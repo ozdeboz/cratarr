@@ -66,7 +66,10 @@ impl App {
         let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules).await?;
         let playlists = Arc::new(PlaylistService::new(library.clone()));
         let files = crate::ports::disk();
-        let incoming = Arc::new(IncomingService::new(library.clone(), files.clone(), saved.lidarr, saved.trash_days));
+        let journal_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("journal.sqlite"));
+        let journal = Arc::new(crate::journal::Journal::open(journal_file.as_deref())?);
+        let incoming = Arc::new(IncomingService::new(library.clone(), files.clone(), journal, saved.lidarr, saved.trash_days));
+        incoming.listen();
         let playing = PlayingService::new(library.clone(), playlists.clone());
         let settings = SettingsService::new(
             library.clone(),
@@ -113,6 +116,7 @@ impl App {
     pub async fn sync(&self, pass: u64) {
         self.incoming.refresh().await;
         if pass % 2 == 0 {
+            self.incoming.catch_up().await;
             self.playlists.refresh_dead().await;
             self.library.retry_placement().await;
         }

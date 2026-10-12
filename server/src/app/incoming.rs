@@ -12,7 +12,11 @@ use tokio::sync::Mutex;
 
 use super::ToggleError;
 use super::library::{Active, Library, epoch_now, label_of};
+use crate::journal::{Entry, Event, EventId, Journal};
 use crate::ports::{Acquisition, Files};
+
+/// The handler name in the journal for telling Lidarr (decision 0011 §6).
+const ACQUISITION: &str = "acquisition";
 use crate::settings;
 use crate::source::{self, Source};
 
@@ -125,19 +129,6 @@ struct IncomingDir {
     release_group: Option<String>,
 }
 
-/// What Delete did, so Undo can reverse it.
-#[derive(Debug, Clone)]
-struct Deleted {
-    folder: i64,
-    /// The album folder, relative to `folder`.
-    dir: String,
-    token: String,
-    album_id: String,
-    title: String,
-    /// Lidarr albums that were monitored and were switched off.
-    lidarr_ids: Vec<i64>,
-}
-
 /// A Lidarr connection and its client (`None` when the key cannot be used in a header).
 pub(super) type LidarrPair = (Option<settings::LidarrConfig>, Option<crate::lidarr::Lidarr>);
 
@@ -163,8 +154,8 @@ pub struct IncomingService {
     lidarr: std::sync::RwLock<LidarrPair>,
     /// Incoming albums deleted here, hidden until the server's list no longer has them.
     hidden: Mutex<std::collections::HashSet<String>>,
-    /// Deletions that Undo can still reverse, by undo key.
-    deleted: Mutex<std::collections::HashMap<String, Deleted>>,
+    /// What happened, for the handlers and for Undo (survives restarts).
+    journal: Arc<Journal>,
     /// Whether Cratarr could write in a folder, and when that was tested (epoch seconds).
     writable: Mutex<std::collections::HashMap<PathBuf, (i64, bool)>>,
     /// Saved with the sources.
@@ -172,7 +163,13 @@ pub struct IncomingService {
 }
 
 impl IncomingService {
-    pub(super) fn new(lib: Arc<Library>, files: Arc<dyn Files>, lidarr: Option<settings::LidarrConfig>, trash_days: u32) -> Self {
+    pub(super) fn new(
+        lib: Arc<Library>,
+        files: Arc<dyn Files>,
+        journal: Arc<Journal>,
+        lidarr: Option<settings::LidarrConfig>,
+        trash_days: u32,
+    ) -> Self {
         Self {
             lib,
             files,
@@ -180,7 +177,7 @@ impl IncomingService {
             owned: Mutex::new(None),
             lidarr: std::sync::RwLock::new(lidarr_pair(lidarr)),
             hidden: Mutex::new(std::collections::HashSet::new()),
-            deleted: Mutex::new(std::collections::HashMap::new()),
+            journal,
             writable: Mutex::new(std::collections::HashMap::new()),
             trash_days: std::sync::atomic::AtomicU32::new(trash_days),
         }
@@ -387,57 +384,125 @@ impl IncomingService {
         if let Err(e) = tokio::task::spawn_blocking(move || c.mark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
             tracing::warn!("catalogue: could not mark {} as trashed: {e:#}", album.title);
         }
-        // Best effort: the album is in the trash either way; a Lidarr failure only means it may come back.
-        let lidarr_ids = match (self.acquisition(), dir.release_group.as_deref()) {
-            (Some(l), Some(rg)) => l.stop_fetching(rg).await.unwrap_or_else(|e| {
-                tracing::warn!("Lidarr: could not stop fetching {}: {e:#}", album.title);
-                Vec::new()
-            }),
-            _ => Vec::new(),
+        // What happened goes to the journal; Lidarr hears of it from there (`handle`), and Undo reads it back.
+        let event = Event::AlbumRejected {
+            source: source_id.to_string(),
+            album_id: album.id.clone(),
+            title: album.title.clone(),
+            folder: dir.folder,
+            dir: dir.dir.clone(),
+            token,
+            release_group: dir.release_group.clone(),
         };
+        let id = self.journal.record(epoch_now(), &event)?;
         self.hidden.lock().await.insert(album.id.clone());
         catalogue.poke();
-        let key = format!("{}:{token}", dir.folder);
-        self.deleted.lock().await.insert(
-            key.clone(),
-            Deleted { folder: dir.folder, dir: dir.dir.clone(), token, album_id: album.id.clone(), title: album.title.clone(), lidarr_ids },
-        );
-        Ok(DeleteResult { undo: key, title: album.title })
+        Ok(DeleteResult { undo: id.to_string(), title: album.title })
     }
 
-    /// Undo a Delete: back from the trash, and Lidarr monitors what it monitored before.
+    /// Undo a Delete: back from the trash, its tracks keep their ids, and Lidarr fetches what it fetched before.
     pub async fn undo_delete(&self, key: &str) -> Result<String, ToggleError> {
-        let d = self
-            .deleted
-            .lock()
-            .await
-            .get(key)
-            .cloned()
-            .ok_or_else(|| ToggleError::Refused("that deletion can no longer be undone here".into()))?;
+        let gone = || ToggleError::Refused("that deletion can no longer be undone".into());
+        let id: EventId = key.parse().map_err(|_| gone())?;
+        let entry = self.journal.get(id)?.ok_or_else(gone)?;
+        let Event::AlbumRejected { album_id, title, folder, dir, token, .. } = &entry.event;
+        if entry.undone {
+            return Err(ToggleError::Refused(format!("{title} is already back")));
+        }
         let catalogue = self.lib.catalogue();
-        let folder = catalogue
+        let root = catalogue
             .folders()
-            .get(d.folder as usize)
+            .get(*folder as usize)
             .cloned()
             .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
-        let (token, files) = (d.token.clone(), self.files.clone());
-        tokio::task::spawn_blocking(move || files.restore(&folder, &token))
+        let (t, files) = (token.clone(), self.files.clone());
+        tokio::task::spawn_blocking(move || files.restore(&root, &t))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        let (c, f, rel, tok) = (catalogue.clone(), d.folder, d.dir.clone(), d.token.clone());
+        let (c, f, rel, tok) = (catalogue.clone(), *folder, dir.clone(), token.clone());
         if let Err(e) = tokio::task::spawn_blocking(move || c.unmark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
-            tracing::warn!("catalogue: could not bring {} back from the trash: {e:#}", d.title);
+            tracing::warn!("catalogue: could not bring {title} back from the trash: {e:#}");
         }
-        if let Some(l) = self.acquisition() {
-            if let Err(e) = l.resume(&d.lidarr_ids).await {
-                tracing::warn!("Lidarr: could not restore monitoring of {}: {e:#}", d.title);
-            }
-        }
-        self.deleted.lock().await.remove(key);
-        self.hidden.lock().await.remove(&d.album_id);
+        self.journal.mark_undone(id, epoch_now())?;
+        self.resume_fetching(id, title).await;
+        self.hidden.lock().await.remove(album_id);
         catalogue.poke();
-        Ok(d.title)
+        Ok(title.clone())
+    }
+
+    /// React to a journal event (decision 0011 §6). Safe to call twice: what is done is recorded per event.
+    pub(super) async fn handle(&self, entry: &Entry) {
+        if self.journal.result(entry.id, ACQUISITION).ok().flatten().is_some() {
+            return;
+        }
+        let Event::AlbumRejected { title, release_group, .. } = &entry.event;
+        // Lidarr stops fetching the album. Best effort: the album is in the trash either way; when Lidarr cannot be
+        // told, the next pass tries again.
+        let stopped = match (self.acquisition(), release_group.as_deref()) {
+            (Some(l), Some(rg)) => match l.stop_fetching(rg).await {
+                Ok(ids) => ids,
+                Err(e) => {
+                    tracing::warn!("Lidarr: could not stop fetching {title}: {e:#}");
+                    return;
+                }
+            },
+            _ => Vec::new(),
+        };
+        if let Err(e) = self.journal.done(entry.id, ACQUISITION, epoch_now(), &serde_json::json!(stopped)) {
+            tracing::warn!("journal: {e:#}");
+        }
+        // Undone while Lidarr was being told: put it back at once.
+        if self.journal.get(entry.id).ok().flatten().is_some_and(|e| e.undone) {
+            self.resume_fetching(entry.id, title).await;
+        }
+    }
+
+    /// Lidarr fetches again what it fetched before the deletion, if it was told to stop.
+    async fn resume_fetching(&self, id: EventId, title: &str) {
+        let stopped: Vec<i64> =
+            self.journal.result(id, ACQUISITION).ok().flatten().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        if stopped.is_empty() {
+            return;
+        }
+        if let Some(l) = self.acquisition()
+            && let Err(e) = l.resume(&stopped).await
+        {
+            tracing::warn!("Lidarr: could not fetch {title} again: {e:#}");
+        }
+    }
+
+    /// Handle what the journal shows as not done (a restart, Lidarr down), back as far as the trash keeps things.
+    pub(super) async fn catch_up(&self) {
+        let since = epoch_now() - i64::from(self.trash_days()) * 86_400;
+        match self.journal.pending(ACQUISITION, since) {
+            Ok(entries) => {
+                for e in &entries {
+                    self.handle(e).await;
+                }
+            }
+            Err(e) => tracing::warn!("journal: {e:#}"),
+        }
+    }
+
+    /// Hear of new journal events and react to them, for as long as Cratarr runs.
+    pub(super) fn listen(self: &Arc<Self>) {
+        let (me, mut rx) = (Arc::downgrade(self), self.journal.subscribe());
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(id) => {
+                        let Some(me) = me.upgrade() else { return };
+                        if let Ok(Some(entry)) = me.journal.get(id) {
+                            me.handle(&entry).await;
+                        }
+                    }
+                    // Fell behind or closed: the background pass catches up.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
     }
 
     /// Empty Incoming trash older than the trash days set in Settings.
@@ -454,7 +519,10 @@ impl IncomingService {
         .unwrap_or(0);
         if gone > 0 {
             tracing::info!("emptied {gone} old deletion(s) from the Incoming trash");
-            self.deleted.lock().await.clear();
+        }
+        // What the trash no longer holds can no longer be undone.
+        if let Err(e) = self.journal.prune(now - (i64::from(keep) + 1) * 86_400) {
+            tracing::warn!("journal: {e:#}");
         }
     }
 
