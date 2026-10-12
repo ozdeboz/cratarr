@@ -6,6 +6,7 @@
 //! - `playlists`: playlist files, edits, repairs, Play;
 //! - `incoming`: new music, verdicts, Delete and Undo, Lidarr;
 //! - `insights`: figures about the library and the playlists;
+//! - `sync`: the user's own server playlists, kept in step with the files;
 //! - `settings`: the Settings page.
 
 mod error;
@@ -54,6 +55,8 @@ pub struct StatusView {
 
 pub struct App {
     pub library: Arc<Library>,
+    /// The user's own server playlists, in step with the files (decision 0012).
+    pub sync: Arc<sync::SyncService>,
     pub playing: PlayingService,
     pub playlists: Arc<PlaylistService>,
     pub incoming: Arc<IncomingService>,
@@ -65,7 +68,9 @@ impl App {
     pub async fn new(cfg: Config, saved: Saved, origin: Origin) -> Result<Arc<Self>> {
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
         let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules).await?;
-        let playlists = Arc::new(PlaylistService::new(library.clone()));
+        let sync_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("playlist-sync.sqlite"));
+        let sync = Arc::new(sync::SyncService::new(library.clone(), crate::sync_state::SyncState::open(sync_file.as_deref())?));
+        let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone()));
         let files = crate::ports::disk();
         let journal_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("journal.sqlite"));
         let journal = Arc::new(crate::journal::Journal::open(journal_file.as_deref())?);
@@ -82,7 +87,7 @@ impl App {
             origin,
         );
         let insights = InsightsService::new(library.clone());
-        Ok(Arc::new(Self { library, playing, playlists, incoming, insights, settings }))
+        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, insights, settings }))
     }
 
     /// For the navigation header.
@@ -116,6 +121,7 @@ impl App {
     /// the Incoming trash every hour.
     pub async fn sync(&self, pass: u64) {
         self.incoming.refresh().await;
+        self.sync.pass().await;
         if pass % 2 == 0 {
             self.incoming.catch_up().await;
             self.playlists.refresh_dead().await;

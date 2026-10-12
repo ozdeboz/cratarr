@@ -49,11 +49,13 @@ fn shuffle<T>(items: &mut [T]) {
 
 pub struct PlaylistService {
     lib: Arc<Library>,
+    /// Keeps the user's own server playlists in step (decision 0012).
+    sync: Arc<super::sync::SyncService>,
 }
 
 impl PlaylistService {
-    pub(super) fn new(lib: Arc<Library>) -> Self {
-        Self { lib }
+    pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>) -> Self {
+        Self { lib, sync }
     }
 
     /// Every playlist, marked where it holds `entry` (the playing track's line).
@@ -239,7 +241,9 @@ impl PlaylistService {
     }
 
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), ToggleError> {
-        self.lib.store()?.rename(from, to).await?;
+        let store = self.lib.store()?;
+        // Through the sync, so the server copies keep following the playlist (decision 0012).
+        self.sync.rename(from, to, store.rename(from, to)).await?;
         self.tell_sources(vec![(from.to_string(), PlaylistChange::Deleted), (to.to_string(), PlaylistChange::Created)]);
         Ok(())
     }
