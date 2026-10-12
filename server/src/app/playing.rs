@@ -130,13 +130,14 @@ impl PlayingService {
         Ok(StateView { now_playing, playlists, sources })
     }
 
-    /// Add the playing track to the playlist file, or remove it if it is already there.
-    pub async fn toggle(&self, playlist_id: &str, want: Option<&str>) -> Result<StateView, ToggleError> {
+    /// Put the playing track in the playlist (`member: Some(true)`), take it out (`Some(false)`), or flip it (`None`).
+    /// With `Some`, a repeated or retried request changes nothing more.
+    pub async fn toggle(&self, playlist_id: &str, want: Option<&str>, member: Option<bool>) -> Result<StateView, ToggleError> {
         let (np, _) = self.playing(want).await?;
         let (active, playing) = np.ok_or(ToggleError::NothingPlaying)?;
         self.lib.store()?;
         let entry = active.entry(self.lib.music().as_deref(), &playing.track).ok_or(ToggleError::NotInLibrary)?;
-        self.playlists.toggle_entry(playlist_id, &entry).await?;
+        self.playlists.set_entry(playlist_id, &entry, member).await?;
         Ok(self.state(want).await?)
     }
 

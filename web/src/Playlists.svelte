@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ApiError, createPlaylist, toggle, type Playlist } from './lib/api';
+  import { ApiError, createPlaylist, setMember, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, refresh } from './lib/live.svelte';
   import Notice, { type NoticeData } from './lib/Notice.svelte';
@@ -53,7 +53,7 @@
     busy[p.id] = true;
     optimistic[p.id] = !p.member;
     try {
-      live.view = await toggle(p.id, prefs.source || undefined);
+      live.view = await setMember(p.id, !p.member, prefs.source || undefined);
     } catch (e) {
       notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
     } finally {

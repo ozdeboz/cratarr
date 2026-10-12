@@ -79,8 +79,12 @@ export type PlayResult = { player: string; sent: number; total: number; unknown:
 export const playPlaylist = (playlistId: string, mode: PlayMode, source?: string) =>
   post<PlayResult>(`/api/playlists/${encodeURIComponent(playlistId)}/play${follow(source)}`, { mode });
 
-export const toggle = (playlistId: string, source?: string) =>
-  request<State>(`/api/playlists/${encodeURIComponent(playlistId)}/toggle${follow(source)}`, { method: 'POST' });
+/** Put the playing track in the playlist or take it out. Says the state wanted, so a retried request changes nothing more. */
+export const setMember = (playlistId: string, member: boolean, source?: string) => {
+  const q = new URLSearchParams({ member: String(member) });
+  if (source) q.set('source', source);
+  return request<State>(`/api/playlists/${encodeURIComponent(playlistId)}/toggle?${q}`, { method: 'POST' });
+};
 
 export type Repair = { playlist: string; from: string; to: string };
 export type Repairs = { safe: Repair[]; review: Repair[] };

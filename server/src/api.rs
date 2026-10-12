@@ -61,12 +61,19 @@ struct Follow {
     source: Option<String>,
 }
 
+/// `member`: the state wanted (idempotent); absent, the entry is flipped.
+#[derive(Deserialize)]
+struct Membership {
+    source: Option<String>,
+    member: Option<bool>,
+}
+
 async fn state(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<StateView>, ApiError> {
     Ok(Json(app.playing.state(f.source.as_deref()).await.map_err(ToggleError::from)?))
 }
 
-async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Json<StateView>, ApiError> {
-    Ok(Json(app.playing.toggle(&id, f.source.as_deref()).await?))
+async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Membership>) -> Result<Json<StateView>, ApiError> {
+    Ok(Json(app.playing.toggle(&id, f.source.as_deref(), f.member).await?))
 }
 
 async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {

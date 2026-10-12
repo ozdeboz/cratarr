@@ -64,10 +64,20 @@ impl PlaylistService {
         }
     }
 
-    /// Add `entry` to the playlist, or remove it if it is there.
-    pub(super) async fn toggle_entry(&self, playlist_id: &str, entry: &str) -> Result<(), ToggleError> {
-        self.lib.store()?.toggle(playlist_id, entry).await?;
-        self.tell_sources(vec![(playlist_id.to_string(), PlaylistChange::Edited)]);
+    /// Make `entry` a member of the playlist or not (`Some`), or flip it (`None`, older pages). Only a real change
+    /// is passed on.
+    pub(super) async fn set_entry(&self, playlist_id: &str, entry: &str, member: Option<bool>) -> Result<(), ToggleError> {
+        let store = self.lib.store()?;
+        let changed = match member {
+            Some(m) => store.set_member(playlist_id, entry, m).await?,
+            None => {
+                store.toggle(playlist_id, entry).await?;
+                true
+            }
+        };
+        if changed {
+            self.tell_sources(vec![(playlist_id.to_string(), PlaylistChange::Edited)]);
+        }
         Ok(())
     }
 

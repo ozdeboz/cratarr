@@ -440,6 +440,20 @@ impl Store {
         Ok(true)
     }
 
+    /// Make `entry` a member of the playlist (`member`) or not. Idempotent: asking twice for the same state changes
+    /// nothing the second time, so a repeated or retried request is harmless. Returns whether the file changed.
+    pub async fn set_member(&self, id: &str, entry: &str, member: bool) -> Result<bool, StoreError> {
+        let _one_writer = self.write.lock().await;
+        let (path, perms, text) = self.load_for_edit(id).await?;
+        let new_text = match (m3u::contains(&text, entry), member) {
+            (false, true) => m3u::with_added(&text, entry),
+            (true, false) => m3u::with_removed(&text, entry).0,
+            _ => return Ok(false),
+        };
+        self.commit(id, &path, perms, &new_text).await?;
+        Ok(true)
+    }
+
     /// Add `entry` to the playlist, or remove it if it is already there.
     pub async fn toggle(&self, id: &str, entry: &str) -> Result<Toggled, StoreError> {
         let _one_writer = self.write.lock().await;
@@ -853,6 +867,23 @@ mod tests {
         let d = Dir::new();
         d.write("a.m3u", "A/1.mp3\n");
         assert!(d.store().view(None).await.unwrap().iter().all(|p| !p.member));
+    }
+
+    #[tokio::test]
+    async fn asking_for_the_same_membership_twice_changes_nothing_the_second_time() {
+        let d = Dir::new();
+        d.write("a.m3u", "A/1.mp3
+");
+        let s = d.store();
+        assert!(s.set_member("a", "B/2.mp3", true).await.unwrap());
+        assert!(!s.set_member("a", "B/2.mp3", true).await.unwrap(), "a retry adds nothing");
+        assert_eq!(d.read("a.m3u"), "A/1.mp3
+B/2.mp3
+");
+        assert!(s.set_member("a", "B/2.mp3", false).await.unwrap());
+        assert!(!s.set_member("a", "B/2.mp3", false).await.unwrap());
+        assert_eq!(d.read("a.m3u"), "A/1.mp3
+");
     }
 
     #[tokio::test]

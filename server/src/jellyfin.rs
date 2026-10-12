@@ -363,11 +363,11 @@ impl Jellyfin {
         Ok(())
     }
 
-    /// Delete an item (a playlist).
+    /// Delete an item (a playlist). Already gone counts as done, so a repeated delete is harmless.
     pub async fn delete_item(&self, id: &str) -> Result<()> {
         let path = format!("/Items/{id}");
         let status = self.http.delete(format!("{}{path}", self.base)).send().await.with_context(|| format!("DELETE {path}"))?.status();
-        if !status.is_success() {
+        if !status.is_success() && status != reqwest::StatusCode::NOT_FOUND {
             bail!("DELETE {path} returned {status}");
         }
         Ok(())
