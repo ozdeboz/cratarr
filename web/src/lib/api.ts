@@ -15,6 +15,16 @@ export type NowPlaying = {
   album: string | null;
   /** False when the track is outside the curated library, so it cannot be added to a playlist. */
   addable: boolean;
+  /** Null when nothing reports a position. */
+  progress: Progress | null;
+};
+
+export type Progress = {
+  position_secs: number;
+  duration_secs: number | null;
+  paused: boolean;
+  /** No player reports this track; the position is time since it started (wrong after a pause or seek). */
+  estimated: boolean;
 };
 
 export type State = {

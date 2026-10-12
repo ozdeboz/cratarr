@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { ApiError, getState, toggle, type Playlist, type State } from './lib/api';
 
   let view = $state<State | null>(null);
@@ -53,6 +54,47 @@
   });
 
   const np = $derived(view?.now_playing ?? null);
+  // The bar runs on a local clock between 2-second polls. It is re-anchored to the server only when the server
+  // disagrees with it (track, pause state, or more than 1.5 s off: a seek or drift), so it moves smoothly.
+  let anchor = $state<{ id: string; pos: number; at: number; paused: boolean } | null>(null);
+  let tick = $state(performance.now());
+
+  $effect(() => {
+    const p = np?.progress;
+    if (!np || !p) {
+      anchor = null;
+      return;
+    }
+    const now = performance.now();
+    const a = untrack(() => anchor);
+    const predicted = a ? a.pos + (a.paused ? 0 : (now - a.at) / 1000) : 0;
+    if (!a || a.id !== np.id || a.paused !== p.paused || Math.abs(predicted - p.position_secs) > 1.5) {
+      anchor = { id: np.id, pos: p.position_secs, at: now, paused: p.paused };
+    }
+  });
+
+  $effect(() => {
+    if (!anchor || anchor.paused) return;
+    const t = setInterval(() => {
+      if (!document.hidden) tick = performance.now();
+    }, 250);
+    return () => clearInterval(t);
+  });
+
+  const duration = $derived(np?.progress?.duration_secs ?? null);
+  const position = $derived.by(() => {
+    if (!anchor) return 0;
+    const p = anchor.paused ? anchor.pos : anchor.pos + Math.max(0, tick - anchor.at) / 1000;
+    return duration ? Math.min(p, duration) : p;
+  });
+
+  function clock(secs: number) {
+    const s = Math.floor(secs);
+    const mm = String(Math.floor((s % 3600) / 60));
+    const ss = String(s % 60).padStart(2, '0');
+    return s >= 3600 ? `${Math.floor(s / 3600)}:${mm.padStart(2, '0')}:${ss}` : `${mm}:${ss}`;
+  }
+
   // Track ids whose cover failed to load (not in the library, or no cover file): no image, no gap.
   let noCover = $state<Record<string, boolean>>({});
 
@@ -102,6 +144,32 @@
       {#if np}
         <div class="title">{np.name}</div>
         <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
+        {#if np.progress}
+          <div
+            class="progress"
+            class:paused={np.progress.paused}
+            class:estimated={np.progress.estimated}
+            title={np.progress.estimated
+              ? 'Estimated: no player reports this track, so this counts from when it started'
+              : np.progress.paused
+                ? 'Paused'
+                : undefined}
+          >
+            <span class="t">{np.progress.estimated ? '≈' : ''}{clock(position)}</span>
+            <div
+              class="bar"
+              role="progressbar"
+              aria-label={np.progress.paused ? 'Track position, paused' : 'Track position'}
+              aria-valuemin={0}
+              aria-valuemax={duration ?? undefined}
+              aria-valuenow={Math.floor(position)}
+              aria-valuetext={duration ? `${clock(position)} of ${clock(duration)}` : clock(position)}
+            >
+              <div class="fill" style:transform="scaleX({duration ? position / duration : 0})"></div>
+            </div>
+            <span class="t">{duration ? clock(duration) : '–:––'}</span>
+          </div>
+        {/if}
         {#if !np.addable}<span class="badge">Not in the library: cannot be added to playlists</span>{/if}
       {:else}
         <div class="title idle">Nothing is playing</div>
@@ -176,8 +244,51 @@
   }
 
   .np {
+    flex: 1;
     min-width: 0;
-    margin-right: auto;
+  }
+
+  .progress {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 640px;
+    margin-top: 8px;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+
+  .progress .t {
+    flex: none;
+    min-width: 3.2em;
+  }
+
+  .progress .t:last-child {
+    text-align: right;
+  }
+
+  .bar {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    overflow: hidden;
+  }
+
+  .fill {
+    height: 100%;
+    background: var(--accent);
+    transform-origin: left;
+    transition: transform 250ms linear;
+  }
+
+  .progress.paused .fill {
+    background: var(--muted);
+  }
+
+  .progress.estimated .fill {
+    opacity: 0.5;
   }
 
   .cover {

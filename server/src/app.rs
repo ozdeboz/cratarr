@@ -10,10 +10,10 @@ use tokio::sync::Mutex;
 use crate::config::Config;
 use crate::jellyfin::{Jellyfin, PlayingItem, pick_now_playing};
 use crate::m3u::library_entry;
-use crate::nowplaying::{current_from_activity, has_audio_history};
+use crate::nowplaying::{Progress, current_from_activity, has_audio_history, progress};
 use crate::playlists::{DupGroup, PlaylistView, Repair, Repairs, Store, StoreError};
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq)]
 pub struct NowPlayingView {
     pub id: String,
     pub name: String,
@@ -21,6 +21,8 @@ pub struct NowPlayingView {
     pub album: Option<String>,
     /// False when the track is outside the curated library (an incoming folder, say): it cannot be added.
     pub addable: bool,
+    /// `None` when nothing reports a position (no matching session and no start time).
+    pub progress: Option<Progress>,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,10 +189,15 @@ impl App {
     /// What is playing. The activity log is the primary source because Jellyfin's session record can be stale
     /// with some clients; sessions are the fallback when the log is unavailable or has no audio history.
     async fn now_playing(&self) -> Result<Option<PlayingItem>> {
+        Ok(self.now_playing_since().await?.map(|(item, _)| item))
+    }
+
+    /// `now_playing`, plus when it started (epoch seconds) if the activity log was the source.
+    async fn now_playing_since(&self) -> Result<Option<(PlayingItem, Option<i64>)>> {
         match self.jf.activity(100).await {
             Ok(entries) if has_audio_history(&entries) => {
                 return match current_from_activity(&entries, epoch_now(), MAX_PLAYING_AGE_SECS) {
-                    Some(id) => Ok(Some(self.item(&id).await?)),
+                    Some(started) => Ok(Some((self.item(&started.item_id).await?, Some(started.at)))),
                     None => Ok(None),
                 };
             }
@@ -198,7 +205,16 @@ impl App {
             Err(e) => tracing::warn!("activity log unavailable, falling back to sessions: {e:#}"),
         }
         let sessions = self.jf.sessions().await?;
-        Ok(pick_now_playing(&sessions, &self.cfg.player_client))
+        Ok(pick_now_playing(&sessions, &self.cfg.player_client).map(|item| (item, None)))
+    }
+
+    /// Best effort: a failed sessions call costs only the exact position, never the page.
+    async fn progress_of(&self, item: &PlayingItem, started_at: Option<i64>) -> Option<Progress> {
+        let sessions = self.jf.sessions().await.unwrap_or_else(|e| {
+            tracing::warn!("sessions unavailable, estimating the position: {e:#}");
+            Vec::new()
+        });
+        progress(&item.id, item.run_time_ticks, &sessions, &self.cfg.player_client, started_at, epoch_now())
     }
 
     async fn item(&self, id: &str) -> Result<PlayingItem> {
@@ -234,11 +250,16 @@ impl App {
     }
 
     pub async fn state(&self) -> Result<StateView> {
-        let np = self.now_playing().await?;
-        let entry = np.as_ref().and_then(|n| self.entry_of(n));
+        let np = self.now_playing_since().await?;
+        let entry = np.as_ref().and_then(|(n, _)| self.entry_of(n));
         let playlists = self.store.view(entry.as_deref()).await?;
-        let now_playing = np.map(|n| NowPlayingView {
+        let progress = match &np {
+            Some((n, started_at)) => self.progress_of(n, *started_at).await,
+            None => None,
+        };
+        let now_playing = np.map(|(n, _)| NowPlayingView {
             addable: entry.is_some(),
+            progress,
             id: n.id,
             name: n.name,
             artist: n.album_artist,

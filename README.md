@@ -33,6 +33,15 @@ track is unknown or outside the library, or when the file is over 10 MB. Respons
 `Cache-Control: public, max-age=86400`, and honour `If-None-Match`. Images are not resized or cached in memory.
 Security rules are in [decision 0003](docs/decisions/0003-album-cover-endpoint.md).
 
+## Progress bar
+
+Under the playing track's title. `now_playing.progress` in `/api/state` carries the position, length and pause
+state, taken from the Jellyfin session that is playing that exact track (the configured client first). When no
+session reports it (a stale session record, see `nowplaying.rs`), the position is estimated from when the activity
+log says the track started, and the bar is shown faded with a `≈`. The page advances the bar on its own clock
+between polls and only re-syncs to the server on a track change, a pause or resume, or a gap of more than 1.5 s
+(a seek).
+
 ## Design goals
 
 - Lean: one container, a single static binary, a small memory budget.

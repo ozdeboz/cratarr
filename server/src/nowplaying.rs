@@ -2,14 +2,24 @@
 //! old track as "paused at 0 s" while the activity log correctly said a new track had started), so the
 //! activity log is the primary source: the newest audio playback that has not been stopped.
 
-use crate::jellyfin::ActivityEntry;
+use serde::Serialize;
+
+use crate::jellyfin::{ActivityEntry, Session};
 
 const START: &str = "AudioPlayback";
 const STOP: &str = "AudioPlaybackStopped";
 
-/// The item id of the track that is currently playing according to the activity log, if any.
+/// A track the activity log says is playing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Started {
+    pub item_id: String,
+    /// When playback started, seconds since the Unix epoch.
+    pub at: i64,
+}
+
+/// The track that is currently playing according to the activity log, if any.
 /// `None` also means "the log says everything has stopped"; callers decide whether to fall back.
-pub fn current_from_activity(entries: &[ActivityEntry], now_epoch: i64, max_age_secs: i64) -> Option<String> {
+pub fn current_from_activity(entries: &[ActivityEntry], now_epoch: i64, max_age_secs: i64) -> Option<Started> {
     let mut starts: Vec<&ActivityEntry> = entries.iter().filter(|e| e.kind == START && e.item_id.is_some()).collect();
     starts.sort_by(|a, b| b.date.cmp(&a.date)); // ISO-8601 UTC strings sort chronologically
     let current = starts.into_iter().find(|s| {
@@ -17,8 +27,59 @@ pub fn current_from_activity(entries: &[ActivityEntry], now_epoch: i64, max_age_
             .iter()
             .any(|e| e.kind == STOP && e.item_id == s.item_id && e.date >= s.date)
     })?;
-    let age = now_epoch - parse_iso_epoch(&current.date)?;
-    (age <= max_age_secs).then(|| current.item_id.clone()).flatten()
+    let at = parse_iso_epoch(&current.date)?;
+    (now_epoch - at <= max_age_secs).then(|| Some(Started { item_id: current.item_id.clone()?, at })).flatten()
+}
+
+/// How far into the playing track we are.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Progress {
+    pub position_secs: f64,
+    pub duration_secs: Option<f64>,
+    pub paused: bool,
+    /// True when no player session reports this track, so the position is "time since it started" from the
+    /// activity log: right unless it was paused or seeked.
+    pub estimated: bool,
+}
+
+const TICKS_PER_SEC: f64 = 10_000_000.0;
+
+/// Position of `item` (with its run time in ticks): from a session playing that exact item (the preferred client
+/// first), else estimated from the activity log's start time. A session showing a different item is ignored, since
+/// session records can be stale (see the module note).
+pub fn progress(
+    item_id: &str,
+    run_time_ticks: Option<i64>,
+    sessions: &[Session],
+    preferred_client: &str,
+    started_at: Option<i64>,
+    now_epoch: i64,
+) -> Option<Progress> {
+    let duration_secs = run_time_ticks.filter(|t| *t > 0).map(|t| t as f64 / TICKS_PER_SEC);
+    let clamp = |p: f64| duration_secs.map_or(p, |d| p.min(d)).max(0.0);
+    let reporting = |s: &&Session| {
+        s.now_playing_item.as_ref().is_some_and(|i| i.id == item_id)
+            && s.play_state.as_ref().is_some_and(|p| p.position_ticks.is_some())
+    };
+    let session = sessions
+        .iter()
+        .filter(reporting)
+        .find(|s| s.client.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(preferred_client)))
+        .or_else(|| sessions.iter().find(reporting));
+    if let Some(ps) = session.and_then(|s| s.play_state.as_ref()) {
+        return Some(Progress {
+            position_secs: clamp(ps.position_ticks.unwrap_or(0) as f64 / TICKS_PER_SEC),
+            duration_secs,
+            paused: ps.is_paused.unwrap_or(false),
+            estimated: false,
+        });
+    }
+    started_at.map(|at| Progress {
+        position_secs: clamp((now_epoch - at) as f64),
+        duration_secs,
+        paused: false,
+        estimated: true,
+    })
 }
 
 /// True when the log has any audio playback entries at all (so its verdict, even "stopped", is meaningful).
@@ -59,6 +120,10 @@ mod tests {
         page.items
     }
 
+    fn id(s: Option<Started>) -> Option<String> {
+        s.map(|s| s.item_id)
+    }
+
     fn e(date: &str, kind: &str, item: &str) -> ActivityEntry {
         ActivityEntry { date: date.into(), kind: kind.into(), item_id: Some(item.into()) }
     }
@@ -75,7 +140,7 @@ mod tests {
     #[test]
     fn newest_unstopped_start_is_the_current_track() {
         let now = parse_iso_epoch("2026-10-12T13:29:00Z").unwrap();
-        assert_eq!(current_from_activity(&entries(), now, 3 * 3600).as_deref(), Some("item-e"));
+        assert_eq!(id(current_from_activity(&entries(), now, 3 * 3600)).as_deref(), Some("item-e"));
     }
 
     #[test]
@@ -86,7 +151,7 @@ mod tests {
             e("2026-10-12T13:12:58.1Z", "AudioPlayback", "old"),
         ];
         let now = parse_iso_epoch("2026-10-12T13:22:00Z").unwrap();
-        assert_eq!(current_from_activity(&log, now, 3600).as_deref(), Some("new"));
+        assert_eq!(id(current_from_activity(&log, now, 3600)).as_deref(), Some("new"));
     }
 
     #[test]
@@ -107,8 +172,57 @@ mod tests {
     fn other_activity_types_are_ignored() {
         let log = vec![e("2026-10-12T13:28:00Z", "VideoPlayback", "v"), e("2026-10-12T13:00:00Z", "AudioPlayback", "a")];
         let now = parse_iso_epoch("2026-10-12T13:29:00Z").unwrap();
-        assert_eq!(current_from_activity(&log, now, 3600).as_deref(), Some("a"));
+        assert_eq!(id(current_from_activity(&log, now, 3600)).as_deref(), Some("a"));
         assert!(has_audio_history(&log));
         assert!(!has_audio_history(&[e("2026-10-12T13:28:00Z", "SessionStarted", "x")]));
+    }
+
+    #[test]
+    fn the_start_time_comes_with_the_current_track() {
+        let log = vec![e("2026-10-12T13:21:00.9Z", "AudioPlayback", "a")];
+        let now = parse_iso_epoch("2026-10-12T13:22:00Z").unwrap();
+        let at = parse_iso_epoch("2026-10-12T13:21:00Z").unwrap();
+        assert_eq!(current_from_activity(&log, now, 3600), Some(Started { item_id: "a".into(), at }));
+    }
+
+    fn sess(client: &str, item: &str, ticks: i64, paused: bool) -> Session {
+        let json = format!(
+            r#"{{"Client":"{client}","NowPlayingItem":{{"Id":"{item}","Name":"x","MediaType":"Audio"}},
+               "PlayState":{{"PositionTicks":{ticks},"IsPaused":{paused}}}}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn the_matching_session_gives_the_position() {
+        let s = vec![sess("Web", "other", 50_000_000, false), sess("Finamp", "a", 1_234_000_000, true)];
+        let p = progress("a", Some(3_240_000_000), &s, "Finamp", Some(0), 1_000).unwrap();
+        assert_eq!(p, Progress { position_secs: 123.4, duration_secs: Some(324.0), paused: true, estimated: false });
+    }
+
+    #[test]
+    fn the_preferred_client_wins_when_two_sessions_play_the_same_track() {
+        let s = vec![sess("Web", "a", 10_000_000, false), sess("finamp", "a", 20_000_000, false)];
+        assert_eq!(progress("a", None, &s, "Finamp", None, 0).unwrap().position_secs, 2.0);
+    }
+
+    #[test]
+    fn a_stale_session_on_another_track_falls_back_to_the_start_time() {
+        let s = vec![sess("Finamp", "old", 0, true)];
+        let p = progress("new", Some(3_000_000_000), &s, "Finamp", Some(1_000), 1_090).unwrap();
+        assert_eq!(p, Progress { position_secs: 90.0, duration_secs: Some(300.0), paused: false, estimated: true });
+    }
+
+    #[test]
+    fn positions_are_kept_within_the_track() {
+        let p = progress("a", Some(1_000_000_000), &[], "Finamp", Some(0), 500).unwrap();
+        assert_eq!(p.position_secs, 100.0);
+        let s = vec![sess("Finamp", "a", -5, false)];
+        assert_eq!(progress("a", None, &s, "Finamp", None, 0).unwrap().position_secs, 0.0);
+    }
+
+    #[test]
+    fn no_session_and_no_start_time_means_no_progress() {
+        assert_eq!(progress("a", Some(1), &[], "Finamp", None, 0), None);
     }
 }

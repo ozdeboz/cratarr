@@ -17,6 +17,16 @@ pub struct ItemsPage<T> {
 pub struct Session {
     pub client: Option<String>,
     pub now_playing_item: Option<PlayingItem>,
+    pub play_state: Option<PlayState>,
+}
+
+/// Where a session is in its track. Observed on 10.11 with Finamp: `PositionTicks` is current whenever it is read
+/// (it advanced 2 s per 2 s poll between the client's check-ins), so no extrapolation from report times is needed.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct PlayState {
+    pub position_ticks: Option<i64>,
+    pub is_paused: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -28,6 +38,8 @@ pub struct PlayingItem {
     pub album: Option<String>,
     pub album_artist: Option<String>,
     pub media_type: Option<String>,
+    /// Track length; 10 000 000 ticks per second.
+    pub run_time_ticks: Option<i64>,
 }
 
 /// One row of Jellyfin's activity log; only audio playback start/stop entries matter to us.
@@ -193,7 +205,9 @@ mod tests {
                 album: None,
                 album_artist: None,
                 media_type: Some(media.into()),
+                run_time_ticks: None,
             }),
+            play_state: None,
         }
     }
 
@@ -211,7 +225,7 @@ mod tests {
 
     #[test]
     fn nothing_playing_gives_none() {
-        let s = vec![Session { client: Some("Finamp".into()), now_playing_item: None }];
+        let s = vec![Session { client: Some("Finamp".into()), now_playing_item: None, play_state: None }];
         assert!(pick_now_playing(&s, "Finamp").is_none());
         assert!(pick_now_playing(&[], "Finamp").is_none());
     }
