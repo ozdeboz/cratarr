@@ -22,6 +22,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/state", get(state))
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/playlists/{id}/toggle", post(toggle))
+        .route("/api/playlists/{id}/play", post(play_playlist))
         .route("/api/playlists", post(create_playlist))
         .route("/api/playlists/{id}", delete(delete_playlist))
         .route("/api/playlists/{id}/rename", post(rename_playlist))
@@ -222,6 +223,20 @@ async fn catalogue_problems(State(app): State<Arc<App>>) -> Result<Json<Vec<crat
 }
 
 #[derive(Deserialize)]
+struct PlayBody {
+    mode: crate::app::PlayMode,
+}
+
+async fn play_playlist(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    Query(f): Query<Follow>,
+    Json(b): Json<PlayBody>,
+) -> Result<Json<crate::app::PlayResult>, ApiError> {
+    Ok(Json(app.play_playlist(&id, b.mode, f.source.as_deref()).await?))
+}
+
+#[derive(Deserialize)]
 struct PreviewBody {
     source: SourceConfig,
 }
@@ -239,7 +254,7 @@ impl IntoResponse for ApiError {
             | ToggleError::NothingToUndo
             | ToggleError::Exists => StatusCode::CONFLICT,
             ToggleError::BadName | ToggleError::BadSettings(_) => StatusCode::BAD_REQUEST,
-            ToggleError::SettingsReadOnly => StatusCode::CONFLICT,
+            ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) => StatusCode::CONFLICT,
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };

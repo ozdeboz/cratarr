@@ -69,6 +69,14 @@ export const getState = (source?: string) => request<State>(`/api/state${follow(
 
 export const coverUrl = (np: NowPlaying) => `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
 
+/** play: in file order · shuffle: random order · next: after the current track · last: at the end of the queue. */
+export type PlayMode = 'play' | 'shuffle' | 'next' | 'last';
+/** sent ≤ 240 of total playable tracks; unknown = lines left out (missing, or not known to the server yet). */
+export type PlayResult = { player: string; sent: number; total: number; unknown: number };
+
+export const playPlaylist = (playlistId: string, mode: PlayMode, source?: string) =>
+  post<PlayResult>(`/api/playlists/${encodeURIComponent(playlistId)}/play${follow(source)}`, { mode });
+
 export const toggle = (playlistId: string, source?: string) =>
   request<State>(`/api/playlists/${encodeURIComponent(playlistId)}/toggle${follow(source)}`, { method: 'POST' });
 

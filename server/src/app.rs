@@ -63,6 +63,8 @@ pub enum ToggleError {
     Exists,
     #[error("that is not a usable playlist name")]
     BadName,
+    #[error("{0}")]
+    CannotPlay(String),
     #[error("settings cannot be saved: CRATARR_DATA_DIR is not set")]
     SettingsReadOnly,
     #[error("{0}")]
@@ -184,6 +186,41 @@ fn catalogue_folders(playlist_dir: &std::path::Path, extra: &[String]) -> Vec<Pa
     std::iter::once(playlist_dir.to_path_buf()).chain(extra.iter().map(PathBuf::from)).collect()
 }
 
+/// The most tracks one play command can carry (decision 0006).
+pub const PLAY_MAX: usize = 240;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlayMode {
+    Play,
+    Shuffle,
+    Next,
+    Last,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PlayResult {
+    /// "Finamp on Lenovo Tab".
+    pub player: String,
+    /// Tracks sent (at most PLAY_MAX).
+    pub sent: usize,
+    /// Playable tracks in the playlist.
+    pub total: usize,
+    /// Lines whose track is missing or not known to the server yet; left out.
+    pub unknown: usize,
+}
+
+/// Shuffle in place (Fisher–Yates) with a small generator seeded from the clock; good enough for a playlist.
+fn shuffle<T>(items: &mut [T]) {
+    let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
+    for i in (1..items.len()).rev() {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        items.swap(i, (x % (i as u64 + 1)) as usize);
+    }
+}
+
 fn epoch_now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -270,6 +307,39 @@ impl App {
             catalogue,
             extras: std::sync::RwLock::new((saved.folders, saved.tag_rules)),
         }))
+    }
+
+    /// Play a playlist on the server's player: its tracks in file order (or shuffled), looked up in the catalogue,
+    /// at most PLAY_MAX of them. `want` = the server to use (default: the first connected one).
+    pub async fn play_playlist(&self, id: &str, mode: PlayMode, want: Option<&str>) -> Result<PlayResult, ToggleError> {
+        let entries = self.store.entries(id).await?;
+        let sources = self.connected();
+        let (active, source) = want
+            .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
+            .or_else(|| sources.first())
+            .cloned()
+            .ok_or_else(|| ToggleError::CannotPlay("no server is connected".into()))?;
+        let (c, sid) = (self.catalogue.clone(), active.cfg.id.clone());
+        let found = tokio::task::spawn_blocking(move || c.track_ids(&sid, 0, &entries))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))??;
+        let unknown = found.iter().filter(|f| f.is_none()).count();
+        let mut ids: Vec<String> = found.into_iter().flatten().collect();
+        let total = ids.len();
+        if total == 0 {
+            return Err(ToggleError::CannotPlay("none of this playlist's tracks are known to the server yet".into()));
+        }
+        if mode == PlayMode::Shuffle {
+            shuffle(&mut ids);
+        }
+        ids.truncate(PLAY_MAX);
+        let how = match mode {
+            PlayMode::Play | PlayMode::Shuffle => source::PlayHow::Now,
+            PlayMode::Next => source::PlayHow::Next,
+            PlayMode::Last => source::PlayHow::Last,
+        };
+        let player = source.play_tracks(&ids, how).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
+        Ok(PlayResult { player, sent: ids.len(), total, unknown })
     }
 
     pub fn catalogue(&self) -> Arc<crate::catalogue::Catalogue> {

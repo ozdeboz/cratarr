@@ -365,12 +365,17 @@ impl Jellyfin {
     /// Ask a session to play these items now, replacing what it plays. Finamp honours this (it ignores some other
     /// remote commands, such as next-track).
     pub async fn play_now(&self, session_id: &str, item_ids: &[String]) -> Result<()> {
+        self.play_command(session_id, "PlayNow", item_ids).await
+    }
+
+    /// `command`: PlayNow, PlayNext or PlayLast. At most 240 ids fit in one request (decision 0006).
+    pub async fn play_command(&self, session_id: &str, command: &str, item_ids: &[String]) -> Result<()> {
         let url = format!("{}/Sessions/{session_id}/Playing", self.base);
         let ids = item_ids.join(",");
         let status = self
             .http
             .post(&url)
-            .query(&[("playCommand", "PlayNow"), ("itemIds", ids.as_str())])
+            .query(&[("playCommand", command), ("itemIds", ids.as_str())])
             .send()
             .await
             .context("POST /Sessions/{id}/Playing")?

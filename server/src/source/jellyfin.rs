@@ -427,6 +427,47 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn play_tracks<'a>(&'a self, ids: &'a [String], how: super::PlayHow) -> Fut<'a, String> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await?;
+            let targets = cast_targets(&sessions, &self.player);
+            let Some(first) = targets.first() else {
+                if self.player.app.is_some() {
+                    bail!("{} is not open", self.player.value().replace(SEP, " on "));
+                }
+                bail!("no player is playing music; start one, or choose a player in Settings");
+            };
+            let label = [first.client.as_deref(), first.device_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" on ");
+            // Finamp re-sorts a multi-track PlayNext/PlayLast batch by track number, so those go one track per
+            // command; Play next goes in reverse so the tracks end up in order after the current one (decision 0006).
+            let commands: Vec<(&str, Vec<String>)> = match how {
+                super::PlayHow::Now => vec![("PlayNow", ids.to_vec())],
+                super::PlayHow::Next => ids.iter().rev().map(|i| ("PlayNext", vec![i.clone()])).collect(),
+                super::PlayHow::Last => ids.iter().map(|i| ("PlayLast", vec![i.clone()])).collect(),
+            };
+            let mut last_error = None;
+            let mut sent = 0;
+            for t in &targets {
+                let session = t.id.as_deref().unwrap_or_default();
+                let mut ok = true;
+                for (cmd, batch) in &commands {
+                    if let Err(e) = self.jf.play_command(session, cmd, batch).await {
+                        last_error = Some(e);
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    sent += 1;
+                }
+            }
+            match (sent, last_error) {
+                (0, Some(e)) => Err(e),
+                _ => Ok(label),
+            }
+        })
+    }
+
     fn album_cover<'a>(&'a self, album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {
         Box::pin(self.jf.primary_image(album_id, crate::covers::MAX_BYTES))
     }

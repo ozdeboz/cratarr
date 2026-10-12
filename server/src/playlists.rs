@@ -354,6 +354,20 @@ impl Store {
         }
     }
 
+    /// A playlist's track lines in file order (comments and blanks left out). Read-only.
+    pub async fn entries(&self, id: &str) -> Result<Vec<String>, StoreError> {
+        if !valid_id(id) {
+            return Err(StoreError::Unknown);
+        }
+        let path = self.path_of(id);
+        match tokio::fs::metadata(&path).await {
+            Ok(m) if m.is_file() => {}
+            _ => return Err(StoreError::Unknown),
+        }
+        let bytes = tokio::fs::read(&path).await.with_context(|| format!("reading {id}.m3u"))?;
+        Ok(m3u::entries(&String::from_utf8_lossy(&bytes)).collect())
+    }
+
     /// Open a playlist for editing. The caller must hold the write lock.
     async fn load_for_edit(&self, id: &str) -> Result<(PathBuf, std::fs::Permissions, String), StoreError> {
         if !valid_id(id) {

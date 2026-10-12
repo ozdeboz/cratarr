@@ -138,6 +138,17 @@ pub struct Album {
     pub tags: Vec<String>,
 }
 
+/// How tracks are sent to a player (decision 0006).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayHow {
+    /// Replace what plays, in the given order.
+    Now,
+    /// Right after the current track, in the given order.
+    Next,
+    /// At the end of the queue, in the given order.
+    Last,
+}
+
 /// One page of a library's tracks: (track id, path as the server sees it).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TrackPage {
@@ -199,6 +210,11 @@ pub trait Source: Send + Sync {
     /// the listing to tracks the server changed after then; `None` lists them all.
     fn track_paths<'a>(&'a self, _library_id: &'a str, _since: Option<i64>, _start: usize, _limit: usize) -> Fut<'a, TrackPage> {
         Box::pin(async { Ok(TrackPage::default()) })
+    }
+
+    /// Optional: play tracks (this source's ids, in order) on the player it follows. Returns the player's label.
+    fn play_tracks<'a>(&'a self, _ids: &'a [String], _how: PlayHow) -> Fut<'a, String> {
+        Box::pin(async { anyhow::bail!("this server cannot play music") })
     }
 
     /// Optional: an album's cover image (content type, bytes). Lets Cratarr show covers of music outside the playlist

@@ -3,10 +3,12 @@
     ApiError,
     createPlaylist,
     deletePlaylist,
+    playPlaylist,
     renamePlaylist,
     restorePlaylist,
     toggle,
     type Playlist,
+    type PlayMode,
   } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, refresh } from './lib/live.svelte';
@@ -103,6 +105,21 @@
     if (to && to !== p.id) act(() => renamePlaylist(p.id, to), { text: `Renamed to ${to}.` });
   };
 
+  /** Play from the menu. Success shows in the header; only a failure says something. */
+  async function play(p: Playlist, mode: PlayMode) {
+    if (working) return;
+    working = true;
+    menu = null;
+    try {
+      await playPlaylist(p.id, mode, prefs.source || undefined);
+      refresh();
+    } catch (e) {
+      notice = { text: e instanceof ApiError ? e.message : 'Could not start playing', tone: 'error' };
+    } finally {
+      working = false;
+    }
+  }
+
   const remove = (p: Playlist) =>
     act(() => deletePlaylist(p.id), {
       text: `Deleted ${p.name}.`,
@@ -183,6 +200,11 @@
     <div class="head">{p.name} <span>{p.count} {p.count === 1 ? 'track' : 'tracks'}{p.dead > 0 ? ` · ${missing(p.dead)}` : ''}</span></div>
     {#if menu.mode === 'menu'}
       <div class="items" role="menu">
+        <button role="menuitem" disabled={working} onclick={() => play(p, 'play')}>Play</button>
+        <button role="menuitem" disabled={working} onclick={() => play(p, 'shuffle')}>Shuffle</button>
+        <button role="menuitem" disabled={working} onclick={() => play(p, 'next')}>Play next</button>
+        <button role="menuitem" disabled={working} onclick={() => play(p, 'last')}>Add to queue</button>
+        <hr />
         <button
           role="menuitem"
           onclick={() => {
@@ -412,6 +434,17 @@
     font: inherit;
     color: inherit;
     cursor: pointer;
+  }
+
+  .items hr {
+    margin: 4px 6px;
+    border: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .items button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .items button:hover,
