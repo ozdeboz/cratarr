@@ -70,14 +70,18 @@ export function weigh(data: Proximity, rank: Record<Signal, (v: number) => numbe
   return w;
 }
 
-/** The links worth drawing: maximum spanning tree plus mutual K-nearest neighbours. */
-export function backbone(n: number, w: Weights, k = MUTUAL_K): Weights {
+/** The links worth drawing. `kin`: pairs among each other's K closest (mutual nearest neighbours), the real
+ * kinship. `bridges`: links of the maximum spanning tree that are not kin, there only so every playlist is reached;
+ * they are drawn slack and barely pull, so they don't glue unrelated groups together. */
+export type Backbone = { kin: Weights; bridges: Weights };
+
+export function backbone(n: number, w: Weights, k = MUTUAL_K): Backbone {
   const edges = [...w].map(([kk, v]) => {
     const [a, b] = kk.split('-').map(Number);
     return { a, b, v, kk };
   });
   edges.sort((x, y) => y.v - x.v);
-  const keep: Weights = new Map();
+  const tree: Weights = new Map();
   // Kruskal, strongest first.
   const parent = [...Array(n).keys()];
   const find = (x: number): number => (parent[x] === x ? x : (parent[x] = find(parent[x])));
@@ -86,7 +90,7 @@ export function backbone(n: number, w: Weights, k = MUTUAL_K): Weights {
     const rb = find(e.b);
     if (ra !== rb) {
       parent[ra] = rb;
-      keep.set(e.kk, e.v);
+      tree.set(e.kk, e.v);
     }
   }
   // Mutual nearest neighbours.
@@ -102,11 +106,21 @@ export function backbone(n: number, w: Weights, k = MUTUAL_K): Weights {
       count[e.b]++;
     }
   }
-  for (const e of edges) if (near[e.a].has(e.b) && near[e.b].has(e.a)) keep.set(e.kk, e.v);
-  return keep;
+  const kin: Weights = new Map();
+  for (const e of edges) if (near[e.a].has(e.b) && near[e.b].has(e.a)) kin.set(e.kk, e.v);
+  const bridges: Weights = new Map([...tree].filter(([kk]) => !kin.has(kk)));
+  return { kin, bridges };
 }
 
-/** Groups by weighted label propagation over the drawn links; group 0 is the largest. Deterministic. */
+/** Each kin link's weight as its rank among the kin links, 0..1: the drawn links are all strong, so their raw
+ * weights sit close together; ranked, strong and weak kinship look and pull differently. */
+export function spread(kin: Weights): Weights {
+  const sorted = [...kin.values()].sort((a, b) => a - b);
+  const last = Math.max(1, sorted.length - 1);
+  return new Map([...kin].map(([kk, v]) => [kk, sorted.indexOf(v) / last]));
+}
+
+/** Groups by weighted label propagation over the kin links; group 0 is the largest. Deterministic. */
 export function groups(n: number, links: Weights): number[] {
   const adj: [number, number][][] = Array.from({ length: n }, () => []);
   for (const [kk, v] of links) {

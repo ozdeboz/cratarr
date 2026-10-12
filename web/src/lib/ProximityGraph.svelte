@@ -7,7 +7,7 @@
   import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from 'd3-zoom';
   import type { Proximity, Signal } from './api';
   import { longpress } from './longpress';
-  import { backbone, groups, rankers, weigh } from './proximity';
+  import { backbone, groups, rankers, spread, weigh } from './proximity';
 
   let {
     data,
@@ -23,7 +23,8 @@
   } = $props();
 
   type Node = { i: number; r: number; x?: number; y?: number; vx?: number; vy?: number };
-  type Edge = { key: string; source: Node | number; target: Node | number; w: number };
+  /** `r`: the kin link's rank among the kin links (0..1); `bridge`: a tree link that is not kin. */
+  type Edge = { key: string; source: Node | number; target: Node | number; r: number; bridge: boolean };
 
   /** Names shown before zooming in: the best connected playlists. */
   const LABELS = 8;
@@ -39,8 +40,11 @@
   // svelte-ignore state_referenced_locally
   const nodes: Node[] = data.playlists.map((p, i) => ({ i, r: Math.min(11, 3 + 1.4 * Math.log2(1 + p.tracks / 8)) }));
 
-  const drawn = $derived(backbone(n, weigh(data, rank, signals)));
-  const group = $derived(groups(n, drawn));
+  const bb = $derived(backbone(n, weigh(data, rank, signals)));
+  /** Every drawn link: kin by its spread rank, bridges apart. */
+  const ranked = $derived(spread(bb.kin));
+  const drawn = $derived(new Map([...ranked, ...bb.bridges]));
+  const group = $derived(groups(n, bb.kin));
   const groupSize = $derived(group.reduce((m, g) => m.set(g, (m.get(g) ?? 0) + 1), new Map<number, number>()));
   const colour = (i: number) => (groupSize.get(group[i])! > 1 && group[i] < PALETTE.length ? PALETTE[group[i]] : 'var(--muted)');
 
@@ -74,18 +78,30 @@
   });
 
   // New signals: the drawn links change on the same running simulation, which is warmed up gently.
+  // Kin pulls with its rank, shared out over a busy point's links (as d3 does by default: 1 / the smaller number of
+  // links of the two), so a point with six links does not drag all six onto itself. Bridges are long and slack.
   $effect(() => {
-    const edges: Edge[] = [...drawn].map(([key, w]) => {
+    const kinDegree = new Array(n).fill(0);
+    for (const k of bb.kin.keys()) for (const x of k.split('-').map(Number)) kinDegree[x]++;
+    const edges: Edge[] = [
+      ...[...ranked].map(([key, r]) => ({ key, r, bridge: false })),
+      ...[...bb.bridges.keys()].map((key) => ({ key, r: 0, bridge: true })),
+    ].map(({ key, r, bridge }) => {
       const [a, b] = key.split('-').map(Number);
-      return { key, source: a, target: b, w };
+      return { key, source: a, target: b, r, bridge };
     });
     if (!sim) return;
+    const ends = (e: Edge) => [e.source, e.target].map((x) => (typeof x === 'number' ? x : x.i));
     sim.force(
       'link',
       forceLink<Node, Edge>(edges)
         .id((p) => p.i)
-        .distance((e) => 26 + 70 * (1 - e.w))
-        .strength(0.7),
+        .distance((e) => (e.bridge ? 130 : 28 + 60 * (1 - e.r)))
+        .strength((e) => {
+          if (e.bridge) return 0.03;
+          const [a, b] = ends(e);
+          return (0.3 + 0.7 * e.r) / Math.max(1, Math.min(kinDegree[a], kinDegree[b]));
+        }),
     );
     sim.alpha(Math.max(sim.alpha(), 0.6)).restart();
   });
@@ -145,17 +161,20 @@
   >
     <g transform={view.toString()}>
       {#each data.links as l (`${l.a}-${l.b}`)}
-        {@const w = drawn.get(`${l.a}-${l.b}`)}
-        {#if w !== undefined}
+        {@const k = `${l.a}-${l.b}`}
+        {@const r = ranked.get(k)}
+        {#if r !== undefined || bb.bridges.has(k)}
           <line
             class="link"
+            class:bridge={r === undefined}
             class:hot={selected !== null && (l.a === selected || l.b === selected)}
             x1={pos[l.a][0]}
             y1={pos[l.a][1]}
             x2={pos[l.b][0]}
             y2={pos[l.b][1]}
-            stroke-width={(0.5 + 2 * w) / Math.sqrt(view.k)}
-            style:opacity={dim(l.a) || dim(l.b) ? 0.06 : 0.2 + 0.35 * w}
+            stroke-width={(r === undefined ? 0.7 : 0.6 + 2.6 * r) / Math.sqrt(view.k)}
+            stroke-dasharray={r === undefined ? `${4 / Math.sqrt(view.k)} ${4 / Math.sqrt(view.k)}` : undefined}
+            style:opacity={dim(l.a) || dim(l.b) ? 0.06 : r === undefined ? 0.3 : 0.2 + 0.55 * r}
           />
         {/if}
       {/each}
