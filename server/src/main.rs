@@ -6,6 +6,7 @@ mod jellyfin;
 mod m3u;
 mod nowplaying;
 mod playlists;
+mod settings;
 mod web;
 
 use std::io::{Read, Write};
@@ -40,7 +41,18 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
-    let cfg = config::Config::from_env()?;
+    // Settings saved from the page (CRATARR_DATA_DIR/settings.json) win over the environment; see decision 0004.
+    let data_dir = std::env::var("CRATARR_DATA_DIR").ok().filter(|d| !d.trim().is_empty());
+    let settings_path = data_dir.map(|d| std::path::Path::new(&d).join("settings.json"));
+    let overrides = match &settings_path {
+        Some(p) => settings::load(p)?,
+        None => settings::Overrides::new(),
+    };
+    let env = |k: &str| std::env::var(k).ok();
+    let cfg = config::Config::from_lookup(settings::lookup(&overrides, &env))?;
+    if !overrides.is_empty() {
+        tracing::info!("using {} setting(s) saved from the Settings page", overrides.len());
+    }
     let jf = jellyfin::Jellyfin::new(&cfg.jellyfin_url, &cfg.api_key, &cfg.user_id)?;
 
     // Startup self-check: fail loudly if Jellyfin is unreachable or the playlist folder cannot be read.
@@ -49,7 +61,7 @@ async fn main() -> Result<()> {
     jf.activity(1).await.context("Jellyfin's activity log did not look as expected")?;
 
     let bind = cfg.bind.clone();
-    let app = app::App::new(cfg, jf);
+    let app = app::App::new(cfg, jf, app::SettingsFile { path: settings_path, overrides });
     let n = app.playlist_count().await.context("cannot read the playlist folder")?;
     tracing::info!("found {n} playlists");
 

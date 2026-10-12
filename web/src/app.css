@@ -8,11 +8,12 @@
   --accent-text: #06281a;
   --warn: #f5b942;
   --danger: #ff6b6b;
-  color-scheme: dark light;
+  color-scheme: dark;
 }
 
+/* Light: when the system asks for it (unless the page is set to dark), or when the page is set to light. */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme='dark']) {
     --bg: #f5f6f8;
     --surface: #ffffff;
     --border: #d9dde5;
@@ -22,7 +23,21 @@
     --accent-text: #ffffff;
     --warn: #a86a00;
     --danger: #c62d2d;
+    color-scheme: light;
   }
+}
+
+:root[data-theme='light'] {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --border: #d9dde5;
+  --text: #1a1d24;
+  --muted: #5d6573;
+  --accent: #12a36a;
+  --accent-text: #ffffff;
+  --warn: #a86a00;
+  --danger: #c62d2d;
+  color-scheme: light;
 }
 
 * {

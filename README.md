@@ -51,8 +51,18 @@ between polls and only re-syncs to the server on a track change, a pause or resu
 ## Configuration
 
 Environment variables: `JELLYFIN_URL`, `JELLYFIN_API_KEY`, `JELLYFIN_USER_ID`, `CRATARR_PLAYLIST_DIR` (required);
-`CRATARR_BIND`, `CRATARR_MUSIC_PREFIXES`, `CRATARR_PLAYER_CLIENT` (optional,
+`CRATARR_BIND`, `CRATARR_MUSIC_PREFIXES`, `CRATARR_PLAYER_CLIENT`, `CRATARR_JELLYFIN_PLAYLIST_DIR` (optional,
 see `server/src/config.rs`).
+
+The Settings page shows the connection status and can change the Jellyfin connection, followed user, preferred
+player and library folders while running. Saving needs `CRATARR_DATA_DIR`, a writable folder where
+`settings.json` (owner-only, it holds the API key) overrides the environment. The key is never sent back to the
+page, and a new Jellyfin address needs the key re-entered. See [decision 0004](docs/decisions/0004-settings-page.md).
+
+## Navigation
+
+A sidebar on screens 1024 px and wider; below that, a bar at the bottom of the screen (with a "More" menu once
+there are more than five pages).
 
 ## Stack
 

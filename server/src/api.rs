@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::app::{App, StateView, ToggleError};
+use crate::app::{App, ProbeView, SettingsView, StateView, StatusView, ToggleError};
 use crate::playlists::{Repair, Repairs};
 
 pub fn router(app: Arc<App>) -> Router {
@@ -30,6 +30,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/repairs", get(repairs))
         .route("/api/repairs/apply", post(apply_repairs))
         .route("/api/undo", post(undo))
+        .route("/api/status", get(status))
+        .route("/api/settings", get(get_settings).post(save_settings))
+        .route("/api/settings/probe", post(probe))
         .fallback(crate::web::serve)
         .with_state(app)
 }
@@ -146,6 +149,32 @@ impl From<ToggleError> for ApiError {
     }
 }
 
+async fn status(State(app): State<Arc<App>>) -> Json<StatusView> {
+    Json(app.status().await)
+}
+
+async fn get_settings(State(app): State<Arc<App>>) -> Result<Json<SettingsView>, ApiError> {
+    Ok(Json(app.settings().await.map_err(ToggleError::from)?))
+}
+
+async fn save_settings(
+    State(app): State<Arc<App>>,
+    Json(change): Json<crate::settings::Change>,
+) -> Result<Json<SettingsView>, ApiError> {
+    Ok(Json(app.save_settings(&change).await?))
+}
+
+#[derive(Deserialize)]
+struct ProbeBody {
+    jellyfin_url: String,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+async fn probe(State(app): State<Arc<App>>, Json(b): Json<ProbeBody>) -> Result<Json<ProbeView>, ApiError> {
+    Ok(Json(app.probe(&b.jellyfin_url, b.api_key.as_deref()).await?))
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self.0 {
@@ -154,7 +183,8 @@ impl IntoResponse for ApiError {
             | ToggleError::NotOffered
             | ToggleError::NothingToUndo
             | ToggleError::Exists => StatusCode::CONFLICT,
-            ToggleError::BadName => StatusCode::BAD_REQUEST,
+            ToggleError::BadName | ToggleError::BadSettings(_) => StatusCode::BAD_REQUEST,
+            ToggleError::SettingsReadOnly => StatusCode::CONFLICT,
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };

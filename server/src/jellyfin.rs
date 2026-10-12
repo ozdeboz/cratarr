@@ -68,6 +68,14 @@ pub fn pick_playlist_id(items: &[ListedPlaylist], name: &str) -> Option<String> 
 #[serde(rename_all = "PascalCase")]
 pub struct PublicInfo {
     pub version: String,
+    pub server_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct User {
+    pub id: String,
+    pub name: String,
 }
 
 /// Fallback source for "what is playing": audio sessions only, preferring the configured client.
@@ -119,6 +127,16 @@ impl Jellyfin {
     /// Unauthenticated; also proves the server is reachable.
     pub async fn public_info(&self) -> Result<PublicInfo> {
         self.get("/System/Info/Public").await
+    }
+
+    /// Needs an API key (they have admin rights); used by the Settings page to pick the followed user.
+    pub async fn users(&self) -> Result<Vec<User>> {
+        self.get("/Users").await
+    }
+
+    /// The configured user; fails when the key is wrong or the user does not exist.
+    pub async fn current_user(&self) -> Result<User> {
+        self.get(&format!("/Users/{}", self.user_id)).await
     }
 
     pub async fn sessions(&self) -> Result<Vec<Session>> {

@@ -1,4 +1,5 @@
-//! Configuration, read from environment variables so the container needs no config file.
+//! Configuration, read from environment variables so the container needs no config file. Values saved from the
+//! Settings page sit in front of the environment (see `settings.rs`).
 
 use anyhow::{Context, Result, bail};
 
@@ -27,11 +28,7 @@ fn split_list(v: &str) -> Vec<String> {
 }
 
 impl Config {
-    pub fn from_env() -> Result<Self> {
-        Self::from_lookup(|k| std::env::var(k).ok())
-    }
-
-    /// Testable core: `lookup` stands in for the environment.
+    /// `lookup` is the environment, with values saved from the Settings page in front (see `settings.rs`).
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self> {
         let need = |key: &str| -> Result<String> {
             lookup(key)

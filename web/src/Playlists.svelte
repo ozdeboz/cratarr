@@ -1,29 +1,15 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { ApiError, getState, toggle, type Playlist, type State } from './lib/api';
+  import { prefs } from './lib/prefs.svelte';
 
   let view = $state<State | null>(null);
   let error = $state<string | null>(null);
   let notice = $state<string | null>(null);
   let filter = $state('');
-  let membersFirst = $state(false);
-  // Zoom = chip width, which sets how many columns fit. Remembered per browser (storage may be unavailable).
+  // Zoom = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
   const WIDTHS = [110, 140, 170, 210, 260, 340];
-  let zoom = $state(2);
-  try {
-    const saved = Number(localStorage.getItem('cratarr-zoom'));
-    if (Number.isInteger(saved) && saved >= 0 && saved < WIDTHS.length) zoom = saved;
-  } catch {
-    /* default zoom */
-  }
-  function setZoom(next: number) {
-    zoom = Math.min(WIDTHS.length - 1, Math.max(0, next));
-    try {
-      localStorage.setItem('cratarr-zoom', String(zoom));
-    } catch {
-      /* not remembered */
-    }
-  }
+  const setZoom = (next: number) => (prefs.zoom = Math.min(WIDTHS.length - 1, Math.max(0, next)));
   // Taps flip the chip at once; the server's answer replaces this guess.
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
@@ -105,7 +91,7 @@
       return { ...p, member, count: p.count + (member === p.member ? 0 : member ? 1 : -1) };
     });
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
-    if (membersFirst) list = [...list].sort((a, b) => Number(b.member) - Number(a.member));
+    if (prefs.membersFirst) list = [...list].sort((a, b) => Number(b.member) - Number(a.member));
     return list;
   });
 
@@ -144,7 +130,7 @@
       {#if np}
         <div class="title">{np.name}</div>
         <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
-        {#if np.progress}
+        {#if np.progress && prefs.showProgress}
           <div
             class="progress"
             class:paused={np.progress.paused}
@@ -186,12 +172,12 @@
   <div class="tools">
     <input type="search" placeholder="Filter playlists" aria-label="Filter playlists" bind:value={filter} />
     <div class="seg" role="group" aria-label="Sort order">
-      <button aria-pressed={!membersFirst} onclick={() => (membersFirst = false)}>A–Z</button>
-      <button aria-pressed={membersFirst} onclick={() => (membersFirst = true)}>In first</button>
+      <button aria-pressed={!prefs.membersFirst} onclick={() => (prefs.membersFirst = false)}>A–Z</button>
+      <button aria-pressed={prefs.membersFirst} onclick={() => (prefs.membersFirst = true)}>In first</button>
     </div>
     <div class="seg" role="group" aria-label="Zoom">
-      <button aria-label="Zoom out, more columns" disabled={zoom === 0} onclick={() => setZoom(zoom - 1)}>−</button>
-      <button aria-label="Zoom in, fewer columns" disabled={zoom === WIDTHS.length - 1} onclick={() => setZoom(zoom + 1)}>+</button>
+      <button aria-label="Zoom out, more columns" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
+      <button aria-label="Zoom in, fewer columns" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
     </div>
   </div>
 
@@ -201,7 +187,7 @@
   {#if !view && !error}
     <p class="empty">Loading…</p>
   {:else}
-    <ul class="grid" style:--min="{WIDTHS[zoom]}px">
+    <ul class="grid" style:--min="{WIDTHS[prefs.zoom]}px">
       {#each items as p (p.id)}
         <li>
           <button

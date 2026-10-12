@@ -88,3 +88,42 @@ export const deletePlaylist = (id: string) =>
   request<{ deleted: string }>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const restorePlaylist = (id: string) =>
   post<{ restored: string }>(`/api/playlists/${encodeURIComponent(id)}/restore`, {});
+
+export type Status = { connected: boolean; server_name: string | null; version: string };
+
+export const getStatus = () => request<Status>('/api/status');
+
+export type Source = 'file' | 'env' | 'default';
+
+export type SettingsValues = {
+  jellyfin_url: string;
+  api_key_set: boolean;
+  user_id: string;
+  player_client: string;
+  music_prefixes: string[];
+  jellyfin_playlist_dir: string;
+};
+
+export type Settings = {
+  values: SettingsValues;
+  sources: Record<'jellyfin_url' | 'api_key' | 'user_id' | 'player_client' | 'music_prefixes' | 'jellyfin_playlist_dir', Source>;
+  fixed: { bind: string; playlist_dir: string };
+  /** Null when the server has no data folder: settings can be looked at, not saved. */
+  settings_file: string | null;
+  jellyfin: { ok: boolean; server_name: string | null; version: string | null; user_name: string | null; error: string | null };
+  playlists: number;
+  version: string;
+  /** Epoch seconds. */
+  started: number;
+};
+
+/** An empty or missing api_key keeps the saved key (only allowed while the address stays the same). */
+export type SettingsChange = Omit<SettingsValues, 'api_key_set'> & { api_key?: string };
+
+export type Probe = { server_name: string | null; version: string; users: { Id: string; Name: string }[] };
+
+export const getSettings = () => request<Settings>('/api/settings');
+
+export const saveSettings = (change: SettingsChange) => post<Settings>('/api/settings', change);
+
+export const probe = (jellyfin_url: string, api_key?: string) => post<Probe>('/api/settings/probe', { jellyfin_url, api_key });
