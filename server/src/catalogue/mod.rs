@@ -114,6 +114,30 @@ pub struct AlbumFact {
     pub release_group: Option<String>,
 }
 
+/// One file as Insights counts it (see `Catalogue::track_rows`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackRow {
+    /// Relative to its folder; for the Music folder, the same text as a playlist line.
+    pub rel: String,
+    /// Upper case: "FLAC", "MP3".
+    pub format: Option<String>,
+    pub kbps: Option<u32>,
+    pub duration_ms: Option<u64>,
+    pub size: u64,
+    /// (name, raw value), only the names in `TAGS`.
+    pub tags: Vec<(String, String)>,
+}
+
+#[allow(dead_code)] // wired up with the Insights page (after the App split, decision 0011)
+impl TrackRow {
+    pub const TAGS: [&'static str; 7] = ["album", "albumartist", "artist", "title", "genre", "date", "originaldate"];
+
+    /// The raw values of one tag.
+    pub fn tag<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.tags.iter().filter(move |(n, _)| n == name).map(|(_, v)| v.as_str())
+    }
+}
+
 pub struct Catalogue {
     db: Mutex<Connection>,
     /// Index = folder id; 0 is the playlist folder.
@@ -396,6 +420,41 @@ impl Catalogue {
             }
         }
         Ok(by_dir.into_values().collect())
+    }
+
+    #[allow(dead_code)] // wired up with the Insights page (after the App split, decision 0011)
+    /// Every file in `folder` with the facts Insights counts: format, bitrate, length, size and the tags named in
+    /// `TrackRow::TAGS` (raw values, not split). Read-only; blocking.
+    pub fn track_rows(&self, folder: i64) -> Result<Vec<TrackRow>> {
+        let db = self.db();
+        let mut rows: Vec<TrackRow> = Vec::new();
+        let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut st = db.prepare("SELECT rel, format, bitrate, duration_ms, size FROM files WHERE folder = ?1")?;
+        let files = st.query_map(params![folder], |r| {
+            Ok(TrackRow {
+                rel: r.get(0)?,
+                format: r.get::<_, Option<String>>(1)?.map(|f| f.to_uppercase()),
+                kbps: r.get::<_, Option<i64>>(2)?.filter(|k| *k > 0).map(|k| k as u32),
+                duration_ms: r.get::<_, Option<i64>>(3)?.filter(|d| *d > 0).map(|d| d as u64),
+                size: r.get::<_, i64>(4)?.max(0) as u64,
+                tags: Vec::new(),
+            })
+        })?;
+        for f in files {
+            let f = f?;
+            index.insert(f.rel.clone(), rows.len());
+            rows.push(f);
+        }
+        let names = TrackRow::TAGS.map(|n| format!("'{n}'")).join(", ");
+        let mut st = db.prepare(&format!("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ({names}) ORDER BY rel, n"))?;
+        let tags = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        for t in tags {
+            let (rel, name, value) = t?;
+            if let Some(&i) = index.get(&rel) {
+                rows[i].tags.push((name, value));
+            }
+        }
+        Ok(rows)
     }
 
     /// Files with a problem, worst first ("broken", then damaged tags, …), at most `limit`. Blocking.

@@ -142,9 +142,143 @@ fn describe_same(new: &AlbumFacts, old: &AlbumFacts) -> String {
     format!("{}, yours is {}{tracks}", q(new.quality), q(old.quality))
 }
 
+#[allow(dead_code)] // used by Replace (after the App split, decision 0011)
+/// One track as Replace pairs them: the library album's tracks against the incoming album's files (decision 0011 §4).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackFacts {
+    /// MusicBrainz recording id (Picard's `musicbrainz_trackid`).
+    pub recording: Option<String>,
+    /// `None` counts as disc 1.
+    pub disc: Option<u32>,
+    pub number: Option<u32>,
+    pub title: String,
+    pub duration_ms: Option<u64>,
+}
+
+#[allow(dead_code)] // used by Replace (after the App split, decision 0011)
+/// Which incoming file takes over which library track. A paired file inherits the old track's identity, so playlists
+/// and play data follow it; indexes refer to the two slices given to `pair`, in ascending order.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Pairing {
+    /// (old track, new file).
+    pub pairs: Vec<(usize, usize)>,
+    /// New files with no old track: new tracks.
+    pub added: Vec<usize>,
+    /// Old tracks with no new file: missing from now on (Repairs shows them).
+    pub retired: Vec<usize>,
+}
+
+#[allow(dead_code)]
+/// Same title, different place on the album: the lengths must agree this closely.
+const SAME_TITLE_MS: u64 = 3_000;
+#[allow(dead_code)]
+/// Same place, different title (a typo, garbled characters): the lengths must agree this closely.
+const SAME_PLACE_MS: u64 = 2_000;
+
+#[allow(dead_code)] // used by Replace (after the App split, decision 0011)
+/// Pair an album's old tracks with its new files, surest evidence first: the MusicBrainz recording; then the same disc
+/// and number with the same title; then the same title with the same length (another numbering); then, only when both
+/// albums have the same number of tracks, the same disc and number with the same length. A pass pairs two tracks only
+/// when each is the other's single candidate, so nothing is guessed: what is left stays unpaired.
+pub fn pair(old: &[TrackFacts], new: &[TrackFacts]) -> Pairing {
+    let close = |a: Option<u64>, b: Option<u64>, ms: u64| matches!((a, b), (Some(a), Some(b)) if a.abs_diff(b) <= ms);
+    let place = |t: &TrackFacts| t.number.map(|n| (t.disc.unwrap_or(1), n));
+    let same_place = |o: &TrackFacts, n: &TrackFacts| place(o).is_some() && place(o) == place(n);
+    let folded_old: Vec<String> = old.iter().map(|t| fold(&t.title)).collect();
+    let folded_new: Vec<String> = new.iter().map(|t| fold(&t.title)).collect();
+    let same_title = |o: usize, n: usize| !folded_old[o].is_empty() && folded_old[o] == folded_new[n];
+    let same_count = old.len() == new.len();
+
+    let passes: [&dyn Fn(usize, usize) -> bool; 4] = [
+        &|o, n| matches!((&old[o].recording, &new[n].recording), (Some(a), Some(b)) if !a.is_empty() && a == b),
+        &|o, n| same_place(&old[o], &new[n]) && same_title(o, n),
+        &|o, n| same_title(o, n) && close(old[o].duration_ms, new[n].duration_ms, SAME_TITLE_MS),
+        &|o, n| same_count && same_place(&old[o], &new[n]) && close(old[o].duration_ms, new[n].duration_ms, SAME_PLACE_MS),
+    ];
+    let mut old_taken = vec![false; old.len()];
+    let mut new_taken = vec![false; new.len()];
+    let mut pairs = Vec::new();
+    for matches in passes {
+        let candidates: Vec<Vec<usize>> = (0..old.len())
+            .map(|o| if old_taken[o] { Vec::new() } else { (0..new.len()).filter(|&n| !new_taken[n] && matches(o, n)).collect() })
+            .collect();
+        for o in 0..old.len() {
+            let [n] = candidates[o][..] else { continue };
+            let wanted_by = candidates.iter().filter(|c| c.contains(&n)).count();
+            if wanted_by == 1 {
+                old_taken[o] = true;
+                new_taken[n] = true;
+                pairs.push((o, n));
+            }
+        }
+    }
+    pairs.sort_unstable();
+    Pairing {
+        pairs,
+        added: (0..new.len()).filter(|&n| !new_taken[n]).collect(),
+        retired: (0..old.len()).filter(|&o| !old_taken[o]).collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn track(number: u32, title: &str, secs: u64) -> TrackFacts {
+        TrackFacts { recording: None, disc: None, number: Some(number), title: title.into(), duration_ms: Some(secs * 1000) }
+    }
+
+    #[test]
+    fn the_same_album_in_another_format_pairs_track_by_track() {
+        let old = vec![track(1, "Sexy Boy", 298), track(2, "Kelly Watch the Stars", 225), track(3, "Talisman", 256)];
+        // FLAC lengths differ slightly from the MP3's; titles differ in case and punctuation.
+        let new = vec![track(1, "Sexy boy", 297), track(2, "Kelly Watch The Stars!", 226), track(3, "Talisman", 256)];
+        assert_eq!(pair(&old, &new), Pairing { pairs: vec![(0, 0), (1, 1), (2, 2)], added: vec![], retired: vec![] });
+    }
+
+    #[test]
+    fn recordings_win_over_numbers() {
+        let mut old = vec![track(1, "A", 100), track(2, "B", 200)];
+        let mut new = vec![track(1, "B", 200), track(2, "A", 100)];
+        old[0].recording = Some("rec-a".into());
+        new[1].recording = Some("rec-a".into());
+        let p = pair(&old, &new);
+        assert_eq!(p.pairs, vec![(0, 1), (1, 0)], "A by recording, B by title and length");
+    }
+
+    #[test]
+    fn another_numbering_pairs_by_title_and_length_and_a_bonus_track_is_added() {
+        let old = vec![track(1, "Intro", 60), track(2, "Song", 240)];
+        let new = vec![track(1, "Bonus Demo", 180), track(2, "Intro", 61), track(3, "Song", 239)];
+        assert_eq!(pair(&old, &new), Pairing { pairs: vec![(0, 1), (1, 2)], added: vec![0], retired: vec![] });
+    }
+
+    #[test]
+    fn a_garbled_title_pairs_by_place_and_length_only_when_the_track_lists_match() {
+        let old = vec![track(1, "CafÃ© Del Mar", 300), track(2, "Second", 200)];
+        let new = vec![track(1, "Café Del Mar", 301), track(2, "Second", 200)];
+        assert_eq!(pair(&old, &new).pairs, vec![(0, 0), (1, 1)]);
+        let longer = vec![track(1, "Café Del Mar", 301), track(2, "Second", 200), track(3, "Third", 100)];
+        let p = pair(&old, &longer);
+        assert_eq!((p.pairs, p.added, p.retired), (vec![(1, 1)], vec![0, 2], vec![0]), "other track lists: no guessing by place");
+    }
+
+    #[test]
+    fn ambiguity_is_never_guessed() {
+        // Two interludes of nearly the same length, renumbered: either could be either.
+        let old = vec![track(3, "Interlude", 60), track(7, "Interlude", 61)];
+        let new = vec![track(4, "Interlude", 60), track(8, "Interlude", 61)];
+        assert_eq!(pair(&old, &new), Pairing { pairs: vec![], added: vec![0, 1], retired: vec![0, 1] });
+    }
+
+    #[test]
+    fn a_track_gone_from_the_new_album_is_retired_and_discs_count() {
+        let mut old = vec![track(1, "One", 100), track(1, "Other", 150)];
+        old[1].disc = Some(2);
+        let mut new = vec![track(1, "Other", 150)];
+        new[0].disc = Some(2);
+        assert_eq!(pair(&old, &new), Pairing { pairs: vec![(1, 0)], added: vec![], retired: vec![0] });
+    }
 
     fn album(artist: &str, title: &str, rg: Option<&str>, tracks: u32, quality: Quality) -> AlbumFacts {
         AlbumFacts { release_group: rg.map(str::to_string), artist: artist.into(), title: title.into(), tracks, quality }
