@@ -12,13 +12,100 @@ use tokio::sync::Mutex;
 
 use super::ToggleError;
 use super::library::{Active, Library, epoch_now, label_of};
-use crate::journal::{Entry, Event, EventId, Journal};
+use crate::journal::{Entry, Event, EventId, Journal, TrackMove};
 use crate::ports::{Acquisition, Files};
 
 /// The handler name in the journal for telling Lidarr (decision 0011 §6). Its result is what it stopped fetching.
 const ACQUISITION: &str = "acquisition";
 /// What the acquisition handler is about to stop fetching, recorded before it acts (plan, then act).
 const ACQUISITION_PLAN: &str = "acquisition-plan";
+/// The handler that gives moved files' new server items the play data of their old ones (decision 0013).
+const PLAYDATA: &str = "playdata";
+/// What each moved file's old item held (plays, favourites…), read before the move: the server forgets it after.
+const PLAYDATA_PLAN: &str = "playdata-plan";
+
+/// One user's data on one moved file's old server item, to give to its new item.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PlayData {
+    source: String,
+    track: i64,
+    old_item: String,
+    user: String,
+    data: serde_json::Value,
+}
+
+/// What Keep would do with an album, for the page to show before asking.
+#[derive(Debug, Serialize)]
+pub struct KeepPreview {
+    pub title: String,
+    /// The album's new folder in Music, when it can be named.
+    pub folder: Option<String>,
+    /// How many files move (music and others).
+    pub files: usize,
+    /// Why Keep cannot go ahead as it is (`needs_year`: the page asks for the year and tries again).
+    pub refused: Option<KeepRefused>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+pub enum KeepRefused {
+    NeedsYear,
+    /// Another reason, said as is.
+    Other(String),
+}
+
+#[derive(Debug, Serialize)]
+pub struct KeepResult {
+    /// Pass to undo.
+    pub undo: String,
+    pub title: String,
+    pub folder: String,
+}
+
+/// An Incoming album located on disk: the server's album, its catalogue folder, and that folder's path.
+struct Located {
+    album: source::Album,
+    dir: IncomingDir,
+    root: PathBuf,
+}
+
+/// Whether an audio file is beyond 16-bit/44.1 kHz (decision 0013: such albums are converted on the way in, which is
+/// not built yet, so Keep refuses them for now).
+fn is_hi_res(path: &std::path::Path) -> bool {
+    use lofty::prelude::*;
+    let read = || -> Result<lofty::file::TaggedFile> {
+        let probe = lofty::probe::Probe::open(path)?
+            .options(lofty::config::ParseOptions::new().read_tags(false).read_cover_art(false))
+            .guess_file_type()?;
+        Ok(probe.read()?)
+    };
+    let Ok(file) = read() else { return false };
+    let props = file.properties();
+    props.sample_rate().is_some_and(|r| r > 44_100) || props.bit_depth().is_some_and(|b| b > 16)
+}
+
+/// Every file under `dir` (recursively), relative to it, leaving out hidden files and folders.
+fn files_under(dir: &std::path::Path) -> Vec<String> {
+    fn walk(root: &std::path::Path, at: &std::path::Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(at) else { return };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let p = e.path();
+            if p.is_dir() {
+                walk(root, &p, out);
+            } else if let Ok(rel) = p.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
 use crate::settings;
 use crate::source::{self, Source};
 
@@ -429,10 +516,25 @@ impl IncomingService {
                     let root = self.lib.catalogue().folders().get(*folder as usize).cloned();
                     root.is_some_and(|r| crate::trash::holds(&r, token))
                 }
-                // Keep and Replace reconcile once they exist (decision 0013); until then nothing records them.
-                _ => false,
+                // Keep: it happened when any file reached Music; then it is finished forward (the moves repeat safely).
+                Event::AlbumAdopted { moves, .. } => {
+                    let folders = self.lib.catalogue().folders();
+                    moves.iter().any(|m| folders.get(m.to.0 as usize).is_some_and(|f| f.join(&m.to.1).is_file()))
+                }
+                Event::AlbumReplaced { .. } => false,
             };
             let (title, _) = entry.event.album();
+            if happened && matches!(entry.event, Event::AlbumAdopted { .. }) {
+                if let Some(steps) = self.steps(&entry.event) {
+                    let files = self.files.clone();
+                    let done = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
+                    if let Err(e) = done.and_then(|r| r) {
+                        tracing::warn!("could not finish keeping {title}: {e:#}");
+                        continue;
+                    }
+                }
+                self.finish_adopt(&entry.event, false).await;
+            }
             let result = if happened {
                 self.finish_reject(&entry.event).await;
                 tracing::info!("finished an interrupted action on {title}");
@@ -444,6 +546,18 @@ impl IncomingService {
             if let Err(e) = result {
                 tracing::warn!("journal: {e:#}");
             }
+        }
+    }
+
+    /// Undo an album action (Delete or Keep) by its undo key. Returns the album's title.
+    pub async fn undo(&self, key: &str) -> Result<String, ToggleError> {
+        let gone = || ToggleError::Refused("that can no longer be undone".into());
+        let id: EventId = key.parse().map_err(|_| gone())?;
+        let entry = self.journal.get(id)?.filter(|e| e.applied).ok_or_else(gone)?;
+        match &entry.event {
+            Event::AlbumRejected { .. } => self.undo_delete(key).await,
+            Event::AlbumAdopted { .. } => self.undo_keep(&entry).await,
+            Event::AlbumReplaced { .. } => Err(gone()),
         }
     }
 
@@ -478,8 +592,262 @@ impl IncomingService {
         Ok(title.clone())
     }
 
+    /// Find an Incoming album on disk.
+    async fn locate(&self, source_id: &str, album_id: &str) -> Result<Located, ToggleError> {
+        let album = self
+            .cache
+            .lock()
+            .await
+            .values()
+            .filter(|v| v.id == source_id)
+            .flat_map(|v| v.albums.iter())
+            .find(|a| a.id == album_id)
+            .cloned()
+            .ok_or_else(|| ToggleError::Refused("that album is no longer in Incoming".into()))?;
+        let path = album.path.clone().ok_or_else(|| ToggleError::Refused("the server gives no folder for that album".into()))?;
+        let (_, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        let dir = incoming_dir(&incoming, &path)
+            .cloned()
+            .ok_or_else(|| ToggleError::Refused("Cratarr cannot see that album's folder".into()))?;
+        let root = self
+            .lib
+            .catalogue()
+            .folders()
+            .get(dir.folder as usize)
+            .cloned()
+            .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
+        Ok(Located { album, dir, root })
+    }
+
+    /// Work out Keep for an album: its new names, or why not. Reads the disk and the catalogue; changes nothing.
+    async fn plan_keep(&self, at: &Located, year: Option<&str>) -> Result<(PathBuf, Result<crate::incoming::KeepPlan, KeepRefused>), ToggleError> {
+        let music = PathBuf::from(self.lib.music().ok_or_else(|| ToggleError::Refused("no Music library is set".into()))?);
+        let (c, folder, dir, root, music_, year) =
+            (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), music.clone(), year.map(str::to_string));
+        let plan = tokio::task::spawn_blocking(move || -> Result<Result<crate::incoming::KeepPlan, KeepRefused>> {
+            let prefix = format!("{dir}/");
+            let music_files: Vec<(String, crate::naming::Tags)> = c
+                .album_tags(folder, &dir)?
+                .into_iter()
+                .map(|(rel, tags)| (rel.strip_prefix(&prefix).unwrap_or(&rel).to_string(), crate::naming::Tags(tags)))
+                .collect();
+            if music_files.iter().any(|(rel, _)| is_hi_res(&root.join(&dir).join(rel))) {
+                return Ok(Err(KeepRefused::Other(
+                    "this album is hi-res; converting it to 16-bit/44.1 kHz on the way in is not there yet".into(),
+                )));
+            }
+            let others: Vec<String> =
+                files_under(&root.join(&dir)).into_iter().filter(|f| !music_files.iter().any(|(m, _)| m == f)).collect();
+            let template = crate::naming::Template::default();
+            Ok(match crate::incoming::plan_keep(&template, &music_files, &others, year.as_deref()) {
+                Ok(plan) if music_.join(&plan.folder).exists() => {
+                    Err(KeepRefused::Other(format!("Music already has a folder named {}", plan.folder)))
+                }
+                Ok(plan) => Ok(plan),
+                Err(crate::incoming::KeepRefusal::NeedsYear) => Err(KeepRefused::NeedsYear),
+                Err(e) => Err(KeepRefused::Other(e.to_string())),
+            })
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
+        Ok((music, plan))
+    }
+
+    /// What Keep would do with an album (decision 0013), for the page to show before asking. Changes nothing.
+    pub async fn keep_preview(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
+        let at = self.locate(source_id, album_id).await?;
+        let (_, plan) = self.plan_keep(&at, year).await?;
+        Ok(match plan {
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r) },
+        })
+    }
+
+    /// Keep (decision 0013): move a new album from Incoming into Music, named per the library's template. Write-ahead
+    /// like Delete; the files and catalogue rows move (track ids kept); Lidarr stops fetching it, and the moved
+    /// files' new server items get the old ones' play data (handlers). Undo puts it all back.
+    pub async fn keep(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        let at = self.locate(source_id, album_id).await?;
+        let (music, plan) = self.plan_keep(&at, year).await?;
+        let plan = plan.map_err(|r| match r {
+            KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
+            KeepRefused::Other(why) => ToggleError::Refused(why),
+        })?;
+        if !self.can_write(&at.root).await || !self.can_write(&music).await {
+            return Err(ToggleError::Refused("Cratarr cannot write in Incoming or Music".into()));
+        }
+        let c = self.lib.catalogue();
+        let from = |rel: &str| format!("{}/{rel}", at.dir.dir);
+        let moves: Vec<TrackMove> = plan
+            .moves
+            .iter()
+            .map(|(rel, to)| TrackMove { track: c.track_of(at.dir.folder, &from(rel)), from: (at.dir.folder, from(rel)), to: (0, to.clone()) })
+            .collect();
+        // Before anything moves: what users did with the old server items (the server forgets them after).
+        let mut play: Vec<PlayData> = Vec::new();
+        for (source, s) in self.lib.connected_sources() {
+            let rels: Vec<String> = moves.iter().map(|m| m.from.1.clone()).collect();
+            let items = c.track_ids(&source, at.dir.folder, &rels).unwrap_or_default();
+            for (m, item) in moves.iter().zip(items) {
+                let (Some(track), Some(item)) = (m.track, item) else { continue };
+                match s.user_data(&item).await {
+                    Ok(users) => play.extend(users.into_iter().map(|(user, data)| PlayData {
+                        source: source.clone(),
+                        track,
+                        old_item: item.clone(),
+                        user,
+                        data,
+                    })),
+                    Err(e) => tracing::warn!("{source}: could not read the play data of {item}: {e:#}"),
+                }
+            }
+        }
+        let event = Event::AlbumAdopted {
+            source: source_id.to_string(),
+            album_id: at.album.id.clone(),
+            title: at.album.title.clone(),
+            from_dir: (at.dir.folder, at.dir.dir.clone()),
+            to_dir: (0, plan.folder.clone()),
+            moves,
+            release_group: at.dir.release_group.clone(),
+        };
+        let now = epoch_now();
+        let id = self.journal.intend(now, &event)?;
+        self.journal.done(id, PLAYDATA_PLAN, now, &serde_json::to_value(&play).map_err(anyhow::Error::from)?)?;
+        let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
+        let files = self.files.clone();
+        let moved = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
+        if let Err(e) = moved.and_then(|r| r) {
+            self.journal.forget(id)?;
+            return Err(ToggleError::Refused(format!("{e:#}")));
+        }
+        self.finish_adopt(&event, false).await;
+        self.journal.applied(id)?;
+        self.hidden.lock().await.insert(at.album.id.clone());
+        *self.owned.lock().await = None;
+        c.poke();
+        Ok(KeepResult { undo: id.to_string(), title: at.album.title, folder: plan.folder })
+    }
+
+    /// The file moves of an album action, as paths on disk; `None` when a folder is no longer in use.
+    fn steps(&self, event: &Event) -> Option<Vec<crate::moves::Step>> {
+        let folders = self.lib.catalogue().folders();
+        let moves = match event {
+            Event::AlbumAdopted { moves, .. } => moves,
+            _ => return Some(Vec::new()),
+        };
+        moves
+            .iter()
+            .map(|m| {
+                Some(crate::moves::Step {
+                    from: (folders.get(m.from.0 as usize)?.clone(), m.from.1.clone()),
+                    to: (folders.get(m.to.0 as usize)?.clone(), m.to.1.clone()),
+                })
+            })
+            .collect()
+    }
+
+    /// After the files moved (or moved back, `back`): the catalogue rows follow, track ids kept, and the servers hear
+    /// of it at once. Safe to repeat.
+    async fn finish_adopt(&self, event: &Event, back: bool) {
+        let Event::AlbumAdopted { moves, title, .. } = event else { return };
+        let c = self.lib.catalogue();
+        let pairs: Vec<((i64, String), (i64, String))> =
+            moves.iter().map(|m| if back { (m.to.clone(), m.from.clone()) } else { (m.from.clone(), m.to.clone()) }).collect();
+        let c2 = c.clone();
+        let moved = tokio::task::spawn_blocking(move || -> Result<()> {
+            for ((ff, fr), (tf, tr)) in &pairs {
+                c2.move_files(*ff, fr, *tf, tr)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .and_then(|r| r);
+        if let Err(e) = moved {
+            tracing::warn!("catalogue: could not follow the files of {title}: {e:#}");
+        }
+        // Tell each server, in its own paths, which files appeared and which went.
+        let folders = c.folders();
+        for (a, s) in self.lib.connected() {
+            let server_path = |(folder, rel): &(i64, String)| -> Option<String> {
+                let f = folders.get(*folder as usize)?.display().to_string();
+                a.placement.root(&f).map(|root| format!("{root}{rel}"))
+            };
+            let mut changes: Vec<(String, bool)> = Vec::new();
+            for m in moves {
+                let (gone, came) = if back { (&m.to, &m.from) } else { (&m.from, &m.to) };
+                changes.extend(server_path(gone).map(|p| (p, false)));
+                changes.extend(server_path(came).map(|p| (p, true)));
+            }
+            if !changes.is_empty()
+                && let Err(e) = s.files_changed(&changes).await
+            {
+                tracing::warn!("{}: could not tell it about {title}: {e:#}", a.cfg.id);
+            }
+        }
+    }
+
+    /// Undo a Keep: the files back into Incoming, the catalogue rows with them, Lidarr fetching as before.
+    async fn undo_keep(&self, entry: &Entry) -> Result<String, ToggleError> {
+        let Event::AlbumAdopted { album_id, title, .. } = &entry.event else { unreachable!() };
+        if entry.undone {
+            return Err(ToggleError::Refused(format!("{title} is already back in Incoming")));
+        }
+        let steps = self.steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
+        let files = self.files.clone();
+        tokio::task::spawn_blocking(move || files.move_back(&steps))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        self.finish_adopt(&entry.event, true).await;
+        self.journal.mark_undone(entry.id, epoch_now())?;
+        self.resume_fetching(entry.id, title).await;
+        self.hidden.lock().await.remove(album_id);
+        *self.owned.lock().await = None;
+        self.lib.catalogue().poke();
+        Ok(title.clone())
+    }
+
+    /// Give the moved files' new server items the play data their old items had (read before the move). Waits until
+    /// the server has the new items and Cratarr has linked them (a scan, then a sync pass); safe to repeat.
+    async fn carry_play_data(&self, entry: &Entry) {
+        if self.journal.result(entry.id, PLAYDATA).ok().flatten().is_some() {
+            return;
+        }
+        let plan: Vec<PlayData> =
+            self.journal.result(entry.id, PLAYDATA_PLAN).ok().flatten().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        let c = self.lib.catalogue();
+        let sources: std::collections::HashMap<String, Arc<dyn Source>> = self.lib.connected_sources().into_iter().collect();
+        let mut ready = Vec::new();
+        for p in &plan {
+            let Some(s) = sources.get(&p.source) else { return };
+            match c.source_id_of(&p.source, p.track) {
+                Some(new) if new != p.old_item => ready.push((s.clone(), new, p)),
+                _ => return, // not scanned or linked yet: the next pass tries again
+            }
+        }
+        for (s, new, p) in ready {
+            if let Err(e) = s.set_user_data(&new, &p.user, &p.data).await {
+                tracing::warn!("{}: could not carry play data to {new}: {e:#}", p.source);
+                return;
+            }
+        }
+        if let Err(e) = self.journal.done(entry.id, PLAYDATA, epoch_now(), &serde_json::json!(plan.len())) {
+            tracing::warn!("journal: {e:#}");
+        }
+    }
+
     /// React to a journal event (decision 0011 §6). Safe to call twice: what is done is recorded per event.
     pub(super) async fn handle(&self, entry: &Entry) {
+        if matches!(entry.event, Event::AlbumRejected { .. }) {
+            // Nothing moved, so no play data to carry.
+            if self.journal.result(entry.id, PLAYDATA).ok().flatten().is_none() {
+                let _ = self.journal.done(entry.id, PLAYDATA, epoch_now(), &serde_json::json!(0));
+            }
+        } else {
+            self.carry_play_data(entry).await;
+        }
         if self.journal.result(entry.id, ACQUISITION).ok().flatten().is_some() {
             return;
         }
@@ -544,13 +912,17 @@ impl IncomingService {
     pub(super) async fn catch_up(&self) {
         self.reconcile().await;
         let since = epoch_now() - i64::from(self.trash_days()) * 86_400;
-        match self.journal.pending(ACQUISITION, since) {
-            Ok(entries) => {
-                for e in &entries {
-                    self.handle(e).await;
-                }
+        let mut entries = Vec::new();
+        for handler in [ACQUISITION, PLAYDATA] {
+            match self.journal.pending(handler, since) {
+                Ok(list) => entries.extend(list),
+                Err(e) => tracing::warn!("journal: {e:#}"),
             }
-            Err(e) => tracing::warn!("journal: {e:#}"),
+        }
+        entries.sort_by_key(|e| e.id);
+        entries.dedup_by_key(|e| e.id);
+        for e in &entries {
+            self.handle(e).await;
         }
     }
 

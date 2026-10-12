@@ -5,7 +5,10 @@
     getIncoming,
     incomingCoverUrl,
     playIncoming,
-    undoDelete,
+    keepIncoming,
+    keepPreview,
+    undoIncoming,
+    type KeepPreview,
     type IncomingAlbum,
     type IncomingSource,
   } from './lib/api';
@@ -25,8 +28,56 @@
   let notice = $state<NoticeData | null>(null);
   let starting = $state<string | null>(null);
 
-  // The open menu of one album (Play, Delete album), anchored to it; `ask` = the in-place delete question.
-  let menu = $state<{ source: string; a: IncomingAlbum; anchor: DOMRect; ask: boolean; deletable: boolean } | null>(null);
+  // The open menu of one album (Play, Keep in Music, Delete album), anchored to it; `ask` = the in-place question.
+  // Keep is offered for an album that is not in Music yet (no verdict) and whose folder Cratarr can write.
+  let menu = $state<{
+    source: string;
+    a: IncomingAlbum;
+    anchor: DOMRect;
+    ask: false | 'delete' | 'keep';
+    deletable: boolean;
+    keepable: boolean;
+  } | null>(null);
+  let keep = $state<KeepPreview | null>(null);
+  let year = $state('');
+
+  async function askKeep() {
+    if (!menu) return;
+    menu.ask = 'keep';
+    keep = null;
+    year = '';
+    try {
+      keep = await keepPreview(menu.source, menu.a.id);
+    } catch (e) {
+      notice = { text: e instanceof ApiError ? e.message : 'Could not work out the names', tone: 'error' };
+      menu = null;
+    }
+  }
+
+  // With a year typed in, show what the names would be.
+  async function tryYear() {
+    if (!menu || !/^\d{4}$/.test(year.trim())) return;
+    try {
+      keep = await keepPreview(menu.source, menu.a.id, year.trim());
+    } catch {
+      /* keep the question open */
+    }
+  }
+
+  async function keepIt(source: string, a: IncomingAlbum) {
+    if (working) return;
+    working = true;
+    try {
+      const { undo, title } = await keepIncoming(source, a.id, year.trim() || undefined);
+      sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
+      notice = { text: `Kept ${title} in Music.`, undo: () => restore(undo) };
+    } catch (e) {
+      notice = { text: e instanceof ApiError ? e.message : 'Could not keep the album', tone: 'error' };
+    } finally {
+      working = false;
+      menu = null;
+    }
+  }
   let working = $state(false);
 
   async function reload() {
@@ -54,7 +105,7 @@
 
   async function restore(undo: string) {
     try {
-      await undoDelete(undo);
+      await undoIncoming(undo);
       notice = null;
       await reload();
     } catch (e) {
@@ -140,7 +191,8 @@
                 disabled={starting !== null}
                 aria-busy={starting === a.id}
                 onclick={() => play(s.id, a)}
-                use:longpress={(anchor) => (menu = { source: s.id, a, anchor, ask: false, deletable: s.deletable.includes(a.id) })}
+                use:longpress={(anchor) =>
+                  (menu = { source: s.id, a, anchor, ask: false, deletable: s.deletable.includes(a.id), keepable: s.deletable.includes(a.id) && !s.verdicts?.[a.id] })}
               >
               {#if noCover[a.id]}
                 <div class="cover none" aria-hidden="true"></div>
@@ -187,10 +239,32 @@
     {#if !m.ask}
       <div class="items" role="menu">
         <button role="menuitem" onclick={() => { menu = null; play(m.source, m.a); }}>Play</button>
+        {#if m.keepable}
+          <button role="menuitem" onclick={askKeep}>Keep in Music</button>
+        {/if}
         {#if m.deletable}
           <hr />
-          <button role="menuitem" class="danger" onclick={() => menu && (menu.ask = true)}>Delete album</button>
+          <button role="menuitem" class="danger" onclick={() => menu && (menu.ask = 'delete')}>Delete album</button>
         {/if}
+      </div>
+    {:else if m.ask === 'keep'}
+      <div class="form">
+        {#if !keep}
+          <p class="ask">Working out the names…</p>
+        {:else if keep.refused?.kind === 'needs_year'}
+          <p class="ask">The tags don't say when {m.a.title} came out. Which year?</p>
+          <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
+        {:else if keep.refused}
+          <p class="ask">Can't keep {m.a.title}: {keep.refused.detail}</p>
+        {:else}
+          <p class="ask">Move {m.a.title} into Music as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?</p>
+        {/if}
+        <div class="actions">
+          {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
+            <button class="primary" disabled={working || !!keep.refused} onclick={() => keepIt(m.source, m.a)}>Keep in Music</button>
+          {/if}
+          <button onclick={() => (menu = null)}>Cancel</button>
+        </div>
       </div>
     {:else}
       <div class="form">
@@ -429,6 +503,24 @@
     font: inherit;
     color: inherit;
     cursor: pointer;
+  }
+
+  .actions button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+
+  .year {
+    min-height: 40px;
+    width: 7em;
+    padding: 0 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font: inherit;
+    color: inherit;
   }
 
   .actions button.danger.solid {

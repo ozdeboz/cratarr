@@ -24,7 +24,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 pub use error::ToggleError;
-pub use incoming::{DeleteResult, IncomingService, IncomingView, LidarrView};
+pub use incoming::{DeleteResult, IncomingService, IncomingView, KeepPreview, KeepResult, LidarrView};
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{PlayingService, StateView};

@@ -39,7 +39,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/incoming", get(incoming))
         .route("/api/incoming/cover/{source}/{album}", get(incoming_cover))
         .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
-        .route("/api/incoming/undo", post(undo_delete))
+        .route("/api/incoming/undo", post(undo_incoming))
+        .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
         .route("/api/incoming/play/{source}/{album}", post(play_incoming))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
@@ -123,12 +124,37 @@ async fn delete_incoming(
 }
 
 #[derive(Deserialize)]
-struct UndoDeleteBody {
+struct UndoBody {
     undo: String,
 }
 
-async fn undo_delete(State(app): State<Arc<App>>, Json(b): Json<UndoDeleteBody>) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "restored": app.incoming.undo_delete(&b.undo).await? })))
+/// Undo an Incoming action (Delete, Keep) by the key it returned.
+async fn undo_incoming(State(app): State<Arc<App>>, Json(b): Json<UndoBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "restored": app.incoming.undo(&b.undo).await? })))
+}
+
+#[derive(Deserialize, Default)]
+struct KeepYear {
+    /// Stands in for a missing release year (the page asks for it).
+    #[serde(default)]
+    year: Option<String>,
+}
+
+async fn keep_preview(
+    State(app): State<Arc<App>>,
+    Path((source, album)): Path<(String, String)>,
+    Query(q): Query<KeepYear>,
+) -> Result<Json<crate::app::KeepPreview>, ApiError> {
+    Ok(Json(app.incoming.keep_preview(&source, &album, q.year.as_deref()).await?))
+}
+
+async fn keep_incoming(
+    State(app): State<Arc<App>>,
+    Path((source, album)): Path<(String, String)>,
+    body: Option<Json<KeepYear>>,
+) -> Result<Json<crate::app::KeepResult>, ApiError> {
+    let year = body.map(|Json(b)| b).unwrap_or_default().year;
+    Ok(Json(app.incoming.keep(&source, &album, year.as_deref()).await?))
 }
 
 async fn incoming_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {

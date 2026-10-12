@@ -362,11 +362,30 @@ export const deleteIncoming = (source: string, album: string) =>
   request<{ undo: string; title: string }>(`/api/incoming/delete/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, {
     method: 'POST',
   });
-export const undoDelete = (undo: string) =>
+/** Undo an Incoming action (Delete, Keep) by the key it returned. */
+export const undoIncoming = (undo: string) =>
   request<{ restored: string }>('/api/incoming/undo', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ undo }),
+  });
+
+/** What Keep would do with an album: its new folder in Music, or why not (`needs_year`: ask for the year). */
+export type KeepPreview = {
+  title: string;
+  folder: string | null;
+  files: number;
+  refused: { kind: 'needs_year' } | { kind: 'other'; detail: string } | null;
+};
+const keepPath = (source: string, album: string) => `/api/incoming/keep/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
+export const keepPreview = (source: string, album: string, year?: string) =>
+  request<KeepPreview>(`${keepPath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);
+/** Keep an Incoming album: it moves into Music, named the library's way (Undo brings it back). */
+export const keepIncoming = (source: string, album: string, year?: string) =>
+  request<{ undo: string; title: string; folder: string }>(keepPath(source, album), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(year ? { year } : {}),
   });
 
 /** A name with a count: "Downtempo", 120 albums. */
