@@ -38,6 +38,11 @@ Checked on the reference install (Jellyfin 10.11, read-only):
   removed.
 - Incoming tracks may be in playlists. Adopting the album keeps them (same track ids, decision 0011). Rejecting it
   takes them out of both copies, and Undo puts them back.
+  The journal's "playlists" handler (`app/follow.rs`) does this:
+  - Keep and Replace: each `.m3u` line naming a moved file is renamed to the file's new place.
+  - Delete: the album's lines are taken out, after recording where each one stood. Undo puts them back there.
+  - The Jellyfin copies follow through the sync. The sync skips its merge while an album action is under way, so a
+    line naming a file that just moved is never mistaken for a removed track.
 - Only playlists Cratarr tracks are synced. Jellyfin playlists made by others (the weekly ListenBrainz ones) are
   left alone.
 - Sync state (which `.m3u` goes with which Jellyfin playlist, and the last agreed list) lives in the data folder,

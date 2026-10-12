@@ -40,14 +40,41 @@ pub struct SyncStatus {
 pub struct SyncService {
     lib: Arc<Library>,
     state: SyncState,
+    /// Playlist lines follow album actions (the journal's "playlists" handler), one at a time with the passes.
+    follow: super::follow::Follow,
     one_at_a_time: tokio::sync::Mutex<()>,
     /// The last pass per server id.
     last: std::sync::Mutex<std::collections::HashMap<String, SyncStatus>>,
 }
 
 impl SyncService {
-    pub(super) fn new(lib: Arc<Library>, state: SyncState) -> Self {
-        Self { lib, state, one_at_a_time: tokio::sync::Mutex::new(()), last: Default::default() }
+    pub(super) fn new(lib: Arc<Library>, state: SyncState, journal: Arc<crate::journal::Journal>) -> Self {
+        let follow = super::follow::Follow::new(lib.clone(), journal);
+        Self { lib, state, follow, one_at_a_time: tokio::sync::Mutex::new(()), last: Default::default() }
+    }
+
+    /// Hear of album actions and their Undo, and make the playlist lines follow at once, for as long as Cratarr runs.
+    /// What is missed (a lag, a failed write) the pass catches up.
+    pub(super) fn listen(self: &Arc<Self>) {
+        use tokio::sync::broadcast::error::RecvError;
+        let journal = self.follow.journal();
+        for (mut rx, undone) in [(journal.subscribe(), false), (journal.subscribe_undone(), true)] {
+            let me = Arc::downgrade(self);
+            tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Ok(id) => {
+                            let Some(me) = me.upgrade() else { return };
+                            let Ok(Some(entry)) = me.follow.journal().get(id) else { continue };
+                            let _one = me.one_at_a_time.lock().await;
+                            if undone { me.follow.handle_undo(&entry).await } else { me.follow.handle(&entry).await }
+                        }
+                        Err(RecvError::Lagged(_)) => {}
+                        Err(RecvError::Closed) => return,
+                    }
+                }
+            });
+        }
     }
 
     /// How the last pass went with a server; `None` before one ran (or with no playlist owner set).
@@ -66,6 +93,7 @@ impl SyncService {
     /// a version is all a migration takes (decision 0012).
     pub async fn pass(&self) {
         let _one = self.one_at_a_time.lock().await;
+        self.follow.catch_up().await;
         let owned = self.lib.connected().iter().any(|(a, _)| crate::source::text(&a.cfg.values, PLAYLIST_USER).is_some());
         if !owned {
             return;
@@ -80,6 +108,10 @@ impl SyncService {
             return;
         }
         let Some(store) = self.lib.store_opt() else { return };
+        // Mid album action, a line can name a file that just moved: merged now, its track would leave the server copy.
+        if self.follow.busy() {
+            return;
+        }
         for (a, s) in self.lib.connected() {
             let Some(user) = crate::source::text(&a.cfg.values, PLAYLIST_USER).map(str::to_string) else { continue };
             let done = sync_server(&store, self.lib.catalogue(), &*s, &self.state, &a.cfg.id, &user).await;
@@ -208,7 +240,7 @@ impl Translate {
 }
 
 /// `target` as a path relative to the folder `base` ("../lidarr-music/A/01.flac").
-fn relative_to(base: &Path, target: &Path) -> Option<String> {
+pub(super) fn relative_to(base: &Path, target: &Path) -> Option<String> {
     let (b, t): (Vec<_>, Vec<_>) = (base.components().collect(), target.components().collect());
     let common = b.iter().zip(&t).take_while(|(x, y)| x == y).count();
     if common == 0 {

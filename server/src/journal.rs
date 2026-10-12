@@ -109,6 +109,8 @@ pub struct Journal {
     db: Mutex<Connection>,
     /// New events, for the handlers listening (`subscribe`).
     tell: tokio::sync::broadcast::Sender<EventId>,
+    /// Events just undone, for handlers that put their work back (`subscribe_undone`).
+    tell_undone: tokio::sync::broadcast::Sender<EventId>,
 }
 
 impl Journal {
@@ -129,7 +131,7 @@ impl Journal {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}")).context("updating the journal")?;
             }
         }
-        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0 })
+        Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0, tell_undone: tokio::sync::broadcast::channel(64).0 })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -235,9 +237,35 @@ impl Journal {
         .collect()
     }
 
-    /// Mark an event undone. False when it already was (so an Undo runs once).
+    /// Mark an event undone, then tell whoever listens for that. False when it already was (so an Undo runs once).
     pub fn mark_undone(&self, id: EventId, at: i64) -> Result<bool> {
-        Ok(self.db().execute("UPDATE events SET undone_at = ?2 WHERE id = ?1 AND undone_at IS NULL", params![id, at])? == 1)
+        let marked = self.db().execute("UPDATE events SET undone_at = ?2 WHERE id = ?1 AND undone_at IS NULL", params![id, at])? == 1;
+        if marked {
+            let _ = self.tell_undone.send(id);
+        }
+        Ok(marked)
+    }
+
+    /// Event ids as they are undone. A listener that falls behind catches up through `undone_since`.
+    pub fn subscribe_undone(&self) -> tokio::sync::broadcast::Receiver<EventId> {
+        self.tell_undone.subscribe()
+    }
+
+    /// Undone events since `since` that `handler` handled and has not put back yet (no `undo_handler` row), oldest
+    /// first.
+    pub fn undone_since(&self, handler: &str, undo_handler: &str, since: i64) -> Result<Vec<Entry>> {
+        let db = self.db();
+        let mut st = db.prepare(
+            "SELECT id, at, event FROM events e WHERE at >= ?3 AND undone_at IS NOT NULL
+             AND EXISTS (SELECT 1 FROM handled h WHERE h.event = e.id AND h.handler = ?1)
+             AND NOT EXISTS (SELECT 1 FROM handled h WHERE h.event = e.id AND h.handler = ?2) ORDER BY id",
+        )?;
+        let rows = st.query_map(params![handler, undo_handler, since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        rows.map(|r| {
+            let (id, at, event) = r?;
+            Ok(Entry { id, at, event: serde_json::from_str(&event)?, undone: true, applied: true })
+        })
+        .collect()
     }
 
     /// Forget events older than `before` (epoch seconds): nothing can undo or handle them any more.
@@ -329,6 +357,23 @@ mod tests {
         assert!(!j.mark_undone(id, 201).unwrap(), "twice: no");
         assert!(j.get(id).unwrap().unwrap().undone);
         assert!(j.pending("acquisition", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_undo_is_heard_of_and_listed_until_put_back() {
+        let j = Journal::open(None).unwrap();
+        let mut rx = j.subscribe_undone();
+        let (a, b) = (j.record(100, &rejected("A")).unwrap(), j.record(100, &rejected("B")).unwrap());
+        j.done(a, "playlists", 101, &serde_json::json!(1)).unwrap();
+        j.mark_undone(a, 200).unwrap();
+        j.mark_undone(b, 200).unwrap();
+        j.mark_undone(a, 201).unwrap();
+        assert_eq!((rx.try_recv().unwrap(), rx.try_recv().unwrap()), (a, b));
+        assert!(rx.try_recv().is_err(), "heard of once");
+        let ids = |v: Vec<Entry>| v.into_iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(ids(j.undone_since("playlists", "playlists-undone", 0).unwrap()), vec![a], "only what the handler did");
+        j.done(a, "playlists-undone", 202, &serde_json::json!(1)).unwrap();
+        assert!(j.undone_since("playlists", "playlists-undone", 0).unwrap().is_empty());
     }
 
     #[test]

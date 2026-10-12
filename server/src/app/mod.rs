@@ -10,6 +10,7 @@
 //! - `settings`: the Settings page.
 
 mod error;
+mod follow;
 mod incoming;
 mod insights;
 mod library;
@@ -69,11 +70,13 @@ impl App {
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
         let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules).await?;
         let sync_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("playlist-sync.sqlite"));
-        let sync = Arc::new(sync::SyncService::new(library.clone(), crate::sync_state::SyncState::open(sync_file.as_deref())?));
-        let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone()));
-        let files = crate::ports::disk();
         let journal_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("journal.sqlite"));
         let journal = Arc::new(crate::journal::Journal::open(journal_file.as_deref())?);
+        let sync_state = crate::sync_state::SyncState::open(sync_file.as_deref())?;
+        let sync = Arc::new(sync::SyncService::new(library.clone(), sync_state, journal.clone()));
+        sync.listen();
+        let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone()));
+        let files = crate::ports::disk();
         let incoming = Arc::new(IncomingService::new(library.clone(), files.clone(), journal, saved.lidarr, saved.trash_days));
         incoming.listen();
         let playing = PlayingService::new(library.clone(), playlists.clone());

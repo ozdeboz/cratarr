@@ -128,25 +128,8 @@ impl PlaylistService {
         Ok(PlayResult { player, sent: ids.len(), total, unknown })
     }
 
-    /// Best effort, in the background: every connected source hears about changed playlist files, each with the
-    /// file's path as it sees it.
     fn tell_sources(&self, changes: Vec<(String, PlaylistChange)>) {
-        let Some(music) = self.lib.music() else { return };
-        // Hidden from Jellyfin (decision 0012): the playlist sync keeps the servers' copies instead.
-        if self.lib.store_opt().is_some_and(|s| s.is_hidden()) {
-            return;
-        }
-        for (a, s) in self.lib.connected() {
-            let events: Vec<PlaylistEvent> = changes
-                .iter()
-                .map(|(name, change)| PlaylistEvent { name: name.clone(), path: a.placement.playlist_path(&music, name), change: *change })
-                .collect();
-            tokio::spawn(async move {
-                if let Err(e) = s.playlists_changed(events).await {
-                    tracing::warn!("source {}: could not pass on playlist changes: {e:#}", a.cfg.id);
-                }
-            });
-        }
+        tell_sources(&self.lib, changes);
     }
 
     /// 0 when there is no Music folder.
@@ -269,5 +252,26 @@ impl PlaylistService {
         if let Some(store) = self.lib.store_opt() {
             store.refresh_dead().await;
         }
+    }
+}
+
+/// Best effort, in the background: every connected source hears about changed playlist files, each with the file's
+/// path as it sees it.
+pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>) {
+    let Some(music) = lib.music() else { return };
+    // Hidden from Jellyfin (decision 0012): the playlist sync keeps the servers' copies instead.
+    if lib.store_opt().is_some_and(|s| s.is_hidden()) {
+        return;
+    }
+    for (a, s) in lib.connected() {
+        let events: Vec<PlaylistEvent> = changes
+            .iter()
+            .map(|(name, change)| PlaylistEvent { name: name.clone(), path: a.placement.playlist_path(&music, name), change: *change })
+            .collect();
+        tokio::spawn(async move {
+            if let Err(e) = s.playlists_changed(events).await {
+                tracing::warn!("source {}: could not pass on playlist changes: {e:#}", a.cfg.id);
+            }
+        });
     }
 }

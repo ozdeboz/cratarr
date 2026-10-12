@@ -548,6 +548,32 @@ impl Store {
         Ok(changed)
     }
 
+    /// Give every playlist the entries `edit` returns for it (`None`: leave it as it is), each backed up like every
+    /// edit. A file that is not UTF-8 is left alone. Returns the playlists that changed.
+    pub async fn edit_all(&self, edit: impl Fn(&str, &[String]) -> Option<Vec<String>>) -> Result<Vec<String>> {
+        let _one_writer = self.write.lock().await;
+        let mut changed = Vec::new();
+        for (id, _, _) in self.list().await? {
+            let (path, perms, text) = match self.load_for_edit(&id).await {
+                Ok(f) => f,
+                Err(StoreError::Unknown) => continue, // gone since the listing
+                Err(e) => {
+                    tracing::warn!("{id}: {e:#}");
+                    continue;
+                }
+            };
+            let entries: Vec<String> = m3u::entries(&text).map(|l| unprefixed(&l, &self.prefix)).collect();
+            let Some(new) = edit(&id, &entries) else { continue };
+            let lines: Vec<String> = new.iter().map(|e| self.line(e)).collect();
+            let new_text = m3u::with_entries(&text, &lines);
+            if new_text != text {
+                self.commit(&id, &path, perms, &new_text).await?;
+                changed.push(id);
+            }
+        }
+        Ok(changed)
+    }
+
     /// Put the playlist back as it was before its last change (the newest backup). The current file is backed up
     /// first, so an undo can itself be undone.
     pub async fn undo(&self, id: &str) -> Result<(), StoreError> {
