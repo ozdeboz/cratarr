@@ -1,0 +1,250 @@
+//! The library (decision 0011): the servers in use and where their music lies, the folders behind the libraries in
+//! use, the Music folder's playlist store and the catalogue. The other services read it; changes to the servers go
+//! through `switch_to`, one at a time.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use anyhow::Result;
+use serde::Serialize;
+use tokio::sync::Mutex;
+
+use super::ToggleError;
+use crate::catalogue::Catalogue;
+use crate::placement::{self, Placement};
+use crate::playlists::Store;
+use crate::settings::{Folders, SourceConfig};
+use crate::source::{self, Source};
+
+/// One enabled source, for the page's source picker.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct SourceTab {
+    pub id: String,
+    pub label: String,
+    pub playing: bool,
+}
+
+pub(crate) fn epoch_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+pub(super) fn label_of(cfg: &SourceConfig) -> String {
+    source::kind(&cfg.kind).map_or_else(|| cfg.kind.clone(), |k| k.label.to_string())
+}
+
+/// The catalogue's folders: the Music folder first (id 0), then the incoming ones.
+fn catalogue_folders(folders: &Folders) -> Vec<PathBuf> {
+    folders.all().into_iter().map(PathBuf::from).collect()
+}
+
+/// The folders mounted into the container, without the data folder.
+fn mounted(data_dir: Option<&str>) -> Vec<String> {
+    crate::mounts::list(&data_dir.into_iter().collect::<Vec<_>>())
+}
+
+/// Every folder a server's music is looked for in: the mounted ones, and the Music folder in use (which need not be a
+/// mount point of its own).
+fn place_folders(data_dir: Option<&str>, music: Option<&str>) -> Vec<String> {
+    let mut out = mounted(data_dir);
+    if let Some(m) = music {
+        if !out.iter().any(|f| f == m) {
+            out.push(m.to_string());
+        }
+    }
+    out
+}
+
+/// Where the libraries in use keep their files, as Cratarr sees them (decision 0009). The Music folder is the first
+/// one a Music library was found in; `last_music` stands in while no server has answered (or none has a Music
+/// library yet).
+pub(super) fn derive_folders(live: &[Arc<Active>], last_music: Option<&str>) -> Folders {
+    let found = |a: &Active, ids: &[String]| -> Vec<String> {
+        ids.iter()
+            .filter_map(|id| a.placement.libraries.iter().find(|l| &l.id == id))
+            .flat_map(|l| l.folders.clone())
+            .collect()
+    };
+    let up: Vec<&Arc<Active>> = live.iter().filter(|a| a.source.is_some()).collect();
+    let music = up.iter().flat_map(|a| found(a, &a.cfg.libraries.music)).next().or_else(|| last_music.map(str::to_string));
+    let mut incoming: Vec<String> =
+        up.iter().flat_map(|a| found(a, &a.cfg.libraries.incoming)).filter(|f| Some(f) != music.as_ref()).collect();
+    incoming.sort();
+    incoming.dedup();
+    Folders { music, incoming }
+}
+
+/// A configured source and, when it is enabled and its settings work, the connection and where its music lies.
+pub(super) struct Active {
+    pub(super) cfg: SourceConfig,
+    pub(super) source: Option<Arc<dyn Source>>,
+    pub(super) placement: Placement,
+    pub(super) error: Option<String>,
+}
+
+impl Active {
+    pub(super) async fn start(cfg: SourceConfig, folders: &[String]) -> Self {
+        if !cfg.enabled {
+            return Self { cfg, source: None, placement: Placement::default(), error: None };
+        }
+        let connected = source::kind(&cfg.kind)
+            .ok_or_else(|| anyhow::anyhow!("unknown kind of source {:?}", cfg.kind))
+            .and_then(|k| (k.connect)(&cfg.values, false));
+        let source: Arc<dyn Source> = match connected {
+            Ok(s) => Arc::from(s),
+            Err(e) => {
+                tracing::warn!("source {}: {e:#}", cfg.id);
+                return Self { cfg, source: None, placement: Placement::default(), error: Some(format!("{e:#}")) };
+            }
+        };
+        let placement = placement::place(&*source, folders).await.unwrap_or_else(|e| {
+            tracing::warn!("source {}: cannot look at its libraries yet: {e:#}", cfg.id);
+            Placement::default()
+        });
+        if placement.roots.is_empty() {
+            tracing::warn!("source {}: none of its music found in Cratarr's folders (yet)", cfg.id);
+        }
+        Self { cfg, source: Some(source), placement, error: None }
+    }
+
+    /// The playlist line for a track: its path in the Music folder, if it lies there.
+    pub(super) fn entry(&self, music: Option<&str>, track: &source::Track) -> Option<String> {
+        self.placement.entry(music?, track.path.as_deref())
+    }
+}
+
+pub struct Library {
+    live: std::sync::RwLock<Arc<Vec<Arc<Active>>>>,
+    data_dir: Option<String>,
+    /// Where the libraries in use keep their files, and the playlists of the Music folder (swapped in whole when
+    /// either changes).
+    folders: std::sync::RwLock<(Folders, Option<Arc<Store>>)>,
+    /// Every audio file Cratarr can see, and the servers' ids for them (decision 0008).
+    catalogue: Arc<Catalogue>,
+    /// One change to the servers at a time, so two pages (or the background placement retry) cannot interleave.
+    pub(super) changing: Mutex<()>,
+}
+
+impl Library {
+    /// `last_music`: where the Music libraries were last found (or CRATARR_PLAYLIST_DIR), used until a server answers.
+    pub(super) async fn new(data_dir: Option<String>, last_music: Option<String>, sources: Vec<SourceConfig>) -> Result<Arc<Self>> {
+        let places = place_folders(data_dir.as_deref(), last_music.as_deref());
+        let mut active = Vec::new();
+        for s in sources {
+            active.push(Active::start(s, &places).await);
+        }
+        // First run: no Music library chosen yet, so the libraries found in CRATARR_PLAYLIST_DIR are Music (shown so on
+        // the Settings page, kept once saved).
+        if let Some(m) = last_music.as_deref().filter(|_| active.iter().all(|a| a.cfg.libraries.music.is_empty())) {
+            for a in active.iter_mut().filter(|a| a.source.is_some()) {
+                let incoming = a.cfg.libraries.incoming.clone();
+                a.cfg.libraries.music =
+                    a.placement.libraries_in(m).map(|l| l.id.clone()).filter(|id| !incoming.contains(id)).collect();
+            }
+        }
+        let active: Vec<Arc<Active>> = active.into_iter().map(Arc::new).collect();
+        let folders = derive_folders(&active, last_music.as_deref());
+        let db = data_dir.as_ref().map(|d| PathBuf::from(d).join("catalogue.sqlite"));
+        let catalogue = Arc::new(Catalogue::open(db.as_deref(), catalogue_folders(&folders))?);
+        let store = folders.music.as_ref().map(|m| Arc::new(Store::new(m)));
+        Ok(Arc::new(Self {
+            live: std::sync::RwLock::new(Arc::new(active)),
+            data_dir,
+            folders: std::sync::RwLock::new((folders, store)),
+            catalogue,
+            changing: Mutex::new(()),
+        }))
+    }
+
+    pub fn catalogue(&self) -> Arc<Catalogue> {
+        self.catalogue.clone()
+    }
+
+    /// The connected servers by id, for the catalogue's background pass.
+    pub fn connected_sources(&self) -> Vec<(String, Arc<dyn Source>)> {
+        self.connected().into_iter().map(|(a, s)| (a.cfg.id.clone(), s)).collect()
+    }
+
+    pub(super) fn live(&self) -> Arc<Vec<Arc<Active>>> {
+        self.live.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    pub(super) fn connected(&self) -> Vec<(Arc<Active>, Arc<dyn Source>)> {
+        self.live().iter().filter_map(|a| a.source.clone().map(|s| (a.clone(), s))).collect()
+    }
+
+    pub(super) fn folders(&self) -> Folders {
+        self.folders.read().unwrap_or_else(|p| p.into_inner()).0.clone()
+    }
+
+    pub(super) fn music(&self) -> Option<String> {
+        self.folders.read().unwrap_or_else(|p| p.into_inner()).0.music.clone()
+    }
+
+    /// The Music folder's playlists, if one is set.
+    pub(super) fn store_opt(&self) -> Option<Arc<Store>> {
+        self.folders.read().unwrap_or_else(|p| p.into_inner()).1.clone()
+    }
+
+    pub(super) fn store(&self) -> Result<Arc<Store>, ToggleError> {
+        self.store_opt().ok_or(ToggleError::NoMusicFolder)
+    }
+
+    /// The folders a server's libraries are looked for in now.
+    pub(super) fn place_folders(&self) -> Vec<String> {
+        place_folders(self.data_dir.as_deref(), self.music().as_deref())
+    }
+
+    /// Put new sources in use, and follow where their libraries' files are: a new Music folder gets its own playlist
+    /// store, and the catalogue follows the folders.
+    pub(super) async fn switch_to(&self, next: Vec<Arc<Active>>) -> Result<()> {
+        let old = self.folders();
+        let folders = derive_folders(&next, old.music.as_deref());
+        *self.live.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(next);
+        if folders != old {
+            tracing::info!("music folder {:?}, incoming folders {:?}", folders.music, folders.incoming);
+            let (c, dirs) = (self.catalogue.clone(), catalogue_folders(&folders));
+            tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+            let mut slot = self.folders.write().unwrap_or_else(|p| p.into_inner());
+            if folders.music != old.music {
+                slot.1 = folders.music.as_ref().map(|m| Arc::new(Store::new(m)));
+            }
+            slot.0 = folders;
+        }
+        Ok(())
+    }
+
+    /// Servers whose libraries could not be listed, or whose Music library's files were not found, get looked at
+    /// again (called now and then): they may have been down, or still scanning. An Incoming library Cratarr cannot see
+    /// is not retried: only a new mount (a restart) changes that.
+    pub async fn retry_placement(&self) {
+        let _one_at_a_time = self.changing.lock().await;
+        let live = self.live();
+        let unplaced = |a: &Active| {
+            a.source.is_some()
+                && (a.placement.libraries.is_empty()
+                    || a.cfg.libraries.music.iter().any(|id| {
+                        a.placement.libraries.iter().find(|l| &l.id == id).is_none_or(|l| l.folders.is_empty())
+                    }))
+        };
+        if !live.iter().any(|a| unplaced(a)) {
+            return;
+        }
+        let places = self.place_folders();
+        let mut next = Vec::with_capacity(live.len());
+        for a in live.iter() {
+            match &a.source {
+                Some(s) if unplaced(a) => {
+                    let placement = placement::place(&**s, &places).await.unwrap_or_default();
+                    if placement.roots.len() > a.placement.roots.len() {
+                        tracing::info!("source {}: found its music in more folders", a.cfg.id);
+                    }
+                    next.push(Arc::new(Active { cfg: a.cfg.clone(), source: Some(s.clone()), placement, error: a.error.clone() }));
+                }
+                _ => next.push(a.clone()),
+            }
+        }
+        if let Err(e) = self.switch_to(next).await {
+            tracing::warn!("cannot follow the music folders: {e:#}");
+        }
+    }
+}

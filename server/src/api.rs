@@ -50,7 +50,7 @@ pub fn router(app: Arc<App>) -> Router {
 }
 
 async fn health(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    let n = app.playlist_count().await.map_err(ToggleError::from)?;
+    let n = app.playlists.count().await.map_err(ToggleError::from)?;
     Ok(Json(json!({ "status": "ok", "playlists": n })))
 }
 
@@ -61,11 +61,11 @@ struct Follow {
 }
 
 async fn state(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<StateView>, ApiError> {
-    Ok(Json(app.state(f.source.as_deref()).await.map_err(ToggleError::from)?))
+    Ok(Json(app.playing.state(f.source.as_deref()).await.map_err(ToggleError::from)?))
 }
 
 async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Json<StateView>, ApiError> {
-    Ok(Json(app.toggle(&id, f.source.as_deref()).await?))
+    Ok(Json(app.playing.toggle(&id, f.source.as_deref()).await?))
 }
 
 async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
@@ -73,7 +73,7 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
     let inm = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
     let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"));
     let tag = |etag: &str| HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""));
-    match app.cover(&source, &id, inm).await {
+    match app.playing.cover(&source, &id, inm).await {
         Outcome::NotFound => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
         Outcome::NotModified { etag } => (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response(),
         Outcome::Image { content_type, etag, bytes } => (
@@ -85,11 +85,11 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
 }
 
 async fn incoming(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::IncomingView> {
-    Json(app.incoming(f.source.as_deref()).await)
+    Json(app.incoming.list(f.source.as_deref()).await)
 }
 
 async fn play_incoming(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
-    match app.play_incoming(&source, &album).await {
+    match app.incoming.play(&source, &album).await {
         Ok(player) => Json(json!({ "player": player })).into_response(),
         Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": format!("{e:#}") }))).into_response(),
     }
@@ -99,7 +99,7 @@ async fn delete_incoming(
     State(app): State<Arc<App>>,
     Path((source, album)): Path<(String, String)>,
 ) -> Result<Json<crate::app::DeleteResult>, ApiError> {
-    Ok(Json(app.delete_incoming(&source, &album).await?))
+    Ok(Json(app.incoming.delete(&source, &album).await?))
 }
 
 #[derive(Deserialize)]
@@ -108,11 +108,11 @@ struct UndoDeleteBody {
 }
 
 async fn undo_delete(State(app): State<Arc<App>>, Json(b): Json<UndoDeleteBody>) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "restored": app.undo_delete(&b.undo).await? })))
+    Ok(Json(json!({ "restored": app.incoming.undo_delete(&b.undo).await? })))
 }
 
 async fn incoming_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
-    match app.incoming_cover(&source, &album).await {
+    match app.incoming.cover(&source, &album).await {
         Some((content_type, bytes)) => {
             let ct = HeaderValue::from_str(&content_type).unwrap_or(HeaderValue::from_static("application/octet-stream"));
             ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"))], bytes).into_response()
@@ -122,7 +122,7 @@ async fn incoming_cover(State(app): State<Arc<App>>, Path((source, album)): Path
 }
 
 async fn repairs(State(app): State<Arc<App>>) -> Result<Json<Repairs>, ApiError> {
-    Ok(Json(app.repairs().await.map_err(ToggleError::from)?))
+    Ok(Json(app.playlists.repairs().await.map_err(ToggleError::from)?))
 }
 
 /// `{"kind":"safe"}` applies every safe repair; `{"kind":"one", playlist, from, to}` applies a single offered one.
@@ -138,7 +138,7 @@ async fn apply_repairs(State(app): State<Arc<App>>, Json(req): Json<ApplyRequest
         ApplyRequest::Safe => None,
         ApplyRequest::One { playlist, from, to } => Some(Repair { playlist, from, to }),
     };
-    let changed = app.apply_repairs(only).await?;
+    let changed = app.playlists.apply_repairs(only).await?;
     Ok(Json(json!({ "playlists": changed })))
 }
 
@@ -158,35 +158,35 @@ struct PlaylistRequest {
 }
 
 async fn create_playlist(State(app): State<Arc<App>>, Json(req): Json<NameRequest>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    app.create_playlist(&req.name).await?;
+    app.playlists.create(&req.name).await?;
     Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name }))))
 }
 
 async fn rename_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<RenameRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    app.rename_playlist(&id, &req.to).await?;
+    app.playlists.rename(&id, &req.to).await?;
     Ok(Json(json!({ "playlist": req.to })))
 }
 
 async fn delete_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    app.delete_playlist(&id).await?;
+    app.playlists.delete(&id).await?;
     Ok(Json(json!({ "deleted": id })))
 }
 
 async fn restore_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    app.restore_playlist(&id).await?;
+    app.playlists.restore(&id).await?;
     Ok(Json(json!({ "restored": id })))
 }
 
 async fn album_duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "groups": app.album_duplicates().await.map_err(ToggleError::from)? })))
+    Ok(Json(json!({ "groups": app.playlists.album_duplicates().await.map_err(ToggleError::from)? })))
 }
 
 async fn duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!(app.duplicates().await.map_err(ToggleError::from)?)))
+    Ok(Json(json!(app.playlists.duplicates().await.map_err(ToggleError::from)?)))
 }
 
 async fn dedupe(State(app): State<Arc<App>>, Json(req): Json<PlaylistRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let removed = app.dedupe(&req.playlist).await?;
+    let removed = app.playlists.dedupe(&req.playlist).await?;
     Ok(Json(json!({ "removed": removed })))
 }
 
@@ -196,7 +196,7 @@ struct UndoRequest {
 }
 
 async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let restored = app.undo(req.playlists).await?;
+    let restored = app.playlists.undo(req.playlists).await?;
     Ok(Json(json!({ "restored": restored })))
 }
 
@@ -213,7 +213,7 @@ async fn status(State(app): State<Arc<App>>) -> Json<StatusView> {
 }
 
 async fn get_settings(State(app): State<Arc<App>>) -> Result<Json<SettingsView>, ApiError> {
-    Ok(Json(app.settings().await.map_err(ToggleError::from)?))
+    Ok(Json(app.settings.view().await.map_err(ToggleError::from)?))
 }
 
 #[derive(Deserialize)]
@@ -231,17 +231,17 @@ struct SaveBody {
 }
 
 async fn save_settings(State(app): State<Arc<App>>, Json(b): Json<SaveBody>) -> Result<Json<SettingsView>, ApiError> {
-    Ok(Json(app.save_settings(b.sources, b.tag_rules, b.lidarr, b.trash_days).await?))
+    Ok(Json(app.settings.save(b.sources, b.tag_rules, b.lidarr, b.trash_days).await?))
 }
 
 async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::catalogue::Status>, ApiError> {
-    let c = app.catalogue();
+    let c = app.library.catalogue();
     let status = tokio::task::spawn_blocking(move || c.status()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(status.map_err(ToggleError::from)?))
 }
 
 async fn catalogue_problems(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::catalogue::Problem>>, ApiError> {
-    let c = app.catalogue();
+    let c = app.library.catalogue();
     let list = tokio::task::spawn_blocking(move || c.problems(500)).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
     Ok(Json(list.map_err(ToggleError::from)?))
 }
@@ -258,7 +258,7 @@ async fn transport(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let command: crate::source::Transport = serde_json::from_value(json!(command))
         .map_err(|_| ToggleError::CannotPlay("unknown player command (previous, play-pause, next)".into()))?;
-    Ok(Json(json!({ "player": app.transport(f.source.as_deref(), command).await? })))
+    Ok(Json(json!({ "player": app.playing.transport(f.source.as_deref(), command).await? })))
 }
 
 async fn play_playlist(
@@ -267,7 +267,7 @@ async fn play_playlist(
     Query(f): Query<Follow>,
     Json(b): Json<PlayBody>,
 ) -> Result<Json<crate::app::PlayResult>, ApiError> {
-    Ok(Json(app.play_playlist(&id, b.mode, f.source.as_deref()).await?))
+    Ok(Json(app.playlists.play(&id, b.mode, f.source.as_deref()).await?))
 }
 
 #[derive(Deserialize)]
@@ -279,11 +279,11 @@ async fn preview_lidarr(
     State(app): State<Arc<App>>,
     Json(b): Json<crate::settings::LidarrConfig>,
 ) -> Result<Json<Option<crate::app::LidarrView>>, ApiError> {
-    Ok(Json(app.preview_lidarr(b).await?))
+    Ok(Json(app.settings.preview_lidarr(b).await?))
 }
 
 async fn preview(State(app): State<Arc<App>>, Json(b): Json<PreviewBody>) -> Result<Json<SourceView>, ApiError> {
-    Ok(Json(app.preview(b.source).await?))
+    Ok(Json(app.settings.preview(b.source).await?))
 }
 
 impl IntoResponse for ApiError {

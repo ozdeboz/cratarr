@@ -83,14 +83,14 @@ async fn main() -> Result<()> {
     // A source that is down only costs its own features; an unreadable Music folder is fatal.
     let bind = cfg.bind.clone();
     let app = app::App::new(cfg, saved, origin).await.context("cannot open the catalogue")?;
-    let n = app.playlist_count().await.context("cannot read the playlist folder")?;
+    let n = app.playlists.count().await.context("cannot read the playlist folder")?;
     tracing::info!("found {n} playlists");
     let status = app.status().await;
     tracing::info!("sources: {}", if status.connected { status.server_name.unwrap_or_default() } else { "none connected".into() });
 
     // The catalogue fills and follows itself in the background (decision 0008).
     let linker = app.clone();
-    tokio::spawn(catalogue::run(app.catalogue(), move || linker.connected_sources()));
+    tokio::spawn(catalogue::run(app.library.catalogue(), move || linker.library.connected_sources()));
 
     // One background pass keeps Cratarr in step with the sources and the library (see `App::sync`); the first runs
     // at once, so the incoming lists are ready soon after start.
