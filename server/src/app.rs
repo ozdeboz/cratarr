@@ -608,12 +608,14 @@ impl App {
         s.play_album(album_id).await
     }
 
-    /// The cover of an album on a source that has an incoming library. The id is only passed on to the source.
+    /// An album's image from a connected server: the Incoming list, and the now-playing header for music outside the
+    /// library. Any connected server, not only one with an incoming library: the header needs the cover of whatever
+    /// plays. Only images come back, and the id is only ever passed on to that server.
     pub async fn incoming_cover(&self, source_id: &str, album_id: &str) -> Option<(String, Vec<u8>)> {
         if !crate::covers::valid_item_id(album_id) {
             return None;
         }
-        let (_, s) = self.connected().into_iter().find(|(a, _)| a.cfg.id == source_id && a.cfg.libraries.incoming.is_some())?;
+        let (_, s) = self.connected().into_iter().find(|(a, _)| a.cfg.id == source_id)?;
         match s.album_cover(album_id).await {
             Ok(found) => found,
             Err(e) => {
