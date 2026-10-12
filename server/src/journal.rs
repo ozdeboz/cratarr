@@ -40,7 +40,9 @@ pub struct Entry {
     pub undone: bool,
 }
 
+// temp_store: the image has no /tmp.
 const SCHEMA: &str = "
+PRAGMA temp_store = MEMORY;
 PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, event TEXT NOT NULL, undone_at INTEGER);

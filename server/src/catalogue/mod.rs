@@ -35,7 +35,9 @@ const PASS_EVERY: Duration = Duration::from_secs(300);
 /// A full listing of each server library at least this often, to forget tracks the server dropped.
 const FULL_EVERY_SECS: i64 = 24 * 3600;
 
+// temp_store: the image has no /tmp, and building an index (or a large sort) needs temporary storage.
 const SCHEMA: &str = "
+PRAGMA temp_store = MEMORY;
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS folders (id INTEGER PRIMARY KEY, path TEXT NOT NULL);
