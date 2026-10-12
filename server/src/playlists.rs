@@ -425,6 +425,21 @@ impl Store {
         Ok(true)
     }
 
+    /// As `set_entries`, but only when the playlist still holds `expected` (else nothing is written and false is
+    /// returned): the sync must not overwrite an edit made while it was merging.
+    pub async fn set_entries_if(&self, id: &str, expected: &[String], entries: &[String]) -> Result<bool, StoreError> {
+        let _one_writer = self.write.lock().await;
+        let (path, perms, text) = self.load_for_edit(id).await?;
+        if m3u::entries(&text).collect::<Vec<_>>() != expected {
+            return Ok(false);
+        }
+        let new_text = m3u::with_entries(&text, entries);
+        if new_text != text {
+            self.commit(id, &path, perms, &new_text).await?;
+        }
+        Ok(true)
+    }
+
     /// Add `entry` to the playlist, or remove it if it is already there.
     pub async fn toggle(&self, id: &str, entry: &str) -> Result<Toggled, StoreError> {
         let _one_writer = self.write.lock().await;

@@ -15,6 +15,7 @@ mod library;
 mod playing;
 mod playlists;
 mod settings;
+mod sync;
 
 use std::sync::Arc;
 

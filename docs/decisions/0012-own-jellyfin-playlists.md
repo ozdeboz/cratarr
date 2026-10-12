@@ -1,6 +1,6 @@
 # 0012: Playlists become the user's own Jellyfin playlists, kept in step with the .m3u files both ways
 
-- Status: proposed
+- Status: accepted (2026-10-13)
 - Date: 2026-10-12
 - Builds on: decision 0011 (track identity, events). Changes decision 0002.
 
@@ -42,6 +42,15 @@ Checked on the reference install (Jellyfin 10.11, read-only):
   left alone.
 - Sync state (which `.m3u` goes with which Jellyfin playlist, and the last agreed list) lives in the data folder,
   next to the catalogue and the journal.
+
+## The owner's choices (2026-10-13)
+
+- The playlists belong to the `jellyfin` account (the one the tablet plays as).
+- The `.m3u` files stay the hub, in `Music/.playlists`: the alternative (Jellyfin as the only copy, files as a
+  write-only backup) would tie every playlist to one server, and Cratarr is meant to be able to bridge servers.
+- Home Assistant's references (the voice playlist list, the Chill id in welcome-home) are updated as part of the
+  migration.
+- The data folder goes into the NAS backups.
 
 ## Migration, once
 

@@ -508,6 +508,12 @@ impl Catalogue {
         .collect()
     }
 
+    /// Tests elsewhere: treat every file waiting for its tags as read (test files are not audio).
+    #[cfg(test)]
+    pub fn pretend_read_for_tests(&self) {
+        self.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
+    }
+
     // ----- Track identity (decision 0011 §4) -----
 
     /// Give every identified file a track id: a new file that is a gone one moved (by the rules of
@@ -675,6 +681,42 @@ impl Catalogue {
             .optional()
             .ok()
             .flatten()
+            .flatten()
+    }
+
+    /// The track a server's item id stands for (decision 0012), when the item is linked to a file the catalogue
+    /// counts. Blocking.
+    pub fn track_of_source(&self, source: &str, item: &str) -> Option<i64> {
+        self.db()
+            .query_row(
+                &format!(
+                    "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
+                     WHERE s.source = ?1 AND s.track_id = ?2 AND {}",
+                    PRESENT.replace("gone_at", "f.gone_at").replace("trashed", "f.trashed")
+                ),
+                params![source, item],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .flatten()
+    }
+
+    /// A track's item id on a server (decision 0012), when it is linked. Blocking.
+    pub fn source_id_of(&self, source: &str, track: i64) -> Option<String> {
+        self.db()
+            .query_row(
+                &format!(
+                    "SELECT s.track_id FROM files f JOIN source_ids s ON s.folder = f.folder AND s.rel = f.rel
+                     WHERE f.track = ?2 AND s.source = ?1 AND {} LIMIT 1",
+                    PRESENT.replace("gone_at", "f.gone_at").replace("trashed", "f.trashed")
+                ),
+                params![source, track],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()
             .flatten()
     }
 
