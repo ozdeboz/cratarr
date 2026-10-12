@@ -1,27 +1,24 @@
 <script lang="ts">
-  // The now-playing header, shared by the pages that show what is playing. The page polls the state and passes the
-  // track in; this component owns the look and the progress bar. Page-specific bits go in the `aside` (right) and
-  // `below` (under the progress bar) snippets.
-  import { untrack, type Snippet } from 'svelte';
-  import { coverUrl, type NowPlaying } from './api';
+  // The now-playing header, part of the app shell: shown above every page. It reads the shared state (see
+  // live.svelte.ts) and shows the track, its cover, the progress bar, and how many playlists hold it.
+  import { untrack } from 'svelte';
+  import { coverUrl, incomingCoverUrl } from './api';
+  import { live } from './live.svelte';
   import { prefs } from './prefs.svelte';
 
-  let {
-    np,
-    cover = undefined,
-    aside,
-    below,
-  }: {
-    np: NowPlaying | null;
-    /** Cover image URL; defaults to the library cover of the playing track. `null` = no cover. */
-    cover?: string | null;
-    aside?: Snippet;
-    below?: Snippet;
-  } = $props();
+  const np = $derived(live.view?.now_playing ?? null);
+  const memberCount = $derived((live.view?.playlists ?? []).filter((p) => p.member).length);
 
-  const src = $derived(cover === undefined ? (np ? coverUrl(np) : null) : cover);
-  // Covers that failed to load (not in the library, or none there): no image, no gap.
+  // Cover: the library's cover file for a library track; otherwise (or when there is none) the album's image from the
+  // server, which also covers music outside the library, such as Incoming. Candidates that fail are skipped.
   let failed = $state<Record<string, boolean>>({});
+  const candidates = $derived.by(() => {
+    if (!np) return [];
+    const library = coverUrl(np);
+    const album = np.album_id ? incomingCoverUrl(np.source, np.album_id) : null;
+    return (np.addable ? [library, album] : [album, library]).filter((u): u is string => !!u);
+  });
+  const src = $derived(candidates.find((u) => !failed[u]) ?? null);
 
   // The bar runs on a local clock between polls. It is re-anchored to the server only when the server disagrees
   // with it (track, pause state, or more than 1.5 s off: a seek or drift), so it moves smoothly.
@@ -66,7 +63,7 @@
 </script>
 
 <header>
-  {#if np && src && !failed[src]}
+  {#if np && src}
     {#key src}
       <img class="cover" {src} alt="" decoding="async" onerror={() => (failed[src] = true)} />
     {/key}
@@ -101,12 +98,18 @@
           <span class="t">{duration ? clock(duration) : '–:––'}</span>
         </div>
       {/if}
-      {@render below?.()}
+      {#if !np.addable}<span class="badge">Not in your Music, so it can't go in playlists.</span>{/if}
     {:else}
       <div class="title idle">Nothing is playing</div>
     {/if}
   </div>
-  {#if np}{@render aside?.()}{/if}
+  {#if np}
+    <div class="count" aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
+      <span>in</span>
+      <strong>{memberCount}</strong>
+      <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
+    </div>
+  {/if}
 </header>
 
 <style>
@@ -213,5 +216,33 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .badge {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 2px 10px;
+    border: 1px solid var(--warn);
+    border-radius: 999px;
+    color: var(--warn);
+    font-size: 0.8rem;
+  }
+
+  .count {
+    flex: none;
+    text-align: center;
+    line-height: 1.1;
+  }
+
+  .count strong {
+    display: block;
+    font-size: 1.8rem;
+    color: var(--accent);
+  }
+
+  .count span {
+    display: block;
+    color: var(--muted);
+    font-size: 0.75rem;
   }
 </style>

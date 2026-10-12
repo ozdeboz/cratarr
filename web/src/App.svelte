@@ -5,9 +5,11 @@
   import Incoming from './Incoming.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import SourcePicker from './lib/SourcePicker.svelte';
+  import NowPlaying from './lib/NowPlaying.svelte';
+  import { poll } from './lib/live.svelte';
   import { known } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
-  import './lib/prefs.svelte';
+  import { prefs } from './lib/prefs.svelte';
 
   type Page = { id: string; href: string; label: string; icon: IconName };
   // Main pages in order; Settings sits apart at the bottom of the sidebar.
@@ -54,6 +56,12 @@
     const esc = (e: KeyboardEvent) => e.key === 'Escape' && (moreOpen = false);
     addEventListener('keydown', esc);
     return () => removeEventListener('keydown', esc);
+  });
+
+  // What is playing, for the header above every page; restarts when the followed source changes.
+  $effect(() => {
+    void prefs.source;
+    return poll();
   });
 
   // Connection line in the sidebar header.
@@ -121,6 +129,7 @@
 
   <div class="content">
     {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
+    <div class="np-bar"><NowPlaying /></div>
     {#if page === 'repairs'}
       <Repairs />
     {:else if page === 'settings'}
@@ -166,6 +175,15 @@
   .content {
     min-width: 0;
     padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+
+  /* The now-playing header stays on top of every page while it scrolls; same side padding as the pages. */
+  .np-bar {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    padding: 0 clamp(12px, 2vw, 32px);
+    background: var(--bg);
   }
 
   .bar {

@@ -3,22 +3,20 @@
     ApiError,
     createPlaylist,
     deletePlaylist,
-    getState,
     renamePlaylist,
     restorePlaylist,
     toggle,
     type Playlist,
-    type State,
   } from './lib/api';
-  import { remember } from './lib/sources.svelte';
   import { prefs } from './lib/prefs.svelte';
-  import NowPlaying from './lib/NowPlaying.svelte';
+  import { live, refresh } from './lib/live.svelte';
   import Notice, { type NoticeData } from './lib/Notice.svelte';
   import Popover from './lib/Popover.svelte';
   import { longpress } from './lib/longpress';
 
-  let view = $state<State | null>(null);
-  let error = $state<string | null>(null);
+  // What is playing and the playlists come from the shell's poll (live.svelte.ts).
+  const view = $derived(live.view);
+  const error = $derived(live.error);
   let notice = $state<NoticeData | null>(null);
   let filter = $state('');
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
@@ -35,32 +33,6 @@
   let menu = $state<Menu | null>(null);
   let nameField = $state('');
   let working = $state(false);
-
-  async function refresh() {
-    try {
-      view = await getState(prefs.source || undefined);
-      remember(view.sources);
-      error = null;
-    } catch (e) {
-      error = e instanceof ApiError ? e.message : 'Unexpected error';
-    }
-  }
-
-  // Restarts (and polls at once) when the followed source changes.
-  $effect(() => {
-    void prefs.source;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      await refresh();
-      if (!stopped) timer = setTimeout(poll, document.hidden ? 5000 : 2000);
-    }
-    poll();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  });
 
   const np = $derived(view?.now_playing ?? null);
   const items = $derived.by(() => {
@@ -90,7 +62,7 @@
     busy[p.id] = true;
     optimistic[p.id] = !p.member;
     try {
-      view = await toggle(p.id, prefs.source || undefined);
+      live.view = await toggle(p.id, prefs.source || undefined);
     } catch (e) {
       notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
     } finally {
@@ -139,18 +111,6 @@
 </script>
 
 <main>
-  <NowPlaying {np}>
-    {#snippet below()}
-      {#if np && !np.addable}<span class="badge">{NOT_MUSIC}</span>{/if}
-    {/snippet}
-    {#snippet aside()}
-      <div class="count" aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
-        <span>in</span>
-        <strong>{memberCount}</strong>
-        <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
-      </div>
-    {/snippet}
-  </NowPlaying>
 
   <div class="tools">
     <input type="search" placeholder="Filter playlists" aria-label="Filter playlists" bind:value={filter} />
@@ -262,34 +222,6 @@
 <style>
   main {
     padding: 0 clamp(12px, 2vw, 32px) 48px;
-  }
-
-  .badge {
-    display: inline-block;
-    margin-top: 8px;
-    padding: 2px 10px;
-    border: 1px solid var(--warn);
-    border-radius: 999px;
-    color: var(--warn);
-    font-size: 0.8rem;
-  }
-
-  .count {
-    flex: none;
-    text-align: center;
-    line-height: 1.1;
-  }
-
-  .count strong {
-    display: block;
-    font-size: 1.8rem;
-    color: var(--accent);
-  }
-
-  .count span {
-    display: block;
-    color: var(--muted);
-    font-size: 0.75rem;
   }
 
   .tools {

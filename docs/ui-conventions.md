@@ -7,8 +7,11 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 - **Pages:** Incoming (only when an incoming library is set), Playlists, Repairs, Settings. One thing lives in one
   place: no setting, list or action appears on two pages.
-- **No page titles.** The navigation shows where you are. A page starts with the now-playing header if it has one
-  (Playlists, Incoming), then its toolbar, then its content.
+- **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
+- **The now-playing header is part of the app shell**, above every page and sticky: cover (library cover, else the
+  album image from the server), title, artist · album, progress, "in N playlists", and the transport controls
+  (previous, play/pause, next). The active player is always named in a small pill, even when there is only one.
+  Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`).
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. The player choice is in the now-playing header ("Playing on Finamp · Lenovo Tab ▾"), not in

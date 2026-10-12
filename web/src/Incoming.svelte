@@ -1,14 +1,15 @@
 <script lang="ts">
-  import { ApiError, getIncoming, getState, incomingCoverUrl, playIncoming, type IncomingAlbum, type IncomingSource, type NowPlaying as Playing } from './lib/api';
+  import { ApiError, getIncoming, incomingCoverUrl, playIncoming, type IncomingAlbum, type IncomingSource } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
-  import NowPlaying from './lib/NowPlaying.svelte';
+  import { live } from './lib/live.svelte';
   import Notice, { type NoticeData } from './lib/Notice.svelte';
 
   let sources = $state<IncomingSource[] | null>(null);
   let error = $state<string | null>(null);
   let noCover = $state<Record<string, boolean>>({});
   let filter = $state('');
-  let playing = $state<Playing | null>(null);
+  // What is playing (the shell polls it), so the album being listened to stands out.
+  const playing = $derived(live.view?.now_playing ?? null);
   let notice = $state<NoticeData | null>(null);
   let starting = $state<string | null>(null);
 
@@ -24,26 +25,6 @@
       starting = null;
     }
   }
-
-  // What is playing, so the album being listened to stands out. Cheap: the state call is the one the Playlists page polls.
-  $effect(() => {
-    const want = prefs.source || undefined;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        playing = (await getState(want)).now_playing;
-      } catch {
-        /* keep the last known track */
-      }
-      if (!stopped) timer = setTimeout(poll, document.hidden ? 5000 : 2000);
-    }
-    poll();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  });
 
   // The server follows the source every 30 s and keeps the list. First show whatever copy answers fastest (the
   // service worker's), then ask for the latest, and keep asking every 30 s.
@@ -82,11 +63,6 @@
 </script>
 
 <main>
-  <!-- A library track keeps its library cover; an incoming one has none there, so its album cover comes via the source. -->
-  <NowPlaying
-    np={playing}
-    cover={playing && !playing.addable ? (playing.album_id ? incomingCoverUrl(playing.source, playing.album_id) : null) : undefined}
-  />
 
   <Notice bind:notice />
 
@@ -211,8 +187,6 @@
   .row[aria-busy='true'] {
     opacity: 0.6;
   }
-
-
 
   .cover {
     flex: none;
