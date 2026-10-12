@@ -31,6 +31,18 @@ Jellyfin facts this rests on (10.11, observed 2026-10-12):
 - A chosen player that is not connected stays chosen and is shown as not connected; nothing is followed until it
   returns. No silent switching.
 
+## Playing a list (added 2026-10-12, measured on Jellyfin 10.11 with Finamp 1.0.x)
+
+- Cratarr always sends track ids in the order it wants, never a playlist or album id: Jellyfin expands a playlist
+  in track-number order (by sort name), not in playlist order. With track ids, "play now" keeps the sent order.
+- One command carries at most 240 track ids (the request line is limited to 8 KB; 260 ids are refused with 414).
+  Play and Shuffle therefore play at most 240 tracks: the first 240 in file order, or 240 drawn at random for
+  Shuffle. The notice says so when a playlist is longer.
+- Play next and Add to queue send one track per command: Finamp re-sorts a multi-track batch by track number.
+  Play next sends the tracks in reverse, so they end up in order after the current one.
+- Commands go to every session of the player's device (decision above), and a previous track can be put back with
+  "play now" plus a start position.
+
 ## Consequences
 
 - Each device follows its own player; two people can use Cratarr at once.
