@@ -451,14 +451,19 @@ impl Source for JellyfinSource {
                 bail!("nothing is playing");
             };
             let label = session_label(first);
+            // Play/pause is sent as an explicit Pause or Unpause, decided from what the device reports: a toggle
+            // that arrives late, twice, or at the wrong session could do the opposite of what the page shows.
+            let paused = targets.iter().find(|t| t.now_playing_item.is_some()).and_then(|t| t.play_state.as_ref()).and_then(|p| p.is_paused);
             let name = match command {
                 super::Transport::Previous => "PreviousTrack",
-                super::Transport::PlayPause => "PlayPause",
+                super::Transport::PlayPause if paused == Some(true) => "Unpause",
+                super::Transport::PlayPause => "Pause",
                 super::Transport::Next => "NextTrack",
             };
-            // Every session of the device (see cast_targets: Finamp acts on the one listing no commands). Verified
-            // on the tablet 2026-10-12: PlayPause toggles; NextTrack advances (stops at the end of the queue);
-            // PreviousTrack restarts the track first and goes back on a second press within a few seconds.
+            // Every session of the device (see cast_targets). Verified on the tablet 2026-10-12, one command and one
+            // session at a time: the reporting session ignores Pause, Unpause and NextTrack; the command-less
+            // "Play On" session executes them, and the reporting session then shows the result. NextTrack stops at
+            // the end of the queue; PreviousTrack restarts the track first and goes back on a second press.
             let mut sent = 0;
             let mut last_error = None;
             for t in &targets {

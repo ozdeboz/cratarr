@@ -188,8 +188,8 @@ fn catalogue_folders(playlist_dir: &std::path::Path, extra: &[String]) -> Vec<Pa
     std::iter::once(playlist_dir.to_path_buf()).chain(extra.iter().map(PathBuf::from)).collect()
 }
 
-/// The most tracks one play command can carry (decision 0006).
-pub const PLAY_MAX: usize = 240;
+/// The most tracks one play sends: Finamp holds at most 100 in its queue (seen 2026-10-12; user: "we go by 100").
+pub const PLAY_MAX: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
