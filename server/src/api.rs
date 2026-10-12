@@ -42,6 +42,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/incoming/play/{source}/{album}", post(play_incoming))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
+        .route("/api/settings/lidarr", post(preview_lidarr))
         .route("/api/catalogue", get(catalogue_status))
         .route("/api/catalogue/problems", get(catalogue_problems))
         .fallback(crate::web::serve)
@@ -221,10 +222,13 @@ struct SaveBody {
     /// Omitted: keep the saved ones.
     #[serde(default)]
     tag_rules: Option<crate::catalogue::Rules>,
+    /// Omitted: keep the saved one; a blank address removes it.
+    #[serde(default)]
+    lidarr: Option<crate::settings::LidarrConfig>,
 }
 
 async fn save_settings(State(app): State<Arc<App>>, Json(b): Json<SaveBody>) -> Result<Json<SettingsView>, ApiError> {
-    Ok(Json(app.save_settings(b.sources, b.tag_rules).await?))
+    Ok(Json(app.save_settings(b.sources, b.tag_rules, b.lidarr).await?))
 }
 
 async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::catalogue::Status>, ApiError> {
@@ -266,6 +270,13 @@ async fn play_playlist(
 #[derive(Deserialize)]
 struct PreviewBody {
     source: SourceConfig,
+}
+
+async fn preview_lidarr(
+    State(app): State<Arc<App>>,
+    Json(b): Json<crate::settings::LidarrConfig>,
+) -> Result<Json<Option<crate::app::LidarrView>>, ApiError> {
+    Ok(Json(app.preview_lidarr(b).await?))
 }
 
 async fn preview(State(app): State<Arc<App>>, Json(b): Json<PreviewBody>) -> Result<Json<SourceView>, ApiError> {

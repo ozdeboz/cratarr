@@ -268,8 +268,32 @@ pub struct SettingsView {
     pub started: i64,
     /// Where the Music libraries' files are, as Cratarr sees them: the playlists live there.
     pub music_folder: Option<String>,
+    /// `None` when no Lidarr is set.
+    pub lidarr: Option<LidarrView>,
     pub tag_rules: crate::catalogue::Rules,
     pub catalogue: Option<crate::catalogue::Status>,
+}
+
+/// Lidarr on the Settings page. The key is never sent.
+#[derive(Debug, Serialize)]
+pub struct LidarrView {
+    pub url: String,
+    pub key_set: bool,
+    /// Lidarr's version when it answered.
+    pub version: Option<String>,
+    pub error: Option<String>,
+}
+
+/// A Lidarr connection and its client (`None` when the key cannot be used in a header).
+fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> (Option<settings::LidarrConfig>, Option<crate::lidarr::Lidarr>) {
+    let client = cfg.as_ref().and_then(|c| match crate::lidarr::Lidarr::new(&c.url, &c.api_key) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            tracing::warn!("Lidarr: {e:#}");
+            None
+        }
+    });
+    (cfg, client)
 }
 
 /// The catalogue's folders: the Music folder first (id 0), then the incoming ones.
@@ -411,8 +435,8 @@ pub struct App {
     incoming_cache: Mutex<std::collections::HashMap<String, IncomingSourceView>>,
     /// See `Owned`; `None` until first needed, and after settings change.
     owned: Mutex<Option<Owned>>,
-    /// Optional (LIDARR_URL / LIDARR_API_KEY): asked to stop fetching albums deleted from Incoming.
-    lidarr: Option<crate::lidarr::Lidarr>,
+    /// Optional, from Settings: asked to stop fetching albums deleted from Incoming. Swapped in whole on save.
+    lidarr: std::sync::RwLock<(Option<settings::LidarrConfig>, Option<crate::lidarr::Lidarr>)>,
     /// Incoming albums deleted here, hidden until the server's list no longer has them.
     hidden: Mutex<std::collections::HashSet<String>>,
     /// Deletions that Undo can still reverse, by undo key.
@@ -456,7 +480,7 @@ impl App {
             folders: std::sync::RwLock::new((folders, store)),
             incoming_cache: Mutex::new(std::collections::HashMap::new()),
             owned: Mutex::new(None),
-            lidarr: crate::lidarr::Lidarr::from_env(),
+            lidarr: std::sync::RwLock::new(lidarr_pair(saved.lidarr)),
             hidden: Mutex::new(std::collections::HashSet::new()),
             deleted: Mutex::new(std::collections::HashMap::new()),
             catalogue,
@@ -466,6 +490,33 @@ impl App {
 
     fn folders(&self) -> Folders {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).0.clone()
+    }
+
+    /// The Lidarr connection, when one is set.
+    fn lidarr(&self) -> Option<crate::lidarr::Lidarr> {
+        self.lidarr.read().unwrap_or_else(|p| p.into_inner()).1.clone()
+    }
+
+    /// Lidarr as the page sees it: its address, whether a key is saved, and whether it answers.
+    async fn lidarr_view(cfg: Option<&settings::LidarrConfig>, client: Option<crate::lidarr::Lidarr>) -> Option<LidarrView> {
+        let cfg = cfg?;
+        let (version, error) = match client {
+            Some(l) => match l.version().await {
+                Ok(v) => (Some(v), None),
+                Err(e) => (None, Some(format!("{e:#}"))),
+            },
+            None => (None, Some("the API key is not usable".into())),
+        };
+        Some(LidarrView { url: cfg.url.clone(), key_set: !cfg.api_key.is_empty(), version, error })
+    }
+
+    /// Check a Lidarr as the page fills it in (a blank key means the saved one, under the rules of saving). Nothing
+    /// is saved.
+    pub async fn preview_lidarr(&self, draft: settings::LidarrConfig) -> Result<Option<LidarrView>, ToggleError> {
+        let saved = self.lidarr.read().unwrap_or_else(|p| p.into_inner()).0.clone();
+        let cfg = settings::merge_lidarr(saved.as_ref(), draft)?;
+        let client = cfg.as_ref().and_then(|c| crate::lidarr::Lidarr::new(&c.url, &c.api_key).ok());
+        Ok(Self::lidarr_view(cfg.as_ref(), client).await)
     }
 
     fn music(&self) -> Option<String> {
@@ -885,7 +936,7 @@ impl App {
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         // Best effort: the album is in the trash either way; a Lidarr failure only means it may come back.
-        let lidarr_ids = match (&self.lidarr, dir.release_group.as_deref()) {
+        let lidarr_ids = match (self.lidarr(), dir.release_group.as_deref()) {
             (Some(l), Some(rg)) => l.unmonitor(rg).await.unwrap_or_else(|e| {
                 tracing::warn!("Lidarr: could not stop fetching {}: {e:#}", album.title);
                 Vec::new()
@@ -922,7 +973,7 @@ impl App {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        if let Some(l) = &self.lidarr {
+        if let Some(l) = self.lidarr() {
             if let Err(e) = l.monitor(&d.lidarr_ids).await {
                 tracing::warn!("Lidarr: could not restore monitoring of {}: {e:#}", d.title);
             }
@@ -1084,6 +1135,8 @@ impl App {
         // Read before the struct below: a lock guard must not live across its awaits.
         let tag_rules = self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone();
         let music_folder = self.music();
+        let (lidarr_cfg, lidarr_client) = self.lidarr.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let lidarr = Self::lidarr_view(lidarr_cfg.as_ref(), lidarr_client).await;
         Ok(SettingsView {
             sources,
             kinds: Self::kinds(),
@@ -1094,6 +1147,7 @@ impl App {
             version: VERSION,
             started: self.started,
             music_folder,
+            lidarr,
             tag_rules,
             catalogue: {
                 let c = self.catalogue.clone();
@@ -1115,13 +1169,25 @@ impl App {
     /// Check every enabled source against its server, then save the list and switch over. Nothing is saved if a
     /// check fails. The Music libraries' files hold the playlists, so Cratarr must see them, all in one folder.
     /// `tag_rules`: `None` keeps what is saved.
+    /// `lidarr`: `None` keeps the saved one; a blank address removes it.
     pub async fn save_settings(
         &self,
         drafts: Vec<SourceConfig>,
         tag_rules: Option<crate::catalogue::Rules>,
+        lidarr: Option<settings::LidarrConfig>,
     ) -> Result<SettingsView, ToggleError> {
         let Some(path) = self.settings_path.clone() else { return Err(ToggleError::SettingsReadOnly) };
         let _one_at_a_time = self.saving.lock().await;
+        let old_lidarr = self.lidarr.read().unwrap_or_else(|p| p.into_inner()).0.clone();
+        let lidarr = match lidarr {
+            Some(draft) => settings::merge_lidarr(old_lidarr.as_ref(), draft)?,
+            None => old_lidarr,
+        };
+        let lidarr = lidarr_pair(lidarr);
+        if let Some(cfg) = &lidarr.0 {
+            let client = lidarr.1.as_ref().ok_or_else(|| ToggleError::BadSettings("Lidarr: the API key is not usable".into()))?;
+            client.version().await.map_err(|e| ToggleError::BadSettings(format!("Lidarr at {}: {e:#}", cfg.url)))?;
+        }
         let old_rules = self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone();
         let places = place_folders(self.data_dir.as_deref(), self.music().as_deref());
         let tag_rules = tag_rules.unwrap_or(old_rules);
@@ -1165,11 +1231,12 @@ impl App {
             )));
         }
         let music_folder = derive_folders(&next, self.music().as_deref()).music;
-        let to_save = settings::Saved { sources: merged, music_folder, tag_rules: tag_rules.clone() };
+        let to_save = settings::Saved { sources: merged, music_folder, tag_rules: tag_rules.clone(), lidarr: lidarr.0.clone() };
         tokio::task::spawn_blocking(move || settings::save(&path, &to_save))
             .await
             .map_err(|e| anyhow::anyhow!("saving settings: {e}"))??;
         *self.tag_rules.write().unwrap_or_else(|p| p.into_inner()) = tag_rules;
+        *self.lidarr.write().unwrap_or_else(|p| p.into_inner()) = lidarr;
         self.switch_to(next).await?;
         // Servers may have changed: link their tracks again soon.
         self.catalogue.poke();

@@ -89,7 +89,8 @@ folder until a Music library is saved; see `server/src/config.rs`).
 
 Sources and library uses are set up on the Settings page and saved in `CRATARR_DATA_DIR/settings.json` (owner-only: it holds secrets).
 Until something is saved there, one Jellyfin source comes from `JELLYFIN_URL`, `JELLYFIN_API_KEY` and the
-optional `CRATARR_PLAYER_CLIENT`. Secrets are never sent back to the page, and a saved
+optional `CRATARR_PLAYER_CLIENT`. Lidarr (optional: Delete in Incoming asks it to stop fetching the album) is set
+there too, under Connections; `LIDARR_URL` and `LIDARR_API_KEY` are its first-run default. Secrets are never sent back to the page, and a saved
 secret is only reused while the fields it is tied to (Jellyfin: the address) stay the same. `CRATARR_MUSIC_PREFIXES`,
 `CRATARR_JELLYFIN_PLAYLIST_DIR` and `JELLYFIN_USER_ID` are no longer used. See decisions [0004](docs/decisions/0004-settings-page.md)
 and [0005](docs/decisions/0005-pluggable-sources.md).

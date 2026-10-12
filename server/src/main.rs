@@ -71,6 +71,11 @@ async fn main() -> Result<()> {
         Some(s) => (s, settings::Origin::File),
         None => (settings::Saved { sources: settings::from_env(&env), ..Default::default() }, settings::Origin::Env),
     };
+    // Lidarr from LIDARR_URL / LIDARR_API_KEY until one is saved in Settings.
+    let mut saved = saved;
+    if saved.lidarr.is_none() {
+        saved.lidarr = settings::lidarr_from_env(&env);
+    }
     if saved.sources.is_empty() {
         tracing::warn!("no music source is set up yet: add one on the Settings page (or set JELLYFIN_URL)");
     }

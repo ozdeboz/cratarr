@@ -63,6 +63,17 @@ struct FileV3 {
     music_folder: Option<String>,
     #[serde(default)]
     tag_rules: crate::catalogue::Rules,
+    #[serde(default)]
+    lidarr: Option<LidarrConfig>,
+}
+
+/// Lidarr, which Incoming asks to stop fetching an album it deleted. Optional.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LidarrConfig {
+    pub url: String,
+    /// Secret: never sent to the page; reused only while the address stays the same.
+    #[serde(default)]
+    pub api_key: String,
 }
 
 /// Everything the Settings page saves.
@@ -73,6 +84,7 @@ pub struct Saved {
     pub music_folder: Option<String>,
     /// How tag values are split when read (decision 0008).
     pub tag_rules: crate::catalogue::Rules,
+    pub lidarr: Option<LidarrConfig>,
 }
 
 /// Cratarr's folders, as found behind the libraries in use (decision 0009).
@@ -110,7 +122,7 @@ pub fn load(path: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<
     let json: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("{} is not JSON", path.display()))?;
     if json.get("version").is_some() {
         let f: FileV3 = serde_json::from_value(json).with_context(|| format!("{} has an unexpected shape", path.display()))?;
-        return Ok(Some(Saved { sources: f.sources, music_folder: f.music_folder, tag_rules: f.tag_rules }));
+        return Ok(Some(Saved { sources: f.sources, music_folder: f.music_folder, tag_rules: f.tag_rules, lidarr: f.lidarr }));
     }
     let flat: std::collections::BTreeMap<String, String> =
         serde_json::from_value(json).with_context(|| format!("{} is neither a source list nor the older flat format", path.display()))?;
@@ -134,6 +146,7 @@ pub fn save(path: &Path, saved: &Saved) -> Result<()> {
         sources: saved.sources.clone(),
         music_folder: saved.music_folder.clone(),
         tag_rules: saved.tag_rules.clone(),
+        lidarr: saved.lidarr.clone(),
     };
     f.write_all(serde_json::to_string_pretty(&body)?.as_bytes())?;
     f.sync_all()?;
@@ -154,6 +167,33 @@ pub fn from_env(env: &dyn Fn(&str) -> Option<String>) -> Vec<SourceConfig> {
         }
     }
     vec![SourceConfig { id: "jellyfin".into(), kind: "jellyfin".into(), enabled: true, libraries: Roles::default(), values }]
+}
+
+/// Lidarr from `LIDARR_URL` and `LIDARR_API_KEY` (until one is saved); nothing unless both are set.
+pub fn lidarr_from_env(env: &dyn Fn(&str) -> Option<String>) -> Option<LidarrConfig> {
+    let get = |k: &str| env(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    Some(LidarrConfig { url: get("LIDARR_URL")?, api_key: get("LIDARR_API_KEY")? })
+}
+
+/// Check the Lidarr from the page against the saved one: a blank address removes it; a blank key keeps the saved
+/// key while the address stays the same (the rule of `merge`).
+pub fn merge_lidarr(saved: Option<&LidarrConfig>, draft: LidarrConfig) -> Result<Option<LidarrConfig>, ChangeError> {
+    let url = draft.url.trim().trim_end_matches('/').to_string();
+    if url.is_empty() {
+        return Ok(None);
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(ChangeError::Invalid("Lidarr: the address must start with http:// or https://".into()));
+    }
+    let key = draft.api_key.trim().to_string();
+    if !key.is_empty() {
+        return Ok(Some(LidarrConfig { url, api_key: key }));
+    }
+    match saved.filter(|s| !s.api_key.is_empty()) {
+        Some(s) if s.url == url => Ok(Some(LidarrConfig { url, api_key: s.api_key.clone() })),
+        Some(_) => Err(ChangeError::SecretNeeded { name: "Lidarr".into(), field: "address".into(), secret: "API key".into() }),
+        None => Err(ChangeError::Invalid("Lidarr: the API key is required".into())),
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -326,6 +366,21 @@ mod tests {
     }
 
     #[test]
+    fn lidarr_keeps_its_key_only_for_the_same_address() {
+        let saved = LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into() };
+        let draft = |url: &str, key: &str| LidarrConfig { url: url.into(), api_key: key.into() };
+        assert_eq!(merge_lidarr(Some(&saved), draft("http://lidarr:8686/", "")).unwrap(), Some(saved.clone()));
+        assert!(matches!(merge_lidarr(Some(&saved), draft("http://evil:8686", "")), Err(ChangeError::SecretNeeded { .. })));
+        assert_eq!(merge_lidarr(Some(&saved), draft("http://new:8686", "k2")).unwrap().unwrap().api_key, "k2");
+        assert_eq!(merge_lidarr(Some(&saved), draft(" ", "")).unwrap(), None, "a blank address removes it");
+        assert!(merge_lidarr(None, draft("http://lidarr:8686", "")).is_err(), "a new one needs its key");
+        assert!(merge_lidarr(None, draft("lidarr:8686", "k")).is_err());
+        let env = env_of(&[("LIDARR_URL", "http://lidarr:8686"), ("LIDARR_API_KEY", "k")]);
+        assert_eq!(lidarr_from_env(&env), Some(saved));
+        assert_eq!(lidarr_from_env(&env_of(&[("LIDARR_URL", "http://lidarr:8686")])), None);
+    }
+
+    #[test]
     fn the_page_never_sees_secrets() {
         let (values, set) = redact(&jf("jellyfin", "http://jf:8096", Some("secret")));
         assert!(!values.contains_key("api_key"));
@@ -351,7 +406,8 @@ mod tests {
         let s = vec![jf("jellyfin", "http://jf:8096", Some("k"))];
         let mut s = s;
         s[0].libraries = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()] };
-        let saved = Saved { sources: s, music_folder: Some("/music".into()), tag_rules: Default::default() };
+        let lidarr = Some(LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into() });
+        let saved = Saved { sources: s, music_folder: Some("/music".into()), tag_rules: Default::default(), lidarr };
         save(&path, &saved).unwrap();
         assert_eq!(load(&path, &none).unwrap(), Some(saved));
         #[cfg(unix)]

@@ -3,12 +3,14 @@
     ApiError,
     getCatalogue,
     getSettings,
+    previewLidarr,
     previewSource,
     saveSettings,
     type Choice,
     type Field,
     type Kind,
     type LibraryUse,
+    type LidarrView,
     type Settings,
     type SourceConfig,
     type SourceView,
@@ -36,6 +38,9 @@
   let ruleText = $state({ artistSeps: '', genreSeps: '', artistKeep: '', genreKeep: '' });
   let cat = $state<CatalogueStatus | null>(null);
 
+  // Lidarr as the page edits it; the saved key is never sent here.
+  let lid = $state({ url: '', key: '', view: null as LidarrView | null, busy: false, note: null as string | null, removing: false });
+
   function fill(next: Settings) {
     s = next;
     ruleText = {
@@ -45,6 +50,7 @@
       genreKeep: next.tag_rules.genre_keep.join('\n'),
     };
     cat = next.catalogue;
+    lid = { url: next.lidarr?.url ?? '', key: '', view: next.lidarr, busy: false, note: null, removing: false };
     drafts = next.sources.map((v) => ({
       id: v.id,
       kind: v.kind,
@@ -97,9 +103,29 @@
     artist_keep: fromLines(ruleText.artistKeep),
     genre_keep: fromLines(ruleText.genreKeep),
   });
+  const lidarrChanged = $derived(!!s && (lid.url.trim().replace(/\/+$/, '') !== (s.lidarr?.url ?? '') || lid.key.trim() !== ''));
+  /** The saved key is only reused for the same address. */
+  const lidarrKeyNeeded = $derived(!!s?.lidarr?.key_set && lid.url.trim().replace(/\/+$/, '') !== s.lidarr.url && lid.url.trim() !== '');
+  // Lidarr only matters to Incoming.
+  const showLidarr = $derived(!!s?.lidarr || drafts.some((d) => d.enabled && d.libraries.incoming.length > 0));
+
+  async function checkLidarr() {
+    lid.busy = true;
+    lid.note = null;
+    try {
+      lid.view = await previewLidarr({ url: lid.url, api_key: lid.key });
+      lid.note = lid.view?.error ?? null;
+    } catch (e) {
+      lid.note = e instanceof ApiError ? e.message : 'Unexpected error';
+    } finally {
+      lid.busy = false;
+    }
+  }
+
   const dirty = $derived(
     !!s &&
       (drafts.some((d) => Object.values(d.secrets).some((v) => v.trim())) ||
+        lidarrChanged ||
         JSON.stringify(rules) !== JSON.stringify(s.tag_rules) ||
         JSON.stringify(drafts.map(payload)) !==
           JSON.stringify(s.sources.map((v) => payload({ ...v, secrets: {}, view: v, busy: false, note: null })))),
@@ -144,7 +170,8 @@
     notice = null;
     saving = true;
     try {
-      fill(await saveSettings(drafts.map(payload), { tag_rules: rules }));
+      const lidarr = lidarrChanged ? { url: lid.url.trim(), api_key: lid.key.trim() } : undefined;
+      fill(await saveSettings(drafts.map(payload), { tag_rules: rules, lidarr }));
       notice = { text: 'Saved and in use.' };
     } catch (e) {
       notice = { text: e instanceof ApiError ? e.message : 'Unexpected error', tone: 'error' };
@@ -308,6 +335,52 @@
           </select>
           <button class="add" onclick={() => addServer(addKind)}>Add server</button>
         </div>
+      {/if}
+
+      {#if showLidarr}
+        <article class="server lidarr">
+          <header>
+            <h3>Lidarr<small>optional</small></h3>
+            {#if s.lidarr && lid.url}
+              {#if lid.removing}
+                <span class="ask">Remove Lidarr?</span>
+                <button class="danger" onclick={() => ((lid.url = ''), (lid.key = ''), (lid.view = null), (lid.removing = false))}>Remove</button>
+                <button onclick={() => (lid.removing = false)}>Cancel</button>
+              {:else}
+                <button onclick={() => (lid.removing = true)}>Remove</button>
+              {/if}
+            {/if}
+          </header>
+          {#if lid.view && lid.url}
+            <p class="state" class:bad={!lid.view.version}>
+              <span class="dot" class:ok={!!lid.view.version} aria-hidden="true"></span>{lid.view.version ? `Connected to Lidarr ${lid.view.version}` : (lid.view.error ?? 'Not connected')}
+            </p>
+          {/if}
+          <div class="fields">
+            <label>
+              <span class="l">Server address</span>
+              <input type="url" bind:value={lid.url} spellcheck="false" autocomplete="off" placeholder="http://lidarr:8686" />
+            </label>
+            <label>
+              <span class="l">API key</span>
+              <input
+                type="password"
+                autocomplete="new-password"
+                bind:value={lid.key}
+                placeholder={s.lidarr?.key_set && !lidarrKeyNeeded ? 'Saved; leave empty to keep it' : ''}
+              />
+              {#if lidarrKeyNeeded}
+                <span class="hint warn">You changed the server address, so enter the API key again.</span>
+              {:else}
+                <span class="hint">In Lidarr under Settings, General. Lets Delete in Incoming stop Lidarr fetching the album again.</span>
+              {/if}
+            </label>
+          </div>
+          <div class="row">
+            <button type="button" disabled={lid.busy || !lid.url.trim()} onclick={checkLidarr}>Check connection</button>
+            {#if lid.note}<span class="hint bad">{lid.note}</span>{/if}
+          </div>
+        </article>
       {/if}
     </section>
 

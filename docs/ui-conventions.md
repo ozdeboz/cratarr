@@ -16,7 +16,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. The player choice is in the now-playing header ("Playing on Finamp · Lenovo Tab ▾"), not in
   the sidebar.
-- **Settings** has four sections, in this order: Connections (servers: address, key, status), Libraries (one row per
+- **Settings** has four sections, in this order: Connections (servers: address, key, status; Lidarr the same way, shown
+  only when an Incoming library is set), Libraries (one row per
   server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its files in, or a warning when
   it can't; then the catalogue status and tag splitting), Display (theme, progress bar), About (version, port, file
   locations). Technical details go to About or nowhere. A use is set only there (decision 0009).

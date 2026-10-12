@@ -195,6 +195,8 @@ export type Settings = {
   started: number;
   /** Where the Music libraries' files are, as Cratarr sees them: the playlists live there. */
   music_folder: string | null;
+  /** Null when no Lidarr is set. */
+  lidarr: LidarrView | null;
   tag_rules: TagRules;
   catalogue: CatalogueStatus | null;
 };
@@ -236,7 +238,17 @@ export type FileProblem = {
 
 export const getFileProblems = () => request<FileProblem[]>('/api/catalogue/problems');
 
-export const saveSettings = (sources: SourceConfig[], extra: { tag_rules: TagRules }) =>
+/** Lidarr on the Settings page; the key is never sent. */
+export type LidarrView = { url: string; key_set: boolean; version: string | null; error: string | null };
+
+/** What the page sends for Lidarr: a blank key keeps the saved one while the address stays; a blank address removes it. */
+export type LidarrDraft = { url: string; api_key: string };
+
+/** Check a Lidarr as filled in; nothing is saved. Null for a blank address. */
+export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);
+
+/** `lidarr` left out: keep the saved one. */
+export const saveSettings = (sources: SourceConfig[], extra: { tag_rules: TagRules; lidarr?: LidarrDraft }) =>
   request<Settings>('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
