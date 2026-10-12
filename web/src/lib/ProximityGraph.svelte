@@ -6,13 +6,21 @@
   import { select } from 'd3-selection';
   import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from 'd3-zoom';
   import type { Proximity, Signal } from './api';
+  import { longpress } from './longpress';
   import { backbone, groups, rankers, weigh } from './proximity';
 
   let {
     data,
     signals,
     selected = $bindable(null),
-  }: { data: Proximity; signals: Record<Signal, boolean>; selected?: number | null } = $props();
+    onmenu,
+  }: {
+    data: Proximity;
+    signals: Record<Signal, boolean>;
+    selected?: number | null;
+    /** Long-press or right-click on a point: open that playlist's menu. */
+    onmenu?: (i: number, anchor: DOMRect) => void;
+  } = $props();
 
   type Node = { i: number; r: number; x?: number; y?: number; vx?: number; vy?: number };
   type Edge = { key: string; source: Node | number; target: Node | number; w: number };
@@ -161,6 +169,7 @@
           tabindex="0"
           aria-label={data.playlists[p.i].name}
           onclick={() => (selected = selected === p.i ? null : p.i)}
+          use:longpress={(anchor) => onmenu?.(p.i, anchor)}
           onkeydown={(e) =>
             e.key === 'Escape' ? (selected = null) : (e.key === 'Enter' || e.key === ' ') && (selected = selected === p.i ? null : p.i)}
         >

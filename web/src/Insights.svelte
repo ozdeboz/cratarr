@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ApiError, getInsights, type Count, type Insights, type Signal } from './lib/api';
+  import { ApiError, getInsights, type Count, type Insights, type Proximity, type Signal } from './lib/api';
+  import { live } from './lib/live.svelte';
+  import Notice, { type NoticeData } from './lib/Notice.svelte';
+  import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import { prefs } from './lib/prefs.svelte';
   import ProximityGraph from './lib/ProximityGraph.svelte';
   import { key, rankers, weigh } from './lib/proximity';
@@ -7,6 +10,36 @@
   let data = $state<Insights | null>(null);
   let error = $state<string | null>(null);
   let selected = $state<number | null>(null);
+  let notice = $state<NoticeData | null>(null);
+  // The playlist menu, opened by a long-press on a point; `name` is the playlist's id.
+  let menu = $state<{ name: string; anchor: DOMRect } | null>(null);
+  // Deleted here (and not undone): left out of the graph until the next visit.
+  let removed = $state<string[]>([]);
+
+  /** The proximity data without deleted playlists, links renumbered. */
+  const shown = $derived.by((): Proximity | null => {
+    if (!data) return null;
+    const p = data.proximity;
+    const index = new Map<number, number>();
+    p.playlists.forEach((x, i) => !removed.includes(x.name) && index.set(i, index.size));
+    const playlists = p.playlists.filter((_, i) => index.has(i));
+    const links = p.links
+      .filter((l) => index.has(l.a) && index.has(l.b))
+      .map((l) => ({ ...l, a: index.get(l.a)!, b: index.get(l.b)! }));
+    return { playlists, links };
+  });
+
+  /** What the menu shows for a playlist: the live counts when the shell has them. */
+  const menuPlaylist = (name: string) => {
+    const known = live.view?.playlists.find((x) => x.id === name);
+    const point = data?.proximity.playlists.find((x) => x.name === name);
+    return known ?? { id: name, name, count: point?.tracks ?? 0, dead: 0 };
+  };
+
+  function renamed(from: string, to: string) {
+    const point = data?.proximity.playlists.find((x) => x.name === from);
+    if (point) point.name = to;
+  }
 
   $effect(() => {
     getInsights()
@@ -33,11 +66,11 @@
   const widest = (rows: Count[]) => Math.max(1, ...rows.map((r) => r.n));
 
   /** The selected playlist's closest playlists under the current signals (scored as the graph does), with what they share. */
-  const rank = $derived(data ? rankers(data.proximity) : null);
-  const weights = $derived(data && rank ? weigh(data.proximity, rank, prefs.signals) : new Map<string, number>());
+  const rank = $derived(shown ? rankers(shown) : null);
+  const weights = $derived(shown && rank ? weigh(shown, rank, prefs.signals) : new Map<string, number>());
   const closest = $derived.by(() => {
-    if (!data || selected === null) return [];
-    return data.proximity.links
+    if (!shown || selected === null) return [];
+    return shown.links
       .filter((l) => l.a === selected || l.b === selected)
       .map((l) => ({ l, other: l.a === selected ? l.b : l.a, w: weights.get(key(l.a, l.b)) ?? 0 }))
       .filter((x) => x.w > 0)
@@ -63,6 +96,8 @@
       </div>
     {/if}
   </div>
+
+  <Notice bind:notice />
 
   {#if error}
     <p class="error" role="alert">{error}</p>
@@ -125,16 +160,21 @@
     {@render bars('Genres', l.genres, 'album')}
     {@render bars('Decades', l.decades, 'album')}
     {@render bars('Artists', l.top_artists, 'album')}
-  {:else if data.proximity.playlists.length < 2}
+  {:else if !shown || shown.playlists.length < 2}
     <p class="empty">Related playlists need at least two playlists.</p>
   {:else if !anyOn}
     <p class="empty">Turn on at least one of shared tracks, genre or artists.</p>
   {:else}
-    {#key data}
-      <ProximityGraph data={data.proximity} signals={prefs.signals} bind:selected />
+    {#key removed.join('/')}
+      <ProximityGraph
+        data={shown}
+        signals={prefs.signals}
+        bind:selected
+        onmenu={(i, anchor) => (menu = { name: shown.playlists[i].name, anchor })}
+      />
     {/key}
-    {#if selected !== null}
-      {@const me = data.proximity.playlists[selected]}
+    {#if selected !== null && shown.playlists[selected]}
+      {@const me = shown.playlists[selected]}
       <section class="detail">
         <h2>{me.name} <span class="n">{plural(me.tracks, 'track')}</span></h2>
         {#if me.genres.length}<p class="muted">{me.genres.join(', ')}</p>{/if}
@@ -142,7 +182,7 @@
           <ul class="plain">
             {#each closest as c (c.other)}
               <li>
-                <button class="link" onclick={() => (selected = c.other)}>{data.proximity.playlists[c.other].name}</button>
+                <button class="link" onclick={() => (selected = c.other)}>{shown.playlists[c.other].name}</button>
                 <span class="muted">
                   {[
                     c.l.shared_tracks ? plural(c.l.shared_tracks, 'shared track') : null,
@@ -164,6 +204,21 @@
     {/if}
   {/if}
 </main>
+
+{#if menu}
+  <PlaylistMenu
+    playlist={menuPlaylist(menu.name)}
+    anchor={menu.anchor}
+    onclose={() => (menu = null)}
+    onnotice={(n) => (notice = n)}
+    onrenamed={renamed}
+    ondeleted={(id) => {
+      selected = null;
+      removed = [...removed, id];
+    }}
+    onrestored={(id) => (removed = removed.filter((x) => x !== id))}
+  />
+{/if}
 
 <style>
   main {

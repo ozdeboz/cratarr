@@ -4,7 +4,9 @@
 const HOLD_MS = 500;
 const SLOP_PX = 10;
 
-export function longpress(node: HTMLElement, onlong: (rect: DOMRect) => void) {
+export function longpress(target: HTMLElement | SVGElement, onlong: (rect: DOMRect) => void) {
+  // An SVG element (a point in Insights' graph) takes the same events and inline style; typed as one for the listeners.
+  const node = target as HTMLElement;
   let handler = onlong;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let start: { x: number; y: number } | null = null;

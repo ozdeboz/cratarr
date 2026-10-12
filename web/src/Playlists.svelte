@@ -1,19 +1,10 @@
 <script lang="ts">
-  import {
-    ApiError,
-    createPlaylist,
-    deletePlaylist,
-    playPlaylist,
-    renamePlaylist,
-    restorePlaylist,
-    toggle,
-    type Playlist,
-    type PlayMode,
-  } from './lib/api';
+  import { ApiError, createPlaylist, toggle, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, refresh } from './lib/live.svelte';
   import Notice, { type NoticeData } from './lib/Notice.svelte';
   import Popover from './lib/Popover.svelte';
+  import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import { longpress } from './lib/longpress';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
@@ -28,10 +19,8 @@
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
 
-  // The open menu: a playlist's (rename, delete) or the "New playlist" one; anchored to what opened it.
-  type Menu =
-    | { kind: 'playlist'; p: Playlist; anchor: DOMRect; mode: 'menu' | 'rename' | 'delete' }
-    | { kind: 'new'; anchor: DOMRect };
+  // The open menu: a playlist's (lib/PlaylistMenu) or the "New playlist" one; anchored to what opened it.
+  type Menu = { kind: 'playlist'; p: Playlist; anchor: DOMRect } | { kind: 'new'; anchor: DOMRect };
   let menu = $state<Menu | null>(null);
   let nameField = $state('');
   let working = $state(false);
@@ -100,31 +89,6 @@
     if (name) act(() => createPlaylist(name), { text: `Created ${name}.` });
   };
 
-  const rename = (p: Playlist) => {
-    const to = nameField.trim();
-    if (to && to !== p.id) act(() => renamePlaylist(p.id, to), { text: `Renamed to ${to}.` });
-  };
-
-  /** Play from the menu. Success shows in the header; only a failure says something. */
-  async function play(p: Playlist, mode: PlayMode) {
-    if (working) return;
-    working = true;
-    menu = null;
-    try {
-      await playPlaylist(p.id, mode, prefs.source || undefined);
-      refresh();
-    } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Could not start playing', tone: 'error' };
-    } finally {
-      working = false;
-    }
-  }
-
-  const remove = (p: Playlist) =>
-    act(() => deletePlaylist(p.id), {
-      text: `Deleted ${p.name}.`,
-      undo: () => act(() => restorePlaylist(p.id), { text: `Restored ${p.name}.` }),
-    });
 </script>
 
 <main>
@@ -165,7 +129,7 @@
             aria-pressed={p.member}
             title={p.dead > 0 ? missing(p.dead) : undefined}
             onclick={() => tap(p)}
-            use:longpress={(anchor) => (menu = { kind: 'playlist', p, anchor, mode: 'menu' })}
+            use:longpress={(anchor) => (menu = { kind: 'playlist', p, anchor })}
           >
             <span class="mark" aria-hidden="true">{p.member ? '✓' : '+'}</span>
             <span class="name">{p.name}</span>
@@ -195,50 +159,7 @@
     </form>
   </Popover>
 {:else if menu?.kind === 'playlist'}
-  {@const p = menu.p}
-  <Popover anchor={menu.anchor} label={p.name} onclose={() => (menu = null)}>
-    <div class="head">{p.name} <span>{p.count} {p.count === 1 ? 'track' : 'tracks'}{p.dead > 0 ? ` · ${missing(p.dead)}` : ''}</span></div>
-    {#if menu.mode === 'menu'}
-      <div class="items" role="menu">
-        <button role="menuitem" disabled={working} onclick={() => play(p, 'play')}>Play</button>
-        <button role="menuitem" disabled={working} onclick={() => play(p, 'shuffle')}>Shuffle</button>
-        <button role="menuitem" disabled={working} onclick={() => play(p, 'next')}>Play next</button>
-        <button role="menuitem" disabled={working} onclick={() => play(p, 'last')}>Add to queue</button>
-        <hr />
-        <button
-          role="menuitem"
-          onclick={() => {
-            if (menu?.kind !== 'playlist') return;
-            nameField = p.id;
-            menu.mode = 'rename';
-          }}>Rename</button
-        >
-        <button role="menuitem" class="danger" onclick={() => menu?.kind === 'playlist' && (menu.mode = 'delete')}>Delete</button>
-      </div>
-    {:else if menu.mode === 'rename'}
-      <form
-        class="form"
-        onsubmit={(e) => {
-          e.preventDefault();
-          rename(p);
-        }}
-      >
-        <input type="text" aria-label="New name" maxlength="100" bind:value={nameField} />
-        <div class="row">
-          <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === p.id}>Rename</button>
-          <button type="button" onclick={() => (menu = null)}>Cancel</button>
-        </div>
-      </form>
-    {:else}
-      <div class="form">
-        <p class="ask">Delete {p.name}? You can undo this right after.</p>
-        <div class="row">
-          <button class="danger solid" disabled={working} onclick={() => remove(p)}>Delete playlist</button>
-          <button onclick={() => (menu = null)}>Cancel</button>
-        </div>
-      </div>
-    {/if}
-  </Popover>
+  <PlaylistMenu playlist={menu.p} anchor={menu.anchor} onclose={() => (menu = null)} onnotice={(n) => (notice = n)} />
 {/if}
 
 <style>
@@ -407,65 +328,11 @@
   }
 
   /* Popover contents */
-  .head {
-    padding: 8px 10px 6px;
-    font-weight: 650;
-    overflow-wrap: anywhere;
-  }
-
-  .head span {
-    display: block;
-    color: var(--muted);
-    font-size: 0.8rem;
-    font-weight: 400;
-  }
-
-  .items {
-    display: grid;
-  }
-
-  .items button {
-    min-height: 44px;
-    padding: 0 10px;
-    text-align: left;
-    background: none;
-    border: 0;
-    border-radius: 8px;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .items hr {
-    margin: 4px 6px;
-    border: 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .items button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .items button:hover,
-  .items button:focus-visible {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
-  }
-
-  .danger,
-  .items button.danger {
-    color: var(--danger);
-  }
 
   .form {
     display: grid;
     gap: 10px;
     padding: 6px;
-  }
-
-  .ask {
-    margin: 0;
-    font-size: 0.92rem;
   }
 
   .row {
@@ -489,13 +356,6 @@
     background: var(--accent);
     border-color: var(--accent);
     color: var(--accent-text);
-    font-weight: 600;
-  }
-
-  .row button.danger.solid {
-    background: var(--danger);
-    border-color: var(--danger);
-    color: #fff;
     font-weight: 600;
   }
 
