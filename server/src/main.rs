@@ -6,8 +6,10 @@ mod covers;
 mod jellyfin;
 mod m3u;
 mod nowplaying;
+mod placement;
 mod playlists;
 mod settings;
+mod source;
 mod web;
 
 use std::io::{Read, Write};
@@ -42,31 +44,37 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
-    // Settings saved from the page (CRATARR_DATA_DIR/settings.json) win over the environment; see decision 0004.
-    let data_dir = std::env::var("CRATARR_DATA_DIR").ok().filter(|d| !d.trim().is_empty());
-    let settings_path = data_dir.map(|d| std::path::Path::new(&d).join("settings.json"));
-    let overrides = match &settings_path {
-        Some(p) => settings::load(p)?,
-        None => settings::Overrides::new(),
-    };
     let env = |k: &str| std::env::var(k).ok();
-    let cfg = config::Config::from_lookup(settings::lookup(&overrides, &env))?;
-    if !overrides.is_empty() {
-        tracing::info!("using {} setting(s) saved from the Settings page", overrides.len());
+    let cfg = config::Config::from_lookup(env)?;
+    for retired in config::RETIRED {
+        if env(retired).is_some() {
+            tracing::warn!("{retired} is no longer used: Cratarr finds the library paths itself (decision 0005)");
+        }
     }
-    let jf = jellyfin::Jellyfin::new(&cfg.jellyfin_url, &cfg.api_key, &cfg.user_id)?;
 
-    // Startup self-check: fail loudly if Jellyfin is unreachable or the playlist folder cannot be read.
-    let info = jf.public_info().await.context("cannot reach Jellyfin")?;
-    tracing::info!("connected to Jellyfin {}", info.version);
-    jf.activity(1).await.context("Jellyfin's activity log did not look as expected")?;
+    // Sources saved from the page, or on first run one made from the JELLYFIN_* variables; see decision 0005.
+    let saved = match &cfg.data_dir {
+        Some(d) => settings::load(&std::path::Path::new(d).join("settings.json"), &env)?,
+        None => None,
+    };
+    let (sources, origin) = match saved {
+        Some(s) => (s, settings::Origin::File),
+        None => (settings::from_env(&env), settings::Origin::Env),
+    };
+    if sources.is_empty() {
+        tracing::warn!("no music source is set up yet: add one on the Settings page (or set JELLYFIN_URL)");
+    }
 
+    // A source that is down only costs its own features; an unreadable playlist folder is fatal.
     let bind = cfg.bind.clone();
-    let app = app::App::new(cfg, jf, app::SettingsFile { path: settings_path, overrides });
+    let app = app::App::new(cfg, sources, origin).await;
     let n = app.playlist_count().await.context("cannot read the playlist folder")?;
     tracing::info!("found {n} playlists");
+    let status = app.status().await;
+    tracing::info!("sources: {}", if status.connected { status.server_name.unwrap_or_default() } else { "none connected".into() });
 
-    // Files come and go in the library without the playlists changing, so re-check dead entries now and then.
+    // Files come and go in the library without the playlists changing, so re-check dead entries now and then; and
+    // look again for sources whose libraries could not be found yet (server down at start).
     let checker = app.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(60));
@@ -74,6 +82,7 @@ async fn main() -> Result<()> {
         loop {
             tick.tick().await;
             checker.refresh_dead().await;
+            checker.retry_placement().await;
         }
     });
 

@@ -20,15 +20,24 @@ pub struct Started {
 /// The track that is currently playing according to the activity log, if any.
 /// `None` also means "the log says everything has stopped"; callers decide whether to fall back.
 pub fn current_from_activity(entries: &[ActivityEntry], now_epoch: i64, max_age_secs: i64) -> Option<Started> {
+    playing_from_activity(entries, now_epoch, max_age_secs).into_iter().next()
+}
+
+/// Every track the log says is playing (started, not stopped, not too old), newest first. Several players can play
+/// at once; the caller picks one.
+pub fn playing_from_activity(entries: &[ActivityEntry], now_epoch: i64, max_age_secs: i64) -> Vec<Started> {
     let mut starts: Vec<&ActivityEntry> = entries.iter().filter(|e| e.kind == START && e.item_id.is_some()).collect();
     starts.sort_by(|a, b| b.date.cmp(&a.date)); // ISO-8601 UTC strings sort chronologically
-    let current = starts.into_iter().find(|s| {
-        !entries
-            .iter()
-            .any(|e| e.kind == STOP && e.item_id == s.item_id && e.date >= s.date)
-    })?;
-    let at = parse_iso_epoch(&current.date)?;
-    (now_epoch - at <= max_age_secs).then(|| Some(Started { item_id: current.item_id.clone()?, at })).flatten()
+    let mut out: Vec<Started> = Vec::new();
+    for s in starts {
+        let stopped = entries.iter().any(|e| e.kind == STOP && e.item_id == s.item_id && e.date >= s.date);
+        let (Some(item_id), Some(at)) = (s.item_id.clone(), parse_iso_epoch(&s.date)) else { continue };
+        if stopped || now_epoch - at > max_age_secs || out.iter().any(|o| o.item_id == item_id) {
+            continue;
+        }
+        out.push(Started { item_id, at });
+    }
+    out
 }
 
 /// How far into the playing track we are.
@@ -44,14 +53,14 @@ pub struct Progress {
 
 const TICKS_PER_SEC: f64 = 10_000_000.0;
 
-/// Position of `item` (with its run time in ticks): from a session playing that exact item (the preferred client
+/// Position of `item` (with its run time in ticks): from a session playing that exact item (the preferred player
 /// first), else estimated from the activity log's start time. A session showing a different item is ignored, since
 /// session records can be stale (see the module note).
 pub fn progress(
     item_id: &str,
     run_time_ticks: Option<i64>,
     sessions: &[Session],
-    preferred_client: &str,
+    prefers: impl Fn(&Session) -> bool,
     started_at: Option<i64>,
     now_epoch: i64,
 ) -> Option<Progress> {
@@ -64,7 +73,7 @@ pub fn progress(
     let session = sessions
         .iter()
         .filter(reporting)
-        .find(|s| s.client.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(preferred_client)))
+        .find(|s| prefers(s))
         .or_else(|| sessions.iter().find(reporting));
     if let Some(ps) = session.and_then(|s| s.play_state.as_ref()) {
         return Some(Progress {
@@ -193,36 +202,53 @@ mod tests {
         serde_json::from_str(&json).unwrap()
     }
 
+    fn finamp(s: &Session) -> bool {
+        s.client.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("Finamp"))
+    }
+
+    #[test]
+    fn every_playing_track_is_listed_newest_first() {
+        let log = vec![
+            e("2026-10-12T13:20:00Z", "AudioPlayback", "tablet"),
+            e("2026-10-12T13:21:00Z", "AudioPlayback", "phone"),
+            e("2026-10-12T13:19:00Z", "AudioPlayback", "stopped"),
+            e("2026-10-12T13:19:30Z", "AudioPlaybackStopped", "stopped"),
+        ];
+        let now = parse_iso_epoch("2026-10-12T13:22:00Z").unwrap();
+        let ids: Vec<String> = playing_from_activity(&log, now, 3600).into_iter().map(|s| s.item_id).collect();
+        assert_eq!(ids, vec!["phone", "tablet"]);
+    }
+
     #[test]
     fn the_matching_session_gives_the_position() {
         let s = vec![sess("Web", "other", 50_000_000, false), sess("Finamp", "a", 1_234_000_000, true)];
-        let p = progress("a", Some(3_240_000_000), &s, "Finamp", Some(0), 1_000).unwrap();
+        let p = progress("a", Some(3_240_000_000), &s, finamp, Some(0), 1_000).unwrap();
         assert_eq!(p, Progress { position_secs: 123.4, duration_secs: Some(324.0), paused: true, estimated: false });
     }
 
     #[test]
     fn the_preferred_client_wins_when_two_sessions_play_the_same_track() {
         let s = vec![sess("Web", "a", 10_000_000, false), sess("finamp", "a", 20_000_000, false)];
-        assert_eq!(progress("a", None, &s, "Finamp", None, 0).unwrap().position_secs, 2.0);
+        assert_eq!(progress("a", None, &s, finamp, None, 0).unwrap().position_secs, 2.0);
     }
 
     #[test]
     fn a_stale_session_on_another_track_falls_back_to_the_start_time() {
         let s = vec![sess("Finamp", "old", 0, true)];
-        let p = progress("new", Some(3_000_000_000), &s, "Finamp", Some(1_000), 1_090).unwrap();
+        let p = progress("new", Some(3_000_000_000), &s, finamp, Some(1_000), 1_090).unwrap();
         assert_eq!(p, Progress { position_secs: 90.0, duration_secs: Some(300.0), paused: false, estimated: true });
     }
 
     #[test]
     fn positions_are_kept_within_the_track() {
-        let p = progress("a", Some(1_000_000_000), &[], "Finamp", Some(0), 500).unwrap();
+        let p = progress("a", Some(1_000_000_000), &[], finamp, Some(0), 500).unwrap();
         assert_eq!(p.position_secs, 100.0);
         let s = vec![sess("Finamp", "a", -5, false)];
-        assert_eq!(progress("a", None, &s, "Finamp", None, 0).unwrap().position_secs, 0.0);
+        assert_eq!(progress("a", None, &s, finamp, None, 0).unwrap().position_secs, 0.0);
     }
 
     #[test]
     fn no_session_and_no_start_time_means_no_progress() {
-        assert_eq!(progress("a", Some(1), &[], "Finamp", None, 0), None);
+        assert_eq!(progress("a", Some(1), &[], finamp, None, 0), None);
     }
 }

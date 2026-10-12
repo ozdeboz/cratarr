@@ -16,8 +16,44 @@ pub struct ItemsPage<T> {
 #[serde(rename_all = "PascalCase")]
 pub struct Session {
     pub client: Option<String>,
+    pub device_name: Option<String>,
     pub now_playing_item: Option<PlayingItem>,
     pub play_state: Option<PlayState>,
+}
+
+/// A device Jellyfin remembers. Note: a session's `Client` and `DeviceId` do not always match the device's
+/// `AppName` and `Id` (observed: Finamp sessions with ids missing from this list, "Jellyfin for Android" vs
+/// "Jellyfin Android"), so players are matched by app and device name, loosely (see `source::jellyfin`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct Device {
+    pub app_name: Option<String>,
+    pub name: Option<String>,
+    pub date_last_activity: Option<String>,
+}
+
+/// A library as configured in Jellyfin. Its `Locations` are not used: they need not match the paths Jellyfin
+/// reports for the tracks in it (observed: `/Volume1/media/Music` vs `/data/media/Music/...`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct VirtualFolder {
+    pub name: String,
+    pub collection_type: Option<String>,
+    pub item_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Ancestor {
+    id: String,
+    #[serde(rename = "Type")]
+    kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct PathOnly {
+    path: Option<String>,
 }
 
 /// Where a session is in its track. Observed on 10.11 with Finamp: `PositionTicks` is current whenever it is read
@@ -108,8 +144,8 @@ pub struct User {
     pub name: String,
 }
 
-/// Fallback source for "what is playing": audio sessions only, preferring the configured client.
-pub fn pick_now_playing(sessions: &[Session], preferred_client: &str) -> Option<PlayingItem> {
+/// Fallback source for "what is playing": audio sessions only, preferring the chosen player.
+pub fn pick_now_playing(sessions: &[Session], prefers: impl Fn(&Session) -> bool) -> Option<PlayingItem> {
     let audio = |s: &&Session| {
         s.now_playing_item
             .as_ref()
@@ -118,7 +154,7 @@ pub fn pick_now_playing(sessions: &[Session], preferred_client: &str) -> Option<
     let preferred = sessions
         .iter()
         .filter(audio)
-        .find(|s| s.client.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(preferred_client)));
+        .find(|s| prefers(s));
     preferred
         .or_else(|| sessions.iter().find(audio))
         .and_then(|s| s.now_playing_item.clone())
@@ -171,6 +207,32 @@ impl Jellyfin {
 
     pub async fn sessions(&self) -> Result<Vec<Session>> {
         self.get("/Sessions").await
+    }
+
+    pub async fn devices(&self) -> Result<Vec<Device>> {
+        let page: ItemsPage<Device> = self.get("/Devices").await?;
+        Ok(page.items)
+    }
+
+    pub async fn virtual_folders(&self) -> Result<Vec<VirtualFolder>> {
+        self.get("/Library/VirtualFolders").await
+    }
+
+    /// The id of the library (collection folder) an item is in, if any.
+    pub async fn library_of(&self, item_id: &str) -> Result<Option<String>> {
+        let up: Vec<Ancestor> = self.get(&format!("/Items/{item_id}/Ancestors?userId={}", self.user_id)).await?;
+        Ok(up.into_iter().find(|a| a.kind.as_deref() == Some("CollectionFolder")).map(|a| a.id))
+    }
+
+    /// Paths of up to `n` tracks in a library.
+    pub async fn sample_paths(&self, library_id: &str, n: usize) -> Result<Vec<String>> {
+        let page: ItemsPage<PathOnly> = self
+            .get(&format!(
+                "/Users/{}/Items?ParentId={library_id}&IncludeItemTypes=Audio&Recursive=true&Limit={n}&Fields=Path",
+                self.user_id
+            ))
+            .await?;
+        Ok(page.items.into_iter().filter_map(|i| i.path).collect())
     }
 
     /// Newest entries first.
@@ -284,14 +346,19 @@ mod tests {
     #[test]
     fn now_playing_comes_from_the_audio_session() {
         let s: Vec<Session> = serde_json::from_str(SESSIONS).unwrap();
-        let np = pick_now_playing(&s, "Finamp").expect("fixture has an audio session");
+        let np = pick_now_playing(&s, finamp).expect("fixture has an audio session");
         assert_eq!(np.media_type.as_deref(), Some("Audio"));
         assert!(np.path.is_some());
+    }
+
+    fn finamp(s: &Session) -> bool {
+        s.client.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("Finamp"))
     }
 
     fn sess(client: &str, id: &str, media: &str) -> Session {
         Session {
             client: Some(client.into()),
+            device_name: None,
             now_playing_item: Some(PlayingItem {
                 id: id.into(),
                 name: id.into(),
@@ -308,20 +375,20 @@ mod tests {
     #[test]
     fn preferred_client_wins_among_audio_sessions() {
         let s = vec![sess("Web", "a", "Audio"), sess("finamp", "b", "Audio")];
-        assert_eq!(pick_now_playing(&s, "Finamp").unwrap().id, "b");
+        assert_eq!(pick_now_playing(&s, finamp).unwrap().id, "b");
     }
 
     #[test]
     fn video_sessions_are_ignored() {
         let s = vec![sess("Finamp", "v", "Video"), sess("Web", "a", "Audio")];
-        assert_eq!(pick_now_playing(&s, "Finamp").unwrap().id, "a");
+        assert_eq!(pick_now_playing(&s, finamp).unwrap().id, "a");
     }
 
     #[test]
     fn nothing_playing_gives_none() {
-        let s = vec![Session { client: Some("Finamp".into()), now_playing_item: None, play_state: None }];
-        assert!(pick_now_playing(&s, "Finamp").is_none());
-        assert!(pick_now_playing(&[], "Finamp").is_none());
+        let s = vec![Session { client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
+        assert!(pick_now_playing(&s, finamp).is_none());
+        assert!(pick_now_playing(&[], finamp).is_none());
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -12,14 +12,15 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::app::{App, ProbeView, SettingsView, StateView, StatusView, ToggleError};
+use crate::app::{App, SettingsView, SourceView, StateView, StatusView, ToggleError};
+use crate::settings::SourceConfig;
 use crate::playlists::{Repair, Repairs};
 
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/state", get(state))
-        .route("/api/cover/{id}", get(cover))
+        .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/playlists", post(create_playlist))
         .route("/api/playlists/{id}", delete(delete_playlist))
@@ -32,8 +33,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/repairs/apply", post(apply_repairs))
         .route("/api/undo", post(undo))
         .route("/api/status", get(status))
-        .route("/api/settings", get(get_settings).post(save_settings))
-        .route("/api/settings/probe", post(probe))
+        .route("/api/settings", get(get_settings).put(save_settings))
+        .route("/api/settings/preview", post(preview))
         .fallback(crate::web::serve)
         .with_state(app)
 }
@@ -43,20 +44,26 @@ async fn health(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, 
     Ok(Json(json!({ "status": "ok", "playlists": n })))
 }
 
-async fn state(State(app): State<Arc<App>>) -> Result<Json<StateView>, ApiError> {
-    Ok(Json(app.state().await.map_err(ToggleError::from)?))
+/// `?source=<id>`: follow that source; absent (or unknown): whichever started playing most recently.
+#[derive(Deserialize)]
+struct Follow {
+    source: Option<String>,
 }
 
-async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<StateView>, ApiError> {
-    Ok(Json(app.toggle(&id).await?))
+async fn state(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<StateView>, ApiError> {
+    Ok(Json(app.state(f.source.as_deref()).await.map_err(ToggleError::from)?))
 }
 
-async fn cover(State(app): State<Arc<App>>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Json<StateView>, ApiError> {
+    Ok(Json(app.toggle(&id, f.source.as_deref()).await?))
+}
+
+async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
     use crate::covers::Outcome;
     let inm = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
     let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"));
     let tag = |etag: &str| HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""));
-    match app.cover(&id, inm).await {
+    match app.cover(&source, &id, inm).await {
         Outcome::NotFound => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
         Outcome::NotModified { etag } => (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag(&etag))]).into_response(),
         Outcome::Image { content_type, etag, bytes } => (
@@ -162,22 +169,22 @@ async fn get_settings(State(app): State<Arc<App>>) -> Result<Json<SettingsView>,
     Ok(Json(app.settings().await.map_err(ToggleError::from)?))
 }
 
-async fn save_settings(
-    State(app): State<Arc<App>>,
-    Json(change): Json<crate::settings::Change>,
-) -> Result<Json<SettingsView>, ApiError> {
-    Ok(Json(app.save_settings(&change).await?))
+#[derive(Deserialize)]
+struct SaveBody {
+    sources: Vec<SourceConfig>,
+}
+
+async fn save_settings(State(app): State<Arc<App>>, Json(b): Json<SaveBody>) -> Result<Json<SettingsView>, ApiError> {
+    Ok(Json(app.save_settings(b.sources).await?))
 }
 
 #[derive(Deserialize)]
-struct ProbeBody {
-    jellyfin_url: String,
-    #[serde(default)]
-    api_key: Option<String>,
+struct PreviewBody {
+    source: SourceConfig,
 }
 
-async fn probe(State(app): State<Arc<App>>, Json(b): Json<ProbeBody>) -> Result<Json<ProbeView>, ApiError> {
-    Ok(Json(app.probe(&b.jellyfin_url, b.api_key.as_deref()).await?))
+async fn preview(State(app): State<Arc<App>>, Json(b): Json<PreviewBody>) -> Result<Json<SourceView>, ApiError> {
+    Ok(Json(app.preview(b.source).await?))
 }
 
 impl IntoResponse for ApiError {
