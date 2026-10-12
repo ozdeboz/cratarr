@@ -173,6 +173,15 @@ pub struct SettingsView {
     pub version: &'static str,
     /// Epoch seconds.
     pub started: i64,
+    /// Extra music folders the catalogue covers (the playlist folder always is).
+    pub folders: Vec<String>,
+    pub tag_rules: crate::catalogue::Rules,
+    pub catalogue: Option<crate::catalogue::Status>,
+}
+
+/// The catalogue's folders: the playlist folder first (id 0), then the extra ones.
+fn catalogue_folders(playlist_dir: &std::path::Path, extra: &[String]) -> Vec<PathBuf> {
+    std::iter::once(playlist_dir.to_path_buf()).chain(extra.iter().map(PathBuf::from)).collect()
 }
 
 fn epoch_now() -> i64 {
@@ -233,16 +242,22 @@ pub struct App {
     store: Store,
     /// Incoming lists by source and library (see `refresh_incoming`).
     incoming_cache: Mutex<std::collections::HashMap<String, IncomingSourceView>>,
+    /// Every audio file Cratarr can see, and the servers' ids for them (decision 0008).
+    catalogue: Arc<crate::catalogue::Catalogue>,
+    /// Saved with the sources: extra folders and tag rules.
+    extras: std::sync::RwLock<(Vec<String>, crate::catalogue::Rules)>,
 }
 
 impl App {
-    pub async fn new(cfg: Config, sources: Vec<SourceConfig>, origin: Origin) -> Arc<Self> {
+    pub async fn new(cfg: Config, saved: settings::Saved, origin: Origin) -> Result<Arc<Self>> {
         let playlist_dir = PathBuf::from(&cfg.playlist_dir);
         let mut active = Vec::new();
-        for s in sources {
+        for s in saved.sources {
             active.push(Arc::new(Active::start(s, &playlist_dir).await));
         }
-        Arc::new(Self {
+        let db = cfg.data_dir.as_ref().map(|d| PathBuf::from(d).join("catalogue.sqlite"));
+        let catalogue = Arc::new(crate::catalogue::Catalogue::open(db.as_deref(), catalogue_folders(&playlist_dir, &saved.folders))?);
+        Ok(Arc::new(Self {
             live: std::sync::RwLock::new(Arc::new(active)),
             origin: std::sync::RwLock::new(origin),
             settings_path: cfg.data_dir.as_ref().map(|d| PathBuf::from(d).join("settings.json")),
@@ -252,7 +267,18 @@ impl App {
             saving: Mutex::new(()),
             started: epoch_now(),
             incoming_cache: Mutex::new(std::collections::HashMap::new()),
-        })
+            catalogue,
+            extras: std::sync::RwLock::new((saved.folders, saved.tag_rules)),
+        }))
+    }
+
+    pub fn catalogue(&self) -> Arc<crate::catalogue::Catalogue> {
+        self.catalogue.clone()
+    }
+
+    /// The connected servers by id, for the catalogue's background pass.
+    pub fn connected_sources(&self) -> Vec<(String, Arc<dyn Source>)> {
+        self.connected().into_iter().map(|(a, s)| (a.cfg.id.clone(), s)).collect()
     }
 
     fn live(&self) -> Arc<Vec<Arc<Active>>> {
@@ -569,6 +595,8 @@ impl App {
             sources.push(self.view_of(&a.cfg, s, a.error.clone()).await);
         }
         let origin = *self.origin.read().unwrap_or_else(|p| p.into_inner());
+        // Read before the struct below: a lock guard must not live across its awaits.
+        let (folders, tag_rules) = self.extras.read().unwrap_or_else(|p| p.into_inner()).clone();
         Ok(SettingsView {
             sources,
             kinds: Self::kinds(),
@@ -578,6 +606,12 @@ impl App {
             playlists: self.playlist_count().await?,
             version: VERSION,
             started: self.started,
+            folders,
+            tag_rules,
+            catalogue: {
+                let c = self.catalogue.clone();
+                tokio::task::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok)
+            },
         })
     }
 
@@ -593,9 +627,26 @@ impl App {
 
     /// Check every enabled source against its server, then save the list and switch over. Nothing is saved if a
     /// check fails.
-    pub async fn save_settings(&self, drafts: Vec<SourceConfig>) -> Result<SettingsView, ToggleError> {
+    /// `folders` and `tag_rules`: `None` keeps what is saved.
+    pub async fn save_settings(
+        &self,
+        drafts: Vec<SourceConfig>,
+        folders: Option<Vec<String>>,
+        tag_rules: Option<crate::catalogue::Rules>,
+    ) -> Result<SettingsView, ToggleError> {
         let Some(path) = self.settings_path.clone() else { return Err(ToggleError::SettingsReadOnly) };
         let _one_at_a_time = self.saving.lock().await;
+        let (old_folders, old_rules) = self.extras.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let folders = match folders {
+            Some(f) => settings::check_folders(&f, &self.playlist_dir.to_string_lossy())?,
+            None => old_folders.clone(),
+        };
+        for f in &folders {
+            if !std::path::Path::new(f).is_dir() {
+                return Err(ToggleError::BadSettings(format!("{f} is not a folder Cratarr can see (is it mounted into the container?)")));
+            }
+        }
+        let tag_rules = tag_rules.unwrap_or(old_rules);
         let saved: Vec<SourceConfig> = self.live().iter().map(|a| a.cfg.clone()).collect();
         let merged = settings::merge(&saved, drafts)?;
         let mut next = Vec::with_capacity(merged.len());
@@ -617,9 +668,17 @@ impl App {
             }
             next.push(Arc::new(a));
         }
-        tokio::task::spawn_blocking(move || settings::save(&path, &merged))
+        let to_save = settings::Saved { sources: merged, folders: folders.clone(), tag_rules: tag_rules.clone() };
+        tokio::task::spawn_blocking(move || settings::save(&path, &to_save))
             .await
             .map_err(|e| anyhow::anyhow!("saving settings: {e}"))??;
+        if folders != old_folders {
+            let (c, dirs) = (self.catalogue.clone(), catalogue_folders(&self.playlist_dir, &folders));
+            tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        }
+        *self.extras.write().unwrap_or_else(|p| p.into_inner()) = (folders, tag_rules);
+        // Servers may have changed: link their tracks again soon.
+        self.catalogue.poke();
         *self.live.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(next);
         *self.origin.write().unwrap_or_else(|p| p.into_inner()) = Origin::File;
         // Sources and libraries may have changed: lists are read again on the next look (or the next sync pass).

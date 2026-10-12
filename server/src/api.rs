@@ -38,6 +38,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/incoming/play/{source}/{album}", post(play_incoming))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
+        .route("/api/catalogue", get(catalogue_status))
+        .route("/api/catalogue/problems", get(catalogue_problems))
         .fallback(crate::web::serve)
         .with_state(app)
 }
@@ -196,10 +198,27 @@ async fn get_settings(State(app): State<Arc<App>>) -> Result<Json<SettingsView>,
 #[derive(Deserialize)]
 struct SaveBody {
     sources: Vec<SourceConfig>,
+    /// Omitted: keep the saved ones.
+    #[serde(default)]
+    folders: Option<Vec<String>>,
+    #[serde(default)]
+    tag_rules: Option<crate::catalogue::Rules>,
 }
 
 async fn save_settings(State(app): State<Arc<App>>, Json(b): Json<SaveBody>) -> Result<Json<SettingsView>, ApiError> {
-    Ok(Json(app.save_settings(b.sources).await?))
+    Ok(Json(app.save_settings(b.sources, b.folders, b.tag_rules).await?))
+}
+
+async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::catalogue::Status>, ApiError> {
+    let c = app.catalogue();
+    let status = tokio::task::spawn_blocking(move || c.status()).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    Ok(Json(status.map_err(ToggleError::from)?))
+}
+
+async fn catalogue_problems(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::catalogue::Problem>>, ApiError> {
+    let c = app.catalogue();
+    let list = tokio::task::spawn_blocking(move || c.problems(500)).await.map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    Ok(Json(list.map_err(ToggleError::from)?))
 }
 
 #[derive(Deserialize)]

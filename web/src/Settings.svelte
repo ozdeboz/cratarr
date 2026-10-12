@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     ApiError,
+    getCatalogue,
     getSettings,
     previewSource,
     saveSettings,
@@ -10,6 +11,8 @@
     type Settings,
     type SourceConfig,
     type SourceView,
+    type TagRules,
+    type CatalogueStatus,
   } from './lib/api';
   import { prefs, type Theme } from './lib/prefs.svelte';
   import Notice, { type NoticeData } from './lib/Notice.svelte';
@@ -27,8 +30,22 @@
 
   const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 
+  // Saved with the servers: extra folders and how tags are split.
+  let folders = $state<string[]>([]);
+  // Edited as text (so Enter and spaces can be typed) and parsed when compared or saved.
+  let ruleText = $state({ artistSeps: '', genreSeps: '', artistKeep: '', genreKeep: '' });
+  let cat = $state<CatalogueStatus | null>(null);
+
   function fill(next: Settings) {
     s = next;
+    folders = [...next.folders];
+    ruleText = {
+      artistSeps: next.tag_rules.artist_separators.join(' '),
+      genreSeps: next.tag_rules.genre_separators.join(' '),
+      artistKeep: next.tag_rules.artist_keep.join('\n'),
+      genreKeep: next.tag_rules.genre_keep.join('\n'),
+    };
+    cat = next.catalogue;
     drafts = next.sources.map((v) => ({
       id: v.id,
       kind: v.kind,
@@ -58,9 +75,19 @@
     return { id: d.id, kind: d.kind, enabled: d.enabled, libraries: clone(d.libraries), values };
   }
 
+  const cleanFolders = (f: string[]) => f.map((x) => x.trim()).filter(Boolean);
+  const fromWords = (text: string) => text.split(/\s+/).filter(Boolean);
+  const fromLines = (text: string) => text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const rules = $derived<TagRules>({
+    artist_separators: fromWords(ruleText.artistSeps),
+    genre_separators: fromWords(ruleText.genreSeps),
+    artist_keep: fromLines(ruleText.artistKeep),
+    genre_keep: fromLines(ruleText.genreKeep),
+  });
   const dirty = $derived(
     !!s &&
       (drafts.some((d) => Object.values(d.secrets).some((v) => v.trim())) ||
+        JSON.stringify([cleanFolders(folders), rules]) !== JSON.stringify([s.folders, s.tag_rules]) ||
         JSON.stringify(drafts.map(payload)) !==
           JSON.stringify(s.sources.map((v) => payload({ ...v, secrets: {}, view: v, busy: false, note: null })))),
   );
@@ -104,7 +131,7 @@
     notice = null;
     saving = true;
     try {
-      fill(await saveSettings(drafts.map(payload)));
+      fill(await saveSettings(drafts.map(payload), { folders: cleanFolders(folders), tag_rules: rules }));
       notice = { text: 'Saved and in use.' };
     } catch (e) {
       notice = { text: e instanceof ApiError ? e.message : 'Unexpected error', tone: 'error' };
@@ -128,6 +155,41 @@
     const st = v.status;
     if (st.connected) return { ok: true, text: ['Connected to', st.server_name ?? v.label, st.version, st.detail].filter(Boolean).join(' ') };
     return { ok: false, text: st.error ?? v.error ?? 'Not connected' };
+  }
+
+  // The catalogue's progress, while this page is open.
+  $effect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        cat = await getCatalogue();
+      } catch {
+        /* the status line keeps its last value */
+      }
+      if (!stopped) timer = setTimeout(poll, 5000);
+    }
+    timer = setTimeout(poll, 5000);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  });
+
+  const n = (x: number) => x.toLocaleString();
+  const serverName = (id: string) => {
+    const v = s?.sources.find((x) => x.id === id);
+    return v ? (s!.sources.length > 1 ? `${v.label} (${id})` : v.label) : id;
+  };
+  function catalogueLine(c: CatalogueStatus) {
+    const read = c.files - c.tags_pending;
+    const parts = [`${n(c.files)} tracks`];
+    if (c.tags_pending > 0) parts.push(`tags read for ${n(read)} (${Math.floor((100 * read) / Math.max(c.files, 1))}%)`);
+    for (const [id, count] of Object.entries(c.linked)) parts.push(`${n(count)} known to ${serverName(id)}`);
+    const problems = Object.values(c.issues).reduce((a, b) => a + (b ?? 0), 0);
+    if (problems > 0) parts.push(`${n(problems)} with problems (see Repairs)`);
+    const when = c.progress.last_pass ? new Date(c.progress.last_pass * 1000).toLocaleTimeString(undefined, { timeStyle: 'short' }) : null;
+    return { parts, doing: c.progress.doing, when };
   }
 
   /** The labels of the given fields, for "you changed the server address". */
@@ -292,6 +354,55 @@
       {:else}
         <p class="hint">Add a server under Connections first.</p>
       {/each}
+
+      <div class="sub">
+        <h3>Catalogue</h3>
+        {#if cat}
+          {@const line = catalogueLine(cat)}
+          <p class="state"><span class="dot" class:ok={!line.doing && cat.progress.problems.length === 0} aria-hidden="true"></span>{line.parts.join(' · ')}</p>
+          <p class="hint">{line.doing ? `Working: ${line.doing}…` : line.when ? `Up to date, checked at ${line.when}.` : 'Starting…'}</p>
+          {#each cat.progress.problems as p (p)}<p class="hint bad">{p}</p>{/each}
+        {:else}
+          <p class="hint">Not available.</p>
+        {/if}
+      </div>
+
+      <div class="sub">
+        <h3>Other music folders <small>optional</small></h3>
+        <p class="hint">Music outside the playlist folder that Cratarr should know about, such as an incoming folder. Each has to be mounted into Cratarr's container.</p>
+        {#each folders as _, i (i)}
+          <div class="row">
+            <input type="text" bind:value={folders[i]} placeholder="/incoming" spellcheck="false" aria-label="Folder" />
+            <button onclick={() => folders.splice(i, 1)}>Remove</button>
+          </div>
+        {/each}
+        <div class="row"><button onclick={() => folders.push('')}>Add folder</button></div>
+      </div>
+
+      <details class="sub">
+        <summary>Tag splitting</summary>
+        <p class="hint">How tags with several artists or genres in one value are read. The files are never changed.</p>
+        <div class="fields">
+          <label>
+            <span class="l">Artist separators</span>
+            <input type="text" bind:value={ruleText.artistSeps} spellcheck="false" />
+            <span class="hint">Separated by spaces. "&amp;", "," and "feat." are left alone: they are part of credits.</span>
+          </label>
+          <label>
+            <span class="l">Genre separators</span>
+            <input type="text" bind:value={ruleText.genreSeps} spellcheck="false" />
+          </label>
+          <label>
+            <span class="l">Artists never split</span>
+            <textarea rows="3" bind:value={ruleText.artistKeep} spellcheck="false" placeholder="AC/DC"></textarea>
+            <span class="hint">One per line.</span>
+          </label>
+          <label>
+            <span class="l">Genres never split</span>
+            <textarea rows="3" bind:value={ruleText.genreKeep} spellcheck="false" placeholder="Funk / Soul"></textarea>
+          </label>
+        </div>
+      </details>
     </section>
   {:else if !loadError}
     <p class="lede">Loading…</p>
@@ -458,6 +569,41 @@
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 12px;
+  }
+
+  .sub {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  .sub h3 {
+    margin-bottom: 6px;
+  }
+
+  .sub .row + .row {
+    margin-top: 8px;
+  }
+
+  details.sub summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.98rem;
+  }
+
+  details.sub[open] summary {
+    margin-bottom: 8px;
+  }
+
+  textarea {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font: inherit;
+    color: inherit;
+    resize: vertical;
   }
 
   .server.plain {

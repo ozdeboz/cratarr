@@ -338,6 +338,17 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn lists_tracks(&self) -> bool {
+        true
+    }
+
+    fn track_paths<'a>(&'a self, library_id: &'a str, since: Option<i64>, start: usize, limit: usize) -> Fut<'a, super::TrackPage> {
+        Box::pin(async move {
+            let (items, total) = self.jf.track_page(library_id, since, start, limit).await?;
+            Ok(super::TrackPage { items, total })
+        })
+    }
+
     fn lists_albums(&self) -> bool {
         true
     }

@@ -172,15 +172,54 @@ export type Settings = {
   version: string;
   /** Epoch seconds. */
   started: number;
+  /** Extra music folders the catalogue covers (the playlist folder always is). */
+  folders: string[];
+  tag_rules: TagRules;
+  catalogue: CatalogueStatus | null;
+};
+
+/** How tag values are split when read; the files are never changed. */
+export type TagRules = {
+  artist_separators: string[];
+  genre_separators: string[];
+  /** Names containing a separator that are one artist (AC/DC). */
+  artist_keep: string[];
+  /** Genres containing a separator that are one genre ("Funk / Soul"). */
+  genre_keep: string[];
+};
+
+export type CatalogueStatus = {
+  folders: { path: string; files: number }[];
+  files: number;
+  tags_pending: number;
+  tags_failed: number;
+  /** Files with a known id, per server id. */
+  linked: Record<string, number>;
+  /** Files with a problem, per kind (see FileProblem). */
+  issues: Partial<Record<FileProblem['kind'], number>>;
+  progress: { doing: string | null; last_pass: number | null; problems: string[] };
 };
 
 export const getSettings = () => request<Settings>('/api/settings');
 
-export const saveSettings = (sources: SourceConfig[]) =>
+export const getCatalogue = () => request<CatalogueStatus>('/api/catalogue');
+
+/** A file the catalogue could not read properly. */
+export type FileProblem = {
+  folder: string;
+  rel: string;
+  /** broken: cannot be read · damaged_tag: one field unreadable, rest fine · no_tags · no_length */
+  kind: 'broken' | 'damaged_tag' | 'no_tags' | 'no_length';
+  detail: string | null;
+};
+
+export const getFileProblems = () => request<FileProblem[]>('/api/catalogue/problems');
+
+export const saveSettings = (sources: SourceConfig[], extra: { folders: string[]; tag_rules: TagRules }) =>
   request<Settings>('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sources }),
+    body: JSON.stringify({ sources, ...extra }),
   });
 
 /** One source as it is being filled in: status, choices and libraries, nothing saved. */

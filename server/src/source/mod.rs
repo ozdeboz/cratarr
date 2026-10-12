@@ -138,6 +138,14 @@ pub struct Album {
     pub tags: Vec<String>,
 }
 
+/// One page of a library's tracks: (track id, path as the server sees it).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrackPage {
+    pub items: Vec<(String, String)>,
+    /// Tracks in the whole listing (all pages).
+    pub total: usize,
+}
+
 pub trait Source: Send + Sync {
     fn status(&self) -> Fut<'_, Status>;
 
@@ -180,6 +188,17 @@ pub trait Source: Send + Sync {
     /// the player, for the page to show.
     fn play_album<'a>(&'a self, _album_id: &'a str) -> Fut<'a, String> {
         Box::pin(async { anyhow::bail!("this source cannot play music") })
+    }
+
+    /// Whether this source implements [`Source::track_paths`], which the catalogue uses to know its track ids.
+    fn lists_tracks(&self) -> bool {
+        false
+    }
+
+    /// Optional: a page of a library's tracks with their paths, in a stable order. `since` (epoch seconds) limits
+    /// the listing to tracks the server changed after then; `None` lists them all.
+    fn track_paths<'a>(&'a self, _library_id: &'a str, _since: Option<i64>, _start: usize, _limit: usize) -> Fut<'a, TrackPage> {
+        Box::pin(async { Ok(TrackPage::default()) })
     }
 
     /// Optional: an album's cover image (content type, bytes). Lets Cratarr show covers of music outside the playlist

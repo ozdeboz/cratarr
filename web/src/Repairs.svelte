@@ -12,6 +12,28 @@
     type Repairs,
   } from './lib/api';
   import Notice, { type NoticeData } from './lib/Notice.svelte';
+  import { getFileProblems, type FileProblem } from './lib/api';
+
+  // Files the catalogue could not read properly, by kind, worst first.
+  let fileProblems = $state<FileProblem[]>([]);
+  $effect(() => {
+    getFileProblems()
+      .then((p) => (fileProblems = p))
+      .catch(() => {
+        /* the catalogue may not be ready; the section just stays away */
+      });
+  });
+  const KINDS: { kind: FileProblem['kind']; title: string; hint: string }[] = [
+    { kind: 'broken', title: "Files that can't be read", hint: 'Not readable as audio at all. Usually a damaged or incomplete file; replace it.' },
+    {
+      kind: 'damaged_tag',
+      title: 'Files with a damaged tag',
+      hint: 'One tag field is broken and was skipped; the music and the other tags are fine. Saving the tags again in a tag editor fixes it.',
+    },
+    { kind: 'no_tags', title: 'Files without tags', hint: 'No artist, title or other tags at all.' },
+    { kind: 'no_length', title: 'Files without a length', hint: "The audio's length could not be read." },
+  ];
+  const ofKind = (k: FileProblem['kind']) => fileProblems.filter((p) => p.kind === k);
 
   let data = $state<Repairs | null>(null);
   let dups = $state<DupGroup[]>([]);
@@ -85,15 +107,15 @@
 </script>
 
 <main>
-  <p class="lede">Tracks in playlists whose file is gone, and tracks listed twice. Every change can be undone.</p>
+  <p class="lede">Missing and repeated tracks in playlists (every change can be undone), and music files that can't be read properly.</p>
 
   {#if error}<Notice notice={{ text: error, tone: 'error' }} />{/if}
   <Notice bind:notice />
 
   {#if !data && !error}
     <p class="empty">Loading…</p>
-  {:else if data && safe.length === 0 && review.length === 0 && dups.length === 0}
-    <p class="empty">No missing or repeated tracks.</p>
+  {:else if data && safe.length === 0 && review.length === 0 && dups.length === 0 && fileProblems.length === 0}
+    <p class="empty">Nothing to repair.</p>
   {:else if data}
     {#if safe.length > 0}
       <section>
@@ -141,6 +163,27 @@
           {/each}
         </ul>
       </section>
+    {/if}
+
+    {#if fileProblems.length > 0}
+      <h2 class="group">Files with problems</h2>
+      {#each KINDS as k (k.kind)}
+        {@const list = ofKind(k.kind)}
+        {#if list.length > 0}
+          <details class="files">
+            <summary>{k.title} <span class="n">{list.length}</span></summary>
+            <p class="hint">{k.hint}</p>
+            <ul class="rows">
+              {#each list as p (p.folder + p.rel)}
+                <li title={p.folder}>
+                  <strong>{fileOf(p.rel)}</strong>
+                  <div class="pair">{albumOf(p.rel)}{#if p.detail} · {p.detail}{/if}</div>
+                </li>
+              {/each}
+            </ul>
+          </details>
+        {/if}
+      {/each}
     {/if}
 
     {#if dups.length > 0}
@@ -215,6 +258,21 @@
 
   .lede {
     margin: 0 0 14px;
+  }
+
+  h2.group {
+    margin-top: 36px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  details.files {
+    margin: 10px 0;
+  }
+
+  details.files summary {
+    cursor: pointer;
+    font-weight: 600;
   }
 
   .ask {

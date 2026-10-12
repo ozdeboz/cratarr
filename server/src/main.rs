@@ -1,6 +1,7 @@
 mod albums;
 mod api;
 mod app;
+mod catalogue;
 mod config;
 mod covers;
 mod jellyfin;
@@ -41,7 +42,12 @@ async fn main() -> Result<()> {
         std::process::exit(healthcheck());
     }
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        // The tag reader warns about every MP3 whose length it has to estimate; that is normal and would flood the log.
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info"))
+                .add_directive("lofty=error".parse().expect("a valid directive")),
+        )
         .init();
 
     let env = |k: &str| std::env::var(k).ok();
@@ -57,21 +63,25 @@ async fn main() -> Result<()> {
         Some(d) => settings::load(&std::path::Path::new(d).join("settings.json"), &env)?,
         None => None,
     };
-    let (sources, origin) = match saved {
+    let (saved, origin) = match saved {
         Some(s) => (s, settings::Origin::File),
-        None => (settings::from_env(&env), settings::Origin::Env),
+        None => (settings::Saved { sources: settings::from_env(&env), ..Default::default() }, settings::Origin::Env),
     };
-    if sources.is_empty() {
+    if saved.sources.is_empty() {
         tracing::warn!("no music source is set up yet: add one on the Settings page (or set JELLYFIN_URL)");
     }
 
     // A source that is down only costs its own features; an unreadable playlist folder is fatal.
     let bind = cfg.bind.clone();
-    let app = app::App::new(cfg, sources, origin).await;
+    let app = app::App::new(cfg, saved, origin).await.context("cannot open the catalogue")?;
     let n = app.playlist_count().await.context("cannot read the playlist folder")?;
     tracing::info!("found {n} playlists");
     let status = app.status().await;
     tracing::info!("sources: {}", if status.connected { status.server_name.unwrap_or_default() } else { "none connected".into() });
+
+    // The catalogue fills and follows itself in the background (decision 0008).
+    let linker = app.clone();
+    tokio::spawn(catalogue::run(app.catalogue(), move || linker.connected_sources()));
 
     // One background pass keeps Cratarr in step with the sources and the library (see `App::sync`); the first runs
     // at once, so the incoming lists are ready soon after start.

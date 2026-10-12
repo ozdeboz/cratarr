@@ -33,6 +33,20 @@ fn yes() -> bool {
 struct FileV2 {
     version: u32,
     sources: Vec<SourceConfig>,
+    #[serde(default)]
+    folders: Vec<String>,
+    #[serde(default)]
+    tag_rules: crate::catalogue::Rules,
+}
+
+/// Everything the Settings page saves.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Saved {
+    pub sources: Vec<SourceConfig>,
+    /// Extra music folders for the catalogue, as Cratarr sees them (decision 0008).
+    pub folders: Vec<String>,
+    /// How tag values are split when read (decision 0008).
+    pub tag_rules: crate::catalogue::Rules,
 }
 
 /// Where the sources came from, shown on the page.
@@ -43,9 +57,9 @@ pub enum Origin {
     Env,
 }
 
-/// The saved sources; `None` when nothing was saved yet. The first format (a flat map of environment-variable
-/// names, decision 0004) is read as the Jellyfin source it described.
-pub fn load(path: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<Vec<SourceConfig>>> {
+/// What was saved; `None` when nothing was saved yet. The first format (a flat map of environment-variable names,
+/// decision 0004) is read as the Jellyfin source it described.
+pub fn load(path: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<Saved>> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -54,15 +68,15 @@ pub fn load(path: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<
     let json: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("{} is not JSON", path.display()))?;
     if json.get("version").is_some() {
         let f: FileV2 = serde_json::from_value(json).with_context(|| format!("{} has an unexpected shape", path.display()))?;
-        return Ok(Some(f.sources));
+        return Ok(Some(Saved { sources: f.sources, folders: f.folders, tag_rules: f.tag_rules }));
     }
     let flat: std::collections::BTreeMap<String, String> =
         serde_json::from_value(json).with_context(|| format!("{} is neither a source list nor the older flat format", path.display()))?;
-    Ok(Some(from_env(&|k: &str| flat.get(k).cloned().or_else(|| env(k)))))
+    Ok(Some(Saved { sources: from_env(&|k: &str| flat.get(k).cloned().or_else(|| env(k))), ..Saved::default() }))
 }
 
 /// Write atomically (temporary file, then rename), readable by the owner only: it holds secrets.
-pub fn save(path: &Path, sources: &[SourceConfig]) -> Result<()> {
+pub fn save(path: &Path, saved: &Saved) -> Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("json.tmp");
     let mut opts = std::fs::OpenOptions::new();
@@ -73,7 +87,7 @@ pub fn save(path: &Path, sources: &[SourceConfig]) -> Result<()> {
         opts.mode(0o600);
     }
     let mut f = opts.open(&tmp).with_context(|| format!("cannot write {}", tmp.display()))?;
-    let body = FileV2 { version: 2, sources: sources.to_vec() };
+    let body = FileV2 { version: 2, sources: saved.sources.clone(), folders: saved.folders.clone(), tag_rules: saved.tag_rules.clone() };
     f.write_all(serde_json::to_string_pretty(&body)?.as_bytes())?;
     f.sync_all()?;
     drop(f);
@@ -159,6 +173,36 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
             d.values.insert(secret.key.into(), old.into());
         }
         out.push(d);
+    }
+    Ok(out)
+}
+
+/// Check the extra folders from the page: absolute, not the playlist folder, not inside it or around it (the same
+/// files would be catalogued twice), no repeats. Trailing slashes are dropped. Whether each exists is checked by
+/// the caller, which can reach the disk.
+pub fn check_folders(folders: &[String], playlist_dir: &str) -> Result<Vec<String>, ChangeError> {
+    let clean = |p: &str| {
+        let t = p.trim().trim_end_matches('/');
+        if t.is_empty() { "/".to_string() } else { t.to_string() }
+    };
+    let playlists = clean(playlist_dir);
+    let within = |a: &str, b: &str| a == b || a.starts_with(&format!("{b}/")) || b == "/";
+    let mut out: Vec<String> = Vec::new();
+    for f in folders.iter().filter(|f| !f.trim().is_empty()) {
+        let f = clean(f);
+        if !f.starts_with('/') {
+            return Err(ChangeError::Invalid(format!("{f}: a folder must be a full path, starting with /")));
+        }
+        if f.split('/').any(|seg| seg == "..") {
+            return Err(ChangeError::Invalid(format!("{f}: a folder must not contain ..")));
+        }
+        if within(&f, &playlists) || within(&playlists, &f) {
+            return Err(ChangeError::Invalid(format!("{f} overlaps the playlist folder ({playlists}), so its music would be counted twice")));
+        }
+        if let Some(o) = out.iter().find(|o| within(&f, o) || within(o, &f)) {
+            return Err(ChangeError::Invalid(format!("{f} overlaps {o}")));
+        }
+        out.push(f);
     }
     Ok(out)
 }
@@ -261,6 +305,17 @@ mod tests {
     }
 
     #[test]
+    fn extra_folders_must_be_separate_full_paths() {
+        let ok = check_folders(&[" /media/incoming/ ".into(), "".into()], "/music").unwrap();
+        assert_eq!(ok, vec!["/media/incoming"]);
+        for bad in ["incoming", "/music", "/music/sub", "/", "/media/../etc"] {
+            assert!(check_folders(&[bad.into()], "/music").is_err(), "{bad}");
+        }
+        assert!(check_folders(&["/a".into(), "/a/b".into()], "/music").is_err());
+        assert!(check_folders(&["/a".into(), "/a".into()], "/music").is_err());
+    }
+
+    #[test]
     fn the_page_never_sees_secrets() {
         let (values, set) = redact(&jf("jellyfin", "http://jf:8096", Some("secret")));
         assert!(!values.contains_key("api_key"));
@@ -284,8 +339,9 @@ mod tests {
         let none = env_of(&[]);
         assert_eq!(load(&path, &none).unwrap(), None);
         let s = vec![jf("jellyfin", "http://jf:8096", Some("k"))];
-        save(&path, &s).unwrap();
-        assert_eq!(load(&path, &none).unwrap(), Some(s));
+        let saved = Saved { sources: s, folders: vec!["/incoming".into()], tag_rules: Default::default() };
+        save(&path, &saved).unwrap();
+        assert_eq!(load(&path, &none).unwrap(), Some(saved));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -301,7 +357,7 @@ mod tests {
         let path = d.join("settings.json");
         std::fs::write(&path, r#"{"CRATARR_PLAYER_CLIENT":"Kodi","CRATARR_MUSIC_PREFIXES":"/x"}"#).unwrap();
         let env = env_of(&[("JELLYFIN_URL", "http://jf:8096"), ("JELLYFIN_API_KEY", "k")]);
-        let s = load(&path, &env).unwrap().unwrap();
+        let s = load(&path, &env).unwrap().unwrap().sources;
         assert_eq!(s.len(), 1);
         assert_eq!(source::text(&s[0].values, "player"), Some("Kodi"));
         assert_eq!(source::text(&s[0].values, "api_key"), Some("k"));

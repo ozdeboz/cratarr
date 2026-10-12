@@ -211,6 +211,23 @@ pub fn pick_now_playing(sessions: &[Session], prefers: impl Fn(&Session) -> bool
         .and_then(|s| s.now_playing_item.clone())
 }
 
+/// Epoch seconds as the UTC date-time Jellyfin's query parameters take.
+fn iso(t: i64) -> String {
+    let days = t.div_euclid(86_400);
+    let secs = t.rem_euclid(86_400);
+    // civil from days (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", secs / 3600, secs % 3600 / 60, secs % 60)
+}
+
 #[derive(Clone)]
 pub struct Jellyfin {
     http: reqwest::Client,
@@ -282,6 +299,32 @@ impl Jellyfin {
     pub async fn library_of(&self, item_id: &str, user: &str) -> Result<Option<String>> {
         let up: Vec<Ancestor> = self.get(&format!("/Items/{item_id}/Ancestors?userId={user}")).await?;
         Ok(up.into_iter().find(|a| a.kind.as_deref() == Some("CollectionFolder")).map(|a| a.id))
+    }
+
+    /// A page of a library's tracks (id, path), by sort name so pages are stable; `since` = only tracks Jellyfin saved
+    /// after then. Measured on 10.11 with ~24,000 tracks: 500 per page in about 5 s.
+    pub async fn track_page(&self, library_id: &str, since: Option<i64>, start: usize, limit: usize) -> Result<(Vec<(String, String)>, usize)> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Row {
+            id: String,
+            path: Option<String>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Page {
+            items: Vec<Row>,
+            total_record_count: Option<usize>,
+        }
+        let mut q = format!(
+            "/Items?ParentId={library_id}&IncludeItemTypes=Audio&Recursive=true&Fields=Path&SortBy=SortName&EnableImages=false&EnableUserData=false&StartIndex={start}&Limit={limit}"
+        );
+        if let Some(t) = since {
+            q.push_str(&format!("&MinDateLastSaved={}", iso(t)));
+        }
+        let page: Page = self.get(&q).await?;
+        let total = page.total_record_count.unwrap_or(start + page.items.len());
+        Ok((page.items.into_iter().filter_map(|r| r.path.map(|p| (r.id, p))).collect(), total))
     }
 
     /// Paths of up to `n` tracks in a library.
@@ -518,6 +561,13 @@ mod tests {
     }
 
     const SESSIONS: &str = include_str!("../tests/fixtures/sessions.json");
+
+    #[test]
+    fn epoch_seconds_become_utc_dates() {
+        assert_eq!(iso(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso(1_791_811_680), "2026-10-12T13:28:00Z");
+        assert_eq!(crate::nowplaying::parse_iso_epoch(&iso(951_868_800)), Some(951_868_800));
+    }
 
     #[test]
     fn sessions_fixture_parses() {
