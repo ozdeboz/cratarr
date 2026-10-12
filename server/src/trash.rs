@@ -1,6 +1,6 @@
 //! Incoming albums deleted from Cratarr go to a trash folder inside their own Incoming folder, so Undo can put them
-//! back and nothing is lost on one tap; the trash is emptied after `KEEP_DAYS`. Inside the same folder because a
-//! rename across mounts fails (and copying an album would be slow). Blocking file operations.
+//! back and nothing is lost on one tap; the trash is emptied after the days set in Settings (decision 0010). Inside
+//! the same folder because a rename across mounts fails (and copying an album would be slow). Blocking file operations.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -8,8 +8,8 @@ use anyhow::{Context, Result, bail};
 
 /// Under each Incoming folder; hidden, so media servers and Lidarr leave it alone.
 pub const TRASH_DIR: &str = ".cratarr-trash";
-/// How long a deleted album can still be brought back.
-pub const KEEP_DAYS: i64 = 14;
+/// How long a deleted album can still be brought back, until Settings says otherwise.
+pub const DEFAULT_KEEP_DAYS: u32 = 14;
 
 /// `rel` must be a plain relative path inside the folder: no `..`, no root, not the trash itself.
 fn checked(rel: &str) -> Result<PathBuf> {
@@ -70,15 +70,15 @@ pub fn restore(folder: &Path, token: &str) -> Result<String> {
     Ok(rel.to_string())
 }
 
-/// Empty trash older than `KEEP_DAYS`. Returns how many deletions were removed for good.
-pub fn purge(folder: &Path, now_epoch: i64) -> Result<usize> {
+/// Empty trash older than `keep_days`. Returns how many deletions were removed for good.
+pub fn purge(folder: &Path, now_epoch: i64, keep_days: u32) -> Result<usize> {
     let trash = folder.join(TRASH_DIR);
     let Ok(entries) = std::fs::read_dir(&trash) else { return Ok(0) };
     let mut gone = 0;
     for e in entries.flatten() {
         let name = e.file_name();
         let Some(stamp) = name.to_str().and_then(|s| s.parse::<i64>().ok()) else { continue };
-        if now_epoch - stamp > KEEP_DAYS * 86_400 && e.path().is_dir() {
+        if now_epoch - stamp > i64::from(keep_days) * 86_400 && e.path().is_dir() {
             std::fs::remove_dir_all(e.path()).with_context(|| format!("emptying {}", e.path().display()))?;
             gone += 1;
         }
@@ -141,7 +141,7 @@ mod tests {
         trash(&f, "Old/X", 0).unwrap();
         let now = 20 * 86_400;
         trash(&f, "New/Y", now - 86_400).unwrap();
-        assert_eq!(purge(&f, now).unwrap(), 1);
+        assert_eq!(purge(&f, now, 14).unwrap(), 1);
         assert!(!f.join(".cratarr-trash/0").exists());
         assert!(f.join(format!(".cratarr-trash/{}/New/Y", now - 86_400)).exists());
     }

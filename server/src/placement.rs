@@ -39,6 +39,8 @@ pub struct PlacedLibrary {
     pub folders: Vec<String>,
     /// Its folders as the server describes them (to say what to mount).
     pub paths: Vec<String>,
+    /// Cratarr sees its files but cannot write there (filled in for the Settings page, which says so).
+    pub read_only: bool,
 }
 
 impl Placement {
@@ -109,7 +111,7 @@ pub async fn place(source: &dyn Source, folders: &[String]) -> Result<Placement>
                 }
             }
         }
-        placed.push(PlacedLibrary { id: lib.id, name: lib.name, folders: found, paths: lib.paths });
+        placed.push(PlacedLibrary { id: lib.id, name: lib.name, folders: found, paths: lib.paths, read_only: false });
     }
     Ok(Placement { roots, libraries: placed })
 }
@@ -206,7 +208,7 @@ mod tests {
     fn placement() -> Placement {
         Placement {
             roots: vec![FolderRoot { folder: "/music".into(), root: "/data/media/Music/".into() }],
-            libraries: vec![PlacedLibrary { id: "music".into(), name: "Music".into(), folders: vec!["/music".into()], paths: vec![] }],
+            libraries: vec![PlacedLibrary { id: "music".into(), name: "Music".into(), folders: vec!["/music".into()], paths: vec![], read_only: false }],
         }
     }
 

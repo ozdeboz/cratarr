@@ -51,9 +51,29 @@ pub fn list(exclude: &[&str]) -> Vec<String> {
     std::fs::read_to_string("/proc/self/mountinfo").map(|t| parse(&t, exclude)).unwrap_or_default()
 }
 
+/// Whether Cratarr can write in `dir`, tested by writing (as the *arr apps test a root folder): a read-only mount and
+/// wrong ownership both fail it. Leaves nothing behind. Blocking.
+pub fn writable(dir: &std::path::Path) -> bool {
+    let probe = dir.join(format!(".cratarr-write-test-{}", std::process::id()));
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(_) => std::fs::remove_file(&probe).is_ok(),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writable_folder_is_seen_as_writable() {
+        let d = std::env::temp_dir().join(format!("cratarr-writable-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(writable(&d));
+        assert_eq!(std::fs::read_dir(&d).unwrap().count(), 0, "the test file is removed");
+        assert!(!writable(&d.join("missing")));
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     // Shaped like the reference install's cratarr container (docker on TOS).
     const INFO: &str = "\

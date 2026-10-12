@@ -65,6 +65,12 @@ struct FileV3 {
     tag_rules: crate::catalogue::Rules,
     #[serde(default)]
     lidarr: Option<LidarrConfig>,
+    #[serde(default = "default_trash_days")]
+    trash_days: u32,
+}
+
+fn default_trash_days() -> u32 {
+    crate::trash::DEFAULT_KEEP_DAYS
 }
 
 /// Lidarr, which Incoming asks to stop fetching an album it deleted. Optional.
@@ -77,7 +83,7 @@ pub struct LidarrConfig {
 }
 
 /// Everything the Settings page saves.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Saved {
     pub sources: Vec<SourceConfig>,
     /// Where the Music libraries were last found, as Cratarr sees it: used until the servers answer.
@@ -85,6 +91,14 @@ pub struct Saved {
     /// How tag values are split when read (decision 0008).
     pub tag_rules: crate::catalogue::Rules,
     pub lidarr: Option<LidarrConfig>,
+    /// How long albums deleted from Incoming stay in the trash.
+    pub trash_days: u32,
+}
+
+impl Default for Saved {
+    fn default() -> Self {
+        Self { sources: Vec::new(), music_folder: None, tag_rules: Default::default(), lidarr: None, trash_days: default_trash_days() }
+    }
 }
 
 /// Cratarr's folders, as found behind the libraries in use (decision 0009).
@@ -122,7 +136,7 @@ pub fn load(path: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<
     let json: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("{} is not JSON", path.display()))?;
     if json.get("version").is_some() {
         let f: FileV3 = serde_json::from_value(json).with_context(|| format!("{} has an unexpected shape", path.display()))?;
-        return Ok(Some(Saved { sources: f.sources, music_folder: f.music_folder, tag_rules: f.tag_rules, lidarr: f.lidarr }));
+        return Ok(Some(Saved { sources: f.sources, music_folder: f.music_folder, tag_rules: f.tag_rules, lidarr: f.lidarr, trash_days: f.trash_days }));
     }
     let flat: std::collections::BTreeMap<String, String> =
         serde_json::from_value(json).with_context(|| format!("{} is neither a source list nor the older flat format", path.display()))?;
@@ -147,6 +161,7 @@ pub fn save(path: &Path, saved: &Saved) -> Result<()> {
         music_folder: saved.music_folder.clone(),
         tag_rules: saved.tag_rules.clone(),
         lidarr: saved.lidarr.clone(),
+        trash_days: saved.trash_days,
     };
     f.write_all(serde_json::to_string_pretty(&body)?.as_bytes())?;
     f.sync_all()?;
@@ -407,7 +422,7 @@ mod tests {
         let mut s = s;
         s[0].libraries = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()] };
         let lidarr = Some(LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into() });
-        let saved = Saved { sources: s, music_folder: Some("/music".into()), tag_rules: Default::default(), lidarr };
+        let saved = Saved { sources: s, music_folder: Some("/music".into()), tag_rules: Default::default(), lidarr, trash_days: 30 };
         save(&path, &saved).unwrap();
         assert_eq!(load(&path, &none).unwrap(), Some(saved));
         #[cfg(unix)]

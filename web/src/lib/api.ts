@@ -165,6 +165,8 @@ export type ServerLibrary = {
   folders: string[];
   /** Its folders as the server describes them, to say what to mount. */
   paths: string[];
+  /** Cratarr sees its files but cannot write there. */
+  read_only: boolean;
 };
 
 export type SourceConfig = { id: string; kind: string; enabled: boolean; libraries: Roles; values: Values };
@@ -198,6 +200,8 @@ export type Settings = {
   /** Null when no Lidarr is set. */
   lidarr: LidarrView | null;
   tag_rules: TagRules;
+  /** How long albums deleted from Incoming stay in the trash. */
+  trash_days: number;
   catalogue: CatalogueStatus | null;
 };
 
@@ -248,7 +252,7 @@ export type LidarrDraft = { url: string; api_key: string };
 export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);
 
 /** `lidarr` left out: keep the saved one. */
-export const saveSettings = (sources: SourceConfig[], extra: { tag_rules: TagRules; lidarr?: LidarrDraft }) =>
+export const saveSettings = (sources: SourceConfig[], extra: { tag_rules: TagRules; lidarr?: LidarrDraft; trash_days: number }) =>
   request<Settings>('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -320,11 +324,13 @@ export type IncomingSource = {
   as_of: number;
   /** Per album id, when it is already in Music: an upgrade of it, or a duplicate. New albums are absent. */
   verdicts: Record<string, { kind: 'upgrade' | 'duplicate'; library: string; why: string }>;
+  /** The albums Cratarr can delete (it sees their folder and can write there). */
+  deletable: string[];
 };
 
 /** `fresh` asks past the service worker's copy (which answers at once, see sw.js) for the server's latest. */
 export const getIncoming = (source?: string, fresh = false) =>
-  request<{ sources: IncomingSource[] }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
+  request<{ sources: IncomingSource[]; trash_days: number }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
 /** Play an incoming album on the followed player; answers with the player's label. */
 export const playIncoming = (source: string, album: string) =>
   request<{ player: string }>(`/api/incoming/play/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, { method: 'POST' });
@@ -336,7 +342,7 @@ export type Transport = 'previous' | 'play-pause' | 'next';
 export const transport = (command: Transport, source?: string) =>
   request<{ player: string }>(`/api/player/${command}${follow(source)}`, { method: 'POST' });
 
-/** Delete an Incoming album: it goes to the trash in its folder (Undo brings it back; emptied after 14 days). */
+/** Delete an Incoming album: it goes to the trash in its folder (Undo brings it back; emptied after the days set in Settings). */
 export const deleteIncoming = (source: string, album: string) =>
   request<{ undo: string; title: string }>(`/api/incoming/delete/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, {
     method: 'POST',

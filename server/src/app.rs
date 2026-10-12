@@ -114,6 +114,8 @@ pub struct IncomingSourceView {
     pub as_of: i64,
     /// Per album id, when the album is already in the library: an upgrade of it or a duplicate (new albums are absent).
     pub verdicts: BTreeMap<String, VerdictView>,
+    /// The albums Cratarr can delete: it sees their folder and can write there.
+    pub deletable: Vec<String>,
 }
 
 /// How an incoming album relates to the library.
@@ -159,6 +161,9 @@ fn incoming_dir<'a>(incoming: &'a [IncomingDir], path: &str) -> Option<&'a Incom
     incoming.iter().filter(|d| !d.dir.is_empty() && path.ends_with(&format!("/{}", d.dir))).max_by_key(|d| d.dir.len())
 }
 
+/// How long a folder's write test is trusted (a remount needs a restart anyway, but ownership can be fixed live).
+const WRITE_TEST_SECS: i64 = 600;
+
 /// How long the library index (for Incoming's verdicts) is kept before it is read from the catalogue again.
 const INDEX_SECS: i64 = 300;
 
@@ -199,6 +204,8 @@ pub struct DeleteResult {
 #[derive(Debug, Serialize)]
 pub struct IncomingView {
     pub sources: Vec<IncomingSourceView>,
+    /// How long a deleted album stays in the trash.
+    pub trash_days: u32,
 }
 
 /// How often the background pass runs (see `App::sync`).
@@ -271,6 +278,8 @@ pub struct SettingsView {
     /// `None` when no Lidarr is set.
     pub lidarr: Option<LidarrView>,
     pub tag_rules: crate::catalogue::Rules,
+    /// How long albums deleted from Incoming stay in the trash.
+    pub trash_days: u32,
     pub catalogue: Option<crate::catalogue::Status>,
 }
 
@@ -441,6 +450,10 @@ pub struct App {
     hidden: Mutex<std::collections::HashSet<String>>,
     /// Deletions that Undo can still reverse, by undo key.
     deleted: Mutex<std::collections::HashMap<String, Deleted>>,
+    /// Whether Cratarr could write in a folder, and when that was tested (epoch seconds).
+    writable: Mutex<std::collections::HashMap<PathBuf, (i64, bool)>>,
+    /// Saved with the sources.
+    trash_days: std::sync::atomic::AtomicU32,
     /// Every audio file Cratarr can see, and the servers' ids for them (decision 0008).
     catalogue: Arc<crate::catalogue::Catalogue>,
     /// Saved with the sources.
@@ -483,6 +496,8 @@ impl App {
             lidarr: std::sync::RwLock::new(lidarr_pair(saved.lidarr)),
             hidden: Mutex::new(std::collections::HashSet::new()),
             deleted: Mutex::new(std::collections::HashMap::new()),
+            writable: Mutex::new(std::collections::HashMap::new()),
+            trash_days: std::sync::atomic::AtomicU32::new(saved.trash_days),
             catalogue,
             tag_rules: std::sync::RwLock::new(saved.tag_rules),
         }))
@@ -830,11 +845,40 @@ impl App {
             view.albums.retain(|a| !hidden.contains(&a.id));
         }
         if let Some((library, incoming)) = self.owned_index().await {
+            let folders = self.catalogue.folders();
             for view in &mut sources {
                 view.verdicts = verdicts(&view.albums, &library, &incoming);
+                let mut deletable = Vec::new();
+                for a in &view.albums {
+                    let folder = a.path.as_deref().and_then(|p| incoming_dir(&incoming, p)).and_then(|d| folders.get(d.folder as usize));
+                    if let Some(f) = folder
+                        && self.can_write(f).await
+                    {
+                        deletable.push(a.id.clone());
+                    }
+                }
+                view.deletable = deletable;
             }
         }
-        IncomingView { sources }
+        IncomingView { sources, trash_days: self.trash_days() }
+    }
+
+    fn trash_days(&self) -> u32 {
+        self.trash_days.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether Cratarr can write in `folder`, tested at most every `WRITE_TEST_SECS`.
+    async fn can_write(&self, folder: &std::path::Path) -> bool {
+        let now = epoch_now();
+        if let Some(&(at, ok)) = self.writable.lock().await.get(folder)
+            && now - at < WRITE_TEST_SECS
+        {
+            return ok;
+        }
+        let f = folder.to_path_buf();
+        let ok = tokio::task::spawn_blocking(move || crate::mounts::writable(&f)).await.unwrap_or(false);
+        self.writable.lock().await.insert(folder.to_path_buf(), (now, ok));
+        ok
     }
 
     /// The library index and the incoming release groups, read from the catalogue at most every `INDEX_SECS`.
@@ -907,7 +951,7 @@ impl App {
     }
 
     /// Delete an Incoming album: into the trash inside its folder (Undo brings it back; emptied after
-    /// `trash::KEEP_DAYS`), and Lidarr stops fetching it.
+    /// the trash days set in Settings), and Lidarr stops fetching it.
     pub async fn delete_incoming(&self, source_id: &str, album_id: &str) -> Result<DeleteResult, ToggleError> {
         let album = self
             .incoming_cache
@@ -984,12 +1028,12 @@ impl App {
         Ok(d.title)
     }
 
-    /// Empty Incoming trash older than `trash::KEEP_DAYS`.
+    /// Empty Incoming trash older than the trash days set in Settings.
     async fn purge_trash(&self) {
         let folders: Vec<std::path::PathBuf> = self.catalogue.folders().into_iter().skip(1).collect();
-        let now = epoch_now();
+        let (now, keep) = (epoch_now(), self.trash_days());
         let gone = tokio::task::spawn_blocking(move || {
-            folders.iter().map(|f| crate::trash::purge(f, now).unwrap_or_else(|e| {
+            folders.iter().map(|f| crate::trash::purge(f, now, keep).unwrap_or_else(|e| {
                 tracing::warn!("emptying the trash in {}: {e:#}", f.display());
                 0
             })).sum::<usize>()
@@ -1029,7 +1073,7 @@ impl App {
             }
             albums.sort_by_key(|a: &source::Album| std::cmp::Reverse(a.added.unwrap_or(0)));
         }
-        IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now(), verdicts: BTreeMap::new() }
+        IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now(), verdicts: BTreeMap::new(), deletable: Vec::new() }
     }
 
     /// The one background pass that keeps Cratarr in step with its sources and the library, run every
@@ -1108,7 +1152,17 @@ impl App {
             }
         }
         match placed {
-            Ok(p) => view.server_libraries = p.libraries,
+            Ok(p) => {
+                view.server_libraries = tokio::task::spawn_blocking(move || {
+                    let mut libs = p.libraries;
+                    for l in &mut libs {
+                        l.read_only = !l.folders.is_empty() && !l.folders.iter().all(|f| crate::mounts::writable(std::path::Path::new(f)));
+                    }
+                    libs
+                })
+                .await
+                .unwrap_or_default();
+            }
             Err(e) => {
                 view.error.get_or_insert(format!("cannot list the libraries: {e:#}"));
             }
@@ -1149,6 +1203,7 @@ impl App {
             music_folder,
             lidarr,
             tag_rules,
+            trash_days: self.trash_days(),
             catalogue: {
                 let c = self.catalogue.clone();
                 tokio::task::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok)
@@ -1175,6 +1230,7 @@ impl App {
         drafts: Vec<SourceConfig>,
         tag_rules: Option<crate::catalogue::Rules>,
         lidarr: Option<settings::LidarrConfig>,
+        trash_days: Option<u32>,
     ) -> Result<SettingsView, ToggleError> {
         let Some(path) = self.settings_path.clone() else { return Err(ToggleError::SettingsReadOnly) };
         let _one_at_a_time = self.saving.lock().await;
@@ -1191,6 +1247,10 @@ impl App {
         let old_rules = self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone();
         let places = place_folders(self.data_dir.as_deref(), self.music().as_deref());
         let tag_rules = tag_rules.unwrap_or(old_rules);
+        let trash_days = trash_days.unwrap_or_else(|| self.trash_days());
+        if !(1..=3650).contains(&trash_days) {
+            return Err(ToggleError::BadSettings("keep deleted albums for 1 to 3650 days".into()));
+        }
         let saved: Vec<SourceConfig> = self.live().iter().map(|a| a.cfg.clone()).collect();
         let merged = settings::merge(&saved, drafts)?;
         let mut next = Vec::with_capacity(merged.len());
@@ -1231,12 +1291,13 @@ impl App {
             )));
         }
         let music_folder = derive_folders(&next, self.music().as_deref()).music;
-        let to_save = settings::Saved { sources: merged, music_folder, tag_rules: tag_rules.clone(), lidarr: lidarr.0.clone() };
+        let to_save = settings::Saved { sources: merged, music_folder, tag_rules: tag_rules.clone(), lidarr: lidarr.0.clone(), trash_days };
         tokio::task::spawn_blocking(move || settings::save(&path, &to_save))
             .await
             .map_err(|e| anyhow::anyhow!("saving settings: {e}"))??;
         *self.tag_rules.write().unwrap_or_else(|p| p.into_inner()) = tag_rules;
         *self.lidarr.write().unwrap_or_else(|p| p.into_inner()) = lidarr;
+        self.trash_days.store(trash_days, std::sync::atomic::Ordering::Relaxed);
         self.switch_to(next).await?;
         // Servers may have changed: link their tracks again soon.
         self.catalogue.poke();

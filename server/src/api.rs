@@ -225,10 +225,13 @@ struct SaveBody {
     /// Omitted: keep the saved one; a blank address removes it.
     #[serde(default)]
     lidarr: Option<crate::settings::LidarrConfig>,
+    /// Omitted: keep the saved number.
+    #[serde(default)]
+    trash_days: Option<u32>,
 }
 
 async fn save_settings(State(app): State<Arc<App>>, Json(b): Json<SaveBody>) -> Result<Json<SettingsView>, ApiError> {
-    Ok(Json(app.save_settings(b.sources, b.tag_rules, b.lidarr).await?))
+    Ok(Json(app.save_settings(b.sources, b.tag_rules, b.lidarr, b.trash_days).await?))
 }
 
 async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::catalogue::Status>, ApiError> {

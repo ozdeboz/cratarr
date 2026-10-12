@@ -82,9 +82,9 @@ between polls and only re-syncs to the server on a track change, a pause or resu
 
 ## Configuration
 
-The container: one mount that holds your music libraries, such as their parent folder (read only is enough), with
-the Music library's folder mounted writable inside it, since the playlists are written there (Settings says which
-library it can't see), and optionally `CRATARR_BIND`, `CRATARR_DATA_DIR` and `CRATARR_PLAYLIST_DIR` (the Music
+The container: one writable mount that holds your music libraries, such as their parent folder (Settings says which
+library it can't see or can't write to; Cratarr only writes playlists in the Music folder and deleted albums into
+the trash of an Incoming folder, see decision [0010](docs/decisions/0010-writable-libraries.md)), and optionally `CRATARR_BIND`, `CRATARR_DATA_DIR` and `CRATARR_PLAYLIST_DIR` (the Music
 folder until a Music library is saved; see `server/src/config.rs`).
 
 Sources and library uses are set up on the Settings page and saved in `CRATARR_DATA_DIR/settings.json` (owner-only: it holds secrets).

@@ -51,9 +51,7 @@ folder says so plainly (the *arrs' health checks) instead of fixing it.
 - A mount may be one library's folder or a parent of several, as the *arr stack mounts one `/data` for everything.
   The library's own folder inside it comes from the server: Jellyfin's top items of a library (albums or artist
   folders) carry their paths, and their parent is the library's folder. One broad mount at install means a new
-  library never needs a compose edit. Only the Music library's folder needs writing (playlists and their backups),
-  so the parent can be read only with the Music folder mounted writable inside it. The reference install mounts
-  `/Volume1/media` at `/media` read only and `/Volume1/media/Music` at `/media/Music`.
+  library never needs a compose edit. Decision 0010 makes that mount writable: Incoming is written too now.
 - The catalogue keeps a folder's rows when the folder's path changes but the same files are there (checked on a
   sample), so rearranging mounts does not cost a refill.
 - Placement asks each server what it did before: its library list and three sample paths per library. Each sample

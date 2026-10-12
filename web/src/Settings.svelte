@@ -37,6 +37,7 @@
   // Edited as text (so Enter and spaces can be typed) and parsed when compared or saved.
   let ruleText = $state({ artistSeps: '', genreSeps: '', artistKeep: '', genreKeep: '' });
   let cat = $state<CatalogueStatus | null>(null);
+  let trashDays = $state(14);
 
   // Lidarr as the page edits it; the saved key is never sent here.
   let lid = $state({ url: '', key: '', view: null as LidarrView | null, busy: false, note: null as string | null, removing: false });
@@ -51,6 +52,7 @@
     };
     cat = next.catalogue;
     lid = { url: next.lidarr?.url ?? '', key: '', view: next.lidarr, busy: false, note: null, removing: false };
+    trashDays = next.trash_days;
     drafts = next.sources.map((v) => ({
       id: v.id,
       kind: v.kind,
@@ -127,6 +129,7 @@
       (drafts.some((d) => Object.values(d.secrets).some((v) => v.trim())) ||
         lidarrChanged ||
         JSON.stringify(rules) !== JSON.stringify(s.tag_rules) ||
+        trashDays !== s.trash_days ||
         JSON.stringify(drafts.map(payload)) !==
           JSON.stringify(s.sources.map((v) => payload({ ...v, secrets: {}, view: v, busy: false, note: null })))),
   );
@@ -171,7 +174,7 @@
     saving = true;
     try {
       const lidarr = lidarrChanged ? { url: lid.url.trim(), api_key: lid.key.trim() } : undefined;
-      fill(await saveSettings(drafts.map(payload), { tag_rules: rules, lidarr }));
+      fill(await saveSettings(drafts.map(payload), { tag_rules: rules, lidarr, trash_days: trashDays }));
       notice = { text: 'Saved and in use.' };
     } catch (e) {
       notice = { text: e instanceof ApiError ? e.message : 'Unexpected error', tone: 'error' };
@@ -405,6 +408,12 @@
                     <span>{l.name}</span>
                     {#if l.folders.length}
                       <code class="hint">{l.folders.join(', ')}</code>
+                      {#if l.read_only && u !== 'unused'}
+                        <span class="hint warn">
+                          Cratarr can't write here, so {u === 'music' ? 'playlists can’t be saved' : 'albums can’t be deleted'}. Mount it
+                          writable and give Cratarr's user write access.
+                        </span>
+                      {/if}
                     {:else if u !== 'unused'}
                       <span class="hint warn">
                         Cratarr can't see these files.{#if l.paths.length}
@@ -429,6 +438,15 @@
       {/each}
       {#if drafts.some((d) => d.enabled && d.view) && !drafts.some((d) => d.enabled && d.libraries.music.length)}
         <p class="hint warn">Choose a Music library.</p>
+      {/if}
+
+      {#if drafts.some((d) => d.enabled && d.libraries.incoming.length)}
+        <div class="sub fields">
+          <label>
+            <span class="l">Keep deleted Incoming albums for</span>
+            <span class="days"><input type="number" min="1" max="3650" step="1" bind:value={trashDays} /> days</span>
+          </label>
+        </div>
       {/if}
 
       <div class="sub">
@@ -779,6 +797,7 @@
   }
 
   input[type='url'],
+  input[type='number'],
   input[type='text'],
   input[type='password'],
   select {
@@ -903,5 +922,15 @@
     .savebar {
       bottom: 16px;
     }
+  }
+
+  .days {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .days input {
+    width: 6em;
   }
 </style>

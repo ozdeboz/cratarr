@@ -16,6 +16,7 @@
   import Notice, { type NoticeData } from './lib/Notice.svelte';
 
   let sources = $state<IncomingSource[] | null>(null);
+  let trashDays = $state(14);
   let error = $state<string | null>(null);
   let noCover = $state<Record<string, boolean>>({});
   let filter = $state('');
@@ -25,12 +26,12 @@
   let starting = $state<string | null>(null);
 
   // The open menu of one album (Play, Delete album), anchored to it; `ask` = the in-place delete question.
-  let menu = $state<{ source: string; a: IncomingAlbum; anchor: DOMRect; ask: boolean } | null>(null);
+  let menu = $state<{ source: string; a: IncomingAlbum; anchor: DOMRect; ask: boolean; deletable: boolean } | null>(null);
   let working = $state(false);
 
   async function reload() {
     try {
-      sources = (await getIncoming(prefs.source || undefined, true)).sources;
+      ({ sources, trash_days: trashDays } = await getIncoming(prefs.source || undefined, true));
     } catch {
       /* the regular refresh will try again */
     }
@@ -53,8 +54,8 @@
 
   async function restore(undo: string) {
     try {
-      const { restored } = await undoDelete(undo);
-      notice = { text: `Restored ${restored}.` };
+      await undoDelete(undo);
+      notice = null;
       await reload();
     } catch (e) {
       notice = { text: e instanceof ApiError ? e.message : 'Could not restore the album', tone: 'error' };
@@ -65,8 +66,7 @@
     if (starting) return;
     starting = a.id;
     try {
-      const { player } = await playIncoming(source, a.id);
-      notice = { text: `Playing ${a.title} on ${player}.` };
+      await playIncoming(source, a.id);
     } catch (e) {
       notice = { text: e instanceof ApiError ? e.message : 'Could not start playing', tone: 'error' };
     } finally {
@@ -82,7 +82,7 @@
     let timer: ReturnType<typeof setTimeout>;
     async function load(fresh: boolean) {
       try {
-        sources = (await getIncoming(want, fresh)).sources;
+        ({ sources, trash_days: trashDays } = await getIncoming(want, fresh));
         error = null;
       } catch (e) {
         if (!sources) error = e instanceof ApiError ? e.message : 'Unexpected error';
@@ -140,7 +140,7 @@
                 disabled={starting !== null}
                 aria-busy={starting === a.id}
                 onclick={() => play(s.id, a)}
-                use:longpress={(anchor) => (menu = { source: s.id, a, anchor, ask: false })}
+                use:longpress={(anchor) => (menu = { source: s.id, a, anchor, ask: false, deletable: s.deletable.includes(a.id) })}
               >
               {#if noCover[a.id]}
                 <div class="cover none" aria-hidden="true"></div>
@@ -187,12 +187,14 @@
     {#if !m.ask}
       <div class="items" role="menu">
         <button role="menuitem" onclick={() => { menu = null; play(m.source, m.a); }}>Play</button>
-        <hr />
-        <button role="menuitem" class="danger" onclick={() => menu && (menu.ask = true)}>Delete album</button>
+        {#if m.deletable}
+          <hr />
+          <button role="menuitem" class="danger" onclick={() => menu && (menu.ask = true)}>Delete album</button>
+        {/if}
       </div>
     {:else}
       <div class="form">
-        <p class="ask">Delete {m.a.title}? It stays in the trash for 14 days, and you can undo this right after.</p>
+        <p class="ask">Delete {m.a.title}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
         <div class="actions">
           <button class="danger solid" disabled={working} onclick={() => remove(m.source, m.a)}>Delete album</button>
           <button onclick={() => (menu = null)}>Cancel</button>
