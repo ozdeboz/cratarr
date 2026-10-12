@@ -3,14 +3,14 @@
 // Measuring: each signal is turned into its rank among all pairs (0..1), so switching one on adds information in
 // its own right instead of being drowned by another one's scale (genre is high almost everywhere in a library of one
 // style). A pair's weight is the mean rank of the switched-on signals.
-// Untangling: only a backbone is drawn: the strongest tree that reaches every playlist (maximum spanning tree), plus
-// each pair that are among each other's K closest (mutual nearest neighbours). Measured on the reference library,
-// K = 3 keeps about 1.1 links per playlist with every playlist reached; more brings the hairball back.
-// Grab-bags weigh less: a playlist spread over many genres resembles a bit of everything and would sit in everyone's
-// top 3 as a hub. Each playlist's focus (genre concentration, from the server) becomes its rank among the playlists,
-// and a link counts for sqrt(m(a) * m(b)) of its weight, with m = FOCUS_FLOOR + (1 - FOCUS_FLOOR) * rank: the least
-// focused playlist's links count three quarters, the most focused's in full. Measured on the reference library (layout
-// benchmark, 8 seeds): 0.75 holds groups together better than both 0.5 (grab-bags are part of the glue) and 1.
+// Untangling: only a backbone is drawn. Solid (kin): each pair among each other's K closest (mutual nearest
+// neighbours), plus every playlist's own closest link, so no playlist is left without a solid line. Dashed (bridges):
+// the links of the strongest tree that reaches every playlist (maximum spanning tree) that are not kin.
+// Measured on the reference library (66 playlists, 6 layout seeds): mutual top-3 alone left 8 playlists without a
+// solid line, 7 of them grab-bags (a playlist spread over many genres is nobody's top 3); with each one's closest link
+// added, none, 69 solid lines, 15 crossings. Top-4 or two closest links each only add clutter (40-60 crossings).
+// Grab-bags are not weighed down: doing so (an earlier version) cost them their solid lines; their focus is shown in
+// the panel only.
 // Groups (colour and a gentle pull): Louvain modularity over each playlist's GROUP_NEIGHBOURS strongest links, not
 // only the drawn ones, so every playlist belongs somewhere. Measured on the reference library (66 playlists): 6
 // neighbours at resolution 1.2 gives 7 groups (fits the 8 colours, nothing grey), members twice as alike as with label
@@ -21,7 +21,6 @@ import type { Proximity, Signal } from './api';
 
 export const SIGNALS: Signal[] = ['tracks', 'genre', 'artists'];
 export const MUTUAL_K = 3;
-export const FOCUS_FLOOR = 0.75;
 export const GROUP_NEIGHBOURS = 6;
 export const GROUP_RESOLUTION = 1.2;
 
@@ -62,27 +61,23 @@ export function focusRanks(data: Proximity): number[] {
   });
 }
 
-/** Each pair's weight under the switched-on signals: the mean of their ranks, scaled down for grab-bags (see above);
- * pairs with nothing in common left out. */
+/** Each pair's weight under the switched-on signals: the mean of their ranks; pairs with nothing in common left
+ * out. */
 export function weigh(data: Proximity, rank: Record<Signal, (v: number) => number>, on: Record<Signal, boolean>): Weights {
   const active = SIGNALS.filter((s) => on[s]);
   const w: Weights = new Map();
   if (!active.length) return w;
-  const m = focusRanks(data).map((r) => FOCUS_FLOOR + (1 - FOCUS_FLOOR) * r);
   for (const l of data.links) {
     if (!active.some((s) => l[s] > 0)) continue;
-    const mean = active.reduce((sum, s) => sum + rank[s](l[s]), 0) / active.length;
-    w.set(key(l.a, l.b), mean * Math.sqrt(m[l.a] * m[l.b]));
+    w.set(key(l.a, l.b), active.reduce((sum, s) => sum + rank[s](l[s]), 0) / active.length);
   }
   return w;
 }
 
-/** The links worth drawing. `kin`: pairs among each other's K closest (mutual nearest neighbours), the real
- * kinship. `bridges`: links of the maximum spanning tree that are not kin, there only so every playlist is reached;
- * they are drawn slack and barely pull, so they don't glue unrelated groups together. `anchors`: the bridges that
- * are a playlist's own closest link (a well defined playlist that no other ranks high has only such a link); they
- * keep a normal length, so it stays near what it is most like. */
-export type Backbone = { kin: Weights; bridges: Weights; anchors: Set<string> };
+/** The links worth drawing (see above). `kin`: mutual K closest plus each playlist's own closest, drawn solid.
+ * `bridges`: tree links that are not kin, there only so every playlist is reached; drawn slack and barely pulling,
+ * so they don't glue unrelated groups together. */
+export type Backbone = { kin: Weights; bridges: Weights };
 
 export function backbone(n: number, w: Weights, k = MUTUAL_K): Backbone {
   const edges = [...w].map(([kk, v]) => {
@@ -117,12 +112,18 @@ export function backbone(n: number, w: Weights, k = MUTUAL_K): Backbone {
   }
   const kin: Weights = new Map();
   for (const e of edges) if (near[e.a].has(e.b) && near[e.b].has(e.a)) kin.set(e.kk, e.v);
+  // Edges are sorted strongest first, so a playlist's first edge is its own closest link.
+  const seen = new Set<number>();
+  for (const e of edges) {
+    for (const x of [e.a, e.b]) {
+      if (!seen.has(x)) {
+        seen.add(x);
+        kin.set(e.kk, e.v);
+      }
+    }
+  }
   const bridges: Weights = new Map([...tree].filter(([kk]) => !kin.has(kk)));
-  // Edges are sorted strongest first, so a playlist's first edge is its closest.
-  const closest = new Map<number, string>();
-  for (const e of edges) for (const x of [e.a, e.b]) if (!closest.has(x)) closest.set(x, e.kk);
-  const anchors = new Set([...bridges.keys()].filter((kk) => [...closest.values()].includes(kk)));
-  return { kin, bridges, anchors };
+  return { kin, bridges };
 }
 
 /** Each kin link's weight as its rank among the kin links, 0..1: the drawn links are all strong, so their raw

@@ -23,9 +23,8 @@
   } = $props();
 
   type Node = { i: number; r: number; x?: number; y?: number; vx?: number; vy?: number };
-  /** `r`: the kin link's rank among the kin links (0..1); `bridge`: a tree link that is not kin; `anchor`: a bridge
-   * that is one of its playlists' closest link. */
-  type Edge = { key: string; source: Node | number; target: Node | number; r: number; bridge: boolean; anchor: boolean };
+  /** `r`: the kin link's rank among the kin links (0..1); `bridge`: a tree link that is not kin. */
+  type Edge = { key: string; source: Node | number; target: Node | number; r: number; bridge: boolean };
 
   /** Names shown before zooming in: the best connected playlists. */
   const LABELS = 8;
@@ -104,23 +103,22 @@
 
   // New signals: the drawn links change on the same running simulation, which is warmed up gently.
   // Kin pulls with its rank (not shared out over a busy point's links, as d3 does by default: measured, that weakened
-  // exactly the links inside groups). Bridges are long and slack; anchors keep a normal length.
+  // exactly the links inside groups). Bridges are long and slack.
   $effect(() => {
     const edges: Edge[] = [
       ...[...ranked].map(([key, r]) => ({ key, r, bridge: false })),
       ...[...bb.bridges.keys()].map((key) => ({ key, r: 0, bridge: true })),
     ].map(({ key, r, bridge }) => {
       const [a, b] = key.split('-').map(Number);
-      return { key, source: a, target: b, r, bridge, anchor: bb.anchors.has(key) };
+      return { key, source: a, target: b, r, bridge };
     });
     if (!sim) return;
     sim.force(
       'link',
       forceLink<Node, Edge>(edges)
         .id((p) => p.i)
-        .distance((e) => (e.anchor ? 58 : e.bridge ? 130 : 28 + 60 * (1 - e.r)))
+        .distance((e) => (e.bridge ? 130 : 28 + 60 * (1 - e.r)))
         .strength((e) => {
-          if (e.anchor) return 0.3;
           if (e.bridge) return 0.03;
           return 0.3 + 0.7 * e.r;
         }),
