@@ -87,6 +87,11 @@ library it can't see or can't write to; Cratarr only writes playlists in the Mus
 the trash of an Incoming folder, see decision [0010](docs/decisions/0010-writable-libraries.md)), and optionally `CRATARR_BIND`, `CRATARR_DATA_DIR` and `CRATARR_PLAYLIST_DIR` (the Music
 folder until a Music library is saved; see `server/src/config.rs`).
 
+Playlists can belong to one account's own Jellyfin playlists instead of being shared `.m3u` playlists: choose
+"Playlists belong to" in Settings. Cratarr then keeps the files in `Music/.playlists` (Jellyfin does not import a
+hidden folder) and the account's private Jellyfin playlists in step both ways; see
+[decision 0012](docs/decisions/0012-own-jellyfin-playlists.md).
+
 Sources and library uses are set up on the Settings page and saved in `CRATARR_DATA_DIR/settings.json` (owner-only: it holds secrets).
 Until something is saved there, one Jellyfin source comes from `JELLYFIN_URL`, `JELLYFIN_API_KEY` and the
 optional `CRATARR_PLAYER_CLIENT`. Lidarr (optional: Delete in Incoming asks it to stop fetching the album) is set

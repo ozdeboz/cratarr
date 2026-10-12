@@ -52,11 +52,27 @@ Checked on the reference install (Jellyfin 10.11, read-only):
   migration.
 - The data folder goes into the NAS backups.
 
-## Migration, once
+## Migration: part of the program
 
-1. Move the 67 `.m3u` files into the dot-folder and rewrite their lines for the new location.
-2. Create a private Jellyfin playlist per file for the chosen user.
-3. The imported playlists disappear from Jellyfin, for every account.
+There is no manual step: choosing an owner in Settings ("Playlists belong to") is the switch, and deploying a
+version is all a migration takes. The next background pass:
+
+1. moves the `.m3u` files into `Music/.playlists`, each line given `../` so it still points at the same file. A file
+   is written there in full before the one in Music goes; a pass cut short is finished by the next one; a file found
+   in both places with different content stops the move and is reported, nothing decided;
+2. tells Jellyfin the imported playlists are gone;
+3. makes a private Jellyfin playlist per file for the owner (or links one of the same name that is already there).
+
+Until an owner is set, nothing moves and the files stay shared `.m3u` playlists, as before.
+
+## Safe to repeat and to interrupt
+
+Links are matched by the server copy's id and remember both agreed names (here and on the server), so a rename made
+on either side, even one cut short, is never taken for a deletion. A rename made in Cratarr is recorded before the
+file is renamed. A listing on either side that suddenly lacks most linked playlists is not believed. A server copy
+made but not yet remembered is found again by its name, not made twice. A file edited while a pass merged is left
+for the next pass. Deleting what is already gone counts as done. Membership edits from the page say the state
+wanted (in or out), so a retried request changes nothing more.
 
 ## Consequences
 
