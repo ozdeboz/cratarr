@@ -8,7 +8,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Pages:** Incoming (only when an Incoming library is set), Playlists, Insights, Repairs, Settings. One thing lives in one
   place: no setting, list or action appears on two pages.
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
-- **The now-playing header is part of the app shell**, above every page and sticky: cover (library cover, else the
+- **The now-playing header is part of the app shell**, sticky above the pages where what plays is acted on: Playlists
+  and Incoming. Repairs, Insights and Settings have no player. It shows the cover (library cover, else the
   album image from the server), title, artist · album, progress, "in N playlists", and the transport controls
   (previous, play/pause, next). The active player is always named in a small pill, even when there is only one.
   Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`).

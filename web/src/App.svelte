@@ -36,6 +36,8 @@
             ? 'insights'
             : 'playlists';
   let page = $state(fromHash());
+  // What plays only matters where it is acted on: Playlists (add it) and Incoming (play an album).
+  const withPlayer = $derived(page === 'playlists' || page === 'incoming');
   // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bottom bar.
   const wide = window.matchMedia('(min-width: 1024px)');
   let phone = $state(!wide.matches);
@@ -132,8 +134,10 @@
   </aside>
 
   <div class="content">
-    {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
-    <div class="np-bar"><NowPlaying /></div>
+    {#if withPlayer}
+      {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
+      <div class="np-bar"><NowPlaying /></div>
+    {/if}
     {#if page === 'settings'}
       <Settings />
     {:else if page === 'incoming' && status?.incoming}
