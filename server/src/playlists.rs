@@ -70,6 +70,76 @@ pub struct DupEntry {
     pub copies: usize,
 }
 
+/// Two playlists that share tracks (the old app's "Proximity"). `similarity` is shared / union (Jaccard), so a big
+/// playlist does not look related to everything just by being big.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Related {
+    pub a: String,
+    pub b: String,
+    pub shared: usize,
+    pub similarity: f64,
+}
+
+/// Figures across all playlists, from the playlist files alone.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct PlaylistStats {
+    pub playlists: usize,
+    /// Entry lines, repeats included.
+    pub lines: usize,
+    /// Different tracks across all playlists.
+    pub distinct_tracks: usize,
+    /// Tracks that are in exactly one playlist.
+    pub in_one_playlist: usize,
+    /// Entries pointing at a missing file, summed over playlists.
+    pub missing: usize,
+    /// The tracks in the most playlists, most first (at most ten).
+    pub most_shared: Vec<(String, usize)>,
+}
+
+/// Every pair of playlists sharing at least `min_shared` tracks, most similar first.
+pub fn relate(playlists: &[(&str, &HashSet<String>)], min_shared: usize) -> Vec<Related> {
+    let mut out = Vec::new();
+    for (i, (a, ea)) in playlists.iter().enumerate() {
+        for (b, eb) in &playlists[i + 1..] {
+            let (small, large) = if ea.len() <= eb.len() { (ea, eb) } else { (eb, ea) };
+            let shared = small.iter().filter(|e| large.contains(*e)).count();
+            if shared == 0 || shared < min_shared {
+                continue;
+            }
+            let union = ea.len() + eb.len() - shared;
+            out.push(Related { a: a.to_string(), b: b.to_string(), shared, similarity: shared as f64 / union as f64 });
+        }
+    }
+    out.sort_by(|x, y| y.similarity.total_cmp(&x.similarity).then(y.shared.cmp(&x.shared)).then(x.a.cmp(&y.a)));
+    out
+}
+
+/// Figures for a set of playlists: (name, entry lines, missing count).
+pub fn playlist_stats(playlists: &[(&str, &[String], usize)]) -> PlaylistStats {
+    let mut per_track: HashMap<&str, usize> = HashMap::new();
+    let mut lines = 0;
+    let mut missing = 0;
+    for (_, ls, dead) in playlists {
+        lines += ls.len();
+        missing += dead;
+        let distinct: HashSet<&str> = ls.iter().map(String::as_str).collect();
+        for t in distinct {
+            *per_track.entry(t).or_default() += 1;
+        }
+    }
+    let mut most: Vec<(String, usize)> = per_track.iter().filter(|(_, n)| **n > 1).map(|(t, n)| (t.to_string(), *n)).collect();
+    most.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    most.truncate(10);
+    PlaylistStats {
+        playlists: playlists.len(),
+        lines,
+        distinct_tracks: per_track.len(),
+        in_one_playlist: per_track.values().filter(|n| **n == 1).count(),
+        missing,
+        most_shared: most,
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct Repairs {
     pub safe: Vec<Repair>,
@@ -428,6 +498,25 @@ impl Store {
         Ok(out)
     }
 
+    /// Playlists related through shared tracks, most similar first (for Insights).
+    #[allow(dead_code)] // wired up with the Insights page
+    pub async fn related(&self, min_shared: usize) -> Result<Vec<Related>> {
+        self.view(None).await?;
+        let cache = self.cache.read().await;
+        let sets: Vec<(&str, &HashSet<String>)> = cache.iter().map(|(id, c)| (id.as_str(), &c.entries)).collect();
+        Ok(relate(&sets, min_shared))
+    }
+
+    /// Figures across all playlists (for Insights).
+    #[allow(dead_code)] // wired up with the Insights page
+    pub async fn stats(&self) -> Result<PlaylistStats> {
+        self.view(None).await?;
+        let cache = self.cache.read().await;
+        let all: Vec<(&str, &[String], usize)> =
+            cache.iter().map(|(id, c)| (id.as_str(), c.lines.as_slice(), c.dead.unwrap_or(0))).collect();
+        Ok(playlist_stats(&all))
+    }
+
     pub async fn duplicates(&self) -> Result<Vec<DupGroup>> {
         self.view(None).await?;
         let cache = self.cache.read().await;
@@ -593,6 +682,32 @@ impl Store {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn set(v: &[&str]) -> HashSet<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn related_playlists_are_ranked_by_overlap_not_size() {
+        let chill = set(&["a", "b", "c", "d"]);
+        let lounge = set(&["a", "b", "c", "x"]);
+        let everything = set(&["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]);
+        let other = set(&["z"]);
+        let r = relate(&[("Chill", &chill), ("Lounge", &lounge), ("Everything", &everything), ("Other", &other)], 1);
+        assert_eq!((r[0].a.as_str(), r[0].b.as_str(), r[0].shared), ("Chill", "Lounge", 3), "3 of 5 beats 4 of 12");
+        assert!((r[0].similarity - 0.6).abs() < 1e-9);
+        assert!(r.iter().all(|x| x.a != "Other" && x.b != "Other"), "no shared tracks: not related");
+        assert_eq!(relate(&[("Chill", &chill), ("Lounge", &lounge)], 4).len(), 0, "below the minimum");
+    }
+
+    #[test]
+    fn stats_count_distinct_tracks_and_repeats_once_per_playlist() {
+        let a = vec!["x".to_string(), "y".to_string(), "x".to_string()];
+        let b = vec!["x".to_string(), "z".to_string()];
+        let s = playlist_stats(&[("A", a.as_slice(), 1), ("B", b.as_slice(), 0)]);
+        assert_eq!((s.playlists, s.lines, s.distinct_tracks, s.in_one_playlist, s.missing), (2, 5, 3, 2, 1));
+        assert_eq!(s.most_shared, vec![("x".to_string(), 2)], "a repeat within one playlist counts once");
+    }
 
     static N: AtomicUsize = AtomicUsize::new(0);
 
