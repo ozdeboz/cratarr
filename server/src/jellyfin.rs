@@ -15,6 +15,8 @@ pub struct ItemsPage<T> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Session {
+    pub id: Option<String>,
+    pub supports_remote_control: Option<bool>,
     pub client: Option<String>,
     pub device_name: Option<String>,
     pub now_playing_item: Option<PlayingItem>,
@@ -61,6 +63,12 @@ struct Ancestor {
     id: String,
     #[serde(rename = "Type")]
     kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct IdOnly {
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,6 +291,33 @@ impl Jellyfin {
         Ok(album_rows(albums.items, tracks.items))
     }
 
+    /// The tracks of an album, in disc and track order.
+    pub async fn album_track_ids(&self, album_id: &str) -> Result<Vec<String>> {
+        let page: ItemsPage<IdOnly> = self
+            .get(&format!("/Items?ParentId={album_id}&IncludeItemTypes=Audio&Recursive=true&SortBy=ParentIndexNumber,IndexNumber,SortName"))
+            .await?;
+        Ok(page.items.into_iter().map(|i| i.id).collect())
+    }
+
+    /// Ask a session to play these items now, replacing what it plays. Finamp honours this (it ignores some other
+    /// remote commands, such as next-track).
+    pub async fn play_now(&self, session_id: &str, item_ids: &[String]) -> Result<()> {
+        let url = format!("{}/Sessions/{session_id}/Playing", self.base);
+        let ids = item_ids.join(",");
+        let status = self
+            .http
+            .post(&url)
+            .query(&[("playCommand", "PlayNow"), ("itemIds", ids.as_str())])
+            .send()
+            .await
+            .context("POST /Sessions/{id}/Playing")?
+            .status();
+        if !status.is_success() {
+            bail!("the player refused to play ({status})");
+        }
+        Ok(())
+    }
+
     /// An item's primary image (content type, bytes); `None` when it has none. Refused above `max_bytes`.
     pub async fn primary_image(&self, item_id: &str, max_bytes: u64) -> Result<Option<(String, Vec<u8>)>> {
         let url = format!("{}/Items/{item_id}/Images/Primary", self.base);
@@ -492,6 +527,8 @@ mod tests {
 
     fn sess(client: &str, id: &str, media: &str) -> Session {
         Session {
+            id: None,
+            supports_remote_control: None,
             client: Some(client.into()),
             device_name: None,
             now_playing_item: Some(PlayingItem {
@@ -522,7 +559,7 @@ mod tests {
 
     #[test]
     fn nothing_playing_gives_none() {
-        let s = vec![Session { client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
+        let s = vec![Session { id: None, supports_remote_control: None, client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
         assert!(pick_now_playing(&s, finamp).is_none());
         assert!(pick_now_playing(&[], finamp).is_none());
     }

@@ -429,6 +429,17 @@ impl App {
         IncomingView { sources }
     }
 
+    /// Play an album of a source's incoming library on that source's player. Returns the player's label.
+    pub async fn play_incoming(&self, source_id: &str, album_id: &str) -> Result<String> {
+        anyhow::ensure!(crate::covers::valid_item_id(album_id), "not an album id");
+        let (_, s) = self
+            .connected()
+            .into_iter()
+            .find(|(a, _)| a.cfg.id == source_id && a.cfg.libraries.incoming.is_some())
+            .ok_or_else(|| anyhow::anyhow!("no such source with an incoming library"))?;
+        s.play_album(album_id).await
+    }
+
     /// The cover of an album on a source that has an incoming library. The id is only passed on to the source.
     pub async fn incoming_cover(&self, source_id: &str, album_id: &str) -> Option<(String, Vec<u8>)> {
         if !crate::covers::valid_item_id(album_id) {

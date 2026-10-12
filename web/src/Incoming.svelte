@@ -1,12 +1,34 @@
 <script lang="ts">
-  import { ApiError, getIncoming, getState, incomingCoverUrl, type IncomingAlbum, type IncomingSource, type NowPlaying } from './lib/api';
+  import { ApiError, getIncoming, getState, incomingCoverUrl, playIncoming, type IncomingAlbum, type IncomingSource, type NowPlaying as Playing } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
+  import NowPlaying from './lib/NowPlaying.svelte';
 
   let sources = $state<IncomingSource[] | null>(null);
   let error = $state<string | null>(null);
   let noCover = $state<Record<string, boolean>>({});
   let filter = $state('');
-  let playing = $state<NowPlaying | null>(null);
+  let playing = $state<Playing | null>(null);
+  let notice = $state<{ text: string; bad: boolean } | null>(null);
+  let starting = $state<string | null>(null);
+
+  $effect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => (notice = null), 5000);
+    return () => clearTimeout(t);
+  });
+
+  async function play(source: string, a: IncomingAlbum) {
+    if (starting) return;
+    starting = a.id;
+    try {
+      const { player } = await playIncoming(source, a.id);
+      notice = { text: `Playing ${a.title} on ${player}.`, bad: false };
+    } catch (e) {
+      notice = { text: e instanceof ApiError ? e.message : 'Could not start playing', bad: true };
+    } finally {
+      starting = null;
+    }
+  }
 
   // What is playing, so the album being listened to stands out. Cheap: the state call is the one the Playlists page polls.
   $effect(() => {
@@ -19,7 +41,7 @@
       } catch {
         /* keep the last known track */
       }
-      if (!stopped) timer = setTimeout(poll, 5000);
+      if (!stopped) timer = setTimeout(poll, document.hidden ? 5000 : 2000);
     }
     poll();
     return () => {
@@ -50,29 +72,15 @@
 </script>
 
 <main>
-  <h1>Incoming</h1>
-  <p class="lede">New music waiting to be listened to, newest first.</p>
+  <!-- A library track keeps its library cover; an incoming one has none there, so its album cover comes via the source. -->
+  <NowPlaying
+    np={playing}
+    cover={playing && !playing.addable ? (playing.album_id ? incomingCoverUrl(playing.source, playing.album_id) : null) : undefined}
+  />
 
-  {#if playing}
-    <div class="np">
-      {#if playing.album_id && !noCover['np:' + playing.album_id]}
-        <img
-          class="cover"
-          src={incomingCoverUrl(playing.source, playing.album_id)}
-          alt=""
-          decoding="async"
-          onerror={() => playing?.album_id && (noCover['np:' + playing.album_id] = true)}
-        />
-      {:else}
-        <div class="cover none" aria-hidden="true"></div>
-      {/if}
-      <div class="text">
-        <div class="label">Now playing</div>
-        <div class="title">{playing.name}</div>
-        <div class="artist">{[playing.artist, playing.album].filter(Boolean).join(' · ')}</div>
-      </div>
-    </div>
-  {/if}
+  <h1>Incoming</h1>
+  <p class="lede">New music waiting to be listened to, newest first. Tap an album to play it.</p>
+  {#if notice}<p class="notice" class:bad={notice.bad} role="status">{notice.text}</p>{/if}
 
   {#if error}
     <p class="error" role="alert">{error}</p>
@@ -95,6 +103,7 @@
         <ul>
           {#each s.albums.filter(matches) as a (a.id)}
             <li class:playing={playing?.album_id === a.id}>
+              <button class="row" disabled={starting !== null} aria-busy={starting === a.id} onclick={() => play(s.id, a)}>
               {#if noCover[a.id]}
                 <div class="cover none" aria-hidden="true"></div>
               {:else}
@@ -117,6 +126,7 @@
                   {#each a.tags as t (t)}<span class="tag">{t}</span>{/each}
                 </div>
               </div>
+              </button>
             </li>
           {/each}
         </ul>
@@ -128,7 +138,7 @@
 <style>
   main {
     max-width: 900px;
-    padding: 8px clamp(12px, 2vw, 32px) 48px;
+    padding: 0 clamp(12px, 2vw, 32px) 48px;
   }
 
   h1 {
@@ -171,11 +181,46 @@
   }
 
   li {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .row {
     display: flex;
     gap: 12px;
     align-items: center;
+    width: 100%;
     padding: 10px 0;
-    border-bottom: 1px solid var(--border);
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .row:hover .title {
+    text-decoration: underline;
+  }
+
+  .row:disabled {
+    cursor: progress;
+  }
+
+  .row[aria-busy='true'] {
+    opacity: 0.6;
+  }
+
+  .notice {
+    margin: 8px 0;
+    padding: 8px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    font-size: 0.9rem;
+  }
+
+  .notice.bad {
+    border-color: var(--danger);
+    color: var(--danger);
   }
 
   .cover {
@@ -218,25 +263,6 @@
     color: var(--muted);
     font-size: 0.8rem;
     font-variant-numeric: tabular-nums;
-  }
-
-  .np {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    margin: 12px 0 8px;
-    padding: 10px 12px;
-    background: var(--surface);
-    border: 1px solid var(--accent);
-    border-radius: 12px;
-  }
-
-  .np .label {
-    color: var(--accent);
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
   }
 
   li.playing {

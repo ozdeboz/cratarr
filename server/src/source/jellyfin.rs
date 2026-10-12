@@ -106,6 +106,18 @@ pub fn choose<'a>(playing: &'a [Started], sessions: &[Session], player: &Player)
         .or_else(|| playing.first())
 }
 
+/// The session to start music on: the chosen player when it can be controlled; with no player chosen, the one
+/// playing music now. `None` rather than a guess.
+pub fn cast_target<'a>(sessions: &'a [Session], player: &Player) -> Option<&'a Session> {
+    let controllable = |s: &&Session| s.id.is_some() && s.supports_remote_control == Some(true);
+    if player.app.is_some() {
+        return sessions.iter().filter(controllable).find(|s| player.matches(s.client.as_deref(), s.device_name.as_deref()));
+    }
+    sessions.iter().filter(controllable).find(|s| {
+        s.now_playing_item.as_ref().is_some_and(|i| i.media_type.as_deref().is_some_and(|m| m.eq_ignore_ascii_case("Audio")))
+    })
+}
+
 /// "Any player", then per app (most recently seen first) the app on any device and on each device it was seen on.
 /// Sessions count as seen now; remembered devices by their last activity.
 pub fn player_choices(sessions: &[Session], devices: &[Device]) -> Vec<Choice> {
@@ -312,6 +324,24 @@ impl Source for JellyfinSource {
         Box::pin(self.jf.albums_in(library_id, limit))
     }
 
+    fn play_album<'a>(&'a self, album_id: &'a str) -> Fut<'a, String> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await?;
+            let Some(target) = cast_target(&sessions, &self.player) else {
+                if self.player.app.is_some() {
+                    bail!("{} is not open, or cannot be controlled remotely", self.player.value().replace(SEP, " on "));
+                }
+                bail!("no player is playing music; choose a player in Settings");
+            };
+            let tracks = self.jf.album_track_ids(album_id).await?;
+            if tracks.is_empty() {
+                bail!("that album has no tracks");
+            }
+            self.jf.play_now(target.id.as_deref().unwrap_or_default(), &tracks).await?;
+            Ok([target.client.as_deref(), target.device_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" on "))
+        })
+    }
+
     fn album_cover<'a>(&'a self, album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {
         Box::pin(self.jf.primary_image(album_id, crate::covers::MAX_BYTES))
     }
@@ -344,6 +374,35 @@ mod tests {
     fn session(client: &str, device: &str, playing: Option<&str>) -> Session {
         let item = playing.map_or("null".to_string(), |id| format!(r#"{{"Id":"{id}","Name":"x","MediaType":"Audio"}}"#));
         serde_json::from_str(&format!(r#"{{"Client":"{client}","DeviceName":"{device}","NowPlayingItem":{item}}}"#)).unwrap()
+    }
+
+    fn remote(client: &str, device: &str, id: &str, controllable: bool, playing: Option<&str>) -> Session {
+        let mut s = session(client, device, playing);
+        s.id = Some(id.into());
+        s.supports_remote_control = Some(controllable);
+        s
+    }
+
+    #[test]
+    fn music_is_cast_to_the_chosen_player_only() {
+        let sessions = vec![
+            remote("Finamp", "motorola", "phone", true, Some("x")),
+            remote("Finamp", "Lenovo Tab", "tab", true, None),
+            remote("Jellyfin Web", "Edge", "web", false, Some("y")),
+        ];
+        let target = |p: &str| cast_target(&sessions, &Player::parse(p)).and_then(|s| s.id.clone());
+        assert_eq!(target("Finamp::Lenovo Tab").as_deref(), Some("tab"), "the chosen one, even when idle");
+        assert_eq!(target("Finamp").as_deref(), Some("phone"), "the app on any device");
+        assert_eq!(target("Jellyfin Web"), None, "not remotely controllable");
+        assert_eq!(target("Kodi"), None, "not open: no guess");
+    }
+
+    #[test]
+    fn with_no_player_chosen_music_goes_to_the_one_playing() {
+        let sessions = vec![remote("Finamp", "Lenovo Tab", "tab", true, None), remote("Finamp", "motorola", "phone", true, Some("x"))];
+        assert_eq!(cast_target(&sessions, &Player::default()).and_then(|s| s.id.clone()).as_deref(), Some("phone"));
+        let idle = vec![remote("Finamp", "Lenovo Tab", "tab", true, None)];
+        assert!(cast_target(&idle, &Player::default()).is_none(), "nothing playing and nothing chosen: no guess");
     }
 
     #[test]

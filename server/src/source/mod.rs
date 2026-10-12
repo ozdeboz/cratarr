@@ -176,6 +176,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { Ok(Vec::new()) })
     }
 
+    /// Optional: play an album, from its first track, on the player this source follows. Returns a short label of
+    /// the player, for the page to show.
+    fn play_album<'a>(&'a self, _album_id: &'a str) -> Fut<'a, String> {
+        Box::pin(async { anyhow::bail!("this source cannot play music") })
+    }
+
     /// Optional: an album's cover image (content type, bytes). Lets Cratarr show covers of music outside the playlist
     /// folder without giving the page the source's address or key.
     fn album_cover<'a>(&'a self, _album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {

@@ -247,5 +247,8 @@ export type IncomingSource = {
 };
 
 export const getIncoming = (source?: string) => request<{ sources: IncomingSource[] }>(`/api/incoming${follow(source)}`);
+/** Play an incoming album on the followed player; answers with the player's label. */
+export const playIncoming = (source: string, album: string) =>
+  request<{ player: string }>(`/api/incoming/play/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, { method: 'POST' });
 export const incomingCoverUrl = (source: string, album: string) =>
   `/api/incoming/cover/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;

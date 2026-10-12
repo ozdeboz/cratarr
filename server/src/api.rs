@@ -35,6 +35,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/status", get(status))
         .route("/api/incoming", get(incoming))
         .route("/api/incoming/cover/{source}/{album}", get(incoming_cover))
+        .route("/api/incoming/play/{source}/{album}", post(play_incoming))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
         .fallback(crate::web::serve)
@@ -78,6 +79,13 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
 
 async fn incoming(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::IncomingView> {
     Json(app.incoming(f.source.as_deref()).await)
+}
+
+async fn play_incoming(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
+    match app.play_incoming(&source, &album).await {
+        Ok(player) => Json(json!({ "player": player })).into_response(),
+        Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+    }
 }
 
 async fn incoming_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
