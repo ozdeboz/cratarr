@@ -353,3 +353,54 @@ export const undoDelete = (undo: string) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ undo }),
   });
+
+/** A name with a count: "Downtempo", 120 albums. */
+export type Count = { name: string; n: number };
+
+export type Insights = {
+  library: {
+    tracks: number;
+    albums: number;
+    artists: number;
+    duration_ms: number;
+    bytes: number;
+    /** Tracks per format. */
+    formats: Count[];
+    lossless_albums: number;
+    below_320_albums: number;
+    /** Albums per decade, oldest first ("1970s"). */
+    decades: Count[];
+    /** Albums per genre / album artist, most first. */
+    genres: Count[];
+    top_artists: Count[];
+  };
+  playlists: {
+    playlists: number;
+    distinct_tracks: number;
+    in_one_playlist: number;
+    missing: number;
+    library_tracks_in_playlists: number;
+    albums_without_playlist: number;
+    most_shared: { title: string; artist: string | null; playlists: number }[];
+  };
+  proximity: Proximity;
+};
+
+/** Playlists as points and how close each two are, by three signals (0..1 each). */
+export type Proximity = {
+  playlists: { name: string; tracks: number; genres: string[] }[];
+  links: {
+    a: number;
+    b: number;
+    tracks: number;
+    genre: number;
+    artists: number;
+    shared_tracks: number;
+    shared_artists: number;
+    genres: string[];
+  }[];
+};
+
+export type Signal = 'tracks' | 'genre' | 'artists';
+
+export const getInsights = () => request<Insights>('/api/insights');

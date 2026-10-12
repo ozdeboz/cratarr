@@ -5,7 +5,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 ## Structure
 
-- **Pages:** Incoming (only when an Incoming library is set), Playlists, Repairs, Settings. One thing lives in one
+- **Pages:** Incoming (only when an Incoming library is set), Playlists, Insights, Repairs, Settings. One thing lives in one
   place: no setting, list or action appears on two pages.
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
 - **The now-playing header is part of the app shell**, above every page and sticky: cover (library cover, else the
@@ -16,6 +16,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. The player choice is in the now-playing header ("Playing on Finamp · Lenovo Tab ▾"), not in
   the sidebar.
+- **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser
+  (Insights: Statistics, Related). Its switches (Related: shared tracks, genre, artists) sit in the same toolbar.
 - **Settings** has four sections, in this order: Connections (servers: address, key, status; Lidarr the same way, shown
   only when an Incoming library is set), Libraries (one row per
   server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its files in, or a warning when
@@ -25,7 +27,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 ## Gestures
 
 - **Tap does the page's main action** on an item: on Playlists add or remove the playing track; on Incoming play
-  the album.
+  the album; on Insights' graph highlight the playlist and its closest playlists.
 - **Long-press (right-click with a mouse) opens the item's menu** when the item has more than one other action: a
   small popover anchored to the item, styled like the rest of the app, pointing at it, flipping to stay on screen.
   The same component on every page. For a playlist: Play, Shuffle, Play next, Add to queue, Rename, Delete.

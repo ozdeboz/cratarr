@@ -12,14 +12,25 @@ export type Prefs = {
   showProgress: boolean;
   /** Source this browser follows when several are active; '' = whichever started playing most recently. */
   source: string;
+  /** Insights: the open tab, and which signals bring playlists together in Related. */
+  insightsTab: 'statistics' | 'related';
+  signals: { tracks: boolean; genre: boolean; artists: boolean };
 };
 
 const KEY = 'cratarr-prefs';
 export const ZOOM_STEPS = 6;
-export const DEFAULTS: Prefs = { theme: 'auto', zoom: 2, membersFirst: false, showProgress: true, source: '' };
+export const DEFAULTS: Prefs = {
+  theme: 'auto',
+  zoom: 2,
+  membersFirst: false,
+  showProgress: true,
+  source: '',
+  insightsTab: 'statistics',
+  signals: { tracks: true, genre: true, artists: true },
+};
 
 function read(): Prefs {
-  const p = { ...DEFAULTS };
+  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals } };
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (saved && typeof saved === 'object') {
@@ -28,6 +39,12 @@ function read(): Prefs {
       if (typeof saved.membersFirst === 'boolean') p.membersFirst = saved.membersFirst;
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
       if (typeof saved.source === 'string') p.source = saved.source;
+      if (saved.insightsTab === 'statistics' || saved.insightsTab === 'related') p.insightsTab = saved.insightsTab;
+      if (saved.signals && typeof saved.signals === 'object') {
+        for (const k of ['tracks', 'genre', 'artists'] as const) {
+          if (typeof saved.signals[k] === 'boolean') p.signals[k] = saved.signals[k];
+        }
+      }
     } else {
       // Before there were preferences, only the zoom was remembered.
       const z = Number(localStorage.getItem('cratarr-zoom') ?? NaN);
@@ -43,7 +60,7 @@ export const prefs = $state<Prefs>(read());
 
 /** Back to the default look; the followed source is not a display matter and stays. */
 export function resetPrefs() {
-  Object.assign(prefs, { ...DEFAULTS, source: prefs.source });
+  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source });
 }
 
 // Remember every change and apply the theme (app.css reads data-theme; no attribute = follow the system).

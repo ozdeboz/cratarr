@@ -3,6 +3,7 @@
   import Repairs from './Repairs.svelte';
   import Settings from './Settings.svelte';
   import Incoming from './Incoming.svelte';
+  import Insights from './Insights.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
@@ -16,6 +17,7 @@
   const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
   // Shown only when some source has an incoming library (see the status call below).
   const INCOMING: Page = { id: 'incoming', href: '#/incoming', label: 'Incoming', icon: 'incoming' };
+  const INSIGHTS: Page = { id: 'insights', href: '#/insights', label: 'Insights', icon: 'insights' };
   const REPAIRS: Page = { id: 'repairs', href: '#/repairs', label: 'Repairs', icon: 'repairs' };
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
 
@@ -30,7 +32,9 @@
         ? 'settings'
         : location.hash === INCOMING.href
           ? 'incoming'
-          : 'playlists';
+          : location.hash === INSIGHTS.href
+            ? 'insights'
+            : 'playlists';
   let page = $state(fromHash());
   // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bottom bar.
   const wide = window.matchMedia('(min-width: 1024px)');
@@ -95,7 +99,7 @@
           ? { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, PLAYLISTS, REPAIRS] : [PLAYLISTS, REPAIRS]);
+  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, PLAYLISTS, INSIGHTS, REPAIRS] : [PLAYLISTS, INSIGHTS, REPAIRS]);
   const ALL = $derived([...MAIN, SETTINGS]);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, BAR_SLOTS - 1));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
@@ -138,6 +142,8 @@
       <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
     {:else if page === 'repairs'}
       <Repairs />
+    {:else if page === 'insights'}
+      <Insights />
     {:else}
       <Playlists />
     {/if}
