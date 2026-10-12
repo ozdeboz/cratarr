@@ -491,10 +491,12 @@ impl Source for JellyfinSource {
             };
             let label = [first.client.as_deref(), first.device_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" on ");
             // Finamp re-sorts a multi-track PlayNext/PlayLast batch by track number, so those go one track per
-            // command; Play next goes in reverse so the tracks end up in order after the current one (decision 0006).
+            // command (decision 0006).
             let commands: Vec<(&str, Vec<String>)> = match how {
                 super::PlayHow::Now => vec![("PlayNow", ids.to_vec())],
-                super::PlayHow::Next => ids.iter().rev().map(|i| ("PlayNext", vec![i.clone()])).collect(),
+                // In file order, not reversed: Finamp puts each "play next" track after the ones already queued
+                // as next (verified on the tablet 2026-10-12: reversed sending played them backwards).
+                super::PlayHow::Next => ids.iter().map(|i| ("PlayNext", vec![i.clone()])).collect(),
                 super::PlayHow::Last => ids.iter().map(|i| ("PlayLast", vec![i.clone()])).collect(),
             };
             let mut last_error = None;
