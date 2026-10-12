@@ -279,6 +279,24 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
     }
 
+    /// Optional (decision 0013): what each user did with an item (plays, last played, favourite, rating), as
+    /// (user, data) for the users with something to keep. Read before Cratarr moves the item's file: a server forgets
+    /// a moved file's item, and with it this.
+    fn user_data<'a>(&'a self, _item: &'a str) -> Fut<'a, Vec<(String, serde_json::Value)>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Optional (decision 0013): give an item a user's data as `user_data` returned it. Safe to repeat.
+    fn set_user_data<'a>(&'a self, _item: &'a str, _user: &'a str, _data: &'a serde_json::Value) -> Fut<'a, ()> {
+        Box::pin(async { anyhow::bail!("this server keeps no play data") })
+    }
+
+    /// Optional: files appeared (`true`) or disappeared (`false`), paths as the server sees them, so it notices a
+    /// move at once instead of at its next scan.
+    fn files_changed<'a>(&'a self, _changes: &'a [(String, bool)]) -> Fut<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Optional: play tracks (this source's ids, in order) on the player it follows. Returns the player's label.
     /// Optional: previous / play-pause / next on the player that plays now (or the chosen one). Returns its label.
     fn transport<'a>(&'a self, _command: Transport) -> Fut<'a, String> {

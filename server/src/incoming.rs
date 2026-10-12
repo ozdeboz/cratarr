@@ -220,9 +220,120 @@ pub fn pair(old: &[TrackFacts], new: &[TrackFacts]) -> Pairing {
     }
 }
 
+/// What Keep will do with an album (decision 0013), worked out before anything moves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KeepPlan {
+    /// The album's new folder, relative to Music.
+    pub folder: String,
+    /// (path relative to the album's Incoming folder → path relative to Music), music files first, in their order.
+    pub moves: Vec<(String, String)>,
+}
+
+/// Why Keep cannot name an album yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+pub enum KeepRefusal {
+    /// No year in the tags: the page asks for it, and Keep tries again with it.
+    #[error("the album's year is not known")]
+    NeedsYear,
+    /// The tags cannot give every file its own name (a track number missing, two tracks named alike…).
+    #[error("{0}")]
+    Names(String),
+    #[error("Cratarr knows no music files in this album yet")]
+    Empty,
+}
+
+/// Name an album's files for Music: its music files (path inside the album folder, tags) by the library's template,
+/// its other files (a cover, a booklet) keeping their place inside the new folder. `year`, when given, stands in for a
+/// missing (original) release year.
+pub fn plan_keep(
+    template: &crate::naming::Template,
+    music: &[(String, crate::naming::Tags)],
+    others: &[String],
+    year: Option<&str>,
+) -> Result<KeepPlan, KeepRefusal> {
+    use crate::naming::{RenderError, Track};
+    if music.is_empty() {
+        return Err(KeepRefusal::Empty);
+    }
+    let year = year.map(str::trim).filter(|y| y.len() == 4 && y.bytes().all(|b| b.is_ascii_digit()));
+    let tracks: Vec<Track> = music
+        .iter()
+        .map(|(rel, tags)| {
+            let mut tags = tags.clone();
+            if let Some(y) = year {
+                let has = |name: &str| tags.0.iter().any(|(n, v)| n.eq_ignore_ascii_case(name) && !v.trim().is_empty());
+                if !has("originaldate") && !has("date") {
+                    tags.0.push(("originaldate".into(), y.into()));
+                }
+            }
+            Track { file: rel.rsplit('/').next().unwrap_or(rel).to_string(), tags }
+        })
+        .collect();
+    let names = template.render(&tracks).map_err(|e| match e {
+        RenderError::Missing { token: "originalyear" | "year", .. } => KeepRefusal::NeedsYear,
+        e => KeepRefusal::Names(e.to_string()),
+    })?;
+    let mut moves: Vec<(String, String)> =
+        music.iter().zip(&names.files).map(|((rel, _), name)| (rel.clone(), format!("{}/{name}", names.folder))).collect();
+    for rel in others {
+        let to = format!("{}/{rel}", names.folder);
+        if moves.iter().any(|(_, t)| t.eq_ignore_ascii_case(&to)) {
+            return Err(KeepRefusal::Names(format!("{rel} would take the name of a music file")));
+        }
+        moves.push((rel.clone(), to));
+    }
+    Ok(KeepPlan { folder: names.folder, moves })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tags(pairs: &[(&str, &str)]) -> crate::naming::Tags {
+        crate::naming::Tags(pairs.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect())
+    }
+
+    fn moon_safari(with_year: bool) -> Vec<(String, crate::naming::Tags)> {
+        let base = |n: &str, t: &str| {
+            let mut v = vec![("albumartist", "Air"), ("artist", "Air"), ("album", "Moon Safari"), ("tracknumber", n), ("title", t)];
+            if with_year {
+                v.push(("originaldate", "1998-01-16"));
+            }
+            tags(&v)
+        };
+        vec![("01 - Sexy Boy.flac".to_string(), base("1", "Sexy Boy")), ("02 - Talisman.flac".to_string(), base("2", "Talisman"))]
+    }
+
+    #[test]
+    fn keep_names_music_by_the_template_and_keeps_other_files_in_place() {
+        let plan = plan_keep(&Default::default(), &moon_safari(true), &["cover.jpg".to_string(), "Scans/back.jpg".to_string()], None).unwrap();
+        assert_eq!(plan.folder, "Air - Moon Safari (1998)");
+        assert_eq!(
+            plan.moves,
+            vec![
+                ("01 - Sexy Boy.flac".to_string(), "Air - Moon Safari (1998)/01 Air - Sexy Boy.flac".to_string()),
+                ("02 - Talisman.flac".to_string(), "Air - Moon Safari (1998)/02 Air - Talisman.flac".to_string()),
+                ("cover.jpg".to_string(), "Air - Moon Safari (1998)/cover.jpg".to_string()),
+                ("Scans/back.jpg".to_string(), "Air - Moon Safari (1998)/Scans/back.jpg".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_missing_year_is_asked_for_and_then_used() {
+        assert_eq!(plan_keep(&Default::default(), &moon_safari(false), &[], None), Err(KeepRefusal::NeedsYear));
+        assert_eq!(plan_keep(&Default::default(), &moon_safari(false), &[], Some("98")), Err(KeepRefusal::NeedsYear), "a year has four digits");
+        assert_eq!(plan_keep(&Default::default(), &moon_safari(false), &[], Some("1998")).unwrap().folder, "Air - Moon Safari (1998)");
+    }
+
+    #[test]
+    fn names_that_clash_or_are_missing_refuse_keep() {
+        let mut twice = moon_safari(true);
+        twice[1].1 = twice[0].1.clone();
+        assert!(matches!(plan_keep(&Default::default(), &twice, &[], None), Err(KeepRefusal::Names(_))));
+        assert_eq!(plan_keep(&Default::default(), &[], &["cover.jpg".to_string()], None), Err(KeepRefusal::Empty));
+    }
 
     fn track(number: u32, title: &str, secs: u64) -> TrackFacts {
         TrackFacts { recording: None, disc: None, number: Some(number), title: title.into(), duration_ms: Some(secs * 1000) }

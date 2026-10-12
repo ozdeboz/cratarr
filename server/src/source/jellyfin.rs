@@ -443,6 +443,30 @@ impl Source for JellyfinSource {
         Box::pin(self.jf.delete_item(playlist))
     }
 
+    fn user_data<'a>(&'a self, item: &'a str) -> Fut<'a, Vec<(String, serde_json::Value)>> {
+        Box::pin(async move {
+            let mut out = Vec::new();
+            for (user, _) in self.jf.users().await? {
+                let data = self.jf.user_item_data(item, &user).await?;
+                if let Some(kept) = crate::jellyfin::user_data_to_keep(&data) {
+                    out.push((user, kept));
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    fn set_user_data<'a>(&'a self, item: &'a str, user: &'a str, data: &'a serde_json::Value) -> Fut<'a, ()> {
+        Box::pin(self.jf.set_user_item_data(item, user, data))
+    }
+
+    fn files_changed<'a>(&'a self, changes: &'a [(String, bool)]) -> Fut<'a, ()> {
+        Box::pin(async move {
+            let kinds: Vec<(String, &str)> = changes.iter().map(|(p, on)| (p.clone(), if *on { "Created" } else { "Deleted" })).collect();
+            self.jf.library_changed(&kinds).await
+        })
+    }
+
     fn library_roots<'a>(&'a self, library_id: &'a str) -> Fut<'a, Vec<String>> {
         Box::pin(self.jf.library_roots(library_id, 50))
     }

@@ -456,6 +456,37 @@ impl Catalogue {
         Ok(by_dir.into_values().collect())
     }
 
+    /// The audio files of one album folder (`dir`, relative to `folder`) with all their named tags, in path order:
+    /// what Keep names the files from (decision 0013). Read-only; blocking.
+    pub fn album_tags(&self, folder: i64, dir: &str) -> Result<Vec<(String, Vec<(String, String)>)>> {
+        let db = self.db();
+        let prefix = format!("{}/", dir.trim_end_matches('/'));
+        let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        let mut st = db.prepare(&format!(
+            "SELECT rel FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND {PRESENT} ORDER BY rel"
+        ))?;
+        let rels = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| r.get::<_, String>(0))?;
+        let mut index = std::collections::HashMap::new();
+        for rel in rels {
+            let rel = rel?;
+            index.insert(rel.clone(), out.len());
+            out.push((rel, Vec::new()));
+        }
+        let mut st = db.prepare(
+            "SELECT rel, name, value FROM tags WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND name IS NOT NULL ORDER BY rel, n",
+        )?;
+        let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        })?;
+        for row in rows {
+            let (rel, name, value) = row?;
+            if let Some(&i) = index.get(&rel) {
+                out[i].1.push((name, value));
+            }
+        }
+        Ok(out)
+    }
+
     /// Every file in `folder` with the facts Insights counts: format, bitrate, length, size and the tags named in
     /// `TrackRow::TAGS` (raw values, not split). Read-only; blocking.
     pub fn track_rows(&self, folder: i64) -> Result<Vec<TrackRow>> {

@@ -630,6 +630,23 @@ impl Jellyfin {
         page.items.into_iter().next().with_context(|| format!("Jellyfin has no item {id}"))
     }
 
+    /// A user's data on an item: plays, last played, favourite, rating, resume position (Jellyfin 10.9+).
+    pub async fn user_item_data(&self, item: &str, user: &str) -> Result<serde_json::Value> {
+        anyhow::ensure!(crate::covers::valid_item_id(item) && crate::covers::valid_item_id(user), "not an item or user id");
+        self.get(&format!("/UserItems/{item}/UserData?userId={user}")).await
+    }
+
+    /// Set a user's data on an item (the fields of `user_data_to_keep`). Safe to repeat.
+    pub async fn set_user_item_data(&self, item: &str, user: &str, data: &serde_json::Value) -> Result<()> {
+        anyhow::ensure!(crate::covers::valid_item_id(item) && crate::covers::valid_item_id(user), "not an item or user id");
+        let path = format!("/UserItems/{item}/UserData?userId={user}");
+        let status = self.http.post(format!("{}{path}", self.base)).json(data).send().await.with_context(|| format!("POST {path}"))?.status();
+        if !status.is_success() {
+            bail!("POST {path} returned {status}");
+        }
+        Ok(())
+    }
+
     /// Tell Jellyfin that files appeared, changed or disappeared (`kind`: "Created", "Modified" or "Deleted"); paths are
     /// as Jellyfin sees them. This is what makes Jellyfin notice a new or removed `.m3u` file (its Music library
     /// does not watch the folder); it does not make Jellyfin re-read a changed playlist, see `refresh_playlist`.
@@ -700,9 +717,42 @@ fn summarize(tracks: &[ListedAudio]) -> AlbumSummary {
     }
 }
 
+/// The part of an item's user data worth carrying to a moved file's new item: `None` when the user never played,
+/// rated or favoured it. Only fields Jellyfin accepts back on update.
+pub fn user_data_to_keep(data: &serde_json::Value) -> Option<serde_json::Value> {
+    const FIELDS: [&str; 7] = ["PlayCount", "Played", "IsFavorite", "LastPlayedDate", "Rating", "Likes", "PlaybackPositionTicks"];
+    let worth = data["PlayCount"].as_i64().unwrap_or(0) > 0
+        || data["Played"].as_bool() == Some(true)
+        || data["IsFavorite"].as_bool() == Some(true)
+        || !data["Rating"].is_null()
+        || !data["Likes"].is_null()
+        || data["PlaybackPositionTicks"].as_i64().unwrap_or(0) > 0;
+    worth.then(|| {
+        let mut kept = serde_json::Map::new();
+        for f in FIELDS {
+            if let Some(v) = data.get(f).filter(|v| !v.is_null()) {
+                kept.insert(f.to_string(), v.clone());
+            }
+        }
+        serde_json::Value::Object(kept)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_user_data_with_something_in_it_is_kept_and_only_settable_fields() {
+        let none = json!({"PlayCount": 0, "Played": false, "IsFavorite": false, "Key": "x", "ItemId": "y"});
+        assert_eq!(user_data_to_keep(&none), None);
+        let played = json!({"PlayCount": 7, "Played": true, "IsFavorite": true, "LastPlayedDate": "2026-10-01T20:00:00Z", "Key": "x", "ItemId": "y"});
+        assert_eq!(
+            user_data_to_keep(&played),
+            Some(json!({"PlayCount": 7, "Played": true, "IsFavorite": true, "LastPlayedDate": "2026-10-01T20:00:00Z"}))
+        );
+        assert!(user_data_to_keep(&json!({"PlayCount": 0, "IsFavorite": true})).is_some(), "a favourite alone counts");
+    }
 
     #[test]
     fn album_heads_and_summaries_read_what_jellyfin_sends() {
