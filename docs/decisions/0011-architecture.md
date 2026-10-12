@@ -1,6 +1,6 @@
 # 0011: Feature modules around a functional core; ports where things vary; events between features
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-12
 
 ## Context
