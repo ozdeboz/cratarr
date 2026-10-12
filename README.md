@@ -82,8 +82,8 @@ between polls and only re-syncs to the server on a track change, a pause or resu
 
 ## Configuration
 
-The container: the music libraries' folders as mounts (read only is enough for Incoming ones; Settings says which
-library it can't see), and optionally `CRATARR_BIND`, `CRATARR_DATA_DIR` and `CRATARR_PLAYLIST_DIR` (the Music
+The container: one mount that holds your music libraries, such as the parent folder of all of them (writable: the
+playlists are written in the Music library's folder; Settings says which library it can't see), and optionally `CRATARR_BIND`, `CRATARR_DATA_DIR` and `CRATARR_PLAYLIST_DIR` (the Music
 folder until a Music library is saved; see `server/src/config.rs`).
 
 Sources and library uses are set up on the Settings page and saved in `CRATARR_DATA_DIR/settings.json` (owner-only: it holds secrets).

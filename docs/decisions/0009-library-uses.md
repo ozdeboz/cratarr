@@ -48,6 +48,11 @@ folder says so plainly (the *arrs' health checks) instead of fixing it.
 - The folder in that warning is the server's own path. On the reference install that is the host path
   (`/Volume1/media/lidarr-music`), but a server in its own container may report its container path. So the page
   calls it the server's folder, not the path to mount.
-- On the reference install the Lidarr sandbox is now mounted read only at `/incoming`, so its files are visible.
+- A mount may be one library's folder or a parent of several, as the *arr stack mounts one `/data` for everything.
+  The library's own folder inside it comes from the server: Jellyfin's top items of a library (albums or artist
+  folders) carry their paths, and their parent is the library's folder. One broad mount at install means a new
+  library never needs a compose edit. The reference install mounts `/Volume1/media` at `/media`.
+- The catalogue keeps a folder's rows when the folder's path changes but the same files are there (checked on a
+  sample), so rearranging mounts does not cost a refill.
 - Placement asks each server what it did before: its library list and three sample paths per library. Each sample
   is then checked against every mounted folder.
