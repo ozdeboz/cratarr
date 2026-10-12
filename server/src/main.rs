@@ -13,6 +13,7 @@ mod jellyfin;
 mod m3u;
 mod mounts;
 mod moves;
+mod naming;
 mod nowplaying;
 mod placement;
 #[allow(dead_code)] // the playlist sync uses it (decision 0012)
