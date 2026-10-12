@@ -337,6 +337,23 @@ impl Jellyfin {
         Ok(page.items.into_iter().filter_map(|i| i.path).collect())
     }
 
+    /// A library's own folders as Jellyfin reports track paths: the parents of its top items (albums or artist
+    /// folders, observed on 10.11). A library with several folders has a parent for each, as far as its first `n`
+    /// items reach.
+    pub async fn library_roots(&self, library_id: &str, n: usize) -> Result<Vec<String>> {
+        let page: ItemsPage<PathOnly> = self.get(&format!("/Items?ParentId={library_id}&Limit={n}&Fields=Path")).await?;
+        let mut roots: Vec<String> = Vec::new();
+        for path in page.items.into_iter().filter_map(|i| i.path) {
+            let path = path.replace('\\', "/");
+            if let Some((parent, _)) = path.trim_end_matches('/').rsplit_once('/') {
+                if !parent.is_empty() && !roots.iter().any(|r| r == parent) {
+                    roots.push(parent.to_string());
+                }
+            }
+        }
+        Ok(roots)
+    }
+
     /// Albums in a library, newest first, without their tracks (one cheap request, under a second for a hundred
     /// albums), each with the stamp that changes when Jellyfin saves it again.
     pub async fn album_heads(&self, library_id: &str, limit: usize) -> Result<Vec<(crate::source::Album, Option<String>)>> {

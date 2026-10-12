@@ -64,10 +64,15 @@ impl Placement {
     }
 }
 
-/// Look at every music library of the server against `folders`. Errors from the server fail the whole placement; a
-/// library whose samples cannot be read is simply found nowhere.
+/// Look at every music library of the server against `folders` (the mounted ones). Errors from the server fail the
+/// whole placement; a library whose samples cannot be read is simply found nowhere.
+///
+/// A mount may be a library's own folder (`/music`) or a parent of several (`/media`): the library's own folder
+/// inside it (`/media/Music`) comes from the folders the server reports for the library (`library_roots`).
 pub async fn place(source: &dyn Source, folders: &[String]) -> Result<Placement> {
     let libraries: Vec<Library> = source.libraries().await?;
+    // Each mount the server's tracks were found in, with the server's path for it.
+    let mut mounts: Vec<FolderRoot> = Vec::new();
     let mut roots: Vec<FolderRoot> = Vec::new();
     let mut placed = Vec::with_capacity(libraries.len());
     for lib in libraries {
@@ -75,31 +80,55 @@ pub async fn place(source: &dyn Source, folders: &[String]) -> Result<Placement>
             tracing::warn!("cannot sample library {:?}: {e:#}", lib.name);
             Vec::new()
         });
+        let own: Vec<String> = source
+            .library_roots(&lib.id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("cannot read the folders of library {:?}: {e:#}", lib.name);
+                Vec::new()
+            })
+            .into_iter()
+            .map(|r| format!("{}/", r.replace('\\', "/").trim_end_matches('/')))
+            .collect();
         let mut found: Vec<String> = Vec::new();
         for path in &samples {
+            let path = path.replace('\\', "/");
             for folder in folders {
-                if found.contains(folder) {
-                    continue;
-                }
                 let dir = Path::new(folder);
-                let hit = match roots.iter().find(|r| &r.folder == folder) {
-                    Some(r) => under_root(dir, &r.root, path),
-                    None => match find_root(dir, path) {
-                        Some(root) => {
-                            roots.push(FolderRoot { folder: folder.clone(), root });
-                            true
-                        }
-                        None => false,
-                    },
+                let prefix = match mounts.iter().find(|r| &r.folder == folder) {
+                    Some(r) => under_root(dir, &r.root, &path).then(|| r.root.clone()),
+                    None => find_root(dir, &path).inspect(|root| mounts.push(FolderRoot { folder: folder.clone(), root: root.clone() })),
                 };
-                if hit {
-                    found.push(folder.clone());
+                let Some(prefix) = prefix else { continue };
+                let here = own_folder(folder, &prefix, &own, &path).unwrap_or(FolderRoot { folder: folder.clone(), root: prefix });
+                if !found.contains(&here.folder) {
+                    found.push(here.folder.clone());
+                }
+                if !roots.contains(&here) {
+                    roots.push(here);
                 }
             }
         }
         placed.push(PlacedLibrary { id: lib.id, name: lib.name, folders: found, paths: lib.paths });
     }
     Ok(Placement { roots, libraries: placed })
+}
+
+/// The library's own folder that holds `path`, inside `mount` (whose path on the server is `prefix`): the server's
+/// folder for the library with `prefix` swapped for the mount. `None` when the server named none that fits.
+fn own_folder(mount: &str, prefix: &str, own: &[String], path: &str) -> Option<FolderRoot> {
+    own.iter().filter(|r| path.starts_with(r.as_str())).find_map(|r| {
+        let sub = r.strip_prefix(prefix)?.trim_end_matches('/');
+        let folder = if sub.is_empty() {
+            mount.to_string()
+        } else {
+            if !safe_relative(sub) {
+                return None;
+            }
+            format!("{}/{sub}", mount.trim_end_matches('/'))
+        };
+        Path::new(&folder).is_dir().then(|| FolderRoot { folder, root: r.clone() })
+    })
 }
 
 fn segments(path: &str) -> Vec<&str> {
@@ -195,8 +224,8 @@ mod tests {
         assert_eq!(p.libraries_in("/music").map(|l| l.name.as_str()).collect::<Vec<_>>(), vec!["Music"]);
     }
 
-    /// A source with fixed libraries and samples.
-    struct Fake(Vec<(Library, Vec<String>)>);
+    /// A source with fixed libraries and samples, and (optionally) each library's own folder.
+    struct Fake(Vec<(Library, Vec<String>)>, Vec<(String, String)>);
 
     impl Source for Fake {
         fn status(&self) -> Fut<'_, Status> {
@@ -210,6 +239,9 @@ mod tests {
         }
         fn sample_paths<'a>(&'a self, id: &'a str, n: usize) -> Fut<'a, Vec<String>> {
             Box::pin(async move { Ok(self.0.iter().find(|(l, _)| l.id == id).map(|(_, s)| s.iter().take(n).cloned().collect()).unwrap_or_default()) })
+        }
+        fn library_roots<'a>(&'a self, id: &'a str) -> Fut<'a, Vec<String>> {
+            Box::pin(async move { Ok(self.1.iter().filter(|(l, _)| l == id).map(|(_, r)| r.clone()).collect()) })
         }
         fn now_playing(&self) -> Fut<'_, Option<Playing>> {
             Box::pin(async { Ok(None) })
@@ -233,11 +265,14 @@ mod tests {
         std::fs::create_dir_all(inc.join("X")).unwrap();
         std::fs::write(inc.join("X/01 New.flac"), b"x").unwrap();
         let folders = vec![m.display().to_string(), inc.display().to_string()];
-        let src = Fake(vec![
-            (lib("incoming"), vec!["/data/media/lidarr-music/X/01 New.flac".into()]),
-            (lib("music"), vec!["/data/media/Music/missing.mp3".into(), "/data/media/Music/Artist - Album (2020)/01 Song.mp3".into()]),
-            (lib("empty"), vec![]),
-        ]);
+        let src = Fake(
+            vec![
+                (lib("incoming"), vec!["/data/media/lidarr-music/X/01 New.flac".into()]),
+                (lib("music"), vec!["/data/media/Music/missing.mp3".into(), "/data/media/Music/Artist - Album (2020)/01 Song.mp3".into()]),
+                (lib("empty"), vec![]),
+            ],
+            vec![],
+        );
         let p = place(&src, &folders).await.unwrap();
         assert_eq!(p.root(&folders[0]), Some("/data/media/Music/"));
         assert_eq!(p.root(&folders[1]), Some("/data/media/lidarr-music/"));
@@ -245,5 +280,35 @@ mod tests {
         assert_eq!(found, vec![("incoming", vec![folders[1].clone()]), ("music", vec![folders[0].clone()]), ("empty", vec![])]);
         std::fs::remove_dir_all(&m).ok();
         std::fs::remove_dir_all(&inc).ok();
+    }
+
+    #[tokio::test]
+    async fn one_broad_mount_holds_each_library_in_its_own_folder() {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let media = std::env::temp_dir().join(format!("cratarr-media-{}-{n}", std::process::id()));
+        for f in ["Music/Artist - Album (2020)/01 Song.mp3", "lidarr-music/X/Y/01 New.flac"] {
+            std::fs::create_dir_all(media.join(f).parent().unwrap()).unwrap();
+            std::fs::write(media.join(f), b"x").unwrap();
+        }
+        let m = media.display().to_string();
+        let src = Fake(
+            vec![
+                (lib("music"), vec!["/data/media/Music/Artist - Album (2020)/01 Song.mp3".into()]),
+                (lib("incoming"), vec!["/data/media/lidarr-music/X/Y/01 New.flac".into()]),
+            ],
+            vec![("music".into(), "/data/media/Music".into()), ("incoming".into(), "/data/media/lidarr-music/".into())],
+        );
+        let p = place(&src, &[m.clone()]).await.unwrap();
+        let (music, incoming) = (format!("{m}/Music"), format!("{m}/lidarr-music"));
+        assert_eq!(p.libraries[0].folders, vec![music.clone()]);
+        assert_eq!(p.libraries[1].folders, vec![incoming.clone()]);
+        assert_eq!(p.root(&music), Some("/data/media/Music/"));
+        assert_eq!(p.entry(&music, Some("/data/media/Music/Artist - Album (2020)/01 Song.mp3")).as_deref(), Some("Artist - Album (2020)/01 Song.mp3"));
+        assert_eq!(p.playlist_path(&music, "Chill").as_deref(), Some("/data/media/Music/Chill.m3u"));
+        // Without the server's folders, the mount itself is the library's folder, as before.
+        let bare = Fake(src.0.clone(), vec![]);
+        assert_eq!(place(&bare, &[m.clone()]).await.unwrap().libraries[0].folders, vec![m.clone()]);
+        std::fs::remove_dir_all(&media).ok();
     }
 }

@@ -149,7 +149,9 @@ impl Catalogue {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
-    /// Use these folders (index = id). A folder whose path changed loses its rows; the others keep theirs.
+    /// Use these folders (index = id). A folder whose path changed loses its rows, unless the same files are there
+    /// under the new path (a mount moved, say `/music` to `/media/Music`): then it keeps them and nothing is read
+    /// again. The others keep theirs.
     pub fn set_folders(&self, folders: Vec<PathBuf>) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
@@ -159,8 +161,20 @@ impl Catalogue {
         };
         let wanted: HashMap<i64, String> =
             folders.iter().enumerate().map(|(i, p)| (i as i64, p.to_string_lossy().into_owned())).collect();
+        let moved = |id: i64, to: &str| -> Result<bool> {
+            let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 LIMIT 20")?;
+            let rels: Vec<String> = st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+            Ok(!rels.is_empty() && rels.iter().all(|rel| Path::new(to).join(rel).is_file()))
+        };
         for (id, path) in &known {
-            if wanted.get(id) != Some(path) {
+            let kept = match wanted.get(id) {
+                Some(to) if to != path => moved(*id, to)?,
+                _ => false,
+            };
+            if kept {
+                tracing::info!("catalogue: {path} is now {}, same files", wanted[id]);
+            }
+            if wanted.get(id) != Some(path) && !kept {
                 for table in ["files", "tags", "source_ids"] {
                     tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1"), [id])?;
                 }
@@ -598,5 +612,22 @@ mod tests {
         assert_eq!(cat.status().unwrap().files, 2);
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
+    }
+
+    #[test]
+    fn a_folder_that_moved_with_its_files_keeps_its_rows() {
+        let a = music();
+        let cat = Catalogue::open(None, vec![a.clone()]).unwrap();
+        cat.walk_all();
+        let moved = a.with_extension("moved");
+        std::fs::rename(&a, &moved).unwrap();
+        cat.set_folders(vec![moved.clone()]).unwrap();
+        assert_eq!(cat.status().unwrap().files, 2, "same files under the new path: nothing to read again");
+        let empty = moved.with_extension("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        cat.set_folders(vec![empty.clone()]).unwrap();
+        assert_eq!(cat.status().unwrap().files, 0, "different files: the rows go");
+        std::fs::remove_dir_all(&moved).ok();
+        std::fs::remove_dir_all(&empty).ok();
     }
 }

@@ -280,6 +280,10 @@ impl Source for JellyfinSource {
         Box::pin(self.jf.sample_paths(library_id, n))
     }
 
+    fn library_roots<'a>(&'a self, library_id: &'a str) -> Fut<'a, Vec<String>> {
+        Box::pin(self.jf.library_roots(library_id, 50))
+    }
+
     fn now_playing(&self) -> Fut<'_, Option<Playing>> {
         Box::pin(async move {
             let (activity, sessions) = tokio::join!(self.jf.activity(100), self.jf.sessions());

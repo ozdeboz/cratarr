@@ -183,6 +183,12 @@ pub trait Source: Send + Sync {
     /// the playlist folder.
     fn sample_paths<'a>(&'a self, library_id: &'a str, n: usize) -> Fut<'a, Vec<String>>;
 
+    /// Optional: a library's own folders, as the source writes track paths. Lets one broad mount hold several
+    /// libraries: without it, the mounted folder a library's tracks are found in counts as its folder.
+    fn library_roots<'a>(&'a self, _library_id: &'a str) -> Fut<'a, Vec<String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
     /// What is playing now, following the player chosen in the settings when the plugin has that notion.
     fn now_playing(&self) -> Fut<'_, Option<Playing>>;
 
