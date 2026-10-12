@@ -1,6 +1,7 @@
 # 0004: Connection settings can be changed from the page
 
-- Status: accepted
+- Status: accepted; the file format and the per-key overrides are superseded by
+  [0005](0005-pluggable-sources.md) (the secret rules stand, generalised there)
 - Date: 2026-10-12
 
 ## Context

@@ -3,6 +3,8 @@
   import Manage from './Manage.svelte';
   import Settings from './Settings.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
+  import SourcePicker from './lib/SourcePicker.svelte';
+  import { known } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
   import './lib/prefs.svelte';
 
@@ -28,6 +30,14 @@
         ? 'settings'
         : 'playlists';
   let page = $state(fromHash());
+  // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bottom bar.
+  const wide = window.matchMedia('(min-width: 1024px)');
+  let phone = $state(!wide.matches);
+  $effect(() => {
+    const on = () => (phone = !wide.matches);
+    wide.addEventListener('change', on);
+    return () => wide.removeEventListener('change', on);
+  });
   let moreOpen = $state(false);
 
   $effect(() => {
@@ -89,6 +99,9 @@
     {#if connection}
       <a class="conn" class:down={!connection.ok} href="#/settings"><i aria-hidden="true"></i>{connection.text}</a>
     {/if}
+    {#if !phone}
+      <div class="side-picker" class:shown={known.list.length > 1}><SourcePicker /></div>
+    {/if}
 
     <nav aria-label="Pages">
       {#each MAIN as p (p.id)}
@@ -103,6 +116,7 @@
   </aside>
 
   <div class="content">
+    {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
     {#if page === 'manage'}
       <Manage />
     {:else if page === 'settings'}
@@ -284,6 +298,16 @@
     font-size: 1.35rem;
     font-weight: 700;
     letter-spacing: -0.01em;
+  }
+
+  /* One picker at a time: the sidebar's from 1024 px, otherwise a row above the page. It takes no room until there
+     is more than one source (the picker itself renders nothing then, but stays mounted to learn the sources). */
+  .side-picker.shown {
+    margin: -8px 8px 16px;
+  }
+
+  .top-picker.shown {
+    padding: 10px clamp(12px, 2vw, 32px) 0;
   }
 
   .conn {

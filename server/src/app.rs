@@ -95,6 +95,8 @@ pub struct StatusView {
     pub connected: bool,
     /// Some enabled source has an incoming library: the page shows incoming-music features.
     pub incoming: bool,
+    /// Connected sources, for the source picker (`playing` is not checked here and always false).
+    pub sources: Vec<SourceTab>,
     /// The server's name with one source; "n of m sources" with several.
     pub server_name: Option<String>,
     pub version: &'static str,
@@ -269,7 +271,8 @@ impl App {
             many => Some(format!("{up} of {} sources", many.len())),
         };
         let incoming = self.live().iter().any(|a| a.cfg.enabled && a.cfg.libraries.incoming.is_some());
-        StatusView { connected: up > 0, incoming, server_name, version: VERSION }
+        let sources = sources.iter().map(|(a, _)| SourceTab { id: a.cfg.id.clone(), label: label_of(&a.cfg), playing: false }).collect();
+        StatusView { connected: up > 0, incoming, sources, server_name, version: VERSION }
     }
 
     /// Ask every connected source what it plays, all at once, and pick: the requested source, or (`None` / unknown)

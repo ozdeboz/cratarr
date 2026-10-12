@@ -9,6 +9,8 @@ export type Playlist = {
 };
 
 export type NowPlaying = {
+  /** The source it came from (covers are looked up there). */
+  source: string;
   id: string;
   name: string;
   artist: string | null;
@@ -27,9 +29,13 @@ export type Progress = {
   estimated: boolean;
 };
 
+/** An enabled, connected source; `playing` is only filled by `getState`. */
+export type SourceTab = { id: string; label: string; playing: boolean };
+
 export type State = {
   now_playing: NowPlaying | null;
   playlists: Playlist[];
+  sources: SourceTab[];
 };
 
 export class ApiError extends Error {}
@@ -54,10 +60,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const getState = () => request<State>('/api/state');
+/** `source`: follow that source; absent: whichever started playing most recently. */
+const follow = (source?: string) => (source ? `?source=${encodeURIComponent(source)}` : '');
 
-export const toggle = (playlistId: string) =>
-  request<State>(`/api/playlists/${encodeURIComponent(playlistId)}/toggle`, { method: 'POST' });
+export const getState = (source?: string) => request<State>(`/api/state${follow(source)}`);
+
+export const coverUrl = (np: NowPlaying) => `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
+
+export const toggle = (playlistId: string, source?: string) =>
+  request<State>(`/api/playlists/${encodeURIComponent(playlistId)}/toggle${follow(source)}`, { method: 'POST' });
 
 export type Repair = { playlist: string; from: string; to: string };
 export type Repairs = { safe: Repair[]; review: Repair[] };
@@ -89,44 +100,89 @@ export const deletePlaylist = (id: string) =>
 export const restorePlaylist = (id: string) =>
   post<{ restored: string }>(`/api/playlists/${encodeURIComponent(id)}/restore`, {});
 
-export type Status = { connected: boolean; server_name: string | null; version: string };
+export type Status = {
+  connected: boolean;
+  /** The server's name with one source; "n of m sources" with several. */
+  server_name: string | null;
+  /** Some enabled source has an incoming library. */
+  incoming: boolean;
+  sources: SourceTab[];
+  version: string;
+};
 
 export const getStatus = () => request<Status>('/api/status');
 
-export type Source = 'file' | 'env' | 'default';
+export type FieldKind = 'url' | 'text' | 'secret' | 'choice' | 'multi_choice';
 
-export type SettingsValues = {
-  jellyfin_url: string;
-  api_key_set: boolean;
-  user_id: string;
-  player_client: string;
-  music_prefixes: string[];
-  jellyfin_playlist_dir: string;
+/** A setting a source plugin asks for; the Settings page draws its form from these. */
+export type Field = {
+  key: string;
+  label: string;
+  kind: FieldKind;
+  required: boolean;
+  help: string | null;
+  /** Secrets: changing one of these fields needs the secret entered again. */
+  bound_to: string[];
 };
 
+export type Choice = { value: string; label: string };
+
+/** What a source's libraries are used for. `music` empty = every library inside the playlist folder. */
+export type Roles = { music: string[]; incoming: string | null };
+
+export type PlacedLibrary = { id: string; name: string; inside: boolean };
+
+export type SourceStatus = {
+  connected: boolean;
+  server_name: string | null;
+  version: string | null;
+  detail: string | null;
+  error: string | null;
+};
+
+export type Values = Record<string, string | string[]>;
+
+/** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
+export type SourceConfig = { id: string; kind: string; enabled: boolean; libraries: Roles; values: Values };
+
+export type SourceView = SourceConfig & {
+  label: string;
+  /** Secrets are never sent; these are the ones that are set. */
+  secrets_set: string[];
+  status: SourceStatus;
+  choices: Record<string, Choice[]>;
+  /** `root`: the playlist folder as this source sees it, if found. */
+  placement: { root: string | null; libraries: PlacedLibrary[] };
+  error: string | null;
+};
+
+export type Kind = { id: string; label: string; fields: Field[] };
+
 export type Settings = {
-  values: SettingsValues;
-  sources: Record<'jellyfin_url' | 'api_key' | 'user_id' | 'player_client' | 'music_prefixes' | 'jellyfin_playlist_dir', Source>;
+  sources: SourceView[];
+  kinds: Kind[];
+  /** Whether the sources come from the settings file or (first run) the container's environment. */
+  origin: 'file' | 'env';
   fixed: { bind: string; playlist_dir: string };
   /** Null when the server has no data folder: settings can be looked at, not saved. */
   settings_file: string | null;
-  jellyfin: { ok: boolean; server_name: string | null; version: string | null; user_name: string | null; error: string | null };
   playlists: number;
   version: string;
   /** Epoch seconds. */
   started: number;
 };
 
-/** An empty or missing api_key keeps the saved key (only allowed while the address stays the same). */
-export type SettingsChange = Omit<SettingsValues, 'api_key_set'> & { api_key?: string };
-
-export type Probe = { server_name: string | null; version: string; users: { Id: string; Name: string }[] };
-
 export const getSettings = () => request<Settings>('/api/settings');
 
-export const saveSettings = (change: SettingsChange) => post<Settings>('/api/settings', change);
+export const saveSettings = (sources: SourceConfig[]) =>
+  request<Settings>('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sources }),
+  });
 
-export const probe = (jellyfin_url: string, api_key?: string) => post<Probe>('/api/settings/probe', { jellyfin_url, api_key });
+/** One source as it is being filled in: status, choices and libraries, nothing saved. */
+export const previewSource = (source: SourceConfig) => post<SourceView>('/api/settings/preview', { source });
 
 export type AlbumTrack = {
   file: string;

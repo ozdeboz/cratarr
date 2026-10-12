@@ -1,112 +1,142 @@
 <script lang="ts">
-  import { ApiError, getSettings, probe, saveSettings, type Probe, type Settings, type Source } from './lib/api';
+  import {
+    ApiError,
+    getSettings,
+    previewSource,
+    saveSettings,
+    type Choice,
+    type Field,
+    type Kind,
+    type Settings,
+    type SourceConfig,
+    type SourceView,
+  } from './lib/api';
   import { prefs, resetPrefs, ZOOM_STEPS, type Theme } from './lib/prefs.svelte';
 
-  let s = $state<Settings | null>(null);
-  let loadError = $state<string | null>(null);
+  // A source as the page edits it. Secrets typed here are kept apart: the server never sends saved ones.
+  type Draft = SourceConfig & { secrets: Record<string, string>; view: SourceView | null; busy: boolean; note: string | null };
 
-  // The connection form. `form` is what the page shows; `s.values` is what the server runs with.
-  let form = $state({ jellyfin_url: '', api_key: '', user_id: '', player_client: '', prefixes: '', jellyfin_playlist_dir: '' });
-  let users = $state<Probe['users']>([]);
-  let probed = $state<Probe | null>(null);
-  let busy = $state(false);
+  let s = $state<Settings | null>(null);
+  let drafts = $state<Draft[]>([]);
+  let loadError = $state<string | null>(null);
+  let saving = $state(false);
   let formError = $state<string | null>(null);
   let notice = $state<string | null>(null);
+  let removing = $state<string | null>(null);
+  let addKind = $state('');
 
-  function fill(v: Settings) {
-    s = v;
-    form = {
-      jellyfin_url: v.values.jellyfin_url,
-      api_key: '',
-      user_id: v.values.user_id,
-      player_client: v.values.player_client,
-      prefixes: v.values.music_prefixes.join('\n'),
-      jellyfin_playlist_dir: v.values.jellyfin_playlist_dir,
-    };
+  const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
+
+  function fill(next: Settings) {
+    s = next;
+    drafts = next.sources.map((v) => ({
+      id: v.id,
+      kind: v.kind,
+      enabled: v.enabled,
+      libraries: clone(v.libraries),
+      values: clone(v.values),
+      secrets: {},
+      view: v,
+      busy: false,
+      note: null,
+    }));
+    addKind = next.kinds[0]?.id ?? '';
   }
 
-  const lines = (t: string) =>
-    t
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean);
+  getSettings()
+    .then(fill)
+    .catch((e) => (loadError = e instanceof ApiError ? e.message : 'Unexpected error'));
 
-  async function load() {
-    try {
-      fill(await getSettings());
-      loadError = null;
-      // Fill the user list from the saved connection; failure just leaves the plain id field.
-      test(true);
-    } catch (e) {
-      loadError = e instanceof ApiError ? e.message : 'Unexpected error';
-    }
+  const kindOf = (d: { kind: string }): Kind | undefined => s?.kinds.find((k) => k.id === d.kind);
+  const saved = (d: Draft) => s?.sources.find((v) => v.id === d.id && v.kind === d.kind);
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+
+  /** What is sent: blank secrets are left out, so the saved ones are kept (where the server allows). */
+  function payload(d: Draft): SourceConfig {
+    const values = { ...d.values };
+    for (const [k, v] of Object.entries(d.secrets)) if (v.trim()) values[k] = v.trim();
+    return { id: d.id, kind: d.kind, enabled: d.enabled, libraries: clone(d.libraries), values };
   }
-  load();
 
-  const urlChanged = $derived(!!s && form.jellyfin_url.trim().replace(/\/+$/, '') !== s.values.jellyfin_url);
   const dirty = $derived(
     !!s &&
-      (urlChanged ||
-        form.api_key.trim() !== '' ||
-        form.user_id.trim() !== s.values.user_id ||
-        form.player_client.trim() !== s.values.player_client ||
-        lines(form.prefixes).join('\n') !== s.values.music_prefixes.join('\n') ||
-        form.jellyfin_playlist_dir.trim() !== s.values.jellyfin_playlist_dir),
+      (drafts.some((d) => Object.values(d.secrets).some((v) => v.trim())) ||
+        JSON.stringify(drafts.map(payload)) !==
+          JSON.stringify(s.sources.map((v) => payload({ ...v, secrets: {}, view: v, busy: false, note: null })))),
   );
 
-  async function test(quiet = false) {
-    if (!quiet) {
-      formError = null;
-      notice = null;
-    }
-    busy = true;
+  /** A secret must be typed again when the source is new, has none saved, or a field it is bound to changed. */
+  function secretNeeded(d: Draft, f: Field) {
+    const before = saved(d);
+    if (!before || !before.secrets_set.includes(f.key)) return f.required;
+    return f.bound_to.some((b) => str(d.values[b]) !== str(before.values[b]));
+  }
+
+  /** The choices for a field, always including the current value so nothing is silently dropped. */
+  function choicesFor(d: Draft, f: Field): Choice[] {
+    const list = d.view?.choices[f.key] ?? [];
+    const cur = str(d.values[f.key]);
+    return cur && !list.some((c) => c.value === cur) ? [{ value: cur, label: cur }, ...list] : list;
+  }
+
+  async function check(d: Draft) {
+    d.busy = true;
+    d.note = null;
     try {
-      probed = await probe(form.jellyfin_url, form.api_key || undefined);
-      users = probed.users;
-      if (!quiet) notice = `Reached ${probed.server_name ?? 'Jellyfin'} ${probed.version}, ${users.length} ${users.length === 1 ? 'user' : 'users'}.`;
+      d.view = await previewSource(payload(d));
+      d.note = d.view.status.connected ? null : (d.view.status.error ?? d.view.error);
     } catch (e) {
-      probed = null;
-      if (!quiet) formError = e instanceof ApiError ? e.message : 'Unexpected error';
+      d.note = e instanceof ApiError ? e.message : 'Unexpected error';
     } finally {
-      busy = false;
+      d.busy = false;
     }
+  }
+
+  function addSource() {
+    const k = s?.kinds.find((x) => x.id === addKind);
+    if (!k) return;
+    let id = k.id;
+    for (let n = 2; drafts.some((d) => d.id === id); n++) id = `${k.id}-${n}`;
+    drafts.push({ id, kind: k.id, enabled: true, libraries: { music: [], incoming: null }, values: {}, secrets: {}, view: null, busy: false, note: null });
   }
 
   async function save() {
     formError = null;
     notice = null;
-    busy = true;
+    saving = true;
     try {
-      fill(
-        await saveSettings({
-          jellyfin_url: form.jellyfin_url,
-          api_key: form.api_key || undefined,
-          user_id: form.user_id,
-          player_client: form.player_client,
-          music_prefixes: lines(form.prefixes),
-          jellyfin_playlist_dir: form.jellyfin_playlist_dir,
-        }),
-      );
+      fill(await saveSettings(drafts.map(payload)));
       notice = 'Saved and in use.';
     } catch (e) {
       formError = e instanceof ApiError ? e.message : 'Unexpected error';
     } finally {
-      busy = false;
+      saving = false;
     }
   }
 
-  const SOURCE: Record<Source, string> = { file: 'Saved here', env: 'From the container', default: 'Default' };
+  // Music libraries: automatic (every library inside the playlist folder) or a chosen set.
+  function setAutomatic(d: Draft, auto: boolean) {
+    const inside = (d.view?.placement.libraries ?? []).filter((l) => l.inside && l.id !== d.libraries.incoming);
+    d.libraries.music = auto ? [] : inside.map((l) => l.id);
+  }
+
+  function toggleMusic(d: Draft, id: string, on: boolean) {
+    d.libraries.music = on ? [...d.libraries.music, id] : d.libraries.music.filter((x) => x !== id);
+  }
+
+  function statusLine(v: SourceView | null) {
+    if (!v) return null;
+    const st = v.status;
+    if (st.connected) return { ok: true, text: ['Connected to', st.server_name ?? v.label, st.version, st.detail].filter(Boolean).join(' ') };
+    return { ok: false, text: st.error ?? v.error ?? 'Not connected' };
+  }
+
   const THEMES: { id: Theme; label: string }[] = [
     { id: 'auto', label: 'System' },
     { id: 'light', label: 'Light' },
     { id: 'dark', label: 'Dark' },
   ];
-  const since = (epoch: number) =>
-    new Date(epoch * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-  // The saved user is always offered, even when the list could not be loaded or no longer has it.
-  const userOptions = $derived(
-    users.some((u) => u.Id === form.user_id) || !form.user_id ? users : [{ Id: form.user_id, Name: form.user_id }, ...users],
-  );
+  const since = (epoch: number) => new Date(epoch * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 </script>
 
 <main>
@@ -118,15 +148,17 @@
     <section aria-labelledby="status-h">
       <h2 id="status-h">Status</h2>
       <dl>
-        <dt>Jellyfin</dt>
-        <dd>
-          {#if s.jellyfin.ok}
-            <span class="dot ok" aria-hidden="true"></span>Connected to {s.jellyfin.server_name ?? 'Jellyfin'}
-            {s.jellyfin.version} as {s.jellyfin.user_name}
-          {:else}
-            <span class="dot down" aria-hidden="true"></span><span class="bad">{s.jellyfin.error ?? 'Not connected'}</span>
-          {/if}
-        </dd>
+        {#each s.sources as v (v.id)}
+          {@const line = statusLine(v)}
+          <dt>{v.label}{s.sources.length > 1 ? ` (${v.id})` : ''}</dt>
+          <dd>
+            {#if !v.enabled}<span class="muted">Switched off</span>
+            {:else if line}<span class="dot" class:ok={line.ok} aria-hidden="true"></span><span class:bad={!line.ok}>{line.text}</span>{/if}
+          </dd>
+        {:else}
+          <dt>Sources</dt>
+          <dd class="bad">None yet: add one below</dd>
+        {/each}
         <dt>Playlists</dt>
         <dd>{s.playlists} in <code>{s.fixed.playlist_dir}</code></dd>
         <dt>Listening on</dt>
@@ -140,77 +172,139 @@
       </dl>
     </section>
 
-    <section aria-labelledby="conn-h">
-      <h2 id="conn-h">Jellyfin connection</h2>
+    <section aria-labelledby="sources-h">
+      <h2 id="sources-h">Sources</h2>
       <p class="lede">
-        Shared by everyone who uses Cratarr. Values saved here win over the container's; saving one back to the
-        container's value removes the override. The playlist folder and port belong to the container and are set there.
+        The servers Cratarr works alongside. Shared by everyone who uses Cratarr.
+        {#if s.origin === 'env'}These come from the container's settings until you save here.{/if}
+        Saved secrets are never shown; leave them empty to keep them.
       </p>
 
-      <form
-        onsubmit={(e) => {
-          e.preventDefault();
-          save();
-        }}
-      >
-        <label>
-          <span class="l">Server address <small>{SOURCE[s.sources.jellyfin_url]}</small></span>
-          <input type="url" required bind:value={form.jellyfin_url} autocomplete="off" spellcheck="false" />
-        </label>
+      {#each drafts as d (d)}
+        {@const k = kindOf(d)}
+        {@const line = statusLine(d.view)}
+        {@const libs = d.view?.placement.libraries ?? []}
+        <article class="source" class:off={!d.enabled}>
+          <header>
+            <h3>{k?.label ?? d.kind} <small>{d.id}</small></h3>
+            <label class="switch"><input type="checkbox" bind:checked={d.enabled} /> On</label>
+            {#if removing === d.id}
+              <button class="danger" onclick={() => ((drafts = drafts.filter((x) => x !== d)), (removing = null))}>Remove</button>
+              <button onclick={() => (removing = null)}>Keep</button>
+            {:else}
+              <button onclick={() => (removing = d.id)}>Remove…</button>
+            {/if}
+          </header>
 
-        <label>
-          <span class="l">API key <small>{SOURCE[s.sources.api_key]}</small></span>
-          <input
-            type="password"
-            bind:value={form.api_key}
-            autocomplete="new-password"
-            placeholder={s.values.api_key_set ? 'Saved; leave empty to keep it' : 'Not set'}
-            required={urlChanged}
-          />
-          {#if urlChanged}<span class="hint">A new address needs the key entered again, so the saved key is never sent to another server.</span>{/if}
-        </label>
+          {#if line}<p class="state" class:bad={!line.ok}><span class="dot" class:ok={line.ok} aria-hidden="true"></span>{line.text}</p>{/if}
 
-        <div class="row">
-          <button type="button" disabled={busy || !form.jellyfin_url} onclick={() => test()}>Test connection</button>
-          {#if probed}<span class="hint">{probed.server_name ?? 'Jellyfin'} {probed.version}</span>{/if}
-        </div>
+          <div class="fields">
+            {#each k?.fields ?? [] as f (f.key)}
+              <label>
+                <span class="l">{f.label}{#if !f.required}<small>optional</small>{/if}</span>
+                {#if f.kind === 'secret'}
+                  {@const needed = secretNeeded(d, f)}
+                  <input
+                    type="password"
+                    autocomplete="new-password"
+                    bind:value={d.secrets[f.key]}
+                    required={needed}
+                    placeholder={saved(d)?.secrets_set.includes(f.key) && !needed ? 'Saved; leave empty to keep it' : ''}
+                  />
+                  {#if needed && saved(d)?.secrets_set.includes(f.key)}
+                    <span class="hint warn">Changed {f.bound_to.join(', ')}: enter it again, so the saved one is never sent somewhere new.</span>
+                  {/if}
+                {:else if f.kind === 'choice' && choicesFor(d, f).length}
+                  <select value={str(d.values[f.key])} onchange={(e) => (d.values[f.key] = e.currentTarget.value)} required={f.required}>
+                    {#if !choicesFor(d, f).some((c) => c.value === '')}<option value="" disabled={f.required}>Choose…</option>{/if}
+                    {#each choicesFor(d, f) as c (c.value)}<option value={c.value}>{c.label}</option>{/each}
+                  </select>
+                {:else if f.kind === 'multi_choice'}
+                  {@const chosen = Array.isArray(d.values[f.key]) ? (d.values[f.key] as string[]) : []}
+                  <span class="checks">
+                    {#each choicesFor(d, f) as c (c.value)}
+                      <label class="check">
+                        <input
+                          type="checkbox"
+                          checked={chosen.includes(c.value)}
+                          onchange={(e) =>
+                            (d.values[f.key] = e.currentTarget.checked ? [...chosen, c.value] : chosen.filter((x) => x !== c.value))}
+                        />{c.label}
+                      </label>
+                    {/each}
+                  </span>
+                {:else}
+                  <input
+                    type={f.kind === 'url' ? 'url' : 'text'}
+                    value={str(d.values[f.key])}
+                    oninput={(e) => (d.values[f.key] = e.currentTarget.value)}
+                    required={f.required}
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder={f.kind === 'choice' ? 'Connect first to choose' : ''}
+                  />
+                {/if}
+                {#if f.help}<span class="hint">{f.help}</span>{/if}
+              </label>
+            {/each}
+          </div>
 
-        <label>
-          <span class="l">User whose library is used <small>{SOURCE[s.sources.user_id]}</small></span>
-          {#if userOptions.length}
-            <select bind:value={form.user_id} required>
-              {#each userOptions as u (u.Id)}<option value={u.Id}>{u.Name}</option>{/each}
-            </select>
-          {:else}
-            <input type="text" required bind:value={form.user_id} spellcheck="false" placeholder="User id" />
+          <div class="row">
+            <button type="button" disabled={d.busy} onclick={() => check(d)}>{d.view ? 'Check again' : 'Connect'}</button>
+            {#if d.note}<span class="hint bad">{d.note}</span>{/if}
+          </div>
+
+          {#if d.view}
+            <fieldset>
+              <legend>Music</legend>
+              <p class="hint">Tracks in these libraries can go in playlists.</p>
+              <label class="check"><input type="radio" checked={d.libraries.music.length === 0} onchange={() => setAutomatic(d, true)} />Every library inside the playlist folder</label>
+              <label class="check"><input type="radio" checked={d.libraries.music.length > 0} onchange={() => setAutomatic(d, false)} />Only these:</label>
+              {#if d.libraries.music.length > 0}
+                <div class="checks indent">
+                  {#each libs.filter((l) => l.id !== d.libraries.incoming) as l (l.id)}
+                    <label class="check" class:muted={!l.inside}>
+                      <input type="checkbox" disabled={!l.inside} checked={d.libraries.music.includes(l.id)} onchange={(e) => toggleMusic(d, l.id, e.currentTarget.checked)} />
+                      {l.name}{#if !l.inside}<small>outside the playlist folder</small>{/if}
+                    </label>
+                  {/each}
+                </div>
+              {/if}
+              {#if d.view.placement.root}
+                <p class="hint">This source sees the playlist folder as <code>{d.view.placement.root}</code>.</p>
+              {:else}
+                <p class="hint bad">None of this source's music libraries is inside the playlist folder ({s.fixed.playlist_dir}).</p>
+              {/if}
+            </fieldset>
+
+            <fieldset>
+              <legend>Incoming <small>optional</small></legend>
+              <p class="hint">Where new music waits for review (Lidarr's sandbox, say). Never added to playlists; choosing one turns on incoming-music features.</p>
+              <select value={d.libraries.incoming ?? ''} onchange={(e) => (d.libraries.incoming = e.currentTarget.value || null)}>
+                <option value="">None</option>
+                {#each libs.filter((l) => !d.libraries.music.includes(l.id)) as l (l.id)}<option value={l.id}>{l.name}</option>{/each}
+              </select>
+            </fieldset>
           {/if}
-        </label>
+        </article>
+      {/each}
 
-        <label>
-          <span class="l">Preferred player <small>{SOURCE[s.sources.player_client]}</small></span>
-          <input type="text" bind:value={form.player_client} placeholder="Finamp" spellcheck="false" />
-          <span class="hint">When several players are playing music, this one's track counts.</span>
-        </label>
-
-        <label>
-          <span class="l">Library folders, as Jellyfin sees them <small>{SOURCE[s.sources.music_prefixes]}</small></span>
-          <textarea rows="3" required bind:value={form.prefixes} spellcheck="false"></textarea>
-          <span class="hint">One per line. Tracks outside these (an incoming folder, say) cannot be added to playlists.</span>
-        </label>
-
-        <label>
-          <span class="l">Playlist folder, as Jellyfin sees it <small>{SOURCE[s.sources.jellyfin_playlist_dir]}</small></span>
-          <input type="text" required bind:value={form.jellyfin_playlist_dir} spellcheck="false" />
-        </label>
-
-        {#if formError}<div class="banner error" role="alert">{formError}</div>{/if}
-        {#if notice}<div class="banner" role="status">{notice}</div>{/if}
-
-        <div class="row">
-          <button class="primary" type="submit" disabled={busy || !dirty || !s.settings_file}>Save</button>
-          <button type="button" disabled={busy || !dirty} onclick={() => s && fill(s)}>Discard changes</button>
+      {#if s.kinds.length}
+        <div class="row add">
+          <select bind:value={addKind} aria-label="Kind of source">
+            {#each s.kinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}
+          </select>
+          <button onclick={addSource}>Add source</button>
         </div>
-      </form>
+      {/if}
+
+      {#if formError}<div class="banner error" role="alert">{formError}</div>{/if}
+      {#if notice}<div class="banner" role="status">{notice}</div>{/if}
+
+      <div class="row">
+        <button class="primary" disabled={saving || !dirty || !s.settings_file} onclick={save}>Save</button>
+        <button disabled={saving || !dirty} onclick={() => s && fill(s)}>Discard changes</button>
+      </div>
     </section>
   {:else if !loadError}
     <p class="lede">Loading…</p>
@@ -281,6 +375,22 @@
     font-size: 1rem;
   }
 
+  h3 {
+    margin: 0;
+    margin-right: auto;
+    font-size: 0.98rem;
+  }
+
+  h3 small,
+  .l small,
+  legend small,
+  .check small {
+    margin-left: 6px;
+    color: var(--muted);
+    font-weight: 400;
+    font-size: 0.8rem;
+  }
+
   .lede {
     margin: 0 0 14px;
     color: var(--muted);
@@ -317,14 +427,17 @@
 
   code {
     font-size: 0.85em;
+    overflow-wrap: anywhere;
   }
 
   .dot {
     display: inline-block;
+    flex: none;
     width: 8px;
     height: 8px;
     margin-right: 8px;
     border-radius: 50%;
+    background: var(--danger);
     vertical-align: middle;
   }
 
@@ -332,15 +445,45 @@
     background: var(--accent);
   }
 
-  .dot.down {
-    background: var(--danger);
-  }
-
   .bad {
     color: var(--danger);
   }
 
-  form {
+  .muted {
+    color: var(--muted);
+  }
+
+  .source {
+    display: grid;
+    gap: 14px;
+    margin-bottom: 14px;
+    padding: 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+
+  .source.off .fields,
+  .source.off fieldset {
+    opacity: 0.6;
+  }
+
+  .source header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .state {
+    display: flex;
+    align-items: center;
+    margin: 0;
+    font-size: 0.88rem;
+    overflow-wrap: anywhere;
+  }
+
+  .fields {
     display: grid;
     gap: 14px;
   }
@@ -355,37 +498,76 @@
     font-weight: 600;
   }
 
-  .l small {
-    margin-left: 6px;
-    color: var(--muted);
-    font-weight: 400;
-  }
-
   .hint {
     color: var(--muted);
     font-size: 0.8rem;
   }
 
+  .hint.warn {
+    color: var(--warn);
+  }
+
+  .hint.bad {
+    color: var(--danger);
+  }
+
+  fieldset {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  legend {
+    padding: 0 6px;
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+
+  fieldset p {
+    margin: 0;
+  }
+
+  .checks {
+    display: grid;
+    gap: 6px;
+  }
+
+  .indent {
+    padding-left: 28px;
+  }
+
+  label.check,
+  label.switch {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.92rem;
+    cursor: pointer;
+  }
+
+  label.check input,
+  label.switch input {
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    accent-color: var(--accent);
+  }
+
   input[type='url'],
   input[type='text'],
   input[type='password'],
-  select,
-  textarea {
+  select {
     width: 100%;
     min-height: 44px;
     padding: 0 12px;
-    background: var(--bg);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 10px;
     font: inherit;
     color: inherit;
-  }
-
-  textarea {
-    padding: 10px 12px;
-    resize: vertical;
-    font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace;
-    font-size: 0.88rem;
   }
 
   .row {
@@ -393,6 +575,14 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .row.add {
+    margin-bottom: 14px;
+  }
+
+  .row.add select {
+    width: auto;
   }
 
   button {
@@ -404,11 +594,20 @@
     cursor: pointer;
   }
 
+  .source button {
+    background: var(--surface);
+  }
+
   button.primary {
     background: var(--accent);
     border-color: var(--accent);
     color: var(--accent-text);
     font-weight: 600;
+  }
+
+  button.danger {
+    border-color: var(--danger);
+    color: var(--danger);
   }
 
   button:disabled {
@@ -417,6 +616,7 @@
   }
 
   .banner {
+    margin: 12px 0;
     padding: 10px 14px;
     border: 1px solid var(--border);
     border-radius: 10px;

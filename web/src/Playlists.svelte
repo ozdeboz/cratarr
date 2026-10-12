@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { ApiError, getState, toggle, type Playlist, type State } from './lib/api';
+  import { ApiError, coverUrl, getState, toggle, type Playlist, type State } from './lib/api';
+  import { remember } from './lib/sources.svelte';
   import { prefs } from './lib/prefs.svelte';
 
   let view = $state<State | null>(null);
@@ -14,12 +15,15 @@
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
 
+  // Restarts (and polls at once) when the followed source changes.
   $effect(() => {
+    const followed = prefs.source || undefined;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       try {
-        view = await getState();
+        view = await getState(followed);
+        remember(view.sources);
         error = null;
       } catch (e) {
         error = e instanceof ApiError ? e.message : 'Unexpected error';
@@ -109,7 +113,7 @@
     optimistic[p.id] = !p.member;
     notice = null;
     try {
-      view = await toggle(p.id);
+      view = await toggle(p.id, prefs.source || undefined);
     } catch (e) {
       notice = e instanceof ApiError ? e.message : 'Something went wrong';
     } finally {
@@ -123,7 +127,7 @@
   <header>
     {#if np && !noCover[np.id]}
       {#key np.id}
-        <img class="cover" src="/api/cover/{np.id}" alt="" decoding="async" onerror={() => np && (noCover[np.id] = true)} />
+        <img class="cover" src={coverUrl(np)} alt="" decoding="async" onerror={() => np && (noCover[np.id] = true)} />
       {/key}
     {/if}
     <div class="np">
