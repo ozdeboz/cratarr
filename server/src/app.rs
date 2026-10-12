@@ -93,13 +93,16 @@ impl From<StoreError> for ToggleError {
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// One source's incoming library, newest first. `supported` is false when the source cannot list albums at all.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IncomingSourceView {
     pub id: String,
     pub label: String,
     pub supported: bool,
     pub albums: Vec<source::Album>,
     pub error: Option<String>,
+    /// When this list was read from the source, epoch seconds. Lists are kept and refreshed in the background,
+    /// because reading one can take the source many seconds.
+    pub as_of: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -225,6 +228,8 @@ pub struct App {
     saving: Mutex<()>,
     started: i64,
     store: Store,
+    /// Incoming lists by source and library (see `refresh_incoming`).
+    incoming_cache: Mutex<std::collections::HashMap<String, IncomingSourceView>>,
 }
 
 impl App {
@@ -243,6 +248,7 @@ impl App {
             bind: cfg.bind,
             saving: Mutex::new(()),
             started: epoch_now(),
+            incoming_cache: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -408,25 +414,63 @@ impl App {
     // ----- Incoming -----
 
     /// Every enabled source with an incoming library (or only `want`), its albums newest first. Read-only.
+    /// The kept lists, read from the source only when there is none yet (the background refresh keeps them fresh).
     pub async fn incoming(&self, want: Option<&str>) -> IncomingView {
         let mut sources = Vec::new();
-        for (a, s) in self.connected() {
-            let Some(library) = a.cfg.libraries.incoming.clone() else { continue };
-            if !a.cfg.enabled || want.is_some_and(|w| w != a.cfg.id) {
+        for (a, s, library) in self.incoming_sources() {
+            if want.is_some_and(|w| w != a.cfg.id) {
                 continue;
             }
-            let supported = s.lists_albums();
-            let (albums, error) = if supported {
-                match s.albums(&library, INCOMING_LIMIT).await {
-                    Ok(list) => (list, None),
-                    Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+            let key = format!("{}\n{library}", a.cfg.id);
+            let kept = self.incoming_cache.lock().await.get(&key).cloned();
+            let view = match kept {
+                Some(v) => v,
+                None => {
+                    let v = Self::read_incoming(&a, &*s, &library).await;
+                    self.incoming_cache.lock().await.insert(key, v.clone());
+                    v
                 }
-            } else {
-                (Vec::new(), None)
             };
-            sources.push(IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error });
+            sources.push(view);
         }
         IncomingView { sources }
+    }
+
+    /// Read every incoming list again and forget lists of sources or libraries no longer configured. Meant to run in
+    /// the background every few minutes; a failed read keeps the previous list.
+    pub async fn refresh_incoming(&self) {
+        let mut keep = std::collections::HashSet::new();
+        for (a, s, library) in self.incoming_sources() {
+            let key = format!("{}\n{library}", a.cfg.id);
+            let fresh = Self::read_incoming(&a, &*s, &library).await;
+            let mut cache = self.incoming_cache.lock().await;
+            if fresh.error.is_none() || !cache.contains_key(&key) {
+                cache.insert(key.clone(), fresh);
+            }
+            keep.insert(key);
+        }
+        self.incoming_cache.lock().await.retain(|k, _| keep.contains(k));
+    }
+
+    fn incoming_sources(&self) -> Vec<(Arc<Active>, Arc<dyn Source>, String)> {
+        self.connected()
+            .into_iter()
+            .filter(|(a, _)| a.cfg.enabled)
+            .filter_map(|(a, s)| a.cfg.libraries.incoming.clone().map(|l| (a, s, l)))
+            .collect()
+    }
+
+    async fn read_incoming(a: &Active, s: &dyn Source, library: &str) -> IncomingSourceView {
+        let supported = s.lists_albums();
+        let (albums, error) = if supported {
+            match s.albums(library, INCOMING_LIMIT).await {
+                Ok(list) => (list, None),
+                Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+            }
+        } else {
+            (Vec::new(), None)
+        };
+        IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now() }
     }
 
     /// Play an album of a source's incoming library on that source's player. Returns the player's label.

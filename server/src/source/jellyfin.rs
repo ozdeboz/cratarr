@@ -106,16 +106,32 @@ pub fn choose<'a>(playing: &'a [Started], sessions: &[Session], player: &Player)
         .or_else(|| playing.first())
 }
 
-/// The session to start music on: the chosen player when it can be controlled; with no player chosen, the one
-/// playing music now. `None` rather than a guess.
-pub fn cast_target<'a>(sessions: &'a [Session], player: &Player) -> Option<&'a Session> {
-    let controllable = |s: &&Session| s.id.is_some() && s.supports_remote_control == Some(true);
-    if player.app.is_some() {
-        return sessions.iter().filter(controllable).find(|s| player.matches(s.client.as_deref(), s.device_name.as_deref()));
-    }
-    sessions.iter().filter(controllable).find(|s| {
-        s.now_playing_item.as_ref().is_some_and(|i| i.media_type.as_deref().is_some_and(|m| m.eq_ignore_ascii_case("Audio")))
-    })
+/// The sessions to send music to: every session of one device. The device is the chosen player (its most recently
+/// active device when only an app is chosen); with no player chosen, the device playing music now. Empty rather
+/// than a guess.
+///
+/// Every session of the device, not one: Finamp 1.0.x registers two per device (observed on 10.11). The one that
+/// reports playback lists all its commands but holds no connection and ignores commands; a second one ("Play On")
+/// lists no commands at all yet is the one that plays what it is sent. Both report `SupportsRemoteControl: false`,
+/// and Jellyfin answers 204 to both, so neither the flags nor the answer tell them apart.
+pub fn cast_targets<'a>(sessions: &'a [Session], player: &Player) -> Vec<&'a Session> {
+    // ISO dates sort as text; the most recently active session decides the device.
+    let newest = |a: &&Session, b: &&Session| a.last_activity_date.cmp(&b.last_activity_date);
+    let with_id = || sessions.iter().filter(|s| s.id.is_some());
+    let anchor = if player.app.is_some() {
+        with_id().filter(|s| player.matches(s.client.as_deref(), s.device_name.as_deref())).max_by(newest)
+    } else {
+        // A session record can keep a finished track, so "not paused" is required as well.
+        with_id()
+            .filter(|s| s.now_playing_item.as_ref().is_some_and(|i| i.media_type.as_deref().is_some_and(|m| m.eq_ignore_ascii_case("Audio"))))
+            .filter(|s| s.play_state.as_ref().and_then(|p| p.is_paused) == Some(false))
+            .max_by(newest)
+    };
+    let Some(anchor) = anchor else { return Vec::new() };
+    let same_app = |s: &&Session| matches!((&s.client, &anchor.client), (Some(a), Some(b)) if loose(a) == loose(b));
+    let same_device =
+        |s: &&Session| matches!((&s.device_name, &anchor.device_name), (Some(a), Some(b)) if a.trim().eq_ignore_ascii_case(b.trim()));
+    with_id().filter(same_app).filter(same_device).collect()
 }
 
 /// "Any player", then per app (most recently seen first) the app on any device and on each device it was seen on.
@@ -327,18 +343,30 @@ impl Source for JellyfinSource {
     fn play_album<'a>(&'a self, album_id: &'a str) -> Fut<'a, String> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;
-            let Some(target) = cast_target(&sessions, &self.player) else {
+            let targets = cast_targets(&sessions, &self.player);
+            let Some(first) = targets.first() else {
                 if self.player.app.is_some() {
-                    bail!("{} is not open, or cannot be controlled remotely", self.player.value().replace(SEP, " on "));
+                    bail!("{} is not open", self.player.value().replace(SEP, " on "));
                 }
                 bail!("no player is playing music; choose a player in Settings");
             };
+            let label = [first.client.as_deref(), first.device_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" on ");
             let tracks = self.jf.album_track_ids(album_id).await?;
             if tracks.is_empty() {
                 bail!("that album has no tracks");
             }
-            self.jf.play_now(target.id.as_deref().unwrap_or_default(), &tracks).await?;
-            Ok([target.client.as_deref(), target.device_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" on "))
+            let mut last_error = None;
+            let mut sent = 0;
+            for t in &targets {
+                match self.jf.play_now(t.id.as_deref().unwrap_or_default(), &tracks).await {
+                    Ok(()) => sent += 1,
+                    Err(e) => last_error = Some(e),
+                }
+            }
+            match (sent, last_error) {
+                (0, Some(e)) => Err(e),
+                _ => Ok(label),
+            }
         })
     }
 
@@ -376,33 +404,54 @@ mod tests {
         serde_json::from_str(&format!(r#"{{"Client":"{client}","DeviceName":"{device}","NowPlayingItem":{item}}}"#)).unwrap()
     }
 
-    fn remote(client: &str, device: &str, id: &str, controllable: bool, playing: Option<&str>) -> Session {
+    fn remote(client: &str, device: &str, id: &str, commands: bool, playing: Option<&str>, last: &str) -> Session {
         let mut s = session(client, device, playing);
         s.id = Some(id.into());
-        s.supports_remote_control = Some(controllable);
+        s.supports_remote_control = Some(false);
+        s.supported_commands = Some(if commands { vec!["PlayState".into()] } else { vec![] });
+        s.play_state = playing.map(|_| crate::jellyfin::PlayState { position_ticks: Some(0), is_paused: Some(false) });
+        s.last_activity_date = Some(last.into());
         s
     }
 
-    #[test]
-    fn music_is_cast_to_the_chosen_player_only() {
-        let sessions = vec![
-            remote("Finamp", "motorola", "phone", true, Some("x")),
-            remote("Finamp", "Lenovo Tab", "tab", true, None),
-            remote("Jellyfin Web", "Edge", "web", false, Some("y")),
-        ];
-        let target = |p: &str| cast_target(&sessions, &Player::parse(p)).and_then(|s| s.id.clone());
-        assert_eq!(target("Finamp::Lenovo Tab").as_deref(), Some("tab"), "the chosen one, even when idle");
-        assert_eq!(target("Finamp").as_deref(), Some("phone"), "the app on any device");
-        assert_eq!(target("Jellyfin Web"), None, "not remotely controllable");
-        assert_eq!(target("Kodi"), None, "not open: no guess");
+    fn ids(v: Vec<&Session>) -> Vec<String> {
+        let mut out: Vec<String> = v.into_iter().filter_map(|s| s.id.clone()).collect();
+        out.sort();
+        out
+    }
+
+    /// Finamp 1.0.x on the tablet, as observed: a reporting session with commands and a "Play On" one without.
+    fn tablet() -> Vec<Session> {
+        vec![
+            remote("Finamp", "Lenovo Tab", "report", true, Some("x"), "2026-10-12T16:49:00Z"),
+            remote("Finamp", "Lenovo Tab", "playon", false, None, "2026-10-12T15:25:00Z"),
+        ]
     }
 
     #[test]
-    fn with_no_player_chosen_music_goes_to_the_one_playing() {
-        let sessions = vec![remote("Finamp", "Lenovo Tab", "tab", true, None), remote("Finamp", "motorola", "phone", true, Some("x"))];
-        assert_eq!(cast_target(&sessions, &Player::default()).and_then(|s| s.id.clone()).as_deref(), Some("phone"));
-        let idle = vec![remote("Finamp", "Lenovo Tab", "tab", true, None)];
-        assert!(cast_target(&idle, &Player::default()).is_none(), "nothing playing and nothing chosen: no guess");
+    fn music_goes_to_every_session_of_the_chosen_device() {
+        let mut sessions = tablet();
+        sessions.push(remote("Finamp", "motorola", "phone", true, Some("y"), "2026-10-12T16:50:00Z"));
+        sessions.push(remote("Jellyfin Web", "Edge", "web", true, None, "2026-10-12T16:51:00Z"));
+        assert_eq!(ids(cast_targets(&sessions, &Player::parse("Finamp::Lenovo Tab"))), ["playon", "report"]);
+        assert_eq!(ids(cast_targets(&sessions, &Player::parse("Finamp"))), ["phone"], "app only: its most recent device, never two devices");
+        assert!(cast_targets(&sessions, &Player::parse("Kodi")).is_empty(), "not open: no guess");
+    }
+
+    #[test]
+    fn with_no_player_chosen_music_goes_to_the_device_playing_now() {
+        let mut sessions = tablet();
+        sessions.push(remote("Finamp", "motorola", "phone", true, None, "2026-10-12T16:55:00Z"));
+        assert_eq!(ids(cast_targets(&sessions, &Player::default())), ["playon", "report"]);
+        let idle = vec![remote("Finamp", "Lenovo Tab", "playon", false, None, "2026-10-12T15:25:00Z")];
+        assert!(cast_targets(&idle, &Player::default()).is_empty(), "nothing playing and nothing chosen: no guess");
+    }
+
+    #[test]
+    fn a_paused_or_finished_track_does_not_count_as_playing() {
+        let mut paused = remote("Finamp", "motorola", "phone", true, Some("x"), "2026-10-12T16:00:00Z");
+        paused.play_state = Some(crate::jellyfin::PlayState { position_ticks: Some(0), is_paused: Some(true) });
+        assert!(cast_targets(&[paused], &Player::default()).is_empty());
     }
 
     #[test]

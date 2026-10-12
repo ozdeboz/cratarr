@@ -50,14 +50,25 @@
     };
   });
 
+  // The server keeps the list and reads it again every few minutes; looking again each minute picks that up.
   $effect(() => {
     const want = prefs.source || undefined;
-    getIncoming(want)
-      .then((r) => {
-        sources = r.sources;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function load() {
+      try {
+        sources = (await getIncoming(want)).sources;
         error = null;
-      })
-      .catch((e) => (error = e instanceof ApiError ? e.message : 'Unexpected error'));
+      } catch (e) {
+        if (!sources) error = e instanceof ApiError ? e.message : 'Unexpected error';
+      }
+      if (!stopped) timer = setTimeout(load, 60_000);
+    }
+    load();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
   });
 
   const lossless = (a: IncomingAlbum) => a.format === 'FLAC';

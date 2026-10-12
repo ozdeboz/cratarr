@@ -244,6 +244,8 @@ export type IncomingSource = {
   supported: boolean;
   albums: IncomingAlbum[];
   error: string | null;
+  /** When the server read this list from the source, epoch seconds. */
+  as_of: number;
 };
 
 export const getIncoming = (source?: string) => request<{ sources: IncomingSource[] }>(`/api/incoming${follow(source)}`);

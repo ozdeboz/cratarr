@@ -1,7 +1,8 @@
 // Cratarr service worker: makes the app installable and lets the shell open without the server. Everything under
-// /api/ is live data and always goes to the network. The shell is network-first (a new build shows up at once);
+// /api/ is live data and always goes to the network, except the incoming list: it changes slowly and is large, so
+// the last copy is shown at once while a fresh one is fetched (stale-while-revalidate). The shell is network-first (a new build shows up at once);
 // Vite's fingerprinted assets and the icons never change, so they are cache-first.
-const CACHE = 'cratarr-v1';
+const CACHE = 'cratarr-v2';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/', '/manifest.webmanifest'])));
@@ -28,7 +29,15 @@ const put = (key, response) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
-  if (req.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+  if (req.method !== 'GET' || url.origin !== self.location.origin) return;
+
+  if (url.pathname === '/api/incoming') {
+    const fresh = fetch(req).then((r) => put(req, r));
+    event.waitUntil(fresh.catch(() => {}));
+    event.respondWith(caches.match(req).then((hit) => hit || fresh));
+    return;
+  }
+  if (url.pathname.startsWith('/api/')) return;
 
   if (req.mode === 'navigate') {
     // Hash routes all load "/", so one cached shell serves every page.

@@ -86,6 +86,17 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Incoming lists are slow to read (seconds per source), so they are kept and read again in the background: at
+    // start, then every few minutes.
+    let reader = app.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(180));
+        loop {
+            tick.tick().await;
+            reader.refresh_incoming().await;
+        }
+    });
+
     let listener = tokio::net::TcpListener::bind(&bind).await.with_context(|| format!("cannot bind {bind}"))?;
     tracing::info!("listening on {bind}");
     axum::serve(listener, api::router(app))

@@ -17,6 +17,10 @@ pub struct ItemsPage<T> {
 pub struct Session {
     pub id: Option<String>,
     pub supports_remote_control: Option<bool>,
+    /// Remote commands the client says it takes. Finamp reports `SupportsRemoteControl: false` yet lists commands
+    /// here and does play what it is sent (observed on 10.11), so a non-empty list counts as controllable too.
+    pub supported_commands: Option<Vec<String>>,
+    pub last_activity_date: Option<String>,
     pub client: Option<String>,
     pub device_name: Option<String>,
     pub now_playing_item: Option<PlayingItem>,
@@ -529,6 +533,8 @@ mod tests {
         Session {
             id: None,
             supports_remote_control: None,
+            supported_commands: None,
+            last_activity_date: None,
             client: Some(client.into()),
             device_name: None,
             now_playing_item: Some(PlayingItem {
@@ -559,7 +565,7 @@ mod tests {
 
     #[test]
     fn nothing_playing_gives_none() {
-        let s = vec![Session { id: None, supports_remote_control: None, client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
+        let s = vec![Session { id: None, supports_remote_control: None, supported_commands: None, last_activity_date: None, client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
         assert!(pick_now_playing(&s, finamp).is_none());
         assert!(pick_now_playing(&[], finamp).is_none());
     }
