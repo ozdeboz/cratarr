@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 
 use super::ToggleError;
 use super::library::{Active, Library, epoch_now, label_of};
+use crate::ports::{Acquisition, Files};
 use crate::settings;
 use crate::source::{self, Source};
 
@@ -151,6 +152,7 @@ pub(super) fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> LidarrPair {
 
 pub struct IncomingService {
     lib: Arc<Library>,
+    files: Arc<dyn Files>,
     /// Incoming lists by source and library (see `refresh`).
     cache: Mutex<std::collections::HashMap<String, IncomingSourceView>>,
     /// See `Owned`; `None` until first needed, and after settings change.
@@ -168,9 +170,10 @@ pub struct IncomingService {
 }
 
 impl IncomingService {
-    pub(super) fn new(lib: Arc<Library>, lidarr: Option<settings::LidarrConfig>, trash_days: u32) -> Self {
+    pub(super) fn new(lib: Arc<Library>, files: Arc<dyn Files>, lidarr: Option<settings::LidarrConfig>, trash_days: u32) -> Self {
         Self {
             lib,
+            files,
             cache: Mutex::new(std::collections::HashMap::new()),
             owned: Mutex::new(None),
             lidarr: std::sync::RwLock::new(lidarr_pair(lidarr)),
@@ -181,9 +184,10 @@ impl IncomingService {
         }
     }
 
-    /// The Lidarr connection, when one is set.
-    fn lidarr(&self) -> Option<crate::lidarr::Lidarr> {
-        self.lidarr.read().unwrap_or_else(|p| p.into_inner()).1.clone()
+    /// Where new music comes from (the saved Lidarr), when one is set.
+    fn acquisition(&self) -> Option<Arc<dyn Acquisition>> {
+        let client = self.lidarr.read().unwrap_or_else(|p| p.into_inner()).1.clone();
+        client.map(|l| Arc::new(l) as Arc<dyn Acquisition>)
     }
 
     /// The saved Lidarr connection and its client.
@@ -272,8 +276,8 @@ impl IncomingService {
         {
             return ok;
         }
-        let f = folder.to_path_buf();
-        let ok = tokio::task::spawn_blocking(move || crate::mounts::writable(&f)).await.unwrap_or(false);
+        let (f, files) = (folder.to_path_buf(), self.files.clone());
+        let ok = tokio::task::spawn_blocking(move || files.can_write(&f)).await.unwrap_or(false);
         self.writable.lock().await.insert(folder.to_path_buf(), (now, ok));
         ok
     }
@@ -371,14 +375,14 @@ impl IncomingService {
             .get(dir.folder as usize)
             .cloned()
             .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
-        let (f, rel, now) = (folder.clone(), dir.dir.clone(), epoch_now());
-        let token = tokio::task::spawn_blocking(move || crate::trash::trash(&f, &rel, now))
+        let (f, rel, now, files) = (folder.clone(), dir.dir.clone(), epoch_now(), self.files.clone());
+        let token = tokio::task::spawn_blocking(move || files.trash(&f, &rel, now))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         // Best effort: the album is in the trash either way; a Lidarr failure only means it may come back.
-        let lidarr_ids = match (self.lidarr(), dir.release_group.as_deref()) {
-            (Some(l), Some(rg)) => l.unmonitor(rg).await.unwrap_or_else(|e| {
+        let lidarr_ids = match (self.acquisition(), dir.release_group.as_deref()) {
+            (Some(l), Some(rg)) => l.stop_fetching(rg).await.unwrap_or_else(|e| {
                 tracing::warn!("Lidarr: could not stop fetching {}: {e:#}", album.title);
                 Vec::new()
             }),
@@ -409,13 +413,13 @@ impl IncomingService {
             .get(d.folder as usize)
             .cloned()
             .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
-        let token = d.token.clone();
-        tokio::task::spawn_blocking(move || crate::trash::restore(&folder, &token))
+        let (token, files) = (d.token.clone(), self.files.clone());
+        tokio::task::spawn_blocking(move || files.restore(&folder, &token))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        if let Some(l) = self.lidarr() {
-            if let Err(e) = l.monitor(&d.lidarr_ids).await {
+        if let Some(l) = self.acquisition() {
+            if let Err(e) = l.resume(&d.lidarr_ids).await {
                 tracing::warn!("Lidarr: could not restore monitoring of {}: {e:#}", d.title);
             }
         }
@@ -428,9 +432,9 @@ impl IncomingService {
     /// Empty Incoming trash older than the trash days set in Settings.
     pub(super) async fn purge_trash(&self) {
         let folders: Vec<std::path::PathBuf> = self.lib.catalogue().folders().into_iter().skip(1).collect();
-        let (now, keep) = (epoch_now(), self.trash_days());
+        let (now, keep, files) = (epoch_now(), self.trash_days(), self.files.clone());
         let gone = tokio::task::spawn_blocking(move || {
-            folders.iter().map(|f| crate::trash::purge(f, now, keep).unwrap_or_else(|e| {
+            folders.iter().map(|f| files.purge(f, now, keep).unwrap_or_else(|e| {
                 tracing::warn!("emptying the trash in {}: {e:#}", f.display());
                 0
             })).sum::<usize>()

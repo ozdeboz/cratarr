@@ -65,10 +65,12 @@ impl App {
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
         let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules).await?;
         let playlists = Arc::new(PlaylistService::new(library.clone()));
-        let incoming = Arc::new(IncomingService::new(library.clone(), saved.lidarr, saved.trash_days));
+        let files = crate::ports::disk();
+        let incoming = Arc::new(IncomingService::new(library.clone(), files.clone(), saved.lidarr, saved.trash_days));
         let playing = PlayingService::new(library.clone(), playlists.clone());
         let settings = SettingsService::new(
             library.clone(),
+            files,
             playlists.clone(),
             incoming.clone(),
             cfg.bind,

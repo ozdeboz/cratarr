@@ -13,6 +13,7 @@ mod m3u;
 mod mounts;
 mod nowplaying;
 mod placement;
+mod ports;
 mod playlists;
 mod settings;
 mod source;

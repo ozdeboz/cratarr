@@ -13,6 +13,7 @@ use super::library::{Active, Library, derive_folders, epoch_now, label_of};
 use super::playlists::PlaylistService;
 use super::{ToggleError, VERSION};
 use crate::placement;
+use crate::ports::Files;
 use crate::settings::{self, Origin, SourceConfig};
 use crate::source::{self, Choice, Field, Source, Status};
 
@@ -73,6 +74,7 @@ pub struct SettingsView {
 
 pub struct SettingsService {
     lib: Arc<Library>,
+    files: Arc<dyn Files>,
     playlists: Arc<PlaylistService>,
     incoming: Arc<IncomingService>,
     origin: std::sync::RwLock<Origin>,
@@ -84,6 +86,7 @@ pub struct SettingsService {
 impl SettingsService {
     pub(super) fn new(
         lib: Arc<Library>,
+        files: Arc<dyn Files>,
         playlists: Arc<PlaylistService>,
         incoming: Arc<IncomingService>,
         bind: String,
@@ -92,6 +95,7 @@ impl SettingsService {
     ) -> Self {
         Self {
             lib,
+            files,
             playlists,
             incoming,
             origin: std::sync::RwLock::new(origin),
@@ -134,10 +138,11 @@ impl SettingsService {
         }
         match placed {
             Ok(p) => {
+                let files = self.files.clone();
                 view.server_libraries = tokio::task::spawn_blocking(move || {
                     let mut libs = p.libraries;
                     for l in &mut libs {
-                        l.read_only = !l.folders.is_empty() && !l.folders.iter().all(|f| crate::mounts::writable(std::path::Path::new(f)));
+                        l.read_only = !l.folders.is_empty() && !l.folders.iter().all(|f| files.can_write(std::path::Path::new(f)));
                     }
                     libs
                 })
