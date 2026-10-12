@@ -136,6 +136,9 @@ fn describe_same(new: &AlbumFacts, old: &AlbumFacts) -> String {
         Quality::Unknown => "unknown quality".to_string(),
     };
     let tracks = if new.tracks != old.tracks { format!(", {} tracks against your {}", new.tracks, old.tracks) } else { String::new() };
+    if new.quality == old.quality {
+        return format!("{}, same as yours{tracks}", q(new.quality));
+    }
     format!("{}, yours is {}{tracks}", q(new.quality), q(old.quality))
 }
 
@@ -164,7 +167,7 @@ mod tests {
     #[test]
     fn the_same_quality_again_is_a_duplicate() {
         let v = classify(&album("9 Lazy 9", "Paradise Blown", None, 17, Quality::Lossless), &library());
-        assert!(matches!(v, Verdict::Duplicate { library: 1, .. }), "{v:?}");
+        assert_eq!(v, Verdict::Duplicate { library: 1, why: "lossless, same as yours".into() });
         let mp3 = classify(&album("AIR", "Moon Safari", Some("rg-moon"), 10, Quality::Lossy { kbps: 321 }), &library());
         assert!(matches!(mp3, Verdict::Duplicate { library: 0, .. }), "321 against 320 is no upgrade: {mp3:?}");
     }
