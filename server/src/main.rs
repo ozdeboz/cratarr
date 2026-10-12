@@ -3,6 +3,7 @@ mod api;
 mod app;
 mod catalogue;
 mod config;
+mod convert;
 mod covers;
 mod incoming;
 mod insights;
