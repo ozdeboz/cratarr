@@ -256,6 +256,11 @@ pub struct Store {
     write: Mutex<()>,
 }
 
+/// Backup copies kept next to the playlists ("Love.bak.m3u") are not playlists: they are left alone, unlisted.
+fn is_backup_copy(id: &str) -> bool {
+    id.to_lowercase().ends_with(".bak")
+}
+
 /// A playlist id is its file name without `.m3u`; it must never be able to point outside the folder.
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() < 200 && !id.starts_with('.') && !id.contains(['/', '\\', '\0'])
@@ -268,6 +273,7 @@ fn valid_new_name(name: &str) -> bool {
         && name.len() <= 100
         && name == name.trim()
         && !name.ends_with('.')
+        && !is_backup_copy(name)
         && !name.chars().any(|c| c.is_control() || ":*?\"<>|".contains(c))
 }
 
@@ -280,7 +286,7 @@ impl Store {
         self.dir.join(format!("{id}.m3u"))
     }
 
-    /// `(id, path, stamp)` for every visible `.m3u` file directly in the folder.
+    /// `(id, path, stamp)` for every visible `.m3u` file directly in the folder, backup copies left out.
     async fn list(&self) -> Result<Vec<(String, PathBuf, (SystemTime, u64))>> {
         let mut rd = tokio::fs::read_dir(&self.dir)
             .await
@@ -297,6 +303,9 @@ impl Store {
                 continue;
             }
             let id = name[..name.len() - 4].to_string();
+            if is_backup_copy(&id) {
+                continue;
+            }
             out.push((id, e.path(), (meta.modified().unwrap_or(UNIX_EPOCH), meta.len())));
         }
         Ok(out)
@@ -756,6 +765,7 @@ mod tests {
         d.write("Analogic.m3u", "B/2.mp3\n");
         d.write("notes.txt", "A/1.mp3\n");
         d.write(".hidden.m3u", "A/1.mp3\n");
+        d.write("Love.bak.m3u", "A/1.mp3\n");
         std::fs::create_dir(d.0.join("Some Album (2020)")).unwrap();
         let v = d.store().view(Some("A/1.mp3")).await.unwrap();
         assert_eq!(

@@ -2,6 +2,7 @@
   import { ApiError, getInsights, type Count, type Insights, type Signal } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import ProximityGraph from './lib/ProximityGraph.svelte';
+  import { key, rankers, weigh } from './lib/proximity';
 
   let data = $state<Insights | null>(null);
   let error = $state<string | null>(null);
@@ -31,13 +32,14 @@
   const pct = (part: number, whole: number) => (whole ? `${Math.round((100 * part) / whole)}%` : '0%');
   const widest = (rows: Count[]) => Math.max(1, ...rows.map((r) => r.n));
 
-  /** The selected playlist's closest playlists under the current signals, closest first, with what they share. */
+  /** The selected playlist's closest playlists under the current signals (scored as the graph does), with what they share. */
+  const rank = $derived(data ? rankers(data.proximity) : null);
+  const weights = $derived(data && rank ? weigh(data.proximity, rank, prefs.signals) : new Map<string, number>());
   const closest = $derived.by(() => {
     if (!data || selected === null) return [];
-    const on = SIGNALS.filter((s) => prefs.signals[s.id]).map((s) => s.id);
     return data.proximity.links
       .filter((l) => l.a === selected || l.b === selected)
-      .map((l) => ({ l, other: l.a === selected ? l.b : l.a, w: on.length ? on.reduce((s, k) => s + l[k], 0) / on.length : 0 }))
+      .map((l) => ({ l, other: l.a === selected ? l.b : l.a, w: weights.get(key(l.a, l.b)) ?? 0 }))
       .filter((x) => x.w > 0)
       .sort((a, b) => b.w - a.w)
       .slice(0, 8);
