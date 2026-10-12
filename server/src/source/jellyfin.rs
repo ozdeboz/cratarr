@@ -97,6 +97,12 @@ fn loose(app: &str) -> String {
         .collect()
 }
 
+/// A playlist imported from an `.m3u` file in a library (its path is that file), as opposed to one Jellyfin keeps
+/// itself (in its data folder, as `playlist.xml`).
+fn own_playlist_is_imported(path: Option<&str>) -> bool {
+    path.is_some_and(|p| p.to_lowercase().ends_with(".m3u") || p.to_lowercase().ends_with(".m3u8"))
+}
+
 /// A session that has not been active for this long is idle: its record may still show a track that stopped long
 /// ago, so it is not believed (an open Finamp is active every few seconds, playing or paused).
 const IDLE_SECS: i64 = 300;
@@ -308,6 +314,39 @@ impl Source for JellyfinSource {
 
     fn sample_paths<'a>(&'a self, library_id: &'a str, n: usize) -> Fut<'a, Vec<String>> {
         Box::pin(self.jf.sample_paths(library_id, n))
+    }
+
+    fn users(&self) -> Fut<'_, Vec<Choice>> {
+        Box::pin(async move { Ok(self.jf.users().await?.into_iter().map(|(id, name)| Choice { value: id, label: name }).collect()) })
+    }
+
+    fn own_playlists<'a>(&'a self, user: &'a str) -> Fut<'a, Vec<super::OwnPlaylist>> {
+        Box::pin(async move {
+            Ok(self
+                .jf
+                .user_playlists(user)
+                .await?
+                .into_iter()
+                .filter(|p| !own_playlist_is_imported(p.path.as_deref()))
+                .map(|p| super::OwnPlaylist { id: p.id, name: p.name, stamp: p.etag })
+                .collect())
+        })
+    }
+
+    fn playlist_tracks<'a>(&'a self, user: &'a str, playlist: &'a str) -> Fut<'a, Vec<String>> {
+        Box::pin(self.jf.playlist_entries(user, playlist))
+    }
+
+    fn create_playlist<'a>(&'a self, user: &'a str, name: &'a str, ids: &'a [String]) -> Fut<'a, String> {
+        Box::pin(self.jf.create_playlist(user, name, ids))
+    }
+
+    fn set_playlist<'a>(&'a self, playlist: &'a str, name: Option<&'a str>, ids: Option<&'a [String]>) -> Fut<'a, ()> {
+        Box::pin(self.jf.update_playlist(playlist, name, ids))
+    }
+
+    fn delete_playlist<'a>(&'a self, playlist: &'a str) -> Fut<'a, ()> {
+        Box::pin(self.jf.delete_item(playlist))
     }
 
     fn library_roots<'a>(&'a self, library_id: &'a str) -> Fut<'a, Vec<String>> {
@@ -665,6 +704,19 @@ mod tests {
 
     fn chosen(playing: &[Started], sessions: &[Session], p: &str) -> Option<String> {
         choose(playing, sessions, &Player::parse(p), NOW).map(|s| s.item_id)
+    }
+
+    #[test]
+    fn imported_m3u_playlists_are_not_the_users_own() {
+        assert!(own_playlist_is_imported(Some("/data/media/Music/Chill.m3u")));
+        assert!(!own_playlist_is_imported(Some("/config/data/playlists/Chill/playlist.xml")));
+        assert!(!own_playlist_is_imported(None));
+        let listed: Vec<crate::jellyfin::UserPlaylist> = serde_json::from_str(
+            r#"[{"Name":"Chill","Id":"a","Etag":"e1","Path":"/data/media/Music/Chill.m3u"},{"Name":"Mine","Id":"b","Etag":"e2","Path":"/config/data/playlists/Mine/playlist.xml"}]"#,
+        )
+        .unwrap();
+        let own: Vec<&str> = listed.iter().filter(|p| !own_playlist_is_imported(p.path.as_deref())).map(|p| p.name.as_str()).collect();
+        assert_eq!(own, ["Mine"]);
     }
 
     #[test]

@@ -142,6 +142,15 @@ pub struct Album {
     pub tags: Vec<String>,
 }
 
+/// One of a user's own playlists on the server (decision 0012).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnPlaylist {
+    pub id: String,
+    pub name: String,
+    /// Changes whenever the server saves the playlist; compared to notice edits made elsewhere.
+    pub stamp: Option<String>,
+}
+
 /// How tracks are sent to a player (decision 0006).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayHow {
@@ -229,6 +238,36 @@ pub trait Source: Send + Sync {
     /// the listing to tracks the server changed after then; `None` lists them all.
     fn track_paths<'a>(&'a self, _library_id: &'a str, _since: Option<i64>, _start: usize, _limit: usize) -> Fut<'a, TrackPage> {
         Box::pin(async { Ok(TrackPage::default()) })
+    }
+
+    /// Optional (decision 0012): the server's accounts, for choosing whose playlists Cratarr keeps.
+    fn users(&self) -> Fut<'_, Vec<Choice>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Optional (decision 0012): a user's own playlists (not ones imported from files), with their change stamps.
+    fn own_playlists<'a>(&'a self, _user: &'a str) -> Fut<'a, Vec<OwnPlaylist>> {
+        Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
+    }
+
+    /// Optional (decision 0012): a playlist's tracks (this source's ids), in order.
+    fn playlist_tracks<'a>(&'a self, _user: &'a str, _playlist: &'a str) -> Fut<'a, Vec<String>> {
+        Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
+    }
+
+    /// Optional (decision 0012): a new private playlist for `user` with these tracks. Returns its id.
+    fn create_playlist<'a>(&'a self, _user: &'a str, _name: &'a str, _ids: &'a [String]) -> Fut<'a, String> {
+        Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
+    }
+
+    /// Optional (decision 0012): rename a playlist and/or replace all its tracks.
+    fn set_playlist<'a>(&'a self, _playlist: &'a str, _name: Option<&'a str>, _ids: Option<&'a [String]>) -> Fut<'a, ()> {
+        Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
+    }
+
+    /// Optional (decision 0012): delete a playlist of the user's own.
+    fn delete_playlist<'a>(&'a self, _playlist: &'a str) -> Fut<'a, ()> {
+        Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
     }
 
     /// Optional: play tracks (this source's ids, in order) on the player it follows. Returns the player's label.

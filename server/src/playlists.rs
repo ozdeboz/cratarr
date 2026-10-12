@@ -412,6 +412,19 @@ impl Store {
         Ok(())
     }
 
+    /// Make the playlist exactly `entries`, in order (the playlist sync, decision 0012). Backed up like every edit.
+    /// Returns false when it already was.
+    pub async fn set_entries(&self, id: &str, entries: &[String]) -> Result<bool, StoreError> {
+        let _one_writer = self.write.lock().await;
+        let (path, perms, text) = self.load_for_edit(id).await?;
+        let new_text = m3u::with_entries(&text, entries);
+        if new_text == text {
+            return Ok(false);
+        }
+        self.commit(id, &path, perms, &new_text).await?;
+        Ok(true)
+    }
+
     /// Add `entry` to the playlist, or remove it if it is already there.
     pub async fn toggle(&self, id: &str, entry: &str) -> Result<Toggled, StoreError> {
         let _one_writer = self.write.lock().await;

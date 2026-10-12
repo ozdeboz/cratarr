@@ -74,6 +74,30 @@ pub fn with_deduped(content: &str) -> (String, usize) {
     (out, removed)
 }
 
+/// The playlist as exactly `entries`, in order: what comes before the first entry (a BOM, `#EXTM3U`, comments) and
+/// the file's line-ending style stay; comments between or after entries do not (Cratarr's files have none).
+pub fn with_entries(content: &str, entries: &[String]) -> String {
+    let eol = if content.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(content.len());
+    for line in content.split_inclusive('\n') {
+        if entry_of(line).is_some() {
+            break;
+        }
+        out.push_str(line);
+    }
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push_str(eol);
+    }
+    if out.is_empty() && content.starts_with('\u{feff}') {
+        out.push('\u{feff}');
+    }
+    for e in entries {
+        out.push_str(e);
+        out.push_str(eol);
+    }
+    out
+}
+
 /// Replace every line whose entry equals `from` with `to`, keeping the line's ending and a leading BOM.
 pub fn with_replaced(content: &str, from: &str, to: &str) -> (String, usize) {
     let mut replaced = 0;
@@ -96,6 +120,16 @@ pub fn with_replaced(content: &str, from: &str, to: &str) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_whole_list_keeps_the_header_line_endings_and_bom() {
+        let e = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(with_entries("a.mp3\nb.mp3\n", &e(&["b.mp3", "c.mp3"])), "b.mp3\nc.mp3\n");
+        assert_eq!(with_entries("#EXTM3U\r\na.mp3\r\n", &e(&["c.mp3"])), "#EXTM3U\r\nc.mp3\r\n");
+        assert_eq!(with_entries("\u{feff}a.mp3\n", &e(&["c.mp3"])), "\u{feff}c.mp3\n");
+        assert_eq!(with_entries("", &e(&["c.mp3"])), "c.mp3\n");
+        assert_eq!(with_entries("#EXTM3U\na.mp3\n", &[]), "#EXTM3U\n");
+    }
 
     #[test]
     fn deduping_keeps_the_first_copy_comments_and_endings() {

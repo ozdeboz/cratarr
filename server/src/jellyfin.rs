@@ -117,6 +117,24 @@ struct PathOnly {
     path: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct UserName {
+    id: String,
+    name: String,
+}
+
+/// A playlist as a user's listing shows it.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub struct UserPlaylist {
+    pub id: String,
+    pub name: String,
+    /// Changes when the playlist is saved.
+    pub etag: Option<String>,
+    pub path: Option<String>,
+}
+
 /// Where a session is in its track. Observed on 10.11 with Finamp: `PositionTicks` is current whenever it is read
 /// (it advanced 2 s per 2 s poll between the client's check-ins), so no extrapolation from report times is needed.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -297,6 +315,71 @@ impl Jellyfin {
             .find(|u| u.policy.as_ref().and_then(|p| p.is_administrator) == Some(true))
             .map(|u| u.id)
             .context("Jellyfin has no administrator account")
+    }
+
+    /// Every account: (id, name), for choosing whose playlists Cratarr keeps (decision 0012).
+    pub async fn users(&self) -> Result<Vec<(String, String)>> {
+        let users: Vec<UserName> = self.get("/Users").await?;
+        Ok(users.into_iter().map(|u| (u.id, u.name)).collect())
+    }
+
+    /// A user's playlists with the stamp that changes when one is saved. Includes `.m3u` playlists imported from a
+    /// library (their path is a file in it); the user's own have a path in Jellyfin's data folder.
+    pub async fn user_playlists(&self, user: &str) -> Result<Vec<UserPlaylist>> {
+        let page: ItemsPage<UserPlaylist> =
+            self.get(&format!("/Items?IncludeItemTypes=Playlist&Recursive=true&UserId={user}&Fields=Etag,Path")).await?;
+        Ok(page.items)
+    }
+
+    /// A playlist's track ids in order. Jellyfin answers this only with a user (observed on 10.11: 400 without).
+    pub async fn playlist_entries(&self, user: &str, playlist: &str) -> Result<Vec<String>> {
+        let page: ItemsPage<IdOnly> = self.get(&format!("/Playlists/{playlist}/Items?UserId={user}")).await?;
+        Ok(page.items.into_iter().map(|i| i.id).collect())
+    }
+
+    /// A new playlist owned by `user`, private (`IsPublic: false`), with these tracks. Returns its id. The ids travel
+    /// in the body, so any length fits.
+    pub async fn create_playlist(&self, user: &str, name: &str, ids: &[String]) -> Result<String> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Created {
+            id: String,
+        }
+        let body = serde_json::json!({ "Name": name, "Ids": ids, "UserId": user, "MediaType": "Audio", "IsPublic": false });
+        let created: Created = self.send_json(reqwest::Method::POST, "/Playlists", &body).await?.json().await.context("POST /Playlists: unexpected answer")?;
+        Ok(created.id)
+    }
+
+    /// Rename a playlist and/or replace all its tracks (in this order).
+    pub async fn update_playlist(&self, playlist: &str, name: Option<&str>, ids: Option<&[String]>) -> Result<()> {
+        let mut body = serde_json::Map::new();
+        if let Some(n) = name {
+            body.insert("Name".into(), n.into());
+        }
+        if let Some(ids) = ids {
+            body.insert("Ids".into(), serde_json::json!(ids));
+        }
+        self.send_json(reqwest::Method::POST, &format!("/Playlists/{playlist}"), &serde_json::Value::Object(body)).await?;
+        Ok(())
+    }
+
+    /// Delete an item (a playlist).
+    pub async fn delete_item(&self, id: &str) -> Result<()> {
+        let path = format!("/Items/{id}");
+        let status = self.http.delete(format!("{}{path}", self.base)).send().await.with_context(|| format!("DELETE {path}"))?.status();
+        if !status.is_success() {
+            bail!("DELETE {path} returned {status}");
+        }
+        Ok(())
+    }
+
+    async fn send_json(&self, method: reqwest::Method, path: &str, body: &serde_json::Value) -> Result<reqwest::Response> {
+        let resp = self.http.request(method.clone(), format!("{}{path}", self.base)).json(body).send().await.with_context(|| format!("{method} {path}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            bail!("{method} {path} returned {status}");
+        }
+        Ok(resp)
     }
 
     /// The id of the library (collection folder) an item is in, if any, as `user` sees it (see `admin_user`).
