@@ -5,6 +5,7 @@ mod catalogue;
 mod config;
 mod covers;
 mod incoming;
+mod insights;
 mod lidarr;
 mod trash;
 mod jellyfin;

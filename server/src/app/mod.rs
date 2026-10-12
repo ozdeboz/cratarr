@@ -5,10 +5,12 @@
 //! - `playing`: what plays, the controls, adding it to a playlist;
 //! - `playlists`: playlist files, edits, repairs, Play;
 //! - `incoming`: new music, verdicts, Delete and Undo, Lidarr;
+//! - `insights`: figures about the library and the playlists;
 //! - `settings`: the Settings page.
 
 mod error;
 mod incoming;
+mod insights;
 mod library;
 mod playing;
 mod playlists;
@@ -21,6 +23,7 @@ use serde::Serialize;
 
 pub use error::ToggleError;
 pub use incoming::{DeleteResult, IncomingService, IncomingView, LidarrView};
+pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{PlayingService, StateView};
 pub use playlists::{PlayMode, PlayResult, PlaylistService};
@@ -53,13 +56,14 @@ pub struct App {
     pub playing: PlayingService,
     pub playlists: Arc<PlaylistService>,
     pub incoming: Arc<IncomingService>,
+    pub insights: InsightsService,
     pub settings: SettingsService,
 }
 
 impl App {
     pub async fn new(cfg: Config, saved: Saved, origin: Origin) -> Result<Arc<Self>> {
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
-        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources).await?;
+        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules).await?;
         let playlists = Arc::new(PlaylistService::new(library.clone()));
         let incoming = Arc::new(IncomingService::new(library.clone(), saved.lidarr, saved.trash_days));
         let playing = PlayingService::new(library.clone(), playlists.clone());
@@ -70,9 +74,9 @@ impl App {
             cfg.bind,
             cfg.data_dir.as_deref(),
             origin,
-            saved.tag_rules,
         );
-        Ok(Arc::new(Self { library, playing, playlists, incoming, settings }))
+        let insights = InsightsService::new(library.clone());
+        Ok(Arc::new(Self { library, playing, playlists, incoming, insights, settings }))
     }
 
     /// For the navigation header.

@@ -122,11 +122,18 @@ pub struct Library {
     catalogue: Arc<Catalogue>,
     /// One change to the servers at a time, so two pages (or the background placement retry) cannot interleave.
     pub(super) changing: Mutex<()>,
+    /// How tag values are split when read (decision 0008); saved with the sources.
+    tag_rules: std::sync::RwLock<crate::catalogue::Rules>,
 }
 
 impl Library {
     /// `last_music`: where the Music libraries were last found (or CRATARR_PLAYLIST_DIR), used until a server answers.
-    pub(super) async fn new(data_dir: Option<String>, last_music: Option<String>, sources: Vec<SourceConfig>) -> Result<Arc<Self>> {
+    pub(super) async fn new(
+        data_dir: Option<String>,
+        last_music: Option<String>,
+        sources: Vec<SourceConfig>,
+        tag_rules: crate::catalogue::Rules,
+    ) -> Result<Arc<Self>> {
         let places = place_folders(data_dir.as_deref(), last_music.as_deref());
         let mut active = Vec::new();
         for s in sources {
@@ -152,7 +159,16 @@ impl Library {
             folders: std::sync::RwLock::new((folders, store)),
             catalogue,
             changing: Mutex::new(()),
+            tag_rules: std::sync::RwLock::new(tag_rules),
         }))
+    }
+
+    pub(super) fn tag_rules(&self) -> crate::catalogue::Rules {
+        self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    pub(super) fn set_tag_rules(&self, rules: crate::catalogue::Rules) {
+        *self.tag_rules.write().unwrap_or_else(|p| p.into_inner()) = rules;
     }
 
     pub fn catalogue(&self) -> Arc<Catalogue> {

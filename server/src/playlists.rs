@@ -512,23 +512,14 @@ impl Store {
         Ok(out)
     }
 
-    /// Playlists related through shared tracks, most similar first (for Insights).
-    #[allow(dead_code)] // wired up with the Insights page
-    pub async fn related(&self, min_shared: usize) -> Result<Vec<Related>> {
+    /// Every playlist's lines and missing-track count, by name (for Insights).
+    pub async fn snapshot(&self) -> Result<Vec<(String, Vec<String>, usize)>> {
         self.view(None).await?;
         let cache = self.cache.read().await;
-        let sets: Vec<(&str, &HashSet<String>)> = cache.iter().map(|(id, c)| (id.as_str(), &c.entries)).collect();
-        Ok(relate(&sets, min_shared))
-    }
-
-    /// Figures across all playlists (for Insights).
-    #[allow(dead_code)] // wired up with the Insights page
-    pub async fn stats(&self) -> Result<PlaylistStats> {
-        self.view(None).await?;
-        let cache = self.cache.read().await;
-        let all: Vec<(&str, &[String], usize)> =
-            cache.iter().map(|(id, c)| (id.as_str(), c.lines.as_slice(), c.dead.unwrap_or(0))).collect();
-        Ok(playlist_stats(&all))
+        let mut out: Vec<(String, Vec<String>, usize)> =
+            cache.iter().map(|(id, c)| (id.clone(), c.lines.clone(), c.dead.unwrap_or(0))).collect();
+        out.sort_by_key(|(id, _, _)| id.to_lowercase());
+        Ok(out)
     }
 
     pub async fn duplicates(&self) -> Result<Vec<DupGroup>> {

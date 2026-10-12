@@ -42,6 +42,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/incoming/play/{source}/{album}", post(play_incoming))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
+        .route("/api/insights", get(insights))
         .route("/api/settings/lidarr", post(preview_lidarr))
         .route("/api/catalogue", get(catalogue_status))
         .route("/api/catalogue/problems", get(catalogue_problems))
@@ -280,6 +281,10 @@ async fn preview_lidarr(
     Json(b): Json<crate::settings::LidarrConfig>,
 ) -> Result<Json<Option<crate::app::LidarrView>>, ApiError> {
     Ok(Json(app.settings.preview_lidarr(b).await?))
+}
+
+async fn insights(State(app): State<Arc<App>>) -> Result<Json<crate::insights::Insights>, ApiError> {
+    Ok(Json(app.insights.get().await.map(|r| (*r).clone()).map_err(ToggleError::from)?))
 }
 
 async fn preview(State(app): State<Arc<App>>, Json(b): Json<PreviewBody>) -> Result<Json<SourceView>, ApiError> {

@@ -79,8 +79,6 @@ pub struct SettingsService {
     bind: String,
     settings_path: Option<PathBuf>,
     started: i64,
-    /// Saved with the sources.
-    tag_rules: std::sync::RwLock<crate::catalogue::Rules>,
 }
 
 impl SettingsService {
@@ -91,7 +89,6 @@ impl SettingsService {
         bind: String,
         data_dir: Option<&str>,
         origin: Origin,
-        tag_rules: crate::catalogue::Rules,
     ) -> Self {
         Self {
             lib,
@@ -101,7 +98,6 @@ impl SettingsService {
             bind,
             settings_path: data_dir.map(|d| PathBuf::from(d).join("settings.json")),
             started: epoch_now(),
-            tag_rules: std::sync::RwLock::new(tag_rules),
         }
     }
 
@@ -172,7 +168,7 @@ impl SettingsService {
         }
         let origin = *self.origin.read().unwrap_or_else(|p| p.into_inner());
         // Read before the struct below: a lock guard must not live across its awaits.
-        let tag_rules = self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let tag_rules = self.lib.tag_rules();
         let music_folder = self.lib.music();
         let (lidarr_cfg, lidarr_client) = self.incoming.lidarr_state();
         let lidarr = IncomingService::lidarr_view(lidarr_cfg.as_ref(), lidarr_client).await;
@@ -238,7 +234,7 @@ impl SettingsService {
             let client = lidarr.1.as_ref().ok_or_else(|| ToggleError::BadSettings("Lidarr: the API key is not usable".into()))?;
             client.version().await.map_err(|e| ToggleError::BadSettings(format!("Lidarr at {}: {e:#}", cfg.url)))?;
         }
-        let old_rules = self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let old_rules = self.lib.tag_rules();
         let places = self.lib.place_folders();
         let tag_rules = tag_rules.unwrap_or(old_rules);
         let trash_days = trash_days.unwrap_or_else(|| self.incoming.trash_days());
@@ -289,7 +285,7 @@ impl SettingsService {
         tokio::task::spawn_blocking(move || settings::save(&path, &to_save))
             .await
             .map_err(|e| anyhow::anyhow!("saving settings: {e}"))??;
-        *self.tag_rules.write().unwrap_or_else(|p| p.into_inner()) = tag_rules;
+        self.lib.set_tag_rules(tag_rules);
         self.incoming.apply_settings(lidarr, trash_days);
         self.lib.switch_to(next).await?;
         // Servers may have changed: link their tracks again soon.
