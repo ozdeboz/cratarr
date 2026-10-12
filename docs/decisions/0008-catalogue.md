@@ -45,3 +45,20 @@ size and modification time once cached; the incoming folder (1,170 files) 0.15 s
   before release (an estimate goes in the release notes, not here).
 - The database is derived data: deleting it only costs a refill.
 - Playlists stay the source of truth (decision 0002); the catalogue never changes a playlist on its own.
+
+## As built (2026-10-12)
+
+- Measured on the reference install (24,187 files): the walk takes seconds; tags are read at about 2,100 files a
+  minute (about 12 minutes for a first fill) with about 37 MiB of memory and a few percent CPU. The database was
+  96 MB after the first fill.
+- Tag values are split on read, never in the files. The rules are one set for now (Settings → Libraries → Tag
+  splitting): artist fields on "/" and ";" (not "&", "," or "feat.", which are credits), genres also on ",", with
+  never-split lists, ID3v1 genre codes as names and case-insensitive repeats dropped. The settings file can carry
+  rules per library later; nothing needs one yet.
+- Files with problems are classified rather than skipped: *broken* (not readable as audio), *damaged tag* (one
+  field unreadable and left out, the rest read), *no tags*, *no length*. They are listed on Repairs. lofty 0.25
+  rejects a whole MP3 for some malformed frames in every parsing mode (seen: TIPL with an invalid UTF-16
+  byte-order mark, 175 files); a small tolerant ID3v2 text reader then reads the other fields. Files that failed
+  with an older reader are read again when the reader improves.
+- Each server's ids are linked by a paged listing (500 per page, about 5 s each on Jellyfin 10.11 under load): in
+  full once a day, otherwise only tracks the server saved since the last pass.

@@ -47,6 +47,15 @@ with no plugin-specific UI code.
 
 See [decision 0005](docs/decisions/0005-pluggable-sources.md).
 
+## Catalogue
+
+Cratarr keeps its own index of every audio file in the playlist folder (and any extra folders set in Settings →
+Libraries): path, size, tags as stored, and each server's id for it. It fills itself in the background (a first
+fill of about 24,000 files takes some 12 minutes) and then follows changes every few minutes. It is derived data
+in `CRATARR_DATA_DIR/catalogue.sqlite`; deleting it only costs a refill. Tags are split on read by editable rules,
+never rewritten in the files, and files that cannot be read properly are listed on the Repairs page. See
+[decision 0008](docs/decisions/0008-catalogue.md).
+
 ## Album cover
 
 The page header shows the cover of the playing track's album, small, next to the title. `GET /api/cover/{source}/{item_id}`
