@@ -1,9 +1,11 @@
 <script lang="ts">
   import Playlists from './Playlists.svelte';
   import Repairs from './Repairs.svelte';
+  import Manage from './Manage.svelte';
 
-  const fromHash = () => (location.hash === '#/repairs' ? 'repairs' : 'playlists');
-  let page = $state<'playlists' | 'repairs'>(fromHash());
+  type Page = 'playlists' | 'repairs' | 'manage';
+  const fromHash = (): Page => (location.hash === '#/repairs' ? 'repairs' : location.hash === '#/manage' ? 'manage' : 'playlists');
+  let page = $state<Page>(fromHash());
 
   $effect(() => {
     const on = () => (page = fromHash());
@@ -15,10 +17,13 @@
 <nav aria-label="Pages">
   <a href="#/" aria-current={page === 'playlists' ? 'page' : undefined}>Playlists</a>
   <a href="#/repairs" aria-current={page === 'repairs' ? 'page' : undefined}>Repairs</a>
+  <a href="#/manage" aria-current={page === 'manage' ? 'page' : undefined}>Manage</a>
 </nav>
 
 {#if page === 'repairs'}
   <Repairs />
+{:else if page === 'manage'}
+  <Manage />
 {:else}
   <Playlists />
 {/if}

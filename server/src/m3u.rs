@@ -58,6 +58,22 @@ pub fn with_removed(content: &str, entry: &str) -> (String, usize) {
     (out, removed)
 }
 
+/// Keep the first occurrence of every entry and drop the later copies; comments and blank lines stay.
+pub fn with_deduped(content: &str) -> (String, usize) {
+    let mut seen = std::collections::HashSet::new();
+    let mut removed = 0;
+    let mut out = String::with_capacity(content.len());
+    for line in content.split_inclusive('\n') {
+        let repeated = entry_of(line).is_some_and(|e| !seen.insert(e));
+        if repeated {
+            removed += 1;
+        } else {
+            out.push_str(line);
+        }
+    }
+    (out, removed)
+}
+
 /// Replace every line whose entry equals `from` with `to`, keeping the line's ending and a leading BOM.
 pub fn with_replaced(content: &str, from: &str, to: &str) -> (String, usize) {
     let mut replaced = 0;
@@ -80,6 +96,15 @@ pub fn with_replaced(content: &str, from: &str, to: &str) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deduping_keeps_the_first_copy_comments_and_endings() {
+        let c = "#c\nA/1.mp3\r\nB/2.mp3\nA\\1.mp3\n\nB/2.mp3";
+        let (out, n) = with_deduped(c);
+        assert_eq!(n, 2, "the backslash copy of A/1.mp3 and the second B/2.mp3");
+        assert_eq!(out, "#c\nA/1.mp3\r\nB/2.mp3\n\n");
+        assert_eq!(with_deduped("A/1.mp3\n"), ("A/1.mp3\n".to_string(), 0));
+    }
 
     #[test]
     fn replacing_keeps_everything_else_and_the_line_endings() {

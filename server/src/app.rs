@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::jellyfin::{Jellyfin, PlayingItem, pick_now_playing};
 use crate::m3u::library_entry;
 use crate::nowplaying::{current_from_activity, has_audio_history};
-use crate::playlists::{PlaylistView, Repair, Repairs, Store, StoreError};
+use crate::playlists::{DupGroup, PlaylistView, Repair, Repairs, Store, StoreError};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct NowPlayingView {
@@ -41,6 +41,10 @@ pub enum ToggleError {
     NotOffered,
     #[error("there is no earlier version to go back to")]
     NothingToUndo,
+    #[error("a playlist with that name already exists")]
+    Exists,
+    #[error("that is not a usable playlist name")]
+    BadName,
     #[error("{0:#}")]
     Upstream(#[from] anyhow::Error),
 }
@@ -51,6 +55,8 @@ impl From<StoreError> for ToggleError {
             StoreError::Unknown => ToggleError::UnknownPlaylist,
             StoreError::NotOffered => ToggleError::NotOffered,
             StoreError::NothingToUndo => ToggleError::NothingToUndo,
+            StoreError::Exists => ToggleError::Exists,
+            StoreError::BadName => ToggleError::BadName,
             StoreError::Io(e) => ToggleError::Upstream(e),
         }
     }
@@ -110,6 +116,55 @@ impl App {
         let n = done.len();
         self.refresh_in_jellyfin(done);
         Ok(n)
+    }
+
+    pub async fn duplicates(&self) -> Result<Vec<DupGroup>> {
+        self.store.duplicates().await
+    }
+
+    /// Remove repeated entries from one playlist (the first copy of each stays).
+    pub async fn dedupe(self: &Arc<Self>, id: &str) -> Result<usize, ToggleError> {
+        let removed = self.store.dedupe(id).await?;
+        if removed > 0 {
+            self.refresh_in_jellyfin(vec![id.to_string()]);
+        }
+        Ok(removed)
+    }
+
+    pub async fn create_playlist(self: &Arc<Self>, name: &str) -> Result<(), ToggleError> {
+        self.store.create(name).await?;
+        self.notify_files(vec![(name.to_string(), "Created")]);
+        Ok(())
+    }
+
+    pub async fn rename_playlist(self: &Arc<Self>, from: &str, to: &str) -> Result<(), ToggleError> {
+        self.store.rename(from, to).await?;
+        self.notify_files(vec![(from.to_string(), "Deleted"), (to.to_string(), "Created")]);
+        Ok(())
+    }
+
+    pub async fn delete_playlist(self: &Arc<Self>, id: &str) -> Result<(), ToggleError> {
+        self.store.delete(id).await?;
+        self.notify_files(vec![(id.to_string(), "Deleted")]);
+        Ok(())
+    }
+
+    pub async fn restore_playlist(self: &Arc<Self>, id: &str) -> Result<(), ToggleError> {
+        self.store.restore_deleted(id).await?;
+        self.notify_files(vec![(id.to_string(), "Created")]);
+        Ok(())
+    }
+
+    /// Best effort, in the background: tell Jellyfin that playlist files were created or deleted.
+    fn notify_files(&self, changes: Vec<(String, &'static str)>) {
+        let dir = self.cfg.jellyfin_playlist_dir.trim_end_matches('/').to_string();
+        let changes: Vec<(String, &'static str)> = changes.into_iter().map(|(n, k)| (format!("{dir}/{n}.m3u"), k)).collect();
+        let jf = self.jf.clone();
+        tokio::spawn(async move {
+            if let Err(e) = jf.library_changed(&changes).await {
+                tracing::warn!("could not tell Jellyfin about the playlist file change: {e:#}");
+            }
+        });
     }
 
     /// Best effort, in the background, one playlist at a time: ask Jellyfin to re-read the changed playlists.

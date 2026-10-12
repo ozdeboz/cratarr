@@ -1,7 +1,19 @@
 <script lang="ts">
-  import { ApiError, applyOne, applySafe, getRepairs, undo, type Repair, type Repairs } from './lib/api';
+  import {
+    ApiError,
+    applyOne,
+    applySafe,
+    dedupe,
+    getDuplicates,
+    getRepairs,
+    undo,
+    type DupGroup,
+    type Repair,
+    type Repairs,
+  } from './lib/api';
 
   let data = $state<Repairs | null>(null);
+  let dups = $state<DupGroup[]>([]);
   let error = $state<string | null>(null);
   let notice = $state<{ text: string; undo: string[] } | null>(null);
   let confirming = $state(false);
@@ -9,7 +21,7 @@
 
   async function load() {
     try {
-      data = await getRepairs();
+      [data, dups] = await Promise.all([getRepairs(), getDuplicates()]);
       error = null;
     } catch (e) {
       error = e instanceof ApiError ? e.message : 'Unexpected error';
@@ -54,6 +66,13 @@
     }
   }
 
+  async function removeDups(playlist: string, extra: number) {
+    await run(async () => {
+      await dedupe(playlist);
+      return { playlists: [playlist] };
+    }, `Removed ${extra} repeated ${extra === 1 ? 'line' : 'lines'}`);
+  }
+
   const safe = $derived(data?.safe ?? []);
   const review = $derived(data?.review ?? []);
   const safeByPlaylist = $derived.by(() => {
@@ -79,7 +98,7 @@
 
   {#if !data && !error}
     <p class="empty">Checking…</p>
-  {:else if data && safe.length === 0 && review.length === 0}
+  {:else if data && safe.length === 0 && review.length === 0 && dups.length === 0}
     <p class="empty">Nothing to repair.</p>
   {:else if data}
     <section>
@@ -108,6 +127,24 @@
         </ul>
       {/if}
     </section>
+
+    {#if dups.length > 0}
+      <section>
+        <h2>Repeated lines <span class="n">{dups.reduce((n, g) => n + g.extra, 0)}</span></h2>
+        <p class="hint">The same track listed more than once. Removing keeps the first copy.</p>
+        <ul class="rows">
+          {#each dups as g (g.playlist)}
+            <li class="review">
+              <div>
+                <strong>{g.playlist}</strong> <span class="n">{g.extra} extra</span>
+                <div class="pair">{g.entries.slice(0, 3).map((e) => fileOf(e.entry)).join(' · ')}{g.entries.length > 3 ? ' …' : ''}</div>
+              </div>
+              <button onclick={() => removeDups(g.playlist, g.extra)} disabled={busy}>Remove extras</button>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
 
     {#if review.length > 0}
       <section>

@@ -34,6 +34,10 @@ pub enum StoreError {
     NotOffered,
     #[error("there is no earlier version to go back to")]
     NothingToUndo,
+    #[error("a playlist with that name already exists")]
+    Exists,
+    #[error("that is not a usable playlist name")]
+    BadName,
     #[error(transparent)]
     Io(#[from] anyhow::Error),
 }
@@ -49,6 +53,21 @@ pub struct Repair {
     pub playlist: String,
     pub from: String,
     pub to: String,
+}
+
+/// A playlist that lists the same entry more than once.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DupGroup {
+    pub playlist: String,
+    /// How many lines `Store::dedupe` would remove.
+    pub extra: usize,
+    pub entries: Vec<DupEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DupEntry {
+    pub entry: String,
+    pub copies: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -170,6 +189,16 @@ pub struct Store {
 /// A playlist id is its file name without `.m3u`; it must never be able to point outside the folder.
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() < 200 && !id.starts_with('.') && !id.contains(['/', '\\', '\0'])
+}
+
+/// A name for a new playlist: usable on the NAS and over SMB from Windows (no reserved characters, no leading dot,
+/// no trailing dot or space), and not a path.
+fn valid_new_name(name: &str) -> bool {
+    valid_id(name)
+        && name.len() <= 100
+        && name == name.trim()
+        && !name.ends_with('.')
+        && !name.chars().any(|c| c.is_control() || ":*?\"<>|".contains(c))
 }
 
 impl Store {
@@ -373,28 +402,136 @@ impl Store {
     pub async fn undo(&self, id: &str) -> Result<(), StoreError> {
         let _one_writer = self.write.lock().await;
         let (path, perms, _) = self.load_for_edit(id).await?;
-        let dir = self.dir.join(BACKUP_DIR);
-        let prefix = format!("{id}.");
-        let mut newest: Option<(u128, PathBuf)> = None;
-        if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
-            while let Ok(Some(e)) = rd.next_entry().await {
-                let name = e.file_name();
-                let Some(name) = name.to_str() else { continue };
-                let Some(mid) = name.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".bak")) else { continue };
-                if let Ok(n) = mid.parse::<u128>() {
-                    if newest.as_ref().is_none_or(|(m, _)| n > *m) {
-                        newest = Some((n, e.path()));
-                    }
-                }
-            }
-        }
-        let Some((_, backup)) = newest else {
+        let Some(backup) = self.newest_backup(id).await else {
             return Err(StoreError::NothingToUndo);
         };
         let bytes = tokio::fs::read(&backup).await.with_context(|| format!("reading the backup of {id}"))?;
         let text = String::from_utf8(bytes).map_err(|_| anyhow!("the backup of {id} is not valid UTF-8"))?;
         self.commit(id, &path, perms, &text).await?;
         Ok(())
+    }
+
+    /// Playlists that list the same entry more than once.
+    pub async fn duplicates(&self) -> Result<Vec<DupGroup>> {
+        self.view(None).await?;
+        let cache = self.cache.read().await;
+        let mut out = Vec::new();
+        for (id, c) in cache.iter() {
+            let mut counts: HashMap<&str, usize> = HashMap::new();
+            for l in &c.lines {
+                *counts.entry(l.as_str()).or_default() += 1;
+            }
+            let mut entries: Vec<DupEntry> = counts
+                .into_iter()
+                .filter(|(_, n)| *n > 1)
+                .map(|(e, n)| DupEntry { entry: e.to_string(), copies: n })
+                .collect();
+            if entries.is_empty() {
+                continue;
+            }
+            entries.sort_by(|a, b| a.entry.cmp(&b.entry));
+            out.push(DupGroup { playlist: id.clone(), extra: entries.iter().map(|e| e.copies - 1).sum(), entries });
+        }
+        out.sort_by_key(|g| g.playlist.to_lowercase());
+        Ok(out)
+    }
+
+    /// Remove repeated entries from a playlist, keeping the first copy of each. Returns how many lines went.
+    pub async fn dedupe(&self, id: &str) -> Result<usize, StoreError> {
+        let _one_writer = self.write.lock().await;
+        let (path, perms, text) = self.load_for_edit(id).await?;
+        let (new_text, removed) = m3u::with_deduped(&text);
+        if removed > 0 {
+            self.commit(id, &path, perms, &new_text).await?;
+        }
+        Ok(removed)
+    }
+
+    /// Create an empty playlist. Never overwrites an existing file.
+    pub async fn create(&self, name: &str) -> Result<(), StoreError> {
+        if !valid_new_name(name) {
+            return Err(StoreError::BadName);
+        }
+        let _one_writer = self.write.lock().await;
+        let path = self.path_of(name);
+        // `create_new` fails if the file exists (also on a case-insensitive clash), so nothing is overwritten.
+        match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&path).await {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(StoreError::Exists),
+            Err(e) => Err(anyhow!(e).context(format!("creating {name}.m3u")).into()),
+        }
+    }
+
+    /// Rename a playlist. The file keeps its content; nothing is overwritten.
+    pub async fn rename(&self, from: &str, to: &str) -> Result<(), StoreError> {
+        if !valid_id(from) {
+            return Err(StoreError::Unknown);
+        }
+        if !valid_new_name(to) {
+            return Err(StoreError::BadName);
+        }
+        let _one_writer = self.write.lock().await;
+        let (src, dst) = (self.path_of(from), self.path_of(to));
+        if !tokio::fs::metadata(&src).await.is_ok_and(|m| m.is_file()) {
+            return Err(StoreError::Unknown);
+        }
+        if tokio::fs::try_exists(&dst).await.unwrap_or(false) {
+            return Err(StoreError::Exists);
+        }
+        self.backup(from, &src).await?;
+        tokio::fs::rename(&src, &dst).await.with_context(|| format!("renaming {from}.m3u"))?;
+        let mut cache = self.cache.write().await;
+        cache.remove(from);
+        Ok(())
+    }
+
+    /// Delete a playlist. The file is moved into the backup folder, never destroyed, so `restore_deleted` can bring it back.
+    pub async fn delete(&self, id: &str) -> Result<(), StoreError> {
+        let _one_writer = self.write.lock().await;
+        let (path, _, _) = self.load_for_edit(id).await?;
+        self.backup(id, &path).await?;
+        tokio::fs::remove_file(&path).await.with_context(|| format!("deleting {id}.m3u"))?;
+        self.cache.write().await.remove(id);
+        Ok(())
+    }
+
+    /// Bring back a deleted playlist from its newest backup (refuses if a playlist of that name exists again).
+    pub async fn restore_deleted(&self, id: &str) -> Result<(), StoreError> {
+        if !valid_id(id) {
+            return Err(StoreError::Unknown);
+        }
+        let _one_writer = self.write.lock().await;
+        let path = self.path_of(id);
+        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Err(StoreError::Exists);
+        }
+        let Some(backup) = self.newest_backup(id).await else { return Err(StoreError::NothingToUndo) };
+        let bytes = tokio::fs::read(&backup).await.with_context(|| format!("reading the backup of {id}"))?;
+        tokio::fs::write(&path, bytes).await.with_context(|| format!("restoring {id}.m3u"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).await;
+        }
+        Ok(())
+    }
+
+    /// The newest backup file of `id`, if any.
+    async fn newest_backup(&self, id: &str) -> Option<PathBuf> {
+        let prefix = format!("{id}.");
+        let mut newest: Option<(u128, PathBuf)> = None;
+        let mut rd = tokio::fs::read_dir(self.dir.join(BACKUP_DIR)).await.ok()?;
+        while let Ok(Some(e)) = rd.next_entry().await {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(mid) = name.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".bak")) else { continue };
+            if let Ok(n) = mid.parse::<u128>() {
+                if newest.as_ref().is_none_or(|(m, _)| n > *m) {
+                    newest = Some((n, e.path()));
+                }
+            }
+        }
+        newest.map(|(_, p)| p)
     }
 
     /// Copy the current file to the backup folder (named `<id>.<millis>.bak`) and keep only the newest few.
@@ -765,6 +902,78 @@ mod tests {
         assert!(s.undo("p").await.is_err());
         assert!(matches!(s.undo("nope").await, Err(StoreError::Unknown)));
         assert!(matches!(s.undo("../p").await, Err(StoreError::Unknown)));
+    }
+
+    #[tokio::test]
+    async fn duplicates_are_found_and_removed_keeping_the_first_copy() {
+        let d = Dir::new();
+        d.write("a.m3u", "A/1.mp3\nB/2.mp3\nA/1.mp3\nA/1.mp3\n");
+        d.write("clean.m3u", "A/1.mp3\n");
+        let s = d.store();
+        let dups = s.duplicates().await.unwrap();
+        assert_eq!(dups.len(), 1);
+        assert_eq!((dups[0].playlist.as_str(), dups[0].extra), ("a", 2));
+        assert_eq!(dups[0].entries, vec![DupEntry { entry: "A/1.mp3".into(), copies: 3 }]);
+        assert_eq!(s.dedupe("a").await.unwrap(), 2);
+        assert_eq!(d.read("a.m3u"), "A/1.mp3\nB/2.mp3\n");
+        assert!(s.duplicates().await.unwrap().is_empty());
+        assert_eq!(s.dedupe("clean").await.unwrap(), 0);
+        assert_eq!(std::fs::read_dir(d.0.join(BACKUP_DIR)).unwrap().count(), 1, "only the changed playlist is backed up");
+    }
+
+    #[tokio::test]
+    async fn a_new_playlist_is_created_empty_and_never_overwrites() {
+        let d = Dir::new();
+        d.write("old.m3u", "A/1.mp3\n");
+        let s = d.store();
+        s.create("Late Night").await.unwrap();
+        assert_eq!(d.read("Late Night.m3u"), "");
+        assert!(s.view(None).await.unwrap().iter().any(|p| p.id == "Late Night"));
+        assert!(matches!(s.create("old").await, Err(StoreError::Exists)));
+        assert_eq!(d.read("old.m3u"), "A/1.mp3\n");
+    }
+
+    #[tokio::test]
+    async fn unusable_playlist_names_are_refused() {
+        let d = Dir::new();
+        let s = d.store();
+        for name in ["", " ", "a/b", "a\\b", ".hidden", "ends.", "ends ", " starts", "co:lon", "star*", "q?", "quo\"te", "a<b", "p|pe", "nul\0"] {
+            assert!(matches!(s.create(name).await, Err(StoreError::BadName)), "{name:?}");
+        }
+        assert!(matches!(s.create(&"x".repeat(101)).await, Err(StoreError::BadName)));
+        s.create("Ünïcode & spaces (2024)").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn renaming_moves_the_file_and_refuses_clashes() {
+        let d = Dir::new();
+        d.write("a.m3u", "A/1.mp3\n");
+        d.write("b.m3u", "B/2.mp3\n");
+        let s = d.store();
+        s.rename("a", "c").await.unwrap();
+        assert_eq!(d.read("c.m3u"), "A/1.mp3\n");
+        assert!(!d.0.join("a.m3u").exists());
+        assert!(matches!(s.rename("c", "b").await, Err(StoreError::Exists)));
+        assert!(matches!(s.rename("c", "bad/name").await, Err(StoreError::BadName)));
+        assert!(matches!(s.rename("nope", "z").await, Err(StoreError::Unknown)));
+        assert!(matches!(s.rename("../c", "z").await, Err(StoreError::Unknown)));
+        let names: Vec<String> = s.view(None).await.unwrap().into_iter().map(|p| p.id).collect();
+        assert_eq!(names, vec!["b", "c"]);
+    }
+
+    #[tokio::test]
+    async fn deleting_keeps_a_recoverable_copy() {
+        let d = Dir::new();
+        d.write("a.m3u", "A/1.mp3\n");
+        let s = d.store();
+        s.delete("a").await.unwrap();
+        assert!(!d.0.join("a.m3u").exists());
+        assert!(s.view(None).await.unwrap().is_empty());
+        s.restore_deleted("a").await.unwrap();
+        assert_eq!(d.read("a.m3u"), "A/1.mp3\n");
+        assert!(matches!(s.restore_deleted("a").await, Err(StoreError::Exists)));
+        assert!(matches!(s.delete("nope").await, Err(StoreError::Unknown)));
+        assert!(matches!(s.restore_deleted("never-existed").await, Err(StoreError::NothingToUndo)));
     }
 
     #[tokio::test]

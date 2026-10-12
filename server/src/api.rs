@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -21,6 +21,12 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/state", get(state))
         .route("/api/cover/{id}", get(cover))
         .route("/api/playlists/{id}/toggle", post(toggle))
+        .route("/api/playlists", post(create_playlist))
+        .route("/api/playlists/{id}", delete(delete_playlist))
+        .route("/api/playlists/{id}/rename", post(rename_playlist))
+        .route("/api/playlists/{id}/restore", post(restore_playlist))
+        .route("/api/duplicates", get(duplicates))
+        .route("/api/duplicates/dedupe", post(dedupe))
         .route("/api/repairs", get(repairs))
         .route("/api/repairs/apply", post(apply_repairs))
         .route("/api/undo", post(undo))
@@ -79,6 +85,50 @@ async fn apply_repairs(State(app): State<Arc<App>>, Json(req): Json<ApplyRequest
 }
 
 #[derive(Deserialize)]
+struct NameRequest {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RenameRequest {
+    to: String,
+}
+
+#[derive(Deserialize)]
+struct PlaylistRequest {
+    playlist: String,
+}
+
+async fn create_playlist(State(app): State<Arc<App>>, Json(req): Json<NameRequest>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    app.create_playlist(&req.name).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name }))))
+}
+
+async fn rename_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<RenameRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    app.rename_playlist(&id, &req.to).await?;
+    Ok(Json(json!({ "playlist": req.to })))
+}
+
+async fn delete_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    app.delete_playlist(&id).await?;
+    Ok(Json(json!({ "deleted": id })))
+}
+
+async fn restore_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    app.restore_playlist(&id).await?;
+    Ok(Json(json!({ "restored": id })))
+}
+
+async fn duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!(app.duplicates().await.map_err(ToggleError::from)?)))
+}
+
+async fn dedupe(State(app): State<Arc<App>>, Json(req): Json<PlaylistRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let removed = app.dedupe(&req.playlist).await?;
+    Ok(Json(json!({ "removed": removed })))
+}
+
+#[derive(Deserialize)]
 struct UndoRequest {
     playlists: Vec<String>,
 }
@@ -99,9 +149,12 @@ impl From<ToggleError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self.0 {
-            ToggleError::NothingPlaying | ToggleError::NotInLibrary | ToggleError::NotOffered | ToggleError::NothingToUndo => {
-                StatusCode::CONFLICT
-            }
+            ToggleError::NothingPlaying
+            | ToggleError::NotInLibrary
+            | ToggleError::NotOffered
+            | ToggleError::NothingToUndo
+            | ToggleError::Exists => StatusCode::CONFLICT,
+            ToggleError::BadName => StatusCode::BAD_REQUEST,
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };

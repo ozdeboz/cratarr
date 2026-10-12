@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use serde_json::json;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -121,6 +122,19 @@ impl Jellyfin {
     /// One item with the fields shown on the page.
     pub async fn item(&self, id: &str) -> Result<PlayingItem> {
         self.get(&format!("/Users/{}/Items/{id}", self.user_id)).await
+    }
+
+    /// Tell Jellyfin that files appeared, changed or disappeared (`kind`: "Created", "Modified" or "Deleted"); paths are
+    /// as Jellyfin sees them. This is what makes Jellyfin notice a new or removed `.m3u` file (its Music library
+    /// does not watch the folder); it does not make Jellyfin re-read a changed playlist, see `refresh_playlist`.
+    pub async fn library_changed(&self, changes: &[(String, &str)]) -> Result<()> {
+        let updates: Vec<_> = changes.iter().map(|(p, k)| json!({ "Path": p, "UpdateType": k })).collect();
+        let url = format!("{}/Library/Media/Updated", self.base);
+        let status = self.http.post(&url).json(&json!({ "Updates": updates })).send().await.context("POST /Library/Media/Updated")?.status();
+        if !status.is_success() {
+            bail!("POST /Library/Media/Updated returned {status}");
+        }
+        Ok(())
     }
 
     /// Ask Jellyfin to re-read one imported playlist after its `.m3u` file changed. `name` is the file name

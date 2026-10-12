@@ -65,3 +65,16 @@ export const applyOne = (r: Repair) => post<{ playlists: string[] }>('/api/repai
 
 /** Put playlists back as they were before their last change. */
 export const undo = (playlists: string[]) => post<{ restored: number }>('/api/undo', { playlists });
+
+export type DupGroup = { playlist: string; extra: number; entries: { entry: string; copies: number }[] };
+
+export const getDuplicates = () => request<DupGroup[]>('/api/duplicates');
+export const dedupe = (playlist: string) => post<{ removed: number }>('/api/duplicates/dedupe', { playlist });
+
+export const createPlaylist = (name: string) => post<{ playlist: string }>('/api/playlists', { name });
+export const renamePlaylist = (id: string, to: string) =>
+  post<{ playlist: string }>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to });
+export const deletePlaylist = (id: string) =>
+  request<{ deleted: string }>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const restorePlaylist = (id: string) =>
+  post<{ restored: string }>(`/api/playlists/${encodeURIComponent(id)}/restore`, {});
