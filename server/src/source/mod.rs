@@ -74,6 +74,8 @@ pub struct Track {
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
+    /// The source's id of the track's album, when it has one.
+    pub album_id: Option<String>,
     /// As the source sees it.
     pub path: Option<String>,
     /// `None` when the source cannot tell; such a track is never addable.

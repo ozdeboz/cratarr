@@ -15,6 +15,8 @@ export type NowPlaying = {
   name: string;
   artist: string | null;
   album: string | null;
+  /** The source's album id (used to mark the playing album on the Incoming page). */
+  album_id: string | null;
   /** False when the track is outside the curated library, so it cannot be added to a playlist. */
   addable: boolean;
   /** Null when nothing reports a position. */

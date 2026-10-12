@@ -24,6 +24,8 @@ pub struct NowPlayingView {
     pub name: String,
     pub artist: Option<String>,
     pub album: Option<String>,
+    /// The source's album id: the Incoming page uses it to mark the album that is playing.
+    pub album_id: Option<String>,
     /// False when the track's library is not in use (an incoming folder, say): it cannot be added.
     pub addable: bool,
     /// `None` when nothing reports a position.
@@ -357,6 +359,7 @@ impl App {
             name: p.track.title,
             artist: p.track.artist,
             album: p.track.album,
+            album_id: p.track.album_id,
         });
         Ok(StateView { now_playing, playlists, sources })
     }

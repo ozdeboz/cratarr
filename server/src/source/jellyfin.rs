@@ -187,7 +187,7 @@ impl JellyfinSource {
 }
 
 fn to_track((i, library_id): (PlayingItem, Option<String>)) -> Track {
-    Track { id: i.id, title: i.name, artist: i.album_artist, album: i.album, path: i.path, library_id }
+    Track { id: i.id, title: i.name, artist: i.album_artist, album: i.album, album_id: i.album_id, path: i.path, library_id }
 }
 
 impl Source for JellyfinSource {

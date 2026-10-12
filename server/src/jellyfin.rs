@@ -106,6 +106,7 @@ pub struct PlayingItem {
     pub name: String,
     pub path: Option<String>,
     pub album: Option<String>,
+    pub album_id: Option<String>,
     pub album_artist: Option<String>,
     pub media_type: Option<String>,
     /// Track length; 10 000 000 ticks per second.
@@ -498,6 +499,7 @@ mod tests {
                 name: id.into(),
                 path: None,
                 album: None,
+                album_id: None,
                 album_artist: None,
                 media_type: Some(media.into()),
                 run_time_ticks: None,
