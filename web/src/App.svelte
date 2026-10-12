@@ -1,8 +1,6 @@
 <script lang="ts">
   import Playlists from './Playlists.svelte';
-  import Repairs from './Repairs.svelte';
   import Manage from './Manage.svelte';
-  import Albums from './Albums.svelte';
   import Settings from './Settings.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { getStatus, type Status } from './lib/api';
@@ -12,9 +10,7 @@
   // Main pages in order; Settings sits apart at the bottom of the sidebar.
   const MAIN: Page[] = [
     { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' },
-    { id: 'repairs', href: '#/repairs', label: 'Repairs', icon: 'repairs' },
     { id: 'manage', href: '#/manage', label: 'Manage', icon: 'manage' },
-    { id: 'albums', href: '#/albums', label: 'Albums', icon: 'albums' },
   ];
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
   const ALL = [...MAIN, SETTINGS];
@@ -24,7 +20,13 @@
   const bar = ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, BAR_SLOTS - 1);
   const overflow = ALL.filter((p) => !bar.includes(p));
 
-  const fromHash = () => ALL.find((p) => p.href !== '#/' && location.hash === p.href)?.id ?? 'playlists';
+  // Repairs lives under Manage; the old #/repairs link still lands there.
+  const fromHash = () =>
+    location.hash.startsWith('#/manage') || location.hash === '#/repairs'
+      ? 'manage'
+      : location.hash === SETTINGS.href
+        ? 'settings'
+        : 'playlists';
   let page = $state(fromHash());
   let moreOpen = $state(false);
 
@@ -101,12 +103,8 @@
   </aside>
 
   <div class="content">
-    {#if page === 'repairs'}
-      <Repairs />
-    {:else if page === 'manage'}
+    {#if page === 'manage'}
       <Manage />
-    {:else if page === 'albums'}
-      <Albums />
     {:else if page === 'settings'}
       <Settings />
     {:else}

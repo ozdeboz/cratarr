@@ -82,8 +82,7 @@
   });
 </script>
 
-<main>
-  <h1>Repairs</h1>
+<div class="pane">
   <p class="lede">
     Lines in playlists that point at a file that no longer exists. Every change keeps a backup and can be undone.
   </p>
@@ -164,19 +163,9 @@
       </section>
     {/if}
   {/if}
-</main>
+</div>
 
 <style>
-  main {
-    max-width: 900px;
-    padding: 8px clamp(12px, 2vw, 32px) 48px;
-  }
-
-  h1 {
-    margin: 16px 0 4px;
-    font-size: 1.25rem;
-  }
-
   h2 {
     margin: 28px 0 6px;
     font-size: 1rem;
