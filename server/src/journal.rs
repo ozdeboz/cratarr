@@ -29,6 +29,55 @@ pub enum Event {
         token: String,
         release_group: Option<String>,
     },
+    /// Keep (decision 0013): an Incoming album moved into Music, renamed per the library's template. Recorded after
+    /// the catalogue rows moved with the files (track ids kept).
+    AlbumAdopted {
+        source: String,
+        album_id: String,
+        title: String,
+        /// The Incoming album folder and its new Music folder: (catalogue folder, relative path).
+        from_dir: (i64, String),
+        to_dir: (i64, String),
+        /// Every file, audio and others.
+        moves: Vec<TrackMove>,
+        release_group: Option<String>,
+    },
+    /// Replace (decision 0013): an upgrade took the place of an album in Music. Every old track had a match (else
+    /// Replace is refused). Recorded after the catalogue rows moved and the ids were handed on.
+    AlbumReplaced {
+        source: String,
+        album_id: String,
+        title: String,
+        from_dir: (i64, String),
+        to_dir: (i64, String),
+        /// The new files, Incoming → Music; `track` is the id each inherited from its old track (or a fresh one for a
+        /// track the old album did not have).
+        moves: Vec<TrackMove>,
+        /// The old files, Music → the Incoming trash; `track` is the id each handed on.
+        replaced: Vec<TrackMove>,
+        /// Puts the old files back on Undo.
+        token: String,
+        release_group: Option<String>,
+    },
+}
+
+impl Event {
+    /// The album's title and MusicBrainz release group, whatever happened to it.
+    pub fn album(&self) -> (&str, Option<&str>) {
+        match self {
+            Event::AlbumRejected { title, release_group, .. }
+            | Event::AlbumAdopted { title, release_group, .. }
+            | Event::AlbumReplaced { title, release_group, .. } => (title, release_group.as_deref()),
+        }
+    }
+}
+
+/// One file of an album action: where it was and where it went, as (catalogue folder, relative path).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackMove {
+    pub track: Option<i64>,
+    pub from: (i64, String),
+    pub to: (i64, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]

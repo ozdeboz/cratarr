@@ -19,6 +19,10 @@ pub trait Files: Send + Sync {
     fn purge(&self, folder: &Path, now_epoch: i64, keep_days: u32) -> Result<usize>;
     /// Whether Cratarr can create and remove a file in `folder` (decision 0010).
     fn can_write(&self, folder: &Path) -> bool;
+    /// Move files between Cratarr's folders, all or none, nothing overwritten (Keep and Replace, decision 0013).
+    fn move_all(&self, plan: &[crate::moves::Step]) -> Result<()>;
+    /// Undo `move_all`.
+    fn move_back(&self, plan: &[crate::moves::Step]) -> Result<()>;
 }
 
 /// The disk itself.
@@ -39,6 +43,14 @@ impl Files for Disk {
 
     fn can_write(&self, folder: &Path) -> bool {
         crate::mounts::writable(folder)
+    }
+
+    fn move_all(&self, plan: &[crate::moves::Step]) -> Result<()> {
+        crate::moves::apply(plan)
+    }
+
+    fn move_back(&self, plan: &[crate::moves::Step]) -> Result<()> {
+        crate::moves::revert(plan)
     }
 }
 

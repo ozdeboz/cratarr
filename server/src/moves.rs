@@ -1,0 +1,156 @@
+//! Moving an album's files between Cratarr's folders (Keep and Replace, decision 0013): every file of a plan goes, or
+//! none does. A rename where the two folders share a file system (instant); a copy then delete where they do not.
+//! Folders left empty behind are removed, up to the folder's root. Blocking file operations.
+
+use std::path::{Component, Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+
+/// One file to move: (root folder, path relative to it) → (root folder, path relative to it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Step {
+    pub from: (PathBuf, String),
+    pub to: (PathBuf, String),
+}
+
+/// `rel` must be a plain relative path: no `..`, no root, not into a hidden folder (the trash, backups).
+fn checked(rel: &str) -> Result<PathBuf> {
+    let p = Path::new(rel);
+    let ok = !rel.is_empty()
+        && !rel.contains('\0')
+        && p.components().all(|c| matches!(c, Component::Normal(n) if !n.to_string_lossy().starts_with('.')));
+    if !ok {
+        bail!("not a plain path inside a library: {rel:?}");
+    }
+    Ok(p.to_path_buf())
+}
+
+fn full((root, rel): &(PathBuf, String)) -> Result<PathBuf> {
+    Ok(root.join(checked(rel)?))
+}
+
+/// Move every file of the plan. Nothing is overwritten: when a target exists, nothing moves. When a move fails
+/// midway, the files already moved go back and the error is returned.
+pub fn apply(plan: &[Step]) -> Result<()> {
+    let pairs: Vec<(PathBuf, PathBuf)> = plan.iter().map(|s| Ok((full(&s.from)?, full(&s.to)?))).collect::<Result<_>>()?;
+    for (from, to) in &pairs {
+        if !from.is_file() {
+            bail!("{} is not there", from.display());
+        }
+        if to.exists() {
+            bail!("{} exists already; not overwriting it", to.display());
+        }
+    }
+    let mut done: Vec<&(PathBuf, PathBuf)> = Vec::new();
+    for pair in &pairs {
+        if let Err(e) = move_file(&pair.0, &pair.1) {
+            for (from, to) in done.iter().rev() {
+                if let Err(back) = move_file(to, from) {
+                    tracing::error!("could not move {} back to {}: {back:#}", to.display(), from.display());
+                }
+            }
+            return Err(e);
+        }
+        done.push(pair);
+    }
+    for s in plan {
+        prune_empty(&s.from.0, &s.from.1);
+    }
+    Ok(())
+}
+
+/// Undo `apply`: every file back where it came from.
+pub fn revert(plan: &[Step]) -> Result<()> {
+    let back: Vec<Step> = plan.iter().rev().map(|s| Step { from: s.to.clone(), to: s.from.clone() }).collect();
+    apply(&back)
+}
+
+fn move_file(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to.parent().context("target has no folder")?)?;
+    match std::fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        // Another file system: copy, make sure it is on disk, then remove the original.
+        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {
+            std::fs::copy(from, to).with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+            std::fs::File::open(to)?.sync_all()?;
+            std::fs::remove_file(from).with_context(|| format!("removing {} after copying it", from.display()))
+        }
+        Err(e) => Err(e).with_context(|| format!("moving {} to {}", from.display(), to.display())),
+    }
+}
+
+/// Remove the folders of `rel` that are now empty, deepest first, never `root` itself.
+fn prune_empty(root: &Path, rel: &str) {
+    let mut dir = root.join(rel).parent().map(Path::to_path_buf);
+    while let Some(d) = dir {
+        if d == root || !d.starts_with(root) || std::fs::remove_dir(&d).is_err() {
+            break;
+        }
+        dir = d.parent().map(Path::to_path_buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp() -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let p = std::env::temp_dir().join(format!("cratarr-moves-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn step(from: &Path, a: &str, to: &Path, b: &str) -> Step {
+        Step { from: (from.to_path_buf(), a.into()), to: (to.to_path_buf(), b.into()) }
+    }
+
+    #[test]
+    fn an_album_moves_renamed_and_its_empty_folders_go() {
+        let (inc, music) = (tmp(), tmp());
+        std::fs::create_dir_all(inc.join("Air/Moon Safari (1998)")).unwrap();
+        std::fs::write(inc.join("Air/Moon Safari (1998)/01 - Sexy Boy.flac"), b"a").unwrap();
+        std::fs::write(inc.join("Air/Moon Safari (1998)/cover.jpg"), b"c").unwrap();
+        let plan = vec![
+            step(&inc, "Air/Moon Safari (1998)/01 - Sexy Boy.flac", &music, "Air - Moon Safari (1998)/01 Air - Sexy Boy.flac"),
+            step(&inc, "Air/Moon Safari (1998)/cover.jpg", &music, "Air - Moon Safari (1998)/cover.jpg"),
+        ];
+        apply(&plan).unwrap();
+        assert_eq!(std::fs::read(music.join("Air - Moon Safari (1998)/01 Air - Sexy Boy.flac")).unwrap(), b"a");
+        assert!(!inc.join("Air").exists(), "album and artist folders left empty are removed");
+        assert!(inc.exists(), "never the root");
+        revert(&plan).unwrap();
+        assert_eq!(std::fs::read(inc.join("Air/Moon Safari (1998)/cover.jpg")).unwrap(), b"c");
+        assert!(!music.join("Air - Moon Safari (1998)").exists());
+        for d in [inc, music] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn nothing_moves_when_a_target_exists() {
+        let (inc, music) = (tmp(), tmp());
+        std::fs::create_dir_all(inc.join("A")).unwrap();
+        std::fs::write(inc.join("A/1.flac"), b"1").unwrap();
+        std::fs::write(inc.join("A/2.flac"), b"2").unwrap();
+        std::fs::create_dir_all(music.join("A")).unwrap();
+        std::fs::write(music.join("A/2.flac"), b"mine").unwrap();
+        let plan = vec![step(&inc, "A/1.flac", &music, "A/1.flac"), step(&inc, "A/2.flac", &music, "A/2.flac")];
+        assert!(apply(&plan).is_err());
+        assert!(inc.join("A/1.flac").exists() && !music.join("A/1.flac").exists(), "all or nothing");
+        assert_eq!(std::fs::read(music.join("A/2.flac")).unwrap(), b"mine");
+        for d in [inc, music] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn paths_must_stay_inside_and_out_of_hidden_folders() {
+        let r = tmp();
+        for bad in ["../x", "/etc/passwd", ".cratarr-trash/1/A", "A/../../x", ""] {
+            assert!(apply(&[step(&r, bad, &r, "ok")]).is_err(), "{bad}");
+            assert!(apply(&[step(&r, "ok", &r, bad)]).is_err(), "{bad}");
+        }
+        std::fs::remove_dir_all(r).ok();
+    }
+}

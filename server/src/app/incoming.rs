@@ -405,7 +405,7 @@ impl IncomingService {
         let gone = || ToggleError::Refused("that deletion can no longer be undone".into());
         let id: EventId = key.parse().map_err(|_| gone())?;
         let entry = self.journal.get(id)?.ok_or_else(gone)?;
-        let Event::AlbumRejected { album_id, title, folder, dir, token, .. } = &entry.event;
+        let Event::AlbumRejected { album_id, title, folder, dir, token, .. } = &entry.event else { return Err(gone()) };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back")));
         }
@@ -436,10 +436,10 @@ impl IncomingService {
         if self.journal.result(entry.id, ACQUISITION).ok().flatten().is_some() {
             return;
         }
-        let Event::AlbumRejected { title, release_group, .. } = &entry.event;
-        // Lidarr stops fetching the album. Best effort: the album is in the trash either way; when Lidarr cannot be
-        // told, the next pass tries again.
-        let stopped = match (self.acquisition(), release_group.as_deref()) {
+        // Deleted, kept or replaced: Lidarr stops fetching the album either way (else it fetches it again). Best effort:
+        // the action stands; when Lidarr cannot be told, the next pass tries again.
+        let (title, release_group) = entry.event.album();
+        let stopped = match (self.acquisition(), release_group) {
             (Some(l), Some(rg)) => match l.stop_fetching(rg).await {
                 Ok(ids) => ids,
                 Err(e) => {
