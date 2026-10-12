@@ -412,6 +412,22 @@ impl Store {
     }
 
     /// Playlists that list the same entry more than once.
+    /// Playlist lines that point into the album folder `folder`, per playlist (playlists without any are left out).
+    pub async fn lines_in_folder(&self, folder: &str) -> Result<Vec<(String, usize)>> {
+        self.view(None).await?;
+        let prefix = format!("{folder}/");
+        let cache = self.cache.read().await;
+        let mut out: Vec<(String, usize)> = cache
+            .iter()
+            .filter_map(|(id, c)| {
+                let n = c.lines.iter().filter(|l| l.starts_with(&prefix)).count();
+                (n > 0).then(|| (id.clone(), n))
+            })
+            .collect();
+        out.sort_by_key(|(id, _)| id.to_lowercase());
+        Ok(out)
+    }
+
     pub async fn duplicates(&self) -> Result<Vec<DupGroup>> {
         self.view(None).await?;
         let cache = self.cache.read().await;

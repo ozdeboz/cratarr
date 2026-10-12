@@ -78,3 +78,36 @@ export const deletePlaylist = (id: string) =>
   request<{ deleted: string }>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const restorePlaylist = (id: string) =>
   post<{ restored: string }>(`/api/playlists/${encodeURIComponent(id)}/restore`, {});
+
+export type AlbumTrack = {
+  file: string;
+  key: string | null;
+  bytes: number;
+  seconds: number | null;
+  kbps: number | null;
+  plays: number;
+  favourite: boolean;
+};
+export type Album = {
+  folder: string;
+  tracks: AlbumTrack[];
+  total_bytes: number;
+  cover_bytes: number | null;
+  plays: number;
+  favourites: number;
+  playlist_lines: [string, number][];
+};
+export type Comparison = {
+  same_track_count: boolean;
+  matched: number;
+  same_length: number;
+  same_size: number;
+  verdict: 'same' | 'similar' | 'different';
+};
+export type AlbumGroup = {
+  albums: Album[];
+  comparisons: Comparison[];
+  suggestion: { keep: string; reasons: string[] };
+};
+
+export const getAlbumDuplicates = () => request<{ groups: AlbumGroup[] }>('/api/albums/duplicates');

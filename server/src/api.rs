@@ -25,6 +25,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}", delete(delete_playlist))
         .route("/api/playlists/{id}/rename", post(rename_playlist))
         .route("/api/playlists/{id}/restore", post(restore_playlist))
+        .route("/api/albums/duplicates", get(album_duplicates))
         .route("/api/duplicates", get(duplicates))
         .route("/api/duplicates/dedupe", post(dedupe))
         .route("/api/repairs", get(repairs))
@@ -117,6 +118,10 @@ async fn delete_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) ->
 async fn restore_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
     app.restore_playlist(&id).await?;
     Ok(Json(json!({ "restored": id })))
+}
+
+async fn album_duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "groups": app.album_duplicates().await.map_err(ToggleError::from)? })))
 }
 
 async fn duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {

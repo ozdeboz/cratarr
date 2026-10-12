@@ -48,6 +48,36 @@ pub struct ListedPlaylist {
     pub name: String,
 }
 
+/// An album as Jellyfin lists it; `path` is the album folder as Jellyfin sees it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListedAlbum {
+    pub id: String,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListedTrack {
+    pub path: Option<String>,
+    pub run_time_ticks: Option<i64>,
+    pub media_sources: Option<Vec<ListedSource>>,
+    pub user_data: Option<ListedUserData>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListedSource {
+    pub bitrate: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ListedUserData {
+    pub play_count: Option<u32>,
+    pub is_favorite: Option<bool>,
+}
+
 pub fn pick_playlist_id(items: &[ListedPlaylist], name: &str) -> Option<String> {
     items.iter().find(|p| p.name == name).map(|p| p.id.clone())
 }
@@ -117,6 +147,52 @@ impl Jellyfin {
     pub async fn activity(&self, limit: u32) -> Result<Vec<ActivityEntry>> {
         let page: ItemsPage<ActivityEntry> = self.get(&format!("/System/ActivityLog/Entries?limit={limit}")).await?;
         Ok(page.items)
+    }
+
+    /// What Jellyfin knows about the tracks of the album folder named `folder` (its last path segment): runtime,
+    /// bitrate, plays and favourite, keyed by file name. Empty when Jellyfin has no such album. `search` is a
+    /// title fragment to find it with; the folder name is what picks the right match.
+    pub async fn album_tracks(&self, search: &str, folder: &str) -> Result<std::collections::BTreeMap<String, crate::albums::Known>> {
+        let uid = &self.user_id;
+        let url = format!("{}/Users/{uid}/Items", self.base);
+        let found: ItemsPage<ListedAlbum> = self
+            .http
+            .get(&url)
+            .query(&[("IncludeItemTypes", "MusicAlbum"), ("Recursive", "true"), ("Fields", "Path"), ("Limit", "200"), ("SearchTerm", search)])
+            .send()
+            .await
+            .context("searching albums")?
+            .error_for_status()?
+            .json()
+            .await?;
+        let leaf = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or("").to_string();
+        let Some(album) = found.items.iter().find(|a| a.path.as_deref().is_some_and(|p| leaf(p) == folder)) else {
+            return Ok(Default::default());
+        };
+        let tracks: ItemsPage<ListedTrack> = self
+            .http
+            .get(&url)
+            .query(&[("ParentId", album.id.as_str()), ("IncludeItemTypes", "Audio"), ("Recursive", "true"), ("Fields", "Path,MediaSources"), ("Limit", "500")])
+            .send()
+            .await
+            .context("listing album tracks")?
+            .error_for_status()?
+            .json()
+            .await?;
+        let mut out = std::collections::BTreeMap::new();
+        for t in tracks.items {
+            let Some(path) = t.path.as_deref() else { continue };
+            out.insert(
+                leaf(path),
+                crate::albums::Known {
+                    seconds: t.run_time_ticks.map(|x| x as f64 / 10_000_000.0),
+                    kbps: t.media_sources.as_ref().and_then(|m| m.first()).and_then(|s| s.bitrate).map(|b| (b / 1000) as u32),
+                    plays: t.user_data.as_ref().and_then(|u| u.play_count).unwrap_or(0),
+                    favourite: t.user_data.as_ref().and_then(|u| u.is_favorite).unwrap_or(false),
+                },
+            );
+        }
+        Ok(out)
     }
 
     /// One item with the fields shown on the page.
