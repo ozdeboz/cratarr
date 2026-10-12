@@ -53,6 +53,26 @@ and more); the owner wants Music at 16-bit/44.1 kHz.
   path, its track id). The playlist module rewrites `.m3u` lines and Jellyfin entries from them (its handler); the
   media-server port copies play data (plays, favourites) from the old item to the new one.
 
+## Conversion compared with SoX (2026-10-13)
+
+`convert.rs`: symphonia decode; rubato FFT resampler with a long windowed-sinc filter (about 8k taps, delay
+trimmed); plain TPDF dither with a fixed seed (no noise shaping); flacenc, streamed. Six tracks from four Incoming
+albums (96/24, 192/24, 48/24, 44.1/24) against SoX 14.4.2 `rate -v -L 44100 dither`. Read-only copies were used.
+
+- Below 20 kHz the outputs null to −98…−123 dB. The one −98 dB track comes from SoX clipping its own float
+  reference.
+- Durations are identical to the frame. Dither noise is −96.3 dBFS, the TPDF level, the same as SoX.
+- Clipped samples: equal to SoX's or fewer. These are intersample overs in the masters.
+- The only difference is the filter edge. This filter passes up to about 21.9 kHz; SoX `-v` rolls off from about
+  20.9 kHz. The 21–22.05 kHz content matches the source's to within about 2 dB, and aliases are cut by more than
+  100 dB (unit tests).
+- Peak memory: 6 MB. Speed: about 15× real time on the NAS's N95, 4–5× slower than SoX. The same input always
+  gives the same bytes.
+
+Verdict: equivalent to SoX `rate -v -L` with TPDF dither. SoX's noise-shaped dither (`-s`) has a lower audible
+floor; it was left out on purpose. Vorbis comments and pictures are carried over. Cuesheet and seektable blocks are
+not, since their sample positions would be wrong after resampling.
+
 ## Consequences
 
 - Music keeps one naming convention whatever Lidarr does, and the template is the one place it is defined.
