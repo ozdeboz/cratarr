@@ -67,6 +67,9 @@ pub enum ToggleError {
     BadName,
     #[error("{0}")]
     CannotPlay(String),
+    /// An action that cannot be done as asked (the album moved, the trash is gone…); shown as is.
+    #[error("{0}")]
+    Refused(String),
     #[error("no Music library is set")]
     NoMusicFolder,
     #[error("settings cannot be saved: CRATARR_DATA_DIR is not set")]
@@ -128,14 +131,12 @@ pub struct VerdictView {
 fn verdicts(
     albums: &[source::Album],
     library: &crate::incoming::LibraryIndex,
-    incoming: &[(String, Option<String>)],
+    incoming: &[IncomingDir],
 ) -> BTreeMap<String, VerdictView> {
     use crate::incoming::{AlbumFacts, Verdict, quality_of};
     let mut out = BTreeMap::new();
     for a in albums {
-        let release_group = a.path.as_deref().and_then(|p| {
-            incoming.iter().find(|(dir, _)| !dir.is_empty() && p.ends_with(&format!("/{dir}"))).and_then(|(_, rg)| rg.clone())
-        });
+        let release_group = a.path.as_deref().and_then(|p| incoming_dir(incoming, p)).and_then(|d| d.release_group.clone());
         let facts = AlbumFacts {
             release_group,
             artist: a.artist.clone().unwrap_or_default(),
@@ -153,6 +154,11 @@ fn verdicts(
     out
 }
 
+/// The catalogue's album directory behind a server path (the server's paths and Cratarr's differ in front).
+fn incoming_dir<'a>(incoming: &'a [IncomingDir], path: &str) -> Option<&'a IncomingDir> {
+    incoming.iter().filter(|d| !d.dir.is_empty() && path.ends_with(&format!("/{}", d.dir))).max_by_key(|d| d.dir.len())
+}
+
 /// How long the library index (for Incoming's verdicts) is kept before it is read from the catalogue again.
 const INDEX_SECS: i64 = 300;
 
@@ -160,8 +166,34 @@ const INDEX_SECS: i64 = 300;
 struct Owned {
     built: i64,
     library: Arc<crate::incoming::LibraryIndex>,
-    /// (album directory under an Incoming folder, its release group).
-    incoming: Arc<Vec<(String, Option<String>)>>,
+    incoming: Arc<Vec<IncomingDir>>,
+}
+
+/// An album directory under an Incoming folder, as the catalogue knows it.
+#[derive(Debug, Clone)]
+struct IncomingDir {
+    /// Catalogue folder id (1 and up are Incoming).
+    folder: i64,
+    dir: String,
+    release_group: Option<String>,
+}
+
+/// What Delete did, so Undo can reverse it.
+#[derive(Debug, Clone)]
+struct Deleted {
+    folder: i64,
+    token: String,
+    album_id: String,
+    title: String,
+    /// Lidarr albums that were monitored and were switched off.
+    lidarr_ids: Vec<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteResult {
+    /// Pass to undo.
+    pub undo: String,
+    pub title: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -379,6 +411,12 @@ pub struct App {
     incoming_cache: Mutex<std::collections::HashMap<String, IncomingSourceView>>,
     /// See `Owned`; `None` until first needed, and after settings change.
     owned: Mutex<Option<Owned>>,
+    /// Optional (LIDARR_URL / LIDARR_API_KEY): asked to stop fetching albums deleted from Incoming.
+    lidarr: Option<crate::lidarr::Lidarr>,
+    /// Incoming albums deleted here, hidden until the server's list no longer has them.
+    hidden: Mutex<std::collections::HashSet<String>>,
+    /// Deletions that Undo can still reverse, by undo key.
+    deleted: Mutex<std::collections::HashMap<String, Deleted>>,
     /// Every audio file Cratarr can see, and the servers' ids for them (decision 0008).
     catalogue: Arc<crate::catalogue::Catalogue>,
     /// Saved with the sources.
@@ -418,6 +456,9 @@ impl App {
             folders: std::sync::RwLock::new((folders, store)),
             incoming_cache: Mutex::new(std::collections::HashMap::new()),
             owned: Mutex::new(None),
+            lidarr: crate::lidarr::Lidarr::from_env(),
+            hidden: Mutex::new(std::collections::HashSet::new()),
+            deleted: Mutex::new(std::collections::HashMap::new()),
             catalogue,
             tag_rules: std::sync::RwLock::new(saved.tag_rules),
         }))
@@ -733,6 +774,10 @@ impl App {
             };
             sources.push(view);
         }
+        let hidden = self.hidden.lock().await.clone();
+        for view in &mut sources {
+            view.albums.retain(|a| !hidden.contains(&a.id));
+        }
         if let Some((library, incoming)) = self.owned_index().await {
             for view in &mut sources {
                 view.verdicts = verdicts(&view.albums, &library, &incoming);
@@ -742,13 +787,13 @@ impl App {
     }
 
     /// The library index and the incoming release groups, read from the catalogue at most every `INDEX_SECS`.
-    async fn owned_index(&self) -> Option<(Arc<crate::incoming::LibraryIndex>, Arc<Vec<(String, Option<String>)>>)> {
+    async fn owned_index(&self) -> Option<(Arc<crate::incoming::LibraryIndex>, Arc<Vec<IncomingDir>>)> {
         let mut owned = self.owned.lock().await;
         if let Some(o) = owned.as_ref().filter(|o| epoch_now() - o.built < INDEX_SECS) {
             return Some((o.library.clone(), o.incoming.clone()));
         }
         let c = self.catalogue.clone();
-        let read = tokio::task::spawn_blocking(move || -> Result<(crate::incoming::LibraryIndex, Vec<(String, Option<String>)>)> {
+        let read = tokio::task::spawn_blocking(move || -> Result<(crate::incoming::LibraryIndex, Vec<IncomingDir>)> {
             use crate::incoming::{AlbumFacts, LibraryIndex, quality_of};
             let music = c.album_facts(0)?;
             let library = music
@@ -766,7 +811,7 @@ impl App {
                 .collect();
             let mut incoming = Vec::new();
             for id in 1..c.folders().len() as i64 {
-                incoming.extend(c.album_facts(id)?.into_iter().map(|f| (f.dir, f.release_group)));
+                incoming.extend(c.album_facts(id)?.into_iter().map(|f| IncomingDir { folder: id, dir: f.dir, release_group: f.release_group }));
             }
             Ok((LibraryIndex::new(library), incoming))
         })
@@ -804,6 +849,106 @@ impl App {
             keep.insert(key);
         }
         self.incoming_cache.lock().await.retain(|k, _| keep.contains(k));
+        // A deleted album stays hidden until the server's fresh list no longer has it (or Undo brings it back).
+        let listed: std::collections::HashSet<String> =
+            self.incoming_cache.lock().await.values().flat_map(|v| v.albums.iter().map(|a| a.id.clone())).collect();
+        self.hidden.lock().await.retain(|id| listed.contains(id));
+    }
+
+    /// Delete an Incoming album: into the trash inside its folder (Undo brings it back; emptied after
+    /// `trash::KEEP_DAYS`), and Lidarr stops fetching it.
+    pub async fn delete_incoming(&self, source_id: &str, album_id: &str) -> Result<DeleteResult, ToggleError> {
+        let album = self
+            .incoming_cache
+            .lock()
+            .await
+            .values()
+            .filter(|v| v.id == source_id)
+            .flat_map(|v| v.albums.iter())
+            .find(|a| a.id == album_id)
+            .cloned()
+            .ok_or_else(|| ToggleError::Refused("that album is no longer in Incoming".into()))?;
+        let path = album.path.clone().ok_or_else(|| ToggleError::Refused("the server gives no folder for that album".into()))?;
+        let (_, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        let dir = incoming_dir(&incoming, &path)
+            .cloned()
+            .ok_or_else(|| ToggleError::Refused("Cratarr cannot see that album's folder".into()))?;
+        let folder = self
+            .catalogue
+            .folders()
+            .get(dir.folder as usize)
+            .cloned()
+            .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
+        let (f, rel, now) = (folder.clone(), dir.dir.clone(), epoch_now());
+        let token = tokio::task::spawn_blocking(move || crate::trash::trash(&f, &rel, now))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        // Best effort: the album is in the trash either way; a Lidarr failure only means it may come back.
+        let lidarr_ids = match (&self.lidarr, dir.release_group.as_deref()) {
+            (Some(l), Some(rg)) => l.unmonitor(rg).await.unwrap_or_else(|e| {
+                tracing::warn!("Lidarr: could not stop fetching {}: {e:#}", album.title);
+                Vec::new()
+            }),
+            _ => Vec::new(),
+        };
+        self.hidden.lock().await.insert(album.id.clone());
+        self.catalogue.poke();
+        let key = format!("{}:{token}", dir.folder);
+        self.deleted.lock().await.insert(
+            key.clone(),
+            Deleted { folder: dir.folder, token, album_id: album.id.clone(), title: album.title.clone(), lidarr_ids },
+        );
+        Ok(DeleteResult { undo: key, title: album.title })
+    }
+
+    /// Undo a Delete: back from the trash, and Lidarr monitors what it monitored before.
+    pub async fn undo_delete(&self, key: &str) -> Result<String, ToggleError> {
+        let d = self
+            .deleted
+            .lock()
+            .await
+            .get(key)
+            .cloned()
+            .ok_or_else(|| ToggleError::Refused("that deletion can no longer be undone here".into()))?;
+        let folder = self
+            .catalogue
+            .folders()
+            .get(d.folder as usize)
+            .cloned()
+            .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
+        let token = d.token.clone();
+        tokio::task::spawn_blocking(move || crate::trash::restore(&folder, &token))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        if let Some(l) = &self.lidarr {
+            if let Err(e) = l.monitor(&d.lidarr_ids).await {
+                tracing::warn!("Lidarr: could not restore monitoring of {}: {e:#}", d.title);
+            }
+        }
+        self.deleted.lock().await.remove(key);
+        self.hidden.lock().await.remove(&d.album_id);
+        self.catalogue.poke();
+        Ok(d.title)
+    }
+
+    /// Empty Incoming trash older than `trash::KEEP_DAYS`.
+    async fn purge_trash(&self) {
+        let folders: Vec<std::path::PathBuf> = self.catalogue.folders().into_iter().skip(1).collect();
+        let now = epoch_now();
+        let gone = tokio::task::spawn_blocking(move || {
+            folders.iter().map(|f| crate::trash::purge(f, now).unwrap_or_else(|e| {
+                tracing::warn!("emptying the trash in {}: {e:#}", f.display());
+                0
+            })).sum::<usize>()
+        })
+        .await
+        .unwrap_or(0);
+        if gone > 0 {
+            tracing::info!("emptied {gone} old deletion(s) from the Incoming trash");
+            self.deleted.lock().await.clear();
+        }
     }
 
     /// Each connected server with Incoming libraries, and their ids.
@@ -844,6 +989,9 @@ impl App {
         if pass % 2 == 0 {
             self.refresh_dead().await;
             self.retry_placement().await;
+        }
+        if pass % 120 == 0 {
+            self.purge_trash().await;
         }
     }
 

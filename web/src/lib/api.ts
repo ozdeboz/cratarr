@@ -323,3 +323,15 @@ export type Transport = 'previous' | 'play-pause' | 'next';
 /** Previous / play-pause / next on the player that plays now. */
 export const transport = (command: Transport, source?: string) =>
   request<{ player: string }>(`/api/player/${command}${follow(source)}`, { method: 'POST' });
+
+/** Delete an Incoming album: it goes to the trash in its folder (Undo brings it back; emptied after 14 days). */
+export const deleteIncoming = (source: string, album: string) =>
+  request<{ undo: string; title: string }>(`/api/incoming/delete/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, {
+    method: 'POST',
+  });
+export const undoDelete = (undo: string) =>
+  request<{ restored: string }>('/api/incoming/undo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ undo }),
+  });

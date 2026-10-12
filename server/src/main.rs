@@ -5,6 +5,8 @@ mod catalogue;
 mod config;
 mod covers;
 mod incoming;
+mod lidarr;
+mod trash;
 mod jellyfin;
 mod m3u;
 mod mounts;

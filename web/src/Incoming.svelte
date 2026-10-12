@@ -1,5 +1,16 @@
 <script lang="ts">
-  import { ApiError, getIncoming, incomingCoverUrl, playIncoming, type IncomingAlbum, type IncomingSource } from './lib/api';
+  import {
+    ApiError,
+    deleteIncoming,
+    getIncoming,
+    incomingCoverUrl,
+    playIncoming,
+    undoDelete,
+    type IncomingAlbum,
+    type IncomingSource,
+  } from './lib/api';
+  import Popover from './lib/Popover.svelte';
+  import { longpress } from './lib/longpress';
   import { prefs } from './lib/prefs.svelte';
   import { live } from './lib/live.svelte';
   import Notice, { type NoticeData } from './lib/Notice.svelte';
@@ -12,6 +23,43 @@
   const playing = $derived(live.view?.now_playing ?? null);
   let notice = $state<NoticeData | null>(null);
   let starting = $state<string | null>(null);
+
+  // The open menu of one album (Play, Delete album), anchored to it; `ask` = the in-place delete question.
+  let menu = $state<{ source: string; a: IncomingAlbum; anchor: DOMRect; ask: boolean } | null>(null);
+  let working = $state(false);
+
+  async function reload() {
+    try {
+      sources = (await getIncoming(prefs.source || undefined, true)).sources;
+    } catch {
+      /* the regular refresh will try again */
+    }
+  }
+
+  async function remove(source: string, a: IncomingAlbum) {
+    if (working) return;
+    working = true;
+    try {
+      const { undo, title } = await deleteIncoming(source, a.id);
+      sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
+      notice = { text: `Deleted ${title}.`, undo: () => restore(undo) };
+    } catch (e) {
+      notice = { text: e instanceof ApiError ? e.message : 'Could not delete the album', tone: 'error' };
+    } finally {
+      working = false;
+      menu = null;
+    }
+  }
+
+  async function restore(undo: string) {
+    try {
+      const { restored } = await undoDelete(undo);
+      notice = { text: `Restored ${restored}.` };
+      await reload();
+    } catch (e) {
+      notice = { text: e instanceof ApiError ? e.message : 'Could not restore the album', tone: 'error' };
+    }
+  }
 
   async function play(source: string, a: IncomingAlbum) {
     if (starting) return;
@@ -87,7 +135,13 @@
         <ul>
           {#each s.albums.filter(matches) as a (a.id)}
             <li class:playing={playing?.album_id === a.id}>
-              <button class="row" disabled={starting !== null} aria-busy={starting === a.id} onclick={() => play(s.id, a)}>
+              <button
+                class="row"
+                disabled={starting !== null}
+                aria-busy={starting === a.id}
+                onclick={() => play(s.id, a)}
+                use:longpress={(anchor) => (menu = { source: s.id, a, anchor, ask: false })}
+              >
               {#if noCover[a.id]}
                 <div class="cover none" aria-hidden="true"></div>
               {:else}
@@ -125,6 +179,28 @@
     {/each}
   {/if}
 </main>
+
+{#if menu}
+  {@const m = menu}
+  <Popover anchor={m.anchor} label={m.a.title} onclose={() => (menu = null)}>
+    <div class="head">{m.a.title} <span>{m.a.artist ?? 'Unknown artist'}</span></div>
+    {#if !m.ask}
+      <div class="items" role="menu">
+        <button role="menuitem" onclick={() => { menu = null; play(m.source, m.a); }}>Play</button>
+        <hr />
+        <button role="menuitem" class="danger" onclick={() => menu && (menu.ask = true)}>Delete album</button>
+      </div>
+    {:else}
+      <div class="form">
+        <p class="ask">Delete {m.a.title}? It stays in the trash for 14 days, and you can undo this right after.</p>
+        <div class="actions">
+          <button class="danger solid" disabled={working} onclick={() => remove(m.source, m.a)}>Delete album</button>
+          <button onclick={() => (menu = null)}>Cancel</button>
+        </div>
+      </div>
+    {/if}
+  </Popover>
+{/if}
 
 <style>
   main {
@@ -277,5 +353,91 @@
   .verdict.upgrade .badge {
     border-color: var(--accent);
     color: var(--accent);
+  }
+
+  /* Album menu (same look as the playlist menu) */
+  .head {
+    padding: 8px 10px 6px;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+  }
+
+  .head span {
+    display: block;
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 400;
+  }
+
+  .items {
+    display: grid;
+  }
+
+  .items button {
+    min-height: 44px;
+    padding: 0 10px;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .items hr {
+    margin: 4px 6px;
+    border: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .items button:hover,
+  .items button:focus-visible {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .danger,
+  .items button.danger {
+    color: var(--danger);
+  }
+
+  .form {
+    display: grid;
+    gap: 10px;
+    padding: 6px;
+  }
+
+  .ask {
+    margin: 0;
+    font-size: 0.92rem;
+  }
+
+  .actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .actions button {
+    min-height: 40px;
+    padding: 0 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .actions button.danger.solid {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .actions button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 </style>

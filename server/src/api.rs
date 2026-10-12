@@ -37,6 +37,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/status", get(status))
         .route("/api/incoming", get(incoming))
         .route("/api/incoming/cover/{source}/{album}", get(incoming_cover))
+        .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
+        .route("/api/incoming/undo", post(undo_delete))
         .route("/api/incoming/play/{source}/{album}", post(play_incoming))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
@@ -90,6 +92,22 @@ async fn play_incoming(State(app): State<Arc<App>>, Path((source, album)): Path<
         Ok(player) => Json(json!({ "player": player })).into_response(),
         Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": format!("{e:#}") }))).into_response(),
     }
+}
+
+async fn delete_incoming(
+    State(app): State<Arc<App>>,
+    Path((source, album)): Path<(String, String)>,
+) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+    Ok(Json(app.delete_incoming(&source, &album).await?))
+}
+
+#[derive(Deserialize)]
+struct UndoDeleteBody {
+    undo: String,
+}
+
+async fn undo_delete(State(app): State<Arc<App>>, Json(b): Json<UndoDeleteBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "restored": app.undo_delete(&b.undo).await? })))
 }
 
 async fn incoming_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
@@ -263,7 +281,7 @@ impl IntoResponse for ApiError {
             | ToggleError::NothingToUndo
             | ToggleError::Exists => StatusCode::CONFLICT,
             ToggleError::BadName | ToggleError::BadSettings(_) => StatusCode::BAD_REQUEST,
-            ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::NoMusicFolder => StatusCode::CONFLICT,
+            ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::Refused(_) | ToggleError::NoMusicFolder => StatusCode::CONFLICT,
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };
