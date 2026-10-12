@@ -72,8 +72,10 @@ export function weigh(data: Proximity, rank: Record<Signal, (v: number) => numbe
 
 /** The links worth drawing. `kin`: pairs among each other's K closest (mutual nearest neighbours), the real
  * kinship. `bridges`: links of the maximum spanning tree that are not kin, there only so every playlist is reached;
- * they are drawn slack and barely pull, so they don't glue unrelated groups together. */
-export type Backbone = { kin: Weights; bridges: Weights };
+ * they are drawn slack and barely pull, so they don't glue unrelated groups together. `anchors`: the bridges that
+ * are a playlist's own closest link (a well defined playlist that no other ranks high has only such a link); they
+ * keep a normal length, so it stays near what it is most like. */
+export type Backbone = { kin: Weights; bridges: Weights; anchors: Set<string> };
 
 export function backbone(n: number, w: Weights, k = MUTUAL_K): Backbone {
   const edges = [...w].map(([kk, v]) => {
@@ -109,7 +111,11 @@ export function backbone(n: number, w: Weights, k = MUTUAL_K): Backbone {
   const kin: Weights = new Map();
   for (const e of edges) if (near[e.a].has(e.b) && near[e.b].has(e.a)) kin.set(e.kk, e.v);
   const bridges: Weights = new Map([...tree].filter(([kk]) => !kin.has(kk)));
-  return { kin, bridges };
+  // Edges are sorted strongest first, so a playlist's first edge is its closest.
+  const closest = new Map<number, string>();
+  for (const e of edges) for (const x of [e.a, e.b]) if (!closest.has(x)) closest.set(x, e.kk);
+  const anchors = new Set([...bridges.keys()].filter((kk) => [...closest.values()].includes(kk)));
+  return { kin, bridges, anchors };
 }
 
 /** Each kin link's weight as its rank among the kin links, 0..1: the drawn links are all strong, so their raw

@@ -23,8 +23,9 @@
   } = $props();
 
   type Node = { i: number; r: number; x?: number; y?: number; vx?: number; vy?: number };
-  /** `r`: the kin link's rank among the kin links (0..1); `bridge`: a tree link that is not kin. */
-  type Edge = { key: string; source: Node | number; target: Node | number; r: number; bridge: boolean };
+  /** `r`: the kin link's rank among the kin links (0..1); `bridge`: a tree link that is not kin; `anchor`: a bridge
+   * that is one of its playlists' closest link. */
+  type Edge = { key: string; source: Node | number; target: Node | number; r: number; bridge: boolean; anchor: boolean };
 
   /** Names shown before zooming in: the best connected playlists. */
   const LABELS = 8;
@@ -88,7 +89,7 @@
       ...[...bb.bridges.keys()].map((key) => ({ key, r: 0, bridge: true })),
     ].map(({ key, r, bridge }) => {
       const [a, b] = key.split('-').map(Number);
-      return { key, source: a, target: b, r, bridge };
+      return { key, source: a, target: b, r, bridge, anchor: bb.anchors.has(key) };
     });
     if (!sim) return;
     const ends = (e: Edge) => [e.source, e.target].map((x) => (typeof x === 'number' ? x : x.i));
@@ -96,8 +97,9 @@
       'link',
       forceLink<Node, Edge>(edges)
         .id((p) => p.i)
-        .distance((e) => (e.bridge ? 130 : 28 + 60 * (1 - e.r)))
+        .distance((e) => (e.anchor ? 58 : e.bridge ? 130 : 28 + 60 * (1 - e.r)))
         .strength((e) => {
+          if (e.anchor) return 0.3;
           if (e.bridge) return 0.03;
           const [a, b] = ends(e);
           return (0.3 + 0.7 * e.r) / Math.max(1, Math.min(kinDegree[a], kinDegree[b]));

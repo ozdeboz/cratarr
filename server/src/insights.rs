@@ -173,6 +173,10 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
     };
     let genres = tf_idf(profile("genre"));
     let artists = tf_idf(profile("artist"));
+    // Compared without what only one playlist has: it can match nothing and would only lower that playlist's
+    // closeness to every other (a reggae playlist alone with Ska and Rocksteady looked unlike everything).
+    let genres_cmp = shared(&genres);
+    let artists_cmp = shared(&artists);
     let points = playlists
         .iter()
         .enumerate()
@@ -189,8 +193,8 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
             let shared_tracks = tracks[a].intersection(&tracks[b]).count();
             let union = tracks[a].len() + tracks[b].len() - shared_tracks;
             let t = if union == 0 { 0.0 } else { shared_tracks as f64 / union as f64 };
-            let g = cosine(&genres[a], &genres[b]);
-            let r = cosine(&artists[a], &artists[b]);
+            let g = cosine(&genres_cmp[a], &genres_cmp[b]);
+            let r = cosine(&artists_cmp[a], &artists_cmp[b]);
             if t.max(g).max(r) < MIN_SIGNAL {
                 continue;
             }
@@ -210,6 +214,17 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
         }
     }
     Proximity { playlists: points, links }
+}
+
+/// The profiles without the keys found in one profile only.
+fn shared(profiles: &[HashMap<String, f64>]) -> Vec<HashMap<String, f64>> {
+    let mut df: HashMap<&str, usize> = HashMap::new();
+    for p in profiles {
+        for k in p.keys() {
+            *df.entry(k.as_str()).or_default() += 1;
+        }
+    }
+    profiles.iter().map(|p| p.iter().filter(|(k, _)| df[k.as_str()] > 1).map(|(k, v)| (k.clone(), *v)).collect()).collect()
 }
 
 /// Counts weighted by rarity across the playlists: idf = ln(N / playlists having it), so what every playlist has
@@ -423,12 +438,24 @@ mod tests {
         let deep_night = link(0, 1).expect("same rare genre and artist");
         assert_eq!(deep_night.shared_tracks, 0);
         assert!(deep_night.genre > 0.99, "{}", deep_night.genre);
-        // Deepchord in both; Deep also has Echospace, found in one playlist only, so it weighs more: about 0.35.
-        assert!((deep_night.artists - 0.346).abs() < 0.01, "{}", deep_night.artists);
+        // Deepchord in both; Deep's Echospace is in no other playlist, so it is left out of the comparison.
+        assert!(deep_night.artists > 0.99, "{}", deep_night.artists);
         assert_eq!(deep_night.genres, vec!["Dub Techno".to_string()], "Electronic is everywhere: it brings nothing");
         assert!(link(0, 2).is_none() && link(1, 2).is_none(), "only Electronic in common: not close");
         assert_eq!(p.playlists[0].genres, vec!["Dub Techno".to_string()]);
         assert_eq!(p.playlists[0].focus, Some(1.0), "one distinctive genre");
+    }
+
+    #[test]
+    fn a_genre_only_one_playlist_has_does_not_push_it_away() {
+        let t = |rel: &str, genre: &str| row(rel, "MP3", 320, &[("genre", genre), ("artist", rel), ("title", rel)]);
+        let pl = |name: &str, lines: &[&str]| (name.to_string(), lines.iter().map(|s| s.to_string()).collect::<Vec<_>>(), 0);
+        let lists = [pl("Roots", &["a/1", "a/2"]), pl("Mixed", &["b/1"]), pl("Other", &["c/1"])];
+        let with = |extra: &str| {
+            let rows = vec![t("a/1", "Roots Reggae"), t("a/2", extra), t("b/1", "Roots Reggae"), t("c/1", "Polka")];
+            proximity(&rows, &Rules::default(), &lists).links.iter().find(|l| (l.a, l.b) == (0, 1)).map(|l| l.genre).unwrap()
+        };
+        assert!((with("Ska") - with("Roots Reggae")).abs() < 1e-9, "Ska, in Roots only, changes nothing");
     }
 
     #[test]
