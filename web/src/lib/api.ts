@@ -48,3 +48,20 @@ export const getState = () => request<State>('/api/state');
 
 export const toggle = (playlistId: string) =>
   request<State>(`/api/playlists/${encodeURIComponent(playlistId)}/toggle`, { method: 'POST' });
+
+export type Repair = { playlist: string; from: string; to: string };
+export type Repairs = { safe: Repair[]; review: Repair[] };
+
+export const getRepairs = () => request<Repairs>('/api/repairs');
+
+const post = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+/** Apply every safe repair. */
+export const applySafe = () => post<{ playlists: string[] }>('/api/repairs/apply', { kind: 'safe' });
+
+/** Apply one offered repair (used for the ones that need a look). */
+export const applyOne = (r: Repair) => post<{ playlists: string[] }>('/api/repairs/apply', { kind: 'one', ...r });
+
+/** Put playlists back as they were before their last change. */
+export const undo = (playlists: string[]) => post<{ restored: number }>('/api/undo', { playlists });

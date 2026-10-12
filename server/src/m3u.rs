@@ -58,9 +58,48 @@ pub fn with_removed(content: &str, entry: &str) -> (String, usize) {
     (out, removed)
 }
 
+/// Replace every line whose entry equals `from` with `to`, keeping the line's ending and a leading BOM.
+pub fn with_replaced(content: &str, from: &str, to: &str) -> (String, usize) {
+    let mut replaced = 0;
+    let mut out = String::with_capacity(content.len() + to.len());
+    for line in content.split_inclusive('\n') {
+        if entry_of(line).as_deref() == Some(from) {
+            replaced += 1;
+            if line.starts_with('\u{feff}') {
+                out.push('\u{feff}');
+            }
+            out.push_str(to);
+            out.push_str(&line[line.trim_end_matches(['\r', '\n']).len()..]);
+        } else {
+            out.push_str(line);
+        }
+    }
+    (out, replaced)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacing_keeps_everything_else_and_the_line_endings() {
+        let c = "#c\nA/1.mp3\r\nB/2.mp3\nA/1.mp3";
+        let (out, n) = with_replaced(c, "A/1.mp3", "A/1.flac");
+        assert_eq!(n, 2);
+        assert_eq!(out, "#c\nA/1.flac\r\nB/2.mp3\nA/1.flac");
+    }
+
+    #[test]
+    fn replacing_an_absent_entry_changes_nothing() {
+        let c = "A/1.mp3\n";
+        assert_eq!(with_replaced(c, "X/9.mp3", "X/9.flac"), (c.to_string(), 0));
+    }
+
+    #[test]
+    fn replacing_keeps_a_bom_and_matches_across_backslashes() {
+        let (out, n) = with_replaced("\u{feff}A\\1.mp3\nB/2.mp3\n", "A/1.mp3", "A/1.flac");
+        assert_eq!((out.as_str(), n), ("\u{feff}A/1.flac\nB/2.mp3\n", 1));
+    }
 
     fn p(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

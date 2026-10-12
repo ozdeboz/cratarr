@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::jellyfin::{Jellyfin, PlayingItem, pick_now_playing};
 use crate::m3u::library_entry;
 use crate::nowplaying::{current_from_activity, has_audio_history};
-use crate::playlists::{PlaylistView, Store, StoreError};
+use crate::playlists::{PlaylistView, Repair, Repairs, Store, StoreError};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct NowPlayingView {
@@ -37,6 +37,10 @@ pub enum ToggleError {
     NotInLibrary,
     #[error("unknown playlist")]
     UnknownPlaylist,
+    #[error("that repair is no longer offered")]
+    NotOffered,
+    #[error("there is no earlier version to go back to")]
+    NothingToUndo,
     #[error("{0:#}")]
     Upstream(#[from] anyhow::Error),
 }
@@ -45,6 +49,8 @@ impl From<StoreError> for ToggleError {
     fn from(e: StoreError) -> Self {
         match e {
             StoreError::Unknown => ToggleError::UnknownPlaylist,
+            StoreError::NotOffered => ToggleError::NotOffered,
+            StoreError::NothingToUndo => ToggleError::NothingToUndo,
             StoreError::Io(e) => ToggleError::Upstream(e),
         }
     }
@@ -76,6 +82,46 @@ impl App {
 
     pub async fn playlist_count(&self) -> Result<usize> {
         Ok(self.store.view(None).await?.len())
+    }
+
+    pub async fn repairs(&self) -> Result<Repairs> {
+        self.store.repairs().await
+    }
+
+    /// Apply the repairs the client chose (`None` = every safe one). The store only accepts pairs it currently
+    /// offers. Jellyfin is then asked to re-read each changed playlist.
+    pub async fn apply_repairs(self: &Arc<Self>, only: Option<Repair>) -> Result<Vec<String>, ToggleError> {
+        let wanted = match only {
+            Some(one) => vec![one],
+            None => self.store.repairs().await?.safe,
+        };
+        let changed = self.store.apply_repairs(&wanted).await?;
+        self.refresh_in_jellyfin(changed.clone());
+        Ok(changed)
+    }
+
+    /// Put each playlist back as it was before its last change.
+    pub async fn undo(self: &Arc<Self>, playlists: Vec<String>) -> Result<usize, ToggleError> {
+        let mut done = Vec::new();
+        for id in playlists {
+            self.store.undo(&id).await?;
+            done.push(id);
+        }
+        let n = done.len();
+        self.refresh_in_jellyfin(done);
+        Ok(n)
+    }
+
+    /// Best effort, in the background, one playlist at a time: ask Jellyfin to re-read the changed playlists.
+    fn refresh_in_jellyfin(&self, names: Vec<String>) {
+        let jf = self.jf.clone();
+        tokio::spawn(async move {
+            for name in names {
+                if let Err(e) = jf.refresh_playlist(&name).await {
+                    tracing::warn!("could not ask Jellyfin to re-read playlist {name:?}: {e:#}");
+                }
+            }
+        });
     }
 
     /// Re-check which playlist entries point at missing files (the library changes without the playlists).

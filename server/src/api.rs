@@ -9,9 +9,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::app::{App, StateView, ToggleError};
+use crate::playlists::{Repair, Repairs};
 
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
@@ -19,6 +21,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/state", get(state))
         .route("/api/cover/{id}", get(cover))
         .route("/api/playlists/{id}/toggle", post(toggle))
+        .route("/api/repairs", get(repairs))
+        .route("/api/repairs/apply", post(apply_repairs))
+        .route("/api/undo", post(undo))
         .fallback(crate::web::serve)
         .with_state(app)
 }
@@ -52,6 +57,37 @@ async fn cover(State(app): State<Arc<App>>, Path(id): Path<String>, headers: Hea
     }
 }
 
+async fn repairs(State(app): State<Arc<App>>) -> Result<Json<Repairs>, ApiError> {
+    Ok(Json(app.repairs().await.map_err(ToggleError::from)?))
+}
+
+/// `{"kind":"safe"}` applies every safe repair; `{"kind":"one", playlist, from, to}` applies a single offered one.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum ApplyRequest {
+    Safe,
+    One { playlist: String, from: String, to: String },
+}
+
+async fn apply_repairs(State(app): State<Arc<App>>, Json(req): Json<ApplyRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let only = match req {
+        ApplyRequest::Safe => None,
+        ApplyRequest::One { playlist, from, to } => Some(Repair { playlist, from, to }),
+    };
+    let changed = app.apply_repairs(only).await?;
+    Ok(Json(json!({ "playlists": changed })))
+}
+
+#[derive(Deserialize)]
+struct UndoRequest {
+    playlists: Vec<String>,
+}
+
+async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let restored = app.undo(req.playlists).await?;
+    Ok(Json(json!({ "restored": restored })))
+}
+
 pub struct ApiError(ToggleError);
 
 impl From<ToggleError> for ApiError {
@@ -63,7 +99,9 @@ impl From<ToggleError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self.0 {
-            ToggleError::NothingPlaying | ToggleError::NotInLibrary => StatusCode::CONFLICT,
+            ToggleError::NothingPlaying | ToggleError::NotInLibrary | ToggleError::NotOffered | ToggleError::NothingToUndo => {
+                StatusCode::CONFLICT
+            }
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };
