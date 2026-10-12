@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result, bail};
 
 use super::{Choice, Field, FieldKind, Fut, Kind, Library, Playing, PlaylistChange, PlaylistEvent, Source, Status, Track, Values, text};
-use crate::jellyfin::{Device, Jellyfin, PlayingItem, Session, pick_now_playing};
+use crate::jellyfin::{AlbumSummary, Device, Jellyfin, PlayingItem, Session, pick_now_playing};
 use crate::nowplaying::{Started, has_audio_history, playing_from_activity, progress};
 
 pub const KIND: Kind = Kind { id: "jellyfin", label: "Jellyfin", fields, connect };
@@ -51,6 +51,7 @@ fn connect(values: &Values, partial: bool) -> Result<Box<dyn Source>> {
         admin: tokio::sync::OnceCell::new(),
         player: Player::parse(text(values, "player").unwrap_or("")),
         items: Mutex::new(HashMap::new()),
+        summaries: Mutex::new(HashMap::new()),
     }))
 }
 
@@ -184,7 +185,12 @@ struct JellyfinSource {
     admin: tokio::sync::OnceCell<String>,
     /// Recently seen tracks with their library, so polling the playing track stays cheap.
     items: Mutex<HashMap<String, (PlayingItem, Option<String>)>>,
+    /// Per album: its last-saved stamp and what its tracks add up to; read again only when the stamp changes.
+    summaries: Mutex<HashMap<String, (Option<String>, AlbumSummary)>>,
 }
+
+/// How many albums' tracks are read at once when many albums are new (first look at a library).
+const SUMMARY_READERS: usize = 4;
 
 impl JellyfinSource {
     async fn item(&self, id: &str) -> Result<(PlayingItem, Option<String>)> {
@@ -337,7 +343,47 @@ impl Source for JellyfinSource {
     }
 
     fn albums<'a>(&'a self, library_id: &'a str, limit: usize) -> Fut<'a, Vec<super::Album>> {
-        Box::pin(self.jf.albums_in(library_id, limit))
+        Box::pin(async move {
+            let heads = self.jf.album_heads(library_id, limit).await?;
+            // Only albums that are new, or that Jellyfin saved again since we last looked, have their tracks read.
+            let stale: Vec<(String, Option<String>)> = {
+                let known = self.summaries.lock().unwrap_or_else(|p| p.into_inner());
+                heads
+                    .iter()
+                    .filter(|(a, saved)| known.get(&a.id).is_none_or(|(s, _)| s != saved))
+                    .map(|(a, saved)| (a.id.clone(), saved.clone()))
+                    .collect()
+            };
+            for chunk in stale.chunks(SUMMARY_READERS) {
+                let mut readers = tokio::task::JoinSet::new();
+                for (id, saved) in chunk.iter().cloned() {
+                    let jf = self.jf.clone();
+                    readers.spawn(async move { (id.clone(), saved, jf.album_summary(&id).await) });
+                }
+                while let Some(done) = readers.join_next().await {
+                    let Ok((id, saved, summary)) = done else { continue };
+                    match summary {
+                        Ok(s) => {
+                            self.summaries.lock().unwrap_or_else(|p| p.into_inner()).insert(id, (saved, s));
+                        }
+                        Err(e) => tracing::warn!("tracks of album {id}: {e:#}"),
+                    }
+                }
+            }
+            let mut known = self.summaries.lock().unwrap_or_else(|p| p.into_inner());
+            known.retain(|id, _| heads.iter().any(|(a, _)| &a.id == id));
+            Ok(heads
+                .into_iter()
+                .map(|(mut a, _)| {
+                    if let Some((_, s)) = known.get(&a.id) {
+                        a.tracks = s.tracks;
+                        a.format = s.format.clone();
+                        a.bitrate_kbps = s.bitrate_kbps;
+                    }
+                    a
+                })
+                .collect())
+        })
     }
 
     fn play_album<'a>(&'a self, album_id: &'a str) -> Fut<'a, String> {

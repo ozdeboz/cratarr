@@ -110,6 +110,9 @@ pub struct IncomingView {
     pub sources: Vec<IncomingSourceView>,
 }
 
+/// How often the background pass runs (see `App::sync`).
+pub const SYNC_SECS: u64 = 30;
+
 /// More than any incoming queue should hold; the page shows them all.
 const INCOMING_LIMIT: usize = 1000;
 
@@ -436,8 +439,8 @@ impl App {
         IncomingView { sources }
     }
 
-    /// Read every incoming list again and forget lists of sources or libraries no longer configured. Meant to run in
-    /// the background every few minutes; a failed read keeps the previous list.
+    /// Read every incoming list again and forget lists of sources or libraries no longer configured; a failed read
+    /// keeps the previous list. Cheap: only new or changed albums cost more than one request (see the source).
     pub async fn refresh_incoming(&self) {
         let mut keep = std::collections::HashSet::new();
         for (a, s, library) in self.incoming_sources() {
@@ -471,6 +474,17 @@ impl App {
             (Vec::new(), None)
         };
         IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now() }
+    }
+
+    /// The one background pass that keeps Cratarr in step with its sources and the library, run every
+    /// `SYNC_SECS`. Sources offer no reliable change notifications (webhooks are optional plugins), so it looks:
+    /// incoming lists every pass; dead playlist entries and sources still missing their libraries every other pass.
+    pub async fn sync(&self, pass: u64) {
+        self.refresh_incoming().await;
+        if pass % 2 == 0 {
+            self.refresh_dead().await;
+            self.retry_placement().await;
+        }
     }
 
     /// Play an album of a source's incoming library on that source's player. Returns the player's label.
@@ -608,6 +622,8 @@ impl App {
             .map_err(|e| anyhow::anyhow!("saving settings: {e}"))??;
         *self.live.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(next);
         *self.origin.write().unwrap_or_else(|p| p.into_inner()) = Origin::File;
+        // Sources and libraries may have changed: lists are read again on the next look (or the next sync pass).
+        self.incoming_cache.lock().await.clear();
         tracing::info!("settings saved and applied");
         drop(_one_at_a_time);
         Ok(self.settings().await?)

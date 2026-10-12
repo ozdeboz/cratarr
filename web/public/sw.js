@@ -33,6 +33,11 @@ self.addEventListener('fetch', (event) => {
 
   if (url.pathname === '/api/incoming') {
     const fresh = fetch(req).then((r) => put(req, r));
+    // The page asks with cache: 'no-cache' when it wants the latest, right after showing the kept copy.
+    if (req.cache === 'no-cache') {
+      event.respondWith(fresh);
+      return;
+    }
     event.waitUntil(fresh.catch(() => {}));
     event.respondWith(caches.match(req).then((hit) => hit || fresh));
     return;

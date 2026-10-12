@@ -248,7 +248,9 @@ export type IncomingSource = {
   as_of: number;
 };
 
-export const getIncoming = (source?: string) => request<{ sources: IncomingSource[] }>(`/api/incoming${follow(source)}`);
+/** `fresh` asks past the service worker's copy (which answers at once, see sw.js) for the server's latest. */
+export const getIncoming = (source?: string, fresh = false) =>
+  request<{ sources: IncomingSource[] }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
 /** Play an incoming album on the followed player; answers with the player's label. */
 export const playIncoming = (source: string, album: string) =>
   request<{ player: string }>(`/api/incoming/play/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, { method: 'POST' });

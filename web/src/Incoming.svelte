@@ -50,21 +50,25 @@
     };
   });
 
-  // The server keeps the list and reads it again every few minutes; looking again each minute picks that up.
+  // The server follows the source every 30 s and keeps the list. First show whatever copy answers fastest (the
+  // service worker's), then ask for the latest, and keep asking every 30 s.
   $effect(() => {
     const want = prefs.source || undefined;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
-    async function load() {
+    async function load(fresh: boolean) {
       try {
-        sources = (await getIncoming(want)).sources;
+        sources = (await getIncoming(want, fresh)).sources;
         error = null;
       } catch (e) {
         if (!sources) error = e instanceof ApiError ? e.message : 'Unexpected error';
       }
-      if (!stopped) timer = setTimeout(load, 60_000);
     }
-    load();
+    async function follow() {
+      await load(true);
+      if (!stopped) timer = setTimeout(follow, 30_000);
+    }
+    load(false).then(follow);
     return () => {
       stopped = true;
       clearTimeout(timer);

@@ -86,12 +86,23 @@ struct ListedAlbumItem {
     path: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    /// Changes when Jellyfin saves the album again (rescan, tag edit): the cue to read its tracks again.
+    date_last_saved: Option<String>,
+}
+
+/// What an album's tracks add up to.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlbumSummary {
+    pub tracks: u32,
+    /// When every track has the same container; `None` when mixed or unknown.
+    pub format: Option<String>,
+    /// The lowest track bitrate, so a weak track is not hidden by an average.
+    pub bitrate_kbps: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct ListedAudio {
-    album_id: Option<String>,
     container: Option<String>,
     media_sources: Option<Vec<ListedSource>>,
 }
@@ -281,18 +292,23 @@ impl Jellyfin {
         Ok(page.items.into_iter().filter_map(|i| i.path).collect())
     }
 
-    /// Albums in a library, newest first, with track count, format and lowest bitrate from their tracks (two
-    /// requests, however many albums).
-    pub async fn albums_in(&self, library_id: &str, limit: usize) -> Result<Vec<crate::source::Album>> {
-        let albums: ItemsPage<ListedAlbumItem> = self
+    /// Albums in a library, newest first, without their tracks (one cheap request, under a second for a hundred
+    /// albums), each with the stamp that changes when Jellyfin saves it again.
+    pub async fn album_heads(&self, library_id: &str, limit: usize) -> Result<Vec<(crate::source::Album, Option<String>)>> {
+        let page: ItemsPage<ListedAlbumItem> = self
             .get(&format!(
-                "/Items?ParentId={library_id}&IncludeItemTypes=MusicAlbum&Recursive=true&SortBy=DateCreated&SortOrder=Descending&Limit={limit}&Fields=Path,Tags,DateCreated"
+                "/Items?ParentId={library_id}&IncludeItemTypes=MusicAlbum&Recursive=true&SortBy=DateCreated&SortOrder=Descending&Limit={limit}&Fields=Path,Tags,DateCreated,DateLastSaved"
             ))
             .await?;
-        let tracks: ItemsPage<ListedAudio> = self
-            .get(&format!("/Items?ParentId={library_id}&IncludeItemTypes=Audio&Recursive=true&Fields=MediaSources"))
-            .await?;
-        Ok(album_rows(albums.items, tracks.items))
+        Ok(page.items.into_iter().map(album_head).collect())
+    }
+
+    /// Track count, format and lowest bitrate of one album (one request, about a tenth of a second). Reading these
+    /// for a whole library at once takes Jellyfin seconds, so they are read per album and only when it changes.
+    pub async fn album_summary(&self, album_id: &str) -> Result<AlbumSummary> {
+        let page: ItemsPage<ListedAudio> =
+            self.get(&format!("/Items?ParentId={album_id}&IncludeItemTypes=Audio&Recursive=true&Fields=MediaSources")).await?;
+        Ok(summarize(&page.items))
     }
 
     /// The tracks of an album, in disc and track order.
@@ -444,39 +460,35 @@ impl Jellyfin {
     }
 }
 
-/// One row per album: the album's own fields plus track count, format (when all tracks share one) and lowest bitrate.
-fn album_rows(albums: Vec<ListedAlbumItem>, tracks: Vec<ListedAudio>) -> Vec<crate::source::Album> {
-    let mut per: std::collections::HashMap<String, (u32, std::collections::BTreeSet<String>, Option<u32>)> = Default::default();
-    for t in tracks {
-        let Some(album) = t.album_id else { continue };
-        let e = per.entry(album).or_default();
-        e.0 += 1;
-        if let Some(c) = t.container.as_deref().filter(|c| !c.is_empty()) {
-            e.1.insert(c.to_uppercase());
-        }
-        let kbps = t.media_sources.as_ref().and_then(|m| m.first()).and_then(|s| s.bitrate).map(|b| (b / 1000) as u32);
-        if let Some(k) = kbps {
-            e.2 = Some(e.2.map_or(k, |m: u32| m.min(k)));
-        }
+fn album_head(a: ListedAlbumItem) -> (crate::source::Album, Option<String>) {
+    let album = crate::source::Album {
+        added: a.date_created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),
+        title: a.name.unwrap_or_default(),
+        artist: a.album_artist,
+        year: a.production_year,
+        path: a.path,
+        tags: a.tags,
+        id: a.id,
+        tracks: 0,
+        format: None,
+        bitrate_kbps: None,
+    };
+    (album, a.date_last_saved)
+}
+
+fn summarize(tracks: &[ListedAudio]) -> AlbumSummary {
+    let formats: std::collections::BTreeSet<String> =
+        tracks.iter().filter_map(|t| t.container.as_deref()).filter(|c| !c.is_empty()).map(str::to_uppercase).collect();
+    let bitrate_kbps = tracks
+        .iter()
+        .filter_map(|t| t.media_sources.as_ref().and_then(|m| m.first()).and_then(|s| s.bitrate))
+        .map(|b| (b / 1000) as u32)
+        .min();
+    AlbumSummary {
+        tracks: tracks.len() as u32,
+        format: (formats.len() == 1).then(|| formats.into_iter().next().unwrap_or_default()),
+        bitrate_kbps,
     }
-    albums
-        .into_iter()
-        .map(|a| {
-            let (tracks, formats, bitrate_kbps) = per.remove(&a.id).unwrap_or_default();
-            crate::source::Album {
-                format: (formats.len() == 1).then(|| formats.into_iter().next().unwrap_or_default()),
-                added: a.date_created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),
-                title: a.name.unwrap_or_default(),
-                artist: a.album_artist,
-                year: a.production_year,
-                path: a.path,
-                tags: a.tags,
-                id: a.id,
-                tracks,
-                bitrate_kbps,
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -484,29 +496,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn album_rows_summarise_their_tracks() {
-        let albums: Vec<ListedAlbumItem> = serde_json::from_str(
-            r#"[{"Id":"a","Name":"Twirligig","AlbumArtist":"Jonti","ProductionYear":2011,"DateCreated":"2026-10-12T15:39:29.8863581Z","Path":"/m/Jonti/Twirligig (2011)","Tags":["promote"]},
-                {"Id":"b","Name":"Mixed"},{"Id":"c","Name":"Empty"}]"#,
+    fn album_heads_and_summaries_read_what_jellyfin_sends() {
+        let a: ListedAlbumItem = serde_json::from_str(
+            r#"{"Id":"a","Name":"Twirligig","AlbumArtist":"Jonti","ProductionYear":2011,"DateCreated":"2026-10-12T15:39:29.8863581Z","Path":"/m/Jonti/Twirligig (2011)","Tags":["promote"],"DateLastSaved":"2026-10-12T15:40:00Z"}"#,
         )
         .unwrap();
-        let tracks: Vec<ListedAudio> = serde_json::from_str(
-            r#"[{"AlbumId":"a","Container":"flac","MediaSources":[{"Bitrate":884000}]},
-                {"AlbumId":"a","Container":"flac","MediaSources":[{"Bitrate":901000}]},
-                {"AlbumId":"b","Container":"mp3","MediaSources":[{"Bitrate":320000}]},
-                {"AlbumId":"b","Container":"flac","MediaSources":[{"Bitrate":192000}]},
-                {"Container":"mp3"}]"#,
+        let (album, saved) = album_head(a);
+        assert_eq!((album.title.as_str(), album.year, album.tags.len(), album.tracks), ("Twirligig", Some(2011), 1, 0));
+        assert!(album.added.is_some());
+        assert_eq!(saved.as_deref(), Some("2026-10-12T15:40:00Z"));
+        let flac: Vec<ListedAudio> = serde_json::from_str(
+            r#"[{"Container":"flac","MediaSources":[{"Bitrate":884000}]},{"Container":"flac","MediaSources":[{"Bitrate":901000}]}]"#,
         )
         .unwrap();
-        let rows = album_rows(albums, tracks);
-        assert_eq!(rows[0].tracks, 2);
-        assert_eq!(rows[0].format.as_deref(), Some("FLAC"));
-        assert_eq!(rows[0].bitrate_kbps, Some(884), "the lowest bitrate, not an average");
-        assert_eq!(rows[0].year, Some(2011));
-        assert_eq!(rows[0].tags, vec!["promote".to_string()]);
-        assert!(rows[0].added.is_some());
-        assert_eq!((rows[1].tracks, rows[1].format.as_deref(), rows[1].bitrate_kbps), (2, None, Some(192)), "mixed formats");
-        assert_eq!((rows[2].tracks, rows[2].format.as_deref(), rows[2].tags.len()), (0, None, 0));
+        assert_eq!(summarize(&flac), AlbumSummary { tracks: 2, format: Some("FLAC".into()), bitrate_kbps: Some(884) }, "lowest, not average");
+        let mixed: Vec<ListedAudio> =
+            serde_json::from_str(r#"[{"Container":"mp3","MediaSources":[{"Bitrate":320000}]},{"Container":"flac","MediaSources":[{"Bitrate":192000}]}]"#)
+                .unwrap();
+        assert_eq!(summarize(&mixed), AlbumSummary { tracks: 2, format: None, bitrate_kbps: Some(192) });
+        assert_eq!(summarize(&[]), AlbumSummary::default());
     }
 
     const SESSIONS: &str = include_str!("../tests/fixtures/sessions.json");

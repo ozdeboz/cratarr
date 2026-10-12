@@ -73,27 +73,16 @@ async fn main() -> Result<()> {
     let status = app.status().await;
     tracing::info!("sources: {}", if status.connected { status.server_name.unwrap_or_default() } else { "none connected".into() });
 
-    // Files come and go in the library without the playlists changing, so re-check dead entries now and then; and
-    // look again for sources whose libraries could not be found yet (server down at start).
-    let checker = app.clone();
+    // One background pass keeps Cratarr in step with the sources and the library (see `App::sync`); the first runs
+    // at once, so the incoming lists are ready soon after start.
+    let syncer = app.clone();
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(60));
-        tick.tick().await;
+        let mut tick = tokio::time::interval(Duration::from_secs(app::SYNC_SECS));
+        let mut pass: u64 = 0;
         loop {
             tick.tick().await;
-            checker.refresh_dead().await;
-            checker.retry_placement().await;
-        }
-    });
-
-    // Incoming lists are slow to read (seconds per source), so they are kept and read again in the background: at
-    // start, then every few minutes.
-    let reader = app.clone();
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(180));
-        loop {
-            tick.tick().await;
-            reader.refresh_incoming().await;
+            syncer.sync(pass).await;
+            pass += 1;
         }
     });
 

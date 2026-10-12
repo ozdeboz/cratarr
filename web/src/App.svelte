@@ -87,7 +87,7 @@
           ? { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN = $derived<Page[]>(status?.incoming ? [PLAYLISTS, INCOMING, MANAGE] : [PLAYLISTS, MANAGE]);
+  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, PLAYLISTS, MANAGE] : [PLAYLISTS, MANAGE]);
   const ALL = $derived([...MAIN, SETTINGS]);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, BAR_SLOTS - 1));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
