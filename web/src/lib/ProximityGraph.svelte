@@ -13,11 +13,14 @@
     data,
     signals,
     selected = $bindable(null),
+    groups = $bindable([]),
     onmenu,
   }: {
     data: Proximity;
     signals: Record<Signal, boolean>;
     selected?: number | null;
+    /** The colour groups as drawn, for a legend: each colour and its playlists (indexes), largest first. */
+    groups?: { colour: string; members: number[] }[];
     /** Long-press or right-click on a point: open that playlist's menu. */
     onmenu?: (i: number, anchor: DOMRect) => void;
   } = $props();
@@ -49,6 +52,12 @@
   const group = $derived(communities(n, nearest(n, weights, GROUP_NEIGHBOURS), GROUP_RESOLUTION));
   const groupSize = $derived(group.reduce((m, g) => m.set(g, (m.get(g) ?? 0) + 1), new Map<number, number>()));
   const colour = (i: number) => (groupSize.get(group[i])! > 1 && group[i] < PALETTE.length ? PALETTE[group[i]] : 'var(--muted)');
+
+  $effect(() => {
+    const by = new Map<number, number[]>();
+    group.forEach((g, i) => by.set(g, [...(by.get(g) ?? []), i]));
+    groups = [...by.entries()].sort((a, b) => a[0] - b[0]).map(([, members]) => ({ colour: colour(members[0]), members }));
+  });
 
   const degree = $derived.by(() => {
     const d = new Array(n).fill(0);

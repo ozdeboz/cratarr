@@ -27,7 +27,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **The playlist panel (Insights → Related only):** selecting a point shows a button at the graph's top right that
   opens the panel. The graph never gets narrower: the panel sits beside it where there is room, else over its right
   side (full width on a phone). While open it follows the selection; ✕, Esc, Back or a tap on empty space closes it.
-  It has its own address (`#/insights?playlist=…`).
+  It has its own address (`#/insights?playlist=…`). With nothing selected, the same button opens the legend (lines,
+  points, and the colour groups named by their most common genres).
 - **Settings** has four sections, in this order: Connections (servers: address, key, status; Lidarr the same way, shown
   only when an Incoming library is set), Libraries (one row per
   server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its files in, or a warning when

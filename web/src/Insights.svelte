@@ -45,6 +45,30 @@
   // The playlist panel (Related only): it follows the selection while open, and has its own address so Back closes
   // it and a link opens it. Beside the graph where there is room, over it where there is not; the graph keeps its size.
   let panelOpen = $state(false);
+  // The legend (Related, nothing selected): the same button and panel place; no address of its own.
+  let legendOpen = $state(false);
+  let groups = $state<{ colour: string; members: number[] }[]>([]);
+  /** A group's name: the genres most common among its playlists' top genres. */
+  function groupName(members: number[]) {
+    if (!shown) return '';
+    const count = new Map<string, number>();
+    for (const i of members) for (const g of shown.playlists[i]?.genres ?? []) count.set(g, (count.get(g) ?? 0) + 1);
+    const top = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3).map(([g]) => g);
+    return top.length ? top.join(', ') : 'No genre tags';
+  }
+  // Tapping a playlist while the legend is open shows that playlist instead.
+  $effect(() => {
+    if (legendOpen && me) {
+      legendOpen = false;
+      openPanel();
+    }
+  });
+  $effect(() => {
+    if (!legendOpen) return;
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !menu && (legendOpen = false);
+    addEventListener('keydown', esc);
+    return () => removeEventListener('keydown', esc);
+  });
   /** Opened in this visit by pushing an address: closing goes Back, so the history stays tidy. */
   let pushed = false;
   const wanted = () => {
@@ -241,11 +265,56 @@
             data={shown}
             signals={prefs.signals}
             bind:selected
+            bind:groups
             onmenu={(i, anchor) => (menu = { name: shown.playlists[i].name, anchor })}
           />
         {/key}
         {#if me && !panelOpen}
           <button class="open" onclick={openPanel}><Icon name="panel" size={18} /><span>{me.name}</span></button>
+        {:else if !me && !legendOpen}
+          <button class="open" onclick={() => (legendOpen = true)}><Icon name="panel" size={18} /><span>Legend</span></button>
+        {/if}
+        {#if !me && legendOpen}
+          <aside class="panel" aria-label="Legend">
+            <header>
+              <h2>Legend</h2>
+              <button class="icon" aria-label="Close" onclick={() => (legendOpen = false)}><Icon name="close" size={20} /></button>
+            </header>
+            <div class="body">
+              <h3>Lines</h3>
+              <ul class="key">
+                <li>
+                  <svg width="44" height="14" aria-hidden="true"><line x1="2" y1="7" x2="42" y2="7" class="solid thick" /></svg>
+                  <span>Close: each other's closest playlists, or one's own closest. Thicker and shorter is closer.</span>
+                </li>
+                <li>
+                  <svg width="44" height="14" aria-hidden="true"><line x1="2" y1="7" x2="42" y2="7" class="solid" /></svg>
+                  <span>Less close, but still among the closest.</span>
+                </li>
+                <li>
+                  <svg width="44" height="14" aria-hidden="true"><line x1="2" y1="7" x2="42" y2="7" class="dashed" /></svg>
+                  <span>Only there to connect everything: barely alike.</span>
+                </li>
+              </ul>
+              <h3>Points</h3>
+              <ul class="key">
+                <li>
+                  <svg width="44" height="24" aria-hidden="true"><circle cx="10" cy="12" r="4" class="dot" /><circle cx="30" cy="12" r="10" class="dot" /></svg>
+                  <span>A playlist; bigger has more tracks.</span>
+                </li>
+              </ul>
+              <h3>Colours</h3>
+              <p class="muted">Groups of playlists that are alike, named by their most common genres.</p>
+              <ul class="key">
+                {#each groups as g, gi (gi)}
+                  <li>
+                    <span class="swatch" style:background={g.colour}></span>
+                    <span>{groupName(g.members)} <span class="muted">· {plural(g.members.length, 'playlist')}</span></span>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          </aside>
         {/if}
         {#if me && panelOpen}
           <aside class="panel" aria-label={me.name}>
@@ -290,7 +359,7 @@
         {/if}
       </div>
     </div>
-    {#if !me}
+    {#if !me && !legendOpen}
       <p class="hint">Tap a playlist to highlight its closest playlists. Pinch or scroll to zoom.</p>
     {/if}
   {/if}
@@ -413,6 +482,48 @@
     flex: 1;
     overflow-y: auto;
     padding: 4px 14px 16px;
+  }
+
+  .key {
+    margin: 0 0 6px;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 8px;
+    font-size: 0.9rem;
+  }
+
+  .key li {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .key line {
+    stroke: var(--muted);
+    stroke-linecap: round;
+    stroke-width: 1.2;
+  }
+
+  .key line.thick {
+    stroke-width: 3;
+  }
+
+  .key line.dashed {
+    stroke-width: 0.9;
+    stroke-dasharray: 4 4;
+  }
+
+  .key .dot {
+    fill: var(--muted);
+  }
+
+  .swatch {
+    justify-self: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
   }
 
   .toolbar {
