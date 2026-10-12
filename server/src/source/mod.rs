@@ -86,6 +86,8 @@ pub struct Track {
 pub struct Playing {
     pub track: Track,
     pub progress: Option<Progress>,
+    /// The player it plays on, as the page names it ("Finamp on Lenovo Tab"); the device the controls act on.
+    pub player: Option<String>,
     /// When this track started, epoch seconds, if known. With several sources playing, "automatic" follows the
     /// most recent start.
     pub started_at: Option<i64>,
@@ -157,6 +159,15 @@ pub struct TrackPage {
     pub total: usize,
 }
 
+/// A player control, as sent from the now-playing header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Transport {
+    Previous,
+    PlayPause,
+    Next,
+}
+
 pub trait Source: Send + Sync {
     fn status(&self) -> Fut<'_, Status>;
 
@@ -213,6 +224,11 @@ pub trait Source: Send + Sync {
     }
 
     /// Optional: play tracks (this source's ids, in order) on the player it follows. Returns the player's label.
+    /// Optional: previous / play-pause / next on the player that plays now (or the chosen one). Returns its label.
+    fn transport<'a>(&'a self, _command: Transport) -> Fut<'a, String> {
+        Box::pin(async { anyhow::bail!("this server cannot control its players") })
+    }
+
     fn play_tracks<'a>(&'a self, _ids: &'a [String], _how: PlayHow) -> Fut<'a, String> {
         Box::pin(async { anyhow::bail!("this server cannot play music") })
     }

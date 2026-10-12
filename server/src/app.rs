@@ -30,6 +30,8 @@ pub struct NowPlayingView {
     pub addable: bool,
     /// `None` when nothing reports a position.
     pub progress: Option<Progress>,
+    /// The player it plays on ("Finamp on Lenovo Tab"); the controls act on it.
+    pub player: Option<String>,
 }
 
 /// One enabled source, for the page's source picker.
@@ -452,6 +454,17 @@ impl App {
         Ok((best.map(|(i, p)| (sources[i].0.clone(), p)), tabs))
     }
 
+    /// Previous / play-pause / next on the player that plays now (on `want`'s server, else the one playing).
+    pub async fn transport(&self, want: Option<&str>, command: source::Transport) -> Result<String, ToggleError> {
+        let (np, _) = self.playing(want).await?;
+        let source = match np {
+            Some((a, _)) => self.connected().into_iter().find(|(c, _)| c.cfg.id == a.cfg.id).map(|(_, s)| s),
+            None => None,
+        }
+        .ok_or_else(|| ToggleError::CannotPlay("nothing is playing".into()))?;
+        source.transport(command).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
     pub async fn state(&self, want: Option<&str>) -> Result<StateView> {
         let (np, sources) = self.playing(want).await?;
         let entry = np.as_ref().and_then(|(a, p)| a.entry(&p.track));
@@ -465,6 +478,7 @@ impl App {
             artist: p.track.artist,
             album: p.track.album,
             album_id: p.track.album_id,
+            player: p.player,
         });
         Ok(StateView { now_playing, playlists, sources })
     }

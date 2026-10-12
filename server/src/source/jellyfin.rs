@@ -116,6 +116,21 @@ pub fn choose<'a>(playing: &'a [Started], sessions: &[Session], player: &Player)
 /// lists no commands at all yet is the one that plays what it is sent. Both report `SupportsRemoteControl: false`,
 /// and Jellyfin answers 204 to both, so neither the flags nor the answer tell them apart.
 pub fn cast_targets<'a>(sessions: &'a [Session], player: &Player) -> Vec<&'a Session> {
+    device_sessions(sessions, player, false)
+}
+
+/// The sessions the player controls act on (and the pill names): as `cast_targets`, except that with no player chosen
+/// a PAUSED device counts too, or play/pause could never resume what it paused.
+pub fn control_targets<'a>(sessions: &'a [Session], player: &Player) -> Vec<&'a Session> {
+    device_sessions(sessions, player, true)
+}
+
+/// "Finamp on Lenovo Tab": the wording play and the pill share.
+pub fn session_label(s: &Session) -> String {
+    [s.client.as_deref(), s.device_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" on ")
+}
+
+fn device_sessions<'a>(sessions: &'a [Session], player: &Player, paused_counts: bool) -> Vec<&'a Session> {
     // ISO dates sort as text; the most recently active session decides the device.
     let newest = |a: &&Session, b: &&Session| a.last_activity_date.cmp(&b.last_activity_date);
     let with_id = || sessions.iter().filter(|s| s.id.is_some());
@@ -125,7 +140,7 @@ pub fn cast_targets<'a>(sessions: &'a [Session], player: &Player) -> Vec<&'a Ses
         // A session record can keep a finished track, so "not paused" is required as well.
         with_id()
             .filter(|s| s.now_playing_item.as_ref().is_some_and(|i| i.media_type.as_deref().is_some_and(|m| m.eq_ignore_ascii_case("Audio"))))
-            .filter(|s| s.play_state.as_ref().and_then(|p| p.is_paused) == Some(false))
+            .filter(|s| paused_counts || s.play_state.as_ref().and_then(|p| p.is_paused) == Some(false))
             .max_by(newest)
     };
     let Some(anchor) = anchor else { return Vec::new() };
@@ -294,7 +309,8 @@ impl Source for JellyfinSource {
             let (id, started_at) = chosen;
             let found = self.item(&id).await?;
             let progress = progress(&found.0.id, found.0.run_time_ticks, &sessions, self.prefers(), started_at, now);
-            Ok(Some(Playing { track: to_track(found), progress, started_at }))
+            let player = control_targets(&sessions, &self.player).first().map(|s| session_label(s));
+            Ok(Some(Playing { track: to_track(found), progress, started_at, player }))
         })
     }
 
@@ -427,6 +443,37 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn transport<'a>(&'a self, command: super::Transport) -> Fut<'a, String> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await?;
+            let targets = control_targets(&sessions, &self.player);
+            let Some(first) = targets.first() else {
+                bail!("nothing is playing");
+            };
+            let label = session_label(first);
+            let name = match command {
+                super::Transport::Previous => "PreviousTrack",
+                super::Transport::PlayPause => "PlayPause",
+                super::Transport::Next => "NextTrack",
+            };
+            // Every session of the device (see cast_targets: Finamp acts on the one listing no commands). Verified
+            // on the tablet 2026-10-12: PlayPause toggles; NextTrack advances (stops at the end of the queue);
+            // PreviousTrack restarts the track first and goes back on a second press within a few seconds.
+            let mut sent = 0;
+            let mut last_error = None;
+            for t in &targets {
+                match self.jf.playstate(t.id.as_deref().unwrap_or_default(), name).await {
+                    Ok(()) => sent += 1,
+                    Err(e) => last_error = Some(e),
+                }
+            }
+            match (sent, last_error) {
+                (0, Some(e)) => Err(e),
+                _ => Ok(label),
+            }
+        })
+    }
+
     fn play_tracks<'a>(&'a self, ids: &'a [String], how: super::PlayHow) -> Fut<'a, String> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;
@@ -543,6 +590,16 @@ mod tests {
         assert_eq!(ids(cast_targets(&sessions, &Player::default())), ["playon", "report"]);
         let idle = vec![remote("Finamp", "Lenovo Tab", "playon", false, None, "2026-10-12T15:25:00Z")];
         assert!(cast_targets(&idle, &Player::default()).is_empty(), "nothing playing and nothing chosen: no guess");
+    }
+
+    #[test]
+    fn controls_reach_a_paused_device_that_play_would_skip() {
+        let mut paused = remote("Finamp", "Lenovo Tab", "report", true, Some("x"), "2026-10-12T16:00:00Z");
+        paused.play_state = Some(crate::jellyfin::PlayState { position_ticks: Some(0), is_paused: Some(true) });
+        let sessions = vec![paused, remote("Finamp", "Lenovo Tab", "playon", false, None, "2026-10-12T15:00:00Z")];
+        assert!(cast_targets(&sessions, &Player::default()).is_empty(), "starting music needs a device that plays");
+        assert_eq!(ids(control_targets(&sessions, &Player::default())), ["playon", "report"], "resume must reach it");
+        assert_eq!(session_label(control_targets(&sessions, &Player::default())[0]), "Finamp on Lenovo Tab");
     }
 
     #[test]

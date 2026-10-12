@@ -23,6 +23,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/playlists/{id}/play", post(play_playlist))
+        .route("/api/player/{command}", post(transport))
         .route("/api/playlists", post(create_playlist))
         .route("/api/playlists/{id}", delete(delete_playlist))
         .route("/api/playlists/{id}/rename", post(rename_playlist))
@@ -225,6 +226,16 @@ async fn catalogue_problems(State(app): State<Arc<App>>) -> Result<Json<Vec<crat
 #[derive(Deserialize)]
 struct PlayBody {
     mode: crate::app::PlayMode,
+}
+
+async fn transport(
+    State(app): State<Arc<App>>,
+    Path(command): Path<String>,
+    Query(f): Query<Follow>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let command: crate::source::Transport = serde_json::from_value(json!(command))
+        .map_err(|_| ToggleError::CannotPlay("unknown player command (previous, play-pause, next)".into()))?;
+    Ok(Json(json!({ "player": app.transport(f.source.as_deref(), command).await? })))
 }
 
 async fn play_playlist(

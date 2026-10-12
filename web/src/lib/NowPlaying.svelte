@@ -2,8 +2,9 @@
   // The now-playing header, part of the app shell: shown above every page. It reads the shared state (see
   // live.svelte.ts) and shows the track, its cover, the progress bar, and how many playlists hold it.
   import { untrack } from 'svelte';
-  import { coverUrl, incomingCoverUrl } from './api';
-  import { live } from './live.svelte';
+  import { ApiError, coverUrl, incomingCoverUrl, transport, type Transport } from './api';
+  import Icon from './Icon.svelte';
+  import { live, refresh } from './live.svelte';
   import { prefs } from './prefs.svelte';
 
   const np = $derived(live.view?.now_playing ?? null);
@@ -19,6 +20,25 @@
     return (np.addable ? [library, album] : [album, library]).filter((u): u is string => !!u);
   });
   const src = $derived(candidates.find((u) => !failed[u]) ?? null);
+
+  // Player controls. Success shows nothing (the header itself changes); only a failure says something, briefly.
+  let sending = $state(false);
+  let failure = $state<string | null>(null);
+  const paused = $derived(np?.progress?.paused ?? false);
+  async function send(command: Transport) {
+    if (sending || !np) return;
+    sending = true;
+    failure = null;
+    try {
+      await transport(command, np.source);
+      setTimeout(refresh, 700); // the player reports back within a moment
+    } catch (e) {
+      failure = e instanceof ApiError ? e.message : "The player didn't respond";
+      setTimeout(() => (failure = null), 5000);
+    } finally {
+      sending = false;
+    }
+  }
 
   // The bar runs on a local clock between polls. It is re-anchored to the server only when the server disagrees
   // with it (track, pause state, or more than 1.5 s off: a seek or drift), so it moves smoothly.
@@ -70,8 +90,17 @@
   {/if}
   <div class="np">
     {#if np}
+      {#if np.player}<span class="pill">{np.player}</span>{/if}
       <div class="title">{np.name}</div>
       <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
+      <div class="row">
+      <div class="transport" role="group" aria-label="Player controls">
+        <button aria-label="Previous track" disabled={sending} onclick={() => send('previous')}><Icon name="previous" size={18} /></button>
+        <button class="main" aria-label={paused ? 'Play' : 'Pause'} disabled={sending} onclick={() => send('play-pause')}
+          ><Icon name={paused ? 'play' : 'pause'} size={20} /></button
+        >
+        <button aria-label="Next track" disabled={sending} onclick={() => send('next')}><Icon name="next" size={18} /></button>
+      </div>
       {#if np.progress && prefs.showProgress}
         <div
           class="progress"
@@ -98,6 +127,8 @@
           <span class="t">{duration ? clock(duration) : '–:––'}</span>
         </div>
       {/if}
+      </div>
+      {#if failure}<span class="failure" role="alert">{failure}</span>{/if}
       {#if !np.addable}<span class="badge">Not in your Music, so it can't go in playlists.</span>{/if}
     {:else}
       <div class="title idle">Nothing is playing</div>
@@ -244,5 +275,66 @@
     display: block;
     color: var(--muted);
     font-size: 0.75rem;
+  }
+
+  .pill {
+    display: inline-block;
+    margin-bottom: 4px;
+    padding: 1px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 0.72rem;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+
+  .row .progress {
+    flex: 1;
+    margin-top: 0;
+  }
+
+  .transport {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .transport button {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: 50%;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .transport button.main {
+    width: 40px;
+    height: 40px;
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  .transport button:disabled {
+    opacity: 0.5;
+    cursor: progress;
+  }
+
+  .failure {
+    display: block;
+    margin-top: 6px;
+    color: var(--danger);
+    font-size: 0.8rem;
   }
 </style>

@@ -368,6 +368,16 @@ impl Jellyfin {
         self.play_command(session_id, "PlayNow", item_ids).await
     }
 
+    /// A playback control for one session: `PlayPause`, `NextTrack` or `PreviousTrack` (Jellyfin's names).
+    pub async fn playstate(&self, session_id: &str, command: &str) -> Result<()> {
+        let url = format!("{}/Sessions/{session_id}/Playing/{command}", self.base);
+        let status = self.http.post(&url).send().await.context("POST /Sessions/{id}/Playing/{command}")?.status();
+        if !status.is_success() {
+            bail!("the player refused the command ({status})");
+        }
+        Ok(())
+    }
+
     /// `command`: PlayNow, PlayNext or PlayLast. At most 240 ids fit in one request (decision 0006).
     pub async fn play_command(&self, session_id: &str, command: &str, item_ids: &[String]) -> Result<()> {
         let url = format!("{}/Sessions/{session_id}/Playing", self.base);

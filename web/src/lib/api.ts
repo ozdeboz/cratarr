@@ -21,6 +21,8 @@ export type NowPlaying = {
   addable: boolean;
   /** Null when nothing reports a position. */
   progress: Progress | null;
+  /** The player it plays on ("Finamp on Lenovo Tab"); the controls act on it. */
+  player: string | null;
 };
 
 export type Progress = {
@@ -303,3 +305,8 @@ export const playIncoming = (source: string, album: string) =>
   request<{ player: string }>(`/api/incoming/play/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, { method: 'POST' });
 export const incomingCoverUrl = (source: string, album: string) =>
   `/api/incoming/cover/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
+
+export type Transport = 'previous' | 'play-pause' | 'next';
+/** Previous / play-pause / next on the player that plays now. */
+export const transport = (command: Transport, source?: string) =>
+  request<{ player: string }>(`/api/player/${command}${follow(source)}`, { method: 'POST' });
