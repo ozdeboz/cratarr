@@ -271,7 +271,7 @@ impl Source for JellyfinSource {
                 .await?
                 .into_iter()
                 .filter(|f| f.collection_type.as_deref() == Some("music"))
-                .map(|f| Library { id: f.item_id, name: f.name })
+                .map(|f| Library { id: f.item_id, name: f.name, paths: f.locations })
                 .collect())
         })
     }

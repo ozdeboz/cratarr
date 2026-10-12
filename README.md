@@ -17,12 +17,14 @@ It is deliberately small.
 
 ## How it works
 
-- Playlists are plain `.m3u` files in your music folder (the format Jellyfin imports). Cratarr reads and edits the
+- Playlists are plain `.m3u` files in your Music folder (the format Jellyfin imports). Cratarr reads and edits the
   files directly, with a backup before every change.
 - Sources tell Cratarr what is playing; after an edit Cratarr tells every source, so each re-reads the playlist
   (Jellyfin: `FullRefresh` with `ReplaceAllMetadata`, the only mode that handles both added and removed entries).
-- Only tracks in a source's music libraries that lie inside the playlist folder can be added. An incoming library
-  (a sandbox folder, say) never can.
+- Each server library is **Music** (the playlists and the tracks that can go in them), **Incoming** (new music
+  waiting to be heard, never added to playlists) or not used, set in Settings → Libraries. Cratarr finds the
+  folder behind each library and says when it can't see a library's files; see
+  [decision 0009](docs/decisions/0009-library-uses.md).
 
 ## Sources
 
@@ -34,11 +36,9 @@ with no plugin-specific UI code.
 - Several sources can be on at once, for example two servers reading the same music folder. A source picker then
   appears in the sidebar (or above the page on phones). Each browser picks a source, or "Automatic": whichever
   started playing most recently.
-- Library roles per source: **Music** (playlists may use these; by default every library inside the playlist folder)
-  and an optional **Incoming** library (never added to playlists; its presence turns on incoming-music features).
-- Cratarr finds where a source's paths lie in the playlist folder by itself (`placement.rs`). It strips leading
-  folders off a sample track's path until the rest is a file in the playlist folder. Sources need not agree on
-  paths: Jellyfin, for one, reports `/data/media/Music/...` for a library it lists as `/Volume1/media/Music`.
+- Cratarr finds the folder behind each library by itself (`placement.rs`). It strips leading folders off sample
+  track paths until the rest is a file in one of its mounted folders. Sources need not agree on paths: Jellyfin,
+  for one, reports `/data/media/Music/...` for what Cratarr sees as `/music/...`.
 - With Jellyfin, the page follows a chosen player ("Finamp on Lenovo Tab", "Finamp, any device" or any player).
 - Playlists are the same for everyone. Jellyfin shows `.m3u` playlists to every user with access to the library,
   and its per-user ownership and sharing do not apply to them, so Cratarr does not ask for a Jellyfin user (it uses
@@ -49,8 +49,7 @@ See [decision 0005](docs/decisions/0005-pluggable-sources.md).
 
 ## Catalogue
 
-Cratarr keeps its own index of every audio file in the playlist folder (and any extra folders set in Settings →
-Libraries): path, size, tags as stored, and each server's id for it. It fills itself in the background (a first
+Cratarr keeps its own index of every audio file of the Music library and of the Incoming libraries it can see: path, size, tags as stored, and each server's id for it. It fills itself in the background (a first
 fill of about 24,000 files takes some 12 minutes) and then follows changes every few minutes. It is derived data
 in `CRATARR_DATA_DIR/catalogue.sqlite`; deleting it only costs a refill. Tags are split on read by editable rules,
 never rewritten in the files, and files that cannot be read properly are listed on the Repairs page. See
@@ -61,7 +60,7 @@ never rewritten in the files, and files that cannot be read properly are listed 
 The page header shows the cover of the playing track's album, small, next to the title. `GET /api/cover/{source}/{item_id}`
 looks the track up in that source, maps it to its library entry and serves the first of `cover.jpg`, `cover.jpeg`,
 `cover.png`, `folder.jpg`, `folder.jpeg`, `folder.png`, `front.jpg`, `front.png` (any letter case) found in the
-album folder, read from the music folder on disk (the playlist folder). It answers 404 when there is none, when the
+album folder, read from the Music folder on disk. It answers 404 when there is none, when the
 track is unknown or outside the library, or when the file is over 10 MB. Responses carry an `ETag` and
 `Cache-Control: public, max-age=86400`, and honour `If-None-Match`. Images are not resized or cached in memory.
 Security rules are in [decision 0003](docs/decisions/0003-album-cover-endpoint.md).
@@ -83,10 +82,11 @@ between polls and only re-syncs to the server on a track change, a pause or resu
 
 ## Configuration
 
-The container: `CRATARR_PLAYLIST_DIR` (required, the mounted music and playlist folder), `CRATARR_BIND` and
-`CRATARR_DATA_DIR` (optional; see `server/src/config.rs`).
+The container: the music libraries' folders as mounts (read only is enough for Incoming ones; Settings says which
+library it can't see), and optionally `CRATARR_BIND`, `CRATARR_DATA_DIR` and `CRATARR_PLAYLIST_DIR` (the Music
+folder until a Music library is saved; see `server/src/config.rs`).
 
-Sources are set up on the Settings page and saved in `CRATARR_DATA_DIR/settings.json` (owner-only: it holds secrets).
+Sources and library uses are set up on the Settings page and saved in `CRATARR_DATA_DIR/settings.json` (owner-only: it holds secrets).
 Until something is saved there, one Jellyfin source comes from `JELLYFIN_URL`, `JELLYFIN_API_KEY` and the
 optional `CRATARR_PLAYER_CLIENT`. Secrets are never sent back to the page, and a saved
 secret is only reused while the fields it is tied to (Jellyfin: the address) stay the same. `CRATARR_MUSIC_PREFIXES`,
@@ -94,7 +94,7 @@ secret is only reused while the fields it is tied to (Jellyfin: the address) sta
 and [0005](docs/decisions/0005-pluggable-sources.md).
 
 A source that is down does not stop Cratarr: its status shows on the Settings page, and its libraries are looked for
-again every minute. An unreadable playlist folder does stop it.
+again every minute. An unreadable Music folder does stop it.
 
 ## Navigation
 

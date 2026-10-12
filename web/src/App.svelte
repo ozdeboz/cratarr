@@ -130,12 +130,14 @@
   <div class="content">
     {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
     <div class="np-bar"><NowPlaying /></div>
-    {#if page === 'repairs'}
-      <Repairs />
-    {:else if page === 'settings'}
+    {#if page === 'settings'}
       <Settings />
     {:else if page === 'incoming' && status?.incoming}
       <Incoming />
+    {:else if status && !status.music}
+      <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
+    {:else if page === 'repairs'}
+      <Repairs />
     {:else}
       <Playlists />
     {/if}
@@ -175,6 +177,15 @@
   .content {
     min-width: 0;
     padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+
+  /* Same place and look as a page's own empty state. */
+  .no-music {
+    max-width: 900px;
+    margin: 16px 0;
+    padding: 0 clamp(12px, 2vw, 32px);
+    color: var(--muted);
+    font-size: 0.9rem;
   }
 
   /* The now-playing header stays on top of every page while it scrolls; same side padding as the pages. */

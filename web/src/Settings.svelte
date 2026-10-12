@@ -8,6 +8,7 @@
     type Choice,
     type Field,
     type Kind,
+    type LibraryUse,
     type Settings,
     type SourceConfig,
     type SourceView,
@@ -30,15 +31,13 @@
 
   const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 
-  // Saved with the servers: extra folders and how tags are split.
-  let folders = $state<string[]>([]);
+  // Saved with the servers: how tags are split.
   // Edited as text (so Enter and spaces can be typed) and parsed when compared or saved.
   let ruleText = $state({ artistSeps: '', genreSeps: '', artistKeep: '', genreKeep: '' });
   let cat = $state<CatalogueStatus | null>(null);
 
   function fill(next: Settings) {
     s = next;
-    folders = [...next.folders];
     ruleText = {
       artistSeps: next.tag_rules.artist_separators.join(' '),
       genreSeps: next.tag_rules.genre_separators.join(' '),
@@ -75,7 +74,21 @@
     return { id: d.id, kind: d.kind, enabled: d.enabled, libraries: clone(d.libraries), values };
   }
 
-  const cleanFolders = (f: string[]) => f.map((x) => x.trim()).filter(Boolean);
+  const useOf = (d: Draft, id: string): LibraryUse =>
+    d.libraries.music.includes(id) ? 'music' : d.libraries.incoming.includes(id) ? 'incoming' : 'unused';
+
+  function setUse(d: Draft, id: string, use: LibraryUse) {
+    d.libraries.music = d.libraries.music.filter((x) => x !== id);
+    d.libraries.incoming = d.libraries.incoming.filter((x) => x !== id);
+    if (use !== 'unused') d.libraries[use].push(id);
+  }
+
+  const USES: { id: LibraryUse; label: string }[] = [
+    { id: 'music', label: 'Music' },
+    { id: 'incoming', label: 'Incoming' },
+    { id: 'unused', label: 'Not used' },
+  ];
+
   const fromWords = (text: string) => text.split(/\s+/).filter(Boolean);
   const fromLines = (text: string) => text.split('\n').map((l) => l.trim()).filter(Boolean);
   const rules = $derived<TagRules>({
@@ -87,7 +100,7 @@
   const dirty = $derived(
     !!s &&
       (drafts.some((d) => Object.values(d.secrets).some((v) => v.trim())) ||
-        JSON.stringify([cleanFolders(folders), rules]) !== JSON.stringify([s.folders, s.tag_rules]) ||
+        JSON.stringify(rules) !== JSON.stringify(s.tag_rules) ||
         JSON.stringify(drafts.map(payload)) !==
           JSON.stringify(s.sources.map((v) => payload({ ...v, secrets: {}, view: v, busy: false, note: null })))),
   );
@@ -124,30 +137,20 @@
     if (!k) return;
     let id = k.id;
     for (let n = 2; drafts.some((d) => d.id === id); n++) id = `${k.id}-${n}`;
-    drafts.push({ id, kind: k.id, enabled: true, libraries: { music: [], incoming: null }, values: {}, secrets: {}, view: null, busy: false, note: null });
+    drafts.push({ id, kind: k.id, enabled: true, libraries: { music: [], incoming: [] }, values: {}, secrets: {}, view: null, busy: false, note: null });
   }
 
   async function save() {
     notice = null;
     saving = true;
     try {
-      fill(await saveSettings(drafts.map(payload), { folders: cleanFolders(folders), tag_rules: rules }));
+      fill(await saveSettings(drafts.map(payload), { tag_rules: rules }));
       notice = { text: 'Saved and in use.' };
     } catch (e) {
       notice = { text: e instanceof ApiError ? e.message : 'Unexpected error', tone: 'error' };
     } finally {
       saving = false;
     }
-  }
-
-  // Music libraries: automatic (every library inside the playlist folder) or a chosen set.
-  function setAutomatic(d: Draft, auto: boolean) {
-    const inside = (d.view?.placement.libraries ?? []).filter((l) => l.inside && l.id !== d.libraries.incoming);
-    d.libraries.music = auto ? [] : inside.map((l) => l.id);
-  }
-
-  function toggleMusic(d: Draft, id: string, on: boolean) {
-    d.libraries.music = on ? [...d.libraries.music, id] : d.libraries.music.filter((x) => x !== id);
   }
 
   function statusLine(v: SourceView | null) {
@@ -311,49 +314,49 @@
     <section aria-labelledby="lib-h">
       <h2 id="lib-h">Libraries</h2>
       <p class="lede">
-        <strong>Music</strong>: tracks that can go in playlists. <strong>Incoming</strong>: new music waiting to be
-        listened to; never added to playlists.
+        <strong>Music</strong>: the playlists and the tracks that can go in them. <strong>Incoming</strong>: new music
+        waiting to be heard.
       </p>
 
       {#each drafts.filter((d) => d.enabled) as d (d)}
-        {@const libs = d.view?.placement.libraries ?? []}
-        <!-- With one server its frame adds nothing: the section already is the frame. -->
-        <article class="server" class:plain={!many}>
+        <div class="libs-of">
           {#if many}<h3>{kindOf(d)?.label ?? d.kind}<small>{d.id}</small></h3>{/if}
           {#if !d.view}
             <p class="hint">Check the connection to see this server's libraries.</p>
           {:else}
-            <fieldset>
-              <legend>Music</legend>
-              <label class="check"><input type="radio" checked={d.libraries.music.length === 0} onchange={() => setAutomatic(d, true)} />Every library inside the playlist folder</label>
-              <label class="check"><input type="radio" checked={d.libraries.music.length > 0} onchange={() => setAutomatic(d, false)} />Only these:</label>
-              {#if d.libraries.music.length > 0}
-                <div class="checks indent">
-                  {#each libs.filter((l) => l.id !== d.libraries.incoming) as l (l.id)}
-                    <label class="check" class:muted={!l.inside}>
-                      <input type="checkbox" disabled={!l.inside} checked={d.libraries.music.includes(l.id)} onchange={(e) => toggleMusic(d, l.id, e.currentTarget.checked)} />
-                      {l.name}{#if !l.inside}<small>outside the playlist folder</small>{/if}
-                    </label>
-                  {/each}
-                </div>
-              {/if}
-              {#if !d.view.placement.root}
-                <p class="hint bad">None of this server's libraries is inside the playlist folder, so nothing can be added to playlists.</p>
-              {/if}
-            </fieldset>
-
-            <fieldset>
-              <legend>Incoming <small>optional</small></legend>
-              <select value={d.libraries.incoming ?? ''} onchange={(e) => (d.libraries.incoming = e.currentTarget.value || null)} aria-label="Incoming library">
-                <option value="">None</option>
-                {#each libs.filter((l) => !d.libraries.music.includes(l.id)) as l (l.id)}<option value={l.id}>{l.name}</option>{/each}
-              </select>
-            </fieldset>
+            <ul class="libs">
+              {#each d.view.server_libraries as l (l.id)}
+                {@const u = useOf(d, l.id)}
+                <li>
+                  <div class="where">
+                    <span>{l.name}</span>
+                    {#if l.folders.length}
+                      <code class="hint">{l.folders.join(', ')}</code>
+                    {:else if u !== 'unused'}
+                      <span class="hint warn">
+                        Cratarr can't see these files.{#if l.paths.length}
+                          Mount {kindOf(d)?.label ?? d.kind}'s folder <code>{l.paths.join(', ')}</code> into Cratarr and restart it.{/if}
+                      </span>
+                    {/if}
+                  </div>
+                  <div class="seg" role="group" aria-label={`Use of ${l.name}`}>
+                    {#each USES as x (x.id)}
+                      <button aria-pressed={u === x.id} onclick={() => setUse(d, l.id, x.id)}>{x.label}</button>
+                    {/each}
+                  </div>
+                </li>
+              {:else}
+                <li class="hint">No music libraries on this server.</li>
+              {/each}
+            </ul>
           {/if}
-        </article>
+        </div>
       {:else}
         <p class="hint">Add a server under Connections first.</p>
       {/each}
+      {#if drafts.some((d) => d.enabled && d.view) && !drafts.some((d) => d.enabled && d.libraries.music.length)}
+        <p class="hint warn">Choose a Music library.</p>
+      {/if}
 
       <div class="sub">
         <h3>Catalogue</h3>
@@ -365,18 +368,6 @@
         {:else}
           <p class="hint">Not available.</p>
         {/if}
-      </div>
-
-      <div class="sub">
-        <h3>Other music folders <small>optional</small></h3>
-        <p class="hint">Music outside the playlist folder that Cratarr should know about, such as an incoming folder. Each has to be mounted into Cratarr's container.</p>
-        {#each folders as _, i (i)}
-          <div class="row">
-            <input type="text" bind:value={folders[i]} placeholder="/incoming" spellcheck="false" aria-label="Folder" />
-            <button onclick={() => folders.splice(i, 1)}>Remove</button>
-          </div>
-        {/each}
-        <div class="row"><button onclick={() => folders.push('')}>Add folder</button></div>
       </div>
 
       <details class="sub">
@@ -436,12 +427,10 @@
       <dl>
         <dt>Cratarr</dt>
         <dd>{s.version}, running since {since(s.started)}</dd>
-        <dt>Playlists</dt>
-        <dd>{s.playlists} in <code>{s.fixed.playlist_dir}</code></dd>
-        {#each s.sources.filter((v) => v.placement.root) as v (v.id)}
-          <dt>{v.label}{s.sources.length > 1 ? ` (${v.id})` : ''}</dt>
-          <dd>sees that folder as <code>{v.placement.root}</code></dd>
-        {/each}
+        {#if s.music_folder}
+          <dt>Playlists</dt>
+          <dd>{s.playlists} in <code>{s.music_folder}</code></dd>
+        {/if}
         <dt>Port</dt>
         <dd><code>{s.fixed.bind}</code></dd>
         <dt>Settings file</dt>
@@ -487,9 +476,7 @@
   }
 
   h3 small,
-  .l small,
-  legend small,
-  .check small {
+  .l small {
     margin-left: 6px;
     color: var(--muted);
     font-weight: 400;
@@ -557,10 +544,6 @@
     color: var(--danger);
   }
 
-  .muted {
-    color: var(--muted);
-  }
-
   .server {
     display: grid;
     gap: 14px;
@@ -571,6 +554,53 @@
     border-radius: 12px;
   }
 
+  .libs-of + .libs-of {
+    margin-top: 12px;
+  }
+
+  .libs {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .libs li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+    flex-wrap: wrap;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .libs li:last-child {
+    border-bottom: 0;
+  }
+
+  /* Phones: every row the same, the name above and the choice full width below. */
+  @media (max-width: 520px) {
+    .libs li {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .libs .seg button {
+      flex: 1;
+    }
+  }
+
+  .where {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .where .warn code {
+    color: inherit;
+  }
+
   .sub {
     margin-top: 16px;
     padding-top: 14px;
@@ -579,10 +609,6 @@
 
   .sub h3 {
     margin-bottom: 6px;
-  }
-
-  .sub .row + .row {
-    margin-top: 8px;
   }
 
   details.sub summary {
@@ -604,12 +630,6 @@
     font: inherit;
     color: inherit;
     resize: vertical;
-  }
-
-  .server.plain {
-    padding: 0;
-    background: none;
-    border: 0;
   }
 
   .server.off .fields {
@@ -663,32 +683,9 @@
     color: var(--danger);
   }
 
-  fieldset {
-    display: grid;
-    gap: 8px;
-    margin: 0;
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-  }
-
-  legend {
-    padding: 0 6px;
-    font-size: 0.9rem;
-    font-weight: 600;
-  }
-
-  fieldset p {
-    margin: 0;
-  }
-
   .checks {
     display: grid;
     gap: 6px;
-  }
-
-  .indent {
-    padding-left: 28px;
   }
 
   label.check,

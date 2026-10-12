@@ -5,7 +5,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 ## Structure
 
-- **Pages:** Incoming (only when an incoming library is set), Playlists, Repairs, Settings. One thing lives in one
+- **Pages:** Incoming (only when an Incoming library is set), Playlists, Repairs, Settings. One thing lives in one
   place: no setting, list or action appears on two pages.
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
 - **The now-playing header is part of the app shell**, above every page and sticky: cover (library cover, else the
@@ -16,9 +16,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. The player choice is in the now-playing header ("Playing on Finamp · Lenovo Tab ▾"), not in
   the sidebar.
-- **Settings** has four sections, in this order: Connections (servers: address, key, status), Libraries (Music and
-  Incoming per server, extra folders, catalogue status), Display (theme, progress bar), About (version, port, file
-  locations). Technical details go to About or nowhere.
+- **Settings** has four sections, in this order: Connections (servers: address, key, status), Libraries (one row per
+  server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its files in, or a warning when
+  it can't; then the catalogue status and tag splitting), Display (theme, progress bar), About (version, port, file
+  locations). Technical details go to About or nowhere. A use is set only there (decision 0009).
 
 ## Gestures
 
@@ -38,7 +39,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   "placement", "root", "entry", "line", "sync".
 - **Vocabulary:**
   - *track*, *album*, *playlist*.
-  - *Music* and *Incoming*: the two library roles, named exactly as in Settings.
+  - *Music* and *Incoming*: the two library uses, named exactly as in Settings.
   - *missing track*: a playlist line whose file is gone.
   - *player*: an app on a device, written "Finamp on Lenovo Tab".
   - *server*: Jellyfin and the like (not "source").
@@ -53,7 +54,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   unless it is an error.
 - **Destructive actions** ask in place, naming what goes ("Delete Chill?"); nothing destructive happens on one tap.
 - **Loading:** "Loading…" in the content area; never an empty page. **Empty:** say why and what to do ("Nothing
-  incoming." / "No incoming library is set. Choose one in Settings → Libraries.").
+  incoming." / "No Music library is set. Choose one in Settings → Libraries.").
 
 ## Checking
 

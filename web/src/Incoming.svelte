@@ -71,7 +71,7 @@
   {:else if sources === null}
     <p class="empty">Loading…</p>
   {:else if sources.length === 0}
-    <p class="empty">No incoming library is set. Choose one in Settings → Libraries.</p>
+    <p class="empty">No server with an Incoming library is connected.</p>
   {:else}
     <input class="filter" type="search" placeholder="Filter albums" bind:value={filter} aria-label="Filter albums" />
     {#each sources as s (s.id)}

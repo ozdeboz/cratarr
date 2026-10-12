@@ -1,6 +1,6 @@
 # 0005: Music sources are plugins; libraries are chosen, paths are found
 
-- Status: accepted
+- Status: accepted; library roles revised by [0009](0009-library-uses.md)
 - Date: 2026-10-12
 
 ## Context

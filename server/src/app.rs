@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::nowplaying::Progress;
 use crate::placement::{self, Placement};
 use crate::playlists::{DupGroup, PlaylistView, Repair, Repairs, Store, StoreError};
-use crate::settings::{self, ChangeError, Origin, SourceConfig};
+use crate::settings::{self, ChangeError, Folders, Origin, SourceConfig};
 use crate::source::{self, Choice, Field, Playing, PlaylistChange, PlaylistEvent, Source, Status};
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -67,6 +67,8 @@ pub enum ToggleError {
     BadName,
     #[error("{0}")]
     CannotPlay(String),
+    #[error("no Music library is set")]
+    NoMusicFolder,
     #[error("settings cannot be saved: CRATARR_DATA_DIR is not set")]
     SettingsReadOnly,
     #[error("{0}")]
@@ -123,7 +125,9 @@ const INCOMING_LIMIT: usize = 1000;
 #[derive(Debug, Serialize)]
 pub struct StatusView {
     pub connected: bool,
-    /// Some enabled source has an incoming library: the page shows incoming-music features.
+    /// A Music library is set and its folder found: playlists can be read and made.
+    pub music: bool,
+    /// Some enabled server has an Incoming library: the page shows incoming-music features.
     pub incoming: bool,
     /// Connected sources, for the source picker (`playing` is not checked here and always false).
     pub sources: Vec<SourceTab>,
@@ -132,11 +136,10 @@ pub struct StatusView {
     pub version: &'static str,
 }
 
-/// Set by the container (port, mount), so shown but not editable.
+/// Set by the container, so shown but not editable.
 #[derive(Debug, Serialize)]
 pub struct FixedSettings {
     pub bind: String,
-    pub playlist_dir: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,14 +155,15 @@ pub struct SourceView {
     pub kind: String,
     pub label: String,
     pub enabled: bool,
-    /// What its libraries are used for.
-    pub libraries: crate::placement::Roles,
     /// Secrets left out; see `secrets_set`.
     pub values: source::Values,
     pub secrets_set: Vec<String>,
     pub status: Status,
     pub choices: BTreeMap<String, Vec<Choice>>,
-    pub placement: Placement,
+    /// What its libraries are used for, as saved.
+    pub libraries: settings::Roles,
+    /// Its music libraries and where Cratarr sees their files (decision 0009).
+    pub server_libraries: Vec<placement::PlacedLibrary>,
     /// Why the source could not be connected or its choices not filled, if so.
     pub error: Option<String>,
 }
@@ -177,15 +181,51 @@ pub struct SettingsView {
     pub version: &'static str,
     /// Epoch seconds.
     pub started: i64,
-    /// Extra music folders the catalogue covers (the playlist folder always is).
-    pub folders: Vec<String>,
+    /// Where the Music libraries' files are, as Cratarr sees them: the playlists live there.
+    pub music_folder: Option<String>,
     pub tag_rules: crate::catalogue::Rules,
     pub catalogue: Option<crate::catalogue::Status>,
 }
 
-/// The catalogue's folders: the playlist folder first (id 0), then the extra ones.
-fn catalogue_folders(playlist_dir: &std::path::Path, extra: &[String]) -> Vec<PathBuf> {
-    std::iter::once(playlist_dir.to_path_buf()).chain(extra.iter().map(PathBuf::from)).collect()
+/// The catalogue's folders: the Music folder first (id 0), then the incoming ones.
+fn catalogue_folders(folders: &Folders) -> Vec<PathBuf> {
+    folders.all().into_iter().map(PathBuf::from).collect()
+}
+
+/// The folders mounted into the container, without the data folder.
+fn mounted(data_dir: Option<&str>) -> Vec<String> {
+    crate::mounts::list(&data_dir.into_iter().collect::<Vec<_>>())
+}
+
+/// Every folder a server's music is looked for in: the mounted ones, and the Music folder in use (which need not be a
+/// mount point of its own).
+fn place_folders(data_dir: Option<&str>, music: Option<&str>) -> Vec<String> {
+    let mut out = mounted(data_dir);
+    if let Some(m) = music {
+        if !out.iter().any(|f| f == m) {
+            out.push(m.to_string());
+        }
+    }
+    out
+}
+
+/// Where the libraries in use keep their files, as Cratarr sees them (decision 0009). The Music folder is the first
+/// one a Music library was found in; `last_music` stands in while no server has answered (or none has a Music
+/// library yet).
+fn derive_folders(live: &[Arc<Active>], last_music: Option<&str>) -> Folders {
+    let found = |a: &Active, ids: &[String]| -> Vec<String> {
+        ids.iter()
+            .filter_map(|id| a.placement.libraries.iter().find(|l| &l.id == id))
+            .flat_map(|l| l.folders.clone())
+            .collect()
+    };
+    let up: Vec<&Arc<Active>> = live.iter().filter(|a| a.source.is_some()).collect();
+    let music = up.iter().flat_map(|a| found(a, &a.cfg.libraries.music)).next().or_else(|| last_music.map(str::to_string));
+    let mut incoming: Vec<String> =
+        up.iter().flat_map(|a| found(a, &a.cfg.libraries.incoming)).filter(|f| Some(f) != music.as_ref()).collect();
+    incoming.sort();
+    incoming.dedup();
+    Folders { music, incoming }
 }
 
 /// The most tracks one play sends: Finamp holds at most 100 in its queue (seen 2026-10-12; user: "we go by 100").
@@ -240,7 +280,7 @@ struct Active {
 }
 
 impl Active {
-    async fn start(cfg: SourceConfig, playlist_dir: &std::path::Path) -> Self {
+    async fn start(cfg: SourceConfig, folders: &[String]) -> Self {
         if !cfg.enabled {
             return Self { cfg, source: None, placement: Placement::default(), error: None };
         }
@@ -254,67 +294,119 @@ impl Active {
                 return Self { cfg, source: None, placement: Placement::default(), error: Some(format!("{e:#}")) };
             }
         };
-        let placement = placement::place(&*source, playlist_dir).await.unwrap_or_else(|e| {
+        let placement = placement::place(&*source, folders).await.unwrap_or_else(|e| {
             tracing::warn!("source {}: cannot look at its libraries yet: {e:#}", cfg.id);
             Placement::default()
         });
-        if placement.root.is_none() {
-            tracing::warn!("source {}: no library found inside the playlist folder (yet)", cfg.id);
+        if placement.roots.is_empty() {
+            tracing::warn!("source {}: none of its music found in Cratarr's folders (yet)", cfg.id);
         }
         Self { cfg, source: Some(source), placement, error: None }
     }
 
-    fn entry(&self, track: &source::Track) -> Option<String> {
-        self.placement.entry(&self.cfg.libraries, track.library_id.as_deref(), track.path.as_deref())
+    /// The playlist line for a track: its path in the Music folder, if it lies there.
+    fn entry(&self, music: Option<&str>, track: &source::Track) -> Option<String> {
+        self.placement.entry(music?, track.path.as_deref())
     }
 }
 
 pub struct App {
     live: std::sync::RwLock<Arc<Vec<Arc<Active>>>>,
     origin: std::sync::RwLock<Origin>,
-    playlist_dir: PathBuf,
     bind: String,
+    data_dir: Option<String>,
     settings_path: Option<PathBuf>,
     /// One settings change at a time, so two pages (or the background placement retry) cannot interleave.
     saving: Mutex<()>,
     started: i64,
-    store: Store,
+    /// Where the libraries in use keep their files, and the playlists of the Music folder (swapped in whole when
+    /// either changes).
+    folders: std::sync::RwLock<(Folders, Option<Arc<Store>>)>,
     /// Incoming lists by source and library (see `refresh_incoming`).
     incoming_cache: Mutex<std::collections::HashMap<String, IncomingSourceView>>,
     /// Every audio file Cratarr can see, and the servers' ids for them (decision 0008).
     catalogue: Arc<crate::catalogue::Catalogue>,
-    /// Saved with the sources: extra folders and tag rules.
-    extras: std::sync::RwLock<(Vec<String>, crate::catalogue::Rules)>,
+    /// Saved with the sources.
+    tag_rules: std::sync::RwLock<crate::catalogue::Rules>,
 }
 
 impl App {
     pub async fn new(cfg: Config, saved: settings::Saved, origin: Origin) -> Result<Arc<Self>> {
-        let playlist_dir = PathBuf::from(&cfg.playlist_dir);
+        let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
+        let places = place_folders(cfg.data_dir.as_deref(), last_music.as_deref());
         let mut active = Vec::new();
         for s in saved.sources {
-            active.push(Arc::new(Active::start(s, &playlist_dir).await));
+            active.push(Active::start(s, &places).await);
         }
+        // First run: no Music library chosen yet, so the libraries found in CRATARR_PLAYLIST_DIR are Music (shown so on
+        // the Settings page, kept once saved).
+        if let Some(m) = last_music.as_deref().filter(|_| active.iter().all(|a| a.cfg.libraries.music.is_empty())) {
+            for a in active.iter_mut().filter(|a| a.source.is_some()) {
+                let incoming = a.cfg.libraries.incoming.clone();
+                a.cfg.libraries.music =
+                    a.placement.libraries_in(m).map(|l| l.id.clone()).filter(|id| !incoming.contains(id)).collect();
+            }
+        }
+        let active: Vec<Arc<Active>> = active.into_iter().map(Arc::new).collect();
+        let folders = derive_folders(&active, last_music.as_deref());
         let db = cfg.data_dir.as_ref().map(|d| PathBuf::from(d).join("catalogue.sqlite"));
-        let catalogue = Arc::new(crate::catalogue::Catalogue::open(db.as_deref(), catalogue_folders(&playlist_dir, &saved.folders))?);
+        let catalogue = Arc::new(crate::catalogue::Catalogue::open(db.as_deref(), catalogue_folders(&folders))?);
+        let store = folders.music.as_ref().map(|m| Arc::new(Store::new(m)));
         Ok(Arc::new(Self {
             live: std::sync::RwLock::new(Arc::new(active)),
             origin: std::sync::RwLock::new(origin),
             settings_path: cfg.data_dir.as_ref().map(|d| PathBuf::from(d).join("settings.json")),
-            store: Store::new(&cfg.playlist_dir),
-            playlist_dir,
             bind: cfg.bind,
+            data_dir: cfg.data_dir,
             saving: Mutex::new(()),
             started: epoch_now(),
+            folders: std::sync::RwLock::new((folders, store)),
             incoming_cache: Mutex::new(std::collections::HashMap::new()),
             catalogue,
-            extras: std::sync::RwLock::new((saved.folders, saved.tag_rules)),
+            tag_rules: std::sync::RwLock::new(saved.tag_rules),
         }))
+    }
+
+    fn folders(&self) -> Folders {
+        self.folders.read().unwrap_or_else(|p| p.into_inner()).0.clone()
+    }
+
+    fn music(&self) -> Option<String> {
+        self.folders.read().unwrap_or_else(|p| p.into_inner()).0.music.clone()
+    }
+
+    /// The Music folder's playlists, if one is set.
+    fn store_opt(&self) -> Option<Arc<Store>> {
+        self.folders.read().unwrap_or_else(|p| p.into_inner()).1.clone()
+    }
+
+    fn store(&self) -> Result<Arc<Store>, ToggleError> {
+        self.store_opt().ok_or(ToggleError::NoMusicFolder)
+    }
+
+    /// Put new sources in use, and follow where their libraries' files are: a new Music folder gets its own playlist
+    /// store, and the catalogue follows the folders.
+    async fn switch_to(&self, next: Vec<Arc<Active>>) -> Result<()> {
+        let old = self.folders();
+        let folders = derive_folders(&next, old.music.as_deref());
+        *self.live.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(next);
+        if folders != old {
+            tracing::info!("music folder {:?}, incoming folders {:?}", folders.music, folders.incoming);
+            let (c, dirs) = (self.catalogue.clone(), catalogue_folders(&folders));
+            tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+            let mut slot = self.folders.write().unwrap_or_else(|p| p.into_inner());
+            if folders.music != old.music {
+                slot.1 = folders.music.as_ref().map(|m| Arc::new(Store::new(m)));
+            }
+            slot.0 = folders;
+        }
+        Ok(())
     }
 
     /// Play a playlist on the server's player: its tracks in file order (or shuffled), looked up in the catalogue,
     /// at most PLAY_MAX of them. `want` = the server to use (default: the first connected one).
     pub async fn play_playlist(&self, id: &str, mode: PlayMode, want: Option<&str>) -> Result<PlayResult, ToggleError> {
-        let entries = self.store.entries(id).await?;
+        let entries = self.store()?.entries(id).await?;
         let sources = self.connected();
         let (active, source) = want
             .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
@@ -373,27 +465,39 @@ impl App {
         self.live().iter().filter_map(|a| a.source.clone().map(|s| (a.clone(), s))).collect()
     }
 
-    /// Sources that were down when they were set up get looked at again (called now and then).
+    /// Servers whose libraries could not be listed, or whose Music library's files were not found, get looked at
+    /// again (called now and then): they may have been down, or still scanning. An Incoming library Cratarr cannot see
+    /// is not retried: only a new mount (a restart) changes that.
     pub async fn retry_placement(&self) {
         let _one_at_a_time = self.saving.lock().await;
         let live = self.live();
-        if !live.iter().any(|a| a.source.is_some() && a.placement.root.is_none()) {
+        let unplaced = |a: &Active| {
+            a.source.is_some()
+                && (a.placement.libraries.is_empty()
+                    || a.cfg.libraries.music.iter().any(|id| {
+                        a.placement.libraries.iter().find(|l| &l.id == id).is_none_or(|l| l.folders.is_empty())
+                    }))
+        };
+        if !live.iter().any(|a| unplaced(a)) {
             return;
         }
+        let places = place_folders(self.data_dir.as_deref(), self.music().as_deref());
         let mut next = Vec::with_capacity(live.len());
         for a in live.iter() {
             match &a.source {
-                Some(s) if a.placement.root.is_none() => {
-                    let placement = placement::place(&**s, &self.playlist_dir).await.unwrap_or_default();
-                    if placement.root.is_some() {
-                        tracing::info!("source {}: found its libraries in the playlist folder", a.cfg.id);
+                Some(s) if unplaced(a) => {
+                    let placement = placement::place(&**s, &places).await.unwrap_or_default();
+                    if placement.roots.len() > a.placement.roots.len() {
+                        tracing::info!("source {}: found its music in more folders", a.cfg.id);
                     }
                     next.push(Arc::new(Active { cfg: a.cfg.clone(), source: Some(s.clone()), placement, error: a.error.clone() }));
                 }
                 _ => next.push(a.clone()),
             }
         }
-        *self.live.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(next);
+        if let Err(e) = self.switch_to(next).await {
+            tracing::warn!("cannot follow the music folders: {e:#}");
+        }
     }
 
     /// For the navigation header.
@@ -409,9 +513,16 @@ impl App {
             [one] => one.server_name.clone(),
             many => Some(format!("{up} of {} sources", many.len())),
         };
-        let incoming = self.live().iter().any(|a| a.cfg.enabled && a.cfg.libraries.incoming.is_some());
+        let folders = self.folders();
         let sources = sources.iter().map(|(a, _)| SourceTab { id: a.cfg.id.clone(), label: label_of(&a.cfg), playing: false }).collect();
-        StatusView { connected: up > 0, incoming, sources, server_name, version: VERSION }
+        StatusView {
+            connected: up > 0,
+            music: folders.music.is_some(),
+            incoming: self.live().iter().any(|a| a.cfg.enabled && !a.cfg.libraries.incoming.is_empty()),
+            sources,
+            server_name,
+            version: VERSION,
+        }
     }
 
     /// Ask every connected source what it plays, all at once, and pick: the requested source, or (`None` / unknown)
@@ -479,8 +590,12 @@ impl App {
 
     pub async fn state(&self, want: Option<&str>) -> Result<StateView> {
         let (np, sources) = self.playing(want).await?;
-        let entry = np.as_ref().and_then(|(a, p)| a.entry(&p.track));
-        let playlists = self.store.view(entry.as_deref()).await?;
+        let music = self.music();
+        let entry = np.as_ref().and_then(|(a, p)| a.entry(music.as_deref(), &p.track));
+        let playlists = match self.store_opt() {
+            Some(store) => store.view(entry.as_deref()).await?,
+            None => Vec::new(),
+        };
         let now_playing = np.map(|(a, p)| NowPlayingView {
             source: a.cfg.id.clone(),
             addable: entry.is_some(),
@@ -499,8 +614,9 @@ impl App {
     pub async fn toggle(self: &Arc<Self>, playlist_id: &str, want: Option<&str>) -> Result<StateView, ToggleError> {
         let (np, _) = self.playing(want).await?;
         let (active, playing) = np.ok_or(ToggleError::NothingPlaying)?;
-        let entry = active.entry(&playing.track).ok_or(ToggleError::NotInLibrary)?;
-        self.store.toggle(playlist_id, &entry).await?;
+        let store = self.store()?;
+        let entry = active.entry(self.music().as_deref(), &playing.track).ok_or(ToggleError::NotInLibrary)?;
+        store.toggle(playlist_id, &entry).await?;
         self.tell_sources(vec![(playlist_id.to_string(), PlaylistChange::Edited)]);
         Ok(self.state(want).await?)
     }
@@ -508,10 +624,11 @@ impl App {
     /// Best effort, in the background: every connected source hears about changed playlist files, each with the
     /// file's path as it sees it.
     fn tell_sources(&self, changes: Vec<(String, PlaylistChange)>) {
+        let Some(music) = self.music() else { return };
         for (a, s) in self.connected() {
             let events: Vec<PlaylistEvent> = changes
                 .iter()
-                .map(|(name, change)| PlaylistEvent { name: name.clone(), path: a.placement.playlist_path(name), change: *change })
+                .map(|(name, change)| PlaylistEvent { name: name.clone(), path: a.placement.playlist_path(&music, name), change: *change })
                 .collect();
             tokio::spawn(async move {
                 if let Err(e) = s.playlists_changed(events).await {
@@ -530,28 +647,30 @@ impl App {
         }
         let Some((a, s)) = self.connected().into_iter().find(|(a, _)| a.cfg.id == source_id) else { return Outcome::NotFound };
         let Ok(track) = s.track(id).await else { return Outcome::NotFound };
-        match a.entry(&track) {
-            Some(entry) => resolve(&self.playlist_dir, &entry, if_none_match).await,
+        let Some(music) = self.music() else { return Outcome::NotFound };
+        match a.entry(Some(&music), &track) {
+            Some(entry) => resolve(std::path::Path::new(&music), &entry, if_none_match).await,
             None => Outcome::NotFound,
         }
     }
 
     // ----- Incoming -----
 
-    /// Every enabled source with an incoming library (or only `want`), its albums newest first. Read-only.
-    /// The kept lists, read from the source only when there is none yet (the background refresh keeps them fresh).
+    /// Every server with Incoming libraries (or only `want`), their albums newest first. Read-only. Only the server is
+    /// asked: the list works whether or not Cratarr can see the files.
+    /// The kept lists, read from the server only when there is none yet (the background refresh keeps them fresh).
     pub async fn incoming(&self, want: Option<&str>) -> IncomingView {
         let mut sources = Vec::new();
-        for (a, s, library) in self.incoming_sources() {
+        for (a, s, libraries) in self.incoming_sources() {
             if want.is_some_and(|w| w != a.cfg.id) {
                 continue;
             }
-            let key = format!("{}\n{library}", a.cfg.id);
+            let key = format!("{}\n{}", a.cfg.id, libraries.join("\n"));
             let kept = self.incoming_cache.lock().await.get(&key).cloned();
             let view = match kept {
                 Some(v) => v,
                 None => {
-                    let v = Self::read_incoming(&a, &*s, &library).await;
+                    let v = Self::read_incoming(&a, &*s, &libraries).await;
                     self.incoming_cache.lock().await.insert(key, v.clone());
                     v
                 }
@@ -561,13 +680,14 @@ impl App {
         IncomingView { sources }
     }
 
-    /// Read every incoming list again and forget lists of sources or libraries no longer configured; a failed read
-    /// keeps the previous list. Cheap: only new or changed albums cost more than one request (see the source).
+    /// Read every incoming list again and forget lists of servers or libraries no longer Incoming; a failed read
+    /// keeps the previous list. Cheap: only new or changed albums cost more than one request (see the
+    /// server).
     pub async fn refresh_incoming(&self) {
         let mut keep = std::collections::HashSet::new();
-        for (a, s, library) in self.incoming_sources() {
-            let key = format!("{}\n{library}", a.cfg.id);
-            let fresh = Self::read_incoming(&a, &*s, &library).await;
+        for (a, s, libraries) in self.incoming_sources() {
+            let key = format!("{}\n{}", a.cfg.id, libraries.join("\n"));
+            let fresh = Self::read_incoming(&a, &*s, &libraries).await;
             let mut cache = self.incoming_cache.lock().await;
             if fresh.error.is_none() || !cache.contains_key(&key) {
                 cache.insert(key.clone(), fresh);
@@ -577,24 +697,33 @@ impl App {
         self.incoming_cache.lock().await.retain(|k, _| keep.contains(k));
     }
 
-    fn incoming_sources(&self) -> Vec<(Arc<Active>, Arc<dyn Source>, String)> {
+    /// Each connected server with Incoming libraries, and their ids.
+    fn incoming_sources(&self) -> Vec<(Arc<Active>, Arc<dyn Source>, Vec<String>)> {
         self.connected()
             .into_iter()
-            .filter(|(a, _)| a.cfg.enabled)
-            .filter_map(|(a, s)| a.cfg.libraries.incoming.clone().map(|l| (a, s, l)))
+            .filter(|(a, _)| !a.cfg.libraries.incoming.is_empty())
+            .map(|(a, s)| {
+                let ids = a.cfg.libraries.incoming.clone();
+                (a, s, ids)
+            })
             .collect()
     }
 
-    async fn read_incoming(a: &Active, s: &dyn Source, library: &str) -> IncomingSourceView {
+    async fn read_incoming(a: &Active, s: &dyn Source, libraries: &[String]) -> IncomingSourceView {
         let supported = s.lists_albums();
-        let (albums, error) = if supported {
-            match s.albums(library, INCOMING_LIMIT).await {
-                Ok(list) => (list, None),
-                Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+        let mut albums = Vec::new();
+        let mut error = None;
+        if supported {
+            for library in libraries {
+                match s.albums(library, INCOMING_LIMIT).await {
+                    Ok(list) => albums.extend(list),
+                    Err(e) => {
+                        error.get_or_insert(format!("{e:#}"));
+                    }
+                }
             }
-        } else {
-            (Vec::new(), None)
-        };
+            albums.sort_by_key(|a: &source::Album| std::cmp::Reverse(a.added.unwrap_or(0)));
+        }
         IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now() }
     }
 
@@ -609,14 +738,14 @@ impl App {
         }
     }
 
-    /// Play an album of a source's incoming library on that source's player. Returns the player's label.
+    /// Play an album of a server's incoming music on that server's player. Returns the player's label.
     pub async fn play_incoming(&self, source_id: &str, album_id: &str) -> Result<String> {
         anyhow::ensure!(crate::covers::valid_item_id(album_id), "not an album id");
-        let (_, s) = self
-            .connected()
+        let (_, s, _) = self
+            .incoming_sources()
             .into_iter()
-            .find(|(a, _)| a.cfg.id == source_id && a.cfg.libraries.incoming.is_some())
-            .ok_or_else(|| anyhow::anyhow!("no such source with an incoming library"))?;
+            .find(|(a, _, _)| a.cfg.id == source_id)
+            .ok_or_else(|| anyhow::anyhow!("that server has no Incoming library"))?;
         s.play_album(album_id).await
     }
 
@@ -643,7 +772,8 @@ impl App {
         source::KINDS.iter().map(|k| KindView { id: k.id, label: k.label, fields: (k.fields)() }).collect()
     }
 
-    /// Status, choices and a fresh look at the libraries. `source` is `None` when it could not be connected.
+    /// Status, choices and a fresh look at where its libraries lie. `source` is `None` when it could not be
+    /// connected.
     async fn view_of(&self, cfg: &SourceConfig, source: Option<&dyn Source>, error: Option<String>) -> SourceView {
         let (values, secrets_set) = settings::redact(cfg);
         let mut view = SourceView {
@@ -651,16 +781,17 @@ impl App {
             kind: cfg.kind.clone(),
             label: label_of(cfg),
             enabled: cfg.enabled,
-            libraries: cfg.libraries.clone(),
             values,
             secrets_set,
             status: Status::default(),
             choices: BTreeMap::new(),
-            placement: Placement::default(),
+            libraries: cfg.libraries.clone(),
+            server_libraries: Vec::new(),
             error,
         };
         let Some(s) = source else { return view };
-        let (status, choices, placed) = tokio::join!(s.status(), s.options(), placement::place(s, &self.playlist_dir));
+        let places = place_folders(self.data_dir.as_deref(), self.music().as_deref());
+        let (status, choices, placed) = tokio::join!(s.status(), s.options(), placement::place(s, &places));
         view.status = status.unwrap_or_default();
         match choices {
             Ok(c) => view.choices = c,
@@ -669,7 +800,7 @@ impl App {
             }
         }
         match placed {
-            Ok(p) => view.placement = p,
+            Ok(p) => view.server_libraries = p.libraries,
             Err(e) => {
                 view.error.get_or_insert(format!("cannot list the libraries: {e:#}"));
             }
@@ -694,17 +825,18 @@ impl App {
         }
         let origin = *self.origin.read().unwrap_or_else(|p| p.into_inner());
         // Read before the struct below: a lock guard must not live across its awaits.
-        let (folders, tag_rules) = self.extras.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let tag_rules = self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let music_folder = self.music();
         Ok(SettingsView {
             sources,
             kinds: Self::kinds(),
             origin,
-            fixed: FixedSettings { bind: self.bind.clone(), playlist_dir: self.playlist_dir.display().to_string() },
+            fixed: FixedSettings { bind: self.bind.clone() },
             settings_file: self.settings_path.as_ref().map(|p| p.display().to_string()),
             playlists: self.playlist_count().await?,
             version: VERSION,
             started: self.started,
-            folders,
+            music_folder,
             tag_rules,
             catalogue: {
                 let c = self.catalogue.clone();
@@ -724,32 +856,23 @@ impl App {
     }
 
     /// Check every enabled source against its server, then save the list and switch over. Nothing is saved if a
-    /// check fails.
-    /// `folders` and `tag_rules`: `None` keeps what is saved.
+    /// check fails. The Music libraries' files hold the playlists, so Cratarr must see them, all in one folder.
+    /// `tag_rules`: `None` keeps what is saved.
     pub async fn save_settings(
         &self,
         drafts: Vec<SourceConfig>,
-        folders: Option<Vec<String>>,
         tag_rules: Option<crate::catalogue::Rules>,
     ) -> Result<SettingsView, ToggleError> {
         let Some(path) = self.settings_path.clone() else { return Err(ToggleError::SettingsReadOnly) };
         let _one_at_a_time = self.saving.lock().await;
-        let (old_folders, old_rules) = self.extras.read().unwrap_or_else(|p| p.into_inner()).clone();
-        let folders = match folders {
-            Some(f) => settings::check_folders(&f, &self.playlist_dir.to_string_lossy())?,
-            None => old_folders.clone(),
-        };
-        for f in &folders {
-            if !std::path::Path::new(f).is_dir() {
-                return Err(ToggleError::BadSettings(format!("{f} is not a folder Cratarr can see (is it mounted into the container?)")));
-            }
-        }
+        let old_rules = self.tag_rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+        let places = place_folders(self.data_dir.as_deref(), self.music().as_deref());
         let tag_rules = tag_rules.unwrap_or(old_rules);
         let saved: Vec<SourceConfig> = self.live().iter().map(|a| a.cfg.clone()).collect();
         let merged = settings::merge(&saved, drafts)?;
         let mut next = Vec::with_capacity(merged.len());
         for cfg in merged.iter().cloned() {
-            let a = Active::start(cfg, &self.playlist_dir).await;
+            let a = Active::start(cfg, &places).await;
             if a.cfg.enabled {
                 let bad = |why: String| ToggleError::BadSettings(format!("{}: {why}", a.cfg.id));
                 let s = a.source.as_ref().ok_or_else(|| bad(a.error.clone().unwrap_or_else(|| "cannot connect".into())))?;
@@ -757,27 +880,42 @@ impl App {
                 if !st.connected {
                     return Err(bad(st.error.unwrap_or_else(|| "not connected".into())));
                 }
-                if a.placement.usable(&a.cfg.libraries).next().is_none() {
-                    return Err(bad(format!(
-                        "none of the chosen music libraries is inside the playlist folder ({})",
-                        self.playlist_dir.display()
-                    )));
+                for id in &a.cfg.libraries.music {
+                    match a.placement.libraries.iter().find(|l| &l.id == id) {
+                        None => return Err(bad("a Music library is no longer on the server".into())),
+                        Some(l) if l.folders.is_empty() => {
+                            return Err(ToggleError::BadSettings(format!("Cratarr can't see the files of {}", l.name)));
+                        }
+                        Some(_) => {}
+                    }
                 }
             }
             next.push(Arc::new(a));
         }
-        let to_save = settings::Saved { sources: merged, folders: folders.clone(), tag_rules: tag_rules.clone() };
+        let mut music_folders: Vec<String> = next
+            .iter()
+            .filter(|a| a.source.is_some())
+            .flat_map(|a| {
+                a.cfg.libraries.music.iter().filter_map(|id| a.placement.libraries.iter().find(|l| &l.id == id)?.folders.first().cloned())
+            })
+            .collect();
+        music_folders.sort();
+        music_folders.dedup();
+        if music_folders.len() > 1 {
+            return Err(ToggleError::BadSettings(format!(
+                "the Music libraries are in different folders ({}); playlists live in one",
+                music_folders.join(", ")
+            )));
+        }
+        let music_folder = derive_folders(&next, self.music().as_deref()).music;
+        let to_save = settings::Saved { sources: merged, music_folder, tag_rules: tag_rules.clone() };
         tokio::task::spawn_blocking(move || settings::save(&path, &to_save))
             .await
             .map_err(|e| anyhow::anyhow!("saving settings: {e}"))??;
-        if folders != old_folders {
-            let (c, dirs) = (self.catalogue.clone(), catalogue_folders(&self.playlist_dir, &folders));
-            tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
-        }
-        *self.extras.write().unwrap_or_else(|p| p.into_inner()) = (folders, tag_rules);
+        *self.tag_rules.write().unwrap_or_else(|p| p.into_inner()) = tag_rules;
+        self.switch_to(next).await?;
         // Servers may have changed: link their tracks again soon.
         self.catalogue.poke();
-        *self.live.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(next);
         *self.origin.write().unwrap_or_else(|p| p.into_inner()) = Origin::File;
         // Sources and libraries may have changed: lists are read again on the next look (or the next sync pass).
         self.incoming_cache.lock().await.clear();
@@ -788,12 +926,16 @@ impl App {
 
     // ----- Playlist files -----
 
+    /// 0 when there is no Music folder.
     pub async fn playlist_count(&self) -> Result<usize> {
-        Ok(self.store.view(None).await?.len())
+        match self.store_opt() {
+            Some(store) => Ok(store.view(None).await?.len()),
+            None => Ok(0),
+        }
     }
 
     pub async fn repairs(&self) -> Result<Repairs> {
-        self.store.repairs().await
+        self.store()?.repairs().await
     }
 
     /// Apply the repairs the client chose (`None` = every safe one). The store only accepts pairs it currently
@@ -801,9 +943,9 @@ impl App {
     pub async fn apply_repairs(self: &Arc<Self>, only: Option<Repair>) -> Result<Vec<String>, ToggleError> {
         let wanted = match only {
             Some(one) => vec![one],
-            None => self.store.repairs().await?.safe,
+            None => self.store()?.repairs().await?.safe,
         };
-        let changed = self.store.apply_repairs(&wanted).await?;
+        let changed = self.store()?.apply_repairs(&wanted).await?;
         self.tell_sources(changed.iter().map(|n| (n.clone(), PlaylistChange::Edited)).collect());
         Ok(changed)
     }
@@ -812,7 +954,7 @@ impl App {
     pub async fn undo(self: &Arc<Self>, playlists: Vec<String>) -> Result<usize, ToggleError> {
         let mut done = Vec::new();
         for id in playlists {
-            self.store.undo(&id).await?;
+            self.store()?.undo(&id).await?;
             done.push(id);
         }
         let n = done.len();
@@ -824,7 +966,8 @@ impl App {
     /// from the first source that knows the folder.
     pub async fn album_duplicates(&self) -> Result<Vec<crate::albums::AlbumGroup>> {
         use crate::albums::*;
-        let music = self.playlist_dir.clone();
+        let Some(music) = self.music().map(PathBuf::from) else { return Ok(Vec::new()) };
+        let store = self.store()?;
         let dir = music.clone();
         let folders: Vec<String> = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
             Ok(std::fs::read_dir(&dir)?
@@ -852,7 +995,7 @@ impl App {
                         Err(e) => tracing::warn!("source {} has no details for {folder:?}: {e:#}", a.cfg.id),
                     }
                 }
-                let lines = self.store.lines_in_folder(folder).await?;
+                let lines = store.lines_in_folder(folder).await?;
                 albums.push(build_view(folder, files, cover, &known, lines));
             }
             let comparisons = albums.iter().skip(1).map(|b| compare(&albums[0], b)).collect();
@@ -863,12 +1006,12 @@ impl App {
     }
 
     pub async fn duplicates(&self) -> Result<Vec<DupGroup>> {
-        self.store.duplicates().await
+        self.store()?.duplicates().await
     }
 
     /// Remove repeated entries from one playlist (the first copy of each stays).
     pub async fn dedupe(self: &Arc<Self>, id: &str) -> Result<usize, ToggleError> {
-        let removed = self.store.dedupe(id).await?;
+        let removed = self.store()?.dedupe(id).await?;
         if removed > 0 {
             self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
         }
@@ -876,31 +1019,33 @@ impl App {
     }
 
     pub async fn create_playlist(self: &Arc<Self>, name: &str) -> Result<(), ToggleError> {
-        self.store.create(name).await?;
+        self.store()?.create(name).await?;
         self.tell_sources(vec![(name.to_string(), PlaylistChange::Created)]);
         Ok(())
     }
 
     pub async fn rename_playlist(self: &Arc<Self>, from: &str, to: &str) -> Result<(), ToggleError> {
-        self.store.rename(from, to).await?;
+        self.store()?.rename(from, to).await?;
         self.tell_sources(vec![(from.to_string(), PlaylistChange::Deleted), (to.to_string(), PlaylistChange::Created)]);
         Ok(())
     }
 
     pub async fn delete_playlist(self: &Arc<Self>, id: &str) -> Result<(), ToggleError> {
-        self.store.delete(id).await?;
+        self.store()?.delete(id).await?;
         self.tell_sources(vec![(id.to_string(), PlaylistChange::Deleted)]);
         Ok(())
     }
 
     pub async fn restore_playlist(self: &Arc<Self>, id: &str) -> Result<(), ToggleError> {
-        self.store.restore_deleted(id).await?;
+        self.store()?.restore_deleted(id).await?;
         self.tell_sources(vec![(id.to_string(), PlaylistChange::Created)]);
         Ok(())
     }
 
     /// Re-check which playlist entries point at missing files (the library changes without the playlists).
     pub async fn refresh_dead(&self) {
-        self.store.refresh_dead().await;
+        if let Some(store) = self.store_opt() {
+            store.refresh_dead().await;
+        }
     }
 }

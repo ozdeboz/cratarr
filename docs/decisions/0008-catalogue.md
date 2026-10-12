@@ -1,6 +1,6 @@
 # 0008: A local catalogue of the music Cratarr can see
 
-- Status: accepted
+- Status: accepted; extra folders superseded by [0009](0009-library-uses.md)
 - Date: 2026-10-12
 
 ## Context

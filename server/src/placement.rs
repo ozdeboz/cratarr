@@ -1,10 +1,10 @@
-//! Where a source's music lies in the playlist folder. Sources report track paths as they see them (Jellyfin, for
-//! one, reports `/data/media/Music/...` while its library settings say `/Volume1/media/Music`), so no configured
-//! prefix is trusted. Instead the core strips leading folders off a sample track's path until what is left is a file
-//! in the playlist folder. What was stripped is the playlist folder as that source sees it (its "root").
+//! Which folders a server's music lies in (decision 0009). Servers report track paths as they see them (Jellyfin,
+//! for one, reports `/data/media/Music/...` while Cratarr sees `/music/...`), so no configured prefix is trusted.
+//! Instead the core strips leading folders off a few sample tracks of each library until what is left is a file in
+//! one of Cratarr's folders. What was stripped is that folder as the server sees it (its "root").
 //!
-//! A library is usable when its sample tracks lie under that root. A library elsewhere (an incoming folder, say) can
-//! never be added to playlists: its tracks have no path relative to the playlist files.
+//! The uses (Music, Incoming) are set on libraries; the folders behind them are found here. A track can go in
+//! playlists when its path lies under the Music folder's root.
 
 use std::path::Path;
 
@@ -13,92 +13,93 @@ use serde::Serialize;
 
 use crate::source::{Library, Source};
 
-/// What a source's libraries are used for. Library ids are the source's own.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
-pub struct Roles {
-    /// The curated music: tracks here can go in playlists. Empty = every library inside the playlist folder.
-    #[serde(default)]
-    pub music: Vec<String>,
-    /// Optional: where new music waits for review (e.g. Lidarr's sandbox). Its tracks never go in playlists; its
-    /// presence turns on incoming-music features.
-    #[serde(default)]
-    pub incoming: Option<String>,
-}
-
 /// Samples per library: enough to survive one odd file, few enough to stay cheap.
 const SAMPLES: usize = 3;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Placement {
-    /// The playlist folder as this source sees it, ending in `/`; `None` until a sample track was found in it.
-    pub root: Option<String>,
+    /// Each folder the server's tracks were found in, with the server's own path for it.
+    pub roots: Vec<FolderRoot>,
     pub libraries: Vec<PlacedLibrary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FolderRoot {
+    /// As Cratarr sees it: "/music".
+    pub folder: String,
+    /// As the server sees it, ending in `/`: "/data/media/Music/".
+    pub root: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlacedLibrary {
     pub id: String,
     pub name: String,
-    /// Inside the playlist folder, so its tracks can go in playlists.
-    pub inside: bool,
+    /// Cratarr's folders its sample tracks were found in; empty when Cratarr cannot see its files.
+    pub folders: Vec<String>,
+    /// Its folders as the server describes them (to say what to mount).
+    pub paths: Vec<String>,
 }
 
 impl Placement {
-    /// The music libraries in use: the chosen ones that are inside, or every inside one when none were chosen.
-    /// The incoming library never counts, wherever it lies.
-    pub fn usable<'a>(&'a self, roles: &'a Roles) -> impl Iterator<Item = &'a PlacedLibrary> + 'a {
-        self.libraries.iter().filter(move |l| {
-            l.inside && roles.incoming.as_deref() != Some(l.id.as_str()) && (roles.music.is_empty() || roles.music.contains(&l.id))
-        })
+    /// The server's path for one of Cratarr's folders, if its tracks were found there.
+    pub fn root(&self, folder: &str) -> Option<&str> {
+        self.roots.iter().find(|r| r.folder == folder).map(|r| r.root.as_str())
     }
 
-    /// The playlist line for a track, if its library is in use and its path lies under the root.
-    pub fn entry(&self, roles: &Roles, library_id: Option<&str>, path: Option<&str>) -> Option<String> {
-        let lib = library_id?;
-        if !self.usable(roles).any(|l| l.id == lib) {
-            return None;
-        }
-        let root = self.root.as_deref()?;
+    /// The libraries found in a folder.
+    pub fn libraries_in<'a>(&'a self, folder: &'a str) -> impl Iterator<Item = &'a PlacedLibrary> + 'a {
+        self.libraries.iter().filter(move |l| l.folders.iter().any(|f| f == folder))
+    }
+
+    /// The playlist line for a track: its path relative to the Music folder, if it lies there.
+    pub fn entry(&self, music: &str, path: Option<&str>) -> Option<String> {
+        let root = self.root(music)?;
         crate::m3u::library_entry(path?, &[root.to_string()]).filter(|rel| safe_relative(rel))
     }
 
-    /// A playlist file as the source sees it.
-    pub fn playlist_path(&self, name: &str) -> Option<String> {
-        self.root.as_ref().map(|r| format!("{r}{name}.m3u"))
+    /// A playlist file in the Music folder, as the server sees it.
+    pub fn playlist_path(&self, music: &str, name: &str) -> Option<String> {
+        self.root(music).map(|r| format!("{r}{name}.m3u"))
     }
 }
 
-/// Look at every music library of the source. Errors from the source fail the whole placement; a library whose
-/// samples cannot be read is simply not inside.
-pub async fn place(source: &dyn Source, playlist_dir: &Path) -> Result<Placement> {
+/// Look at every music library of the server against `folders`. Errors from the server fail the whole placement; a
+/// library whose samples cannot be read is simply found nowhere.
+pub async fn place(source: &dyn Source, folders: &[String]) -> Result<Placement> {
     let libraries: Vec<Library> = source.libraries().await?;
-    let mut root: Option<String> = None;
+    let mut roots: Vec<FolderRoot> = Vec::new();
     let mut placed = Vec::with_capacity(libraries.len());
     for lib in libraries {
         let samples = source.sample_paths(&lib.id, SAMPLES).await.unwrap_or_else(|e| {
             tracing::warn!("cannot sample library {:?}: {e:#}", lib.name);
             Vec::new()
         });
-        let mut inside = false;
+        let mut found: Vec<String> = Vec::new();
         for path in &samples {
-            let found = match &root {
-                Some(r) => under_root(playlist_dir, r, path),
-                None => match find_root(playlist_dir, path) {
-                    Some(r) => {
-                        root = Some(r);
-                        true
-                    }
-                    None => false,
-                },
-            };
-            if found {
-                inside = true;
-                break;
+            for folder in folders {
+                if found.contains(folder) {
+                    continue;
+                }
+                let dir = Path::new(folder);
+                let hit = match roots.iter().find(|r| &r.folder == folder) {
+                    Some(r) => under_root(dir, &r.root, path),
+                    None => match find_root(dir, path) {
+                        Some(root) => {
+                            roots.push(FolderRoot { folder: folder.clone(), root });
+                            true
+                        }
+                        None => false,
+                    },
+                };
+                if hit {
+                    found.push(folder.clone());
+                }
             }
         }
-        placed.push(PlacedLibrary { id: lib.id, name: lib.name, inside });
+        placed.push(PlacedLibrary { id: lib.id, name: lib.name, folders: found, paths: lib.paths });
     }
-    Ok(Placement { root, libraries: placed })
+    Ok(Placement { roots, libraries: placed })
 }
 
 fn segments(path: &str) -> Vec<&str> {
@@ -175,35 +176,23 @@ mod tests {
 
     fn placement() -> Placement {
         Placement {
-            root: Some("/data/media/Music/".into()),
-            libraries: vec![
-                PlacedLibrary { id: "music".into(), name: "Music".into(), inside: true },
-                PlacedLibrary { id: "more".into(), name: "More".into(), inside: true },
-                PlacedLibrary { id: "incoming".into(), name: "Incoming".into(), inside: false },
-            ],
+            roots: vec![FolderRoot { folder: "/music".into(), root: "/data/media/Music/".into() }],
+            libraries: vec![PlacedLibrary { id: "music".into(), name: "Music".into(), folders: vec!["/music".into()], paths: vec![] }],
         }
     }
 
-    fn roles(music: &[&str], incoming: Option<&str>) -> Roles {
-        Roles { music: music.iter().map(|s| s.to_string()).collect(), incoming: incoming.map(str::to_string) }
-    }
-
     #[test]
-    fn entries_need_a_usable_library_and_a_path_under_the_root() {
+    fn entries_need_a_path_under_the_music_root() {
         let p = placement();
-        let auto = Roles::default();
         let path = Some("/data/media/Music/A/01.mp3");
-        assert_eq!(p.entry(&auto, Some("music"), path).as_deref(), Some("A/01.mp3"));
-        assert_eq!(p.entry(&auto, Some("incoming"), path), None, "outside libraries never count");
-        assert_eq!(p.entry(&roles(&["more"], None), Some("music"), path), None, "only the chosen libraries");
-        assert_eq!(p.entry(&roles(&["incoming"], None), Some("incoming"), path), None, "choosing an outside library does not help");
-        assert_eq!(p.entry(&roles(&[], Some("more")), Some("more"), path), None, "the incoming role is never addable, even inside");
-        assert_eq!(p.entry(&roles(&[], Some("more")), Some("music"), path).as_deref(), Some("A/01.mp3"));
-        assert_eq!(p.entry(&auto, None, path), None);
-        assert_eq!(p.entry(&auto, Some("music"), Some("/elsewhere/A/01.mp3")), None);
-        assert_eq!(p.entry(&auto, Some("music"), Some("/data/media/Music/A/../../x.mp3")), None);
-        assert_eq!(Placement::default().entry(&auto, Some("music"), path), None, "unknown root");
-        assert_eq!(p.playlist_path("Chill").as_deref(), Some("/data/media/Music/Chill.m3u"));
+        assert_eq!(p.entry("/music", path).as_deref(), Some("A/01.mp3"));
+        assert_eq!(p.entry("/incoming", path), None, "a folder the server was not found in");
+        assert_eq!(p.entry("/music", None), None);
+        assert_eq!(p.entry("/music", Some("/data/media/lidarr-music/A/01.mp3")), None);
+        assert_eq!(p.entry("/music", Some("/data/media/Music/A/../../x.mp3")), None);
+        assert_eq!(Placement::default().entry("/music", path), None, "unknown root");
+        assert_eq!(p.playlist_path("/music", "Chill").as_deref(), Some("/data/media/Music/Chill.m3u"));
+        assert_eq!(p.libraries_in("/music").map(|l| l.name.as_str()).collect::<Vec<_>>(), vec!["Music"]);
     }
 
     /// A source with fixed libraries and samples.
@@ -234,21 +223,27 @@ mod tests {
     }
 
     fn lib(id: &str) -> Library {
-        Library { id: id.into(), name: id.to_uppercase() }
+        Library { id: id.into(), name: id.to_uppercase(), paths: vec![] }
     }
 
     #[tokio::test]
-    async fn libraries_inside_the_playlist_folder_are_found() {
-        let d = music();
+    async fn libraries_are_found_in_their_folders() {
+        let m = music();
+        let inc = m.with_extension("incoming");
+        std::fs::create_dir_all(inc.join("X")).unwrap();
+        std::fs::write(inc.join("X/01 New.flac"), b"x").unwrap();
+        let folders = vec![m.display().to_string(), inc.display().to_string()];
         let src = Fake(vec![
-            (lib("incoming"), vec!["/data/media/lidarr-music/A/B/01.flac".into()]),
+            (lib("incoming"), vec!["/data/media/lidarr-music/X/01 New.flac".into()]),
             (lib("music"), vec!["/data/media/Music/missing.mp3".into(), "/data/media/Music/Artist - Album (2020)/01 Song.mp3".into()]),
             (lib("empty"), vec![]),
         ]);
-        let p = place(&src, &d).await.unwrap();
-        assert_eq!(p.root.as_deref(), Some("/data/media/Music/"));
-        let inside: Vec<_> = p.libraries.iter().map(|l| (l.id.as_str(), l.inside)).collect();
-        assert_eq!(inside, vec![("incoming", false), ("music", true), ("empty", false)]);
-        std::fs::remove_dir_all(&d).ok();
+        let p = place(&src, &folders).await.unwrap();
+        assert_eq!(p.root(&folders[0]), Some("/data/media/Music/"));
+        assert_eq!(p.root(&folders[1]), Some("/data/media/lidarr-music/"));
+        let found: Vec<_> = p.libraries.iter().map(|l| (l.id.as_str(), l.folders.clone())).collect();
+        assert_eq!(found, vec![("incoming", vec![folders[1].clone()]), ("music", vec![folders[0].clone()]), ("empty", vec![])]);
+        std::fs::remove_dir_all(&m).ok();
+        std::fs::remove_dir_all(&inc).ok();
     }
 }

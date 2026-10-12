@@ -116,7 +116,9 @@ export type Status = {
   connected: boolean;
   /** The server's name with one source; "n of m sources" with several. */
   server_name: string | null;
-  /** Some enabled source has an incoming library. */
+  /** A Music library is set and its folder found: playlists can be read and made. */
+  music: boolean;
+  /** Some enabled server has an Incoming library. */
   incoming: boolean;
   sources: SourceTab[];
   version: string;
@@ -139,11 +141,6 @@ export type Field = {
 
 export type Choice = { value: string; label: string };
 
-/** What a source's libraries are used for. `music` empty = every library inside the playlist folder. */
-export type Roles = { music: string[]; incoming: string | null };
-
-export type PlacedLibrary = { id: string; name: string; inside: boolean };
-
 export type SourceStatus = {
   connected: boolean;
   server_name: string | null;
@@ -155,6 +152,21 @@ export type SourceStatus = {
 export type Values = Record<string, string | string[]>;
 
 /** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
+/** What a server's libraries are used for, by library id (decision 0009). Libraries in neither list are not used. */
+export type Roles = { music: string[]; incoming: string[] };
+
+export type LibraryUse = 'music' | 'incoming' | 'unused';
+
+/** A server's music library and where Cratarr sees its files. */
+export type ServerLibrary = {
+  id: string;
+  name: string;
+  /** Cratarr's folders its files were found in; empty when Cratarr can't see them. */
+  folders: string[];
+  /** Its folders as the server describes them, to say what to mount. */
+  paths: string[];
+};
+
 export type SourceConfig = { id: string; kind: string; enabled: boolean; libraries: Roles; values: Values };
 
 export type SourceView = SourceConfig & {
@@ -163,8 +175,7 @@ export type SourceView = SourceConfig & {
   secrets_set: string[];
   status: SourceStatus;
   choices: Record<string, Choice[]>;
-  /** `root`: the playlist folder as this source sees it, if found. */
-  placement: { root: string | null; libraries: PlacedLibrary[] };
+  server_libraries: ServerLibrary[];
   error: string | null;
 };
 
@@ -175,15 +186,15 @@ export type Settings = {
   kinds: Kind[];
   /** Whether the sources come from the settings file or (first run) the container's environment. */
   origin: 'file' | 'env';
-  fixed: { bind: string; playlist_dir: string };
+  fixed: { bind: string };
   /** Null when the server has no data folder: settings can be looked at, not saved. */
   settings_file: string | null;
   playlists: number;
   version: string;
   /** Epoch seconds. */
   started: number;
-  /** Extra music folders the catalogue covers (the playlist folder always is). */
-  folders: string[];
+  /** Where the Music libraries' files are, as Cratarr sees them: the playlists live there. */
+  music_folder: string | null;
   tag_rules: TagRules;
   catalogue: CatalogueStatus | null;
 };
@@ -225,7 +236,7 @@ export type FileProblem = {
 
 export const getFileProblems = () => request<FileProblem[]>('/api/catalogue/problems');
 
-export const saveSettings = (sources: SourceConfig[], extra: { folders: string[]; tag_rules: TagRules }) =>
+export const saveSettings = (sources: SourceConfig[], extra: { tag_rules: TagRules }) =>
   request<Settings>('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

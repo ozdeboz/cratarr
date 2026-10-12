@@ -66,6 +66,8 @@ pub struct Choice {
 pub struct Library {
     pub id: String,
     pub name: String,
+    /// Its folders as the server describes them; only shown (to say what to mount), never used to find files.
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

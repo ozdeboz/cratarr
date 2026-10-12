@@ -1,7 +1,7 @@
 //! Sources saved from the Settings page, in `CRATARR_DATA_DIR/settings.json`. Once the file holds sources it is the
 //! whole truth; until then one Jellyfin source is made from the `JELLYFIN_*` environment variables (first run).
 //! Secrets are never sent to the page, and a saved secret is only reused while the fields it is bound to stay the
-//! same. See decisions 0004 and 0005.
+//! same. See decisions 0004, 0005 and 0009.
 
 use std::path::Path;
 
@@ -18,9 +18,9 @@ pub struct SourceConfig {
     pub kind: String,
     #[serde(default = "yes")]
     pub enabled: bool,
-    /// What its libraries are used for.
+    /// What its libraries are used for (decision 0009).
     #[serde(default)]
-    pub libraries: crate::placement::Roles,
+    pub libraries: Roles,
     #[serde(default)]
     pub values: Values,
 }
@@ -29,12 +29,38 @@ fn yes() -> bool {
     true
 }
 
+/// What a server's libraries are used for, by the server's library ids. Libraries in neither list are not used.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Roles {
+    /// The music that can go in playlists. Their folder holds the playlists.
+    #[serde(default)]
+    pub music: Vec<String>,
+    /// New music waiting to be heard. Version 2 files hold one id or none here.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub incoming: Vec<String>,
+}
+
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<OneOrMany>::deserialize(d)? {
+        None => Vec::new(),
+        Some(OneOrMany::One(id)) => vec![id],
+        Some(OneOrMany::Many(ids)) => ids,
+    })
+}
+
+/// Version 2 files may still hold a `folders` list (before decision 0009); it is ignored.
 #[derive(Serialize, Deserialize)]
-struct FileV2 {
+struct FileV3 {
     version: u32,
     sources: Vec<SourceConfig>,
     #[serde(default)]
-    folders: Vec<String>,
+    music_folder: Option<String>,
     #[serde(default)]
     tag_rules: crate::catalogue::Rules,
 }
@@ -43,10 +69,26 @@ struct FileV2 {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Saved {
     pub sources: Vec<SourceConfig>,
-    /// Extra music folders for the catalogue, as Cratarr sees them (decision 0008).
-    pub folders: Vec<String>,
+    /// Where the Music libraries were last found, as Cratarr sees it: used until the servers answer.
+    pub music_folder: Option<String>,
     /// How tag values are split when read (decision 0008).
     pub tag_rules: crate::catalogue::Rules,
+}
+
+/// Cratarr's folders, as found behind the libraries in use (decision 0009).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Folders {
+    /// Holds the playlists and the music that can go in them.
+    pub music: Option<String>,
+    /// Where the Incoming libraries' files are, when Cratarr can see them.
+    pub incoming: Vec<String>,
+}
+
+impl Folders {
+    /// Music first, then incoming: the catalogue's folders.
+    pub fn all(&self) -> Vec<String> {
+        self.music.iter().chain(&self.incoming).cloned().collect()
+    }
 }
 
 /// Where the sources came from, shown on the page.
@@ -67,8 +109,8 @@ pub fn load(path: &Path, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<
     };
     let json: serde_json::Value = serde_json::from_str(&text).with_context(|| format!("{} is not JSON", path.display()))?;
     if json.get("version").is_some() {
-        let f: FileV2 = serde_json::from_value(json).with_context(|| format!("{} has an unexpected shape", path.display()))?;
-        return Ok(Some(Saved { sources: f.sources, folders: f.folders, tag_rules: f.tag_rules }));
+        let f: FileV3 = serde_json::from_value(json).with_context(|| format!("{} has an unexpected shape", path.display()))?;
+        return Ok(Some(Saved { sources: f.sources, music_folder: f.music_folder, tag_rules: f.tag_rules }));
     }
     let flat: std::collections::BTreeMap<String, String> =
         serde_json::from_value(json).with_context(|| format!("{} is neither a source list nor the older flat format", path.display()))?;
@@ -87,7 +129,12 @@ pub fn save(path: &Path, saved: &Saved) -> Result<()> {
         opts.mode(0o600);
     }
     let mut f = opts.open(&tmp).with_context(|| format!("cannot write {}", tmp.display()))?;
-    let body = FileV2 { version: 2, sources: saved.sources.clone(), folders: saved.folders.clone(), tag_rules: saved.tag_rules.clone() };
+    let body = FileV3 {
+        version: 3,
+        sources: saved.sources.clone(),
+        music_folder: saved.music_folder.clone(),
+        tag_rules: saved.tag_rules.clone(),
+    };
     f.write_all(serde_json::to_string_pretty(&body)?.as_bytes())?;
     f.sync_all()?;
     drop(f);
@@ -106,7 +153,7 @@ pub fn from_env(env: &dyn Fn(&str) -> Option<String>) -> Vec<SourceConfig> {
             values.insert(key.into(), v.into());
         }
     }
-    vec![SourceConfig { id: "jellyfin".into(), kind: "jellyfin".into(), enabled: true, libraries: Default::default(), values }]
+    vec![SourceConfig { id: "jellyfin".into(), kind: "jellyfin".into(), enabled: true, libraries: Roles::default(), values }]
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -147,12 +194,15 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
                     }
             })
         });
-        d.libraries.music.retain(|l| !l.trim().is_empty());
-        d.libraries.incoming = d.libraries.incoming.take().filter(|l| !l.trim().is_empty());
-        if let Some(inc) = &d.libraries.incoming {
-            if d.libraries.music.contains(inc) {
-                return Err(ChangeError::Invalid(format!("{}: one library cannot be both music and incoming", d.id)));
-            }
+        let clean = |ids: &mut Vec<String>| {
+            ids.retain(|l| !l.trim().is_empty());
+            let mut seen = std::collections::HashSet::new();
+            ids.retain(|l| seen.insert(l.clone()));
+        };
+        clean(&mut d.libraries.music);
+        clean(&mut d.libraries.incoming);
+        if d.libraries.music.iter().any(|l| d.libraries.incoming.contains(l)) {
+            return Err(ChangeError::Invalid(format!("{}: one library cannot be both Music and Incoming", d.id)));
         }
         let prev = saved.iter().find(|s| s.id == d.id && s.kind == d.kind);
         for secret in fields.iter().filter(|f| f.kind == FieldKind::Secret) {
@@ -173,36 +223,6 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
             d.values.insert(secret.key.into(), old.into());
         }
         out.push(d);
-    }
-    Ok(out)
-}
-
-/// Check the extra folders from the page: absolute, not the playlist folder, not inside it or around it (the same
-/// files would be catalogued twice), no repeats. Trailing slashes are dropped. Whether each exists is checked by
-/// the caller, which can reach the disk.
-pub fn check_folders(folders: &[String], playlist_dir: &str) -> Result<Vec<String>, ChangeError> {
-    let clean = |p: &str| {
-        let t = p.trim().trim_end_matches('/');
-        if t.is_empty() { "/".to_string() } else { t.to_string() }
-    };
-    let playlists = clean(playlist_dir);
-    let within = |a: &str, b: &str| a == b || a.starts_with(&format!("{b}/")) || b == "/";
-    let mut out: Vec<String> = Vec::new();
-    for f in folders.iter().filter(|f| !f.trim().is_empty()) {
-        let f = clean(f);
-        if !f.starts_with('/') {
-            return Err(ChangeError::Invalid(format!("{f}: a folder must be a full path, starting with /")));
-        }
-        if f.split('/').any(|seg| seg == "..") {
-            return Err(ChangeError::Invalid(format!("{f}: a folder must not contain ..")));
-        }
-        if within(&f, &playlists) || within(&playlists, &f) {
-            return Err(ChangeError::Invalid(format!("{f} overlaps the playlist folder ({playlists}), so its music would be counted twice")));
-        }
-        if let Some(o) = out.iter().find(|o| within(&f, o) || within(o, &f)) {
-            return Err(ChangeError::Invalid(format!("{f} overlaps {o}")));
-        }
-        out.push(f);
     }
     Ok(out)
 }
@@ -240,7 +260,7 @@ mod tests {
         if let Some(k) = key {
             values.insert("api_key".into(), k.into());
         }
-        SourceConfig { id: id.into(), kind: "jellyfin".into(), enabled: true, libraries: Default::default(), values }
+        SourceConfig { id: id.into(), kind: "jellyfin".into(), enabled: true, libraries: Roles::default(), values }
     }
 
     #[test]
@@ -296,23 +316,13 @@ mod tests {
     }
 
     #[test]
-    fn a_library_cannot_be_music_and_incoming() {
+    fn a_library_has_one_use() {
         let mut s = jf("a", "http://x", Some("k"));
-        s.libraries = crate::placement::Roles { music: vec!["l1".into()], incoming: Some("l1".into()) };
-        assert!(merge(&[], vec![s.clone()]).is_err());
-        s.libraries.incoming = Some("  ".into());
-        assert_eq!(merge(&[], vec![s]).unwrap()[0].libraries.incoming, None);
-    }
-
-    #[test]
-    fn extra_folders_must_be_separate_full_paths() {
-        let ok = check_folders(&[" /media/incoming/ ".into(), "".into()], "/music").unwrap();
-        assert_eq!(ok, vec!["/media/incoming"]);
-        for bad in ["incoming", "/music", "/music/sub", "/", "/media/../etc"] {
-            assert!(check_folders(&[bad.into()], "/music").is_err(), "{bad}");
-        }
-        assert!(check_folders(&["/a".into(), "/a/b".into()], "/music").is_err());
-        assert!(check_folders(&["/a".into(), "/a".into()], "/music").is_err());
+        s.libraries = Roles { music: vec!["l1".into(), "l1".into(), " ".into()], incoming: vec!["l2".into()] };
+        let out = merge(&[], vec![s.clone()]).unwrap();
+        assert_eq!(out[0].libraries, Roles { music: vec!["l1".into()], incoming: vec!["l2".into()] });
+        s.libraries.incoming.push("l1".into());
+        assert!(merge(&[], vec![s]).is_err());
     }
 
     #[test]
@@ -339,7 +349,9 @@ mod tests {
         let none = env_of(&[]);
         assert_eq!(load(&path, &none).unwrap(), None);
         let s = vec![jf("jellyfin", "http://jf:8096", Some("k"))];
-        let saved = Saved { sources: s, folders: vec!["/incoming".into()], tag_rules: Default::default() };
+        let mut s = s;
+        s[0].libraries = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()] };
+        let saved = Saved { sources: s, music_folder: Some("/music".into()), tag_rules: Default::default() };
         save(&path, &saved).unwrap();
         assert_eq!(load(&path, &none).unwrap(), Some(saved));
         #[cfg(unix)]
@@ -348,6 +360,22 @@ mod tests {
             assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         }
         assert!(!d.join("settings.json.tmp").exists());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_version_2_file_keeps_its_library_roles() {
+        let d = dir();
+        let path = d.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"version":2,"sources":[{"id":"jellyfin","kind":"jellyfin","libraries":{"music":["a"],"incoming":"b"},"values":{"url":"http://jf"}},{"id":"other","kind":"jellyfin","libraries":{"music":[],"incoming":null}}],"folders":["/x"]}"#,
+        )
+        .unwrap();
+        let s = load(&path, &env_of(&[])).unwrap().unwrap();
+        assert_eq!(s.sources[0].libraries, Roles { music: vec!["a".into()], incoming: vec!["b".into()] });
+        assert_eq!(s.sources[1].libraries, Roles::default());
+        assert_eq!(s.music_folder, None);
         std::fs::remove_dir_all(&d).ok();
     }
 

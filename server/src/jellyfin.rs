@@ -38,14 +38,16 @@ pub struct Device {
     pub date_last_activity: Option<String>,
 }
 
-/// A library as configured in Jellyfin. Its `Locations` are not used: they need not match the paths Jellyfin
-/// reports for the tracks in it (observed: `/Volume1/media/Music` vs `/data/media/Music/...`).
+/// A library as configured in Jellyfin. Its `Locations` are only shown, never used to find files: they need not
+/// match the paths Jellyfin reports for the tracks in it (observed: `/Volume1/media/Music` vs `/data/media/Music/...`).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct VirtualFolder {
     pub name: String,
     pub collection_type: Option<String>,
     pub item_id: String,
+    #[serde(default)]
+    pub locations: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

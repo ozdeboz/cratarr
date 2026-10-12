@@ -202,13 +202,11 @@ struct SaveBody {
     sources: Vec<SourceConfig>,
     /// Omitted: keep the saved ones.
     #[serde(default)]
-    folders: Option<Vec<String>>,
-    #[serde(default)]
     tag_rules: Option<crate::catalogue::Rules>,
 }
 
 async fn save_settings(State(app): State<Arc<App>>, Json(b): Json<SaveBody>) -> Result<Json<SettingsView>, ApiError> {
-    Ok(Json(app.save_settings(b.sources, b.folders, b.tag_rules).await?))
+    Ok(Json(app.save_settings(b.sources, b.tag_rules).await?))
 }
 
 async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::catalogue::Status>, ApiError> {
@@ -265,7 +263,7 @@ impl IntoResponse for ApiError {
             | ToggleError::NothingToUndo
             | ToggleError::Exists => StatusCode::CONFLICT,
             ToggleError::BadName | ToggleError::BadSettings(_) => StatusCode::BAD_REQUEST,
-            ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) => StatusCode::CONFLICT,
+            ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::NoMusicFolder => StatusCode::CONFLICT,
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };

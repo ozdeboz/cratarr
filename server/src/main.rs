@@ -6,6 +6,7 @@ mod config;
 mod covers;
 mod jellyfin;
 mod m3u;
+mod mounts;
 mod nowplaying;
 mod placement;
 mod playlists;
@@ -71,7 +72,7 @@ async fn main() -> Result<()> {
         tracing::warn!("no music source is set up yet: add one on the Settings page (or set JELLYFIN_URL)");
     }
 
-    // A source that is down only costs its own features; an unreadable playlist folder is fatal.
+    // A source that is down only costs its own features; an unreadable Music folder is fatal.
     let bind = cfg.bind.clone();
     let app = app::App::new(cfg, saved, origin).await.context("cannot open the catalogue")?;
     let n = app.playlist_count().await.context("cannot read the playlist folder")?;
