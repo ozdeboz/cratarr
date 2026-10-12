@@ -67,23 +67,43 @@
 
   let sim: Simulation<Node, Edge> | undefined;
 
+  /** A gentle pull of each point toward the centre of its colour group (lone points are left alone). Measured on the
+   * reference library, it is what holds groups together most (silhouette -0.07 to 0.09, kin among the 3 nearest
+   * points 0.51 to 0.59), at a small cost in how exactly distance follows link strength. */
+  const GROUP_PULL = 0.1;
+  function pullToGroups(alpha: number) {
+    const centre = new Map<number, { x: number; y: number; n: number }>();
+    for (const p of nodes) {
+      const c = centre.get(group[p.i]) ?? { x: 0, y: 0, n: 0 };
+      c.x += p.x ?? 0;
+      c.y += p.y ?? 0;
+      c.n++;
+      centre.set(group[p.i], c);
+    }
+    for (const p of nodes) {
+      const c = centre.get(group[p.i])!;
+      if (c.n < 2) continue;
+      p.vx = (p.vx ?? 0) + (c.x / c.n - (p.x ?? 0)) * GROUP_PULL * alpha;
+      p.vy = (p.vy ?? 0) + (c.y / c.n - (p.y ?? 0)) * GROUP_PULL * alpha;
+    }
+  }
+
   $effect(() => {
     sim = forceSimulation<Node, Edge>(nodes)
       .force('charge', forceManyBody<Node>().strength(-80).distanceMax(320))
       .force('collide', forceCollide<Node>((p) => p.r + 2))
       .force('x', forceX<Node>(0).strength(0.05))
       .force('y', forceY<Node>(0).strength(0.05))
+      .force('group', pullToGroups)
       .on('tick', () => frame++)
       .on('end', fit);
     return () => sim?.stop();
   });
 
   // New signals: the drawn links change on the same running simulation, which is warmed up gently.
-  // Kin pulls with its rank, shared out over a busy point's links (as d3 does by default: 1 / the smaller number of
-  // links of the two), so a point with six links does not drag all six onto itself. Bridges are long and slack.
+  // Kin pulls with its rank (not shared out over a busy point's links, as d3 does by default: measured, that weakened
+  // exactly the links inside groups). Bridges are long and slack; anchors keep a normal length.
   $effect(() => {
-    const kinDegree = new Array(n).fill(0);
-    for (const k of bb.kin.keys()) for (const x of k.split('-').map(Number)) kinDegree[x]++;
     const edges: Edge[] = [
       ...[...ranked].map(([key, r]) => ({ key, r, bridge: false })),
       ...[...bb.bridges.keys()].map((key) => ({ key, r: 0, bridge: true })),
@@ -92,7 +112,6 @@
       return { key, source: a, target: b, r, bridge, anchor: bb.anchors.has(key) };
     });
     if (!sim) return;
-    const ends = (e: Edge) => [e.source, e.target].map((x) => (typeof x === 'number' ? x : x.i));
     sim.force(
       'link',
       forceLink<Node, Edge>(edges)
@@ -101,8 +120,7 @@
         .strength((e) => {
           if (e.anchor) return 0.3;
           if (e.bridge) return 0.03;
-          const [a, b] = ends(e);
-          return (0.3 + 0.7 * e.r) / Math.max(1, Math.min(kinDegree[a], kinDegree[b]));
+          return 0.3 + 0.7 * e.r;
         }),
     );
     sim.alpha(Math.max(sim.alpha(), 0.6)).restart();

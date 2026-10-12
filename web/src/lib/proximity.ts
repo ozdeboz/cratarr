@@ -9,14 +9,15 @@
 // Grab-bags weigh less: a playlist spread over many genres resembles a bit of everything and would sit in everyone's
 // top 3 as a hub. Each playlist's focus (genre concentration, from the server) becomes its rank among the playlists,
 // and a link counts for sqrt(m(a) * m(b)) of its weight, with m = FOCUS_FLOOR + (1 - FOCUS_FLOOR) * rank: the least
-// focused playlist's links count half, the most focused's in full.
+// focused playlist's links count three quarters, the most focused's in full. Measured on the reference library (layout
+// benchmark, 8 seeds): 0.75 holds groups together better than both 0.5 (grab-bags are part of the glue) and 1.
 // Groups: label propagation over the backbone, for colour.
 
 import type { Proximity, Signal } from './api';
 
 export const SIGNALS: Signal[] = ['tracks', 'genre', 'artists'];
 export const MUTUAL_K = 3;
-export const FOCUS_FLOOR = 0.5;
+export const FOCUS_FLOOR = 0.75;
 
 export type Weights = Map<string, number>;
 export const key = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);
