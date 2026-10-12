@@ -205,6 +205,12 @@ impl Library {
         self.store_opt().ok_or(ToggleError::NoMusicFolder)
     }
 
+    /// Open the Music folder's playlists again (after they moved into `.playlists`).
+    pub(super) fn reopen_store(&self) {
+        let mut slot = self.folders.write().unwrap_or_else(|p| p.into_inner());
+        slot.1 = slot.0.music.as_ref().map(|m| Arc::new(Store::in_music(m)));
+    }
+
     /// The folders a server's libraries are looked for in now.
     pub(super) fn place_folders(&self) -> Vec<String> {
         place_folders(self.data_dir.as_deref(), self.music().as_deref())

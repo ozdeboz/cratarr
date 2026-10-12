@@ -240,11 +240,6 @@ pub trait Source: Send + Sync {
         Box::pin(async { Ok(TrackPage::default()) })
     }
 
-    /// Optional (decision 0012): the server's accounts, for choosing whose playlists Cratarr keeps.
-    fn users(&self) -> Fut<'_, Vec<Choice>> {
-        Box::pin(async { Ok(Vec::new()) })
-    }
-
     /// Optional (decision 0012): a user's own playlists (not ones imported from files), with their change stamps.
     fn own_playlists<'a>(&'a self, _user: &'a str) -> Fut<'a, Vec<OwnPlaylist>> {
         Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })

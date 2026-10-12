@@ -132,6 +132,10 @@ impl PlaylistService {
     /// file's path as it sees it.
     fn tell_sources(&self, changes: Vec<(String, PlaylistChange)>) {
         let Some(music) = self.lib.music() else { return };
+        // Hidden from Jellyfin (decision 0012): the playlist sync keeps the servers' copies instead.
+        if self.lib.store_opt().is_some_and(|s| s.is_hidden()) {
+            return;
+        }
         for (a, s) in self.lib.connected() {
             let events: Vec<PlaylistEvent> = changes
                 .iter()

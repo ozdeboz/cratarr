@@ -37,9 +37,19 @@ impl SyncService {
         Self { lib, state, one_at_a_time: tokio::sync::Mutex::new(()) }
     }
 
-    /// One pass over every connected server with a playlist owner set.
+    /// One pass over every connected server with a playlist owner set. The first one also moves the playlist files
+    /// out of Jellyfin's reach (and finishes that move if a restart cut it short): part of the program, so deploying
+    /// a version is all a migration takes (decision 0012).
     pub async fn pass(&self) {
         let _one = self.one_at_a_time.lock().await;
+        let owned = self.lib.connected().iter().any(|(a, _)| crate::source::text(&a.cfg.values, PLAYLIST_USER).is_some());
+        if !owned {
+            return;
+        }
+        if let Err(e) = self.hide_playlist_files().await {
+            tracing::warn!("playlist sync: cannot move the playlist files out of Jellyfin's reach: {e:#}");
+            return;
+        }
         let Some(store) = self.lib.store_opt() else { return };
         for (a, s) in self.lib.connected() {
             let Some(user) = crate::source::text(&a.cfg.values, PLAYLIST_USER).map(str::to_string) else { continue };
@@ -68,6 +78,42 @@ impl SyncService {
             }
         }
         done
+    }
+}
+
+impl SyncService {
+    /// Move the playlist files into `Music/.playlists` (until none are left in Music), then read them from there and
+    /// tell the servers the imported playlists are gone. Safe to run at every pass: with nothing left to move it only
+    /// lists the Music folder.
+    async fn hide_playlist_files(&self) -> Result<()> {
+        let Some(music) = self.lib.music() else { return Ok(()) };
+        let m = PathBuf::from(&music);
+        let moved = blocking(move || crate::playlists::move_into_hidden_folder(&m)).await??;
+        if !moved.conflicts.is_empty() {
+            bail!("in both Music and {}, with different content: {}", crate::playlists::HIDDEN_DIR, moved.conflicts.join(", "));
+        }
+        if self.lib.store_opt().is_some_and(|s| !s.is_hidden()) {
+            self.lib.reopen_store();
+        }
+        let gone: Vec<String> = moved.moved.iter().chain(&moved.already).map(|n| n.trim_end_matches(".m3u").to_string()).collect();
+        if gone.is_empty() {
+            return Ok(());
+        }
+        tracing::info!("moved {} playlist file(s) into {}; the server copies take over", gone.len(), crate::playlists::HIDDEN_DIR);
+        for (a, s) in self.lib.connected() {
+            let events: Vec<crate::source::PlaylistEvent> = gone
+                .iter()
+                .map(|name| crate::source::PlaylistEvent {
+                    name: name.clone(),
+                    path: a.placement.playlist_path(&music, name),
+                    change: crate::source::PlaylistChange::Deleted,
+                })
+                .collect();
+            if let Err(e) = s.playlists_changed(events).await {
+                tracing::warn!("playlist sync: telling {} the imported playlists are gone: {e:#}", a.cfg.id);
+            }
+        }
+        Ok(())
     }
 }
 

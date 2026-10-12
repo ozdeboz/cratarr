@@ -70,16 +70,6 @@ pub struct DupEntry {
     pub copies: usize,
 }
 
-/// Two playlists that share tracks (the old app's "Proximity"). `similarity` is shared / union (Jaccard), so a big
-/// playlist does not look related to everything just by being big.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Related {
-    pub a: String,
-    pub b: String,
-    pub shared: usize,
-    pub similarity: f64,
-}
-
 /// Figures across all playlists, from the playlist files alone.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct PlaylistStats {
@@ -94,24 +84,6 @@ pub struct PlaylistStats {
     pub missing: usize,
     /// The tracks in the most playlists, most first (at most ten).
     pub most_shared: Vec<(String, usize)>,
-}
-
-/// Every pair of playlists sharing at least `min_shared` tracks, most similar first.
-pub fn relate(playlists: &[(&str, &HashSet<String>)], min_shared: usize) -> Vec<Related> {
-    let mut out = Vec::new();
-    for (i, (a, ea)) in playlists.iter().enumerate() {
-        for (b, eb) in &playlists[i + 1..] {
-            let (small, large) = if ea.len() <= eb.len() { (ea, eb) } else { (eb, ea) };
-            let shared = small.iter().filter(|e| large.contains(*e)).count();
-            if shared == 0 || shared < min_shared {
-                continue;
-            }
-            let union = ea.len() + eb.len() - shared;
-            out.push(Related { a: a.to_string(), b: b.to_string(), shared, similarity: shared as f64 / union as f64 });
-        }
-    }
-    out.sort_by(|x, y| y.similarity.total_cmp(&x.similarity).then(y.shared.cmp(&x.shared)).then(x.a.cmp(&y.a)));
-    out
 }
 
 /// Figures for a set of playlists: (name, entry lines, missing count).
@@ -310,6 +282,12 @@ impl Store {
         }
     }
 
+    /// Whether the files are in the hidden `.playlists` folder (Jellyfin does not import them; the sync keeps the
+    /// user's own copies instead).
+    pub fn is_hidden(&self) -> bool {
+        !self.prefix.is_empty()
+    }
+
     /// A Music-relative entry as a line of this store's files.
     fn line(&self, entry: &str) -> String {
         format!("{}{entry}", self.prefix)
@@ -445,8 +423,9 @@ impl Store {
         Ok(())
     }
 
-    /// Make the playlist exactly `entries`, in order (the playlist sync, decision 0012). Backed up like every edit.
-    /// Returns false when it already was.
+    /// Make the playlist exactly `entries`, in order. Backed up like every edit. Returns false when it already was.
+    /// Tests only: the sync uses `set_entries_if`, which never overwrites an edit it has not seen.
+    #[cfg(test)]
     pub async fn set_entries(&self, id: &str, entries: &[String]) -> Result<bool, StoreError> {
         let _one_writer = self.write.lock().await;
         let (path, perms, text) = self.load_for_edit(id).await?;
@@ -826,23 +805,6 @@ pub fn move_into_hidden_folder(music: &Path) -> Result<Moved> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    fn set(v: &[&str]) -> HashSet<String> {
-        v.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn related_playlists_are_ranked_by_overlap_not_size() {
-        let chill = set(&["a", "b", "c", "d"]);
-        let lounge = set(&["a", "b", "c", "x"]);
-        let everything = set(&["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]);
-        let other = set(&["z"]);
-        let r = relate(&[("Chill", &chill), ("Lounge", &lounge), ("Everything", &everything), ("Other", &other)], 1);
-        assert_eq!((r[0].a.as_str(), r[0].b.as_str(), r[0].shared), ("Chill", "Lounge", 3), "3 of 5 beats 4 of 12");
-        assert!((r[0].similarity - 0.6).abs() < 1e-9);
-        assert!(r.iter().all(|x| x.a != "Other" && x.b != "Other"), "no shared tracks: not related");
-        assert_eq!(relate(&[("Chill", &chill), ("Lounge", &lounge)], 4).len(), 0, "below the minimum");
-    }
 
     #[test]
     fn stats_count_distinct_tracks_and_repeats_once_per_playlist() {

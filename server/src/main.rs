@@ -82,19 +82,6 @@ async fn main() -> Result<()> {
     if saved.lidarr.is_none() {
         saved.lidarr = settings::lidarr_from_env(&env);
     }
-    // `cratarr-server --move-playlists`: the one-off move of the playlist files into Music/.playlists, out of
-    // Jellyfin's reach (decision 0012). Safe to run again; prints what it did. Run it while the server is stopped,
-    // or restart the server afterwards so it reads the files from there.
-    if std::env::args().nth(1).as_deref() == Some("--move-playlists") {
-        let music = saved.music_folder.clone().or(cfg.playlist_dir.clone()).context("no Music folder is known yet")?;
-        let moved = playlists::move_into_hidden_folder(std::path::Path::new(&music))?;
-        println!("moved: {}", moved.moved.len());
-        println!("already there: {}", moved.already.len());
-        for c in &moved.conflicts {
-            println!("conflict, both kept: {c}");
-        }
-        std::process::exit(i32::from(!moved.conflicts.is_empty()));
-    }
     if saved.sources.is_empty() {
         tracing::warn!("no music source is set up yet: add one on the Settings page (or set JELLYFIN_URL)");
     }
