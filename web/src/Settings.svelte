@@ -11,17 +11,17 @@
     type SourceConfig,
     type SourceView,
   } from './lib/api';
-  import { prefs, resetPrefs, ZOOM_STEPS, type Theme } from './lib/prefs.svelte';
+  import { prefs, type Theme } from './lib/prefs.svelte';
+  import Notice, { type NoticeData } from './lib/Notice.svelte';
 
-  // A source as the page edits it. Secrets typed here are kept apart: the server never sends saved ones.
+  // A server (a source, in the code) as the page edits it. Secrets typed here are kept apart: the server never sends saved ones.
   type Draft = SourceConfig & { secrets: Record<string, string>; view: SourceView | null; busy: boolean; note: string | null };
 
   let s = $state<Settings | null>(null);
   let drafts = $state<Draft[]>([]);
   let loadError = $state<string | null>(null);
   let saving = $state(false);
-  let formError = $state<string | null>(null);
-  let notice = $state<string | null>(null);
+  let notice = $state<NoticeData | null>(null);
   let removing = $state<string | null>(null);
   let addKind = $state('');
 
@@ -92,8 +92,8 @@
     }
   }
 
-  function addSource() {
-    const k = s?.kinds.find((x) => x.id === addKind);
+  function addServer(kind: string) {
+    const k = s?.kinds.find((x) => x.id === kind);
     if (!k) return;
     let id = k.id;
     for (let n = 2; drafts.some((d) => d.id === id); n++) id = `${k.id}-${n}`;
@@ -101,14 +101,13 @@
   }
 
   async function save() {
-    formError = null;
     notice = null;
     saving = true;
     try {
       fill(await saveSettings(drafts.map(payload)));
-      notice = 'Saved and in use.';
+      notice = { text: 'Saved and in use.' };
     } catch (e) {
-      formError = e instanceof ApiError ? e.message : 'Unexpected error';
+      notice = { text: e instanceof ApiError ? e.message : 'Unexpected error', tone: 'error' };
     } finally {
       saving = false;
     }
@@ -131,6 +130,10 @@
     return { ok: false, text: st.error ?? v.error ?? 'Not connected' };
   }
 
+  /** The labels of the given fields, for "you changed the server address". */
+  const labelOf = (d: Draft, keys: string[]) =>
+    keys.map((k) => kindOf(d)?.fields.find((f) => f.key === k)?.label.toLowerCase() ?? k).join(' and ');
+
   const THEMES: { id: Theme; label: string }[] = [
     { id: 'auto', label: 'System' },
     { id: 'light', label: 'Light' },
@@ -140,59 +143,31 @@
 </script>
 
 <main>
-  <h1>Settings</h1>
-
-  {#if loadError}<div class="banner error" role="alert">{loadError}</div>{/if}
+  {#if loadError}<Notice notice={{ text: loadError, tone: 'error' }} />{/if}
+  <Notice bind:notice />
 
   {#if s}
-    <section aria-labelledby="status-h">
-      <h2 id="status-h">Status</h2>
-      <dl>
-        {#each s.sources as v (v.id)}
-          {@const line = statusLine(v)}
-          <dt>{v.label}{s.sources.length > 1 ? ` (${v.id})` : ''}</dt>
-          <dd>
-            {#if !v.enabled}<span class="muted">Switched off</span>
-            {:else if line}<span class="dot" class:ok={line.ok} aria-hidden="true"></span><span class:bad={!line.ok}>{line.text}</span>{/if}
-          </dd>
-        {:else}
-          <dt>Sources</dt>
-          <dd class="bad">None yet: add one below</dd>
-        {/each}
-        <dt>Playlists</dt>
-        <dd>{s.playlists} in <code>{s.fixed.playlist_dir}</code></dd>
-        <dt>Listening on</dt>
-        <dd><code>{s.fixed.bind}</code></dd>
-        <dt>Settings file</dt>
-        <dd>
-          {#if s.settings_file}<code>{s.settings_file}</code>{:else}<span class="bad">None: set CRATARR_DATA_DIR to save settings here</span>{/if}
-        </dd>
-        <dt>Cratarr</dt>
-        <dd>{s.version}, running since {since(s.started)}</dd>
-      </dl>
-    </section>
-
-    <section aria-labelledby="sources-h">
-      <h2 id="sources-h">Sources</h2>
+    {@const many = drafts.length > 1}
+    <section aria-labelledby="conn-h">
+      <h2 id="conn-h">Connections</h2>
       <p class="lede">
-        The servers Cratarr works alongside. Shared by everyone who uses Cratarr.
-        {#if s.origin === 'env'}These come from the container's settings until you save here.{/if}
-        Saved secrets are never shown; leave them empty to keep them.
+        The servers Cratarr works with. Shared by everyone who uses Cratarr.
+        {#if s.origin === 'env'}Until you save here, these come from the container's settings.{/if}
       </p>
 
       {#each drafts as d (d)}
         {@const k = kindOf(d)}
         {@const line = statusLine(d.view)}
-        {@const libs = d.view?.placement.libraries ?? []}
-        <article class="source" class:off={!d.enabled}>
+        <article class="server" class:off={!d.enabled}>
           <header>
-            <h3>{k?.label ?? d.kind} <small>{d.id}</small></h3>
+            <h3>{k?.label ?? d.kind}{#if many}<small>{d.id}</small>{/if}</h3>
             <label class="switch"><input type="checkbox" bind:checked={d.enabled} /> On</label>
             {#if removing === d.id}
+              <span class="ask">Remove this server?</span>
               <button class="danger" onclick={() => ((drafts = drafts.filter((x) => x !== d)), (removing = null))}>Remove</button>
-              <button onclick={() => (removing = null)}>Keep</button>
+              <button onclick={() => (removing = null)}>Cancel</button>
             {:else}
-              <button onclick={() => (removing = d.id)}>Remove…</button>
+              <button onclick={() => (removing = d.id)}>Remove</button>
             {/if}
           </header>
 
@@ -204,15 +179,16 @@
                 <span class="l">{f.label}{#if !f.required}<small>optional</small>{/if}</span>
                 {#if f.kind === 'secret'}
                   {@const needed = secretNeeded(d, f)}
+                  {@const isSaved = saved(d)?.secrets_set.includes(f.key)}
                   <input
                     type="password"
                     autocomplete="new-password"
                     bind:value={d.secrets[f.key]}
                     required={needed}
-                    placeholder={saved(d)?.secrets_set.includes(f.key) && !needed ? 'Saved; leave empty to keep it' : ''}
+                    placeholder={isSaved && !needed ? 'Saved; leave empty to keep it' : ''}
                   />
-                  {#if needed && saved(d)?.secrets_set.includes(f.key)}
-                    <span class="hint warn">Changed {f.bound_to.join(', ')}: enter it again, so the saved one is never sent somewhere new.</span>
+                  {#if needed && isSaved}
+                    <span class="hint warn">You changed the {labelOf(d, f.bound_to)}, so enter the {f.label.toLowerCase()} again.</span>
                   {/if}
                 {:else if f.kind === 'choice' && choicesFor(d, f).length}
                   <select value={str(d.values[f.key])} onchange={(e) => (d.values[f.key] = e.currentTarget.value)} required={f.required}>
@@ -241,7 +217,7 @@
                     required={f.required}
                     spellcheck="false"
                     autocomplete="off"
-                    placeholder={f.kind === 'choice' ? 'Connect first to choose' : ''}
+                    placeholder={f.kind === 'choice' ? 'Check the connection first' : ''}
                   />
                 {/if}
                 {#if f.help}<span class="hint">{f.help}</span>{/if}
@@ -250,14 +226,43 @@
           </div>
 
           <div class="row">
-            <button type="button" disabled={d.busy} onclick={() => check(d)}>{d.view ? 'Check again' : 'Connect'}</button>
+            <button type="button" disabled={d.busy} onclick={() => check(d)}>Check connection</button>
             {#if d.note}<span class="hint bad">{d.note}</span>{/if}
           </div>
+        </article>
+      {:else}
+        <p class="hint">No server yet.</p>
+      {/each}
 
-          {#if d.view}
+      {#if s.kinds.length === 1}
+        <button class="add" onclick={() => addServer(s!.kinds[0].id)}>Add {s.kinds[0].label} server</button>
+      {:else if s.kinds.length > 1}
+        <div class="row">
+          <select bind:value={addKind} aria-label="Kind of server">
+            {#each s.kinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}
+          </select>
+          <button class="add" onclick={() => addServer(addKind)}>Add server</button>
+        </div>
+      {/if}
+    </section>
+
+    <section aria-labelledby="lib-h">
+      <h2 id="lib-h">Libraries</h2>
+      <p class="lede">
+        <strong>Music</strong>: tracks that can go in playlists. <strong>Incoming</strong>: new music waiting to be
+        listened to; never added to playlists.
+      </p>
+
+      {#each drafts.filter((d) => d.enabled) as d (d)}
+        {@const libs = d.view?.placement.libraries ?? []}
+        <!-- With one server its frame adds nothing: the section already is the frame. -->
+        <article class="server" class:plain={!many}>
+          {#if many}<h3>{kindOf(d)?.label ?? d.kind}<small>{d.id}</small></h3>{/if}
+          {#if !d.view}
+            <p class="hint">Check the connection to see this server's libraries.</p>
+          {:else}
             <fieldset>
               <legend>Music</legend>
-              <p class="hint">Tracks in these libraries can go in playlists.</p>
               <label class="check"><input type="radio" checked={d.libraries.music.length === 0} onchange={() => setAutomatic(d, true)} />Every library inside the playlist folder</label>
               <label class="check"><input type="radio" checked={d.libraries.music.length > 0} onchange={() => setAutomatic(d, false)} />Only these:</label>
               {#if d.libraries.music.length > 0}
@@ -270,100 +275,89 @@
                   {/each}
                 </div>
               {/if}
-              {#if d.view.placement.root}
-                <p class="hint">This source sees the playlist folder as <code>{d.view.placement.root}</code>.</p>
-              {:else}
-                <p class="hint bad">None of this source's music libraries is inside the playlist folder ({s.fixed.playlist_dir}).</p>
+              {#if !d.view.placement.root}
+                <p class="hint bad">None of this server's libraries is inside the playlist folder, so nothing can be added to playlists.</p>
               {/if}
             </fieldset>
 
             <fieldset>
               <legend>Incoming <small>optional</small></legend>
-              <p class="hint">Where new music waits for review (Lidarr's sandbox, say). Never added to playlists; choosing one turns on incoming-music features.</p>
-              <select value={d.libraries.incoming ?? ''} onchange={(e) => (d.libraries.incoming = e.currentTarget.value || null)}>
+              <select value={d.libraries.incoming ?? ''} onchange={(e) => (d.libraries.incoming = e.currentTarget.value || null)} aria-label="Incoming library">
                 <option value="">None</option>
                 {#each libs.filter((l) => !d.libraries.music.includes(l.id)) as l (l.id)}<option value={l.id}>{l.name}</option>{/each}
               </select>
             </fieldset>
           {/if}
         </article>
+      {:else}
+        <p class="hint">Add a server under Connections first.</p>
       {/each}
-
-      {#if s.kinds.length}
-        <div class="row add">
-          <select bind:value={addKind} aria-label="Kind of source">
-            {#each s.kinds as k (k.id)}<option value={k.id}>{k.label}</option>{/each}
-          </select>
-          <button onclick={addSource}>Add source</button>
-        </div>
-      {/if}
-
-      {#if formError}<div class="banner error" role="alert">{formError}</div>{/if}
-      {#if notice}<div class="banner" role="status">{notice}</div>{/if}
-
-      <div class="row">
-        <button class="primary" disabled={saving || !dirty || !s.settings_file} onclick={save}>Save</button>
-        <button disabled={saving || !dirty} onclick={() => s && fill(s)}>Discard changes</button>
-      </div>
     </section>
   {:else if !loadError}
     <p class="lede">Loading…</p>
   {/if}
 
-  <section aria-labelledby="display-h">
-    <h2 id="display-h">Display</h2>
-    <p class="lede">Remembered by this browser only.</p>
+  <!-- Shown with the rest, so the sections never jump around while the page loads. -->
+  {#if s || loadError}
+    <section aria-labelledby="display-h">
+      <h2 id="display-h">Display</h2>
+      <p class="lede">Remembered by this browser only.</p>
 
-    <div class="pref">
-      <span class="l" id="theme-l">Theme</span>
-      <div class="seg" role="group" aria-labelledby="theme-l">
-        {#each THEMES as t (t.id)}
-          <button aria-pressed={prefs.theme === t.id} onclick={() => (prefs.theme = t.id)}>{t.label}</button>
+      <div class="pref">
+        <span class="l" id="theme-l">Theme</span>
+        <div class="seg" role="group" aria-labelledby="theme-l">
+          {#each THEMES as t (t.id)}
+            <button aria-pressed={prefs.theme === t.id} onclick={() => (prefs.theme = t.id)}>{t.label}</button>
+          {/each}
+        </div>
+      </div>
+
+      <label class="pref check">
+        <span class="l">Progress bar under the playing track</span>
+        <input type="checkbox" bind:checked={prefs.showProgress} />
+      </label>
+    </section>
+  {/if}
+
+  {#if s}
+    <section aria-labelledby="about-h">
+      <h2 id="about-h">About</h2>
+      <dl>
+        <dt>Cratarr</dt>
+        <dd>{s.version}, running since {since(s.started)}</dd>
+        <dt>Playlists</dt>
+        <dd>{s.playlists} in <code>{s.fixed.playlist_dir}</code></dd>
+        {#each s.sources.filter((v) => v.placement.root) as v (v.id)}
+          <dt>{v.label}{s.sources.length > 1 ? ` (${v.id})` : ''}</dt>
+          <dd>sees that folder as <code>{v.placement.root}</code></dd>
         {/each}
-      </div>
-    </div>
+        <dt>Port</dt>
+        <dd><code>{s.fixed.bind}</code></dd>
+        <dt>Settings file</dt>
+        <dd>
+          {#if s.settings_file}<code>{s.settings_file}</code>{:else}<span class="bad">None, so settings can't be saved. Set CRATARR_DATA_DIR.</span>{/if}
+        </dd>
+      </dl>
+    </section>
+  {/if}
 
-    <div class="pref">
-      <span class="l" id="sort-l">Playlist order</span>
-      <div class="seg" role="group" aria-labelledby="sort-l">
-        <button aria-pressed={!prefs.membersFirst} onclick={() => (prefs.membersFirst = false)}>A–Z</button>
-        <button aria-pressed={prefs.membersFirst} onclick={() => (prefs.membersFirst = true)}>In first</button>
-      </div>
+  {#if dirty}
+    <div class="savebar" role="region" aria-label="Unsaved changes">
+      <span>Unsaved changes</span>
+      <button class="primary" disabled={saving || !s?.settings_file} onclick={save}>Save</button>
+      <button disabled={saving} onclick={() => s && fill(s)}>Discard</button>
     </div>
-
-    <div class="pref">
-      <span class="l" id="zoom-l">Playlist size</span>
-      <div class="seg" role="group" aria-labelledby="zoom-l">
-        <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => prefs.zoom--}>−</button>
-        <span class="val">{prefs.zoom + 1} / {ZOOM_STEPS}</span>
-        <button aria-label="Larger" disabled={prefs.zoom === ZOOM_STEPS - 1} onclick={() => prefs.zoom++}>+</button>
-      </div>
-    </div>
-
-    <label class="pref check">
-      <span class="l">Progress bar under the playing track</span>
-      <input type="checkbox" bind:checked={prefs.showProgress} />
-    </label>
-
-    <div class="row">
-      <button onclick={resetPrefs}>Reset display</button>
-    </div>
-  </section>
+  {/if}
 </main>
 
 <style>
   main {
-    max-width: 760px;
-    padding: 8px clamp(12px, 2vw, 32px) 48px;
-  }
-
-  h1 {
-    margin: 16px 0 4px;
-    font-size: 1.25rem;
+    max-width: 900px;
+    padding: 16px clamp(12px, 2vw, 32px) 96px;
   }
 
   section {
-    margin-top: 20px;
+    margin-bottom: 20px;
     padding: 16px;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -371,8 +365,8 @@
   }
 
   h2 {
-    margin: 0 0 8px;
-    font-size: 1rem;
+    margin: 0 0 6px;
+    font-size: 1.05rem;
   }
 
   h3 {
@@ -395,6 +389,10 @@
     margin: 0 0 14px;
     color: var(--muted);
     font-size: 0.88rem;
+  }
+
+  .lede strong {
+    color: var(--text);
   }
 
   dl {
@@ -438,7 +436,6 @@
     margin-right: 8px;
     border-radius: 50%;
     background: var(--danger);
-    vertical-align: middle;
   }
 
   .dot.ok {
@@ -453,7 +450,7 @@
     color: var(--muted);
   }
 
-  .source {
+  .server {
     display: grid;
     gap: 14px;
     margin-bottom: 14px;
@@ -463,16 +460,25 @@
     border-radius: 12px;
   }
 
-  .source.off .fields,
-  .source.off fieldset {
+  .server.plain {
+    padding: 0;
+    background: none;
+    border: 0;
+  }
+
+  .server.off .fields {
     opacity: 0.6;
   }
 
-  .source header {
+  .server header {
     display: flex;
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .ask {
+    font-size: 0.9rem;
   }
 
   .state {
@@ -577,11 +583,7 @@
     flex-wrap: wrap;
   }
 
-  .row.add {
-    margin-bottom: 14px;
-  }
-
-  .row.add select {
+  .row select {
     width: auto;
   }
 
@@ -591,10 +593,12 @@
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 10px;
+    font: inherit;
+    color: inherit;
     cursor: pointer;
   }
 
-  .source button {
+  .server button {
     background: var(--surface);
   }
 
@@ -615,19 +619,6 @@
     cursor: default;
   }
 
-  .banner {
-    margin: 12px 0;
-    padding: 10px 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font-size: 0.9rem;
-  }
-
-  .banner.error {
-    border-color: var(--danger);
-    color: var(--danger);
-  }
-
   .pref {
     display: flex;
     align-items: center;
@@ -636,6 +627,10 @@
     flex-wrap: wrap;
     min-height: 52px;
     border-bottom: 1px solid var(--border);
+  }
+
+  .pref:last-child {
+    border-bottom: 0;
   }
 
   .pref.check {
@@ -647,10 +642,6 @@
     width: 22px;
     height: 22px;
     accent-color: var(--accent);
-  }
-
-  .pref + .row {
-    margin-top: 14px;
   }
 
   .seg {
@@ -672,10 +663,29 @@
     font-weight: 600;
   }
 
-  .val {
-    min-width: 4.5em;
-    text-align: center;
-    font-variant-numeric: tabular-nums;
-    font-size: 0.9rem;
+  /* Appears only with unsaved changes; above the phone's bottom bar. */
+  .savebar {
+    position: sticky;
+    bottom: calc(80px + env(safe-area-inset-bottom));
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+  }
+
+  .savebar span {
+    margin-right: auto;
+    font-weight: 600;
+  }
+
+  @media (min-width: 1024px) {
+    .savebar {
+      bottom: 16px;
+    }
   }
 </style>

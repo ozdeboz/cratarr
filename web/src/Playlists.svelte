@@ -1,33 +1,58 @@
 <script lang="ts">
-  import { ApiError, getState, toggle, type Playlist, type State } from './lib/api';
+  import {
+    ApiError,
+    createPlaylist,
+    deletePlaylist,
+    getState,
+    renamePlaylist,
+    restorePlaylist,
+    toggle,
+    type Playlist,
+    type State,
+  } from './lib/api';
   import { remember } from './lib/sources.svelte';
   import { prefs } from './lib/prefs.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
+  import Notice, { type NoticeData } from './lib/Notice.svelte';
+  import Popover from './lib/Popover.svelte';
+  import { longpress } from './lib/longpress';
 
   let view = $state<State | null>(null);
   let error = $state<string | null>(null);
-  let notice = $state<string | null>(null);
+  let notice = $state<NoticeData | null>(null);
   let filter = $state('');
-  // Zoom = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
+  // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
   const WIDTHS = [110, 140, 170, 210, 260, 340];
   const setZoom = (next: number) => (prefs.zoom = Math.min(WIDTHS.length - 1, Math.max(0, next)));
   // Taps flip the chip at once; the server's answer replaces this guess.
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
 
+  // The open menu: a playlist's (rename, delete) or the "New playlist" one; anchored to what opened it.
+  type Menu =
+    | { kind: 'playlist'; p: Playlist; anchor: DOMRect; mode: 'menu' | 'rename' | 'delete' }
+    | { kind: 'new'; anchor: DOMRect };
+  let menu = $state<Menu | null>(null);
+  let nameField = $state('');
+  let working = $state(false);
+
+  async function refresh() {
+    try {
+      view = await getState(prefs.source || undefined);
+      remember(view.sources);
+      error = null;
+    } catch (e) {
+      error = e instanceof ApiError ? e.message : 'Unexpected error';
+    }
+  }
+
   // Restarts (and polls at once) when the followed source changes.
   $effect(() => {
-    const followed = prefs.source || undefined;
+    void prefs.source;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
-      try {
-        view = await getState(followed);
-        remember(view.sources);
-        error = null;
-      } catch (e) {
-        error = e instanceof ApiError ? e.message : 'Unexpected error';
-      }
+      await refresh();
       if (!stopped) timer = setTimeout(poll, document.hidden ? 5000 : 2000);
     }
     poll();
@@ -35,12 +60,6 @@
       stopped = true;
       clearTimeout(timer);
     };
-  });
-
-  $effect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => (notice = null), 6000);
-    return () => clearTimeout(t);
   });
 
   const np = $derived(view?.now_playing ?? null);
@@ -55,37 +74,78 @@
     return list;
   });
 
-  const memberCount = $derived(
-    (view?.playlists ?? []).filter((p) => optimistic[p.id] ?? p.member).length,
-  );
+  const memberCount = $derived((view?.playlists ?? []).filter((p) => optimistic[p.id] ?? p.member).length);
+  const NOT_MUSIC = "Not in your Music, so it can't go in playlists.";
 
   async function tap(p: Playlist) {
-    if (busy[p.id] || !np) return;
+    if (busy[p.id]) return;
+    if (!np) {
+      notice = { text: 'Nothing is playing. Start a track to add it to playlists.', tone: 'warn' };
+      return;
+    }
     if (!np.addable && !p.member) {
-      notice = 'This track is not in the curated library, so it cannot be added to a playlist.';
+      notice = { text: NOT_MUSIC, tone: 'warn' };
       return;
     }
     busy[p.id] = true;
     optimistic[p.id] = !p.member;
-    notice = null;
     try {
       view = await toggle(p.id, prefs.source || undefined);
     } catch (e) {
-      notice = e instanceof ApiError ? e.message : 'Something went wrong';
+      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
     } finally {
       delete optimistic[p.id];
       delete busy[p.id];
     }
   }
+
+  const missing = (n: number) => `${n} missing ${n === 1 ? 'track' : 'tracks'}`;
+
+  async function act(run: () => Promise<unknown>, done: NoticeData) {
+    if (working) return;
+    working = true;
+    try {
+      await run();
+      notice = done;
+      menu = null;
+    } catch (e) {
+      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
+    } finally {
+      working = false;
+      await refresh();
+    }
+  }
+
+  function openNew(e: MouseEvent) {
+    nameField = '';
+    menu = { kind: 'new', anchor: (e.currentTarget as HTMLElement).getBoundingClientRect() };
+  }
+
+  const create = () => {
+    const name = nameField.trim();
+    if (name) act(() => createPlaylist(name), { text: `Created ${name}.` });
+  };
+
+  const rename = (p: Playlist) => {
+    const to = nameField.trim();
+    if (to && to !== p.id) act(() => renamePlaylist(p.id, to), { text: `Renamed to ${to}.` });
+  };
+
+  const remove = (p: Playlist) =>
+    act(() => deletePlaylist(p.id), {
+      text: `Deleted ${p.name}.`,
+      undo: () => act(() => restorePlaylist(p.id), { text: `Restored ${p.name}.` }),
+    });
 </script>
 
 <main>
   <NowPlaying {np}>
     {#snippet below()}
-      {#if np && !np.addable}<span class="badge">Not in the library: cannot be added to playlists</span>{/if}
+      {#if np && !np.addable}<span class="badge">{NOT_MUSIC}</span>{/if}
     {/snippet}
     {#snippet aside()}
-      <div class="count" aria-live="polite">
+      <div class="count" aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
+        <span>in</span>
         <strong>{memberCount}</strong>
         <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
       </div>
@@ -94,18 +154,24 @@
 
   <div class="tools">
     <input type="search" placeholder="Filter playlists" aria-label="Filter playlists" bind:value={filter} />
-    <div class="seg" role="group" aria-label="Sort order">
+    <div class="seg" role="group" aria-label="Order">
       <button aria-pressed={!prefs.membersFirst} onclick={() => (prefs.membersFirst = false)}>A–Z</button>
-      <button aria-pressed={prefs.membersFirst} onclick={() => (prefs.membersFirst = true)}>In first</button>
+      <button aria-pressed={prefs.membersFirst} onclick={() => (prefs.membersFirst = true)} title="Playlists with the playing track first"
+        >✓ first</button
+      >
     </div>
-    <div class="seg" role="group" aria-label="Zoom">
-      <button aria-label="Zoom out, more columns" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
-      <button aria-label="Zoom in, fewer columns" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
+    <div class="seg" role="group" aria-label="Size">
+      <span class="lbl" aria-hidden="true">Size</span>
+      <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
+      <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
     </div>
+    <button class="new" onclick={openNew}>New playlist</button>
   </div>
 
-  {#if error}<div class="banner error" role="alert">{error}</div>{/if}
-  {#if notice}<div class="banner warn" role="status">{notice}</div>{/if}
+  {#if error}
+    <Notice notice={{ text: error, tone: 'error' }} />
+  {/if}
+  <Notice bind:notice />
 
   {#if !view && !error}
     <p class="empty">Loading…</p>
@@ -117,15 +183,16 @@
             class="chip"
             class:member={p.member}
             class:busy={busy[p.id]}
+            class:idle={!np}
             class:blocked={!!np && !np.addable && !p.member}
             aria-pressed={p.member}
-            title={p.dead > 0 ? `${p.dead} ${p.dead === 1 ? 'entry points' : 'entries point'} at missing files` : undefined}
-            disabled={!np}
+            title={p.dead > 0 ? missing(p.dead) : undefined}
             onclick={() => tap(p)}
+            use:longpress={(anchor) => (menu = { kind: 'playlist', p, anchor, mode: 'menu' })}
           >
             <span class="mark" aria-hidden="true">{p.member ? '✓' : '+'}</span>
             <span class="name">{p.name}</span>
-            <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-hidden="true"></i>{/if}</span>
+            <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}</span>
           </button>
         </li>
       {/each}
@@ -133,6 +200,64 @@
     {#if view && items.length === 0}<p class="empty">No playlists match.</p>{/if}
   {/if}
 </main>
+
+{#if menu?.kind === 'new'}
+  <Popover anchor={menu.anchor} label="New playlist" onclose={() => (menu = null)}>
+    <form
+      class="form"
+      onsubmit={(e) => {
+        e.preventDefault();
+        create();
+      }}
+    >
+      <input type="text" placeholder="Name" aria-label="Name of the new playlist" maxlength="100" bind:value={nameField} />
+      <div class="row">
+        <button type="submit" class="primary" disabled={working || !nameField.trim()}>Create playlist</button>
+        <button type="button" onclick={() => (menu = null)}>Cancel</button>
+      </div>
+    </form>
+  </Popover>
+{:else if menu?.kind === 'playlist'}
+  {@const p = menu.p}
+  <Popover anchor={menu.anchor} label={p.name} onclose={() => (menu = null)}>
+    <div class="head">{p.name} <span>{p.count} {p.count === 1 ? 'track' : 'tracks'}{p.dead > 0 ? ` · ${missing(p.dead)}` : ''}</span></div>
+    {#if menu.mode === 'menu'}
+      <div class="items" role="menu">
+        <button
+          role="menuitem"
+          onclick={() => {
+            if (menu?.kind !== 'playlist') return;
+            nameField = p.id;
+            menu.mode = 'rename';
+          }}>Rename</button
+        >
+        <button role="menuitem" class="danger" onclick={() => menu?.kind === 'playlist' && (menu.mode = 'delete')}>Delete</button>
+      </div>
+    {:else if menu.mode === 'rename'}
+      <form
+        class="form"
+        onsubmit={(e) => {
+          e.preventDefault();
+          rename(p);
+        }}
+      >
+        <input type="text" aria-label="New name" maxlength="100" bind:value={nameField} />
+        <div class="row">
+          <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === p.id}>Rename</button>
+          <button type="button" onclick={() => (menu = null)}>Cancel</button>
+        </div>
+      </form>
+    {:else}
+      <div class="form">
+        <p class="ask">Delete {p.name}? You can undo this right after.</p>
+        <div class="row">
+          <button class="danger solid" disabled={working} onclick={() => remove(p)}>Delete playlist</button>
+          <button onclick={() => (menu = null)}>Cancel</button>
+        </div>
+      </div>
+    {/if}
+  </Popover>
+{/if}
 
 <style>
   main {
@@ -162,6 +287,7 @@
   }
 
   .count span {
+    display: block;
     color: var(--muted);
     font-size: 0.75rem;
   }
@@ -173,20 +299,35 @@
     flex-wrap: wrap;
   }
 
-  input[type='search'] {
-    flex: 1 1 220px;
+  input[type='search'],
+  input[type='text'] {
     min-height: 44px;
     padding: 0 14px;
-    background: var(--surface);
+    background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 10px;
+    font: inherit;
+    color: inherit;
+  }
+
+  input[type='search'] {
+    flex: 1 1 220px;
+    background: var(--surface);
   }
 
   .seg {
     display: flex;
+    align-items: center;
     border: 1px solid var(--border);
     border-radius: 10px;
     overflow: hidden;
+    background: var(--surface);
+  }
+
+  .seg .lbl {
+    padding: 0 4px 0 14px;
+    color: var(--muted);
+    font-size: 0.85rem;
   }
 
   .seg button {
@@ -208,23 +349,13 @@
     font-weight: 600;
   }
 
-  .banner {
-    margin-bottom: 12px;
-    padding: 10px 14px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
+  button.new {
+    min-height: 44px;
+    padding: 0 16px;
     background: var(--surface);
-    font-size: 0.9rem;
-  }
-
-  .banner.warn {
-    border-color: var(--warn);
-    color: var(--warn);
-  }
-
-  .banner.error {
-    border-color: var(--danger);
-    color: var(--danger);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
   }
 
   .grid {
@@ -254,7 +385,7 @@
       transform 80ms;
   }
 
-  .chip:active:not(:disabled) {
+  .chip:active {
     transform: scale(0.97);
   }
 
@@ -265,16 +396,16 @@
     font-weight: 600;
   }
 
-  .chip:disabled {
-    cursor: default;
-    opacity: 0.45;
+  /* Nothing playing: the chips only open their menu, so they look quieter. */
+  .chip.idle {
+    opacity: 0.6;
   }
 
   .chip.busy {
     opacity: 0.7;
   }
 
-  /* Track outside the library: adding is refused, so the add chips look blocked (tapping explains why). */
+  /* Track outside Music: adding is refused, so the add chips look blocked (tapping explains why). */
   .chip.blocked {
     opacity: 0.5;
     border-style: dashed;
@@ -319,5 +450,92 @@
     margin-top: 32px;
     text-align: center;
     color: var(--muted);
+  }
+
+  /* Popover contents */
+  .head {
+    padding: 8px 10px 6px;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+  }
+
+  .head span {
+    display: block;
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 400;
+  }
+
+  .items {
+    display: grid;
+  }
+
+  .items button {
+    min-height: 44px;
+    padding: 0 10px;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .items button:hover,
+  .items button:focus-visible {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .danger,
+  .items button.danger {
+    color: var(--danger);
+  }
+
+  .form {
+    display: grid;
+    gap: 10px;
+    padding: 6px;
+  }
+
+  .ask {
+    margin: 0;
+    font-size: 0.92rem;
+  }
+
+  .row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .row button {
+    min-height: 40px;
+    padding: 0 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .row button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+
+  .row button.danger.solid {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .row button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 </style>

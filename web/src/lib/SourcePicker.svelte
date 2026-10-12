@@ -20,7 +20,7 @@
 
 {#if known.list.length > 1}
   <label class="picker">
-    <span>Source</span>
+    <span>Server</span>
     <select value={value} onchange={(e) => (prefs.source = e.currentTarget.value)}>
       <option value="">Automatic</option>
       {#each known.list as s (s.id)}

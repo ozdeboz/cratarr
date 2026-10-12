@@ -2,29 +2,24 @@
   import { ApiError, getIncoming, getState, incomingCoverUrl, playIncoming, type IncomingAlbum, type IncomingSource, type NowPlaying as Playing } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
+  import Notice, { type NoticeData } from './lib/Notice.svelte';
 
   let sources = $state<IncomingSource[] | null>(null);
   let error = $state<string | null>(null);
   let noCover = $state<Record<string, boolean>>({});
   let filter = $state('');
   let playing = $state<Playing | null>(null);
-  let notice = $state<{ text: string; bad: boolean } | null>(null);
+  let notice = $state<NoticeData | null>(null);
   let starting = $state<string | null>(null);
-
-  $effect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => (notice = null), 5000);
-    return () => clearTimeout(t);
-  });
 
   async function play(source: string, a: IncomingAlbum) {
     if (starting) return;
     starting = a.id;
     try {
       const { player } = await playIncoming(source, a.id);
-      notice = { text: `Playing ${a.title} on ${player}.`, bad: false };
+      notice = { text: `Playing ${a.title} on ${player}.` };
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Could not start playing', bad: true };
+      notice = { text: e instanceof ApiError ? e.message : 'Could not start playing', tone: 'error' };
     } finally {
       starting = null;
     }
@@ -77,7 +72,7 @@
 
   const lossless = (a: IncomingAlbum) => a.format === 'FLAC';
   const quality = (a: IncomingAlbum) =>
-    [a.format ?? 'Mixed', lossless(a) || a.bitrate_kbps === null ? null : `${a.bitrate_kbps} kbps`].filter(Boolean).join(' ');
+    [a.format ?? 'Mixed formats', lossless(a) || a.bitrate_kbps === null ? null : `${a.bitrate_kbps} kbps`].filter(Boolean).join(' ');
   const added = (t: number | null) =>
     t === null ? '' : new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
   const matches = (a: IncomingAlbum) => {
@@ -93,28 +88,26 @@
     cover={playing && !playing.addable ? (playing.album_id ? incomingCoverUrl(playing.source, playing.album_id) : null) : undefined}
   />
 
-  <h1>Incoming</h1>
-  <p class="lede">New music waiting to be listened to, newest first. Tap an album to play it.</p>
-  {#if notice}<p class="notice" class:bad={notice.bad} role="status">{notice.text}</p>{/if}
+  <Notice bind:notice />
 
   {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if sources === null}
     <p class="empty">Loading…</p>
   {:else if sources.length === 0}
-    <p class="empty">No incoming library is set. Choose one in Settings.</p>
+    <p class="empty">No incoming library is set. Choose one in Settings → Libraries.</p>
   {:else}
-    <input class="filter" type="search" placeholder="Filter" bind:value={filter} aria-label="Filter albums" />
+    <input class="filter" type="search" placeholder="Filter albums" bind:value={filter} aria-label="Filter albums" />
     {#each sources as s (s.id)}
       {#if sources.length > 1}<h2>{s.label}</h2>{/if}
       {#if !s.supported}
-        <p class="empty">{s.label} cannot list albums.</p>
+        <p class="empty">{s.label} can't list albums.</p>
       {:else if s.error}
         <p class="error" role="alert">{s.error}</p>
       {:else if s.albums.length === 0}
         <p class="empty">Nothing incoming.</p>
       {:else}
-        <p class="count">{s.albums.length} {s.albums.length === 1 ? 'album' : 'albums'}</p>
+        <p class="count">{s.albums.length} {s.albums.length === 1 ? 'album' : 'albums'}, newest first. Tap one to play it.</p>
         <ul>
           {#each s.albums.filter(matches) as a (a.id)}
             <li class:playing={playing?.album_id === a.id}>
@@ -132,7 +125,7 @@
                 />
               {/if}
               <div class="text">
-                <div class="title">{a.title}{#if a.year}<span class="year"> ({a.year})</span>{/if}</div>
+                <div class="title">{a.title}{#if a.year}<span class="year">{` (${a.year})`}</span>{/if}</div>
                 <div class="artist">{a.artist ?? 'Unknown artist'}{#if playing?.album_id === a.id}<span class="now"> · playing</span>{/if}</div>
                 <div class="meta">
                   <span>{a.tracks} {a.tracks === 1 ? 'track' : 'tracks'}</span>
@@ -156,17 +149,11 @@
     padding: 0 clamp(12px, 2vw, 32px) 48px;
   }
 
-  h1 {
-    margin: 16px 0 4px;
-    font-size: 1.25rem;
-  }
-
   h2 {
     margin: 24px 0 6px;
     font-size: 1rem;
   }
 
-  .lede,
   .empty,
   .count {
     color: var(--muted);
@@ -225,18 +212,7 @@
     opacity: 0.6;
   }
 
-  .notice {
-    margin: 8px 0;
-    padding: 8px 12px;
-    border: 1px solid var(--accent);
-    border-radius: 10px;
-    font-size: 0.9rem;
-  }
 
-  .notice.bad {
-    border-color: var(--danger);
-    color: var(--danger);
-  }
 
   .cover {
     flex: none;

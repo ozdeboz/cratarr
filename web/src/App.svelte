@@ -1,6 +1,6 @@
 <script lang="ts">
   import Playlists from './Playlists.svelte';
-  import Manage from './Manage.svelte';
+  import Repairs from './Repairs.svelte';
   import Settings from './Settings.svelte';
   import Incoming from './Incoming.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
@@ -14,16 +14,16 @@
   const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
   // Shown only when some source has an incoming library (see the status call below).
   const INCOMING: Page = { id: 'incoming', href: '#/incoming', label: 'Incoming', icon: 'incoming' };
-  const MANAGE: Page = { id: 'manage', href: '#/manage', label: 'Manage', icon: 'manage' };
+  const REPAIRS: Page = { id: 'repairs', href: '#/repairs', label: 'Repairs', icon: 'repairs' };
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
 
   // Phones get a bottom bar. Up to five fit; beyond that the first four stay and the rest go under "More".
   const BAR_SLOTS = 5;
 
-  // Repairs lives under Manage; the old #/repairs link still lands there.
+  // Playlists are created, renamed and deleted on the Playlists page now; old Manage links land where they went.
   const fromHash = () =>
-    location.hash.startsWith('#/manage') || location.hash === '#/repairs'
-      ? 'manage'
+    location.hash === '#/repairs' || location.hash === '#/manage/repairs'
+      ? 'repairs'
       : location.hash === SETTINGS.href
         ? 'settings'
         : location.hash === INCOMING.href
@@ -87,7 +87,7 @@
           ? { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, PLAYLISTS, MANAGE] : [PLAYLISTS, MANAGE]);
+  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, PLAYLISTS, REPAIRS] : [PLAYLISTS, REPAIRS]);
   const ALL = $derived([...MAIN, SETTINGS]);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, BAR_SLOTS - 1));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
@@ -121,8 +121,8 @@
 
   <div class="content">
     {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
-    {#if page === 'manage'}
-      <Manage />
+    {#if page === 'repairs'}
+      <Repairs />
     {:else if page === 'settings'}
       <Settings />
     {:else if page === 'incoming' && status?.incoming}

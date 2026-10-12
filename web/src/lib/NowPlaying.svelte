@@ -123,6 +123,19 @@
     border-bottom: 1px solid var(--border);
   }
 
+  /* A background layer reaching into the page's side padding (the pages' own clamp), so a row that bleeds wider
+     (the playing album on Incoming) never shows through while it scrolls under the header. Not further: on
+     desktop the sidebar sits right next to that padding. (A clipped box-shadow did the same but made rendering
+     hang with many images below, observed in Chrome on 0.2.5.) */
+  header::before {
+    content: '';
+    position: absolute;
+    inset: 0 calc(-1 * clamp(12px, 2vw, 32px));
+    z-index: -1;
+    background: var(--bg);
+  }
+
+
   .np {
     flex: 1;
     min-width: 0;

@@ -1,0 +1,73 @@
+// Long-press (touch or pen, ~500 ms) and right-click open an item's menu (docs/ui-conventions.md). A long-press
+// never also counts as a tap, moving or scrolling cancels it, and the browser's own menu stays closed.
+
+const HOLD_MS = 500;
+const SLOP_PX = 10;
+
+export function longpress(node: HTMLElement, onlong: (rect: DOMRect) => void) {
+  let handler = onlong;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let start: { x: number; y: number } | null = null;
+  let fired = false;
+
+  const cancel = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    start = null;
+  };
+  const fire = () => {
+    fired = true;
+    cancel();
+    handler(node.getBoundingClientRect());
+  };
+
+  function down(e: PointerEvent) {
+    fired = false;
+    if (e.pointerType === 'mouse') return; // a mouse has right-click
+    start = { x: e.clientX, y: e.clientY };
+    timer = setTimeout(fire, HOLD_MS);
+  }
+  function move(e: PointerEvent) {
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > SLOP_PX) cancel();
+  }
+  // The tap that ends a long-press is swallowed.
+  function click(e: MouseEvent) {
+    if (!fired) return;
+    fired = false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+  // Right-click, and touch browsers' own long-press signal: open the menu unless this press already did.
+  function contextmenu(e: MouseEvent) {
+    e.preventDefault();
+    if (!fired) fire();
+  }
+
+  node.addEventListener('pointerdown', down);
+  node.addEventListener('pointermove', move);
+  node.addEventListener('pointerup', cancel);
+  node.addEventListener('pointercancel', cancel);
+  node.addEventListener('pointerleave', cancel);
+  node.addEventListener('click', click, true);
+  node.addEventListener('contextmenu', contextmenu);
+  addEventListener('scroll', cancel, true);
+  node.style.setProperty('-webkit-touch-callout', 'none');
+  node.style.userSelect = 'none';
+
+  return {
+    update(next: (rect: DOMRect) => void) {
+      handler = next;
+    },
+    destroy() {
+      cancel();
+      node.removeEventListener('pointerdown', down);
+      node.removeEventListener('pointermove', move);
+      node.removeEventListener('pointerup', cancel);
+      node.removeEventListener('pointercancel', cancel);
+      node.removeEventListener('pointerleave', cancel);
+      node.removeEventListener('click', click, true);
+      node.removeEventListener('contextmenu', contextmenu);
+      removeEventListener('scroll', cancel, true);
+    },
+  };
+}

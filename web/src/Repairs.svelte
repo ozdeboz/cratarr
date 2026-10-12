@@ -11,11 +11,12 @@
     type Repair,
     type Repairs,
   } from './lib/api';
+  import Notice, { type NoticeData } from './lib/Notice.svelte';
 
   let data = $state<Repairs | null>(null);
   let dups = $state<DupGroup[]>([]);
   let error = $state<string | null>(null);
-  let notice = $state<{ text: string; undo: string[] } | null>(null);
+  let notice = $state<NoticeData | null>(null);
   let confirming = $state(false);
   let busy = $state(false);
 
@@ -36,30 +37,31 @@
   const fileOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
   const albumOf = (path: string) => path.slice(0, path.lastIndexOf('/'));
 
+  const tracks = (n: number) => `${n} ${n === 1 ? 'track' : 'tracks'}`;
+  const inPlaylists = (n: number) => `${n} ${n === 1 ? 'playlist' : 'playlists'}`;
+
   async function run(action: () => Promise<{ playlists: string[] }>, what: string) {
     if (busy) return;
     busy = true;
     confirming = false;
     try {
       const { playlists } = await action();
-      notice = { text: `${what} (${playlists.length} ${playlists.length === 1 ? 'playlist' : 'playlists'}).`, undo: playlists };
+      notice = { text: `${what} in ${inPlaylists(playlists.length)}.`, undo: () => undoChanges(playlists) };
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', undo: [] };
+      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
     } finally {
       busy = false;
       await load();
     }
   }
 
-  async function undoLast() {
-    if (!notice || busy) return;
+  async function undoChanges(ids: string[]) {
     busy = true;
-    const ids = notice.undo;
     try {
       await undo(ids);
-      notice = { text: 'Undone.', undo: [] };
+      notice = { text: 'Undone.' };
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', undo: [] };
+      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
     } finally {
       busy = false;
       await load();
@@ -70,7 +72,7 @@
     await run(async () => {
       await dedupe(playlist);
       return { playlists: [playlist] };
-    }, `Removed ${extra} repeated ${extra === 1 ? 'line' : 'lines'}`);
+    }, `Removed ${extra} repeated ${extra === 1 ? 'track' : 'tracks'}`);
   }
 
   const safe = $derived(data?.safe ?? []);
@@ -82,40 +84,36 @@
   });
 </script>
 
-<div class="pane">
-  <p class="lede">
-    Lines in playlists that point at a file that no longer exists. Every change keeps a backup and can be undone.
-  </p>
+<main>
+  <p class="lede">Tracks in playlists whose file is gone, and tracks listed twice. Every change can be undone.</p>
 
-  {#if error}<div class="banner error" role="alert">{error}</div>{/if}
-  {#if notice}
-    <div class="banner" role="status">
-      {notice.text}
-      {#if notice.undo.length > 0}<button class="link" onclick={undoLast} disabled={busy}>Undo</button>{/if}
-    </div>
-  {/if}
+  {#if error}<Notice notice={{ text: error, tone: 'error' }} />{/if}
+  <Notice bind:notice />
 
   {#if !data && !error}
-    <p class="empty">Checking…</p>
+    <p class="empty">Loading…</p>
   {:else if data && safe.length === 0 && review.length === 0 && dups.length === 0}
-    <p class="empty">Nothing to repair.</p>
+    <p class="empty">No missing or repeated tracks.</p>
   {:else if data}
-    <section>
-      <h2>Safe to fix <span class="n">{safe.length}</span></h2>
-      {#if safe.length > 0}
-        <p class="hint">The track is in the library in another format (for example a FLAC upgrade of an MP3).</p>
+    {#if safe.length > 0}
+      <section>
+        <h2>Found in another format <span class="n">{tracks(safe.length)}</span></h2>
+        <p class="hint">The same track is in your Music in another format, for example a FLAC that replaced an MP3.</p>
         {#if confirming}
-          <button class="primary" onclick={() => run(applySafe, `Fixed ${safe.length} lines`)} disabled={busy}>
-            Rewrite {safe.length} lines in {playlistsOf(safe).length} playlists
-          </button>
-          <button onclick={() => (confirming = false)}>Cancel</button>
+          <p class="ask">Point {tracks(safe.length)} in {inPlaylists(playlistsOf(safe).length)} at the new files?</p>
+          <div class="row">
+            <button class="primary" onclick={() => run(applySafe, `Fixed ${tracks(safe.length)}`)} disabled={busy}>
+              Fix {tracks(safe.length)}
+            </button>
+            <button onclick={() => (confirming = false)}>Cancel</button>
+          </div>
         {:else}
-          <button class="primary" onclick={() => (confirming = true)} disabled={busy}>Fix all {safe.length}</button>
+          <button class="primary" onclick={() => (confirming = true)} disabled={busy}>Fix {safe.length} missing {safe.length === 1 ? 'track' : 'tracks'}</button>
         {/if}
         <ul class="rows">
           {#each safeByPlaylist as [playlist, rs] (playlist)}
             <li>
-              <strong>{playlist}</strong> <span class="n">{rs.length}</span>
+              <strong>{playlist}</strong> <span class="n">{tracks(rs.length)}</span>
               <ul>
                 {#each rs as r (r.from)}
                   <li title={albumOf(r.from)}>{fileOf(r.from)} <span class="arrow">→</span> {fileOf(r.to)}</li>
@@ -124,31 +122,13 @@
             </li>
           {/each}
         </ul>
-      {/if}
-    </section>
-
-    {#if dups.length > 0}
-      <section>
-        <h2>Repeated lines <span class="n">{dups.reduce((n, g) => n + g.extra, 0)}</span></h2>
-        <p class="hint">The same track listed more than once. Removing keeps the first copy.</p>
-        <ul class="rows">
-          {#each dups as g (g.playlist)}
-            <li class="review">
-              <div>
-                <strong>{g.playlist}</strong> <span class="n">{g.extra} extra</span>
-                <div class="pair">{g.entries.slice(0, 3).map((e) => fileOf(e.entry)).join(' · ')}{g.entries.length > 3 ? ' …' : ''}</div>
-              </div>
-              <button onclick={() => removeDups(g.playlist, g.extra)} disabled={busy}>Remove extras</button>
-            </li>
-          {/each}
-        </ul>
       </section>
     {/if}
 
     {#if review.length > 0}
       <section>
-        <h2>Needs a look <span class="n">{review.length}</span></h2>
-        <p class="hint">Same track number, similar but different title. Check before accepting.</p>
+        <h2>Likely match <span class="n">{tracks(review.length)}</span></h2>
+        <p class="hint">A missing track with a file of the same number and a similar title. Check before using it.</p>
         <ul class="rows">
           {#each review as r (r.playlist + r.from)}
             <li class="review">
@@ -156,16 +136,39 @@
                 <strong>{r.playlist}</strong>
                 <div class="pair" title={albumOf(r.from)}>{fileOf(r.from)} <span class="arrow">→</span> {fileOf(r.to)}</div>
               </div>
-              <button onclick={() => run(() => applyOne(r), 'Accepted')} disabled={busy}>Accept</button>
+              <button onclick={() => run(() => applyOne(r), 'Used the matching file')} disabled={busy}>Use this file</button>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+
+    {#if dups.length > 0}
+      <section>
+        <h2>Repeated tracks <span class="n">{tracks(dups.reduce((n, g) => n + g.extra, 0))}</span></h2>
+        <p class="hint">The same track more than once in a playlist. Removing keeps the first.</p>
+        <ul class="rows">
+          {#each dups as g (g.playlist)}
+            <li class="review">
+              <div>
+                <strong>{g.playlist}</strong> <span class="n">{g.extra} repeated</span>
+                <div class="pair">{g.entries.slice(0, 3).map((e) => fileOf(e.entry)).join(' · ')}{g.entries.length > 3 ? ' …' : ''}</div>
+              </div>
+              <button onclick={() => removeDups(g.playlist, g.extra)} disabled={busy}>Remove {g.extra === 1 ? 'repeat' : 'repeats'}</button>
             </li>
           {/each}
         </ul>
       </section>
     {/if}
   {/if}
-</div>
+</main>
 
 <style>
+  main {
+    max-width: 900px;
+    padding: 16px clamp(12px, 2vw, 32px) 48px;
+  }
+
   h2 {
     margin: 28px 0 6px;
     font-size: 1rem;
@@ -210,28 +213,19 @@
     cursor: default;
   }
 
-  button.link {
-    min-height: 0;
-    margin-left: 10px;
-    padding: 0;
-    background: none;
-    border: 0;
-    color: var(--accent);
-    text-decoration: underline;
+  .lede {
+    margin: 0 0 14px;
   }
 
-  .banner {
-    margin: 12px 0;
-    padding: 10px 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--surface);
-    font-size: 0.9rem;
+  .ask {
+    margin: 8px 0;
+    font-size: 0.92rem;
   }
 
-  .banner.error {
-    border-color: var(--danger);
-    color: var(--danger);
+  .row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
   }
 
   .rows,
