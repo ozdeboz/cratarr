@@ -2,9 +2,9 @@
   // The now-playing header, part of the app shell: shown above every page. It reads the shared state (see
   // live.svelte.ts) and shows the track, its cover, the progress bar, and how many playlists hold it.
   import { untrack } from 'svelte';
-  import { ApiError, coverUrl, incomingCoverUrl, transport, type Transport } from './api';
+  import { ApiError, coverUrl, incomingCoverUrl, setFavorite, transport, type Transport } from './api';
   import Icon from './Icon.svelte';
-  import { live, refresh } from './live.svelte';
+  import { live, player, refresh } from './live.svelte';
   import { prefs } from './prefs.svelte';
 
   const np = $derived(live.view?.now_playing ?? null);
@@ -74,6 +74,54 @@
     return duration ? Math.min(p, duration) : p;
   });
 
+  // Favourite: shown as the server reports it; a tap shows the new state at once and asks for it.
+  let favWanted = $state<{ id: string; on: boolean } | null>(null);
+  const favorite = $derived(np && favWanted?.id === np.id ? favWanted.on : (np?.favorite ?? false));
+  async function toggleFavorite() {
+    if (!np || np.favorite === null) return;
+    const want = { id: np.id, on: !favorite };
+    favWanted = want;
+    try {
+      live.view = await setFavorite(want.on, np.source);
+    } catch (e) {
+      failure = e instanceof ApiError ? e.message : "The favourite didn't change";
+      setTimeout(() => (failure = null), 5000);
+    } finally {
+      if (favWanted === want) favWanted = null;
+    }
+  }
+
+  // Full screen: opened from the cover, the title or the expand button; closed by the collapse button, Esc, a swipe
+  // down, or the navigation (see App.svelte).
+  const open = () => (player.full = true);
+  const close = () => (player.full = false);
+  $effect(() => {
+    if (!player.full) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    addEventListener('keydown', onKey);
+    return () => removeEventListener('keydown', onKey);
+  });
+  // A swipe down closes it too (an extra to the collapse button and Esc).
+  let head = $state<HTMLElement>();
+  $effect(() => {
+    if (!player.full || !head) return;
+    let from: { x: number; y: number } | null = null;
+    const down = (e: PointerEvent) => (from = { x: e.clientX, y: e.clientY });
+    const up = (e: PointerEvent) => {
+      if (!from) return;
+      const [dx, dy] = [e.clientX - from.x, e.clientY - from.y];
+      from = null;
+      if (dy > 80 && dy > 2 * Math.abs(dx)) close();
+    };
+    const el = head;
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up);
+    return () => {
+      el.removeEventListener('pointerdown', down);
+      el.removeEventListener('pointerup', up);
+    };
+  });
+
   function clock(secs: number) {
     const s = Math.floor(secs);
     const mm = String(Math.floor((s % 3600) / 60));
@@ -82,16 +130,25 @@
   }
 </script>
 
-<header>
+<header class:full={player.full} bind:this={head}>
+  {#if player.full}
+    <button class="collapse" aria-label="Back to normal size" onclick={close}><Icon name="collapse" size={26} /></button>
+  {/if}
   {#if np && src}
     {#key src}
-      <img class="cover" {src} alt="" decoding="async" onerror={() => (failed[src] = true)} />
+      <button class="cover-btn" aria-label="Full screen" tabindex={player.full ? -1 : 0} onclick={open}>
+        <img class="cover" {src} alt="" decoding="async" onerror={() => (failed[src] = true)} />
+      </button>
     {/key}
   {/if}
   <div class="np">
     {#if np}
       {#if np.player}<span class="pill">{np.player}</span>{/if}
-      <div class="title">{np.name}</div>
+      {#if player.full}
+        <div class="title">{np.name}</div>
+      {:else}
+        <button class="title" onclick={open}>{np.name}</button>
+      {/if}
       <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
       <div class="row">
       <div class="transport" role="group" aria-label="Player controls">
@@ -135,23 +192,38 @@
     {/if}
   </div>
   {#if np}
+    <div class="side">
+    <div class="acts">
+      {#if np.favorite !== null}
+        <button class="fav" class:on={favorite} aria-label={favorite ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite} onclick={toggleFavorite}
+          ><Icon name="heart" size={player.full ? 26 : 18} /></button
+        >
+      {/if}
+      {#if !player.full}
+        <button class="expand" aria-label="Full screen" aria-expanded="false" onclick={open}><Icon name="expand" size={16} /></button>
+      {/if}
+    </div>
     <div class="count" aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
       <span>in</span>
       <strong>{memberCount}</strong>
       <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
     </div>
+    </div>
   {/if}
 </header>
 
 <style>
+  /* Cover | track | favourite, expand and count. On very small screens the count and buttons go under the cover, so
+     the track's column (titles, controls, progress) gets the whole width beside it. */
   header {
     position: sticky;
     top: 0;
     z-index: 2;
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: 'cover np side';
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+    gap: 8px 16px;
     padding: 16px 0 12px;
     background: var(--bg);
     border-bottom: 1px solid var(--border);
@@ -336,5 +408,200 @@
     margin-top: 6px;
     color: var(--danger);
     font-size: 0.8rem;
+  }
+
+  /* The cover and the title open full screen; they look as before. */
+  .cover-btn,
+  button.title {
+    display: block;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    cursor: pointer;
+  }
+
+  button.title {
+    max-width: 100%;
+    font-size: 1.25rem;
+    font-weight: 650;
+  }
+
+  /* The expand button sits above the playlist count: no width taken from the progress bar. */
+  .cover-btn {
+    grid-area: cover;
+  }
+
+  .np {
+    grid-area: np;
+  }
+
+  .side {
+    grid-area: side;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .acts {
+    display: flex;
+    gap: 0;
+  }
+
+  .acts button {
+    width: 28px !important;
+    height: 28px !important;
+  }
+
+  .fav {
+    display: grid;
+    place-items: center;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: 50%;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .fav.on {
+    color: var(--accent);
+  }
+
+  .fav.on :global(svg) {
+    fill: currentColor;
+  }
+
+  @media (max-width: 480px) {
+    header:not(.full) {
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-areas:
+        'cover np'
+        'side np';
+      align-items: start;
+      column-gap: 12px;
+    }
+
+    header:not(.full) .side {
+      align-self: start;
+    }
+
+    /* The progress bar on its own line under the controls, full width. */
+    header:not(.full) .row {
+      flex-wrap: wrap;
+      row-gap: 4px;
+    }
+
+    header:not(.full) .row .progress {
+      flex: 1 0 100%;
+    }
+  }
+
+  .expand,
+  .collapse {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: 50%;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  /* Full screen: one centred column, everything larger. It grows to fill the panel (no min-height: that rounded to a
+     pixel over and showed a scrollbar). */
+  header.full {
+    box-sizing: border-box;
+    position: relative;
+    display: flex;
+    flex: 1 0 auto;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    padding: 56px 0 24px;
+    border-bottom: 0;
+    text-align: center;
+    touch-action: pan-x;
+  }
+
+  header.full::before {
+    inset: 0;
+  }
+
+  header.full .collapse {
+    position: absolute;
+    top: 10px;
+    left: 0;
+  }
+
+  header.full .cover-btn {
+    cursor: default;
+  }
+
+  header.full .cover {
+    width: min(78vw, 40vh, 440px);
+    height: min(78vw, 40vh, 440px);
+    border-radius: 14px;
+  }
+
+  header.full .np {
+    flex: none;
+    width: min(100%, 560px);
+  }
+
+  header.full .title {
+    font-size: 1.6rem;
+    white-space: normal;
+  }
+
+  header.full .sub {
+    margin-top: 6px;
+    font-size: 1.05rem;
+    white-space: normal;
+  }
+
+  header.full .row {
+    flex-direction: column-reverse;
+    gap: 18px;
+    margin-top: 22px;
+  }
+
+  header.full .row .progress {
+    width: 100%;
+    max-width: none;
+    font-size: 0.85rem;
+  }
+
+  header.full .transport {
+    gap: 28px;
+  }
+
+  header.full .transport button {
+    width: 56px;
+    height: 56px;
+  }
+
+  header.full .transport button.main {
+    width: 76px;
+    height: 76px;
+  }
+
+  header.full .acts button {
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  /* The favourite next to the count, not above it: less height. */
+  header.full .side {
+    flex-direction: row;
+    gap: 20px;
   }
 </style>

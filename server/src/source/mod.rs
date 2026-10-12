@@ -93,6 +93,8 @@ pub struct Playing {
     /// When this track started, epoch seconds, if known. With several sources playing, "automatic" follows the
     /// most recent start.
     pub started_at: Option<i64>,
+    /// Whether the player's account has marked the track a favourite; `None` when that is not known.
+    pub favorite: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -253,6 +255,12 @@ pub trait Source: Send + Sync {
     /// Optional (decision 0012): a new private playlist for `user` with these tracks. Returns its id.
     fn create_playlist<'a>(&'a self, _user: &'a str, _name: &'a str, _ids: &'a [String]) -> Fut<'a, String> {
         Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
+    }
+
+    /// Optional: mark a track a favourite (or not) for the account of the player playing it. Returns the state now.
+    /// Safe to repeat.
+    fn set_favorite<'a>(&'a self, _track: &'a str, _on: bool) -> Fut<'a, bool> {
+        Box::pin(async { anyhow::bail!("this server has no favourites") })
     }
 
     /// Optional (decision 0012): make a playlist hold exactly these tracks, in this order. Safe to repeat.

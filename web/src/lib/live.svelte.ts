@@ -6,6 +6,9 @@ import { remember } from './sources.svelte';
 
 export const live = $state<{ view: State | null; error: string | null }>({ view: null, error: null });
 
+/** The now-playing header full screen (everything but the navigation); using the navigation puts it back. */
+export const player = $state({ full: false });
+
 /** Ask the server now (the shell's poll calls this; pages call it after an action that changed playlists). */
 export async function refresh() {
   try {

@@ -105,6 +105,15 @@ fn loose(app: &str) -> String {
         .collect()
 }
 
+/// Whose favourite a track is: the account of the session playing it, else of the player the page follows.
+fn whose(sessions: &[Session], player: &Player, track: &str) -> Option<String> {
+    sessions
+        .iter()
+        .find(|s| s.now_playing_item.as_ref().is_some_and(|i| i.id == track) && s.user_id.is_some())
+        .or_else(|| control_targets(sessions, player).into_iter().find(|s| s.user_id.is_some()))
+        .and_then(|s| s.user_id.clone())
+}
+
 /// How to turn a playlist's tracks into the wanted list with the operations an API key has.
 #[derive(Debug, PartialEq, Eq)]
 enum TrackPlan {
@@ -468,7 +477,20 @@ impl Source for JellyfinSource {
             let found = self.item(&id).await?;
             let progress = progress(&found.0.id, found.0.run_time_ticks, &sessions, self.prefers(), started_at, now);
             let player = control_targets(&sessions, &self.player).first().map(|s| session_label(s));
-            Ok(Some(Playing { track: to_track(found), progress, started_at, player }))
+            let favorite = match whose(&sessions, &self.player, &id) {
+                Some(user) => self.jf.is_favorite(&user, &id).await.ok(),
+                None => None,
+            };
+            Ok(Some(Playing { track: to_track(found), progress, started_at, player, favorite }))
+        })
+    }
+
+    fn set_favorite<'a>(&'a self, track: &'a str, on: bool) -> Fut<'a, bool> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await?;
+            let user = whose(&sessions, &self.player, track).context("no player is signed in to mark it for")?;
+            self.jf.set_favorite(&user, track, on).await?;
+            Ok(on)
         })
     }
 
@@ -789,6 +811,18 @@ mod tests {
 
     fn chosen(playing: &[Started], sessions: &[Session], p: &str) -> Option<String> {
         choose(playing, sessions, &Player::parse(p), NOW).map(|s| s.item_id)
+    }
+
+    #[test]
+    fn a_favourite_belongs_to_the_account_playing_it() {
+        let mut playing = remote("Finamp", "Lenovo Tab", "report", true, Some("t1"), "2026-10-12T16:49:00Z");
+        playing.user_id = Some("me".into());
+        let mut other = remote("Finamp", "motorola", "phone", true, Some("t2"), "2026-10-12T16:50:00Z");
+        other.user_id = Some("guest".into());
+        let sessions = vec![playing, other];
+        assert_eq!(whose(&sessions, &Player::default(), "t2").as_deref(), Some("guest"), "the session playing that track");
+        assert_eq!(whose(&sessions, &Player::parse("Finamp::Lenovo Tab"), "t9").as_deref(), Some("me"), "else the followed player");
+        assert_eq!(whose(&[], &Player::default(), "t1"), None);
     }
 
     #[test]

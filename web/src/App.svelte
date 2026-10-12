@@ -7,6 +7,7 @@
   import Icon, { type IconName } from './lib/Icon.svelte';
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
+  import { player } from './lib/live.svelte';
   import { poll } from './lib/live.svelte';
   import { known } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
@@ -38,6 +39,16 @@
   let page = $state(fromHash());
   // What plays only matters where it is acted on: Playlists (add it) and Incoming (play an album).
   const withPlayer = $derived(page === 'playlists' || page === 'incoming');
+  // The full-screen player goes back to its normal size whenever the navigation is used (also on the page already
+  // shown) or the page changes; while it is full, the page behind it does not scroll.
+  const collapse = () => (player.full = false);
+  $effect(() => {
+    page;
+    collapse();
+  });
+  $effect(() => {
+    document.documentElement.style.overflow = player.full && withPlayer ? 'hidden' : '';
+  });
   // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bottom bar.
   const wide = window.matchMedia('(min-width: 1024px)');
   let phone = $state(!wide.matches);
@@ -109,7 +120,7 @@
 </script>
 
 <div class="shell">
-  <aside class="sidebar">
+  <aside class="sidebar" onclickcapture={collapse}>
     <div class="brand">
       <span class="logo"><Icon name="playlists" size={20} /></span>
       <span class="name">Cratarr</span>
@@ -136,7 +147,7 @@
   <div class="content">
     {#if withPlayer}
       {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
-      <div class="np-bar"><NowPlaying /></div>
+      <div class="np-bar" class:full={player.full}><NowPlaying /></div>
     {/if}
     {#if page === 'settings'}
       <Settings />
@@ -155,14 +166,14 @@
 
   {#if moreOpen}
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
-    <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages">
+    <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages" onclickcapture={collapse}>
       {#each overflow as p (p.id)}
         <a href={p.href} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}</a>
       {/each}
     </div>
   {/if}
 
-  <nav class="bar" aria-label="Pages">
+  <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
     {#each bar as p (p.id)}
       <a href={p.href} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} /><span>{p.label}</span></a>
     {/each}
@@ -205,6 +216,18 @@
     z-index: 3;
     padding: 0 clamp(12px, 2vw, 32px);
     background: var(--bg);
+  }
+
+  /* Full screen: the content area, the navigation left visible (the bottom bar here, the sidebar from 1024 px). */
+  .np-bar.full {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    display: flex;
+    flex-direction: column;
+    /* Runs on under the bottom bar (which stays on top), so no strip of the page shows between them. */
+    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+    overflow-y: auto;
   }
 
   .bar {
@@ -312,6 +335,11 @@
     }
 
     .content {
+      padding-bottom: 0;
+    }
+
+    .np-bar.full {
+      inset: 0 0 0 240px;
       padding-bottom: 0;
     }
 

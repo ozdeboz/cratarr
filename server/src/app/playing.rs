@@ -29,6 +29,8 @@ pub struct NowPlayingView {
     pub progress: Option<Progress>,
     /// The player it plays on ("Finamp on Lenovo Tab"); the controls act on it.
     pub player: Option<String>,
+    /// Whether the player's account has it as a favourite; `None` when not known.
+    pub favorite: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -111,6 +113,16 @@ impl PlayingService {
         source.transport(command).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
+    /// Mark the playing track a favourite (`on`) or not, for the account of its player. Safe to repeat.
+    pub async fn set_favorite(&self, want: Option<&str>, on: bool) -> Result<StateView, ToggleError> {
+        let (np, _) = self.playing(want).await?;
+        let (active, playing) = np.ok_or(ToggleError::NothingPlaying)?;
+        let source = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == active.cfg.id).map(|(_, s)| s);
+        let source = source.ok_or(ToggleError::NothingPlaying)?;
+        source.set_favorite(&playing.track.id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
+        Ok(self.state(want).await?)
+    }
+
     pub async fn state(&self, want: Option<&str>) -> Result<StateView> {
         let (np, sources) = self.playing(want).await?;
         let music = self.lib.music();
@@ -126,6 +138,7 @@ impl PlayingService {
             album: p.track.album,
             album_id: p.track.album_id,
             player: p.player,
+            favorite: p.favorite,
         });
         Ok(StateView { now_playing, playlists, sources })
     }

@@ -22,6 +22,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/state", get(state))
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/playlists/{id}/toggle", post(toggle))
+        .route("/api/favorite", post(favorite))
         .route("/api/playlists/{id}/play", post(play_playlist))
         .route("/api/player/{command}", post(transport))
         .route("/api/playlists", post(create_playlist))
@@ -70,6 +71,17 @@ struct Membership {
 
 async fn state(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<StateView>, ApiError> {
     Ok(Json(app.playing.state(f.source.as_deref()).await.map_err(ToggleError::from)?))
+}
+
+/// `on`: the state wanted, so a retried request changes nothing more.
+#[derive(Deserialize)]
+struct Favorite {
+    source: Option<String>,
+    on: bool,
+}
+
+async fn favorite(State(app): State<Arc<App>>, Query(f): Query<Favorite>) -> Result<Json<StateView>, ApiError> {
+    Ok(Json(app.playing.set_favorite(f.source.as_deref(), f.on).await?))
 }
 
 async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Membership>) -> Result<Json<StateView>, ApiError> {

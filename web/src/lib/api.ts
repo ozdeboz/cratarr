@@ -23,6 +23,8 @@ export type NowPlaying = {
   progress: Progress | null;
   /** The player it plays on ("Finamp on Lenovo Tab"); the controls act on it. */
   player: string | null;
+  /** Whether the player's account has it as a favourite; null when not known. */
+  favorite: boolean | null;
 };
 
 export type Progress = {
@@ -78,6 +80,13 @@ export type PlayResult = { player: string; sent: number; total: number; unknown:
 
 export const playPlaylist = (playlistId: string, mode: PlayMode, source?: string) =>
   post<PlayResult>(`/api/playlists/${encodeURIComponent(playlistId)}/play${follow(source)}`, { mode });
+
+/** Mark the playing track a favourite or not. Says the state wanted, so a retried request changes nothing more. */
+export const setFavorite = (on: boolean, source?: string) => {
+  const q = new URLSearchParams({ on: String(on) });
+  if (source) q.set('source', source);
+  return request<State>(`/api/favorite?${q}`, { method: 'POST' });
+};
 
 /** Put the playing track in the playlist or take it out. Says the state wanted, so a retried request changes nothing more. */
 export const setMember = (playlistId: string, member: boolean, source?: string) => {

@@ -11,7 +11,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **The now-playing header is part of the app shell**, sticky above the pages where what plays is acted on: Playlists
   and Incoming. Repairs, Insights and Settings have no player. It shows the cover (library cover, else the
   album image from the server), title, artist · album, progress, "in N playlists", and the transport controls
-  (previous, play/pause, next). The active player is always named in a small pill, even when there is only one.
+  (previous, play/pause, next), a favourite heart (the player's account's Jellyfin favourite) and an expand button.
+  The active player is always named in a small pill, even when there is only one. Below 480 px the count, heart and
+  expand sit under the cover, so the track's column has the width, and the progress bar takes its own line.
+- **Full-screen player:** opened from the cover, the title or the expand button; it covers the page but never the
+  navigation, which stays usable and closes it when used. Also closed by its collapse button, Esc, or a swipe down.
+  It shows the same things, larger, in one centred column, and always fits without scrolling.
   Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`).
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,

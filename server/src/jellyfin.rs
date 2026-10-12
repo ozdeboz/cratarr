@@ -16,6 +16,8 @@ pub struct ItemsPage<T> {
 #[serde(rename_all = "PascalCase")]
 pub struct Session {
     pub id: Option<String>,
+    /// The account the player is signed in with.
+    pub user_id: Option<String>,
     pub supports_remote_control: Option<bool>,
     /// Remote commands the client says it takes. Finamp reports `SupportsRemoteControl: false` yet lists commands
     /// here and does play what it is sent (observed on 10.11), so a non-empty list counts as controllable too.
@@ -410,6 +412,23 @@ impl Jellyfin {
         Ok(resp)
     }
 
+    /// Whether `user` has marked the item a favourite.
+    pub async fn is_favorite(&self, user: &str, item: &str) -> Result<bool> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct UserData {
+            is_favorite: Option<bool>,
+        }
+        let d: UserData = self.get(&format!("/UserItems/{item}/UserData?userId={user}")).await?;
+        Ok(d.is_favorite.unwrap_or(false))
+    }
+
+    /// Mark the item a favourite of `user`, or not. Saying the state wanted makes it safe to repeat.
+    pub async fn set_favorite(&self, user: &str, item: &str, on: bool) -> Result<()> {
+        let method = if on { reqwest::Method::POST } else { reqwest::Method::DELETE };
+        self.send_query(method, &format!("/UserFavoriteItems/{item}"), &[("userId", user.into())]).await
+    }
+
     /// The id of the library (collection folder) an item is in, if any, as `user` sees it (see `admin_user`).
     pub async fn library_of(&self, item_id: &str, user: &str) -> Result<Option<String>> {
         let up: Vec<Ancestor> = self.get(&format!("/Items/{item_id}/Ancestors?userId={user}")).await?;
@@ -737,6 +756,7 @@ mod tests {
     fn sess(client: &str, id: &str, media: &str) -> Session {
         Session {
             id: None,
+            user_id: None,
             supports_remote_control: None,
             supported_commands: None,
             last_activity_date: None,
@@ -771,7 +791,7 @@ mod tests {
 
     #[test]
     fn nothing_playing_gives_none() {
-        let s = vec![Session { id: None, supports_remote_control: None, supported_commands: None, last_activity_date: None, last_playback_check_in: None, client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
+        let s = vec![Session { id: None, user_id: None, supports_remote_control: None, supported_commands: None, last_activity_date: None, last_playback_check_in: None, client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
         assert!(pick_now_playing(&s, finamp).is_none());
         assert!(pick_now_playing(&[], finamp).is_none());
     }
