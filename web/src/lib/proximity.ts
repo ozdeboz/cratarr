@@ -12,17 +12,17 @@
 // Grab-bags are not weighed down: doing so (an earlier version) cost them their solid lines; their focus is shown in
 // the panel only.
 // Groups (colour and a gentle pull): Louvain modularity over each playlist's GROUP_NEIGHBOURS strongest links, not
-// only the drawn ones, so every playlist belongs somewhere. Measured on the reference library (66 playlists): 6
-// neighbours at resolution 1.2 gives 7 groups (fits the 8 colours, nothing grey), members twice as alike as with label
-// propagation over the drawn lines (similarity silhouette 0.24 against 0.11), groups together on screen (0.43 against
-// 0.09), for a small loss in kin among a point's 3 nearest points (0.47 against 0.59).
+// only the drawn ones, so every playlist belongs somewhere. Measured on the reference library (66 playlists, current
+// scoring): 6 neighbours at resolution 2.0 gives 9 groups (10 10 8 8 8 6 6 6 4), members as alike as the best setting
+// (similarity silhouette 0.35); resolution 1.2 gave only 6 broad groups (0.33). More groups sit less together on
+// screen for the same pull, so the pull went up (see ProximityGraph).
 
 import type { Proximity, Signal } from './api';
 
 export const SIGNALS: Signal[] = ['tracks', 'genre', 'artists'];
 export const MUTUAL_K = 3;
 export const GROUP_NEIGHBOURS = 6;
-export const GROUP_RESOLUTION = 1.2;
+export const GROUP_RESOLUTION = 2.0;
 
 export type Weights = Map<string, number>;
 export const key = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);

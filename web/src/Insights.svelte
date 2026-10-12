@@ -53,7 +53,7 @@
     if (!shown) return '';
     const count = new Map<string, number>();
     for (const i of members) for (const g of shown.playlists[i]?.genres ?? []) count.set(g, (count.get(g) ?? 0) + 1);
-    const top = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3).map(([g]) => g);
+    const top = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([g]) => g);
     return top.length ? top.join(', ') : 'No genre tags';
   }
   // Tapping a playlist while the legend is open shows that playlist instead.

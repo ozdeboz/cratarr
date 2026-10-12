@@ -31,8 +31,9 @@
 
   /** Names shown before zooming in: the best connected playlists. */
   const LABELS = 8;
-  /** Group colours, readable on both themes; groups past the palette and lone points stay neutral. */
-  const PALETTE = ['#4cc38a', '#5b9cf5', '#f2a33a', '#d46bd6', '#e5615b', '#38c3d6', '#b8c94a', '#9a87f5'];
+  /** Group colours: nine of Tableau 10 (made to tell categories apart; its grey left out), one per group. Groups past
+   * the palette and lone points stay neutral. */
+  const PALETTE = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f'];
 
   // The parent remounts this component when the data changes ({#key}), so reading it once is right.
   // svelte-ignore state_referenced_locally
@@ -78,9 +79,9 @@
   let sim: Simulation<Node, Edge> | undefined;
 
   /** A gentle pull of each point toward the centre of its colour group (lone points are left alone). Measured on the
-   * reference library, it is what holds groups together most (silhouette -0.07 to 0.09, kin among the 3 nearest
-   * points 0.51 to 0.59), at a small cost in how exactly distance follows link strength. */
-  const GROUP_PULL = 0.1;
+   * reference library with 9 groups (6 seeds): 0.1 left groups loose on screen (silhouette 0.25, kin among a point's 3
+   * nearest 0.41), 0.15 holds them (0.37 / 0.35), 0.2 and more stretch the lines between kin (0.38 / 0.30). */
+  const GROUP_PULL = 0.15;
   function pullToGroups(alpha: number) {
     const centre = new Map<number, { x: number; y: number; n: number }>();
     for (const p of nodes) {
