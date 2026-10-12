@@ -14,6 +14,8 @@ mod m3u;
 mod mounts;
 mod nowplaying;
 mod placement;
+#[allow(dead_code)] // the playlist sync uses it (decision 0012)
+mod playlist_merge;
 mod ports;
 mod playlists;
 mod settings;
