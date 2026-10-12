@@ -6,12 +6,17 @@
 // Untangling: only a backbone is drawn: the strongest tree that reaches every playlist (maximum spanning tree), plus
 // each pair that are among each other's K closest (mutual nearest neighbours). Measured on the reference library,
 // K = 3 keeps about 1.1 links per playlist with every playlist reached; more brings the hairball back.
+// Grab-bags weigh less: a playlist spread over many genres resembles a bit of everything and would sit in everyone's
+// top 3 as a hub. Each playlist's focus (genre concentration, from the server) becomes its rank among the playlists,
+// and a link counts for sqrt(m(a) * m(b)) of its weight, with m = FOCUS_FLOOR + (1 - FOCUS_FLOOR) * rank: the least
+// focused playlist's links count half, the most focused's in full.
 // Groups: label propagation over the backbone, for colour.
 
 import type { Proximity, Signal } from './api';
 
 export const SIGNALS: Signal[] = ['tracks', 'genre', 'artists'];
 export const MUTUAL_K = 3;
+export const FOCUS_FLOOR = 0.5;
 
 export type Weights = Map<string, number>;
 export const key = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);
@@ -40,14 +45,27 @@ export function rankers(data: Proximity): Record<Signal, (v: number) => number> 
   return out;
 }
 
-/** Each pair's weight under the switched-on signals: the mean of their ranks; pairs with nothing in common left out. */
+/** Each playlist's focus as its rank among the playlists, 0..1; without genre tags it counts as the middle. */
+export function focusRanks(data: Proximity): number[] {
+  const known = data.playlists.map((p) => p.focus).filter((f): f is number => f !== null).sort((a, b) => a - b);
+  return data.playlists.map((p) => {
+    if (p.focus === null || known.length < 2) return 0.5;
+    const below = known.filter((f) => f < p.focus!).length;
+    return below / (known.length - 1);
+  });
+}
+
+/** Each pair's weight under the switched-on signals: the mean of their ranks, scaled down for grab-bags (see above);
+ * pairs with nothing in common left out. */
 export function weigh(data: Proximity, rank: Record<Signal, (v: number) => number>, on: Record<Signal, boolean>): Weights {
   const active = SIGNALS.filter((s) => on[s]);
   const w: Weights = new Map();
   if (!active.length) return w;
+  const m = focusRanks(data).map((r) => FOCUS_FLOOR + (1 - FOCUS_FLOOR) * r);
   for (const l of data.links) {
     if (!active.some((s) => l[s] > 0)) continue;
-    w.set(key(l.a, l.b), active.reduce((sum, s) => sum + rank[s](l[s]), 0) / active.length);
+    const mean = active.reduce((sum, s) => sum + rank[s](l[s]), 0) / active.length;
+    w.set(key(l.a, l.b), mean * Math.sqrt(m[l.a] * m[l.b]));
   }
   return w;
 }

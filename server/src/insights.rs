@@ -44,6 +44,9 @@ pub struct Point {
     pub tracks: usize,
     /// Its most characteristic genres.
     pub genres: Vec<String>,
+    /// How concentrated its genres are, 0..1: high for a well defined playlist (one style), low for a grab-bag.
+    /// `None` without genre tags.
+    pub focus: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
@@ -173,7 +176,12 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
     let points = playlists
         .iter()
         .enumerate()
-        .map(|(i, (name, _, _))| Point { name: name.clone(), tracks: tracks[i].len(), genres: strongest(&genres[i], NAMED_GENRES) })
+        .map(|(i, (name, _, _))| Point {
+            name: name.clone(),
+            tracks: tracks[i].len(),
+            genres: strongest(&genres[i], NAMED_GENRES),
+            focus: focus(&genres[i]),
+        })
         .collect();
     let mut links = Vec::new();
     for a in 0..playlists.len() {
@@ -233,6 +241,14 @@ fn cosine(a: &HashMap<String, f64>, b: &HashMap<String, f64>) -> f64 {
     let norm = |m: &HashMap<String, f64>| m.values().map(|v| v * v).sum::<f64>().sqrt();
     let d = norm(a) * norm(b);
     if d == 0.0 { 0.0 } else { (dot / d).clamp(0.0, 1.0) }
+}
+
+/// Concentration of a weighted profile (Simpson's index over its shares): 1 when one genre carries all the weight,
+/// near 0 when it is spread over many. Over the tf-idf weights, so a genre every playlist has (\"Electronic\") does not
+/// make a grab-bag look focused.
+fn focus(profile: &HashMap<String, f64>) -> Option<f64> {
+    let total: f64 = profile.values().sum();
+    (total > 0.0).then(|| profile.values().map(|w| (w / total).powi(2)).sum())
 }
 
 /// The `k` heaviest keys, most first.
@@ -412,6 +428,16 @@ mod tests {
         assert_eq!(deep_night.genres, vec!["Dub Techno".to_string()], "Electronic is everywhere: it brings nothing");
         assert!(link(0, 2).is_none() && link(1, 2).is_none(), "only Electronic in common: not close");
         assert_eq!(p.playlists[0].genres, vec!["Dub Techno".to_string()]);
+        assert_eq!(p.playlists[0].focus, Some(1.0), "one distinctive genre");
+    }
+
+    #[test]
+    fn focus_is_high_for_one_style_and_low_for_a_spread() {
+        let m = |v: &[(&str, f64)]| v.iter().map(|(k, w)| (k.to_string(), *w)).collect::<HashMap<_, _>>();
+        assert_eq!(focus(&m(&[("Roots Reggae", 4.0)])), Some(1.0));
+        let spread = focus(&m(&[("A", 1.0), ("B", 1.0), ("C", 1.0), ("D", 1.0)])).unwrap();
+        assert!((spread - 0.25).abs() < 1e-9);
+        assert_eq!(focus(&HashMap::new()), None);
     }
 
     #[test]

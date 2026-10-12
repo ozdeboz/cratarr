@@ -388,7 +388,8 @@ export type Insights = {
 
 /** Playlists as points and how close each two are, by three signals (0..1 each). */
 export type Proximity = {
-  playlists: { name: string; tracks: number; genres: string[] }[];
+  /** `focus`: how concentrated its genres are, 0..1 (null without genre tags). */
+  playlists: { name: string; tracks: number; genres: string[]; focus: number | null }[];
   links: {
     a: number;
     b: number;

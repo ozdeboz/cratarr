@@ -6,7 +6,7 @@
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import { prefs } from './lib/prefs.svelte';
   import ProximityGraph from './lib/ProximityGraph.svelte';
-  import { key, rankers, weigh } from './lib/proximity';
+  import { focusRanks, key, rankers, weigh } from './lib/proximity';
 
   let data = $state<Insights | null>(null);
   let error = $state<string | null>(null);
@@ -135,6 +135,7 @@
 
   /** The selected playlist's closest playlists under the current signals (scored as the graph does), with what they share. */
   const rank = $derived(shown ? rankers(shown) : null);
+  const focus = $derived(shown ? focusRanks(shown) : []);
   const weights = $derived(shown && rank ? weigh(shown, rank, prefs.signals) : new Map<string, number>());
   const closest = $derived.by(() => {
     if (!shown || selected === null) return [];
@@ -260,6 +261,9 @@
             </header>
             <div class="body">
               <p class="muted">{plural(me.tracks, 'track')}{#if me.genres.length} · {me.genres.join(', ')}{/if}</p>
+              {#if me.focus !== null && selected !== null}
+                <p class="muted">More focused than {Math.round(100 * focus[selected])}% of your playlists</p>
+              {/if}
               <h3>Closest playlists</h3>
               {#if closest.length}
                 <ul class="plain">
