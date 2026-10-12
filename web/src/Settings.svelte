@@ -267,6 +267,14 @@
           </header>
 
           {#if line}<p class="state" class:bad={!line.ok}><span class="dot" class:ok={line.ok} aria-hidden="true"></span>{line.text}</p>{/if}
+          {#if d.view?.playlist_sync}
+            {@const ps = d.view.playlist_sync}
+            <p class="state" class:bad={!!ps.error}>
+              <span class="dot" class:ok={!ps.error} aria-hidden="true"></span>{ps.error
+                ? `Playlists not in step: ${ps.error}`
+                : `${ps.playlists} playlists in step, ${new Date(ps.at * 1000).toLocaleTimeString(undefined, { timeStyle: 'short' })}`}
+            </p>
+          {/if}
 
           <div class="fields">
             {#each k?.fields ?? [] as f (f.key)}

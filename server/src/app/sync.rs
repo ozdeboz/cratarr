@@ -26,15 +26,39 @@ use crate::sync_state::{Link, SyncState};
 /// The server field naming whose playlists these are.
 pub(super) const PLAYLIST_USER: &str = "playlist_user";
 
+/// How the last pass went for one server, for the Settings page.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct SyncStatus {
+    /// Epoch seconds.
+    pub at: i64,
+    /// Playlists in step after the pass.
+    pub playlists: usize,
+    /// Why the pass stopped, if it did (nothing was changed after that point).
+    pub error: Option<String>,
+}
+
 pub struct SyncService {
     lib: Arc<Library>,
     state: SyncState,
     one_at_a_time: tokio::sync::Mutex<()>,
+    /// The last pass per server id.
+    last: std::sync::Mutex<std::collections::HashMap<String, SyncStatus>>,
 }
 
 impl SyncService {
     pub(super) fn new(lib: Arc<Library>, state: SyncState) -> Self {
-        Self { lib, state, one_at_a_time: tokio::sync::Mutex::new(()) }
+        Self { lib, state, one_at_a_time: tokio::sync::Mutex::new(()), last: Default::default() }
+    }
+
+    /// How the last pass went with a server; `None` before one ran (or with no playlist owner set).
+    pub(super) fn status(&self, source_id: &str) -> Option<SyncStatus> {
+        self.last.lock().unwrap_or_else(|p| p.into_inner()).get(source_id).cloned()
+    }
+
+    fn record(&self, source_id: &str, user: &str, error: Option<String>) {
+        let playlists = self.state.links(source_id, user).map(|l| l.len()).unwrap_or(0);
+        let status = SyncStatus { at: super::library::epoch_now(), playlists, error };
+        self.last.lock().unwrap_or_else(|p| p.into_inner()).insert(source_id.to_string(), status);
     }
 
     /// One pass over every connected server with a playlist owner set. The first one also moves the playlist files
@@ -48,14 +72,21 @@ impl SyncService {
         }
         if let Err(e) = self.hide_playlist_files().await {
             tracing::warn!("playlist sync: cannot move the playlist files out of Jellyfin's reach: {e:#}");
+            for (a, _) in self.lib.connected() {
+                if let Some(user) = crate::source::text(&a.cfg.values, PLAYLIST_USER) {
+                    self.record(&a.cfg.id, user, Some(format!("{e:#}")));
+                }
+            }
             return;
         }
         let Some(store) = self.lib.store_opt() else { return };
         for (a, s) in self.lib.connected() {
             let Some(user) = crate::source::text(&a.cfg.values, PLAYLIST_USER).map(str::to_string) else { continue };
-            if let Err(e) = sync_server(&store, self.lib.catalogue(), &*s, &self.state, &a.cfg.id, &user).await {
+            let done = sync_server(&store, self.lib.catalogue(), &*s, &self.state, &a.cfg.id, &user).await;
+            if let Err(e) = &done {
                 tracing::warn!("playlist sync with {}: {e:#}", a.cfg.id);
             }
+            self.record(&a.cfg.id, &user, done.err().map(|e| format!("{e:#}")));
         }
     }
 

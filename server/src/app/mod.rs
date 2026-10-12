@@ -79,6 +79,7 @@ impl App {
         let playing = PlayingService::new(library.clone(), playlists.clone());
         let settings = SettingsService::new(
             library.clone(),
+            sync.clone(),
             files,
             playlists.clone(),
             incoming.clone(),

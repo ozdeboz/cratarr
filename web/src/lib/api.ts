@@ -183,6 +183,8 @@ export type SourceView = SourceConfig & {
   choices: Record<string, Choice[]>;
   server_libraries: ServerLibrary[];
   error: string | null;
+  /** The last playlist sync, when this server's own playlists hold them (decision 0012). */
+  playlist_sync: { at: number; playlists: number; error: string | null } | null;
 };
 
 export type Kind = { id: string; label: string; fields: Field[] };
