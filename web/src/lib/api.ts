@@ -1,4 +1,12 @@
-export type Playlist = { id: string; name: string; member: boolean; count: number };
+export type Playlist = {
+  id: string;
+  name: string;
+  member: boolean;
+  /** Tracks that resolve to a file (what players show). */
+  count: number;
+  /** Entries that point at a missing file. */
+  dead: number;
+};
 
 export type NowPlaying = {
   id: string;

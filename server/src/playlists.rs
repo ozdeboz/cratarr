@@ -20,8 +20,10 @@ pub struct PlaylistView {
     pub id: String,
     pub name: String,
     pub member: bool,
-    /// Number of entries (lines that are not blank or comments).
+    /// Tracks that resolve to a file in the library (what players show), i.e. entries minus `dead`.
     pub count: usize,
+    /// Entries that point at a file that does not exist.
+    pub dead: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -40,13 +42,28 @@ pub struct Toggled {
 struct Cached {
     stamp: (SystemTime, u64),
     entries: HashSet<String>,
-    count: usize,
+    /// Every entry line, in file order (duplicates kept).
+    lines: Vec<String>,
+    /// How many entries point at a missing file; `None` until checked (it changes with the library, not the file).
+    dead: Option<usize>,
 }
 
 impl Cached {
     fn parse(stamp: (SystemTime, u64), text: &str) -> Self {
-        Self { stamp, entries: m3u::entries(text).collect(), count: m3u::entries(text).count() }
+        let lines: Vec<String> = m3u::entries(text).collect();
+        Self { stamp, entries: lines.iter().cloned().collect(), lines, dead: None }
     }
+}
+
+/// True when `entry` (library-relative) names an existing file under `dir`. Absolute paths and `..` never resolve.
+fn entry_exists(dir: &Path, entry: &str) -> bool {
+    let p = Path::new(entry);
+    let safe = !p.is_absolute() && p.components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    safe && dir.join(p).is_file()
+}
+
+fn dead_count(dir: &Path, lines: &[String]) -> usize {
+    lines.iter().filter(|l| !entry_exists(dir, l)).count()
 }
 
 pub struct Store {
@@ -110,12 +127,37 @@ impl Store {
                     }
                 }
             }
+            if cache[&id].dead.is_none() {
+                let (dir, lines) = (self.dir.clone(), cache[&id].lines.clone());
+                let dead = tokio::task::spawn_blocking(move || dead_count(&dir, &lines)).await.unwrap_or(0);
+                cache.get_mut(&id).expect("just inserted").dead = Some(dead);
+            }
             let c = &cache[&id];
             let member = entry.is_some_and(|t| c.entries.contains(t));
-            out.push(PlaylistView { name: id.clone(), member, count: c.count, id });
+            let dead = c.dead.unwrap_or(0);
+            out.push(PlaylistView { name: id.clone(), member, count: c.lines.len().saturating_sub(dead), dead, id });
         }
         out.sort_by_key(|p| p.name.to_lowercase());
         Ok(out)
+    }
+
+    /// Re-check every playlist's dead entries against the library (files appear and disappear without the
+    /// playlist changing). Meant to run every minute or so in the background.
+    pub async fn refresh_dead(&self) {
+        let snapshot: Vec<(String, (SystemTime, u64), Vec<String>)> =
+            self.cache.read().await.iter().map(|(id, c)| (id.clone(), c.stamp, c.lines.clone())).collect();
+        let dir = self.dir.clone();
+        let counted = tokio::task::spawn_blocking(move || {
+            snapshot.into_iter().map(|(id, stamp, lines)| (id, stamp, dead_count(&dir, &lines))).collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        let mut cache = self.cache.write().await;
+        for (id, stamp, dead) in counted {
+            if let Some(c) = cache.get_mut(&id).filter(|c| c.stamp == stamp) {
+                c.dead = Some(dead);
+            }
+        }
     }
 
     /// Add `entry` to the playlist, or remove it if it is already there.
@@ -213,6 +255,12 @@ mod tests {
         fn read(&self, name: &str) -> String {
             std::fs::read_to_string(self.0.join(name)).unwrap()
         }
+        /// Create an (empty) library file such as `A/1.mp3`.
+        fn touch(&self, rel: &str) {
+            let p = self.0.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"").unwrap();
+        }
         fn store(&self) -> Store {
             Store::new(&self.0)
         }
@@ -227,6 +275,8 @@ mod tests {
     #[tokio::test]
     async fn view_lists_visible_m3u_files_sorted_with_membership() {
         let d = Dir::new();
+        d.touch("A/1.mp3");
+        d.touch("B/2.mp3");
         d.write("chill.m3u", "A/1.mp3\nB/2.mp3\n");
         d.write("Analogic.m3u", "B/2.mp3\n");
         d.write("notes.txt", "A/1.mp3\n");
@@ -236,10 +286,53 @@ mod tests {
         assert_eq!(
             v,
             vec![
-                PlaylistView { id: "Analogic".into(), name: "Analogic".into(), member: false, count: 1 },
-                PlaylistView { id: "chill".into(), name: "chill".into(), member: true, count: 2 },
+                PlaylistView { id: "Analogic".into(), name: "Analogic".into(), member: false, count: 1, dead: 0 },
+                PlaylistView { id: "chill".into(), name: "chill".into(), member: true, count: 2, dead: 0 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn entries_without_a_file_are_dead_and_not_counted() {
+        let d = Dir::new();
+        d.touch("A/1.mp3");
+        d.write("a.m3u", "A/1.mp3\nGone/2.mp3\nA/3.flac\n");
+        let v = d.store().view(None).await.unwrap();
+        assert_eq!((v[0].count, v[0].dead), (1, 2));
+    }
+
+    #[tokio::test]
+    async fn absolute_and_parent_paths_never_resolve() {
+        let d = Dir::new();
+        d.touch("A/1.mp3");
+        d.write("a.m3u", "../A/1.mp3\n/etc/hostname\nA/../A/1.mp3\nA/1.mp3\n");
+        let v = d.store().view(None).await.unwrap();
+        assert_eq!((v[0].count, v[0].dead), (1, 3));
+    }
+
+    #[tokio::test]
+    async fn the_background_check_notices_files_appearing() {
+        let d = Dir::new();
+        d.write("a.m3u", "A/1.mp3\nB/2.mp3\n");
+        let s = d.store();
+        assert_eq!(s.view(None).await.unwrap()[0].dead, 2);
+        d.touch("A/1.mp3");
+        assert_eq!(s.view(None).await.unwrap()[0].dead, 2, "cached until the next background check");
+        s.refresh_dead().await;
+        let v = s.view(None).await.unwrap();
+        assert_eq!((v[0].count, v[0].dead), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn adding_a_track_recounts_dead_entries() {
+        let d = Dir::new();
+        d.touch("B/2.mp3");
+        d.write("a.m3u", "Gone/1.mp3\n");
+        let s = d.store();
+        assert_eq!((s.view(None).await.unwrap()[0].count, s.view(None).await.unwrap()[0].dead), (0, 1));
+        s.toggle("a", "B/2.mp3").await.unwrap();
+        let v = s.view(None).await.unwrap();
+        assert_eq!((v[0].count, v[0].dead), (1, 1));
     }
 
     #[tokio::test]
@@ -265,13 +358,10 @@ mod tests {
     #[tokio::test]
     async fn the_count_follows_edits_and_ignores_comments_and_blanks() {
         let d = Dir::new();
-        d.write("a.m3u", "#EXTM3U
-
-A/1.mp3
-A/1.mp3
-# note
-B/2.mp3
-");
+        for f in ["A/1.mp3", "B/2.mp3", "C/3.mp3"] {
+            d.touch(f);
+        }
+        d.write("a.m3u", "#EXTM3U\n\nA/1.mp3\nA/1.mp3\n# note\nB/2.mp3\n");
         let s = d.store();
         assert_eq!(s.view(None).await.unwrap()[0].count, 3, "duplicate lines count, comments and blanks do not");
         s.toggle("a", "C/3.mp3").await.unwrap();

@@ -142,12 +142,13 @@
             class:busy={busy[p.id]}
             class:blocked={!!np && !np.addable && !p.member}
             aria-pressed={p.member}
+            title={p.dead > 0 ? `${p.dead} ${p.dead === 1 ? 'entry points' : 'entries point'} at missing files` : undefined}
             disabled={!np}
             onclick={() => tap(p)}
           >
             <span class="mark" aria-hidden="true">{p.member ? '✓' : '+'}</span>
             <span class="name">{p.name}</span>
-            <span class="n">{p.count}</span>
+            <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-hidden="true"></i>{/if}</span>
           </button>
         </li>
       {/each}
@@ -374,6 +375,16 @@
     font-size: 0.8rem;
     font-variant-numeric: tabular-nums;
     opacity: 0.65;
+  }
+
+  .dead {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: 5px;
+    border-radius: 50%;
+    background: var(--warn);
+    vertical-align: middle;
   }
 
   .empty {

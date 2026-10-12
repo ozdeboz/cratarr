@@ -78,6 +78,11 @@ impl App {
         Ok(self.store.view(None).await?.len())
     }
 
+    /// Re-check which playlist entries point at missing files (the library changes without the playlists).
+    pub async fn refresh_dead(&self) {
+        self.store.refresh_dead().await;
+    }
+
     /// What is playing. The activity log is the primary source because Jellyfin's session record can be stale
     /// with some clients; sessions are the fallback when the log is unavailable or has no audio history.
     async fn now_playing(&self) -> Result<Option<PlayingItem>> {

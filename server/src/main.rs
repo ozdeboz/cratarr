@@ -53,6 +53,17 @@ async fn main() -> Result<()> {
     let n = app.playlist_count().await.context("cannot read the playlist folder")?;
     tracing::info!("found {n} playlists");
 
+    // Files come and go in the library without the playlists changing, so re-check dead entries now and then.
+    let checker = app.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            checker.refresh_dead().await;
+        }
+    });
+
     let listener = tokio::net::TcpListener::bind(&bind).await.with_context(|| format!("cannot bind {bind}"))?;
     tracing::info!("listening on {bind}");
     axum::serve(listener, api::router(app))
