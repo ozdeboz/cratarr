@@ -152,7 +152,7 @@ impl Library {
         let folders = derive_folders(&active, last_music.as_deref());
         let db = data_dir.as_ref().map(|d| PathBuf::from(d).join("catalogue.sqlite"));
         let catalogue = Arc::new(Catalogue::open(db.as_deref(), catalogue_folders(&folders))?);
-        let store = folders.music.as_ref().map(|m| Arc::new(Store::new(m)));
+        let store = folders.music.as_ref().map(|m| Arc::new(Store::in_music(m)));
         Ok(Arc::new(Self {
             live: std::sync::RwLock::new(Arc::new(active)),
             data_dir,
@@ -222,7 +222,7 @@ impl Library {
             tokio::task::spawn_blocking(move || c.set_folders(dirs)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
             let mut slot = self.folders.write().unwrap_or_else(|p| p.into_inner());
             if folders.music != old.music {
-                slot.1 = folders.music.as_ref().map(|m| Arc::new(Store::new(m)));
+                slot.1 = folders.music.as_ref().map(|m| Arc::new(Store::in_music(m)));
             }
             slot.0 = folders;
         }

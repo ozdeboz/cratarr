@@ -156,8 +156,9 @@ struct Cached {
 }
 
 impl Cached {
-    fn parse(stamp: (SystemTime, u64), text: &str) -> Self {
-        let lines: Vec<String> = m3u::entries(text).collect();
+    /// `prefix`: what the file's lines carry in front of a Music-relative entry ("../" in `.playlists`).
+    fn parse(stamp: (SystemTime, u64), text: &str, prefix: &str) -> Self {
+        let lines: Vec<String> = m3u::entries(text).map(|l| unprefixed(&l, prefix)).collect();
         Self { stamp, entries: lines.iter().cloned().collect(), lines, dead: None }
     }
 }
@@ -250,8 +251,21 @@ fn find_repair(dir: &Path, entry: &str, listings: &mut HashMap<String, Vec<Strin
     (close.len() == 1).then(|| (false, format!("{folder}/{}", close[0])))
 }
 
+/// Where the playlist files live once Jellyfin must not import them (decision 0012): a hidden folder in Music, which
+/// Jellyfin skips. Lines there carry "../" in front of the Music-relative entry.
+pub const HIDDEN_DIR: &str = ".playlists";
+
+fn unprefixed(line: &str, prefix: &str) -> String {
+    line.strip_prefix(prefix).unwrap_or(line).to_string()
+}
+
 pub struct Store {
+    /// Where the `.m3u` files are.
     dir: PathBuf,
+    /// The Music folder: entries are relative to it.
+    base: PathBuf,
+    /// What lines carry in front of an entry: "" when the files are in Music itself, "../" in `.playlists`.
+    prefix: String,
     cache: RwLock<HashMap<String, Cached>>,
     write: Mutex<()>,
 }
@@ -278,8 +292,27 @@ fn valid_new_name(name: &str) -> bool {
 }
 
 impl Store {
+    /// Playlists kept in `dir` itself, entries relative to it.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into(), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
+        let dir = dir.into();
+        Self { base: dir.clone(), dir, prefix: String::new(), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
+    }
+
+    /// The Music folder's playlists: in its hidden `.playlists` folder once that exists (decision 0012), else in the
+    /// folder itself.
+    pub fn in_music(music: impl Into<PathBuf>) -> Self {
+        let base = music.into();
+        let hidden = base.join(HIDDEN_DIR);
+        if hidden.is_dir() {
+            Self { dir: hidden, base, prefix: "../".into(), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
+        } else {
+            Self::new(base)
+        }
+    }
+
+    /// A Music-relative entry as a line of this store's files.
+    fn line(&self, entry: &str) -> String {
+        format!("{}{entry}", self.prefix)
     }
 
     fn path_of(&self, id: &str) -> PathBuf {
@@ -322,7 +355,7 @@ impl Store {
                 match tokio::fs::read(&path).await {
                     Ok(bytes) => {
                         let text = String::from_utf8_lossy(&bytes);
-                        cache.insert(id.clone(), Cached::parse(stamp, &text));
+                        cache.insert(id.clone(), Cached::parse(stamp, &text, &self.prefix));
                     }
                     Err(e) => {
                         tracing::warn!("cannot read {}: {e}", path.display());
@@ -331,7 +364,7 @@ impl Store {
                 }
             }
             if cache[&id].dead.is_none() {
-                let (dir, lines) = (self.dir.clone(), cache[&id].lines.clone());
+                let (dir, lines) = (self.base.clone(), cache[&id].lines.clone());
                 let dead = tokio::task::spawn_blocking(move || dead_count(&dir, &lines)).await.unwrap_or(0);
                 cache.get_mut(&id).expect("just inserted").dead = Some(dead);
             }
@@ -349,7 +382,7 @@ impl Store {
     pub async fn refresh_dead(&self) {
         let snapshot: Vec<(String, (SystemTime, u64), Vec<String>)> =
             self.cache.read().await.iter().map(|(id, c)| (id.clone(), c.stamp, c.lines.clone())).collect();
-        let dir = self.dir.clone();
+        let dir = self.base.clone();
         let counted = tokio::task::spawn_blocking(move || {
             snapshot.into_iter().map(|(id, stamp, lines)| (id, stamp, dead_count(&dir, &lines))).collect::<Vec<_>>()
         })
@@ -374,7 +407,7 @@ impl Store {
             _ => return Err(StoreError::Unknown),
         }
         let bytes = tokio::fs::read(&path).await.with_context(|| format!("reading {id}.m3u"))?;
-        Ok(m3u::entries(&String::from_utf8_lossy(&bytes)).collect())
+        Ok(m3u::entries(&String::from_utf8_lossy(&bytes)).map(|l| unprefixed(&l, &self.prefix)).collect())
     }
 
     /// Open a playlist for editing. The caller must hold the write lock.
@@ -407,7 +440,7 @@ impl Store {
             self.cache
                 .write()
                 .await
-                .insert(id.to_string(), Cached::parse((m.modified().unwrap_or(UNIX_EPOCH), m.len()), new_text));
+                .insert(id.to_string(), Cached::parse((m.modified().unwrap_or(UNIX_EPOCH), m.len()), new_text, &self.prefix));
         }
         Ok(())
     }
@@ -417,7 +450,8 @@ impl Store {
     pub async fn set_entries(&self, id: &str, entries: &[String]) -> Result<bool, StoreError> {
         let _one_writer = self.write.lock().await;
         let (path, perms, text) = self.load_for_edit(id).await?;
-        let new_text = m3u::with_entries(&text, entries);
+        let lines: Vec<String> = entries.iter().map(|e| self.line(e)).collect();
+        let new_text = m3u::with_entries(&text, &lines);
         if new_text == text {
             return Ok(false);
         }
@@ -430,10 +464,11 @@ impl Store {
     pub async fn set_entries_if(&self, id: &str, expected: &[String], entries: &[String]) -> Result<bool, StoreError> {
         let _one_writer = self.write.lock().await;
         let (path, perms, text) = self.load_for_edit(id).await?;
-        if m3u::entries(&text).collect::<Vec<_>>() != expected {
+        if m3u::entries(&text).map(|l| unprefixed(&l, &self.prefix)).collect::<Vec<_>>() != expected {
             return Ok(false);
         }
-        let new_text = m3u::with_entries(&text, entries);
+        let lines: Vec<String> = entries.iter().map(|e| self.line(e)).collect();
+        let new_text = m3u::with_entries(&text, &lines);
         if new_text != text {
             self.commit(id, &path, perms, &new_text).await?;
         }
@@ -445,9 +480,10 @@ impl Store {
     pub async fn set_member(&self, id: &str, entry: &str, member: bool) -> Result<bool, StoreError> {
         let _one_writer = self.write.lock().await;
         let (path, perms, text) = self.load_for_edit(id).await?;
-        let new_text = match (m3u::contains(&text, entry), member) {
-            (false, true) => m3u::with_added(&text, entry),
-            (true, false) => m3u::with_removed(&text, entry).0,
+        let line = self.line(entry);
+        let new_text = match (m3u::contains(&text, &line), member) {
+            (false, true) => m3u::with_added(&text, &line),
+            (true, false) => m3u::with_removed(&text, &line).0,
             _ => return Ok(false),
         };
         self.commit(id, &path, perms, &new_text).await?;
@@ -458,10 +494,11 @@ impl Store {
     pub async fn toggle(&self, id: &str, entry: &str) -> Result<Toggled, StoreError> {
         let _one_writer = self.write.lock().await;
         let (path, perms, text) = self.load_for_edit(id).await?;
-        let (new_text, added) = if m3u::contains(&text, entry) {
-            (m3u::with_removed(&text, entry).0, false)
+        let line = self.line(entry);
+        let (new_text, added) = if m3u::contains(&text, &line) {
+            (m3u::with_removed(&text, &line).0, false)
         } else {
-            (m3u::with_added(&text, entry), true)
+            (m3u::with_added(&text, &line), true)
         };
         self.commit(id, &path, perms, &new_text).await?;
         Ok(Toggled { added })
@@ -473,7 +510,7 @@ impl Store {
         self.view(None).await?;
         let snapshot: Vec<(String, Vec<String>)> =
             self.cache.read().await.iter().map(|(id, c)| (id.clone(), c.lines.clone())).collect();
-        let dir = self.dir.clone();
+        let dir = self.base.clone();
         let mut found = tokio::task::spawn_blocking(move || {
             let mut listings: HashMap<String, Vec<String>> = HashMap::new();
             let mut out = Repairs::default();
@@ -520,7 +557,7 @@ impl Store {
             let (path, perms, mut text) = self.load_for_edit(&id).await?;
             let mut total = 0;
             for r in repairs {
-                let (t, n) = m3u::with_replaced(&text, &r.from, &r.to);
+                let (t, n) = m3u::with_replaced(&text, &self.line(&r.from), &self.line(&r.to));
                 text = t;
                 total += n;
             }
@@ -734,6 +771,57 @@ impl Store {
     }
 }
 
+/// What `move_into_hidden_folder` did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Moved {
+    pub moved: Vec<String>,
+    /// Already in `.playlists` with the same content (an earlier run): the copy in Music was removed.
+    pub already: Vec<String>,
+    /// In both places with different content: both kept, nothing decided.
+    pub conflicts: Vec<String>,
+}
+
+/// Move the Music folder's playlist files into its hidden `.playlists` folder, each line given "../" in front so it
+/// still points at the same file (decision 0012). Safe to run again, and to interrupt: a file is written there in
+/// full (temporary file, then rename) before the one in Music goes. Backup copies (`*.bak.m3u`) stay where they are.
+/// Blocking.
+pub fn move_into_hidden_folder(music: &Path) -> Result<Moved> {
+    let hidden = music.join(HIDDEN_DIR);
+    std::fs::create_dir_all(&hidden).with_context(|| format!("making {}", hidden.display()))?;
+    let mut out = Moved::default();
+    let mut names: Vec<String> = std::fs::read_dir(music)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| !n.starts_with('.') && n.to_lowercase().ends_with(".m3u") && !is_backup_copy(&n[..n.len() - 4]))
+        .collect();
+    names.sort();
+    for name in names {
+        let src = music.join(&name);
+        let text = std::fs::read_to_string(&src).with_context(|| format!("reading {name}"))?;
+        let new_text = m3u::with_prefix(&text, "../");
+        let dest = hidden.join(&name);
+        if dest.exists() {
+            if std::fs::read_to_string(&dest).is_ok_and(|t| t == new_text) {
+                std::fs::remove_file(&src).with_context(|| format!("removing {name} from Music"))?;
+                out.already.push(name);
+            } else {
+                out.conflicts.push(name);
+            }
+            continue;
+        }
+        let tmp = hidden.join(format!(".{name}.cratarr-tmp"));
+        std::fs::write(&tmp, &new_text).with_context(|| format!("writing {}", tmp.display()))?;
+        if let Ok(meta) = std::fs::metadata(&src) {
+            std::fs::set_permissions(&tmp, meta.permissions()).ok();
+        }
+        std::fs::rename(&tmp, &dest).with_context(|| format!("moving {name} into {HIDDEN_DIR}"))?;
+        std::fs::remove_file(&src).with_context(|| format!("removing {name} from Music"))?;
+        out.moved.push(name);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -884,6 +972,45 @@ B/2.mp3
         assert!(!s.set_member("a", "B/2.mp3", false).await.unwrap());
         assert_eq!(d.read("a.m3u"), "A/1.mp3
 ");
+    }
+
+    #[tokio::test]
+    async fn moved_into_the_hidden_folder_everything_still_points_at_the_same_files() {
+        let d = Dir::new();
+        d.touch("A/1.mp3");
+        d.write("Chill.m3u", "#EXTM3U\nA/1.mp3\ngone/2.mp3\n");
+        d.write("Old.bak.m3u", "A/1.mp3\n");
+        let report = move_into_hidden_folder(&d.0).unwrap();
+        assert_eq!(report.moved, vec!["Chill.m3u".to_string()]);
+        assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
+        assert!(!d.0.join("Chill.m3u").exists());
+        assert!(d.0.join("Old.bak.m3u").exists(), "backup copies stay");
+        // Run again: nothing more to do. A copy left in Music by a cut-short run is cleared.
+        d.write("Chill.m3u", "#EXTM3U\nA/1.mp3\ngone/2.mp3\n");
+        let again = move_into_hidden_folder(&d.0).unwrap();
+        assert_eq!(again.already, vec!["Chill.m3u".to_string()]);
+        assert!(!d.0.join("Chill.m3u").exists());
+        // The store finds them there, with Music-relative entries as before.
+        let s = Store::in_music(&d.0);
+        let v = s.view(Some("A/1.mp3")).await.unwrap();
+        assert_eq!((v[0].name.as_str(), v[0].member, v[0].count, v[0].dead), ("Chill", true, 1, 1));
+        assert_eq!(s.entries("Chill").await.unwrap(), vec!["A/1.mp3".to_string(), "gone/2.mp3".to_string()]);
+        s.set_member("Chill", "B/3.mp3", true).await.unwrap();
+        assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n../B/3.mp3\n");
+        s.set_entries("Chill", &["B/3.mp3".to_string()]).await.unwrap();
+        assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../B/3.mp3\n");
+    }
+
+    #[test]
+    fn a_conflict_keeps_both_copies() {
+        let d = Dir::new();
+        std::fs::create_dir_all(d.0.join(".playlists")).unwrap();
+        d.write(".playlists/Chill.m3u", "../X/9.mp3\n");
+        d.write("Chill.m3u", "A/1.mp3\n");
+        let report = move_into_hidden_folder(&d.0).unwrap();
+        assert_eq!(report.conflicts, vec!["Chill.m3u".to_string()]);
+        assert!(d.0.join("Chill.m3u").exists());
+        assert_eq!(d.read(".playlists/Chill.m3u"), "../X/9.mp3\n");
     }
 
     #[tokio::test]

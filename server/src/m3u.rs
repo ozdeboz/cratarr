@@ -98,6 +98,27 @@ pub fn with_entries(content: &str, entries: &[String]) -> String {
     out
 }
 
+/// Every entry line with `prefix` put in front ("../" when the files move one folder down), all else kept as is.
+pub fn with_prefix(content: &str, prefix: &str) -> String {
+    let mut out = String::with_capacity(content.len() + prefix.len() * 64);
+    for line in content.split_inclusive('\n') {
+        if entry_of(line).is_some() {
+            let bom = line.starts_with('\u{feff}');
+            let body = line.trim_start_matches('\u{feff}');
+            if bom {
+                out.push('\u{feff}');
+            }
+            let lead = body.len() - body.trim_start().len();
+            out.push_str(&body[..lead]);
+            out.push_str(prefix);
+            out.push_str(&body[lead..]);
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// Replace every line whose entry equals `from` with `to`, keeping the line's ending and a leading BOM.
 pub fn with_replaced(content: &str, from: &str, to: &str) -> (String, usize) {
     let mut replaced = 0;
@@ -120,6 +141,12 @@ pub fn with_replaced(content: &str, from: &str, to: &str) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prefix_goes_on_entries_only() {
+        assert_eq!(with_prefix("#EXTM3U\r\nA/1.mp3\r\n\r\nB/2.mp3", "../"), "#EXTM3U\r\n../A/1.mp3\r\n\r\n../B/2.mp3");
+        assert_eq!(with_prefix("\u{feff}A/1.mp3\n", "../"), "\u{feff}../A/1.mp3\n");
+    }
 
     #[test]
     fn a_whole_list_keeps_the_header_line_endings_and_bom() {
