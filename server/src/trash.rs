@@ -24,15 +24,30 @@ fn checked(rel: &str) -> Result<PathBuf> {
     Ok(p.to_path_buf())
 }
 
-/// Move `folder/rel` into the trash. Returns the undo token: `<epoch>/<rel>`, relative to the trash.
+/// The token `trash` will return for `rel` at `now_epoch`: `<epoch>/<rel>`, relative to the trash. Known before
+/// trashing, so the journal can record the intent first.
+pub fn token(now_epoch: i64, rel: &str) -> String {
+    format!("{now_epoch}/{rel}")
+}
+
+/// Whether the trash holds `token` (the intent of a deletion happened).
+pub fn holds(folder: &Path, token: &str) -> bool {
+    folder.join(TRASH_DIR).join(token).is_dir()
+}
+
+/// Move `folder/rel` into the trash. Returns the undo token (`token`). Safe to repeat: when it is already in the
+/// trash under this token and gone from its place, that is success.
 pub fn trash(folder: &Path, rel: &str, now_epoch: i64) -> Result<String> {
     let rel_path = checked(rel)?;
     let src = folder.join(&rel_path);
+    let token = token(now_epoch, rel);
+    let dest = folder.join(TRASH_DIR).join(&token);
+    if !src.exists() && dest.is_dir() {
+        return Ok(token);
+    }
     if !src.is_dir() {
         bail!("{rel} is not there any more");
     }
-    let token = format!("{now_epoch}/{rel}");
-    let dest = folder.join(TRASH_DIR).join(&token);
     if dest.exists() {
         bail!("already in the trash: {token}");
     }
@@ -50,6 +65,10 @@ pub fn restore(folder: &Path, token: &str) -> Result<String> {
     let rel_path = checked(rel)?;
     let src = folder.join(TRASH_DIR).join(stamp).join(&rel_path);
     let dest = folder.join(&rel_path);
+    // Safe to repeat: already back (a crash after restoring, before the journal knew).
+    if !src.exists() && dest.is_dir() {
+        return Ok(rel.to_string());
+    }
     if !src.is_dir() {
         bail!("{rel} is no longer in the trash");
     }

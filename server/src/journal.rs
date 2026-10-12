@@ -87,6 +87,8 @@ pub struct Entry {
     pub at: i64,
     pub event: Event,
     pub undone: bool,
+    /// False while the action is only intended (see `intend`): it may or may not have happened.
+    pub applied: bool,
 }
 
 // temp_store: the image has no /tmp.
@@ -99,6 +101,9 @@ CREATE TABLE IF NOT EXISTS handled (
   event INTEGER NOT NULL, handler TEXT NOT NULL, at INTEGER NOT NULL, result TEXT NOT NULL,
   PRIMARY KEY (event, handler)) WITHOUT ROWID;
 ";
+
+/// Columns added after the first schema; added to an existing journal when missing.
+const ADDED_COLUMNS: [(&str, &str); 1] = [("events", "applied INTEGER NOT NULL DEFAULT 1")];
 
 pub struct Journal {
     db: Mutex<Connection>,
@@ -115,6 +120,15 @@ impl Journal {
         };
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         conn.execute_batch(SCHEMA).context("creating the journal")?;
+        for (table, column) in ADDED_COLUMNS {
+            let name = column.split_whitespace().next().unwrap_or_default();
+            let has: bool = conn
+                .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?
+                .exists([name])?;
+            if !has {
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}")).context("updating the journal")?;
+            }
+        }
         Ok(Self { db: Mutex::new(conn), tell: tokio::sync::broadcast::channel(64).0 })
     }
 
@@ -122,7 +136,43 @@ impl Journal {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Write an event, then tell whoever listens. Returns its id.
+    /// Write-ahead: write what is about to be done, before doing it. Nobody hears of it until `applied`; a crash in
+    /// between leaves it in `intents`, to be finished or forgotten (whichever the disk shows). Returns its id.
+    pub fn intend(&self, at: i64, event: &Event) -> Result<EventId> {
+        let db = self.db();
+        db.execute("INSERT INTO events (at, event, applied) VALUES (?1, ?2, 0)", params![at, serde_json::to_string(event)?])?;
+        Ok(db.last_insert_rowid())
+    }
+
+    /// The intended action happened: tell whoever listens. Safe to call twice.
+    pub fn applied(&self, id: EventId) -> Result<()> {
+        self.db().execute("UPDATE events SET applied = 1 WHERE id = ?1", [id])?;
+        let _ = self.tell.send(id);
+        Ok(())
+    }
+
+    /// The intended action did not happen: forget it.
+    pub fn forget(&self, id: EventId) -> Result<()> {
+        let db = self.db();
+        db.execute("DELETE FROM handled WHERE event = ?1", [id])?;
+        db.execute("DELETE FROM events WHERE id = ?1 AND applied = 0", [id])?;
+        Ok(())
+    }
+
+    /// Actions intended but not known to have happened (a crash in between), oldest first.
+    pub fn intents(&self) -> Result<Vec<Entry>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, at, event FROM events WHERE applied = 0 ORDER BY id")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
+        rows.map(|r| {
+            let (id, at, event) = r?;
+            Ok(Entry { id, at, event: serde_json::from_str(&event)?, undone: false, applied: false })
+        })
+        .collect()
+    }
+
+    /// Write an event that already happened, then tell whoever listens. Returns its id.
+    #[allow(dead_code)] // album actions use intend/applied; kept for events with nothing to apply
     pub fn record(&self, at: i64, event: &Event) -> Result<EventId> {
         let id = {
             let db = self.db();
@@ -139,11 +189,16 @@ impl Journal {
     }
 
     pub fn get(&self, id: EventId) -> Result<Option<Entry>> {
-        let row: Option<(i64, String, Option<i64>)> = self
+        let row = self
             .db()
-            .query_row("SELECT at, event, undone_at FROM events WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row("SELECT at, event, undone_at, applied FROM events WHERE id = ?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
             .optional()?;
-        row.map(|(at, event, undone)| Ok(Entry { id, at, event: serde_json::from_str(&event)?, undone: undone.is_some() })).transpose()
+        row.map(|(at, event, undone, applied): (i64, String, Option<i64>, i64)| {
+            Ok(Entry { id, at, event: serde_json::from_str(&event)?, undone: undone.is_some(), applied: applied == 1 })
+        })
+        .transpose()
     }
 
     /// Record that `handler` is done with an event, and what it returned (what its undo needs).
@@ -164,17 +219,18 @@ impl Journal {
         Ok(text.map(|t| serde_json::from_str(&t)).transpose()?)
     }
 
-    /// Events since `since` (epoch seconds) that `handler` has not handled and that were not undone, oldest first.
+    /// Events since `since` (epoch seconds) that happened, that `handler` has not handled and that were not undone,
+    /// oldest first.
     pub fn pending(&self, handler: &str, since: i64) -> Result<Vec<Entry>> {
         let db = self.db();
         let mut st = db.prepare(
-            "SELECT id, at, event FROM events e WHERE at >= ?2 AND undone_at IS NULL
+            "SELECT id, at, event FROM events e WHERE at >= ?2 AND undone_at IS NULL AND applied = 1
              AND NOT EXISTS (SELECT 1 FROM handled h WHERE h.event = e.id AND h.handler = ?1) ORDER BY id",
         )?;
         let rows = st.query_map(params![handler, since], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
         rows.map(|r| {
             let (id, at, event) = r?;
-            Ok(Entry { id, at, event: serde_json::from_str(&event)?, undone: false })
+            Ok(Entry { id, at, event: serde_json::from_str(&event)?, undone: false, applied: true })
         })
         .collect()
     }
@@ -215,13 +271,54 @@ mod tests {
         let id = j.record(100, &rejected("Album")).unwrap();
         assert_eq!(rx.try_recv().unwrap(), id, "listeners hear of it");
         let e = j.get(id).unwrap().unwrap();
-        assert_eq!((e.at, e.undone, e.event), (100, false, rejected("Album")));
+        assert_eq!((e.at, e.undone, e.applied, e.event), (100, false, true, rejected("Album")));
         assert_eq!(j.pending("acquisition", 0).unwrap().len(), 1);
         j.done(id, "acquisition", 101, &serde_json::json!([7, 8])).unwrap();
         assert!(j.pending("acquisition", 0).unwrap().is_empty(), "handled once");
         assert_eq!(j.pending("playlists", 0).unwrap().len(), 1, "per handler");
         assert_eq!(j.result(id, "acquisition").unwrap(), Some(serde_json::json!([7, 8])));
         assert_eq!(j.result(id, "playlists").unwrap(), None);
+    }
+
+    #[test]
+    fn an_intent_is_heard_of_only_once_applied_and_can_be_forgotten() {
+        let j = Journal::open(None).unwrap();
+        let mut rx = j.subscribe();
+        let id = j.intend(100, &rejected("Album")).unwrap();
+        assert!(rx.try_recv().is_err(), "nobody hears of an intent");
+        assert!(j.pending("acquisition", 0).unwrap().is_empty(), "not handled before it happened");
+        assert_eq!(j.intents().unwrap().iter().map(|e| e.id).collect::<Vec<_>>(), vec![id]);
+        assert!(!j.get(id).unwrap().unwrap().applied);
+        j.applied(id).unwrap();
+        j.applied(id).unwrap();
+        assert_eq!(rx.try_recv().unwrap(), id);
+        assert!(j.intents().unwrap().is_empty());
+        assert_eq!(j.pending("acquisition", 0).unwrap().len(), 1);
+        let other = j.intend(100, &rejected("Never")).unwrap();
+        j.forget(other).unwrap();
+        assert!(j.get(other).unwrap().is_none());
+        j.forget(id).unwrap();
+        assert!(j.get(id).unwrap().is_some(), "an applied event is never forgotten");
+    }
+
+    #[test]
+    fn a_journal_from_before_intents_reads_as_applied() {
+        let d = std::env::temp_dir().join(format!("cratarr-journal-old-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let file = d.join("journal.sqlite");
+        {
+            let c = Connection::open(&file).unwrap();
+            c.execute_batch(
+                "CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, event TEXT NOT NULL, undone_at INTEGER);",
+            )
+            .unwrap();
+            c.execute("INSERT INTO events (at, event) VALUES (100, ?1)", [serde_json::to_string(&rejected("Old")).unwrap()]).unwrap();
+        }
+        let j = Journal::open(Some(&file)).unwrap();
+        assert!(j.get(1).unwrap().unwrap().applied);
+        assert_eq!(j.pending("acquisition", 0).unwrap().len(), 1);
+        drop(j);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

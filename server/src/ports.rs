@@ -54,22 +54,23 @@ impl Files for Disk {
     }
 }
 
-/// Where new music comes from (Lidarr). Best effort: an action Cratarr takes stands when this fails.
+/// Where new music comes from (Lidarr). Best effort: an action Cratarr takes stands when this fails. A read and a
+/// write, so a caller can record what it will change before changing it (plan, then act: a retry after a crash
+/// re-applies the recorded plan instead of reading a state it already changed).
 pub trait Acquisition: Send + Sync {
-    /// Stop fetching the album of this MusicBrainz release group. Returns what was being fetched before (to give to
-    /// `resume` on undo); empty when nothing was.
-    fn stop_fetching<'a>(&'a self, release_group: &'a str) -> Fut<'a, Vec<i64>>;
-    /// Undo `stop_fetching`.
-    fn resume<'a>(&'a self, previous: &'a [i64]) -> Fut<'a, ()>;
+    /// What is being fetched now for this MusicBrainz release group (empty when nothing is).
+    fn fetching<'a>(&'a self, release_group: &'a str) -> Fut<'a, Vec<i64>>;
+    /// Fetch, or stop fetching, these. Safe to repeat.
+    fn set_fetching<'a>(&'a self, ids: &'a [i64], on: bool) -> Fut<'a, ()>;
 }
 
 impl Acquisition for crate::lidarr::Lidarr {
-    fn stop_fetching<'a>(&'a self, release_group: &'a str) -> Fut<'a, Vec<i64>> {
-        Box::pin(self.unmonitor(release_group))
+    fn fetching<'a>(&'a self, release_group: &'a str) -> Fut<'a, Vec<i64>> {
+        Box::pin(self.monitored(release_group))
     }
 
-    fn resume<'a>(&'a self, previous: &'a [i64]) -> Fut<'a, ()> {
-        Box::pin(self.monitor(previous))
+    fn set_fetching<'a>(&'a self, ids: &'a [i64], on: bool) -> Fut<'a, ()> {
+        Box::pin(self.set_monitored(ids, on))
     }
 }
 

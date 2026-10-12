@@ -15,8 +15,10 @@ use super::library::{Active, Library, epoch_now, label_of};
 use crate::journal::{Entry, Event, EventId, Journal};
 use crate::ports::{Acquisition, Files};
 
-/// The handler name in the journal for telling Lidarr (decision 0011 §6).
+/// The handler name in the journal for telling Lidarr (decision 0011 §6). Its result is what it stopped fetching.
 const ACQUISITION: &str = "acquisition";
+/// What the acquisition handler is about to stop fetching, recorded before it acts (plan, then act).
+const ACQUISITION_PLAN: &str = "acquisition-plan";
 use crate::settings;
 use crate::source::{self, Source};
 
@@ -374,37 +376,82 @@ impl IncomingService {
             .get(dir.folder as usize)
             .cloned()
             .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
-        let (f, rel, now, files) = (folder.clone(), dir.dir.clone(), epoch_now(), self.files.clone());
-        let token = tokio::task::spawn_blocking(move || files.trash(&f, &rel, now))
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?
-            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        // Its tracks keep their ids while in the trash (decision 0011): Undo brings them back unchanged.
-        let (c, f, rel, tok) = (catalogue.clone(), dir.folder, dir.dir.clone(), token.clone());
-        if let Err(e) = tokio::task::spawn_blocking(move || c.mark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
-            tracing::warn!("catalogue: could not mark {} as trashed: {e:#}", album.title);
-        }
-        // What happened goes to the journal; Lidarr hears of it from there (`handle`), and Undo reads it back.
+        // Write-ahead: the journal knows what is about to happen before it does (the token is known up front), so a
+        // crash in between is finished or forgotten by `reconcile`, never lost. Lidarr hears of it once applied.
+        let now = epoch_now();
+        let token = crate::trash::token(now, &dir.dir);
         let event = Event::AlbumRejected {
             source: source_id.to_string(),
             album_id: album.id.clone(),
             title: album.title.clone(),
             folder: dir.folder,
             dir: dir.dir.clone(),
-            token,
+            token: token.clone(),
             release_group: dir.release_group.clone(),
         };
-        let id = self.journal.record(epoch_now(), &event)?;
+        let id = self.journal.intend(now, &event)?;
+        let (f, rel, files) = (folder.clone(), dir.dir.clone(), self.files.clone());
+        let trashed = tokio::task::spawn_blocking(move || files.trash(&f, &rel, now)).await.map_err(|e| anyhow::anyhow!("{e}"));
+        if let Err(e) = trashed.and_then(|r| r) {
+            self.journal.forget(id)?;
+            return Err(ToggleError::Refused(format!("{e:#}")));
+        }
+        self.finish_reject(&event).await;
+        self.journal.applied(id)?;
         self.hidden.lock().await.insert(album.id.clone());
         catalogue.poke();
         Ok(DeleteResult { undo: id.to_string(), title: album.title })
+    }
+
+    /// After the files went to the trash: the catalogue rows follow (their tracks keep their ids, decision 0011: Undo
+    /// brings them back unchanged). Safe to repeat.
+    async fn finish_reject(&self, event: &Event) {
+        let Event::AlbumRejected { folder, dir, token, title, .. } = event else { return };
+        let (c, f, rel, tok) = (self.lib.catalogue(), *folder, dir.clone(), token.clone());
+        if let Err(e) = tokio::task::spawn_blocking(move || c.mark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
+            tracing::warn!("catalogue: could not mark {title} as trashed: {e:#}");
+        }
+    }
+
+    /// Actions the journal intended but does not know to have happened (a crash in between): what the disk shows
+    /// decides. Done → finish the bookkeeping and mark it applied (the handlers then run); not done → forget it.
+    pub(super) async fn reconcile(&self) {
+        let intents = match self.journal.intents() {
+            Ok(i) => i,
+            Err(e) => {
+                tracing::warn!("journal: {e:#}");
+                return;
+            }
+        };
+        for entry in intents {
+            let happened = match &entry.event {
+                Event::AlbumRejected { folder, token, .. } => {
+                    let root = self.lib.catalogue().folders().get(*folder as usize).cloned();
+                    root.is_some_and(|r| crate::trash::holds(&r, token))
+                }
+                // Keep and Replace reconcile once they exist (decision 0013); until then nothing records them.
+                _ => false,
+            };
+            let (title, _) = entry.event.album();
+            let result = if happened {
+                self.finish_reject(&entry.event).await;
+                tracing::info!("finished an interrupted action on {title}");
+                self.journal.applied(entry.id)
+            } else {
+                tracing::info!("forgot an action on {title} that never happened");
+                self.journal.forget(entry.id)
+            };
+            if let Err(e) = result {
+                tracing::warn!("journal: {e:#}");
+            }
+        }
     }
 
     /// Undo a Delete: back from the trash, its tracks keep their ids, and Lidarr fetches what it fetched before.
     pub async fn undo_delete(&self, key: &str) -> Result<String, ToggleError> {
         let gone = || ToggleError::Refused("that deletion can no longer be undone".into());
         let id: EventId = key.parse().map_err(|_| gone())?;
-        let entry = self.journal.get(id)?.ok_or_else(gone)?;
+        let entry = self.journal.get(id)?.filter(|e| e.applied).ok_or_else(gone)?;
         let Event::AlbumRejected { album_id, title, folder, dir, token, .. } = &entry.event else { return Err(gone()) };
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back")));
@@ -437,16 +484,36 @@ impl IncomingService {
             return;
         }
         // Deleted, kept or replaced: Lidarr stops fetching the album either way (else it fetches it again). Best effort:
-        // the action stands; when Lidarr cannot be told, the next pass tries again.
+        // the action stands; when Lidarr cannot be told, the next pass tries again. Plan, then act: what will be
+        // stopped is recorded first, so a retry after a crash stops (and Undo resumes) exactly that, instead of reading
+        // a state it already changed.
         let (title, release_group) = entry.event.album();
-        let stopped = match (self.acquisition(), release_group) {
-            (Some(l), Some(rg)) => match l.stop_fetching(rg).await {
-                Ok(ids) => ids,
-                Err(e) => {
+        let stopped: Vec<i64> = match (self.acquisition(), release_group) {
+            (Some(l), Some(rg)) => {
+                let planned: Option<Vec<i64>> =
+                    self.journal.result(entry.id, ACQUISITION_PLAN).ok().flatten().and_then(|v| serde_json::from_value(v).ok());
+                let plan = match planned {
+                    Some(p) => p,
+                    None => match l.fetching(rg).await {
+                        Ok(ids) => {
+                            if let Err(e) = self.journal.done(entry.id, ACQUISITION_PLAN, epoch_now(), &serde_json::json!(ids)) {
+                                tracing::warn!("journal: {e:#}");
+                                return;
+                            }
+                            ids
+                        }
+                        Err(e) => {
+                            tracing::warn!("Lidarr: could not ask about {title}: {e:#}");
+                            return;
+                        }
+                    },
+                };
+                if let Err(e) = l.set_fetching(&plan, false).await {
                     tracing::warn!("Lidarr: could not stop fetching {title}: {e:#}");
                     return;
                 }
-            },
+                plan
+            }
             _ => Vec::new(),
         };
         if let Err(e) = self.journal.done(entry.id, ACQUISITION, epoch_now(), &serde_json::json!(stopped)) {
@@ -458,22 +525,24 @@ impl IncomingService {
         }
     }
 
-    /// Lidarr fetches again what it fetched before the deletion, if it was told to stop.
+    /// Lidarr fetches again what it fetched before, if it was told (or was about to be told) to stop. Safe to repeat.
     async fn resume_fetching(&self, id: EventId, title: &str) {
-        let stopped: Vec<i64> =
-            self.journal.result(id, ACQUISITION).ok().flatten().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        let read = |h: &str| -> Option<Vec<i64>> { self.journal.result(id, h).ok().flatten().and_then(|v| serde_json::from_value(v).ok()) };
+        let stopped = read(ACQUISITION).or_else(|| read(ACQUISITION_PLAN)).unwrap_or_default();
         if stopped.is_empty() {
             return;
         }
         if let Some(l) = self.acquisition()
-            && let Err(e) = l.resume(&stopped).await
+            && let Err(e) = l.set_fetching(&stopped, true).await
         {
             tracing::warn!("Lidarr: could not fetch {title} again: {e:#}");
         }
     }
 
-    /// Handle what the journal shows as not done (a restart, Lidarr down), back as far as the trash keeps things.
+    /// Finish or forget interrupted actions, then handle what the journal shows as not done (a restart, Lidarr down),
+    /// back as far as the trash keeps things.
     pub(super) async fn catch_up(&self) {
+        self.reconcile().await;
         let since = epoch_now() - i64::from(self.trash_days()) * 86_400;
         match self.journal.pending(ACQUISITION, since) {
             Ok(entries) => {

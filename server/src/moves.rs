@@ -30,9 +30,11 @@ fn full((root, rel): &(PathBuf, String)) -> Result<PathBuf> {
 }
 
 /// Move every file of the plan. Nothing is overwritten: when a target exists, nothing moves. When a move fails
-/// midway, the files already moved go back and the error is returned.
+/// midway, the files already moved go back and the error is returned. Safe to repeat: a step already done (its file
+/// gone from the source and present at the target) is skipped, so a plan interrupted by a crash can be finished.
 pub fn apply(plan: &[Step]) -> Result<()> {
-    let pairs: Vec<(PathBuf, PathBuf)> = plan.iter().map(|s| Ok((full(&s.from)?, full(&s.to)?))).collect::<Result<_>>()?;
+    let all: Vec<(PathBuf, PathBuf)> = plan.iter().map(|s| Ok((full(&s.from)?, full(&s.to)?))).collect::<Result<_>>()?;
+    let pairs: Vec<(PathBuf, PathBuf)> = all.into_iter().filter(|(from, to)| !(!from.exists() && to.is_file())).collect();
     for (from, to) in &pairs {
         if !from.is_file() {
             bail!("{} is not there", from.display());
@@ -139,6 +141,27 @@ mod tests {
         assert!(apply(&plan).is_err());
         assert!(inc.join("A/1.flac").exists() && !music.join("A/1.flac").exists(), "all or nothing");
         assert_eq!(std::fs::read(music.join("A/2.flac")).unwrap(), b"mine");
+        for d in [inc, music] {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    #[test]
+    fn an_interrupted_plan_can_be_finished_and_undone_twice() {
+        let (inc, music) = (tmp(), tmp());
+        std::fs::create_dir_all(inc.join("A")).unwrap();
+        std::fs::write(inc.join("A/1.flac"), b"1").unwrap();
+        std::fs::write(inc.join("A/2.flac"), b"2").unwrap();
+        let plan = vec![step(&inc, "A/1.flac", &music, "B/1.flac"), step(&inc, "A/2.flac", &music, "B/2.flac")];
+        // A crash after the first file: finishing it moves only the rest.
+        std::fs::create_dir_all(music.join("B")).unwrap();
+        std::fs::rename(inc.join("A/1.flac"), music.join("B/1.flac")).unwrap();
+        apply(&plan).unwrap();
+        apply(&plan).unwrap();
+        assert!(music.join("B/2.flac").exists() && !inc.join("A").exists());
+        revert(&plan).unwrap();
+        revert(&plan).unwrap();
+        assert_eq!(std::fs::read(inc.join("A/2.flac")).unwrap(), b"2");
         for d in [inc, music] {
             std::fs::remove_dir_all(d).ok();
         }

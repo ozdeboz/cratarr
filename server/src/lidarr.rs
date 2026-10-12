@@ -1,5 +1,5 @@
 //! Lidarr, only as far as Incoming needs it: when an album is deleted, stop Lidarr from fetching it again
-//! (unmonitor), and undo that. Albums are found by their MusicBrainz release group, which is Lidarr's own album id
+//! (unmonitor: `monitored` then `set_monitored`, see `ports::Acquisition`), and undo that. Albums are found by their MusicBrainz release group, which is Lidarr's own album id
 //! (`foreignAlbumId`). Optional: set in Settings → Connections (LIDARR_URL / LIDARR_API_KEY until saved there).
 
 use anyhow::{Context, Result, bail};
@@ -53,7 +53,13 @@ impl Lidarr {
         Ok(resp.json().await?)
     }
 
-    async fn set_monitored(&self, ids: &[i64], monitored: bool) -> Result<()> {
+    /// Lidarr's albums of a release group that it fetches now (monitored).
+    pub async fn monitored(&self, release_group: &str) -> Result<Vec<i64>> {
+        Ok(self.albums(release_group).await?.into_iter().filter(|a| a.monitored).map(|a| a.id).collect())
+    }
+
+    /// Fetch, or stop fetching, these albums. Safe to repeat.
+    pub async fn set_monitored(&self, ids: &[i64], monitored: bool) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
@@ -65,16 +71,4 @@ impl Lidarr {
         Ok(())
     }
 
-    /// Stop fetching this album. Returns the albums that WERE monitored (to restore on undo); empty when Lidarr
-    /// does not know the album or already left it alone.
-    pub async fn unmonitor(&self, release_group: &str) -> Result<Vec<i64>> {
-        let was: Vec<i64> = self.albums(release_group).await?.into_iter().filter(|a| a.monitored).map(|a| a.id).collect();
-        self.set_monitored(&was, false).await?;
-        Ok(was)
-    }
-
-    /// Undo `unmonitor`.
-    pub async fn monitor(&self, ids: &[i64]) -> Result<()> {
-        self.set_monitored(ids, true).await
-    }
 }
