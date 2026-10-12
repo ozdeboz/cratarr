@@ -44,6 +44,19 @@ pub struct VirtualFolder {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+struct UserLite {
+    id: String,
+    policy: Option<PolicyLite>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct PolicyLite {
+    is_administrator: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 struct Ancestor {
     id: String,
     #[serde(rename = "Type")]
@@ -137,13 +150,6 @@ pub struct PublicInfo {
     pub server_name: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, serde::Serialize)]
-#[serde(rename_all = "PascalCase")]
-pub struct User {
-    pub id: String,
-    pub name: String,
-}
-
 /// Fallback source for "what is playing": audio sessions only, preferring the chosen player.
 pub fn pick_now_playing(sessions: &[Session], prefers: impl Fn(&Session) -> bool) -> Option<PlayingItem> {
     let audio = |s: &&Session| {
@@ -164,11 +170,12 @@ pub fn pick_now_playing(sessions: &[Session], prefers: impl Fn(&Session) -> bool
 pub struct Jellyfin {
     http: reqwest::Client,
     base: String,
-    user_id: String,
 }
 
 impl Jellyfin {
-    pub fn new(base: &str, api_key: &str, user_id: &str) -> Result<Self> {
+    /// No Jellyfin user is involved: the API key (admin rights) is enough for every call, and Cratarr's playlists
+    /// are not per user (decision 0005).
+    pub fn new(base: &str, api_key: &str) -> Result<Self> {
         let mut headers = reqwest::header::HeaderMap::new();
         let mut token = reqwest::header::HeaderValue::from_str(api_key).context("API key has invalid characters")?;
         token.set_sensitive(true);
@@ -177,7 +184,7 @@ impl Jellyfin {
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(20))
             .build()?;
-        Ok(Self { http, base: base.trim_end_matches('/').to_string(), user_id: user_id.to_string() })
+        Ok(Self { http, base: base.trim_end_matches('/').to_string() })
     }
 
     async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
@@ -195,14 +202,9 @@ impl Jellyfin {
         self.get("/System/Info/Public").await
     }
 
-    /// Needs an API key (they have admin rights); used by the Settings page to pick the followed user.
-    pub async fn users(&self) -> Result<Vec<User>> {
-        self.get("/Users").await
-    }
-
-    /// The configured user; fails when the key is wrong or the user does not exist.
-    pub async fn current_user(&self) -> Result<User> {
-        self.get(&format!("/Users/{}", self.user_id)).await
+    /// Needs a valid API key (401 otherwise), unlike `public_info`: this is the connection check.
+    pub async fn system_info(&self) -> Result<PublicInfo> {
+        self.get("/System/Info").await
     }
 
     pub async fn sessions(&self) -> Result<Vec<Session>> {
@@ -218,19 +220,29 @@ impl Jellyfin {
         self.get("/Library/VirtualFolders").await
     }
 
-    /// The id of the library (collection folder) an item is in, if any.
-    pub async fn library_of(&self, item_id: &str) -> Result<Option<String>> {
-        let up: Vec<Ancestor> = self.get(&format!("/Items/{item_id}/Ancestors?userId={}", self.user_id)).await?;
+    /// An administrator's id. Libraries are per-user views in Jellyfin's API, so asking which library an item is in
+    /// needs a user; an administrator sees every library. Observed on 10.11: without a user, an item's ancestors are
+    /// the physical folders (`Folder`, `AggregateFolder`), not its library; and `ParentId` is ignored once `Ids` is
+    /// given, so membership cannot be asked per library either.
+    pub async fn admin_user(&self) -> Result<String> {
+        let users: Vec<UserLite> = self.get("/Users").await?;
+        users
+            .into_iter()
+            .find(|u| u.policy.as_ref().and_then(|p| p.is_administrator) == Some(true))
+            .map(|u| u.id)
+            .context("Jellyfin has no administrator account")
+    }
+
+    /// The id of the library (collection folder) an item is in, if any, as `user` sees it (see `admin_user`).
+    pub async fn library_of(&self, item_id: &str, user: &str) -> Result<Option<String>> {
+        let up: Vec<Ancestor> = self.get(&format!("/Items/{item_id}/Ancestors?userId={user}")).await?;
         Ok(up.into_iter().find(|a| a.kind.as_deref() == Some("CollectionFolder")).map(|a| a.id))
     }
 
     /// Paths of up to `n` tracks in a library.
     pub async fn sample_paths(&self, library_id: &str, n: usize) -> Result<Vec<String>> {
         let page: ItemsPage<PathOnly> = self
-            .get(&format!(
-                "/Users/{}/Items?ParentId={library_id}&IncludeItemTypes=Audio&Recursive=true&Limit={n}&Fields=Path",
-                self.user_id
-            ))
+            .get(&format!("/Items?ParentId={library_id}&IncludeItemTypes=Audio&Recursive=true&Limit={n}&Fields=Path"))
             .await?;
         Ok(page.items.into_iter().filter_map(|i| i.path).collect())
     }
@@ -245,8 +257,7 @@ impl Jellyfin {
     /// bitrate, plays and favourite, keyed by file name. Empty when Jellyfin has no such album. `search` is a
     /// title fragment to find it with; the folder name is what picks the right match.
     pub async fn album_tracks(&self, search: &str, folder: &str) -> Result<std::collections::BTreeMap<String, crate::albums::Known>> {
-        let uid = &self.user_id;
-        let url = format!("{}/Users/{uid}/Items", self.base);
+        let url = format!("{}/Items", self.base);
         let found: ItemsPage<ListedAlbum> = self
             .http
             .get(&url)
@@ -289,7 +300,9 @@ impl Jellyfin {
 
     /// One item with the fields shown on the page.
     pub async fn item(&self, id: &str) -> Result<PlayingItem> {
-        self.get(&format!("/Users/{}/Items/{id}", self.user_id)).await
+        // The single-item call needs a user; the list call by id does not and returns the same fields.
+        let page: ItemsPage<PlayingItem> = self.get(&format!("/Items?Ids={id}&Fields=Path")).await?;
+        page.items.into_iter().next().with_context(|| format!("Jellyfin has no item {id}"))
     }
 
     /// Tell Jellyfin that files appeared, changed or disappeared (`kind`: "Created", "Modified" or "Deleted"); paths are
@@ -314,7 +327,7 @@ impl Jellyfin {
     /// followed the file within seconds). Parameters go in the query string, as the API expects.
     pub async fn refresh_playlist(&self, name: &str) -> Result<()> {
         let listing: ItemsPage<ListedPlaylist> = self
-            .get(&format!("/Users/{}/Items?IncludeItemTypes=Playlist&Recursive=true&Limit=1000", self.user_id))
+            .get("/Items?IncludeItemTypes=Playlist&Recursive=true&Limit=1000")
             .await?;
         let Some(id) = pick_playlist_id(&listing.items, name) else {
             bail!("Jellyfin has no playlist named {name:?}");

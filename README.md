@@ -40,6 +40,10 @@ with no plugin-specific UI code.
   folders off a sample track's path until the rest is a file in the playlist folder. Sources need not agree on
   paths: Jellyfin, for one, reports `/data/media/Music/...` for a library it lists as `/Volume1/media/Music`.
 - With Jellyfin, the page follows a chosen player ("Finamp on Lenovo Tab", "Finamp, any device" or any player).
+- Playlists are the same for everyone. Jellyfin shows `.m3u` playlists to every user with access to the library,
+  and its per-user ownership and sharing do not apply to them, so Cratarr does not ask for a Jellyfin user (it uses
+  an administrator internally for the one call that needs one).
+  Per-user playlists belong with a future integration of Jellyfin's own playlists.
 
 See [decision 0005](docs/decisions/0005-pluggable-sources.md).
 
@@ -74,10 +78,10 @@ The container: `CRATARR_PLAYLIST_DIR` (required, the mounted music and playlist 
 `CRATARR_DATA_DIR` (optional; see `server/src/config.rs`).
 
 Sources are set up on the Settings page and saved in `CRATARR_DATA_DIR/settings.json` (owner-only: it holds secrets).
-Until something is saved there, one Jellyfin source comes from `JELLYFIN_URL`, `JELLYFIN_API_KEY`,
-`JELLYFIN_USER_ID` and the optional `CRATARR_PLAYER_CLIENT`. Secrets are never sent back to the page, and a saved
-secret is only reused while the fields it is tied to (Jellyfin: the address) stay the same. `CRATARR_MUSIC_PREFIXES`
-and `CRATARR_JELLYFIN_PLAYLIST_DIR` are no longer used. See decisions [0004](docs/decisions/0004-settings-page.md)
+Until something is saved there, one Jellyfin source comes from `JELLYFIN_URL`, `JELLYFIN_API_KEY` and the
+optional `CRATARR_PLAYER_CLIENT`. Secrets are never sent back to the page, and a saved
+secret is only reused while the fields it is tied to (Jellyfin: the address) stay the same. `CRATARR_MUSIC_PREFIXES`,
+`CRATARR_JELLYFIN_PLAYLIST_DIR` and `JELLYFIN_USER_ID` are no longer used. See decisions [0004](docs/decisions/0004-settings-page.md)
 and [0005](docs/decisions/0005-pluggable-sources.md).
 
 A source that is down does not stop Cratarr: its status shows on the Settings page, and its libraries are looked for

@@ -1,6 +1,7 @@
 //! Jellyfin as a source. What is playing comes from the activity log first (session records can be stale with some
 //! clients, see `nowplaying.rs`), the position from the session playing that track. Library membership comes from
-//! the track's ancestors, never from paths.
+//! the track's ancestors, never from paths. No Jellyfin user is configured; the one call that needs a user context
+//! (which library a track is in) uses an administrator, found once (decision 0005).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
@@ -28,14 +29,6 @@ fn fields() -> Vec<Field> {
             bound_to: &["url"],
         },
         Field {
-            key: "user",
-            label: "User",
-            kind: FieldKind::Choice,
-            required: true,
-            help: Some("Whose library is used."),
-            bound_to: &[],
-        },
-        Field {
             key: "player",
             label: "Follow player",
             kind: FieldKind::Choice,
@@ -52,13 +45,10 @@ fn connect(values: &Values, partial: bool) -> Result<Box<dyn Source>> {
         bail!("the server address must start with http:// or https://");
     }
     let key = text(values, "api_key").context("the API key is required")?;
-    let user = text(values, "user");
-    if !partial && user.is_none() {
-        bail!("choose a user");
-    }
+    let _ = partial; // nothing here waits on a choice
     Ok(Box::new(JellyfinSource {
-        jf: Jellyfin::new(url, key, user.unwrap_or(""))?,
-        has_user: user.is_some(),
+        jf: Jellyfin::new(url, key)?,
+        admin: tokio::sync::OnceCell::new(),
         player: Player::parse(text(values, "player").unwrap_or("")),
         items: Mutex::new(HashMap::new()),
     }))
@@ -161,8 +151,9 @@ fn epoch_now() -> i64 {
 
 struct JellyfinSource {
     jf: Jellyfin,
-    has_user: bool,
     player: Player,
+    /// See `Jellyfin::admin_user`.
+    admin: tokio::sync::OnceCell<String>,
     /// Recently seen tracks with their library, so polling the playing track stays cheap.
     items: Mutex<HashMap<String, (PlayingItem, Option<String>)>>,
 }
@@ -172,7 +163,11 @@ impl JellyfinSource {
         if let Some(hit) = self.items.lock().unwrap_or_else(|p| p.into_inner()).get(id) {
             return Ok(hit.clone());
         }
-        let (item, library) = tokio::join!(self.jf.item(id), self.jf.library_of(id));
+        let library = async {
+            let admin = self.admin.get_or_try_init(|| self.jf.admin_user()).await?;
+            self.jf.library_of(id, admin).await
+        };
+        let (item, library) = tokio::join!(self.jf.item(id), library);
         let library = library.unwrap_or_else(|e| {
             tracing::warn!("cannot tell which library {id} is in: {e:#}");
             None
@@ -198,31 +193,23 @@ fn to_track((i, library_id): (PlayingItem, Option<String>)) -> Track {
 impl Source for JellyfinSource {
     fn status(&self) -> Fut<'_, Status> {
         Box::pin(async move {
-            let info = match self.jf.public_info().await {
-                Ok(i) => i,
-                Err(e) => return Ok(Status { error: Some(format!("cannot reach Jellyfin: {e:#}")), ..Status::default() }),
-            };
-            let mut s = Status { connected: true, server_name: info.server_name, version: Some(info.version), ..Status::default() };
-            if self.has_user {
-                match self.jf.current_user().await {
-                    Ok(u) => s.detail = Some(format!("as {}", u.name)),
-                    Err(e) => {
-                        s.connected = false;
-                        s.error = Some(format!("Jellyfin refused the key or does not know that user: {e:#}"));
-                    }
-                }
+            // The public call says whether the server answers at all; the authenticated one whether the key works.
+            if let Err(e) = self.jf.public_info().await {
+                return Ok(Status { error: Some(format!("cannot reach Jellyfin: {e:#}")), ..Status::default() });
             }
-            Ok(s)
+            Ok(match self.jf.system_info().await {
+                Ok(i) => Status { connected: true, server_name: i.server_name, version: Some(i.version), ..Status::default() },
+                Err(e) => Status { error: Some(format!("Jellyfin refused the API key: {e:#}")), ..Status::default() },
+            })
         })
     }
 
     fn options(&self) -> Fut<'_, BTreeMap<String, Vec<Choice>>> {
         Box::pin(async move {
-            let (users, devices, sessions) = tokio::join!(self.jf.users(), self.jf.devices(), self.jf.sessions());
-            let users = users.context("Jellyfin refused the API key")?;
+            let (devices, sessions) = tokio::join!(self.jf.devices(), self.jf.sessions());
+            let devices = devices.context("Jellyfin refused the API key")?;
             let mut out = BTreeMap::new();
-            out.insert("user".into(), users.into_iter().map(|u| Choice { value: u.id, label: u.name }).collect());
-            out.insert("player".into(), player_choices(&sessions.unwrap_or_default(), &devices.unwrap_or_default()));
+            out.insert("player".into(), player_choices(&sessions.unwrap_or_default(), &devices));
             Ok(out)
         })
     }
@@ -389,12 +376,13 @@ mod tests {
     }
 
     #[test]
-    fn connecting_needs_an_address_a_key_and_for_real_use_a_user() {
+    fn connecting_needs_an_address_and_a_key() {
         let v = |pairs: &[(&str, &str)]| -> Values { pairs.iter().map(|(k, v)| (k.to_string(), (*v).into())).collect() };
         assert!(connect(&v(&[("url", "jf:8096"), ("api_key", "k")]), true).is_err());
         assert!(connect(&v(&[("url", "http://jf:8096")]), true).is_err());
         assert!(connect(&v(&[("url", "http://jf:8096"), ("api_key", "k")]), true).is_ok());
-        assert!(connect(&v(&[("url", "http://jf:8096"), ("api_key", "k")]), false).is_err());
+        assert!(connect(&v(&[("url", "http://jf:8096"), ("api_key", "k")]), false).is_ok());
+        // A user saved by an earlier version is ignored, not an error.
         assert!(connect(&v(&[("url", "http://jf:8096"), ("api_key", "k"), ("user", "u")]), false).is_ok());
     }
 }

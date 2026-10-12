@@ -80,14 +80,14 @@ pub fn save(path: &Path, sources: &[SourceConfig]) -> Result<()> {
     std::fs::rename(&tmp, path).with_context(|| format!("cannot replace {}", path.display()))
 }
 
-/// First run: one Jellyfin source from `JELLYFIN_URL`, `JELLYFIN_API_KEY`, `JELLYFIN_USER_ID` and the optional
-/// `CRATARR_PLAYER_CLIENT`; nothing when `JELLYFIN_URL` is unset.
+/// First run: one Jellyfin source from `JELLYFIN_URL`, `JELLYFIN_API_KEY` and the optional `CRATARR_PLAYER_CLIENT`;
+/// nothing when `JELLYFIN_URL` is unset.
 pub fn from_env(env: &dyn Fn(&str) -> Option<String>) -> Vec<SourceConfig> {
     let get = |k: &str| env(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     let Some(url) = get("JELLYFIN_URL") else { return Vec::new() };
     let mut values = Values::new();
     values.insert("url".into(), url.into());
-    for (key, var) in [("api_key", "JELLYFIN_API_KEY"), ("user", "JELLYFIN_USER_ID"), ("player", "CRATARR_PLAYER_CLIENT")] {
+    for (key, var) in [("api_key", "JELLYFIN_API_KEY"), ("player", "CRATARR_PLAYER_CLIENT")] {
         if let Some(v) = get(var) {
             values.insert(key.into(), v.into());
         }
@@ -192,7 +192,7 @@ mod tests {
     fn jf(id: &str, url: &str, key: Option<&str>) -> SourceConfig {
         let mut values = Values::new();
         values.insert("url".into(), url.into());
-        values.insert("user".into(), "u1".into());
+        values.insert("player".into(), "Finamp".into());
         if let Some(k) = key {
             values.insert("api_key".into(), k.into());
         }
@@ -206,6 +206,7 @@ mod tests {
         assert_eq!(s.len(), 1);
         assert_eq!(source::text(&s[0].values, "api_key"), Some("k"));
         assert_eq!(source::text(&s[0].values, "player"), Some("Finamp"));
+        assert_eq!(source::text(&s[0].values, "user"), None, "JELLYFIN_USER_ID is no longer read");
         assert!(from_env(&env_of(&[])).is_empty());
     }
 
@@ -244,10 +245,10 @@ mod tests {
         assert!(merge(&[], vec![odd]).is_err());
         let mut extra = jf("a", "http://x", Some("k"));
         extra.values.insert("smuggled".into(), "x".into());
-        extra.values.insert("user".into(), serde_json::json!(["not", "a", "string"]));
+        extra.values.insert("player".into(), serde_json::json!(["not", "a", "string"]));
         let out = merge(&[], vec![extra]).unwrap();
         assert!(!out[0].values.contains_key("smuggled"));
-        assert!(!out[0].values.contains_key("user"), "wrong shape is dropped");
+        assert!(!out[0].values.contains_key("player"), "wrong shape is dropped");
     }
 
     #[test]
@@ -298,11 +299,11 @@ mod tests {
     fn the_older_flat_file_still_loads() {
         let d = dir();
         let path = d.join("settings.json");
-        std::fs::write(&path, r#"{"JELLYFIN_USER_ID":"u2","CRATARR_MUSIC_PREFIXES":"/x"}"#).unwrap();
+        std::fs::write(&path, r#"{"CRATARR_PLAYER_CLIENT":"Kodi","CRATARR_MUSIC_PREFIXES":"/x"}"#).unwrap();
         let env = env_of(&[("JELLYFIN_URL", "http://jf:8096"), ("JELLYFIN_API_KEY", "k")]);
         let s = load(&path, &env).unwrap().unwrap();
         assert_eq!(s.len(), 1);
-        assert_eq!(source::text(&s[0].values, "user"), Some("u2"));
+        assert_eq!(source::text(&s[0].values, "player"), Some("Kodi"));
         assert_eq!(source::text(&s[0].values, "api_key"), Some("k"));
         std::fs::remove_dir_all(&d).ok();
     }

@@ -13,8 +13,8 @@ pub struct Config {
     pub data_dir: Option<String>,
 }
 
-/// Variables from the first version that are no longer read (`placement.rs` finds paths on its own).
-pub const RETIRED: [&str; 2] = ["CRATARR_MUSIC_PREFIXES", "CRATARR_JELLYFIN_PLAYLIST_DIR"];
+/// Variables that are no longer read: `placement.rs` finds paths on its own, and no Jellyfin user is involved.
+pub const RETIRED: [&str; 3] = ["CRATARR_MUSIC_PREFIXES", "CRATARR_JELLYFIN_PLAYLIST_DIR", "JELLYFIN_USER_ID"];
 
 impl Config {
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self> {

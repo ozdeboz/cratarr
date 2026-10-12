@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
     let cfg = config::Config::from_lookup(env)?;
     for retired in config::RETIRED {
         if env(retired).is_some() {
-            tracing::warn!("{retired} is no longer used: Cratarr finds the library paths itself (decision 0005)");
+            tracing::warn!("{retired} is no longer used and can be removed (decision 0005)");
         }
     }
 

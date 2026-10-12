@@ -34,9 +34,18 @@ read `.m3u` files is a separate feature and is not decided here.
 - Jellyfin specifics: library membership comes from the track's ancestors, never from paths. The player to follow
   is an app, optionally on one device, matched by name: device ids are not stable (observed for Finamp), and a
   session's client name can differ slightly from the device list's ("Jellyfin for Android" vs "Jellyfin Android").
+- No Jellyfin user is configured. The `.m3u` playlists are household-wide: every user with access to the Music
+  library sees all of them (observed: all six users see all 67), and Jellyfin's playlist ownership and sharing do
+  not apply to imported playlists (`GET /Playlists/{id}` and `/Playlists/{id}/Users` answer 400). Every call
+  Cratarr makes works with the API key alone, and the connection check uses the authenticated `/System/Info`, except
+  one: which library a track is in. Libraries are per-user views in Jellyfin's API (without a user, a track's
+  ancestors are physical folders, and `ParentId` is ignored once `Ids` is given), so that call runs as Jellyfin's
+  first administrator, found once; an administrator sees every library, so which one does not matter.
+  Per-user playlists need Jellyfin's own playlists and a login in Cratarr; they are left to that future work. The
+  parked Albums page loses per-user play counts and favourites until then.
 - `settings.json` becomes `{"version": 2, "sources": [...]}` and, once present, is the whole truth. Without it, one
   Jellyfin source comes from `JELLYFIN_*` (first run). A file in 0004's flat format is read as that source.
-  `CRATARR_MUSIC_PREFIXES` and `CRATARR_JELLYFIN_PLAYLIST_DIR` are retired (a warning if set).
+  `CRATARR_MUSIC_PREFIXES`, `CRATARR_JELLYFIN_PLAYLIST_DIR` and `JELLYFIN_USER_ID` are retired (a warning if set).
 - Startup no longer fails when a source is down. Its status shows on the page, and its libraries are looked for
   again every minute. An unreadable playlist folder still stops Cratarr.
 
