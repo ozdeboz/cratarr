@@ -4,6 +4,8 @@ mod app;
 mod catalogue;
 mod config;
 mod covers;
+#[allow(dead_code)] // wired up with the Incoming states (new / upgrade / duplicate)
+mod incoming;
 mod jellyfin;
 mod m3u;
 mod mounts;

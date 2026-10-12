@@ -1,0 +1,137 @@
+//! What an incoming album is, compared with the library: new, an upgrade of an album already there, or a duplicate of
+//! one. Pure logic over plain descriptions of albums; where the descriptions come from (the catalogue, the source) is
+//! the caller's business.
+
+use serde::Serialize;
+
+use crate::albums::fold;
+
+/// An album as far as the comparison needs it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AlbumFacts {
+    /// MusicBrainz release group, when the files carry one: the most reliable way to recognise the same album.
+    pub release_group: Option<String>,
+    pub artist: String,
+    pub title: String,
+    pub tracks: u32,
+    pub quality: Quality,
+}
+
+/// How good the files are, as far as an upgrade is concerned. Lossless beats any lossy; between lossy files the lowest
+/// track bitrate counts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Quality {
+    #[default]
+    Unknown,
+    Lossy { kbps: u32 },
+    Lossless,
+}
+
+/// A lossy album counts as better only from this many kbps more (320 against 321 is the same thing).
+const BITRATE_STEP: u32 = 32;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Verdict {
+    /// Not in the library.
+    New,
+    /// In the library, and the incoming copy is better: worth replacing.
+    Upgrade { library: usize, why: String },
+    /// In the library, and the incoming copy is not better.
+    Duplicate { library: usize, why: String },
+}
+
+/// Compare one incoming album with the library albums (`library[i]`, referred to by index in the verdict).
+pub fn classify(incoming: &AlbumFacts, library: &[AlbumFacts]) -> Verdict {
+    let Some(i) = find_same(incoming, library) else { return Verdict::New };
+    let owned = &library[i];
+    match better(incoming.quality, owned.quality) {
+        Some(why) => Verdict::Upgrade { library: i, why },
+        None => Verdict::Duplicate { library: i, why: describe_same(incoming, owned) },
+    }
+}
+
+/// The library album that is the same album: by release group first, else by artist and title with case, accents
+/// and punctuation folded away (as the Albums comparison does). `None` when nothing matches.
+pub fn find_same(incoming: &AlbumFacts, library: &[AlbumFacts]) -> Option<usize> {
+    if let Some(rg) = incoming.release_group.as_deref().filter(|r| !r.is_empty()) {
+        if let Some(i) = library.iter().position(|l| l.release_group.as_deref() == Some(rg)) {
+            return Some(i);
+        }
+    }
+    let key = (fold(&incoming.artist), fold(&incoming.title));
+    if key.0.is_empty() || key.1.is_empty() {
+        return None;
+    }
+    library.iter().position(|l| (fold(&l.artist), fold(&l.title)) == key)
+}
+
+/// Why `new` is better than `old`, or `None` when it is not.
+fn better(new: Quality, old: Quality) -> Option<String> {
+    match (new, old) {
+        (Quality::Lossless, Quality::Lossy { kbps }) => Some(format!("lossless, yours is {kbps} kbps")),
+        (Quality::Lossless, Quality::Unknown) => Some("lossless".into()),
+        (Quality::Lossy { kbps: n }, Quality::Lossy { kbps: o }) if n >= o + BITRATE_STEP => Some(format!("{n} kbps, yours is {o} kbps")),
+        _ => None,
+    }
+}
+
+fn describe_same(new: &AlbumFacts, old: &AlbumFacts) -> String {
+    let q = |q: Quality| match q {
+        Quality::Lossless => "lossless".to_string(),
+        Quality::Lossy { kbps } => format!("{kbps} kbps"),
+        Quality::Unknown => "unknown quality".to_string(),
+    };
+    let tracks = if new.tracks != old.tracks { format!(", {} tracks against your {}", new.tracks, old.tracks) } else { String::new() };
+    format!("{}, yours is {}{tracks}", q(new.quality), q(old.quality))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn album(artist: &str, title: &str, rg: Option<&str>, tracks: u32, quality: Quality) -> AlbumFacts {
+        AlbumFacts { release_group: rg.map(str::to_string), artist: artist.into(), title: title.into(), tracks, quality }
+    }
+
+    fn library() -> Vec<AlbumFacts> {
+        vec![
+            album("AIR", "Moon Safari", Some("rg-moon"), 10, Quality::Lossy { kbps: 320 }),
+            album("9 Lazy 9", "Paradise Blown", None, 17, Quality::Lossless),
+            album("Mélanie", "Cri D'Amour", None, 13, Quality::Lossy { kbps: 320 }),
+        ]
+    }
+
+    #[test]
+    fn a_lossless_copy_of_an_owned_mp3_album_is_an_upgrade() {
+        let v = classify(&album("Air", "Moon Safari", Some("rg-moon"), 10, Quality::Lossless), &library());
+        assert_eq!(v, Verdict::Upgrade { library: 0, why: "lossless, yours is 320 kbps".into() });
+    }
+
+    #[test]
+    fn the_same_quality_again_is_a_duplicate() {
+        let v = classify(&album("9 Lazy 9", "Paradise Blown", None, 17, Quality::Lossless), &library());
+        assert!(matches!(v, Verdict::Duplicate { library: 1, .. }), "{v:?}");
+        let mp3 = classify(&album("AIR", "Moon Safari", Some("rg-moon"), 10, Quality::Lossy { kbps: 321 }), &library());
+        assert!(matches!(mp3, Verdict::Duplicate { library: 0, .. }), "321 against 320 is no upgrade: {mp3:?}");
+    }
+
+    #[test]
+    fn a_weaker_copy_is_a_duplicate_and_says_why() {
+        let v = classify(&album("Melanie", "Cri d'Amour", None, 12, Quality::Lossy { kbps: 192 }), &library());
+        assert_eq!(v, Verdict::Duplicate { library: 2, why: "192 kbps, yours is 320 kbps, 12 tracks against your 13".into() });
+    }
+
+    #[test]
+    fn names_match_without_case_accents_or_punctuation_but_release_groups_win() {
+        assert_eq!(find_same(&album("air", "moon safari!", None, 10, Quality::Unknown), &library()), Some(0));
+        let renamed = album("AIR", "Moon Safari (Deluxe)", Some("rg-moon"), 12, Quality::Lossless);
+        assert_eq!(find_same(&renamed, &library()), Some(0), "same release group, different title");
+    }
+
+    #[test]
+    fn anything_else_is_new() {
+        assert_eq!(classify(&album("Jonti", "Twirligig", Some("rg-jonti"), 14, Quality::Lossless), &library()), Verdict::New);
+        assert_eq!(classify(&album("", "", None, 0, Quality::Unknown), &library()), Verdict::New, "no names: no match");
+    }
+}
