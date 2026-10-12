@@ -329,7 +329,19 @@ impl App {
         let mut ids: Vec<String> = found.into_iter().flatten().collect();
         let total = ids.len();
         if total == 0 {
-            return Err(ToggleError::CannotPlay("none of this playlist's tracks are known to the server yet".into()));
+            // Usually the catalogue is still matching files to the server (a first fill takes minutes): say so.
+            let c = self.catalogue.clone();
+            let status = tokio::task::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok);
+            let why = match status {
+                Some(st) if st.linked.get(&active.cfg.id).copied().unwrap_or(0) < st.files => format!(
+                    "Cratarr is still matching your music with {} ({} of {} tracks); try again in a few minutes",
+                    label_of(&active.cfg),
+                    st.linked.get(&active.cfg.id).copied().unwrap_or(0),
+                    st.files
+                ),
+                _ => format!("none of this playlist's tracks are on {}", label_of(&active.cfg)),
+            };
+            return Err(ToggleError::CannotPlay(why));
         }
         if mode == PlayMode::Shuffle {
             shuffle(&mut ids);
