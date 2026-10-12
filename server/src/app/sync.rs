@@ -266,11 +266,13 @@ pub(super) async fn sync_server(
             continue;
         }
         if link.name != link.remote_name {
-            // Renamed here: the server copy follows.
-            s.set_playlist(&remote.id, Some(&link.name), None).await?;
+            // Renamed here: the server copy follows (a server may give it a new id doing so).
+            link.remote = s.rename_playlist(user, &remote.id, &link.name).await?;
             link.remote_name = link.name.clone();
             link.stamp = None;
             state.put(source_id, user, &link)?;
+            // Its content is looked at next pass, under the server's new listing.
+            continue;
         }
         sync_content(store, s, state, &tr, source_id, user, &link, remote.stamp.clone(), lines).await?;
     }
@@ -383,7 +385,7 @@ async fn sync_content(
     };
     let wrote_server = server_now != server_before;
     if wrote_server {
-        s.set_playlist(&link.remote, None, Some(&server_now)).await?;
+        s.set_playlist_tracks(user, &link.remote, &server_now).await?;
     }
     let base = on_server.into_iter().map(|(t, _)| t).collect();
     // After a write the stamp changed: unknown until the next listing, which then finds nothing to do.
@@ -414,6 +416,13 @@ mod tests {
         }
         fn items(&self, name: &str) -> Vec<String> {
             self.lists.lock().unwrap().iter().find(|p| p.1 == name).map(|p| p.2.clone()).unwrap_or_default()
+        }
+        /// A rename made in Finamp (signed in): same id.
+        fn rename_in_finamp(&self, id: &str, name: &str) {
+            let mut l = self.lists.lock().unwrap();
+            let p = l.iter_mut().find(|p| p.0 == id).unwrap();
+            p.1 = name.to_string();
+            p.3 += 1;
         }
     }
 
@@ -461,18 +470,24 @@ mod tests {
                 Ok(id)
             })
         }
-        fn set_playlist<'a>(&'a self, id: &'a str, name: Option<&'a str>, ids: Option<&'a [String]>) -> Fut<'a, ()> {
+        fn set_playlist_tracks<'a>(&'a self, _user: &'a str, id: &'a str, ids: &'a [String]) -> Fut<'a, ()> {
             Box::pin(async move {
                 let mut l = self.lists.lock().unwrap();
                 let p = l.iter_mut().find(|p| p.0 == id).unwrap();
-                if let Some(n) = name {
-                    p.1 = n.to_string();
-                }
-                if let Some(ids) = ids {
-                    p.2 = ids.to_vec();
-                }
+                p.2 = ids.to_vec();
                 p.3 += 1;
                 Ok(())
+            })
+        }
+        /// As Jellyfin with an API key: a new playlist under the new name, the old one deleted.
+        fn rename_playlist<'a>(&'a self, _user: &'a str, id: &'a str, name: &'a str) -> Fut<'a, String> {
+            Box::pin(async move {
+                let mut l = self.lists.lock().unwrap();
+                let i = l.iter().position(|p| p.0 == id).unwrap();
+                let old = l.remove(i);
+                let new_id = format!("{}r", old.0);
+                l.push((new_id.clone(), name.to_string(), old.2, 1));
+                Ok(new_id)
             })
         }
         fn delete_playlist<'a>(&'a self, id: &'a str) -> Fut<'a, ()> {
@@ -551,7 +566,7 @@ mod tests {
         sync().await.unwrap();
         assert_eq!(store.entries("Road").await.unwrap(), lines(&["A/04.mp3", "A/01.mp3"]));
         // Renamed in Finamp: the file follows, keeping its content.
-        srv.set_playlist("p1", Some("Drive"), None).await.unwrap();
+        srv.rename_in_finamp("p1", "Drive");
         sync().await.unwrap();
         assert_eq!(store.entries("Drive").await.unwrap(), lines(&["A/04.mp3", "A/01.mp3"]));
         assert!(store.entries("Road").await.is_err());
@@ -577,7 +592,7 @@ mod tests {
         store.create("Chill").await.unwrap();
         sync().await.unwrap();
         // Renamed on the server, and the pass that renamed the file was cut short before it remembered.
-        srv.set_playlist("p1", Some("Calm"), None).await.unwrap();
+        srv.rename_in_finamp("p1", "Calm");
         store.rename("Chill", "Calm").await.unwrap();
         sync().await.unwrap();
         assert_eq!(srv.lists.lock().unwrap().len(), 1, "not deleted, not made twice");

@@ -255,8 +255,14 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
     }
 
-    /// Optional (decision 0012): rename a playlist and/or replace all its tracks.
-    fn set_playlist<'a>(&'a self, _playlist: &'a str, _name: Option<&'a str>, _ids: Option<&'a [String]>) -> Fut<'a, ()> {
+    /// Optional (decision 0012): make a playlist hold exactly these tracks, in this order. Safe to repeat.
+    fn set_playlist_tracks<'a>(&'a self, _user: &'a str, _playlist: &'a str, _ids: &'a [String]) -> Fut<'a, ()> {
+        Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
+    }
+
+    /// Optional (decision 0012): rename a playlist. Returns its id afterwards, which a server may change. Safe to
+    /// repeat, and after being cut short.
+    fn rename_playlist<'a>(&'a self, _user: &'a str, _playlist: &'a str, _name: &'a str) -> Fut<'a, String> {
         Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
     }
 

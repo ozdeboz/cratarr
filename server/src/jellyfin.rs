@@ -124,6 +124,9 @@ struct UserName {
     name: String,
 }
 
+/// Ids per playlist request: they travel in the query string, which Jellyfin caps near 8 KB (decision 0006: 240 ids).
+const PLAYLIST_BATCH: usize = 200;
+
 /// A playlist as a user's listing shows it.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
@@ -350,16 +353,41 @@ impl Jellyfin {
         Ok(created.id)
     }
 
-    /// Rename a playlist and/or replace all its tracks (in this order).
-    pub async fn update_playlist(&self, playlist: &str, name: Option<&str>, ids: Option<&[String]>) -> Result<()> {
-        let mut body = serde_json::Map::new();
-        if let Some(n) = name {
-            body.insert("Name".into(), n.into());
+    /// A playlist's entries: (track id, entry id). An entry id names one occurrence, for removing it.
+    pub async fn playlist_entry_ids(&self, user: &str, playlist: &str) -> Result<Vec<(String, String)>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Entry {
+            id: String,
+            playlist_item_id: Option<String>,
         }
-        if let Some(ids) = ids {
-            body.insert("Ids".into(), serde_json::json!(ids));
+        let page: ItemsPage<Entry> = self.get(&format!("/Playlists/{playlist}/Items?UserId={user}")).await?;
+        Ok(page.items.into_iter().map(|e| (e.playlist_item_id.clone().unwrap_or_else(|| e.id.clone()), e.id)).map(|(entry, id)| (id, entry)).collect())
+    }
+
+    /// Append tracks, in order. The ids travel in the query string, so they go in batches (see `PLAYLIST_BATCH`).
+    pub async fn add_to_playlist(&self, user: &str, playlist: &str, ids: &[String]) -> Result<()> {
+        for batch in ids.chunks(PLAYLIST_BATCH) {
+            self.send_query(reqwest::Method::POST, &format!("/Playlists/{playlist}/Items"), &[("ids", batch.join(",")), ("userId", user.into())]).await?;
         }
-        self.send_json(reqwest::Method::POST, &format!("/Playlists/{playlist}"), &serde_json::Value::Object(body)).await?;
+        Ok(())
+    }
+
+    /// Remove entries (by entry id), in batches.
+    pub async fn remove_from_playlist(&self, user: &str, playlist: &str, entries: &[String]) -> Result<()> {
+        for batch in entries.chunks(PLAYLIST_BATCH) {
+            self.send_query(reqwest::Method::DELETE, &format!("/Playlists/{playlist}/Items"), &[("entryIds", batch.join(",")), ("userId", user.into())])
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn send_query(&self, method: reqwest::Method, path: &str, query: &[(&str, String)]) -> Result<()> {
+        let status =
+            self.http.request(method.clone(), format!("{}{path}", self.base)).query(query).send().await.with_context(|| format!("{method} {path}"))?.status();
+        if !status.is_success() {
+            bail!("{method} {path} returned {status}");
+        }
         Ok(())
     }
 

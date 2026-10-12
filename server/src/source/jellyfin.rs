@@ -105,6 +105,41 @@ fn loose(app: &str) -> String {
         .collect()
 }
 
+/// How to turn a playlist's tracks into the wanted list with the operations an API key has.
+#[derive(Debug, PartialEq, Eq)]
+enum TrackPlan {
+    Nothing,
+    /// The wanted list is the current one plus more at the end: add from this index of the wanted list.
+    Append(usize),
+    /// The wanted list is the current one without these entries (indexes into the current list), order kept.
+    Remove(Vec<usize>),
+    /// Anything else: empty it and add the wanted list.
+    Refill,
+}
+
+fn plan_tracks(current: &[String], wanted: &[String]) -> TrackPlan {
+    if current == wanted {
+        return TrackPlan::Nothing;
+    }
+    if wanted.len() > current.len() && wanted.starts_with(current) {
+        return TrackPlan::Append(current.len());
+    }
+    // A subsequence of the current list: remove the rest.
+    let mut remove = Vec::new();
+    let mut w = 0;
+    for (i, c) in current.iter().enumerate() {
+        if wanted.get(w) == Some(c) {
+            w += 1;
+        } else {
+            remove.push(i);
+        }
+    }
+    if w == wanted.len() {
+        return TrackPlan::Remove(remove);
+    }
+    TrackPlan::Refill
+}
+
 /// A playlist imported from an `.m3u` file in a library (its path is that file), as opposed to one Jellyfin keeps
 /// itself (in its data folder, as `playlist.xml`).
 fn own_playlist_is_imported(path: Option<&str>) -> bool {
@@ -348,8 +383,51 @@ impl Source for JellyfinSource {
         Box::pin(self.jf.create_playlist(user, name, ids))
     }
 
-    fn set_playlist<'a>(&'a self, playlist: &'a str, name: Option<&'a str>, ids: Option<&'a [String]>) -> Fut<'a, ()> {
-        Box::pin(self.jf.update_playlist(playlist, name, ids))
+    /// Jellyfin refuses replacing a playlist's list (and moving an entry) to an API key; adding and removing entries
+    /// it allows (observed on 10.11). So: the smallest of append, remove, or empty and refill.
+    fn set_playlist_tracks<'a>(&'a self, user: &'a str, playlist: &'a str, ids: &'a [String]) -> Fut<'a, ()> {
+        Box::pin(async move {
+            let now = self.jf.playlist_entry_ids(user, playlist).await?;
+            let current: Vec<String> = now.iter().map(|(id, _)| id.clone()).collect();
+            match plan_tracks(&current, ids) {
+                TrackPlan::Nothing => Ok(()),
+                TrackPlan::Append(from) => self.jf.add_to_playlist(user, playlist, &ids[from..]).await,
+                TrackPlan::Remove(at) => {
+                    let entries: Vec<String> = at.iter().map(|&i| now[i].1.clone()).collect();
+                    self.jf.remove_from_playlist(user, playlist, &entries).await
+                }
+                TrackPlan::Refill => {
+                    let entries: Vec<String> = now.iter().map(|(_, e)| e.clone()).collect();
+                    self.jf.remove_from_playlist(user, playlist, &entries).await?;
+                    self.jf.add_to_playlist(user, playlist, ids).await
+                }
+            }
+        })
+    }
+
+    /// An API key cannot rename either: a copy under the new name takes the tracks, then the old one goes. A copy
+    /// left by a rename cut short is reused, never made twice.
+    fn rename_playlist<'a>(&'a self, user: &'a str, playlist: &'a str, name: &'a str) -> Fut<'a, String> {
+        Box::pin(async move {
+            let own = self.jf.user_playlists(user).await?;
+            if !own.iter().any(|p| p.id == playlist) {
+                // Already renamed and the old one gone: the copy is the playlist.
+                if let Some(p) = own.iter().find(|p| p.name == name) {
+                    return Ok(p.id.clone());
+                }
+                anyhow::bail!("the playlist to rename is gone");
+            }
+            let ids: Vec<String> = self.jf.playlist_entry_ids(user, playlist).await?.into_iter().map(|(id, _)| id).collect();
+            let target = match own.iter().find(|p| p.name == name && p.id != playlist) {
+                Some(p) => {
+                    self.set_playlist_tracks(user, &p.id, &ids).await?;
+                    p.id.clone()
+                }
+                None => self.jf.create_playlist(user, name, &ids).await?,
+            };
+            self.jf.delete_item(playlist).await?;
+            Ok(target)
+        })
     }
 
     fn delete_playlist<'a>(&'a self, playlist: &'a str) -> Fut<'a, ()> {
@@ -711,6 +789,17 @@ mod tests {
 
     fn chosen(playing: &[Started], sessions: &[Session], p: &str) -> Option<String> {
         choose(playing, sessions, &Player::parse(p), NOW).map(|s| s.item_id)
+    }
+
+    #[test]
+    fn the_smallest_change_with_what_an_api_key_may_do() {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(plan_tracks(&v(&["a", "b"]), &v(&["a", "b"])), TrackPlan::Nothing);
+        assert_eq!(plan_tracks(&v(&["a", "b"]), &v(&["a", "b", "c", "d"])), TrackPlan::Append(2));
+        assert_eq!(plan_tracks(&v(&["a", "b", "c", "b"]), &v(&["a", "b"])), TrackPlan::Remove(vec![2, 3]));
+        assert_eq!(plan_tracks(&v(&["a", "b"]), &v(&["b", "a"])), TrackPlan::Refill);
+        assert_eq!(plan_tracks(&v(&[]), &v(&["a"])), TrackPlan::Append(0));
+        assert_eq!(plan_tracks(&v(&["a"]), &v(&[])), TrackPlan::Remove(vec![0]));
     }
 
     #[test]
