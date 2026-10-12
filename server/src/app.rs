@@ -324,6 +324,42 @@ impl App {
         Ok(n)
     }
 
+    /// Album folders that look like the same release twice, each group compared. Read-only.
+    pub async fn album_duplicates(&self) -> Result<Vec<crate::albums::AlbumGroup>> {
+        use crate::albums::*;
+        let music = std::path::PathBuf::from(&self.cfg().playlist_dir);
+        let dir = music.clone();
+        let folders: Vec<String> = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            Ok(std::fs::read_dir(&dir)?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .filter_map(|e| e.file_name().to_str().map(str::to_string))
+                .collect())
+        })
+        .await??;
+        let mut out = Vec::new();
+        for group in candidate_groups(&folders) {
+            let mut albums = Vec::new();
+            for folder in &group {
+                let (m, f) = (music.clone(), folder.clone());
+                let (files, cover) = tokio::task::spawn_blocking(move || read_folder(&m, &f)).await??;
+                let known = match self.jf().album_tracks(&search_term(folder), folder).await {
+                    Ok(k) => k,
+                    Err(e) => {
+                        tracing::warn!("Jellyfin has no details for {folder:?}: {e:#}");
+                        Default::default()
+                    }
+                };
+                let lines = self.store.lines_in_folder(folder).await?;
+                albums.push(build_view(folder, files, cover, &known, lines));
+            }
+            let comparisons = albums.iter().skip(1).map(|b| compare(&albums[0], b)).collect();
+            let suggestion = suggest(&albums);
+            out.push(AlbumGroup { albums, comparisons, suggestion });
+        }
+        Ok(out)
+    }
+
     pub async fn duplicates(&self) -> Result<Vec<DupGroup>> {
         self.store.duplicates().await
     }

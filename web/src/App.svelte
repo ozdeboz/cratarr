@@ -2,6 +2,7 @@
   import Playlists from './Playlists.svelte';
   import Repairs from './Repairs.svelte';
   import Manage from './Manage.svelte';
+  import Albums from './Albums.svelte';
   import Settings from './Settings.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { getStatus, type Status } from './lib/api';
@@ -13,6 +14,7 @@
     { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' },
     { id: 'repairs', href: '#/repairs', label: 'Repairs', icon: 'repairs' },
     { id: 'manage', href: '#/manage', label: 'Manage', icon: 'manage' },
+    { id: 'albums', href: '#/albums', label: 'Albums', icon: 'albums' },
   ];
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
   const ALL = [...MAIN, SETTINGS];
@@ -103,6 +105,8 @@
       <Repairs />
     {:else if page === 'manage'}
       <Manage />
+    {:else if page === 'albums'}
+      <Albums />
     {:else if page === 'settings'}
       <Settings />
     {:else}
