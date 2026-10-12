@@ -97,14 +97,44 @@ fn loose(app: &str) -> String {
         .collect()
 }
 
-/// The chosen player's track when it is one of those playing, else the newest.
-pub fn choose<'a>(playing: &'a [Started], sessions: &[Session], player: &Player) -> Option<&'a Started> {
-    sessions
+/// A session that has not been active for this long is idle: its record may still show a track that stopped long
+/// ago, so it is not believed (an open Finamp is active every few seconds, playing or paused).
+const IDLE_SECS: i64 = 300;
+
+/// What the player plays now, from two sources that each lag at times: the activity log (a start per track, but a
+/// track whose stop was never reported stays "started"), and the player's own session (current, but it can lag the
+/// log by seconds after a skip). The newest evidence wins:
+/// - a track both report: the log's entry (it has the start time);
+/// - otherwise the player's newest report, when it is newer than the log's newest start: its track (start = report
+///   time minus position), or nothing when it reports nothing. Right after Play, so, the new track, not the newest
+///   unclosed start in the log (the "ghost");
+/// - otherwise the log's newest start (right after Next, when the log moved first).
+///
+/// Idle sessions never count.
+pub fn choose(playing: &[Started], sessions: &[Session], player: &Player, now: i64) -> Option<Started> {
+    let epoch = |d: &Option<String>| d.as_deref().and_then(crate::nowplaying::parse_iso_epoch).filter(|t| *t > 0);
+    fn audio(s: &Session) -> Option<&PlayingItem> {
+        s.now_playing_item.as_ref().filter(|i| i.media_type.as_deref().is_none_or(|m| m.eq_ignore_ascii_case("Audio")))
+    }
+    let fresh: Vec<&Session> = sessions
         .iter()
-        .filter(|s| player.matches(s.client.as_deref(), s.device_name.as_deref()))
-        .filter_map(|s| s.now_playing_item.as_ref())
-        .find_map(|i| playing.iter().find(|p| p.item_id == i.id))
-        .or_else(|| playing.first())
+        // No player chosen: every player has a say.
+        .filter(|s| player.app.is_none() || player.matches(s.client.as_deref(), s.device_name.as_deref()))
+        .filter(|s| epoch(&s.last_activity_date).is_some_and(|t| now - t <= IDLE_SECS))
+        .collect();
+    if let Some(both) = fresh.iter().filter_map(|s| audio(s)).find_map(|i| playing.iter().find(|p| p.item_id == i.id)) {
+        return Some(both.clone());
+    }
+    let newest_log = playing.first();
+    let report = fresh.iter().filter_map(|s| epoch(&s.last_playback_check_in).map(|t| (*s, t))).max_by_key(|(_, t)| *t);
+    if let Some((s, at)) = report {
+        let position = s.play_state.as_ref().and_then(|p| p.position_ticks).unwrap_or(0) / 10_000_000;
+        let started = at - position;
+        if newest_log.is_none_or(|l| started > l.at) {
+            return audio(s).map(|i| Started { item_id: i.id.clone(), at: started });
+        }
+    }
+    newest_log.cloned()
 }
 
 /// The sessions to send music to: every session of one device. The device is the chosen player (its most recently
@@ -295,8 +325,8 @@ impl Source for JellyfinSource {
             let chosen = match activity {
                 Ok(entries) if has_audio_history(&entries) => {
                     let playing = playing_from_activity(&entries, now, MAX_PLAYING_AGE_SECS);
-                    match choose(&playing, &sessions, &self.player) {
-                        Some(s) => (s.item_id.clone(), Some(s.at)),
+                    match choose(&playing, &sessions, &self.player, now) {
+                        Some(s) => (s.item_id, Some(s.at)),
                         None => return Ok(None),
                     }
                 }
@@ -620,18 +650,70 @@ mod tests {
         assert!(cast_targets(&[paused], &Player::default()).is_empty());
     }
 
+    /// 2026-10-12T17:00:00Z.
+    const NOW: i64 = 1_791_824_400;
+
+    /// A session active a minute ago that last reported playback `checked_in` seconds before NOW, `position` seconds in.
+    fn fresh(client: &str, device: &str, playing: Option<&str>, checked_in: i64, position: i64) -> Session {
+        let mut s = session(client, device, playing);
+        s.last_activity_date = Some("2026-10-12T16:59:00Z".into());
+        let t = 17 * 3600 - checked_in;
+        s.last_playback_check_in = Some(format!("2026-10-12T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60));
+        s.play_state = Some(crate::jellyfin::PlayState { position_ticks: Some(position * 10_000_000), is_paused: Some(false) });
+        s
+    }
+
+    fn chosen(playing: &[Started], sessions: &[Session], p: &str) -> Option<String> {
+        choose(playing, sessions, &Player::parse(p), NOW).map(|s| s.item_id)
+    }
+
     #[test]
     fn the_chosen_player_wins_when_it_is_playing() {
-        let playing = vec![Started { item_id: "phone".into(), at: 2 }, Started { item_id: "tab".into(), at: 1 }];
-        let sessions = vec![session("Finamp", "motorola", Some("phone")), session("Finamp", "Lenovo Tab", Some("tab"))];
-        let id = |p: &Player| choose(&playing, &sessions, p).map(|s| s.item_id.clone());
-        assert_eq!(id(&Player::parse("Finamp::Lenovo Tab")).as_deref(), Some("tab"));
-        assert_eq!(id(&Player::default()).as_deref(), Some("phone"), "no preference: newest");
-        assert_eq!(id(&Player::parse("Kodi")).as_deref(), Some("phone"), "chosen player idle: newest");
-        // A stale session showing a track the log says stopped does not count.
-        let stale = vec![session("Finamp", "Lenovo Tab", Some("old"))];
-        assert_eq!(choose(&playing, &stale, &Player::parse("Finamp::Lenovo Tab")).map(|s| s.item_id.as_str()), Some("phone"));
-        assert!(choose(&[], &sessions, &Player::default()).is_none());
+        let playing = vec![Started { item_id: "phone".into(), at: NOW - 10 }, Started { item_id: "tab".into(), at: NOW - 20 }];
+        let sessions = vec![fresh("Finamp", "motorola", Some("phone"), 5, 5), fresh("Finamp", "Lenovo Tab", Some("tab"), 5, 15)];
+        assert_eq!(chosen(&playing, &sessions, "Finamp::Lenovo Tab").as_deref(), Some("tab"));
+        assert_eq!(chosen(&playing, &sessions, "").as_deref(), Some("phone"), "no preference: newest");
+        assert_eq!(chosen(&playing, &sessions, "Kodi").as_deref(), Some("phone"), "chosen player not there: newest");
+        assert!(choose(&[], &[], &Player::default(), NOW).is_none());
+    }
+
+    #[test]
+    fn right_after_play_the_new_track_shows_not_an_old_unclosed_start() {
+        // The log still holds a start from half an hour ago whose stop never came, and no start for the new track yet.
+        let playing = vec![Started { item_id: "ghost".into(), at: NOW - 1800 }];
+        let sessions = vec![fresh("Finamp", "Lenovo Tab", Some("new"), 1, 0)];
+        assert_eq!(chosen(&playing, &sessions, "Finamp::Lenovo Tab").as_deref(), Some("new"));
+        assert_eq!(chosen(&playing, &sessions, "").as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn right_after_next_the_log_wins_over_a_session_that_lags() {
+        // Measured 2026-10-12: the log has the next track at once; the session still shows the previous one, as of
+        // its last report, 2 s into it, well before the log's start.
+        let playing = vec![Started { item_id: "next".into(), at: NOW - 3 }];
+        let sessions = vec![fresh("Finamp", "Lenovo Tab", Some("previous"), 200, 2)];
+        assert_eq!(chosen(&playing, &sessions, "Finamp::Lenovo Tab").as_deref(), Some("next"));
+    }
+
+    #[test]
+    fn idle_sessions_are_not_believed() {
+        let playing = vec![Started { item_id: "logged".into(), at: NOW - 600 }];
+        let mut stale = fresh("Finamp", "Lenovo Tab", Some("old"), 1, 0);
+        stale.last_activity_date = Some("2026-10-12T15:00:00Z".into());
+        assert_eq!(chosen(&playing, &[stale.clone()], "Finamp::Lenovo Tab").as_deref(), Some("logged"));
+        // A session without dates (never active) counts as idle too.
+        assert_eq!(chosen(&playing, &[session("Finamp", "Lenovo Tab", Some("old"))], "Finamp::Lenovo Tab").as_deref(), Some("logged"));
+    }
+
+    #[test]
+    fn a_player_that_reported_stopping_shows_nothing_rather_than_a_ghost() {
+        let playing = vec![Started { item_id: "ghost".into(), at: NOW - 1800 }];
+        let stopped = fresh("Finamp", "Lenovo Tab", None, 30, 0);
+        assert_eq!(chosen(&playing, &[stopped.clone()], "Finamp::Lenovo Tab"), None);
+        // One that never reported playback has no say: the log stands (players that do not report themselves).
+        let mut silent = stopped;
+        silent.last_playback_check_in = Some("0001-01-01T00:00:00.0000000Z".into());
+        assert_eq!(chosen(&playing, &[silent], "Finamp::Lenovo Tab").as_deref(), Some("ghost"));
     }
 
     #[test]

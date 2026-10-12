@@ -12,7 +12,7 @@ pub struct ItemsPage<T> {
     pub items: Vec<T>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Session {
     pub id: Option<String>,
@@ -21,6 +21,8 @@ pub struct Session {
     /// here and does play what it is sent (observed on 10.11), so a non-empty list counts as controllable too.
     pub supported_commands: Option<Vec<String>>,
     pub last_activity_date: Option<String>,
+    /// When the player last reported playback (start, progress or stop); `0001-01-01…` when it never did.
+    pub last_playback_check_in: Option<String>,
     pub client: Option<String>,
     pub device_name: Option<String>,
     pub now_playing_item: Option<PlayingItem>,
@@ -627,6 +629,7 @@ mod tests {
             supports_remote_control: None,
             supported_commands: None,
             last_activity_date: None,
+            last_playback_check_in: None,
             client: Some(client.into()),
             device_name: None,
             now_playing_item: Some(PlayingItem {
@@ -657,7 +660,7 @@ mod tests {
 
     #[test]
     fn nothing_playing_gives_none() {
-        let s = vec![Session { id: None, supports_remote_control: None, supported_commands: None, last_activity_date: None, client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
+        let s = vec![Session { id: None, supports_remote_control: None, supported_commands: None, last_activity_date: None, last_playback_check_in: None, client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
         assert!(pick_now_playing(&s, finamp).is_none());
         assert!(pick_now_playing(&[], finamp).is_none());
     }
