@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ApiError, getInsights, type Count, type Insights, type Proximity, type Signal } from './lib/api';
   import { live } from './lib/live.svelte';
+  import Icon from './lib/Icon.svelte';
   import Notice, { type NoticeData } from './lib/Notice.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import { prefs } from './lib/prefs.svelte';
@@ -41,6 +42,73 @@
     if (point) point.name = to;
   }
 
+  // The playlist panel (Related only): it follows the selection while open, and has its own address so Back closes
+  // it and a link opens it. Beside the graph where there is room, over it where there is not; the graph keeps its size.
+  let panelOpen = $state(false);
+  /** Opened in this visit by pushing an address: closing goes Back, so the history stays tidy. */
+  let pushed = false;
+  const wanted = () => {
+    const q = location.hash.split('?')[1];
+    return q ? new URLSearchParams(q).get('playlist') : null;
+  };
+  const addressOf = (name: string) => `#/insights?playlist=${encodeURIComponent(name)}`;
+  const me = $derived(shown && selected !== null ? (shown.playlists[selected] ?? null) : null);
+
+  function openPanel() {
+    if (!me) return;
+    panelOpen = true;
+    pushed = true;
+    location.hash = addressOf(me.name);
+  }
+
+  function closePanel() {
+    panelOpen = false;
+    if (pushed) {
+      pushed = false;
+      history.back();
+    } else {
+      history.replaceState(null, '', '#/insights');
+    }
+  }
+
+  // Back (or an edited address) decides whether the panel is open.
+  $effect(() => {
+    const on = () => {
+      if (!wanted()) {
+        panelOpen = false;
+        pushed = false;
+      }
+    };
+    addEventListener('hashchange', on);
+    return () => removeEventListener('hashchange', on);
+  });
+
+  // A link to a playlist: select it and open the panel once the data is there.
+  $effect(() => {
+    const name = wanted();
+    if (!shown || !name || panelOpen) return;
+    const i = shown.playlists.findIndex((p) => p.name === name);
+    if (i >= 0) {
+      prefs.insightsTab = 'related';
+      selected = i;
+      panelOpen = true;
+    }
+  });
+
+  // While open, the panel follows the selection (and its address with it); nothing selected closes it.
+  $effect(() => {
+    if (!panelOpen) return;
+    if (!me) closePanel();
+    else if (wanted() !== me.name) history.replaceState(null, '', addressOf(me.name));
+  });
+
+  $effect(() => {
+    if (!panelOpen) return;
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !menu && closePanel();
+    addEventListener('keydown', esc);
+    return () => removeEventListener('keydown', esc);
+  });
+
   $effect(() => {
     getInsights()
       .then((d) => (data = d))
@@ -79,7 +147,7 @@
   });
 </script>
 
-<main>
+<main class:wide={prefs.insightsTab === 'related'}>
   <div class="toolbar">
     <div class="seg" role="group" aria-label="View">
       {#each TABS as t (t.id)}
@@ -165,42 +233,61 @@
   {:else if !anyOn}
     <p class="empty">Turn on at least one of shared tracks, genre or artists.</p>
   {:else}
-    {#key removed.join('/')}
-      <ProximityGraph
-        data={shown}
-        signals={prefs.signals}
-        bind:selected
-        onmenu={(i, anchor) => (menu = { name: shown.playlists[i].name, anchor })}
-      />
-    {/key}
-    {#if selected !== null && shown.playlists[selected]}
-      {@const me = shown.playlists[selected]}
-      <section class="detail">
-        <h2>{me.name} <span class="n">{plural(me.tracks, 'track')}</span></h2>
-        {#if me.genres.length}<p class="muted">{me.genres.join(', ')}</p>{/if}
-        {#if closest.length}
-          <ul class="plain">
-            {#each closest as c (c.other)}
-              <li>
-                <button class="link" onclick={() => (selected = c.other)}>{shown.playlists[c.other].name}</button>
-                <span class="muted">
-                  {[
-                    c.l.shared_tracks ? plural(c.l.shared_tracks, 'shared track') : null,
-                    c.l.genres.length ? c.l.genres.join(', ') : null,
-                    c.l.shared_artists ? plural(c.l.shared_artists, 'shared artist') : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </span>
-              </li>
-            {/each}
-          </ul>
-        {:else}
-          <p class="muted">Not close to another playlist with these switches.</p>
+    <div class="stage">
+      <div class="box">
+        {#key removed.join('/')}
+          <ProximityGraph
+            data={shown}
+            signals={prefs.signals}
+            bind:selected
+            onmenu={(i, anchor) => (menu = { name: shown.playlists[i].name, anchor })}
+          />
+        {/key}
+        {#if me && !panelOpen}
+          <button class="open" onclick={openPanel}><Icon name="panel" size={18} /><span>{me.name}</span></button>
         {/if}
-      </section>
-    {:else}
-      <p class="hint">Tap a playlist to see its closest playlists. Pinch or scroll to zoom.</p>
+        {#if me && panelOpen}
+          <aside class="panel" aria-label={me.name}>
+            <header>
+              <h2>{me.name}</h2>
+              <button
+                class="icon"
+                aria-label={`Menu of ${me.name}`}
+                onclick={(e) => (menu = { name: me.name, anchor: e.currentTarget.getBoundingClientRect() })}
+                ><Icon name="more" size={20} /></button
+              >
+              <button class="icon" aria-label="Close" onclick={closePanel}><Icon name="close" size={20} /></button>
+            </header>
+            <div class="body">
+              <p class="muted">{plural(me.tracks, 'track')}{#if me.genres.length} · {me.genres.join(', ')}{/if}</p>
+              <h3>Closest playlists</h3>
+              {#if closest.length}
+                <ul class="plain">
+                  {#each closest as c (c.other)}
+                    <li>
+                      <button class="link" onclick={() => (selected = c.other)}>{shown.playlists[c.other].name}</button>
+                      <span class="muted">
+                        {[
+                          c.l.shared_tracks ? plural(c.l.shared_tracks, 'shared track') : null,
+                          c.l.genres.length ? c.l.genres.join(', ') : null,
+                          c.l.shared_artists ? plural(c.l.shared_artists, 'shared artist') : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
+                    </li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="muted">Not close to another playlist with these switches.</p>
+              {/if}
+            </div>
+          </aside>
+        {/if}
+      </div>
+    </div>
+    {#if !me}
+      <p class="hint">Tap a playlist to highlight its closest playlists. Pinch or scroll to zoom.</p>
     {/if}
   {/if}
 </main>
@@ -224,6 +311,104 @@
   main {
     max-width: 900px;
     padding: 16px clamp(12px, 2vw, 32px) 48px;
+  }
+
+  /* Related: room for the panel beside the graph on wide screens. */
+  main.wide {
+    max-width: none;
+  }
+
+  /* The graph keeps its width (at most 900 px). The panel sits beside it when the stage has room for both
+     (900 + 16 + 360), else over the graph's right side; full width on a phone. */
+  .stage {
+    container-type: inline-size;
+  }
+
+  .box {
+    position: relative;
+    width: min(100%, 900px);
+  }
+
+  .open {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: calc(100% - 20px);
+    min-height: 40px;
+    padding: 0 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-weight: 600;
+  }
+
+  .open span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(360px, 100%);
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: -8px 0 24px color-mix(in srgb, #000 25%, transparent);
+    overflow: hidden;
+  }
+
+  @container (min-width: 1276px) {
+    .panel {
+      right: auto;
+      left: calc(100% + 16px);
+      box-shadow: none;
+    }
+  }
+
+  .panel header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 6px 6px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .panel header h2 {
+    flex: 1;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .icon {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    min-height: 40px;
+    padding: 0;
+    background: none;
+    border-radius: 10px;
+    color: var(--muted);
+  }
+
+  .icon:hover,
+  .icon:focus-visible {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .panel .body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 14px 16px;
   }
 
   .toolbar {
@@ -373,11 +558,7 @@
     border-radius: 5px;
   }
 
-  .detail h2 {
-    margin-top: 16px;
-  }
-
-  .detail .plain li {
+  .panel .plain li {
     justify-content: flex-start;
     flex-wrap: wrap;
   }

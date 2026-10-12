@@ -19,6 +19,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   the sidebar.
 - **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser
   (Insights: Statistics, Related). Its switches (Related: shared tracks, genre, artists) sit in the same toolbar.
+- **The playlist panel (Insights → Related only):** selecting a point shows a button at the graph's top right that
+  opens the panel. The graph never gets narrower: the panel sits beside it where there is room, else over its right
+  side (full width on a phone). While open it follows the selection; ✕, Esc, Back or a tap on empty space closes it.
+  It has its own address (`#/insights?playlist=…`).
 - **Settings** has four sections, in this order: Connections (servers: address, key, status; Lidarr the same way, shown
   only when an Incoming library is set), Libraries (one row per
   server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its files in, or a warning when

@@ -32,7 +32,7 @@
         ? 'settings'
         : location.hash === INCOMING.href
           ? 'incoming'
-          : location.hash === INSIGHTS.href
+          : location.hash.split('?')[0] === INSIGHTS.href
             ? 'insights'
             : 'playlists';
   let page = $state(fromHash());
