@@ -54,8 +54,11 @@ pub struct Progress {
 const TICKS_PER_SEC: f64 = 10_000_000.0;
 
 /// Position of `item` (with its run time in ticks): from a session playing that exact item (the preferred player
-/// first), else estimated from the activity log's start time. A session showing a different item is ignored, since
-/// session records can be stale (see the module note).
+/// first). Estimated from the activity log's start time only when no session reports any music at all (a player
+/// that does not report itself). When a session reports a DIFFERENT track, the sessions and the log disagree (a
+/// session lagging after a track change, or a stale record): no position rather than a guess that jumps when they
+/// catch up (2026-10-12: Finamp's reporting session lagged the log by seconds and the bar jumped back and forth).
+/// An estimate past the end of the track is no position either: the track has ended, whatever the log says.
 pub fn progress(
     item_id: &str,
     run_time_ticks: Option<i64>,
@@ -83,12 +86,18 @@ pub fn progress(
             estimated: false,
         });
     }
-    started_at.map(|at| Progress {
-        position_secs: clamp((now_epoch - at) as f64),
-        duration_secs,
-        paused: false,
-        estimated: true,
-    })
+    let other_music = sessions.iter().any(|s| {
+        s.now_playing_item.as_ref().is_some_and(|i| i.id != item_id && i.media_type.as_deref().is_none_or(|m| m.eq_ignore_ascii_case("Audio")))
+    });
+    if other_music {
+        return None;
+    }
+    let at = started_at?;
+    let elapsed = (now_epoch - at) as f64;
+    if duration_secs.is_some_and(|d| elapsed > d) {
+        return None;
+    }
+    Some(Progress { position_secs: clamp(elapsed), duration_secs, paused: false, estimated: true })
 }
 
 /// True when the log has any audio playback entries at all (so its verdict, even "stopped", is meaningful).
@@ -233,15 +242,25 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_session_on_another_track_falls_back_to_the_start_time() {
+    fn a_session_on_another_track_means_no_position_not_a_guess() {
         let s = vec![sess("Finamp", "old", 0, true)];
-        let p = progress("new", Some(3_000_000_000), &s, finamp, Some(1_000), 1_090).unwrap();
+        assert_eq!(progress("new", Some(3_000_000_000), &s, finamp, Some(1_000), 1_090), None, "lagging or stale: they disagree");
+    }
+
+    #[test]
+    fn with_no_session_reporting_music_the_start_time_gives_an_estimate() {
+        let p = progress("a", Some(3_000_000_000), &[], finamp, Some(1_000), 1_090).unwrap();
         assert_eq!(p, Progress { position_secs: 90.0, duration_secs: Some(300.0), paused: false, estimated: true });
     }
 
     #[test]
+    fn an_estimate_past_the_end_is_no_position() {
+        assert_eq!(progress("a", Some(1_000_000_000), &[], finamp, Some(0), 500), None, "a 100 s track 500 s ago has ended");
+    }
+
+    #[test]
     fn positions_are_kept_within_the_track() {
-        let p = progress("a", Some(1_000_000_000), &[], finamp, Some(0), 500).unwrap();
+        let p = progress("a", Some(1_000_000_000), &[], finamp, Some(0), 100).unwrap();
         assert_eq!(p.position_secs, 100.0);
         let s = vec![sess("Finamp", "a", -5, false)];
         assert_eq!(progress("a", None, &s, finamp, None, 0).unwrap().position_secs, 0.0);
