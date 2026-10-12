@@ -8,6 +8,7 @@
 //! unmounted folder must never look like "everything was deleted".
 
 mod id3;
+pub mod identity;
 pub mod normalise;
 mod tags;
 mod walk;
@@ -51,10 +52,25 @@ CREATE TABLE IF NOT EXISTS source_ids (
   seen INTEGER NOT NULL, PRIMARY KEY (source, track_id)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS source_ids_by_file ON source_ids (folder, rel);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS tracks (id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, retired_at INTEGER);
 ";
 
+/// A file the catalogue counts: neither gone (no longer where it was, waiting to be recognised elsewhere) nor in the
+/// trash.
+const PRESENT: &str = "gone_at IS NULL AND trashed IS NULL";
+
+/// How long a gone file waits to be recognised as moved before its track id is retired (decision 0011 §4).
+const GONE_KEEP_SECS: i64 = 24 * 3600;
+
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 2] = [("files", "issue TEXT"), ("files", "issue_detail TEXT")];
+const ADDED_COLUMNS: [(&str, &str); 5] = [
+    ("files", "issue TEXT"),
+    ("files", "issue_detail TEXT"),
+    // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
+    ("files", "track INTEGER"),
+    ("files", "gone_at INTEGER"),
+    ("files", "trashed TEXT"),
+];
 
 /// File states.
 const PENDING: i64 = 0;
@@ -169,6 +185,7 @@ impl Catalogue {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}"))?;
             }
         }
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track);")?;
         let cat = Self { db: Mutex::new(conn), folders: RwLock::new(Vec::new()), progress: Mutex::default(), poke: Default::default() };
         // A better reader may read what an older one could not.
         if cat.meta("reader").as_deref() != Some(&tags::READER_VERSION.to_string()) {
@@ -200,7 +217,7 @@ impl Catalogue {
         let wanted: HashMap<i64, String> =
             folders.iter().enumerate().map(|(i, p)| (i as i64, p.to_string_lossy().into_owned())).collect();
         let moved = |id: i64, to: &str| -> Result<bool> {
-            let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 LIMIT 20")?;
+            let mut st = tx.prepare(&format!("SELECT rel FROM files WHERE folder = ?1 AND {PRESENT} LIMIT 20"))?;
             let rels: Vec<String> = st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
             Ok(!rels.is_empty() && rels.iter().all(|rel| Path::new(to).join(rel).is_file()))
         };
@@ -213,6 +230,10 @@ impl Catalogue {
                 tracing::info!("catalogue: {path} is now {}, same files", wanted[id]);
             }
             if wanted.get(id) != Some(path) && !kept {
+                tx.execute(
+                    "UPDATE tracks SET retired_at = ?2 WHERE id IN (SELECT track FROM files WHERE folder = ?1 AND track IS NOT NULL)",
+                    params![id, now()],
+                )?;
                 for table in ["files", "tags", "source_ids"] {
                     tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1"), [id])?;
                 }
@@ -261,26 +282,37 @@ impl Catalogue {
     fn record_walk(&self, folder: i64, found: &[walk::Found]) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let known: HashMap<String, (i64, i64)> = {
-            let mut st = tx.prepare("SELECT rel, size, mtime FROM files WHERE folder = ?1")?;
-            st.query_map([folder], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?))))?.collect::<rusqlite::Result<_>>()?
+        // rel -> (size, mtime, gone); trashed rows are not walked (the trash is a hidden folder) and stay as they are.
+        let known: HashMap<String, (i64, i64, bool)> = {
+            let mut st = tx.prepare("SELECT rel, size, mtime, gone_at IS NOT NULL FROM files WHERE folder = ?1 AND trashed IS NULL")?;
+            st.query_map([folder], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))?.collect::<rusqlite::Result<_>>()?
         };
         {
             let mut upsert = tx.prepare(
                 "INSERT INTO files (folder, rel, size, mtime, state) VALUES (?1, ?2, ?3, ?4, 0)
-                 ON CONFLICT (folder, rel) DO UPDATE SET size = ?3, mtime = ?4, state = 0, error = NULL",
+                 ON CONFLICT (folder, rel) DO UPDATE SET size = ?3, mtime = ?4, state = 0, error = NULL, gone_at = NULL",
             )?;
+            let mut back = tx.prepare("UPDATE files SET gone_at = NULL WHERE folder = ?1 AND rel = ?2")?;
             for f in found {
-                if known.get(&f.rel) != Some(&(f.size as i64, f.mtime)) {
-                    upsert.execute(params![folder, f.rel, f.size as i64, f.mtime])?;
+                match known.get(&f.rel) {
+                    Some(&(size, mtime, gone)) if (size, mtime) == (f.size as i64, f.mtime) => {
+                        if gone {
+                            back.execute(params![folder, f.rel])?;
+                        }
+                    }
+                    _ => {
+                        upsert.execute(params![folder, f.rel, f.size as i64, f.mtime])?;
+                    }
                 }
             }
         }
+        // Missing now: gone, not deleted. It keeps its track id and tags until it is recognised elsewhere (a move made
+        // outside Cratarr) or `GONE_KEEP_SECS` pass. Its server links go at once: they point at a file that is not there.
         let present: std::collections::HashSet<&str> = found.iter().map(|f| f.rel.as_str()).collect();
-        for rel in known.keys().filter(|r| !present.contains(r.as_str())) {
-            for table in ["files", "tags", "source_ids"] {
-                tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, rel])?;
-            }
+        let now = now();
+        for rel in known.iter().filter(|(r, k)| !k.2 && !present.contains(r.as_str())).map(|(r, _)| r) {
+            tx.execute("UPDATE files SET gone_at = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, now])?;
+            tx.execute("DELETE FROM source_ids WHERE folder = ?1 AND rel = ?2", params![folder, rel])?;
         }
         tx.commit()?;
         Ok(())
@@ -290,7 +322,7 @@ impl Catalogue {
     pub fn read_tags_batch(&self, n: usize) -> Result<usize> {
         let todo: Vec<(i64, String)> = {
             let db = self.db();
-            let mut st = db.prepare("SELECT folder, rel FROM files WHERE state = ?1 LIMIT ?2")?;
+            let mut st = db.prepare(&format!("SELECT folder, rel FROM files WHERE state = ?1 AND {PRESENT} LIMIT ?2"))?;
             st.query_map(params![PENDING, n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
         };
         let folders = self.folders();
@@ -366,7 +398,7 @@ impl Catalogue {
     /// Whether a file is in the catalogue (used to find where a server's paths lie). Blocking.
     pub fn has_file(&self, folder: i64, rel: &str) -> bool {
         self.db()
-            .query_row("SELECT 1 FROM files WHERE folder = ?1 AND rel = ?2", params![folder, rel], |_| Ok(()))
+            .query_row(&format!("SELECT 1 FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |_| Ok(()))
             .optional()
             .ok()
             .flatten()
@@ -388,7 +420,7 @@ impl Catalogue {
         let db = self.db();
         let dir_of = |rel: &str| rel.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_string());
         let mut by_dir: BTreeMap<String, AlbumFact> = BTreeMap::new();
-        let mut st = db.prepare("SELECT rel, format, bitrate FROM files WHERE folder = ?1")?;
+        let mut st = db.prepare(&format!("SELECT rel, format, bitrate FROM files WHERE folder = ?1 AND {PRESENT}"))?;
         let rows = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<i64>>(2)?)))?;
         for row in rows {
             let (rel, format, kbps) = row?;
@@ -422,14 +454,13 @@ impl Catalogue {
         Ok(by_dir.into_values().collect())
     }
 
-    #[allow(dead_code)] // wired up with the Insights page (after the App split, decision 0011)
     /// Every file in `folder` with the facts Insights counts: format, bitrate, length, size and the tags named in
     /// `TrackRow::TAGS` (raw values, not split). Read-only; blocking.
     pub fn track_rows(&self, folder: i64) -> Result<Vec<TrackRow>> {
         let db = self.db();
         let mut rows: Vec<TrackRow> = Vec::new();
         let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut st = db.prepare("SELECT rel, format, bitrate, duration_ms, size FROM files WHERE folder = ?1")?;
+        let mut st = db.prepare(&format!("SELECT rel, format, bitrate, duration_ms, size FROM files WHERE folder = ?1 AND {PRESENT}"))?;
         let files = st.query_map(params![folder], |r| {
             Ok(TrackRow {
                 rel: r.get(0)?,
@@ -461,10 +492,10 @@ impl Catalogue {
     pub fn problems(&self, limit: usize) -> Result<Vec<Problem>> {
         let folders = self.folders();
         let db = self.db();
-        let mut st = db.prepare(
-            "SELECT folder, rel, issue, issue_detail FROM files WHERE issue IS NOT NULL
-             ORDER BY CASE issue WHEN 'broken' THEN 0 WHEN 'damaged_tag' THEN 1 WHEN 'no_length' THEN 2 ELSE 3 END, rel LIMIT ?1",
-        )?;
+        let mut st = db.prepare(&format!(
+            "SELECT folder, rel, issue, issue_detail FROM files WHERE issue IS NOT NULL AND {PRESENT}
+             ORDER BY CASE issue WHEN 'broken' THEN 0 WHEN 'damaged_tag' THEN 1 WHEN 'no_length' THEN 2 ELSE 3 END, rel LIMIT ?1"
+        ))?;
         let rows = st.query_map([limit as i64], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))
         })?;
@@ -473,6 +504,186 @@ impl Catalogue {
             Ok(Problem { folder: folders.get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default(), rel, kind, detail })
         })
         .collect()
+    }
+
+    // ----- Track identity (decision 0011 §4) -----
+
+    /// Give every identified file a track id: a new file that is a gone one moved (by the rules of
+    /// `identity::match_moves`) takes its id; any other gets a new one. Files whose tags are not read yet wait. Gone
+    /// files nobody claimed within `GONE_KEEP_SECS`, and trashed files whose trash was emptied, retire their ids.
+    /// Returns (moves recognised, new ids). Blocking.
+    pub fn identify(&self) -> Result<(usize, usize)> {
+        let now = now();
+        let folders = self.folders();
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let facts = |sql: &str| -> Result<Vec<(i64, String, Option<i64>, Option<i64>)>> {
+            let mut st = tx.prepare(sql)?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        };
+        let new = facts(&format!(
+            "SELECT folder, rel, duration_ms, track FROM files WHERE track IS NULL AND state != {PENDING} AND {PRESENT}"
+        ))?;
+        let gone = facts("SELECT folder, rel, duration_ms, track FROM files WHERE gone_at IS NOT NULL AND track IS NOT NULL")?;
+        let mut moved = 0;
+        let mut claimed: std::collections::HashSet<(i64, String)> = std::collections::HashSet::new();
+        let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        if !new.is_empty() && !gone.is_empty() {
+            let mut tag = tx.prepare_cached(
+                "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IN ('musicbrainz_trackid', 'title', 'artist') ORDER BY n",
+            )?;
+            let mut file_facts = |(folder, rel, ms, _): &(i64, String, Option<i64>, Option<i64>)| -> Result<identity::FileFacts> {
+                let mut f = identity::FileFacts { name: identity::name_of(rel), duration_ms: *ms, ..Default::default() };
+                for row in tag.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+                    let (name, value) = row?;
+                    let slot = match name.as_str() {
+                        "musicbrainz_trackid" => &mut f.recording,
+                        "title" => &mut f.title,
+                        _ => &mut f.artist,
+                    };
+                    if slot.is_none() && !value.trim().is_empty() {
+                        *slot = Some(identity::fold(&value));
+                    }
+                }
+                Ok(f)
+            };
+            let new_facts = new.iter().map(&mut file_facts).collect::<Result<Vec<_>>>()?;
+            let gone_facts = gone.iter().map(&mut file_facts).collect::<Result<Vec<_>>>()?;
+            drop(tag);
+            for (n, g) in identity::match_moves(&new_facts, &gone_facts) {
+                let ((nf, nr, _, _), (gf, gr, _, track)) = (&new[n], &gone[g]);
+                tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![nf, nr, track])?;
+                for table in ["files", "tags"] {
+                    tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![gf, gr])?;
+                }
+                claimed.insert((*nf, nr.clone()));
+                taken.insert(g);
+                moved += 1;
+            }
+        }
+        let mut fresh = 0;
+        {
+            let mut born = tx.prepare_cached("INSERT INTO tracks (born) VALUES (?1)")?;
+            let mut give = tx.prepare_cached("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2")?;
+            for (folder, rel, _, _) in new.iter().filter(|(f, r, _, _)| !claimed.contains(&(*f, r.clone()))) {
+                born.execute([now])?;
+                give.execute(params![folder, rel, tx.last_insert_rowid()])?;
+                fresh += 1;
+            }
+        }
+        // Retire: gone too long, or trashed and the trash emptied.
+        let mut retire: Vec<(i64, String)> = gone
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !taken.contains(i))
+            .map(|(_, (f, r, _, _))| (*f, r.clone()))
+            .collect();
+        {
+            let mut st = tx.prepare("SELECT folder, rel FROM files WHERE gone_at IS NOT NULL AND gone_at >= ?1")?;
+            let recent: std::collections::HashSet<(i64, String)> =
+                st.query_map([now - GONE_KEEP_SECS], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            retire.retain(|k| !recent.contains(k));
+            let mut st = tx.prepare("SELECT DISTINCT folder, trashed FROM files WHERE trashed IS NOT NULL")?;
+            let trashed: Vec<(i64, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            for (folder, token) in trashed {
+                let still = folders.get(folder as usize).is_some_and(|f| f.join(crate::trash::TRASH_DIR).join(&token).exists());
+                if !still {
+                    let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 AND trashed = ?2")?;
+                    let rels: Vec<String> = st.query_map(params![folder, token], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+                    retire.extend(rels.into_iter().map(|r| (folder, r)));
+                }
+            }
+        }
+        for (folder, rel) in &retire {
+            tx.execute(
+                "UPDATE tracks SET retired_at = ?3 WHERE id = (SELECT track FROM files WHERE folder = ?1 AND rel = ?2)",
+                params![folder, rel, now],
+            )?;
+            for table in ["files", "tags", "source_ids"] {
+                tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, rel])?;
+            }
+        }
+        tx.commit()?;
+        Ok((moved, fresh))
+    }
+
+    /// An album folder (or file) Cratarr moved into the trash of its folder: its rows follow it there, keep their
+    /// track ids, and are marked trashed with the trash token. Their server links go. Blocking.
+    pub fn mark_trashed(&self, folder: i64, rel: &str, token: &str) -> Result<usize> {
+        self.rekey(folder, rel, folder, &format!("{}/{token}", crate::trash::TRASH_DIR), Some(token))
+    }
+
+    /// Undo `mark_trashed`: the rows go back to where the files are again. Blocking.
+    pub fn unmark_trashed(&self, folder: i64, rel: &str, token: &str) -> Result<usize> {
+        self.rekey(folder, &format!("{}/{token}", crate::trash::TRASH_DIR), folder, rel, None)
+    }
+
+    /// Files Cratarr moved itself (adopting an album, say): their rows follow, track ids and tags kept, so nothing is
+    /// read again and no playlist entry is lost. Blocking.
+    #[allow(dead_code)] // used by Keep (adopt) in Incoming, decision 0011
+    pub fn move_files(&self, from_folder: i64, from: &str, to_folder: i64, to: &str) -> Result<usize> {
+        self.rekey(from_folder, from, to_folder, to, None)
+    }
+
+    /// The rows under `from` (a file, or a folder and everything in it) now live under `to`. `trashed` is set on them.
+    fn rekey(&self, from_folder: i64, from: &str, to_folder: i64, to: &str, trashed: Option<&str>) -> Result<usize> {
+        let (from, to) = (from.trim_end_matches('/'), to.trim_end_matches('/'));
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let rels: Vec<String> = {
+            let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 AND (rel = ?2 OR substr(rel, 1, ?3) = ?4)")?;
+            let prefix = format!("{from}/");
+            st.query_map(params![from_folder, from, prefix.chars().count() as i64, prefix], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        for rel in &rels {
+            let new_rel = format!("{to}{}", &rel[from.len()..]);
+            tx.execute("DELETE FROM source_ids WHERE folder = ?1 AND rel = ?2", params![from_folder, rel])?;
+            tx.execute(
+                "UPDATE files SET folder = ?3, rel = ?4, trashed = ?5, gone_at = NULL WHERE folder = ?1 AND rel = ?2",
+                params![from_folder, rel, to_folder, new_rel, trashed],
+            )?;
+            tx.execute("UPDATE tags SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
+        }
+        tx.commit()?;
+        Ok(rels.len())
+    }
+
+    /// A replacement file takes over the track id of the file it replaces (an upgrade's pairing, decision 0011 §4);
+    /// the old file's row no longer holds it. Blocking.
+    #[allow(dead_code)] // used by Replace in Incoming, decision 0011
+    pub fn inherit(&self, old: (i64, &str), new: (i64, &str)) -> Result<bool> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let track: Option<i64> =
+            tx.query_row("SELECT track FROM files WHERE folder = ?1 AND rel = ?2", params![old.0, old.1], |r| r.get(0)).optional()?.flatten();
+        let Some(track) = track else { return Ok(false) };
+        tx.execute("UPDATE files SET track = NULL WHERE folder = ?1 AND rel = ?2", params![old.0, old.1])?;
+        let n = tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![new.0, new.1, track])?;
+        tx.commit()?;
+        Ok(n == 1)
+    }
+
+    /// The track id of a file, once it has one. Blocking.
+    #[allow(dead_code)] // used by the playlist module, decision 0011
+    pub fn track_of(&self, folder: i64, rel: &str) -> Option<i64> {
+        self.db()
+            .query_row(&format!("SELECT track FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| r.get(0))
+            .optional()
+            .ok()
+            .flatten()
+            .flatten()
+    }
+
+    /// Where a track is now: its folder id and relative path; `None` when it is gone, trashed or retired. Blocking.
+    #[allow(dead_code)] // used by the playlist module, decision 0011
+    pub fn file_of(&self, track: i64) -> Option<(i64, String)> {
+        self.db()
+            .query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .ok()
+            .flatten()
     }
 
     fn meta(&self, key: &str) -> Option<String> {
@@ -491,7 +702,10 @@ impl Catalogue {
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                Ok(FolderStatus { path: p.display().to_string(), files: count("SELECT COUNT(*) FROM files WHERE folder = ?1", &[&(i as i64)])? })
+                Ok(FolderStatus {
+                    path: p.display().to_string(),
+                    files: count(&format!("SELECT COUNT(*) FROM files WHERE folder = ?1 AND {PRESENT}"), &[&(i as i64)])?,
+                })
             })
             .collect::<Result<Vec<_>>>()?;
         let mut linked = BTreeMap::new();
@@ -504,7 +718,7 @@ impl Catalogue {
         }
         let mut issues = BTreeMap::new();
         {
-            let mut st = db.prepare("SELECT issue, COUNT(*) FROM files WHERE issue IS NOT NULL GROUP BY issue")?;
+            let mut st = db.prepare(&format!("SELECT issue, COUNT(*) FROM files WHERE issue IS NOT NULL AND {PRESENT} GROUP BY issue"))?;
             for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
                 let (k, n) = row?;
                 issues.insert(k, n as u64);
@@ -513,9 +727,9 @@ impl Catalogue {
         Ok(Status {
             issues,
             folders,
-            files: count("SELECT COUNT(*) FROM files", &[])?,
-            tags_pending: count("SELECT COUNT(*) FROM files WHERE state = ?1", &[&PENDING])?,
-            tags_failed: count("SELECT COUNT(*) FROM files WHERE state = ?1", &[&FAILED])?,
+            files: count(&format!("SELECT COUNT(*) FROM files WHERE {PRESENT}"), &[])?,
+            tags_pending: count(&format!("SELECT COUNT(*) FROM files WHERE state = ?1 AND {PRESENT}"), &[&PENDING])?,
+            tags_failed: count(&format!("SELECT COUNT(*) FROM files WHERE state = ?1 AND {PRESENT}"), &[&FAILED])?,
             linked,
             progress: self.progress.lock().unwrap_or_else(|p| p.into_inner()).clone(),
         })
@@ -628,6 +842,13 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
                 }
             }
         }
+        let c = cat.clone();
+        match tokio::task::spawn_blocking(move || c.identify()).await {
+            Ok(Ok((moved, _))) if moved > 0 => tracing::info!("catalogue: recognised {moved} moved file(s)"),
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => problems.push(format!("track ids: {e:#}")),
+            Err(e) => problems.push(format!("track ids: {e}")),
+        }
         for (id, source) in sources() {
             cat.set_doing(Some(format!("linking {id}")));
             if let Err(e) = link_source(&cat, &id, &source).await {
@@ -683,6 +904,124 @@ mod tests {
         let s = cat.status().unwrap();
         assert_eq!((s.files, s.tags_pending), (1, 1));
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// Pretend the tags of every file waiting were read: a length (the test files are not audio).
+    fn read_as_audio(cat: &Catalogue) {
+        cat.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
+    }
+
+    fn retired(cat: &Catalogue, track: i64) -> bool {
+        cat.db().query_row("SELECT retired_at FROM tracks WHERE id = ?1", [track], |r| r.get::<_, Option<i64>>(0)).unwrap().is_some()
+    }
+
+    #[test]
+    fn every_identified_file_gets_a_lasting_track_id() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.identify().unwrap(), (0, 0), "tags not read yet: no ids");
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (0, 2));
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        assert_eq!(cat.file_of(one), Some((0, "A - B (2020)/01 One.mp3".to_string())));
+        assert_eq!(cat.identify().unwrap(), (0, 0), "ids are given once");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_folder_renamed_outside_cratarr_keeps_its_track_ids() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        let two = cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap();
+        std::fs::rename(d.join("A - B (2020)"), d.join("A - B (2020) [FLAC]")).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.status().unwrap().files, 2, "gone files are not counted twice");
+        assert_eq!(cat.file_of(one), None, "gone, waiting");
+        read_as_audio(&cat);
+        assert_eq!(cat.identify().unwrap(), (2, 0), "same file names and lengths: recognised, no new ids");
+        assert_eq!(cat.file_of(one), Some((0, "A - B (2020) [FLAC]/01 One.mp3".to_string())));
+        assert_eq!(cat.track_of(0, "A - B (2020) [FLAC]/02 Two.flac"), Some(two));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_file_that_comes_back_keeps_its_id_and_one_that_never_does_is_retired() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        let away = d.join("one.away");
+        std::fs::rename(d.join("A - B (2020)/01 One.mp3"), &away).unwrap();
+        cat.walk_all();
+        std::fs::rename(&away, d.join("A - B (2020)/01 One.mp3")).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.track_of(0, "A - B (2020)/01 One.mp3"), Some(one), "back where it was: same id, tags kept");
+        std::fs::remove_file(d.join("A - B (2020)/01 One.mp3")).unwrap();
+        cat.walk_all();
+        cat.db().execute("UPDATE files SET gone_at = gone_at - ?1 WHERE gone_at IS NOT NULL", [GONE_KEEP_SECS + 1]).unwrap();
+        cat.identify().unwrap();
+        assert!(retired(&cat, one), "unclaimed for a day: retired");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn trashed_files_keep_their_ids_until_the_trash_is_emptied() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        let token = crate::trash::trash(&d, "A - B (2020)", 1_000).unwrap();
+        assert_eq!(cat.mark_trashed(0, "A - B (2020)", &token).unwrap(), 2);
+        cat.walk_all();
+        cat.identify().unwrap();
+        assert_eq!(cat.status().unwrap().files, 0, "trashed files are not counted");
+        assert_eq!(cat.file_of(one), None);
+        assert!(!retired(&cat, one), "still in the trash: not retired");
+        // Undo: back, same ids.
+        crate::trash::restore(&d, &token).unwrap();
+        assert_eq!(cat.unmark_trashed(0, "A - B (2020)", &token).unwrap(), 2);
+        cat.walk_all();
+        assert_eq!(cat.file_of(one), Some((0, "A - B (2020)/01 One.mp3".to_string())));
+        // Trashed again and the trash emptied: retired.
+        let token = crate::trash::trash(&d, "A - B (2020)", 2_000).unwrap();
+        cat.mark_trashed(0, "A - B (2020)", &token).unwrap();
+        crate::trash::purge(&d, 2_000 + 30 * 86_400, 1).unwrap();
+        cat.identify().unwrap();
+        assert!(retired(&cat, one));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn moves_and_replacements_made_by_cratarr_keep_track_ids() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(1, "A - B (2020)/01 One.mp3").unwrap();
+        // Adopt: the album moves from folder 1 to folder 0 under a new name.
+        std::fs::rename(b.join("A - B (2020)"), a.join("A - B (2020) adopted")).unwrap();
+        assert_eq!(cat.move_files(1, "A - B (2020)", 0, "A - B (2020) adopted").unwrap(), 2);
+        cat.walk_all();
+        assert_eq!(cat.identify().unwrap(), (0, 0), "nothing new, nothing recognised: the rows moved");
+        assert_eq!(cat.file_of(one), Some((0, "A - B (2020) adopted/01 One.mp3".to_string())));
+        // Replace: a new file takes the old one's id.
+        std::fs::write(a.join("A - B (2020) adopted/01 One.flac"), b"flac now").unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert!(cat.inherit((0, "A - B (2020) adopted/01 One.mp3"), (0, "A - B (2020) adopted/01 One.flac")).unwrap());
+        assert_eq!(cat.file_of(one), Some((0, "A - B (2020) adopted/01 One.flac".to_string())));
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
     }
 
     #[test]

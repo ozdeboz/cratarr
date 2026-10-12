@@ -129,6 +129,8 @@ struct IncomingDir {
 #[derive(Debug, Clone)]
 struct Deleted {
     folder: i64,
+    /// The album folder, relative to `folder`.
+    dir: String,
     token: String,
     album_id: String,
     title: String,
@@ -380,6 +382,11 @@ impl IncomingService {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        // Its tracks keep their ids while in the trash (decision 0011): Undo brings them back unchanged.
+        let (c, f, rel, tok) = (catalogue.clone(), dir.folder, dir.dir.clone(), token.clone());
+        if let Err(e) = tokio::task::spawn_blocking(move || c.mark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
+            tracing::warn!("catalogue: could not mark {} as trashed: {e:#}", album.title);
+        }
         // Best effort: the album is in the trash either way; a Lidarr failure only means it may come back.
         let lidarr_ids = match (self.acquisition(), dir.release_group.as_deref()) {
             (Some(l), Some(rg)) => l.stop_fetching(rg).await.unwrap_or_else(|e| {
@@ -393,7 +400,7 @@ impl IncomingService {
         let key = format!("{}:{token}", dir.folder);
         self.deleted.lock().await.insert(
             key.clone(),
-            Deleted { folder: dir.folder, token, album_id: album.id.clone(), title: album.title.clone(), lidarr_ids },
+            Deleted { folder: dir.folder, dir: dir.dir.clone(), token, album_id: album.id.clone(), title: album.title.clone(), lidarr_ids },
         );
         Ok(DeleteResult { undo: key, title: album.title })
     }
@@ -418,6 +425,10 @@ impl IncomingService {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        let (c, f, rel, tok) = (catalogue.clone(), d.folder, d.dir.clone(), d.token.clone());
+        if let Err(e) = tokio::task::spawn_blocking(move || c.unmark_trashed(f, &rel, &tok)).await.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r) {
+            tracing::warn!("catalogue: could not bring {} back from the trash: {e:#}", d.title);
+        }
         if let Some(l) = self.acquisition() {
             if let Err(e) = l.resume(&d.lidarr_ids).await {
                 tracing::warn!("Lidarr: could not restore monitoring of {}: {e:#}", d.title);
