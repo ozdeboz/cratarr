@@ -216,3 +216,34 @@ export type AlbumGroup = {
 };
 
 export const getAlbumDuplicates = () => request<{ groups: AlbumGroup[] }>('/api/albums/duplicates');
+
+/** An album in a source's incoming library. */
+export type IncomingAlbum = {
+  id: string;
+  title: string;
+  artist: string | null;
+  year: number | null;
+  /** When the source added it, epoch seconds. */
+  added: number | null;
+  path: string | null;
+  tracks: number;
+  /** e.g. "FLAC", "MP3"; null when mixed or unknown. */
+  format: string | null;
+  /** The lowest track bitrate. */
+  bitrate_kbps: number | null;
+  /** The source's own tags, as they are. */
+  tags: string[];
+};
+
+export type IncomingSource = {
+  id: string;
+  label: string;
+  /** False when this kind of source cannot list albums at all. */
+  supported: boolean;
+  albums: IncomingAlbum[];
+  error: string | null;
+};
+
+export const getIncoming = (source?: string) => request<{ sources: IncomingSource[] }>(`/api/incoming${follow(source)}`);
+export const incomingCoverUrl = (source: string, album: string) =>
+  `/api/incoming/cover/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;

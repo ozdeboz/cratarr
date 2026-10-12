@@ -33,6 +33,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/repairs/apply", post(apply_repairs))
         .route("/api/undo", post(undo))
         .route("/api/status", get(status))
+        .route("/api/incoming", get(incoming))
+        .route("/api/incoming/cover/{source}/{album}", get(incoming_cover))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
         .fallback(crate::web::serve)
@@ -71,6 +73,20 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
             bytes,
         )
             .into_response(),
+    }
+}
+
+async fn incoming(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::IncomingView> {
+    Json(app.incoming(f.source.as_deref()).await)
+}
+
+async fn incoming_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
+    match app.incoming_cover(&source, &album).await {
+        Some((content_type, bytes)) => {
+            let ct = HeaderValue::from_str(&content_type).unwrap_or(HeaderValue::from_static("application/octet-stream"));
+            ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"))], bytes).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
     }
 }
 

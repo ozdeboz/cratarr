@@ -90,6 +90,24 @@ impl From<StoreError> for ToggleError {
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// One source's incoming library, newest first. `supported` is false when the source cannot list albums at all.
+#[derive(Debug, Serialize)]
+pub struct IncomingSourceView {
+    pub id: String,
+    pub label: String,
+    pub supported: bool,
+    pub albums: Vec<source::Album>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IncomingView {
+    pub sources: Vec<IncomingSourceView>,
+}
+
+/// More than any incoming queue should hold; the page shows them all.
+const INCOMING_LIMIT: usize = 1000;
+
 #[derive(Debug, Serialize)]
 pub struct StatusView {
     pub connected: bool,
@@ -381,6 +399,45 @@ impl App {
         match a.entry(&track) {
             Some(entry) => resolve(&self.playlist_dir, &entry, if_none_match).await,
             None => Outcome::NotFound,
+        }
+    }
+
+    // ----- Incoming -----
+
+    /// Every enabled source with an incoming library (or only `want`), its albums newest first. Read-only.
+    pub async fn incoming(&self, want: Option<&str>) -> IncomingView {
+        let mut sources = Vec::new();
+        for (a, s) in self.connected() {
+            let Some(library) = a.cfg.libraries.incoming.clone() else { continue };
+            if !a.cfg.enabled || want.is_some_and(|w| w != a.cfg.id) {
+                continue;
+            }
+            let supported = s.lists_albums();
+            let (albums, error) = if supported {
+                match s.albums(&library, INCOMING_LIMIT).await {
+                    Ok(list) => (list, None),
+                    Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+                }
+            } else {
+                (Vec::new(), None)
+            };
+            sources.push(IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error });
+        }
+        IncomingView { sources }
+    }
+
+    /// The cover of an album on a source that has an incoming library. The id is only passed on to the source.
+    pub async fn incoming_cover(&self, source_id: &str, album_id: &str) -> Option<(String, Vec<u8>)> {
+        if !crate::covers::valid_item_id(album_id) {
+            return None;
+        }
+        let (_, s) = self.connected().into_iter().find(|(a, _)| a.cfg.id == source_id && a.cfg.libraries.incoming.is_some())?;
+        match s.album_cover(album_id).await {
+            Ok(found) => found,
+            Err(e) => {
+                tracing::warn!("cover of {album_id} on {source_id}: {e:#}");
+                None
+            }
         }
     }
 

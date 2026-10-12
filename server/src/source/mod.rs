@@ -117,6 +117,25 @@ pub struct PlaylistEvent {
     pub change: PlaylistChange,
 }
 
+/// An album as a source sees it. Paths are the source's own (see `placement`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Album {
+    pub id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub year: Option<u32>,
+    /// When the source added it, epoch seconds (for newest-first).
+    pub added: Option<i64>,
+    pub path: Option<String>,
+    pub tracks: u32,
+    /// e.g. "FLAC", "MP3"; `None` when mixed or unknown.
+    pub format: Option<String>,
+    /// The lowest track bitrate, so a weak track is not hidden by an average.
+    pub bitrate_kbps: Option<u32>,
+    /// The source's own tags or labels on the album, as they are.
+    pub tags: Vec<String>,
+}
+
 pub trait Source: Send + Sync {
     fn status(&self) -> Fut<'_, Status>;
 
@@ -142,6 +161,23 @@ pub trait Source: Send + Sync {
     /// Optional: what the source knows about the tracks of an album folder (by file name), for the Albums page.
     fn album_details<'a>(&'a self, _folder: &'a str) -> Fut<'a, BTreeMap<String, crate::albums::Known>> {
         Box::pin(async { Ok(BTreeMap::new()) })
+    }
+
+    /// Whether this source implements [`Source::albums`]; without it the Incoming page says so instead of showing an
+    /// empty list as if that were the truth.
+    fn lists_albums(&self) -> bool {
+        false
+    }
+
+    /// Optional: albums in a library, newest first, at most `limit`.
+    fn albums<'a>(&'a self, _library_id: &'a str, _limit: usize) -> Fut<'a, Vec<Album>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Optional: an album's cover image (content type, bytes). Lets Cratarr show covers of music outside the playlist
+    /// folder without giving the page the source's address or key.
+    fn album_cover<'a>(&'a self, _album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {
+        Box::pin(async { Ok(None) })
     }
 }
 

@@ -65,6 +65,27 @@ struct Ancestor {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+struct ListedAlbumItem {
+    id: String,
+    name: Option<String>,
+    album_artist: Option<String>,
+    production_year: Option<u32>,
+    date_created: Option<String>,
+    path: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ListedAudio {
+    album_id: Option<String>,
+    container: Option<String>,
+    media_sources: Option<Vec<ListedSource>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 struct PathOnly {
     path: Option<String>,
 }
@@ -247,6 +268,45 @@ impl Jellyfin {
         Ok(page.items.into_iter().filter_map(|i| i.path).collect())
     }
 
+    /// Albums in a library, newest first, with track count, format and lowest bitrate from their tracks (two
+    /// requests, however many albums).
+    pub async fn albums_in(&self, library_id: &str, limit: usize) -> Result<Vec<crate::source::Album>> {
+        let albums: ItemsPage<ListedAlbumItem> = self
+            .get(&format!(
+                "/Items?ParentId={library_id}&IncludeItemTypes=MusicAlbum&Recursive=true&SortBy=DateCreated&SortOrder=Descending&Limit={limit}&Fields=Path,Tags,DateCreated"
+            ))
+            .await?;
+        let tracks: ItemsPage<ListedAudio> = self
+            .get(&format!("/Items?ParentId={library_id}&IncludeItemTypes=Audio&Recursive=true&Fields=MediaSources"))
+            .await?;
+        Ok(album_rows(albums.items, tracks.items))
+    }
+
+    /// An item's primary image (content type, bytes); `None` when it has none. Refused above `max_bytes`.
+    pub async fn primary_image(&self, item_id: &str, max_bytes: u64) -> Result<Option<(String, Vec<u8>)>> {
+        let url = format!("{}/Items/{item_id}/Images/Primary", self.base);
+        let resp = self.http.get(&url).send().await.context("GET primary image")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let resp = resp.error_for_status()?;
+        if resp.content_length().is_some_and(|n| n > max_bytes) {
+            bail!("cover larger than {max_bytes} bytes");
+        }
+        let ct = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .filter(|t| t.starts_with("image/"))
+            .map(str::to_string);
+        let Some(ct) = ct else { return Ok(None) };
+        let bytes = resp.bytes().await?;
+        if bytes.len() as u64 > max_bytes {
+            bail!("cover larger than {max_bytes} bytes");
+        }
+        Ok(Some((ct, bytes.to_vec())))
+    }
+
     /// Newest entries first.
     pub async fn activity(&self, limit: u32) -> Result<Vec<ActivityEntry>> {
         let page: ItemsPage<ActivityEntry> = self.get(&format!("/System/ActivityLog/Entries?limit={limit}")).await?;
@@ -344,9 +404,70 @@ impl Jellyfin {
     }
 }
 
+/// One row per album: the album's own fields plus track count, format (when all tracks share one) and lowest bitrate.
+fn album_rows(albums: Vec<ListedAlbumItem>, tracks: Vec<ListedAudio>) -> Vec<crate::source::Album> {
+    let mut per: std::collections::HashMap<String, (u32, std::collections::BTreeSet<String>, Option<u32>)> = Default::default();
+    for t in tracks {
+        let Some(album) = t.album_id else { continue };
+        let e = per.entry(album).or_default();
+        e.0 += 1;
+        if let Some(c) = t.container.as_deref().filter(|c| !c.is_empty()) {
+            e.1.insert(c.to_uppercase());
+        }
+        let kbps = t.media_sources.as_ref().and_then(|m| m.first()).and_then(|s| s.bitrate).map(|b| (b / 1000) as u32);
+        if let Some(k) = kbps {
+            e.2 = Some(e.2.map_or(k, |m: u32| m.min(k)));
+        }
+    }
+    albums
+        .into_iter()
+        .map(|a| {
+            let (tracks, formats, bitrate_kbps) = per.remove(&a.id).unwrap_or_default();
+            crate::source::Album {
+                format: (formats.len() == 1).then(|| formats.into_iter().next().unwrap_or_default()),
+                added: a.date_created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),
+                title: a.name.unwrap_or_default(),
+                artist: a.album_artist,
+                year: a.production_year,
+                path: a.path,
+                tags: a.tags,
+                id: a.id,
+                tracks,
+                bitrate_kbps,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn album_rows_summarise_their_tracks() {
+        let albums: Vec<ListedAlbumItem> = serde_json::from_str(
+            r#"[{"Id":"a","Name":"Twirligig","AlbumArtist":"Jonti","ProductionYear":2011,"DateCreated":"2026-10-12T15:39:29.8863581Z","Path":"/m/Jonti/Twirligig (2011)","Tags":["promote"]},
+                {"Id":"b","Name":"Mixed"},{"Id":"c","Name":"Empty"}]"#,
+        )
+        .unwrap();
+        let tracks: Vec<ListedAudio> = serde_json::from_str(
+            r#"[{"AlbumId":"a","Container":"flac","MediaSources":[{"Bitrate":884000}]},
+                {"AlbumId":"a","Container":"flac","MediaSources":[{"Bitrate":901000}]},
+                {"AlbumId":"b","Container":"mp3","MediaSources":[{"Bitrate":320000}]},
+                {"AlbumId":"b","Container":"flac","MediaSources":[{"Bitrate":192000}]},
+                {"Container":"mp3"}]"#,
+        )
+        .unwrap();
+        let rows = album_rows(albums, tracks);
+        assert_eq!(rows[0].tracks, 2);
+        assert_eq!(rows[0].format.as_deref(), Some("FLAC"));
+        assert_eq!(rows[0].bitrate_kbps, Some(884), "the lowest bitrate, not an average");
+        assert_eq!(rows[0].year, Some(2011));
+        assert_eq!(rows[0].tags, vec!["promote".to_string()]);
+        assert!(rows[0].added.is_some());
+        assert_eq!((rows[1].tracks, rows[1].format.as_deref(), rows[1].bitrate_kbps), (2, None, Some(192)), "mixed formats");
+        assert_eq!((rows[2].tracks, rows[2].format.as_deref(), rows[2].tags.len()), (0, None, 0));
+    }
 
     const SESSIONS: &str = include_str!("../tests/fixtures/sessions.json");
 

@@ -303,6 +303,18 @@ impl Source for JellyfinSource {
             self.jf.album_tracks(&term, folder).await
         })
     }
+
+    fn lists_albums(&self) -> bool {
+        true
+    }
+
+    fn albums<'a>(&'a self, library_id: &'a str, limit: usize) -> Fut<'a, Vec<super::Album>> {
+        Box::pin(self.jf.albums_in(library_id, limit))
+    }
+
+    fn album_cover<'a>(&'a self, album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {
+        Box::pin(self.jf.primary_image(album_id, crate::covers::MAX_BYTES))
+    }
 }
 
 #[cfg(test)]
