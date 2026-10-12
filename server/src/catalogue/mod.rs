@@ -100,6 +100,20 @@ pub struct Status {
     pub progress: Progress,
 }
 
+/// One album directory as the catalogue knows it (see `Catalogue::album_facts`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AlbumFact {
+    /// Relative to its folder.
+    pub dir: String,
+    pub tracks: u32,
+    pub formats: std::collections::BTreeSet<String>,
+    pub min_kbps: Option<u32>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub artist: Option<String>,
+    pub release_group: Option<String>,
+}
+
 pub struct Catalogue {
     db: Mutex<Connection>,
     /// Index = folder id; 0 is the playlist folder.
@@ -342,6 +356,46 @@ impl Catalogue {
         rels.iter()
             .map(|rel| Ok(st.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?))
             .collect()
+    }
+
+    /// One row per album directory in `folder`: track count, formats, lowest bitrate, and the album tags Incoming needs
+    /// to recognise an album that is already in the library. Read-only; blocking.
+    pub fn album_facts(&self, folder: i64) -> Result<Vec<AlbumFact>> {
+        let db = self.db();
+        let dir_of = |rel: &str| rel.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_string());
+        let mut by_dir: BTreeMap<String, AlbumFact> = BTreeMap::new();
+        let mut st = db.prepare("SELECT rel, format, bitrate FROM files WHERE folder = ?1")?;
+        let rows = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<i64>>(2)?)))?;
+        for row in rows {
+            let (rel, format, kbps) = row?;
+            let dir = dir_of(&rel);
+            let e = by_dir.entry(dir.clone()).or_insert_with(|| AlbumFact { dir, ..AlbumFact::default() });
+            e.tracks += 1;
+            if let Some(f) = format {
+                e.formats.insert(f.to_uppercase());
+            }
+            if let Some(k) = kbps.filter(|k| *k > 0).map(|k| k as u32) {
+                e.min_kbps = Some(e.min_kbps.map_or(k, |m| m.min(k)));
+            }
+        }
+        let mut st = db.prepare(
+            "SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ('album', 'albumartist', 'artist', 'musicbrainz_releasegroupid') ORDER BY rel, n",
+        )?;
+        let rows = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        for row in rows {
+            let (rel, name, value) = row?;
+            let Some(e) = by_dir.get_mut(&dir_of(&rel)) else { continue };
+            let slot = match name.as_str() {
+                "album" => &mut e.album,
+                "albumartist" => &mut e.album_artist,
+                "artist" => &mut e.artist,
+                _ => &mut e.release_group,
+            };
+            if slot.is_none() && !value.trim().is_empty() {
+                *slot = Some(value);
+            }
+        }
+        Ok(by_dir.into_values().collect())
     }
 
     /// Files with a problem, worst first ("broken", then damaged tags, …), at most `limit`. Blocking.

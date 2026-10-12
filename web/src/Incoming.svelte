@@ -109,6 +109,13 @@
                   {#if a.added}<span>added {added(a.added)}</span>{/if}
                   {#each a.tags as t (t)}<span class="tag">{t}</span>{/each}
                 </div>
+                {#if s.verdicts?.[a.id]}
+                  {@const v = s.verdicts[a.id]}
+                  <div class="verdict" class:upgrade={v.kind === 'upgrade'} title={v.library}>
+                    <span class="badge">{v.kind === 'upgrade' ? 'Upgrade' : 'In Music'}</span>
+                    {v.why}
+                  </div>
+                {/if}
               </div>
               </button>
             </li>
@@ -250,5 +257,25 @@
     padding: 0 8px;
     border: 1px solid var(--border);
     border-radius: 999px;
+  }
+
+  .verdict {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
+  .verdict .badge {
+    margin-right: 6px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .verdict.upgrade .badge {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 </style>

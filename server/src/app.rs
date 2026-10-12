@@ -109,6 +109,59 @@ pub struct IncomingSourceView {
     /// When this list was read from the source, epoch seconds. Lists are kept and refreshed in the background,
     /// because reading one can take the source many seconds.
     pub as_of: i64,
+    /// Per album id, when the album is already in the library: an upgrade of it or a duplicate (new albums are absent).
+    pub verdicts: BTreeMap<String, VerdictView>,
+}
+
+/// How an incoming album relates to the library.
+#[derive(Debug, Clone, Serialize)]
+pub struct VerdictView {
+    /// "upgrade" or "duplicate".
+    pub kind: &'static str,
+    /// The library album it matches (its folder).
+    pub library: String,
+    pub why: String,
+}
+
+/// Each album already in the library, by album id: an upgrade of it or a duplicate. The album's release group comes
+/// from the catalogue, matched by the end of its folder path (the server's paths and Cratarr's differ in front).
+fn verdicts(
+    albums: &[source::Album],
+    library: &crate::incoming::LibraryIndex,
+    incoming: &[(String, Option<String>)],
+) -> BTreeMap<String, VerdictView> {
+    use crate::incoming::{AlbumFacts, Verdict, quality_of};
+    let mut out = BTreeMap::new();
+    for a in albums {
+        let release_group = a.path.as_deref().and_then(|p| {
+            incoming.iter().find(|(dir, _)| !dir.is_empty() && p.ends_with(&format!("/{dir}"))).and_then(|(_, rg)| rg.clone())
+        });
+        let facts = AlbumFacts {
+            release_group,
+            artist: a.artist.clone().unwrap_or_default(),
+            title: a.title.clone(),
+            tracks: a.tracks,
+            quality: quality_of(a.format.as_deref(), a.bitrate_kbps),
+        };
+        let (kind, i, why) = match library.classify(&facts) {
+            Verdict::New => continue,
+            Verdict::Upgrade { library, why } => ("upgrade", library, why),
+            Verdict::Duplicate { library, why } => ("duplicate", library, why),
+        };
+        out.insert(a.id.clone(), VerdictView { kind, library: library.albums[i].0.clone(), why });
+    }
+    out
+}
+
+/// How long the library index (for Incoming's verdicts) is kept before it is read from the catalogue again.
+const INDEX_SECS: i64 = 300;
+
+/// The library index plus the incoming albums' release groups by folder, read together from the catalogue.
+struct Owned {
+    built: i64,
+    library: Arc<crate::incoming::LibraryIndex>,
+    /// (album directory under an Incoming folder, its release group).
+    incoming: Arc<Vec<(String, Option<String>)>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -324,6 +377,8 @@ pub struct App {
     folders: std::sync::RwLock<(Folders, Option<Arc<Store>>)>,
     /// Incoming lists by source and library (see `refresh_incoming`).
     incoming_cache: Mutex<std::collections::HashMap<String, IncomingSourceView>>,
+    /// See `Owned`; `None` until first needed, and after settings change.
+    owned: Mutex<Option<Owned>>,
     /// Every audio file Cratarr can see, and the servers' ids for them (decision 0008).
     catalogue: Arc<crate::catalogue::Catalogue>,
     /// Saved with the sources.
@@ -362,6 +417,7 @@ impl App {
             started: epoch_now(),
             folders: std::sync::RwLock::new((folders, store)),
             incoming_cache: Mutex::new(std::collections::HashMap::new()),
+            owned: Mutex::new(None),
             catalogue,
             tag_rules: std::sync::RwLock::new(saved.tag_rules),
         }))
@@ -677,7 +733,60 @@ impl App {
             };
             sources.push(view);
         }
+        if let Some((library, incoming)) = self.owned_index().await {
+            for view in &mut sources {
+                view.verdicts = verdicts(&view.albums, &library, &incoming);
+            }
+        }
         IncomingView { sources }
+    }
+
+    /// The library index and the incoming release groups, read from the catalogue at most every `INDEX_SECS`.
+    async fn owned_index(&self) -> Option<(Arc<crate::incoming::LibraryIndex>, Arc<Vec<(String, Option<String>)>>)> {
+        let mut owned = self.owned.lock().await;
+        if let Some(o) = owned.as_ref().filter(|o| epoch_now() - o.built < INDEX_SECS) {
+            return Some((o.library.clone(), o.incoming.clone()));
+        }
+        let c = self.catalogue.clone();
+        let read = tokio::task::spawn_blocking(move || -> Result<(crate::incoming::LibraryIndex, Vec<(String, Option<String>)>)> {
+            use crate::incoming::{AlbumFacts, LibraryIndex, quality_of};
+            let music = c.album_facts(0)?;
+            let library = music
+                .into_iter()
+                .map(|f| {
+                    let facts = AlbumFacts {
+                        release_group: f.release_group.clone(),
+                        artist: f.album_artist.clone().or(f.artist.clone()).unwrap_or_default(),
+                        title: f.album.clone().unwrap_or_else(|| f.dir.rsplit('/').next().unwrap_or("").to_string()),
+                        tracks: f.tracks,
+                        quality: quality_of(f.formats.iter().map(String::as_str), f.min_kbps),
+                    };
+                    (f.dir, facts)
+                })
+                .collect();
+            let mut incoming = Vec::new();
+            for id in 1..c.folders().len() as i64 {
+                incoming.extend(c.album_facts(id)?.into_iter().map(|f| (f.dir, f.release_group)));
+            }
+            Ok((LibraryIndex::new(library), incoming))
+        })
+        .await;
+        match read {
+            Ok(Ok((library, incoming))) => {
+                let o = Owned { built: epoch_now(), library: Arc::new(library), incoming: Arc::new(incoming) };
+                let out = (o.library.clone(), o.incoming.clone());
+                *owned = Some(o);
+                Some(out)
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("cannot read the library for Incoming: {e:#}");
+                None
+            }
+            Err(e) => {
+                tracing::warn!("cannot read the library for Incoming: {e}");
+                None
+            }
+        }
     }
 
     /// Read every incoming list again and forget lists of servers or libraries no longer Incoming; a failed read
@@ -724,7 +833,7 @@ impl App {
             }
             albums.sort_by_key(|a: &source::Album| std::cmp::Reverse(a.added.unwrap_or(0)));
         }
-        IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now() }
+        IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now(), verdicts: BTreeMap::new() }
     }
 
     /// The one background pass that keeps Cratarr in step with its sources and the library, run every
@@ -919,6 +1028,7 @@ impl App {
         *self.origin.write().unwrap_or_else(|p| p.into_inner()) = Origin::File;
         // Sources and libraries may have changed: lists are read again on the next look (or the next sync pass).
         self.incoming_cache.lock().await.clear();
+        *self.owned.lock().await = None;
         tracing::info!("settings saved and applied");
         drop(_one_at_a_time);
         Ok(self.settings().await?)

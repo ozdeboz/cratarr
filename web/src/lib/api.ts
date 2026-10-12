@@ -306,6 +306,8 @@ export type IncomingSource = {
   error: string | null;
   /** When the server read this list from the source, epoch seconds. */
   as_of: number;
+  /** Per album id, when it is already in Music: an upgrade of it, or a duplicate. New albums are absent. */
+  verdicts: Record<string, { kind: 'upgrade' | 'duplicate'; library: string; why: string }>;
 };
 
 /** `fresh` asks past the service worker's copy (which answers at once, see sw.js) for the server's latest. */

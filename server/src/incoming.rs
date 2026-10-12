@@ -2,6 +2,8 @@
 //! one. Pure logic over plain descriptions of albums; where the descriptions come from (the catalogue, the source) is
 //! the caller's business.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
 use crate::albums::fold;
@@ -66,6 +68,57 @@ pub fn find_same(incoming: &AlbumFacts, library: &[AlbumFacts]) -> Option<usize>
     library.iter().position(|l| (fold(&l.artist), fold(&l.title)) == key)
 }
 
+/// The library's albums, looked up by release group and by folded artist + title. Built once per catalogue refresh, so
+/// classifying a whole Incoming list is cheap.
+pub struct LibraryIndex {
+    /// (album directory in the library, facts).
+    pub albums: Vec<(String, AlbumFacts)>,
+    by_release_group: HashMap<String, usize>,
+    by_name: HashMap<(String, String), usize>,
+}
+
+impl LibraryIndex {
+    pub fn new(albums: Vec<(String, AlbumFacts)>) -> Self {
+        let mut by_release_group = HashMap::new();
+        let mut by_name = HashMap::new();
+        for (i, (_, f)) in albums.iter().enumerate() {
+            if let Some(rg) = f.release_group.as_deref().filter(|r| !r.is_empty()) {
+                by_release_group.entry(rg.to_string()).or_insert(i);
+            }
+            let key = (fold(&f.artist), fold(&f.title));
+            if !key.0.is_empty() && !key.1.is_empty() {
+                by_name.entry(key).or_insert(i);
+            }
+        }
+        Self { albums, by_release_group, by_name }
+    }
+
+    /// As `classify`, against the whole library.
+    pub fn classify(&self, incoming: &AlbumFacts) -> Verdict {
+        let by_rg = incoming.release_group.as_deref().filter(|r| !r.is_empty()).and_then(|r| self.by_release_group.get(r));
+        let by_name = || self.by_name.get(&(fold(&incoming.artist), fold(&incoming.title)));
+        let Some(&i) = by_rg.or_else(by_name) else { return Verdict::New };
+        let owned = &self.albums[i].1;
+        match better(incoming.quality, owned.quality) {
+            Some(why) => Verdict::Upgrade { library: i, why },
+            None => Verdict::Duplicate { library: i, why: describe_same(incoming, owned) },
+        }
+    }
+}
+
+/// The quality of a set of tracks from their formats and lowest bitrate: lossless only when every track is.
+pub fn quality_of<'a>(formats: impl IntoIterator<Item = &'a str>, min_kbps: Option<u32>) -> Quality {
+    let formats: Vec<String> = formats.into_iter().map(str::to_uppercase).collect();
+    let lossless = |f: &str| matches!(f, "FLAC" | "ALAC" | "WAV" | "AIFF" | "APE" | "WV");
+    if formats.is_empty() {
+        Quality::Unknown
+    } else if formats.iter().all(|f| lossless(f)) {
+        Quality::Lossless
+    } else {
+        min_kbps.map_or(Quality::Unknown, |kbps| Quality::Lossy { kbps })
+    }
+}
+
 /// Why `new` is better than `old`, or `None` when it is not.
 fn better(new: Quality, old: Quality) -> Option<String> {
     match (new, old) {
@@ -127,6 +180,28 @@ mod tests {
         assert_eq!(find_same(&album("air", "moon safari!", None, 10, Quality::Unknown), &library()), Some(0));
         let renamed = album("AIR", "Moon Safari (Deluxe)", Some("rg-moon"), 12, Quality::Lossless);
         assert_eq!(find_same(&renamed, &library()), Some(0), "same release group, different title");
+    }
+
+    #[test]
+    fn the_index_classifies_like_the_plain_function() {
+        let lib = library();
+        let index = LibraryIndex::new(lib.iter().cloned().enumerate().map(|(i, f)| (format!("dir{i}"), f)).collect());
+        for probe in [
+            album("Air", "Moon Safari", Some("rg-moon"), 10, Quality::Lossless),
+            album("9 Lazy 9", "Paradise Blown", None, 17, Quality::Lossless),
+            album("Melanie", "Cri d'Amour", None, 12, Quality::Lossy { kbps: 192 }),
+            album("Jonti", "Twirligig", Some("rg-jonti"), 14, Quality::Lossless),
+        ] {
+            assert_eq!(index.classify(&probe), classify(&probe, &lib), "{probe:?}");
+        }
+    }
+
+    #[test]
+    fn quality_is_lossless_only_when_every_track_is() {
+        assert_eq!(quality_of(["FLAC", "flac"], Some(900)), Quality::Lossless);
+        assert_eq!(quality_of(["FLAC", "MP3"], Some(192)), Quality::Lossy { kbps: 192 });
+        assert_eq!(quality_of(["MP3"], None), Quality::Unknown);
+        assert_eq!(quality_of([], Some(320)), Quality::Unknown);
     }
 
     #[test]
