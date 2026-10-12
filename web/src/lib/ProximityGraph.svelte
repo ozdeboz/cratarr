@@ -7,7 +7,7 @@
   import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from 'd3-zoom';
   import type { Proximity, Signal } from './api';
   import { longpress } from './longpress';
-  import { backbone, groups, rankers, spread, weigh } from './proximity';
+  import { GROUP_NEIGHBOURS, GROUP_RESOLUTION, backbone, communities, nearest, rankers, spread, weigh } from './proximity';
 
   let {
     data,
@@ -41,11 +41,13 @@
   // svelte-ignore state_referenced_locally
   const nodes: Node[] = data.playlists.map((p, i) => ({ i, r: Math.min(11, 3 + 1.4 * Math.log2(1 + p.tracks / 8)) }));
 
-  const bb = $derived(backbone(n, weigh(data, rank, signals)));
+  const weights = $derived(weigh(data, rank, signals));
+  const bb = $derived(backbone(n, weights));
   /** Every drawn link: kin by its spread rank, bridges apart. */
   const ranked = $derived(spread(bb.kin));
   const drawn = $derived(new Map([...ranked, ...bb.bridges]));
-  const group = $derived(groups(n, bb.kin));
+  // Colour groups come from all closeness (each playlist's nearest few), not only the drawn lines.
+  const group = $derived(communities(n, nearest(n, weights, GROUP_NEIGHBOURS), GROUP_RESOLUTION));
   const groupSize = $derived(group.reduce((m, g) => m.set(g, (m.get(g) ?? 0) + 1), new Map<number, number>()));
   const colour = (i: number) => (groupSize.get(group[i])! > 1 && group[i] < PALETTE.length ? PALETTE[group[i]] : 'var(--muted)');
 

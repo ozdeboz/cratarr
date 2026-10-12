@@ -11,13 +11,19 @@
 // and a link counts for sqrt(m(a) * m(b)) of its weight, with m = FOCUS_FLOOR + (1 - FOCUS_FLOOR) * rank: the least
 // focused playlist's links count three quarters, the most focused's in full. Measured on the reference library (layout
 // benchmark, 8 seeds): 0.75 holds groups together better than both 0.5 (grab-bags are part of the glue) and 1.
-// Groups: label propagation over the backbone, for colour.
+// Groups (colour and a gentle pull): Louvain modularity over each playlist's GROUP_NEIGHBOURS strongest links, not
+// only the drawn ones, so every playlist belongs somewhere. Measured on the reference library (66 playlists): 6
+// neighbours at resolution 1.2 gives 7 groups (fits the 8 colours, nothing grey), members twice as alike as with label
+// propagation over the drawn lines (similarity silhouette 0.24 against 0.11), groups together on screen (0.43 against
+// 0.09), for a small loss in kin among a point's 3 nearest points (0.47 against 0.59).
 
 import type { Proximity, Signal } from './api';
 
 export const SIGNALS: Signal[] = ['tracks', 'genre', 'artists'];
 export const MUTUAL_K = 3;
 export const FOCUS_FLOOR = 0.75;
+export const GROUP_NEIGHBOURS = 6;
+export const GROUP_RESOLUTION = 1.2;
 
 export type Weights = Map<string, number>;
 export const key = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);
@@ -127,34 +133,75 @@ export function spread(kin: Weights): Weights {
   return new Map([...kin].map(([kk, v]) => [kk, sorted.indexOf(v) / last]));
 }
 
-/** Groups by weighted label propagation over the kin links; group 0 is the largest. Deterministic. */
-export function groups(n: number, links: Weights): number[] {
-  const adj: [number, number][][] = Array.from({ length: n }, () => []);
+/** The K strongest links of every playlist (a pair counts when it is in either one's K), for grouping. */
+export function nearest(n: number, w: Weights, k: number): Weights {
+  const by: { kk: string; v: number }[][] = Array.from({ length: n }, () => []);
+  for (const [kk, v] of w) for (const x of kk.split('-').map(Number)) by[x].push({ kk, v });
+  const out: Weights = new Map();
+  for (const list of by) for (const { kk, v } of list.sort((x, y) => y.v - x.v).slice(0, k)) out.set(kk, v);
+  return out;
+}
+
+/** Groups by modularity (Louvain: move single points to the neighbouring group that gains most, then merge groups
+ * into points and repeat). `resolution` above 1 makes more, smaller groups. Group 0 is the largest; deterministic. */
+export function communities(n: number, links: Weights, resolution = 1): number[] {
+  // Graph of the current level: adjacency with weights; self-loops hold weight inside a merged point.
+  let adj: Map<number, number>[] = Array.from({ length: n }, () => new Map());
   for (const [kk, v] of links) {
     const [a, b] = kk.split('-').map(Number);
-    adj[a].push([b, v]);
-    adj[b].push([a, v]);
+    adj[a].set(b, (adj[a].get(b) ?? 0) + v);
+    adj[b].set(a, (adj[b].get(a) ?? 0) + v);
   }
-  const label = [...Array(n).keys()];
-  for (let round = 0; round < 30; round++) {
-    let changed = false;
-    for (let i = 0; i < n; i++) {
-      if (!adj[i].length) continue;
-      const score = new Map<number, number>();
-      for (const [j, v] of adj[i]) score.set(label[j], (score.get(label[j]) ?? 0) + v);
-      let best = label[i];
-      let bestScore = score.get(best) ?? 0;
-      for (const [l, s] of score) if (s > bestScore || (s === bestScore && l < best)) [best, bestScore] = [l, s];
-      if (best !== label[i]) {
-        label[i] = best;
-        changed = true;
+  let member = [...Array(n).keys()];
+  for (;;) {
+    const size = adj.length;
+    const degree = adj.map((m, i) => [...m].reduce((s, [j, v]) => s + (j === i ? 2 * v : v), 0));
+    const twoM = degree.reduce((s, d) => s + d, 0);
+    if (twoM === 0) break;
+    const comm = [...Array(size).keys()];
+    const total = [...degree];
+    let movedAny = false;
+    for (let moved = true, rounds = 0; moved && rounds < 50; rounds++) {
+      moved = false;
+      for (let i = 0; i < size; i++) {
+        const own = comm[i];
+        total[own] -= degree[i];
+        const towards = new Map<number, number>();
+        for (const [j, v] of adj[i]) if (j !== i) towards.set(comm[j], (towards.get(comm[j]) ?? 0) + v);
+        const gain = (c: number) => (towards.get(c) ?? 0) - (resolution * total[c] * degree[i]) / twoM;
+        let best = own;
+        let bestGain = gain(own);
+        for (const c of [...towards.keys()].sort((x, y) => x - y)) {
+          const g = gain(c);
+          if (g > bestGain + 1e-12) [best, bestGain] = [c, g];
+        }
+        comm[i] = best;
+        total[best] += degree[i];
+        if (best !== own) moved = movedAny = true;
       }
     }
-    if (!changed) break;
+    if (!movedAny) break;
+    // Merge each group into one point of the next level.
+    const ids = new Map<number, number>();
+    for (const c of comm) if (!ids.has(c)) ids.set(c, ids.size);
+    member = member.map((m) => ids.get(comm[m])!);
+    const next: Map<number, number>[] = Array.from({ length: ids.size }, () => new Map());
+    for (let i = 0; i < size; i++) {
+      for (const [j, v] of adj[i]) {
+        if (j < i) continue;
+        const [a, b] = [ids.get(comm[i])!, ids.get(comm[j])!];
+        if (a === b) next[a].set(a, (next[a].get(a) ?? 0) + v);
+        else {
+          next[a].set(b, (next[a].get(b) ?? 0) + v);
+          next[b].set(a, (next[b].get(a) ?? 0) + v);
+        }
+      }
+    }
+    adj = next;
   }
   const size = new Map<number, number>();
-  for (const l of label) size.set(l, (size.get(l) ?? 0) + 1);
+  for (const g of member) size.set(g, (size.get(g) ?? 0) + 1);
   const order = [...size.keys()].sort((x, y) => size.get(y)! - size.get(x)! || x - y);
-  const rank = new Map(order.map((l, i) => [l, i]));
-  return label.map((l) => rank.get(l)!);
+  const rank = new Map(order.map((g, i) => [g, i]));
+  return member.map((g) => rank.get(g)!);
 }
