@@ -353,6 +353,9 @@ mod tests {
         assert!(parse_moves("a\tA/a\na\tB/a\n").is_err());
         assert!(parse_moves("a\tA/a\nb\tA/a\n").is_err());
         assert!(parse_moves("a A/a\n").is_err());
+        assert!(parse_moves("\tA/a\n").is_err(), "no old path");
+        assert!(parse_moves("a\t\n").is_err(), "no new path");
+        assert!(parse_moves("a\tA/a\tB/a\n").is_err(), "a third field");
         assert_eq!(parse_moves("./x\\a.mp3\tX/a.mp3\r\n").unwrap().find("x/a.mp3"), Some(("X/a.mp3", false)));
     }
 
@@ -369,6 +372,13 @@ mod tests {
         std::fs::write(music.join(BACKUP_DIR).join("Chill.5.bak"), "A - X/01 a.mp3\n").unwrap();
         std::fs::write(music.join(PLAYLIST_DIR).join("Chill.m3u"), "../A - X/01 a.mp3\n").unwrap();
         std::fs::write(music.join(PLAYLIST_DIR).join(BACKUP_DIR).join("Chill.7.bak"), "../A - X/01 a.mp3\n").unwrap();
+        // Not a playlist, though it reads like one: left alone.
+        std::fs::write(music.join("notes.txt"), "A - X/01 a.mp3\n").unwrap();
+        // A backup keeps its time (the newest-first order of backups is by name, but a person looks at times).
+        let then = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        for f in [music.join(BACKUP_DIR).join("Chill.5.bak"), music.join("Chill.m3u")] {
+            std::fs::File::options().write(true).open(f).unwrap().set_modified(then).unwrap();
+        }
         let list = root.join("moves.tsv");
         std::fs::write(&list, "A - X/01 a.mp3\tA/X/01 a.mp3\n").unwrap();
         let args = |extra: &[&str]| {
@@ -386,6 +396,10 @@ mod tests {
         assert_eq!(read(music.join(BACKUP_DIR).join("Chill.5.bak")), "A/X/01 a.mp3\n");
         assert_eq!(read(music.join(PLAYLIST_DIR).join("Chill.m3u")), "../A/X/01 a.mp3\n");
         assert_eq!(read(music.join(PLAYLIST_DIR).join(BACKUP_DIR).join("Chill.7.bak")), "../A/X/01 a.mp3\n");
+        assert_eq!(read(music.join("notes.txt")), "A - X/01 a.mp3\n");
+        let modified = |p: PathBuf| std::fs::metadata(p).unwrap().modified().unwrap();
+        assert_eq!(modified(music.join(BACKUP_DIR).join("Chill.5.bak")), then, "a backup keeps its time");
+        assert_ne!(modified(music.join("Chill.m3u")), then, "a playlist shows it changed");
         let aside: Vec<_> = std::fs::read_dir(&music)
             .unwrap()
             .filter_map(|e| e.ok())

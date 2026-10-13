@@ -106,6 +106,9 @@ pub struct Target {
     pub copy: Option<String>,
 }
 
+/// The meta key of the catalogue generation the agreed lists were made with (`follow_catalogue`).
+const CATALOGUE: &str = "catalogue";
+
 // temp_store: the image has no /tmp.
 const SCHEMA: &str = "
 PRAGMA temp_store = MEMORY;
@@ -180,6 +183,19 @@ impl SyncState {
     /// pass merges both sides as they are, adding what either has. Returns how many links.
     pub fn forget_baselines(&self) -> Result<usize> {
         Ok(self.db().execute("UPDATE links SET base = '[]', stamp = NULL", [])?)
+    }
+
+    /// The agreed lists hold the track ids of one catalogue (`Catalogue::generation`). Given the catalogue now: when
+    /// it is another than the one recorded, every list is forgotten (`forget_baselines`) and how many is returned;
+    /// `None` when it is the same, or the first one seen (recorded then).
+    pub fn follow_catalogue(&self, generation: &str) -> Result<Option<usize>> {
+        let forgot = match self.meta(CATALOGUE) {
+            Some(was) if was == generation => return Ok(None),
+            Some(_) => Some(self.forget_baselines()?),
+            None => None,
+        };
+        self.set_meta(CATALOGUE, generation)?;
+        Ok(forgot)
     }
 
     pub fn remove(&self, source: &str, user: &str, name: &str) -> Result<()> {
@@ -317,6 +333,27 @@ impl SyncState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_catalogue_forgets_every_agreed_list_once() {
+        let s = SyncState::open(None).unwrap();
+        let link = |n: &str| Link { name: n.into(), remote: format!("r-{n}"), remote_name: n.into(), stamp: Some("e".into()), base: vec![1, 2] };
+        s.put("jf", "u1", &link("A")).unwrap();
+        s.put("jf", "u2", &link("B")).unwrap();
+        assert_eq!(s.follow_catalogue("g1").unwrap(), None, "the first seen is recorded, nothing forgotten");
+        assert_eq!(s.links("jf", "u1").unwrap()[0].base, vec![1, 2]);
+        assert_eq!(s.follow_catalogue("g1").unwrap(), None, "the same catalogue");
+        assert_eq!(s.links("jf", "u2").unwrap()[0].stamp.as_deref(), Some("e"));
+        assert_eq!(s.follow_catalogue("g2").unwrap(), Some(2), "another catalogue: both lists forgotten");
+        for u in ["u1", "u2"] {
+            let l = &s.links("jf", u).unwrap()[0];
+            assert!(l.base.is_empty());
+            assert_eq!(l.stamp, None);
+        }
+        s.put("jf", "u1", &link("A")).unwrap();
+        assert_eq!(s.follow_catalogue("g2").unwrap(), None, "once: lists agreed since are kept");
+        assert_eq!(s.links("jf", "u1").unwrap()[0].base, vec![1, 2]);
+    }
 
     #[test]
     fn links_are_kept_per_server_and_user() {

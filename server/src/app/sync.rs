@@ -31,8 +31,6 @@ use crate::sync_state::{Conflict, Direction, Kind, Link, LinkStatus, LinkView, S
 /// Recorded in the sync state once the playlists in Music were adopted (decision 0014): never again, so the shared
 /// copies there are not taken for playlists.
 const ADOPTED: &str = "adopted";
-/// The catalogue generation the links' agreed lists were made with (`Catalogue::generation`).
-const CATALOGUE: &str = "catalogue";
 
 /// A target a playlist can be linked to.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -97,21 +95,6 @@ impl SyncService {
         self.last.lock().unwrap_or_else(|p| p.into_inner()).insert((playlist.to_string(), kind.key()), status);
     }
 
-    /// The links' agreed lists hold track ids. A catalogue made afresh (a restructure, a lost data folder) numbers
-    /// them anew, so those lists mean nothing: forgotten, and the next merge adds what either side has.
-    fn same_catalogue(&self) -> Result<()> {
-        let now = self.lib.catalogue().generation();
-        match self.state.meta(CATALOGUE) {
-            Some(was) if was == now => return Ok(()),
-            Some(_) => {
-                let n = self.state.forget_baselines()?;
-                tracing::info!("playlist sync: the catalogue is new; {n} link(s) merge afresh");
-            }
-            None => {}
-        }
-        self.state.set_meta(CATALOGUE, &now)
-    }
-
     /// One pass: the playlists in Music adopted (once), then every link brought in step.
     pub async fn pass(&self) {
         let _one = self.one_at_a_time.lock().await;
@@ -121,9 +104,15 @@ impl SyncService {
             return;
         }
         let Some(store) = self.lib.store_opt() else { return };
-        if let Err(e) = self.same_catalogue() {
-            tracing::warn!("playlist sync: {e:#}");
-            return;
+        // The links' agreed lists hold track ids: a catalogue made afresh (a restructure, a lost data folder) numbers
+        // them anew, so the lists are forgotten and the next merge adds what either side has.
+        match self.state.follow_catalogue(&self.lib.catalogue().generation()) {
+            Ok(Some(n)) => tracing::info!("playlist sync: the catalogue is new; {n} link(s) merge afresh"),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!("playlist sync: {e:#}");
+                return;
+            }
         }
         // Mid album action, a line can name a file that just moved: merged now, its track would leave the server copy.
         if self.follow.busy() {
