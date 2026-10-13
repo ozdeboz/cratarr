@@ -21,6 +21,18 @@ pub struct Named<'a> {
     pub spoken: &'a [String],
 }
 
+/// What was said without the words around a name ("chill music" → "chill"): a voice sentence may pass them on.
+pub fn spoken_name(said: &str) -> &str {
+    let said = said.trim();
+    let lower = said.to_lowercase();
+    for tail in [" music", " playlist", " songs", " tracks"] {
+        if lower.ends_with(tail) && said.len() > tail.len() {
+            return said[..said.len() - tail.len()].trim_end();
+        }
+    }
+    said
+}
+
 /// The playlist meant by `said`, or `None` when nothing (or more than one) fits.
 pub fn find<'a>(said: &str, playlists: &[Named<'a>]) -> Option<&'a str> {
     let said = fold(said);
@@ -111,6 +123,14 @@ mod tests {
         assert_eq!(find("dubs", &p), Some("Dubstep"));
         assert_eq!(find("chillw", &p), Some("Chillwave"));
         assert_eq!(find("du", &p), None, "too short to stand for a name");
+    }
+
+    #[test]
+    fn the_words_around_a_name_are_left_out() {
+        assert_eq!(spoken_name("chill music"), "chill");
+        assert_eq!(spoken_name(" Jean Michel playlist "), "Jean Michel");
+        assert_eq!(spoken_name("music"), "music", "a name on its own stays");
+        assert_eq!(spoken_name("chill"), "chill");
     }
 
     #[test]

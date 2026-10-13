@@ -30,7 +30,7 @@ pub use incoming::{DeleteResult, IncomingService, IncomingView, JobView, KeepPre
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{PlayingService, StateView};
-pub use playlists::{PlayByName, PlayMode, PlayResult, PlaylistService};
+pub use playlists::{ByName, PlayMode, PlayResult, PlaylistService};
 pub use sync::TargetChoice;
 pub use events::connect as events;
 pub use settings::{NamingView, SettingsService, SettingsView, SourceView};

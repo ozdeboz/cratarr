@@ -32,7 +32,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/restore", post(restore_playlist))
         .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
         .route("/api/sync/targets", get(sync_targets))
-        .route("/api/play-by-name", post(play_by_name))
+        .route("/api/playlists/by-name", get(playlist_by_name))
         .route("/api/playlists/{id}/spoken", put(set_spoken))
         .route("/api/albums/duplicates", get(album_duplicates))
         .route("/api/duplicates", get(duplicates))
@@ -266,16 +266,19 @@ async fn delete_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) ->
 }
 
 #[derive(Deserialize)]
-struct ByName {
+struct ByNameQuery {
     name: String,
-    /// Default: shuffle (how the voice assistant has always played playlists).
-    mode: Option<crate::app::PlayMode>,
+    #[serde(default)]
+    shuffle: bool,
+    /// Default 50, at most 100.
+    limit: Option<usize>,
+    source: Option<String>,
 }
 
-/// Play the playlist meant by a spoken name (decision 0015). Refused, with a sentence to say, when none fits.
-async fn play_by_name(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(b): Json<ByName>) -> Result<Json<crate::app::PlayByName>, ApiError> {
-    let mode = b.mode.unwrap_or(crate::app::PlayMode::Shuffle);
-    Ok(Json(app.playlists.play_by_name(&b.name, mode, f.source.as_deref()).await?))
+/// The playlist meant by a spoken name, as its tracks' server ids (decision 0015). `playlist` is null when nothing
+/// fits; that is an answer, not an error.
+async fn playlist_by_name(State(app): State<Arc<App>>, Query(q): Query<ByNameQuery>) -> Result<Json<crate::app::ByName>, ApiError> {
+    Ok(Json(app.playlists.by_name(&q.name, q.shuffle, q.limit.unwrap_or(50), q.source.as_deref()).await?))
 }
 
 #[derive(Deserialize)]

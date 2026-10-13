@@ -25,13 +25,13 @@ pub enum PlayMode {
     Last,
 }
 
-/// What was played for a spoken name.
+/// A playlist found by a spoken name, as its tracks on a server (decision 0015): the caller plays them itself.
 #[derive(Debug, Serialize)]
-pub struct PlayByName {
-    /// The playlist it was taken for.
-    pub playlist: String,
-    #[serde(flatten)]
-    pub played: PlayResult,
+pub struct ByName {
+    /// The playlist it was taken for; `None` when nothing fits what was said.
+    pub playlist: Option<String>,
+    /// The server's ids of its tracks, in order or shuffled, at most the limit asked for.
+    pub tracks: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,15 +80,20 @@ impl PlaylistService {
         Ok(list)
     }
 
-    /// Play the playlist meant by what was said (decision 0015): a voice assistant hands over free text.
-    pub async fn play_by_name(&self, said: &str, mode: PlayMode, want: Option<&str>) -> Result<PlayByName, ToggleError> {
+    /// The playlist meant by what was said, as its tracks on a server (decision 0015): Cratarr is the playlist server;
+    /// a voice assistant asks it and plays the tracks itself. `limit` at most PLAY_MAX.
+    pub async fn by_name(&self, said: &str, shuffled: bool, limit: usize, want: Option<&str>) -> Result<ByName, ToggleError> {
         let list = self.view(None).await?;
         let named: Vec<crate::voice::Named> = list.iter().map(|p| crate::voice::Named { name: &p.id, spoken: &p.spoken }).collect();
-        let Some(id) = crate::voice::find(said, &named).map(str::to_string) else {
-            return Err(ToggleError::Refused(format!("No playlist like {}", said.trim())));
+        let Some(id) = crate::voice::find(crate::voice::spoken_name(said), &named).map(str::to_string) else {
+            return Ok(ByName { playlist: None, tracks: Vec::new() });
         };
-        let played = self.play(&id, mode, want).await?;
-        Ok(PlayByName { playlist: id, played })
+        let (_, _, mut tracks, _) = self.server_ids(&id, want).await?;
+        if shuffled {
+            shuffle(&mut tracks);
+        }
+        tracks.truncate(limit.clamp(1, PLAY_MAX));
+        Ok(ByName { playlist: Some(id), tracks })
     }
 
     /// Set the other names a playlist is spoken as. Blank ones are dropped.
@@ -137,19 +142,7 @@ impl PlaylistService {
     /// Play a playlist on the server's player: its tracks in file order (or shuffled), looked up in the catalogue,
     /// at most PLAY_MAX of them. `want` = the server to use (default: the first connected one).
     pub async fn play(&self, id: &str, mode: PlayMode, want: Option<&str>) -> Result<PlayResult, ToggleError> {
-        let entries = self.lib.store()?.entries(id).await?;
-        let sources = self.lib.connected();
-        let (active, source) = want
-            .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
-            .or_else(|| sources.first())
-            .cloned()
-            .ok_or_else(|| ToggleError::CannotPlay("no server is connected".into()))?;
-        let (c, sid) = (self.lib.catalogue(), active.cfg.id.clone());
-        let found = tokio::task::spawn_blocking(move || c.track_ids(&sid, 0, &entries))
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))??;
-        let unknown = found.iter().filter(|f| f.is_none()).count();
-        let mut ids: Vec<String> = found.into_iter().flatten().collect();
+        let (active, source, mut ids, unknown) = self.server_ids(id, want).await?;
         let total = ids.len();
         if total == 0 {
             // Usually the catalogue is still matching files to the server (a first fill takes minutes): say so.
@@ -177,6 +170,28 @@ impl PlaylistService {
         };
         let player = source.play_tracks(&ids, how).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
         Ok(PlayResult { player, sent: ids.len(), total, unknown })
+    }
+
+    /// A playlist's tracks as a server's ids, in file order (`want` = the server to use, default the first connected
+    /// one), and how many lines it does not know (missing files, or not linked yet).
+    async fn server_ids(
+        &self,
+        id: &str,
+        want: Option<&str>,
+    ) -> Result<(Arc<super::library::Active>, Arc<dyn source::Source>, Vec<String>, usize), ToggleError> {
+        let entries = self.lib.store()?.entries(id).await?;
+        let sources = self.lib.connected();
+        let (active, source) = want
+            .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
+            .or_else(|| sources.first())
+            .cloned()
+            .ok_or_else(|| ToggleError::CannotPlay("no server is connected".into()))?;
+        let (c, sid) = (self.lib.catalogue(), active.cfg.id.clone());
+        let found = tokio::task::spawn_blocking(move || c.track_ids(&sid, 0, &entries))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))??;
+        let unknown = found.iter().filter(|f| f.is_none()).count();
+        Ok((active, source, found.into_iter().flatten().collect(), unknown))
     }
 
     /// After an edit: the playlist's copies follow (the shared one at once, the others with the next pass).
