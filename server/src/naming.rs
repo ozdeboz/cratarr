@@ -19,12 +19,13 @@
 //! - `/` in a value is part of it (`yes/and`, `AC/DC`, a credit like `Low Flung / Other Joe`) and becomes `_`, as
 //!   MusicBrainz Picard does (its default "directory separators character"). Several artists are told apart by the
 //!   list tags (`albumartists`, `artists`), not by slashes in the text tags (Cratarr decision 0016);
-//! - `:` → `-` (`Title: Subtitle` → `Title- Subtitle`), `?` → `!`, `"` → `'`, and `*` `<` `>` `|` `\` → `-`;
+//! - every other character Windows cannot take (`:` `?` `"` `*` `<` `>` `|` `\`) becomes `_` too (`Title: Subtitle`
+//!   → `Title_ Subtitle`), as Picard does;
 //! - control characters are dropped (tabs and line breaks become a space);
 //! - everything else stays: accents, other scripts, other punctuation, double spaces, dots inside a name;
-//! - no name starts with a space or a dot (a hidden file). A folder name does not end with a space, and a dot at its
-//!   end becomes `_` (`Howie B.` → `Howie B_`), as Picard does: Windows cannot take either. A file name ends with its
-//!   extension, so `R.E.M..mp3` is fine;
+//! - no name starts with a space, and a dot at its start becomes `_` (it would hide the file). A folder name does not
+//!   end with a space, and a dot at its end becomes `_` (`Howie B.` → `Howie B_`): Windows cannot take either. Both as
+//!   Picard does. A file name ends with its extension, so `R.E.M..mp3` is fine;
 //! - at most [`MAX_NAME_BYTES`] per name, cut at a character; Windows device names (`CON`, `NUL`, `COM1` …) get `_`.
 //!
 //! [`infer`] finds the template a library already follows: it renders every album with candidate templates and
@@ -461,10 +462,7 @@ pub fn clean(value: &str) -> String {
 
 fn replace(c: char) -> Option<char> {
     match c {
-        ':' | '*' | '<' | '>' | '|' | '\\' => Some('-'),
-        '?' => Some('!'),
-        '"' => Some('\''),
-        '/' => Some('_'),
+        ':' | '*' | '<' | '>' | '|' | '\\' | '?' | '"' | '/' => Some('_'),
         '\t' | '\n' | '\r' => Some(' '),
         c if c.is_control() => None,
         c => Some(c),
@@ -509,7 +507,11 @@ fn extension(file: &str) -> &str {
 /// A name's edges and length; `ext` is empty for a folder.
 fn finish(name: &str, ext: &str) -> String {
     let budget = if ext.is_empty() { MAX_NAME_BYTES } else { MAX_NAME_BYTES - ext.len() - 1 };
-    let mut stem = name.trim_start_matches([' ', '.']).to_string();
+    let mut stem = name.trim_start_matches(' ').to_string();
+    // A leading dot would hide the file: it becomes `_`, as Picard does.
+    if stem.starts_with('.') {
+        stem.replace_range(..1, "_");
+    }
     if stem.len() > budget {
         let mut cut = budget;
         while !stem.is_char_boundary(cut) {
@@ -882,10 +884,10 @@ mod tests {
 
     #[test]
     fn characters_windows_cannot_take_are_replaced() {
-        assert_eq!(clean("Sgt. Pepper: Reprise"), "Sgt. Pepper- Reprise");
-        assert_eq!(clean("Are You Experienced?"), "Are You Experienced!");
-        assert_eq!(clean("The \"Heroes\" Sessions"), "The 'Heroes' Sessions");
-        assert_eq!(clean("F*ck <this> | \\that"), "F-ck -this- - -that");
+        assert_eq!(clean("Sgt. Pepper: Reprise"), "Sgt. Pepper_ Reprise");
+        assert_eq!(clean("Are You Experienced?"), "Are You Experienced_");
+        assert_eq!(clean("The \"Heroes\" Sessions"), "The _Heroes_ Sessions");
+        assert_eq!(clean("F*ck <this> | \\that"), "F_ck _this_ _ _that");
         assert_eq!(clean("Tab\there\u{0}\nnext"), "Tab here next");
         assert_eq!(clean("Björk – Homogenic  (Live)…"), "Björk – Homogenic  (Live)…");
     }
@@ -895,7 +897,7 @@ mod tests {
         assert_eq!(finish("R.E.M.", ""), "R.E.M_");
         assert_eq!(finish("Howie B. ", ""), "Howie B_");
         assert_eq!(finish("01 R.E.M. - Stand.", "mp3"), "01 R.E.M. - Stand..mp3");
-        assert_eq!(finish("...And You Will Know Us by the Trail of Dead - Source Tags & Codes (2002)", ""), "And You Will Know Us by the Trail of Dead - Source Tags & Codes (2002)");
+        assert_eq!(finish("...And You Will Know Us by the Trail of Dead", ""), "_..And You Will Know Us by the Trail of Dead");
         assert_eq!(finish(" . ", ""), "_");
         assert_eq!(finish("con", "mp3"), "con_.mp3");
         assert_eq!(finish("NUL.x", ""), "NUL_.x");
@@ -968,7 +970,7 @@ mod tests {
         albums[3].tracks[0].file = "01 Massive Attack - Angel (Remastered).flac".into(); // tags differ
         albums[4].folder = "Daft Punk - Discovery- (2001)".into(); // characters
         albums[5].folder = "Radiohead - OK Computer (2017)".into(); // year from date
-        albums[0].tracks[0].file = "01 Pink Floyd - In the Flesh!.flac".into(); // disc prefix missing
+        albums[0].tracks[0].file = "01 Pink Floyd - In the Flesh_.flac".into(); // disc prefix missing
         albums[1].tracks[0].tags.0.retain(|(n, _)| n != "title"); // no title
 
         let found = infer(&albums);
@@ -988,7 +990,7 @@ mod tests {
             ]
         );
         let disc = found.samples.iter().find(|m| m.cause == Cause::MultiDisc).unwrap();
-        assert_eq!(disc.rendered.as_deref(), Some("1-01 Pink Floyd - In the Flesh!.flac"));
+        assert_eq!(disc.rendered.as_deref(), Some("1-01 Pink Floyd - In the Flesh_.flac"));
         assert_eq!(disc.folder, "Pink Floyd - The Wall (1979)");
     }
 

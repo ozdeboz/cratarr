@@ -37,8 +37,10 @@ on one album only.
   `albumartists` (and `artists` per track) holds each artist apart, so a media server links the album to every one
   of them (Jellyfin: "prefer non-standard artists tags" on, its own delimiter splitting off). This is how Picard
   writes them. An album without a MusicBrainz id keeps its artists as listed, joined with "&" in the credit.
-- **Characters, as Picard does:** a `/` inside a value becomes `_` (`yes/and` → `yes_and`), and so does a folder
-  name's last dot (`Howie B.` → `Howie B_`); Windows cannot take either.
+- **Characters, as Picard does:** every character Windows cannot take becomes `_`: a `/` inside a value
+  (`yes/and` → `yes_and`), `:` `?` `"` `*` `<` `>` `|` `\`, a folder name's last dot (`Howie B.` → `Howie B_`) and a
+  name's first dot. The reference library used `-`, `!` and `'` for some of these (37 album folders, 259 tracks);
+  those names are brought to `_` in the same pass as the move, so Music keeps one convention.
 - **Music is never one of Lidarr's root folders.** Lidarr fetches into Incoming; Cratarr moves albums into Music and
   names them (decision 0013). Lidarr's one-artist-per-album model would want collaborations moved into one partner's
   folder, and its renames would undo the template.
