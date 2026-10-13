@@ -135,6 +135,22 @@ pub struct PlaylistEvent {
     pub change: PlaylistChange,
 }
 
+/// An album as listed, before its details. `stamp` changes whenever the source saves the album again: its details
+/// are read again then.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Listed {
+    pub album: Album,
+    pub stamp: Option<String>,
+}
+
+/// An album's track count, format ("FLAC"; `None` when mixed or unknown) and lowest bitrate.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct AlbumDetails {
+    pub tracks: u32,
+    pub format: Option<String>,
+    pub bitrate_kbps: Option<u32>,
+}
+
 /// An album as a source sees it. Paths are the source's own (see `placement`).
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct Album {
@@ -230,9 +246,16 @@ pub trait Source: Send + Sync {
         false
     }
 
-    /// Optional: albums in a library, newest first, at most `limit`.
-    fn albums<'a>(&'a self, _library_id: &'a str, _limit: usize) -> Fut<'a, Vec<Album>> {
+    /// Optional: albums in a library, newest first, at most `limit`, without their details: listing is cheap,
+    /// details are not (see `album_summary`).
+    fn albums<'a>(&'a self, _library_id: &'a str, _limit: usize) -> Fut<'a, Vec<Listed>> {
         Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Optional: an album's track count, format and lowest bitrate, as the source knows them. Costly for some
+    /// sources: Cratarr takes them from its own catalogue where it can, and keeps them (decision 0011).
+    fn album_summary<'a>(&'a self, _album: &'a str) -> Fut<'a, Option<AlbumDetails>> {
+        Box::pin(async { Ok(None) })
     }
 
     /// Optional: play an album, from its first track, on the player this source follows. Returns a short label of

@@ -255,6 +255,10 @@ pub struct IncomingService {
     queue: queue::Queue,
     /// A server's Incoming list changed (albums came or went), for pages that follow it (`/api/events`).
     lists_changed: tokio::sync::broadcast::Sender<()>,
+    /// Album details asked of a source, by source and album id: (the source's stamp then, details). See `with_details`.
+    details: std::sync::Mutex<std::collections::HashMap<String, (Option<String>, source::AlbumDetails)>>,
+    /// Where `details` is kept between restarts.
+    details_file: Option<PathBuf>,
 }
 
 impl IncomingService {
@@ -266,6 +270,7 @@ impl IncomingService {
         trash_days: u32,
         data_dir: Option<&str>,
     ) -> Self {
+        let details_file = data_dir.map(|d| PathBuf::from(d).join("incoming-albums.json"));
         Self {
             lib,
             files,
@@ -278,6 +283,14 @@ impl IncomingService {
             trash_days: std::sync::atomic::AtomicU32::new(trash_days),
             queue: queue::Queue::open(data_dir.map(|d| std::path::PathBuf::from(d).join("convert-queue.json"))),
             lists_changed: tokio::sync::broadcast::channel(16).0,
+            details: std::sync::Mutex::new(
+                details_file
+                    .as_ref()
+                    .and_then(|f| std::fs::read(f).ok())
+                    .and_then(|b| serde_json::from_slice(&b).ok())
+                    .unwrap_or_default(),
+            ),
+            details_file,
         }
     }
 
@@ -340,7 +353,7 @@ impl IncomingService {
             let view = match kept {
                 Some(v) => v,
                 None => {
-                    let v = Self::read_incoming(&a, &*s, &libraries).await;
+                    let v = self.read_incoming(&a, &*s, &libraries).await;
                     self.cache.lock().await.insert(key, v.clone());
                     v
                 }
@@ -441,7 +454,7 @@ impl IncomingService {
         let mut changed = false;
         for (a, s, libraries) in self.incoming_sources() {
             let key = format!("{}\n{}", a.cfg.id, libraries.join("\n"));
-            let fresh = Self::read_incoming(&a, &*s, &libraries).await;
+            let fresh = self.read_incoming(&a, &*s, &libraries).await;
             let mut cache = self.cache.lock().await;
             if fresh.error.is_none() || !cache.contains_key(&key) {
                 changed |= cache.get(&key).is_none_or(|old| ids(old) != ids(&fresh));
@@ -1110,22 +1123,90 @@ impl IncomingService {
             .collect()
     }
 
-    async fn read_incoming(a: &Active, s: &dyn Source, libraries: &[String]) -> IncomingSourceView {
+    async fn read_incoming(&self, a: &Active, s: &dyn Source, libraries: &[String]) -> IncomingSourceView {
         let supported = s.lists_albums();
-        let mut albums = Vec::new();
+        let mut listed = Vec::new();
         let mut error = None;
         if supported {
             for library in libraries {
                 match s.albums(library, INCOMING_LIMIT).await {
-                    Ok(list) => albums.extend(list),
+                    Ok(list) => listed.extend(list),
                     Err(e) => {
                         error.get_or_insert(format!("{e:#}"));
                     }
                 }
             }
-            albums.sort_by_key(|a: &source::Album| std::cmp::Reverse(a.added.unwrap_or(0)));
         }
+        let mut albums = self.with_details(&a.cfg.id, s, listed).await;
+        albums.sort_by_key(|a: &source::Album| std::cmp::Reverse(a.added.unwrap_or(0)));
         IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now(), verdicts: BTreeMap::new(), deletable: Vec::new() }
+    }
+
+    /// Each album with its track count, format and lowest bitrate: from the catalogue where Cratarr sees the album's
+    /// folder (no request), else as kept from before while the source has not saved the album since, else asked of the
+    /// source, one album at a time. Asking is costly for Jellyfin (all 246 albums at once after a restart took it to
+    /// 280% CPU and made it time out, 2026-10-13), so what was asked is kept, also across restarts.
+    async fn with_details(&self, source_id: &str, s: &dyn Source, listed: Vec<source::Listed>) -> Vec<source::Album> {
+        let c = self.lib.catalogue();
+        let seen: Vec<(String, source::AlbumDetails)> = tokio::task::spawn_blocking(move || {
+            let mut out = Vec::new();
+            for folder in 1..c.folders().len() as i64 {
+                for f in c.album_facts(folder).unwrap_or_default() {
+                    let format = (f.formats.len() == 1).then(|| f.formats.iter().next().cloned()).flatten();
+                    out.push((f.dir, source::AlbumDetails { tracks: f.tracks, format, bitrate_kbps: f.min_kbps }));
+                }
+            }
+            out
+        })
+        .await
+        .unwrap_or_default();
+        let from_catalogue = |path: &str| {
+            seen.iter().filter(|(dir, _)| !dir.is_empty() && path.ends_with(&format!("/{dir}"))).max_by_key(|(dir, _)| dir.len()).map(|(_, d)| d.clone())
+        };
+        let key = |id: &str| format!("{source_id}\n{id}");
+        let mut albums = Vec::with_capacity(listed.len());
+        let mut asked = false;
+        for source::Listed { mut album, stamp } in listed {
+            let kept = self.details.lock().unwrap_or_else(|p| p.into_inner()).get(&key(&album.id)).filter(|(s, _)| *s == stamp).map(|(_, d)| d.clone());
+            let details = match album.path.as_deref().and_then(from_catalogue).or(kept) {
+                Some(d) => Some(d),
+                None => match s.album_summary(&album.id).await {
+                    Ok(Some(d)) => {
+                        self.details.lock().unwrap_or_else(|p| p.into_inner()).insert(key(&album.id), (stamp.clone(), d.clone()));
+                        asked = true;
+                        Some(d)
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        tracing::warn!("tracks of album {}: {e:#}", album.id);
+                        None
+                    }
+                },
+            };
+            if let Some(d) = details {
+                album.tracks = d.tracks;
+                album.format = d.format;
+                album.bitrate_kbps = d.bitrate_kbps;
+            }
+            albums.push(album);
+        }
+        if asked {
+            self.save_details();
+        }
+        albums
+    }
+
+    /// Keep the asked album details on disk (see `with_details`); best effort.
+    fn save_details(&self) {
+        let Some(file) = self.details_file.as_ref() else { return };
+        let body = match serde_json::to_vec(&*self.details.lock().unwrap_or_else(|p| p.into_inner())) {
+            Ok(b) => b,
+            Err(e) => return tracing::warn!("album details: {e:#}"),
+        };
+        let tmp = file.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, file)) {
+            tracing::warn!("cannot save {}: {e:#}", file.display());
+        }
     }
 
     /// Play an album of a server's incoming music on that server's player. Returns the player's label.
