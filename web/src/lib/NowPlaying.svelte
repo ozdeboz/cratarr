@@ -515,16 +515,17 @@
     cursor: pointer;
   }
 
-  /* Full screen: one centred column, everything larger. It grows to fill the panel (no min-height: that rounded to a
-     pixel over and showed a scrollbar). */
+  /* Full screen: one centred column, everything larger. It fills the panel above the navigation and no more; the
+     cover gives up height so the rest fits. Only below the cover's smallest size does the panel scroll. */
   header.full {
     box-sizing: border-box;
     position: relative;
     display: flex;
-    flex: 1 0 auto;
+    flex: 1 1 0;
+    min-height: 0;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: safe center;
     gap: 20px;
     padding: 56px 0 24px;
     border-bottom: 0;
@@ -543,12 +544,15 @@
   }
 
   header.full .cover-btn {
+    flex: 0 1 min(78vw, 440px);
+    min-height: 96px;
     cursor: default;
   }
 
   header.full .cover {
-    width: min(78vw, 40vh, 440px);
-    height: min(78vw, 40vh, 440px);
+    width: auto;
+    height: 100%;
+    aspect-ratio: 1;
     border-radius: 14px;
   }
 
