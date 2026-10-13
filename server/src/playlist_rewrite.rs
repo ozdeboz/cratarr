@@ -4,6 +4,9 @@
 //! playlist folder, and the backups of both (an Undo or a restore must not bring the old lines back). Without
 //! `--apply` it only reports. With it, each changed file is first copied into `.cratarr-rewrite-<stamp>` in Music.
 //!
+//! A line naming no file in the list is repaired when its folder had exactly one file of the same name but for the
+//! extension or capitals (an MP3 replaced by its FLAC, a title's case corrected): it follows that file.
+//!
 //! Offline only: a running Cratarr would rewrite the same files.
 
 use std::collections::{BTreeMap, HashMap};
@@ -18,6 +21,8 @@ use crate::playlists::{BACKUP_DIR, PLAYLIST_DIR, relative_to};
 pub struct Counts {
     /// Lines that now name the moved file.
     pub moved: usize,
+    /// Of `moved`: lines that named a twin of the file (see the module), as they were.
+    pub repaired: Vec<String>,
     /// Lines the list does not name (their file did not move, or was missing already).
     pub kept: usize,
     /// Of `kept`: lines whose file is not there.
@@ -25,12 +30,42 @@ pub struct Counts {
 }
 
 /// The moves: old → new, both relative to the Music folder.
-pub type Moves = HashMap<String, String>;
+#[derive(Debug, Default)]
+pub struct Moves {
+    to: HashMap<String, String>,
+    /// The old paths by `twin_key`.
+    twins: HashMap<String, Vec<String>>,
+}
+
+impl Moves {
+    fn insert(&mut self, old: String, new: String) {
+        self.twins.entry(twin_key(&old)).or_default().push(old.clone());
+        self.to.insert(old, new);
+    }
+
+    /// Where the file a line names went, and whether the line named a twin of it.
+    fn find(&self, rel: &str) -> Option<(&str, bool)> {
+        if let Some(new) = self.to.get(rel) {
+            return Some((new, false));
+        }
+        match self.twins.get(&twin_key(rel)).map(Vec::as_slice) {
+            Some([only]) => self.to.get(only).map(|new| (new.as_str(), true)),
+            _ => None,
+        }
+    }
+}
+
+/// A file's folder and name without the extension, in lower case: the same for an MP3 and the FLAC that replaced
+/// it, or a title before and after its case was corrected.
+fn twin_key(rel: &str) -> String {
+    let stem = rel.rsplit_once('.').filter(|(_, ext)| !ext.contains('/')).map_or(rel, |(s, _)| s);
+    stem.to_lowercase()
+}
 
 /// Read the list: `old<TAB>new` per line; blank lines and `#` lines skipped. Refuses one old path given two places,
 /// and two old paths sent to one.
 pub fn parse_moves(text: &str) -> Result<Moves> {
-    let mut moves = Moves::new();
+    let mut moves = Moves::default();
     let mut taken: HashMap<String, String> = HashMap::new();
     for (n, line) in text.lines().enumerate() {
         let line = line.trim_end_matches('\r');
@@ -42,7 +77,7 @@ pub fn parse_moves(text: &str) -> Result<Moves> {
         if old.is_empty() || new.is_empty() || new.contains('\t') {
             bail!("line {}: expected exactly two paths", n + 1);
         }
-        if let Some(was) = moves.get(&old)
+        if let Some(was) = moves.to.get(&old)
             && *was != new
         {
             bail!("line {}: {old} is moved to both {was} and {new}", n + 1);
@@ -51,6 +86,9 @@ pub fn parse_moves(text: &str) -> Result<Moves> {
             && *other != old
         {
             bail!("line {}: {other} and {old} are both moved to {new}", n + 1);
+        }
+        if moves.to.contains_key(&old) {
+            continue;
         }
         taken.insert(new.clone(), old.clone());
         moves.insert(old, new);
@@ -99,10 +137,14 @@ pub fn rewrite(content: &str, music: &Path, home: &Path, moves: &Moves, exists: 
             continue;
         }
         let rel = joined(home, entry).strip_prefix(music).ok().map(|r| clean(&r.to_string_lossy()));
-        let new = rel.as_ref().and_then(|r| moves.get(r)).and_then(|n| relative_to(home, &joined(music, n)));
+        let found = rel.as_ref().and_then(|r| moves.find(r));
+        let new = found.and_then(|(n, twin)| relative_to(home, &joined(music, n)).map(|l| (l, twin)));
         match new {
-            Some(new) => {
+            Some((new, twin)) => {
                 counts.moved += 1;
+                if twin {
+                    counts.repaired.push(entry.to_string());
+                }
                 if bom {
                     out.push('\u{feff}');
                 }
@@ -154,8 +196,8 @@ pub fn run(args: &[String]) -> Result<i32> {
     }
     let moves = parse_moves(&std::fs::read_to_string(list).with_context(|| format!("reading {list}"))?)?;
     let exists = |rel: &str| music.join(rel).is_file();
-    let new_there = moves.values().filter(|n| exists(n)).count();
-    println!("{} moves; {} of their new files are there", moves.len(), new_there);
+    let new_there = moves.to.values().filter(|n| exists(n)).count();
+    println!("{} moves; {} of their new files are there", moves.to.len(), new_there);
 
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let safety = music.join(format!(".cratarr-rewrite-{stamp}"));
@@ -166,12 +208,16 @@ pub fn run(args: &[String]) -> Result<i32> {
         let (new, c) = rewrite(&text, &music, &home_of(&file), &moves, &exists);
         let name = file.strip_prefix(&music).unwrap_or(&file).display().to_string();
         if c.moved > 0 || !c.missing.is_empty() {
-            println!("{name}: {} moved, {} kept, {} missing", c.moved, c.kept, c.missing.len());
+            println!("{name}: {} moved ({} repaired), {} kept, {} missing", c.moved, c.repaired.len(), c.kept, c.missing.len());
+            for r in c.repaired.iter().take(5) {
+                println!("    repaired: {r}");
+            }
             for m in c.missing.iter().take(5) {
                 println!("    missing: {m}");
             }
         }
         total.moved += c.moved;
+        total.repaired.extend(c.repaired);
         total.kept += c.kept;
         total.missing.extend(c.missing);
         if new != text {
@@ -179,9 +225,10 @@ pub fn run(args: &[String]) -> Result<i32> {
         }
     }
     println!(
-        "total: {} files to change, {} lines moved, {} kept, {} missing",
+        "total: {} files to change, {} lines moved ({} repaired), {} kept, {} missing",
         changed.len(),
         total.moved,
+        total.repaired.len(),
         total.kept,
         total.missing.len()
     );
@@ -222,7 +269,11 @@ mod tests {
     use super::*;
 
     fn moves(pairs: &[(&str, &str)]) -> Moves {
-        pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+        let mut m = Moves::default();
+        for (a, b) in pairs {
+            m.insert(a.to_string(), b.to_string());
+        }
+        m
     }
 
     const MUSIC: &str = "/media/Music";
@@ -281,12 +332,28 @@ mod tests {
     }
 
     #[test]
+    fn a_line_naming_a_twin_follows_the_one_file_it_was_and_otherwise_stays() {
+        let m = moves(&[
+            ("Z - W/03 Z - Somersault.flac", "Z/W/03 Z - Somersault.flac"),
+            ("A - Z/10 A - Reading a Wave.mp3", "A/Z/10 A - Reading a Wave.mp3"),
+            ("B - Y/01 B - Song.flac", "B/Y/01 B - Song.flac"),
+            ("B - Y/01 B - Song.ogg", "B/Y/01 B - Song.ogg"),
+        ]);
+        let music = Path::new(MUSIC);
+        let text = "Z - W/03 Z - Somersault.mp3\nA - Z/10 A - Reading A Wave.mp3\nB - Y/01 B - Song.mp3\n";
+        let (out, c) = rewrite(text, music, music, &m, &|_| false);
+        assert_eq!(out, "Z/W/03 Z - Somersault.flac\nA/Z/10 A - Reading a Wave.mp3\nB - Y/01 B - Song.mp3\n");
+        assert_eq!(c.repaired, vec!["Z - W/03 Z - Somersault.mp3".to_string(), "A - Z/10 A - Reading A Wave.mp3".to_string()]);
+        assert_eq!(c.missing, vec!["B - Y/01 B - Song.mp3".to_string()], "two twins: not guessed");
+    }
+
+    #[test]
     fn the_list_refuses_one_file_sent_two_ways_and_two_files_sent_to_one() {
         assert!(parse_moves("# header\n\na\tA/a\n").is_ok());
         assert!(parse_moves("a\tA/a\na\tB/a\n").is_err());
         assert!(parse_moves("a\tA/a\nb\tA/a\n").is_err());
         assert!(parse_moves("a A/a\n").is_err());
-        assert_eq!(parse_moves("./x\\a.mp3\tX/a.mp3\r\n").unwrap().get("x/a.mp3").map(String::as_str), Some("X/a.mp3"));
+        assert_eq!(parse_moves("./x\\a.mp3\tX/a.mp3\r\n").unwrap().find("x/a.mp3"), Some(("X/a.mp3", false)));
     }
 
     #[test]
