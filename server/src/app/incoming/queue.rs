@@ -93,6 +93,8 @@ pub(super) struct Queue {
     file: Option<PathBuf>,
     jobs: std::sync::Mutex<Jobs>,
     wake: std::sync::Arc<tokio::sync::Notify>,
+    /// The whole queue after every change, for pages that follow it (`/api/events`).
+    tell: tokio::sync::broadcast::Sender<Vec<JobView>>,
 }
 
 /// Where a file is converted to: in the staging folder, named `.flac`.
@@ -161,7 +163,7 @@ impl Queue {
                 }
             })
             .unwrap_or_default();
-        Self { file, jobs: std::sync::Mutex::new(jobs), wake: Default::default() }
+        Self { file, jobs: std::sync::Mutex::new(jobs), wake: Default::default(), tell: tokio::sync::broadcast::channel(16).0 }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Jobs> {
@@ -184,7 +186,13 @@ impl Queue {
                 tracing::warn!("the conversion queue cannot be saved: {e:#}");
             }
         }
+        let _ = self.tell.send(views(&jobs, now));
         out
+    }
+
+    /// The whole queue after every change. A listener that falls behind reads `views` instead.
+    pub(super) fn subscribe(&self) -> tokio::sync::broadcast::Receiver<Vec<JobView>> {
+        self.tell.subscribe()
     }
 
     fn update(&self, id: u64, f: impl FnOnce(&mut Job)) {
@@ -217,26 +225,29 @@ impl Queue {
     }
 
     pub(super) fn views(&self) -> Vec<JobView> {
-        let now = epoch_now();
-        self.lock()
-            .list
-            .iter()
-            .filter(|j| j.finished.is_none_or(|at| now - at < KEEP_FINISHED_SECS))
-            .map(|j| JobView {
-                id: j.id,
-                source: j.source.clone(),
-                album_id: j.album.id.clone(),
-                title: j.album.title.clone(),
-                action: j.action,
-                state: j.state,
-                done: j.done,
-                total: j.files.len(),
-                folder: j.to.clone(),
-                undo: j.undo.clone(),
-                why: j.why.clone(),
-            })
-            .collect()
+        views(&self.lock(), epoch_now())
     }
+}
+
+/// The jobs as the page sees them, finished ones only for a while.
+fn views(jobs: &Jobs, now: i64) -> Vec<JobView> {
+    jobs.list
+        .iter()
+        .filter(|j| j.finished.is_none_or(|at| now - at < KEEP_FINISHED_SECS))
+        .map(|j| JobView {
+            id: j.id,
+            source: j.source.clone(),
+            album_id: j.album.id.clone(),
+            title: j.album.title.clone(),
+            action: j.action,
+            state: j.state,
+            done: j.done,
+            total: j.files.len(),
+            folder: j.to.clone(),
+            undo: j.undo.clone(),
+            why: j.why.clone(),
+        })
+        .collect()
 }
 
 /// How a job ended.
@@ -277,8 +288,15 @@ impl IncomingService {
         KeepResult { undo: None, title, folder: to, queued: true }
     }
 
+    /// The conversion queue as the page sees it.
     pub fn jobs(&self) -> Vec<JobView> {
         self.queue.views()
+    }
+
+    /// The whole queue after every change (`jobs` for the first look, and after falling behind).
+    #[allow(dead_code)] // until /api/events uses it
+    pub fn subscribe_jobs(&self) -> tokio::sync::broadcast::Receiver<Vec<JobView>> {
+        self.queue.subscribe()
     }
 
     /// Take a job out of the queue while it waits or converts (a file being converted is finished first, then
@@ -540,6 +558,9 @@ mod tests {
         assert_eq!(q.views().iter().map(|v| v.id).collect::<Vec<_>>(), vec![1, 2], "the old finished job is gone");
         assert_eq!(q.next(), Some(2), "a job cut short goes first");
         assert!(q.busy("a1") && q.busy("a2") && !q.busy("a3"));
+        let mut rx = q.subscribe();
+        q.update(1, |j| j.done = 1);
+        assert_eq!(rx.try_recv().unwrap().iter().find(|v| v.id == 1).map(|v| v.done), Some(1), "every change is told, whole");
         std::fs::remove_dir_all(&d).ok();
     }
 }
