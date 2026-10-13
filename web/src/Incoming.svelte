@@ -156,9 +156,20 @@
     }
   });
 
+  // A server's list could not be read while albums are shown (they stay): one toast says so, not a line that comes and
+  // goes; it goes when the list reads again. With nothing to show, the page says it in place.
+  let readError: string | null = null;
+  function tellReadError() {
+    const now = (sources ?? []).find((s) => s.error && s.albums.length > 0)?.error ?? null;
+    if (now && now !== readError) toast.show({ text: now, tone: 'error' });
+    if (!now && readError && toast.current?.text === readError) toast.dismiss();
+    readError = now;
+  }
+
   async function reload() {
     try {
       ({ sources, trash_days: trashDays } = await getIncoming(prefs.source || undefined, true));
+      tellReadError();
     } catch {
       /* the regular refresh will try again */
     }
@@ -212,6 +223,7 @@
       try {
         ({ sources, trash_days: trashDays } = await getIncoming(want, fresh));
         error = null;
+        tellReadError();
       } catch (e) {
         if (!sources) error = e instanceof ApiError ? e.message : 'Unexpected error';
       }
@@ -254,7 +266,7 @@
       {#if sources.length > 1}<h2>{s.label}</h2>{/if}
       {#if !s.supported}
         <p class="empty">{s.label} can't list albums.</p>
-      {:else if s.error}
+      {:else if s.error && s.albums.length === 0}
         <p class="error" role="alert">{s.error}</p>
       {:else if s.albums.length === 0}
         <p class="empty">Nothing incoming.</p>
@@ -363,7 +375,7 @@
         {/if}
         <div class="actions">
           {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
-            <button class="primary" disabled={working || !!keep.refused} onclick={() => keepIt(m.source, m.a)}>Keep in Music</button>
+            <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={() => keepIt(m.source, m.a)}>Keep in Music</button>
           {/if}
           <button onclick={() => (menu = null)}>Cancel</button>
         </div>
@@ -390,7 +402,7 @@
         {/if}
         <div class="actions">
           {#if swap && (!swap.refused || swap.refused.kind === 'needs_year')}
-            <button class="primary" disabled={working || !!swap.refused} onclick={() => replaceIt(m.source, m.a)}>Replace</button>
+            <button class="primary" disabled={working || !!swap.refused} aria-busy={working} onclick={() => replaceIt(m.source, m.a)}>Replace</button>
           {/if}
           <button onclick={() => (menu = null)}>Cancel</button>
         </div>
@@ -399,7 +411,7 @@
       <div class="form">
         <p class="ask">Delete {m.a.title}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
         <div class="actions">
-          <button class="danger solid" disabled={working} onclick={() => remove(m.source, m.a)}>Delete album</button>
+          <button class="danger solid" disabled={working} aria-busy={working} onclick={() => remove(m.source, m.a)}>Delete album</button>
           <button onclick={() => (menu = null)}>Cancel</button>
         </div>
       </div>
