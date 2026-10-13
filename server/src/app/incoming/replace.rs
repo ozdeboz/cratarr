@@ -128,7 +128,11 @@ impl IncomingService {
             let old = album_files(&c, 0, &old_dir)?;
             let new_others: Vec<String> = files_under(&root.join(&dir)).into_iter().filter(|f| !new.iter().any(|m| &m.rel == f)).collect();
             let plan = match crate::incoming::plan_replace(&template, &old, &new, &new_others, year.as_deref()) {
-                Ok(p) => p,
+                Ok(p) => {
+                    let keep = crate::incoming::KeepPlan { folder: p.folder, moves: p.moves };
+                    let keep = crate::incoming::follow_spelling(keep, |parent| crate::incoming::folders_in(&music, parent));
+                    crate::incoming::ReplacePlan { folder: keep.folder, moves: keep.moves, ..p }
+                }
                 Err(ReplaceRefusal::NeedsYear) => return Ok(Err(ReplaceRefused::NeedsYear)),
                 Err(ReplaceRefusal::Unmatched(titles)) => return Ok(Err(ReplaceRefused::Unmatched(titles))),
                 Err(e) => return Ok(Err(ReplaceRefused::Other(e.to_string()))),

@@ -371,12 +371,99 @@ pub fn plan_keep(
     Ok(KeepPlan { folder: names.folder, moves })
 }
 
+/// Two folder names that differ only in capitals or accents: one folder on a disk that ignores case.
+fn spelling_key(name: &str) -> String {
+    name.chars().flat_map(char::to_lowercase).map(crate::albums::unaccented).collect()
+}
+
+/// The plan with each of its folders spelled as Music already spells it (decision 0019): Lidarr's "DARKSIDE/Spiral
+/// (2014)" goes into the "Darkside/" that is there, instead of beside it. `existing(parent)` lists the folder names in
+/// `parent` ("" for Music itself). A folder Music has under one other spelling only is taken; with none, or several,
+/// the rendered name stays.
+pub fn follow_spelling(plan: KeepPlan, existing: impl Fn(&str) -> Vec<String>) -> KeepPlan {
+    let mut folder = String::new();
+    for part in plan.folder.split('/') {
+        let names = existing(&folder);
+        let key = spelling_key(part);
+        let mut same = names.iter().filter(|n| spelling_key(n) == key);
+        let name = match (same.next(), same.next()) {
+            _ if names.iter().any(|n| n == part) => part,
+            (Some(only), None) => only.as_str(),
+            _ => part,
+        };
+        if !folder.is_empty() {
+            folder.push('/');
+        }
+        folder.push_str(name);
+    }
+    if folder == plan.folder {
+        return plan;
+    }
+    let old = format!("{}/", plan.folder);
+    let moves = plan.moves.into_iter().map(|(from, to)| (from, to.strip_prefix(&old).map_or(to.clone(), |rest| format!("{folder}/{rest}")))).collect();
+    KeepPlan { folder, moves }
+}
+
+/// The folder names in `music/parent`, for `follow_spelling`. Hidden folders are not candidates.
+pub fn folders_in(music: &std::path::Path, parent: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(music.join(parent)) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| !n.starts_with('.'))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn tags(pairs: &[(&str, &str)]) -> crate::naming::Tags {
         crate::naming::Tags(pairs.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect())
+    }
+
+    fn darkside_plan() -> KeepPlan {
+        KeepPlan {
+            folder: "DARKSIDE/Spiral (2014)".into(),
+            moves: vec![
+                ("01 Gone Too Soon.flac".into(), "DARKSIDE/Spiral (2014)/01 DARKSIDE - Gone Too Soon.flac".into()),
+                ("cover.jpg".into(), "DARKSIDE/Spiral (2014)/cover.jpg".into()),
+            ],
+        }
+    }
+
+    #[test]
+    fn an_album_goes_into_the_artist_folder_music_already_has() {
+        let music = |parent: &str| match parent {
+            "" => vec!["Darkside".to_string(), "Air".into()],
+            _ => vec!["Psychic (2013)".to_string()],
+        };
+        let plan = follow_spelling(darkside_plan(), music);
+        assert_eq!(plan.folder, "Darkside/Spiral (2014)");
+        assert_eq!(plan.moves[0], ("01 Gone Too Soon.flac".to_string(), "Darkside/Spiral (2014)/01 DARKSIDE - Gone Too Soon.flac".to_string()));
+        assert_eq!(plan.moves[1].1, "Darkside/Spiral (2014)/cover.jpg");
+    }
+
+    #[test]
+    fn accents_count_as_the_same_spelling_and_a_case_twin_album_is_found() {
+        let plan = KeepPlan { folder: "Andre Bratten/picture music (2022)".into(), moves: vec![] };
+        let music = |parent: &str| match parent {
+            "" => vec!["André Bratten".to_string()],
+            _ => vec!["Picture Music (2022)".to_string()],
+        };
+        // The album folder follows too, so "Music already has a folder" refuses the twin.
+        assert_eq!(follow_spelling(plan, music).folder, "André Bratten/Picture Music (2022)");
+    }
+
+    #[test]
+    fn the_rendered_spelling_stays_when_music_has_it_none_or_several() {
+        let exact = |p: &str| if p.is_empty() { vec!["DARKSIDE".to_string(), "Darkside".into()] } else { vec![] };
+        assert_eq!(follow_spelling(darkside_plan(), exact), darkside_plan());
+        let several = |p: &str| if p.is_empty() { vec!["DarkSide".to_string(), "Darkside".into()] } else { vec![] };
+        assert_eq!(follow_spelling(darkside_plan(), several), darkside_plan());
+        let other = |p: &str| if p.is_empty() { vec!["Dark Side".to_string()] } else { vec![] };
+        assert_eq!(follow_spelling(darkside_plan(), other), darkside_plan(), "only capitals and accents, not spaces");
     }
 
     fn moon_safari(with_year: bool) -> Vec<(String, crate::naming::Tags)> {

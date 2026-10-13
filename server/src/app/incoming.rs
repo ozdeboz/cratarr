@@ -691,7 +691,9 @@ impl IncomingService {
                 .collect();
             let others: Vec<String> =
                 files_under(&root.join(&dir)).into_iter().filter(|f| !music_files.iter().any(|(m, _)| m == f)).collect();
-            Ok(match crate::incoming::plan_keep(&template, &music_files, &others, year.as_deref()) {
+            let plan = crate::incoming::plan_keep(&template, &music_files, &others, year.as_deref())
+                .map(|p| crate::incoming::follow_spelling(p, |parent| crate::incoming::folders_in(&music_, parent)));
+            Ok(match plan {
                 Ok(plan) if music_.join(&plan.folder).exists() => {
                     Err(KeepRefused::Other(format!("Music already has a folder named {}", plan.folder)))
                 }

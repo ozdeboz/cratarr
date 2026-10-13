@@ -16,7 +16,13 @@ pub fn fold(name: &str) -> String {
 }
 
 fn base_letter(c: char) -> Option<char> {
-    let c = match c {
+    let c = unaccented(c);
+    c.is_alphanumeric().then_some(c)
+}
+
+/// A lower-case letter with its accent taken off ('é' -> 'e'); anything else as it is.
+pub fn unaccented(c: char) -> char {
+    match c {
         'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => 'a',
         'ç' | 'ć' | 'č' => 'c',
         'ď' | 'đ' => 'd',
@@ -32,8 +38,7 @@ fn base_letter(c: char) -> Option<char> {
         'ý' | 'ÿ' => 'y',
         'ź' | 'ż' | 'ž' => 'z',
         c => c,
-    };
-    c.is_alphanumeric().then_some(c)
+    }
 }
 
 /// Folder names that share a folded key, in groups of two or more. Hidden folders are never candidates.
