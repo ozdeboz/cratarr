@@ -634,8 +634,8 @@ impl IncomingService {
     /// Work out Keep for an album: its new names, or why not. Reads the disk and the catalogue; changes nothing.
     async fn plan_keep(&self, at: &Located, year: Option<&str>) -> Result<(PathBuf, Result<crate::incoming::KeepPlan, KeepRefused>), ToggleError> {
         let music = PathBuf::from(self.lib.music().ok_or_else(|| ToggleError::Refused("no Music library is set".into()))?);
-        let (c, folder, dir, root, music_, year) =
-            (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), music.clone(), year.map(str::to_string));
+        let (c, folder, dir, root, music_, year, template) =
+            (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), music.clone(), year.map(str::to_string), self.lib.template());
         let plan = tokio::task::spawn_blocking(move || -> Result<Result<crate::incoming::KeepPlan, KeepRefused>> {
             let prefix = format!("{dir}/");
             let music_files: Vec<(String, crate::naming::Tags)> = c
@@ -645,7 +645,6 @@ impl IncomingService {
                 .collect();
             let others: Vec<String> =
                 files_under(&root.join(&dir)).into_iter().filter(|f| !music_files.iter().any(|(m, _)| m == f)).collect();
-            let template = crate::naming::Template::default();
             Ok(match crate::incoming::plan_keep(&template, &music_files, &others, year.as_deref()) {
                 Ok(plan) if music_.join(&plan.folder).exists() => {
                     Err(KeepRefused::Other(format!("Music already has a folder named {}", plan.folder)))

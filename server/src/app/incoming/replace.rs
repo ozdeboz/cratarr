@@ -119,12 +119,13 @@ impl IncomingService {
             .remove(&at.album.id)
             .map(|v| v.library)
             .ok_or_else(|| ToggleError::Refused(format!("{} is not in Music", at.album.title)))?;
-        let (c, folder, dir, root, year) = (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), year.map(str::to_string));
+        let (c, folder, dir, root, year, template) =
+            (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), year.map(str::to_string), self.lib.template());
         tokio::task::spawn_blocking(move || -> Result<Result<Planned, ReplaceRefused>> {
             let new = album_files(&c, folder, &dir)?;
             let old = album_files(&c, 0, &old_dir)?;
             let new_others: Vec<String> = files_under(&root.join(&dir)).into_iter().filter(|f| !new.iter().any(|m| &m.rel == f)).collect();
-            let plan = match crate::incoming::plan_replace(&Default::default(), &old, &new, &new_others, year.as_deref()) {
+            let plan = match crate::incoming::plan_replace(&template, &old, &new, &new_others, year.as_deref()) {
                 Ok(p) => p,
                 Err(ReplaceRefusal::NeedsYear) => return Ok(Err(ReplaceRefused::NeedsYear)),
                 Err(ReplaceRefusal::Unmatched(titles)) => return Ok(Err(ReplaceRefused::Unmatched(titles))),
