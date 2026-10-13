@@ -379,7 +379,7 @@ impl IncomingService {
                     let converted = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                         // Written whole or not at all, and the same input gives the same bytes: one already there is done.
                         if !output.is_file() {
-                            std::fs::create_dir_all(output.parent().unwrap_or(Path::new(".")))?;
+                            crate::moves::create_dirs_like_parent(output.parent().unwrap_or(Path::new(".")))?;
                             crate::convert::to_cd_flac(&input, &output)?;
                         }
                         Ok(())

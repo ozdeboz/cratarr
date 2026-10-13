@@ -797,7 +797,7 @@ impl Store {
 /// the name of every playlist found in Music. Backup copies (`*.bak.m3u`) are left out. Safe to run again. Blocking.
 pub fn adopt_into_hidden_folder(music: &Path) -> Result<Vec<String>> {
     let hidden = music.join(HIDDEN_DIR);
-    std::fs::create_dir_all(&hidden).with_context(|| format!("making {}", hidden.display()))?;
+    crate::moves::create_dirs_like_parent(&hidden).with_context(|| format!("making {}", hidden.display()))?;
     let mut names: Vec<String> = std::fs::read_dir(music)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
