@@ -444,6 +444,10 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn combine_user_data(&self, a: &serde_json::Value, b: &serde_json::Value) -> serde_json::Value {
+        crate::jellyfin::combine_user_data(a, b)
+    }
+
     fn set_user_data<'a>(&'a self, item: &'a str, user: &'a str, data: &'a serde_json::Value) -> Fut<'a, ()> {
         Box::pin(self.jf.set_user_item_data(item, user, data))
     }

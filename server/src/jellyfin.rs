@@ -742,9 +742,60 @@ pub fn user_data_to_keep(data: &serde_json::Value) -> Option<serde_json::Value> 
     })
 }
 
+/// Two items' kept user data (`user_data_to_keep`) as one: plays added up, played or favourite when either was, the
+/// latest play, the higher rating, a like when either liked, and the resume point of the one played last.
+pub fn combine_user_data(a: &serde_json::Value, b: &serde_json::Value) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    let count = a["PlayCount"].as_i64().unwrap_or(0) + b["PlayCount"].as_i64().unwrap_or(0);
+    if count > 0 {
+        out.insert("PlayCount".into(), count.into());
+    }
+    for f in ["Played", "IsFavorite"] {
+        if a[f].as_bool() == Some(true) || b[f].as_bool() == Some(true) {
+            out.insert(f.into(), true.into());
+        } else if !a[f].is_null() || !b[f].is_null() {
+            out.insert(f.into(), false.into());
+        }
+    }
+    // Jellyfin writes its dates in one ISO form, so the later one sorts last.
+    let date = |d: &serde_json::Value| d["LastPlayedDate"].as_str().map(str::to_string);
+    let later_is_b = date(b) > date(a);
+    if let Some(d) = if later_is_b { date(b) } else { date(a) } {
+        out.insert("LastPlayedDate".into(), d.into());
+    }
+    if let Some(r) = [&a["Rating"], &b["Rating"]].iter().filter_map(|r| r.as_f64()).reduce(f64::max) {
+        out.insert("Rating".into(), r.into());
+    }
+    match (a["Likes"].as_bool(), b["Likes"].as_bool()) {
+        (Some(true), _) | (_, Some(true)) => {
+            out.insert("Likes".into(), true.into());
+        }
+        (Some(false), _) | (_, Some(false)) => {
+            out.insert("Likes".into(), false.into());
+        }
+        _ => {}
+    }
+    let resume = if later_is_b { &b["PlaybackPositionTicks"] } else { &a["PlaybackPositionTicks"] };
+    if !resume.is_null() {
+        out.insert("PlaybackPositionTicks".into(), resume.clone());
+    }
+    serde_json::Value::Object(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_items_play_data_add_up() {
+        let old = json!({"PlayCount": 12, "Played": true, "IsFavorite": true, "LastPlayedDate": "2026-03-01T10:00:00.0000000Z", "Rating": 8.0});
+        let new = json!({"PlayCount": 2, "Played": true, "LastPlayedDate": "2026-10-12T21:00:00.0000000Z", "PlaybackPositionTicks": 900});
+        assert_eq!(
+            combine_user_data(&old, &new),
+            json!({"PlayCount": 14, "Played": true, "IsFavorite": true, "LastPlayedDate": "2026-10-12T21:00:00.0000000Z", "Rating": 8.0, "PlaybackPositionTicks": 900})
+        );
+        assert_eq!(combine_user_data(&old, &json!({})), old, "nothing on one side: the other as it was");
+    }
 
     #[test]
     fn only_user_data_with_something_in_it_is_kept_and_only_settable_fields() {

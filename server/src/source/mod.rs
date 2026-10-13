@@ -330,6 +330,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { Ok(Vec::new()) })
     }
 
+    /// One user's data on two items that become one (Replace: the old album's track and its upgrade in Incoming), as
+    /// `user_data` returned them. Without a way to combine them, the first is kept.
+    fn combine_user_data(&self, a: &serde_json::Value, _b: &serde_json::Value) -> serde_json::Value {
+        a.clone()
+    }
+
     /// Optional (decision 0013): give an item a user's data as `user_data` returned it. Safe to repeat.
     fn set_user_data<'a>(&'a self, _item: &'a str, _user: &'a str, _data: &'a serde_json::Value) -> Fut<'a, ()> {
         Box::pin(async { anyhow::bail!("this server keeps no play data") })

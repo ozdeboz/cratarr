@@ -226,22 +226,31 @@ impl IncomingService {
             .collect();
         // Before anything moves: what users did with the old tracks' server items (the server forgets them after);
         // the new items get it once they exist (the play-data handler).
+        // Both copies count: the old album's tracks and their upgrades in Incoming (played while deciding), each
+        // user's data on the two combined into one for the track that lives on.
         let mut play: Vec<PlayData> = Vec::new();
         let kept: Vec<&TrackMove> = replaced.iter().filter(|r| r.track.is_some() && moves.iter().any(|m| m.track == r.track)).collect();
         for (source, s) in self.lib.connected_sources() {
-            let rels: Vec<String> = kept.iter().map(|r| r.from.1.clone()).collect();
-            let items = c.track_ids(&source, 0, &rels).unwrap_or_default();
-            for (r, item) in kept.iter().zip(items) {
-                let (Some(track), Some(item)) = (r.track, item) else { continue };
-                match s.user_data(&item).await {
-                    Ok(users) => play.extend(users.into_iter().map(|(user, data)| PlayData {
-                        source: source.clone(),
-                        track,
-                        old_item: item.clone(),
-                        user,
-                        data,
-                    })),
-                    Err(e) => tracing::warn!("{source}: could not read the play data of {item}: {e:#}"),
+            let old_rels: Vec<String> = kept.iter().map(|r| r.from.1.clone()).collect();
+            let old_items = c.track_ids(&source, 0, &old_rels).unwrap_or_default();
+            let new_rels: Vec<String> = moves.iter().map(|m| m.from.1.clone()).collect();
+            let new_items = c.track_ids(&source, inc, &new_rels).unwrap_or_default();
+            let olds = kept.iter().map(|r| r.track).zip(old_items);
+            let news = moves.iter().map(|m| m.track).zip(new_items);
+            for (track, item) in olds.chain(news) {
+                let (Some(track), Some(item)) = (track, item) else { continue };
+                let users = match s.user_data(&item).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        tracing::warn!("{source}: could not read the play data of {item}: {e:#}");
+                        continue;
+                    }
+                };
+                for (user, data) in users {
+                    match play.iter_mut().find(|p| p.source == source && p.track == track && p.user == user) {
+                        Some(p) => p.data = s.combine_user_data(&p.data, &data),
+                        None => play.push(PlayData { source: source.clone(), track, old_item: item.clone(), user, data }),
+                    }
                 }
             }
         }
