@@ -30,6 +30,14 @@ and more); the owner wants Music at 16-bit/44.1 kHz.
   disc/number and length), and takes over its track id, so playlists and play data follow it. New tracks with no old
   one (bonus tracks) are added. **Replace is refused when an old track has no match**: the owner keeps the old album
   whole rather than lose a track or mix formats.
+  - The whole old folder goes to the trash, its other files (cover, scans) too. The new album goes in at the
+    template's folder, which may be another name than the old one.
+  - A new file may take an old one's name: the old files move out first, and moving in that order is safe to
+    repeat after a crash.
+  - A year missing from the new tags comes from the old album's tags before the page asks for it.
+  - Refused while an old track still has no track id (Cratarr is still reading the album), since nothing could
+    follow it.
+  - Undo gives every file its own track id back.
 - **Hi-res is converted to 16-bit/44.1 kHz FLAC on the way in**, in Cratarr, in pure Rust: decode (symphonia),
   resample (rubato), TPDF dither to 16 bit, encode (flacenc). The image stays small and any install can do it. Before
   it is trusted, its output is compared with SoX's on albums from the reference library; the comparison is recorded

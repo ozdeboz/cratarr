@@ -142,7 +142,6 @@ fn describe_same(new: &AlbumFacts, old: &AlbumFacts) -> String {
     format!("{}, yours is {}{tracks}", q(new.quality), q(old.quality))
 }
 
-#[allow(dead_code)] // used by Replace (after the App split, decision 0011)
 /// One track as Replace pairs them: the library album's tracks against the incoming album's files (decision 0011 §4).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrackFacts {
@@ -155,7 +154,6 @@ pub struct TrackFacts {
     pub duration_ms: Option<u64>,
 }
 
-#[allow(dead_code)] // used by Replace (after the App split, decision 0011)
 /// Which incoming file takes over which library track. A paired file inherits the old track's identity, so playlists
 /// and play data follow it; indexes refer to the two slices given to `pair`, in ascending order.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -168,14 +166,11 @@ pub struct Pairing {
     pub retired: Vec<usize>,
 }
 
-#[allow(dead_code)]
 /// Same title, different place on the album: the lengths must agree this closely.
 const SAME_TITLE_MS: u64 = 3_000;
-#[allow(dead_code)]
 /// Same place, different title (a typo, garbled characters): the lengths must agree this closely.
 const SAME_PLACE_MS: u64 = 2_000;
 
-#[allow(dead_code)] // used by Replace (after the App split, decision 0011)
 /// Pair an album's old tracks with its new files, surest evidence first: the MusicBrainz recording; then the same disc
 /// and number with the same title; then the same title with the same length (another numbering); then, only when both
 /// albums have the same number of tracks, the same disc and number with the same length. A pass pairs two tracks only
@@ -218,6 +213,96 @@ pub fn pair(old: &[TrackFacts], new: &[TrackFacts]) -> Pairing {
         added: (0..new.len()).filter(|&n| !new_taken[n]).collect(),
         retired: (0..old.len()).filter(|&o| !old_taken[o]).collect(),
     }
+}
+
+impl TrackFacts {
+    /// From a file's tags and length.
+    pub fn of(tags: &crate::naming::Tags, duration_ms: Option<u64>) -> Self {
+        let number = |name: &str| tags.first(name).and_then(|v| v.split('/').next()?.trim().parse().ok());
+        TrackFacts {
+            recording: tags.first("musicbrainz_trackid").map(str::to_string),
+            disc: number("discnumber"),
+            number: number("tracknumber"),
+            title: tags.first("title").unwrap_or_default().to_string(),
+            duration_ms,
+        }
+    }
+}
+
+/// A music file of an album as Replace reads it: its path inside the album folder, its tags and its length.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AlbumFile {
+    pub rel: String,
+    pub tags: crate::naming::Tags,
+    pub duration_ms: Option<u64>,
+}
+
+/// What Replace will do (decision 0013), worked out before anything moves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplacePlan {
+    /// The new album's folder, relative to Music.
+    pub folder: String,
+    /// The new album's files: path inside its Incoming folder → path relative to Music (music files first).
+    pub moves: Vec<(String, String)>,
+    /// (old file inside the old album's folder, new file inside the Incoming album's folder): the new one takes over
+    /// the old one's track.
+    pub takes_over: Vec<(String, String)>,
+    /// New tracks without an old one (bonus tracks).
+    pub added: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, thiserror::Error)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+pub enum ReplaceRefusal {
+    /// Neither album's tags give a year: the page asks for it.
+    #[error("the album's year is not known")]
+    NeedsYear,
+    /// Old tracks the new album has no match for, by title: Replace would lose them.
+    #[error("no match for {}", .0.join(", "))]
+    Unmatched(Vec<String>),
+    #[error("{0}")]
+    Names(String),
+    #[error("Cratarr knows no music files in this album yet")]
+    Empty,
+}
+
+/// Plan Replace: pair the old album's tracks with the new album's files (refused when an old track has no match),
+/// and name the new files by the library's template. A year missing from the new tags comes from `year`, else from
+/// the old album's tags.
+pub fn plan_replace(
+    template: &crate::naming::Template,
+    old: &[AlbumFile],
+    new: &[AlbumFile],
+    new_others: &[String],
+    year: Option<&str>,
+) -> Result<ReplacePlan, ReplaceRefusal> {
+    if new.is_empty() {
+        return Err(ReplaceRefusal::Empty);
+    }
+    let facts = |files: &[AlbumFile]| files.iter().map(|f| TrackFacts::of(&f.tags, f.duration_ms)).collect::<Vec<_>>();
+    let (old_facts, new_facts) = (facts(old), facts(new));
+    let pairing = pair(&old_facts, &new_facts);
+    if !pairing.retired.is_empty() {
+        let title = |i: usize| match old_facts[i].title.as_str() {
+            "" => old[i].rel.rsplit('/').next().unwrap_or(&old[i].rel).to_string(),
+            t => t.to_string(),
+        };
+        return Err(ReplaceRefusal::Unmatched(pairing.retired.iter().map(|&i| title(i)).collect()));
+    }
+    let old_year = old.iter().find_map(|f| f.tags.release_year());
+    let year = year.map(str::to_string).or(old_year);
+    let music: Vec<(String, crate::naming::Tags)> = new.iter().map(|f| (f.rel.clone(), f.tags.clone())).collect();
+    let keep = plan_keep(template, &music, new_others, year.as_deref()).map_err(|e| match e {
+        KeepRefusal::NeedsYear => ReplaceRefusal::NeedsYear,
+        KeepRefusal::Names(n) => ReplaceRefusal::Names(n),
+        KeepRefusal::Empty => ReplaceRefusal::Empty,
+    })?;
+    Ok(ReplacePlan {
+        folder: keep.folder,
+        moves: keep.moves,
+        takes_over: pairing.pairs.iter().map(|&(o, n)| (old[o].rel.clone(), new[n].rel.clone())).collect(),
+        added: pairing.added.len(),
+    })
 }
 
 /// What Keep will do with an album (decision 0013), worked out before anything moves.
@@ -456,5 +541,52 @@ mod tests {
     fn anything_else_is_new() {
         assert_eq!(classify(&album("Jonti", "Twirligig", Some("rg-jonti"), 14, Quality::Lossless), &library()), Verdict::New);
         assert_eq!(classify(&album("", "", None, 0, Quality::Unknown), &library()), Verdict::New, "no names: no match");
+    }
+
+    fn file(rel: &str, n: &str, title: &str, ms: u64, extra: &[(&str, &str)]) -> AlbumFile {
+        let mut v = vec![("albumartist", "Air"), ("artist", "Air"), ("album", "Moon Safari"), ("tracknumber", n), ("title", title)];
+        v.extend_from_slice(extra);
+        AlbumFile { rel: rel.into(), tags: tags(&v), duration_ms: Some(ms) }
+    }
+
+    #[test]
+    fn replace_pairs_every_old_track_and_names_the_new_files_with_the_old_albums_year() {
+        let old = vec![
+            file("01 Air - Sexy Boy.mp3", "1", "Sexy Boy", 298_000, &[("originaldate", "1998")]),
+            file("02 Air - Talisman.mp3", "2", "Talisman", 256_000, &[("originaldate", "1998")]),
+        ];
+        let new = vec![
+            file("01 - Sexy Boy.flac", "1", "Sexy Boy", 298_400, &[]),
+            file("02 - Talisman.flac", "2", "Talisman", 256_100, &[]),
+            file("03 - Bonus.flac", "3", "Bonus", 100_000, &[]),
+        ];
+        let plan = plan_replace(&Default::default(), &old, &new, &["cover.jpg".into()], None).unwrap();
+        assert_eq!(plan.folder, "Air - Moon Safari (1998)");
+        assert_eq!(
+            plan.takes_over,
+            vec![
+                ("01 Air - Sexy Boy.mp3".to_string(), "01 - Sexy Boy.flac".to_string()),
+                ("02 Air - Talisman.mp3".to_string(), "02 - Talisman.flac".to_string()),
+            ]
+        );
+        assert_eq!(plan.added, 1);
+        assert_eq!(plan.moves.len(), 4);
+        assert_eq!(plan.moves[2], ("03 - Bonus.flac".to_string(), "Air - Moon Safari (1998)/03 Air - Bonus.flac".to_string()));
+    }
+
+    #[test]
+    fn replace_is_refused_when_an_old_track_would_be_lost() {
+        let old = vec![file("01.mp3", "1", "Sexy Boy", 298_000, &[]), file("02.mp3", "2", "Talisman", 256_000, &[])];
+        let new = vec![file("01.flac", "1", "Sexy Boy", 298_000, &[("date", "1998")])];
+        assert_eq!(plan_replace(&Default::default(), &old, &new, &[], None), Err(ReplaceRefusal::Unmatched(vec!["Talisman".into()])));
+        assert_eq!(plan_replace(&Default::default(), &old, &[], &[], None), Err(ReplaceRefusal::Empty));
+    }
+
+    #[test]
+    fn replace_asks_for_the_year_only_when_neither_album_has_one() {
+        let old = vec![file("01.mp3", "1", "Sexy Boy", 298_000, &[])];
+        let new = vec![file("01.flac", "1", "Sexy Boy", 298_000, &[])];
+        assert_eq!(plan_replace(&Default::default(), &old, &new, &[], None), Err(ReplaceRefusal::NeedsYear));
+        assert_eq!(plan_replace(&Default::default(), &old, &new, &[], Some("1998")).unwrap().folder, "Air - Moon Safari (1998)");
     }
 }

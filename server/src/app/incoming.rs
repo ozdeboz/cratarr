@@ -15,6 +15,9 @@ use super::library::{Active, Library, epoch_now, label_of};
 use crate::journal::{Entry, Event, EventId, Journal, TrackMove};
 use crate::ports::{Acquisition, Files};
 
+mod replace;
+pub use replace::ReplacePreview;
+
 /// The handler name in the journal for telling Lidarr (decision 0011 §6). Its result is what it stopped fetching.
 const ACQUISITION: &str = "acquisition";
 /// What the acquisition handler is about to stop fetching, recorded before it acts (plan, then act).
@@ -521,10 +524,14 @@ impl IncomingService {
                     let folders = self.lib.catalogue().folders();
                     moves.iter().any(|m| folders.get(m.to.0 as usize).is_some_and(|f| f.join(&m.to.1).is_file()))
                 }
-                Event::AlbumReplaced { .. } => false,
+                // Replace: it happened when the old files' trash entry exists (they move first).
+                Event::AlbumReplaced { from_dir, token, .. } => {
+                    let root = self.lib.catalogue().folders().get(from_dir.0 as usize).cloned();
+                    root.is_some_and(|r| crate::trash::holds(&r, token))
+                }
             };
             let (title, _) = entry.event.album();
-            if happened && matches!(entry.event, Event::AlbumAdopted { .. }) {
+            if happened && matches!(entry.event, Event::AlbumAdopted { .. } | Event::AlbumReplaced { .. }) {
                 if let Some(steps) = self.steps(&entry.event) {
                     let files = self.files.clone();
                     let done = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
@@ -534,6 +541,7 @@ impl IncomingService {
                     }
                 }
                 self.finish_adopt(&entry.event, false).await;
+                self.finish_replace(&entry.event, false).await;
             }
             let result = if happened {
                 self.finish_reject(&entry.event).await;
@@ -549,7 +557,7 @@ impl IncomingService {
         }
     }
 
-    /// Undo an album action (Delete or Keep) by its undo key. Returns the album's title.
+    /// Undo an album action (Delete, Keep or Replace) by its undo key. Returns the album's title.
     pub async fn undo(&self, key: &str) -> Result<String, ToggleError> {
         let gone = || ToggleError::Refused("that can no longer be undone".into());
         let id: EventId = key.parse().map_err(|_| gone())?;
@@ -557,7 +565,7 @@ impl IncomingService {
         match &entry.event {
             Event::AlbumRejected { .. } => self.undo_delete(key).await,
             Event::AlbumAdopted { .. } => self.undo_keep(&entry).await,
-            Event::AlbumReplaced { .. } => Err(gone()),
+            Event::AlbumReplaced { .. } => self.undo_replace(&entry).await,
         }
     }
 
@@ -681,7 +689,7 @@ impl IncomingService {
         let moves: Vec<TrackMove> = plan
             .moves
             .iter()
-            .map(|(rel, to)| TrackMove { track: c.track_of(at.dir.folder, &from(rel)), from: (at.dir.folder, from(rel)), to: (0, to.clone()) })
+            .map(|(rel, to)| TrackMove { track: c.track_of(at.dir.folder, &from(rel)), from: (at.dir.folder, from(rel)), to: (0, to.clone()), was: None })
             .collect();
         // Before anything moves: what users did with the old server items (the server forgets them after).
         let mut play: Vec<PlayData> = Vec::new();
@@ -729,11 +737,13 @@ impl IncomingService {
         Ok(KeepResult { undo: id.to_string(), title: at.album.title, folder: plan.folder })
     }
 
-    /// The file moves of an album action, as paths on disk; `None` when a folder is no longer in use.
+    /// The file moves of an album action, as paths on disk, in order (Replace: the old files out first); `None` when
+    /// a folder is no longer in use.
     fn steps(&self, event: &Event) -> Option<Vec<crate::moves::Step>> {
         let folders = self.lib.catalogue().folders();
-        let moves = match event {
-            Event::AlbumAdopted { moves, .. } => moves,
+        let moves: Vec<&TrackMove> = match event {
+            Event::AlbumAdopted { moves, .. } => moves.iter().collect(),
+            Event::AlbumReplaced { moves, replaced, .. } => replaced.iter().chain(moves).collect(),
             _ => return Some(Vec::new()),
         };
         moves
@@ -754,9 +764,9 @@ impl IncomingService {
         let c = self.lib.catalogue();
         let pairs: Vec<((i64, String), (i64, String))> =
             moves.iter().map(|m| if back { (m.to.clone(), m.from.clone()) } else { (m.from.clone(), m.to.clone()) }).collect();
-        let c2 = c.clone();
+        let (c2, pairs2) = (c.clone(), pairs.clone());
         let moved = tokio::task::spawn_blocking(move || -> Result<()> {
-            for ((ff, fr), (tf, tr)) in &pairs {
+            for ((ff, fr), (tf, tr)) in &pairs2 {
                 c2.move_files(*ff, fr, *tf, tr)?;
             }
             Ok(())
@@ -767,16 +777,23 @@ impl IncomingService {
         if let Err(e) = moved {
             tracing::warn!("catalogue: could not follow the files of {title}: {e:#}");
         }
-        // Tell each server, in its own paths, which files appeared and which went.
-        let folders = c.folders();
+        self.tell_moved(title, &pairs).await;
+    }
+
+    /// Tell each server, in its own paths, which files went and where they appeared: `(gone, came)`. The trash is
+    /// hidden from the servers, so neither side is told about it.
+    async fn tell_moved(&self, title: &str, moved: &[((i64, String), (i64, String))]) {
+        let folders = self.lib.catalogue().folders();
         for (a, s) in self.lib.connected() {
             let server_path = |(folder, rel): &(i64, String)| -> Option<String> {
+                if rel.starts_with(&format!("{}/", crate::trash::TRASH_DIR)) {
+                    return None;
+                }
                 let f = folders.get(*folder as usize)?.display().to_string();
                 a.placement.root(&f).map(|root| format!("{root}{rel}"))
             };
             let mut changes: Vec<(String, bool)> = Vec::new();
-            for m in moves {
-                let (gone, came) = if back { (&m.to, &m.from) } else { (&m.from, &m.to) };
+            for (gone, came) in moved {
                 changes.extend(server_path(gone).map(|p| (p, false)));
                 changes.extend(server_path(came).map(|p| (p, true)));
             }

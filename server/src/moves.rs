@@ -13,12 +13,17 @@ pub struct Step {
     pub to: (PathBuf, String),
 }
 
-/// `rel` must be a plain relative path: no `..`, no root, not into a hidden folder (the trash, backups).
+/// `rel` must be a plain relative path: no `..`, no root, not into a hidden folder (backups), except a trash entry
+/// (`.cratarr-trash/<stamp>/…`: Replace moves the old files there, decision 0013).
 fn checked(rel: &str) -> Result<PathBuf> {
     let p = Path::new(rel);
-    let ok = !rel.is_empty()
-        && !rel.contains('\0')
-        && p.components().all(|c| matches!(c, Component::Normal(n) if !n.to_string_lossy().starts_with('.')));
+    let plain = |rest: &Path| rest.components().all(|c| matches!(c, Component::Normal(n) if !n.to_string_lossy().starts_with('.')));
+    let in_trash = || -> Option<bool> {
+        let rest = p.strip_prefix(crate::trash::TRASH_DIR).ok()?;
+        let stamp = rest.components().next()?.as_os_str().to_str()?;
+        Some(!stamp.is_empty() && stamp.bytes().all(|b| b.is_ascii_digit()) && rest.components().count() > 1 && plain(rest))
+    };
+    let ok = !rel.is_empty() && !rel.contains('\0') && (plain(p) || in_trash() == Some(true));
     if !ok {
         bail!("not a plain path inside a library: {rel:?}");
     }
@@ -29,17 +34,23 @@ fn full((root, rel): &(PathBuf, String)) -> Result<PathBuf> {
     Ok(root.join(checked(rel)?))
 }
 
-/// Move every file of the plan. Nothing is overwritten: when a target exists, nothing moves. When a move fails
-/// midway, the files already moved go back and the error is returned. Safe to repeat: a step already done (its file
-/// gone from the source and present at the target) is skipped, so a plan interrupted by a crash can be finished.
+/// Move every file of the plan, in order. Nothing is overwritten: when a target exists, nothing moves, unless an
+/// earlier step moves that file away (Replace: an old file goes to the trash, a new one of the same name takes its
+/// place). When a move fails midway, the files already moved go back and the error is returned. Safe to repeat: a
+/// step already done (its file at the target, and gone from the source or put there by a later step) is skipped, so
+/// a plan interrupted by a crash can be finished.
 pub fn apply(plan: &[Step]) -> Result<()> {
     let all: Vec<(PathBuf, PathBuf)> = plan.iter().map(|s| Ok((full(&s.from)?, full(&s.to)?))).collect::<Result<_>>()?;
-    let pairs: Vec<(PathBuf, PathBuf)> = all.into_iter().filter(|(from, to)| !(!from.exists() && to.is_file())).collect();
-    for (from, to) in &pairs {
+    let done = |i: usize| {
+        let (from, to) = &all[i];
+        to.is_file() && (!from.exists() || all[i + 1..].iter().any(|(_, later)| later == from))
+    };
+    let pairs: Vec<(PathBuf, PathBuf)> = (0..all.len()).filter(|&i| !done(i)).map(|i| all[i].clone()).collect();
+    for (k, (from, to)) in pairs.iter().enumerate() {
         if !from.is_file() {
             bail!("{} is not there", from.display());
         }
-        if to.exists() {
+        if to.exists() && !pairs[..k].iter().any(|(earlier, _)| earlier == to) {
             bail!("{} exists already; not overwriting it", to.display());
         }
     }
@@ -170,10 +181,33 @@ mod tests {
     #[test]
     fn paths_must_stay_inside_and_out_of_hidden_folders() {
         let r = tmp();
-        for bad in ["../x", "/etc/passwd", ".cratarr-trash/1/A", "A/../../x", ""] {
+        for bad in ["../x", "/etc/passwd", ".cratarr-trash/x/A", ".cratarr-trash/1", ".cratarr-trash/1/.h/A", ".backups/A", "A/../../x", ""] {
             assert!(apply(&[step(&r, bad, &r, "ok")]).is_err(), "{bad}");
             assert!(apply(&[step(&r, "ok", &r, bad)]).is_err(), "{bad}");
         }
         std::fs::remove_dir_all(r).ok();
+    }
+
+    #[test]
+    fn a_replacement_takes_the_old_files_name_and_the_old_file_goes_to_the_trash() {
+        let (inc, music) = (tmp(), tmp());
+        std::fs::create_dir_all(inc.join("A")).unwrap();
+        std::fs::create_dir_all(music.join("X")).unwrap();
+        std::fs::write(inc.join("A/1.flac"), b"new").unwrap();
+        std::fs::write(music.join("X/01.flac"), b"old").unwrap();
+        let plan = vec![step(&music, "X/01.flac", &inc, ".cratarr-trash/100/X/01.flac"), step(&inc, "A/1.flac", &music, "X/01.flac")];
+        apply(&plan).unwrap();
+        apply(&plan).unwrap();
+        assert_eq!(std::fs::read(music.join("X/01.flac")).unwrap(), b"new");
+        assert_eq!(std::fs::read(inc.join(".cratarr-trash/100/X/01.flac")).unwrap(), b"old");
+        revert(&plan).unwrap();
+        revert(&plan).unwrap();
+        assert_eq!(std::fs::read(music.join("X/01.flac")).unwrap(), b"old");
+        assert_eq!(std::fs::read(inc.join("A/1.flac")).unwrap(), b"new");
+        // Without the earlier step the same target is refused.
+        assert!(apply(&plan[1..]).is_err());
+        for d in [inc, music] {
+            std::fs::remove_dir_all(d).ok();
+        }
     }
 }

@@ -279,8 +279,13 @@ impl Tags {
         out
     }
 
-    fn first(&self, name: &str) -> Option<&str> {
+    pub(crate) fn first(&self, name: &str) -> Option<&str> {
         self.values(name).into_iter().next()
+    }
+
+    /// The (original) release year: `originaldate`, else `date`.
+    pub(crate) fn release_year(&self) -> Option<String> {
+        year(self, &["originaldate", "date"])
     }
 }
 

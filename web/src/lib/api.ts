@@ -370,7 +370,7 @@ export const deleteIncoming = (source: string, album: string) =>
   request<{ undo: string; title: string }>(`/api/incoming/delete/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, {
     method: 'POST',
   });
-/** Undo an Incoming action (Delete, Keep) by the key it returned. */
+/** Undo an Incoming action (Delete, Keep, Replace) by the key it returned. */
 export const undoIncoming = (undo: string) =>
   request<{ restored: string }>('/api/incoming/undo', {
     method: 'POST',
@@ -391,6 +391,28 @@ export const keepPreview = (source: string, album: string, year?: string) =>
 /** Keep an Incoming album: it moves into Music, named the library's way (Undo brings it back). */
 export const keepIncoming = (source: string, album: string, year?: string) =>
   request<{ undo: string; title: string; folder: string }>(keepPath(source, album), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(year ? { year } : {}),
+  });
+
+/** What Replace would do with an upgrade: the album in Music it replaces, how many of its tracks the new files take
+ * over, new tracks, and where it goes; or why not (`unmatched`: old tracks without a match, by title). */
+export type ReplacePreview = {
+  title: string;
+  old: string;
+  folder: string | null;
+  tracks: number;
+  added: number;
+  refused: { kind: 'needs_year' } | { kind: 'unmatched'; detail: string[] } | { kind: 'other'; detail: string } | null;
+};
+const replacePath = (source: string, album: string) =>
+  `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
+export const replacePreview = (source: string, album: string, year?: string) =>
+  request<ReplacePreview>(`${replacePath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);
+/** Replace the album in Music with an upgrade: the old files go to the trash (Undo brings them back). */
+export const replaceIncoming = (source: string, album: string, year?: string) =>
+  request<{ undo: string; title: string; folder: string }>(replacePath(source, album), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(year ? { year } : {}),

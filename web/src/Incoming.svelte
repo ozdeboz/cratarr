@@ -7,8 +7,11 @@
     playIncoming,
     keepIncoming,
     keepPreview,
+    replaceIncoming,
+    replacePreview,
     undoIncoming,
     type KeepPreview,
+    type ReplacePreview,
     type IncomingAlbum,
     type IncomingSource,
   } from './lib/api';
@@ -27,18 +30,49 @@
   const playing = $derived(live.view?.now_playing ?? null);
   let starting = $state<string | null>(null);
 
-  // The open menu of one album (Play, Keep in Music, Delete album), anchored to it; `ask` = the in-place question.
-  // Keep is offered for an album that is not in Music yet (no verdict) and whose folder Cratarr can write.
+  // The open menu of one album (Play, Keep or Replace in Music, Delete album), anchored to it; `ask` = the in-place
+  // question. Keep is offered for an album that is not in Music yet (no verdict), Replace for an upgrade, both only
+  // when Cratarr can write the album's folder.
   let menu = $state<{
     source: string;
     a: IncomingAlbum;
     anchor: DOMRect;
-    ask: false | 'delete' | 'keep';
+    ask: false | 'delete' | 'keep' | 'replace';
     deletable: boolean;
     keepable: boolean;
+    replaceable: boolean;
   } | null>(null);
   let keep = $state<KeepPreview | null>(null);
+  let swap = $state<ReplacePreview | null>(null);
   let year = $state('');
+
+  async function askReplace() {
+    if (!menu) return;
+    menu.ask = 'replace';
+    swap = null;
+    year = '';
+    try {
+      swap = await replacePreview(menu.source, menu.a.id);
+    } catch (e) {
+      toast.fail(e, 'Could not pair the tracks');
+      menu = null;
+    }
+  }
+
+  async function replaceIt(source: string, a: IncomingAlbum) {
+    if (working) return;
+    working = true;
+    try {
+      const { undo, title } = await replaceIncoming(source, a.id, year.trim() || undefined);
+      sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
+      toast.show({ text: `Replaced ${title} in Music.`, undo: () => restore(undo) });
+    } catch (e) {
+      toast.fail(e, 'Could not replace the album');
+    } finally {
+      working = false;
+      menu = null;
+    }
+  }
 
   async function askKeep() {
     if (!menu) return;
@@ -57,7 +91,8 @@
   async function tryYear() {
     if (!menu || !/^\d{4}$/.test(year.trim())) return;
     try {
-      keep = await keepPreview(menu.source, menu.a.id, year.trim());
+      if (menu.ask === 'replace') swap = await replacePreview(menu.source, menu.a.id, year.trim());
+      else keep = await keepPreview(menu.source, menu.a.id, year.trim());
     } catch {
       /* keep the question open */
     }
@@ -187,7 +222,15 @@
                 aria-busy={starting === a.id}
                 onclick={() => play(s.id, a)}
                 use:longpress={(anchor) =>
-                  (menu = { source: s.id, a, anchor, ask: false, deletable: s.deletable.includes(a.id), keepable: s.deletable.includes(a.id) && !s.verdicts?.[a.id] })}
+                  (menu = {
+                    source: s.id,
+                    a,
+                    anchor,
+                    ask: false,
+                    deletable: s.deletable.includes(a.id),
+                    keepable: s.deletable.includes(a.id) && !s.verdicts?.[a.id],
+                    replaceable: s.deletable.includes(a.id) && s.verdicts?.[a.id]?.kind === 'upgrade',
+                  })}
               >
               {#if noCover[a.id]}
                 <div class="cover none" aria-hidden="true"></div>
@@ -237,6 +280,9 @@
         {#if m.keepable}
           <button role="menuitem" onclick={askKeep}>Keep in Music</button>
         {/if}
+        {#if m.replaceable}
+          <button role="menuitem" onclick={askReplace}>Replace in Music</button>
+        {/if}
         {#if m.deletable}
           <hr />
           <button role="menuitem" class="danger" onclick={() => menu && (menu.ask = 'delete')}>Delete album</button>
@@ -257,6 +303,32 @@
         <div class="actions">
           {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
             <button class="primary" disabled={working || !!keep.refused} onclick={() => keepIt(m.source, m.a)}>Keep in Music</button>
+          {/if}
+          <button onclick={() => (menu = null)}>Cancel</button>
+        </div>
+      </div>
+    {:else if m.ask === 'replace'}
+      <div class="form">
+        {#if !swap}
+          <p class="ask">Pairing the tracks…</p>
+        {:else if swap.refused?.kind === 'needs_year'}
+          <p class="ask">The tags don't say when {m.a.title} came out. Which year?</p>
+          <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
+        {:else if swap.refused?.kind === 'unmatched'}
+          <p class="ask">Can't replace {swap.old}: no match for {swap.refused.detail.join(', ')}.</p>
+        {:else if swap.refused}
+          <p class="ask">Can't replace {swap.old}: {swap.refused.detail}</p>
+        {:else}
+          <p class="ask">
+            Replace <strong>{swap.old}</strong> with this copy ({swap.tracks} {swap.tracks === 1 ? 'track' : 'tracks'}{swap.added
+              ? `, ${swap.added} new`
+              : ''}){#if swap.folder !== swap.old}, as <strong>{swap.folder}</strong>{/if}? The old copy stays in the trash for {trashDays}
+            {trashDays === 1 ? 'day' : 'days'}.
+          </p>
+        {/if}
+        <div class="actions">
+          {#if swap && (!swap.refused || swap.refused.kind === 'needs_year')}
+            <button class="primary" disabled={working || !!swap.refused} onclick={() => replaceIt(m.source, m.a)}>Replace</button>
           {/if}
           <button onclick={() => (menu = null)}>Cancel</button>
         </div>

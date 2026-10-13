@@ -689,19 +689,39 @@ impl Catalogue {
         Ok(rels.len())
     }
 
-    /// A replacement file takes over the track id of the file it replaces (an upgrade's pairing, decision 0011 §4);
-    /// the old file's row no longer holds it. Blocking.
-    #[allow(dead_code)] // used by Replace in Incoming, decision 0011
-    pub fn inherit(&self, old: (i64, &str), new: (i64, &str)) -> Result<bool> {
+    /// Rows Cratarr moved into the trash of another folder (Replace: old files from Music into Incoming's trash):
+    /// they follow, marked trashed with the trash token, so they retire when the trash is emptied. Blocking.
+    pub fn move_into_trash(&self, from: (i64, &str), to: (i64, &str), token: &str) -> Result<usize> {
+        self.rekey(from.0, from.1, to.0, to.1, Some(token))
+    }
+
+    /// Give files these track ids, all or none (Replace: a new file takes over an old one's id and the old file lets go
+    /// of it; Undo gives them back). `None` lets go. Absolute values, so safe to repeat. Blocking.
+    pub fn set_tracks(&self, files: &[((i64, String), Option<i64>)]) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let track: Option<i64> =
-            tx.query_row("SELECT track FROM files WHERE folder = ?1 AND rel = ?2", params![old.0, old.1], |r| r.get(0)).optional()?.flatten();
-        let Some(track) = track else { return Ok(false) };
-        tx.execute("UPDATE files SET track = NULL WHERE folder = ?1 AND rel = ?2", params![old.0, old.1])?;
-        let n = tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![new.0, new.1, track])?;
+        for ((folder, rel), track) in files {
+            tx.execute("UPDATE files SET track = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, track])?;
+        }
         tx.commit()?;
-        Ok(n == 1)
+        Ok(())
+    }
+
+    /// Whether the catalogue has a row for this path, present or gone (a row Cratarr moves must not land on one).
+    /// Blocking.
+    pub fn has_row(&self, folder: i64, rel: &str) -> bool {
+        self.db().prepare_cached("SELECT 1 FROM files WHERE folder = ?1 AND rel = ?2").and_then(|mut st| st.exists(params![folder, rel])).unwrap_or(false)
+    }
+
+    /// The length of each audio file in an album folder (`dir`, relative to `folder`), by path. Read-only; blocking.
+    pub fn album_lengths(&self, folder: i64, dir: &str) -> Result<std::collections::HashMap<String, u64>> {
+        let db = self.db();
+        let prefix = format!("{}/", dir.trim_end_matches('/'));
+        let mut st = db.prepare(&format!(
+            "SELECT rel, duration_ms FROM files WHERE folder = ?1 AND substr(rel, 1, ?2) = ?3 AND duration_ms > 0 AND {PRESENT}"
+        ))?;
+        let rows = st.query_map(params![folder, prefix.chars().count() as i64, prefix], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The track id of a file, once it has one. Blocking.
@@ -1093,8 +1113,13 @@ mod tests {
         std::fs::write(a.join("A - B (2020) adopted/01 One.flac"), b"flac now").unwrap();
         cat.walk_all();
         read_as_audio(&cat);
-        assert!(cat.inherit((0, "A - B (2020) adopted/01 One.mp3"), (0, "A - B (2020) adopted/01 One.flac")).unwrap());
-        assert_eq!(cat.file_of(one), Some((0, "A - B (2020) adopted/01 One.flac".to_string())));
+        let (old, new) = ((0, "A - B (2020) adopted/01 One.mp3".to_string()), (0, "A - B (2020) adopted/01 One.flac".to_string()));
+        let own = cat.track_of(0, &new.1);
+        cat.set_tracks(&[(old.clone(), None), (new.clone(), Some(one))]).unwrap();
+        assert_eq!(cat.file_of(one), Some(new.clone()));
+        // Undo: each its own again.
+        cat.set_tracks(&[(new.clone(), own), (old.clone(), Some(one))]).unwrap();
+        assert_eq!(cat.file_of(one), Some(old));
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
     }

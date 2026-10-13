@@ -41,6 +41,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
         .route("/api/incoming/undo", post(undo_incoming))
         .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
+        .route("/api/incoming/replace/{source}/{album}", get(replace_preview).post(replace_incoming))
         .route("/api/incoming/play/{source}/{album}", post(play_incoming))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
@@ -128,7 +129,7 @@ struct UndoBody {
     undo: String,
 }
 
-/// Undo an Incoming action (Delete, Keep) by the key it returned.
+/// Undo an Incoming action (Delete, Keep, Replace) by the key it returned.
 async fn undo_incoming(State(app): State<Arc<App>>, Json(b): Json<UndoBody>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "restored": app.incoming.undo(&b.undo).await? })))
 }
@@ -155,6 +156,23 @@ async fn keep_incoming(
 ) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let year = body.map(|Json(b)| b).unwrap_or_default().year;
     Ok(Json(app.incoming.keep(&source, &album, year.as_deref()).await?))
+}
+
+async fn replace_preview(
+    State(app): State<Arc<App>>,
+    Path((source, album)): Path<(String, String)>,
+    Query(q): Query<KeepYear>,
+) -> Result<Json<crate::app::ReplacePreview>, ApiError> {
+    Ok(Json(app.incoming.replace_preview(&source, &album, q.year.as_deref()).await?))
+}
+
+async fn replace_incoming(
+    State(app): State<Arc<App>>,
+    Path((source, album)): Path<(String, String)>,
+    body: Option<Json<KeepYear>>,
+) -> Result<Json<crate::app::KeepResult>, ApiError> {
+    let year = body.map(|Json(b)| b).unwrap_or_default().year;
+    Ok(Json(app.incoming.replace(&source, &album, year.as_deref()).await?))
 }
 
 async fn incoming_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {

@@ -78,6 +78,9 @@ pub struct TrackMove {
     pub track: Option<i64>,
     pub from: (i64, String),
     pub to: (i64, String),
+    /// Replace: the track id a new file had before it took over an old one's (given back on Undo).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub was: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

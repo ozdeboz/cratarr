@@ -275,7 +275,7 @@ mod tests {
     }
 
     fn mv(track: i64, from: (i64, &str), to: (i64, &str)) -> TrackMove {
-        TrackMove { track: Some(track), from: (from.0, from.1.into()), to: (to.0, to.1.into()) }
+        TrackMove { track: Some(track), from: (from.0, from.1.into()), to: (to.0, to.1.into()), was: None }
     }
 
     fn adopted() -> Event {
