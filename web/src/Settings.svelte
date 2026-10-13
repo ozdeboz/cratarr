@@ -24,7 +24,7 @@
   import { toast } from './lib/toast.svelte';
 
   // A server (a source, in the code) as the page edits it. Secrets typed here are kept apart: the server never sends saved ones.
-  type Draft = SourceConfig & { secrets: Record<string, string>; view: SourceView | null; busy: boolean; note: string | null };
+  type Draft = SourceConfig & { secrets: Record<string, string>; view: SourceView | null; busy: boolean };
 
   let s = $state<Settings | null>(null);
   let drafts = $state<Draft[]>([]);
@@ -80,7 +80,7 @@
   const count = (n: number) => n.toLocaleString();
 
   // Lidarr as the page edits it; the saved key is never sent here.
-  let lid = $state({ url: '', key: '', view: null as LidarrView | null, busy: false, note: null as string | null, removing: false });
+  let lid = $state({ url: '', key: '', view: null as LidarrView | null, busy: false, removing: false });
 
   function fill(next: Settings) {
     s = next;
@@ -91,7 +91,7 @@
       genreKeep: next.tag_rules.genre_keep.join('\n'),
     };
     cat = next.catalogue;
-    lid = { url: next.lidarr?.url ?? '', key: '', view: next.lidarr, busy: false, note: null, removing: false };
+    lid = { url: next.lidarr?.url ?? '', key: '', view: next.lidarr, busy: false, removing: false };
     trashDays = next.trash_days;
     if (next.music_folder) loadNaming();
     drafts = next.sources.map((v) => ({
@@ -103,7 +103,6 @@
       secrets: {},
       view: v,
       busy: false,
-      note: null,
     }));
     addKind = next.kinds[0]?.id ?? '';
   }
@@ -154,12 +153,13 @@
 
   async function checkLidarr() {
     lid.busy = true;
-    lid.note = null;
     try {
       lid.view = await previewLidarr({ url: lid.url, api_key: lid.key });
-      lid.note = lid.view?.error ?? null;
+      // The answer to a check is a toast, either way.
+      if (lid.view?.error) toast.show({ text: `Lidarr: ${lid.view.error}`, tone: 'error' });
+      else if (lid.view) toast.show({ text: `Connected to Lidarr${lid.view.version ? ` ${lid.view.version}` : ''}.` });
     } catch (e) {
-      lid.note = e instanceof ApiError ? e.message : 'Unexpected error';
+      toast.fail(e, 'Could not check Lidarr');
     } finally {
       lid.busy = false;
     }
@@ -173,7 +173,7 @@
         trashDays !== s.trash_days ||
         (!!namingInUse && naming.trim() !== namingInUse) ||
         JSON.stringify(drafts.map(payload)) !==
-          JSON.stringify(s.sources.map((v) => payload({ ...v, secrets: {}, view: v, busy: false, note: null })))),
+          JSON.stringify(s.sources.map((v) => payload({ ...v, secrets: {}, view: v, busy: false })))),
   );
 
   /** A secret must be typed again when the source is new, has none saved, or a field it is bound to changed. */
@@ -192,12 +192,18 @@
 
   async function check(d: Draft) {
     d.busy = true;
-    d.note = null;
     try {
       d.view = await previewSource(payload(d));
-      d.note = d.view.status.connected ? null : (d.view.status.error ?? d.view.error);
+      // The answer to a check is a toast, either way.
+      const st = d.view.status;
+      if (st.connected) {
+        const name = [st.server_name ?? kindOf(d)?.label ?? d.kind, st.version].filter(Boolean).join(' ');
+        toast.show({ text: `Connected to ${name}.` });
+      } else {
+        toast.show({ text: st.error ?? d.view.error ?? 'Not connected', tone: 'error' });
+      }
     } catch (e) {
-      d.note = e instanceof ApiError ? e.message : 'Unexpected error';
+      toast.fail(e, 'Could not check the connection');
     } finally {
       d.busy = false;
     }
@@ -208,7 +214,7 @@
     if (!k) return;
     let id = k.id;
     for (let n = 2; drafts.some((d) => d.id === id); n++) id = `${k.id}-${n}`;
-    drafts.push({ id, kind: k.id, enabled: true, libraries: { music: [], incoming: [] }, values: {}, secrets: {}, view: null, busy: false, note: null });
+    drafts.push({ id, kind: k.id, enabled: true, libraries: { music: [], incoming: [] }, values: {}, secrets: {}, view: null, busy: false });
   }
 
   async function save() {
@@ -363,7 +369,6 @@
 
           <div class="row">
             <button type="button" disabled={d.busy} aria-busy={d.busy} onclick={() => check(d)}>Check connection</button>
-            {#if d.note}<span class="hint bad">{d.note}</span>{/if}
           </div>
         </article>
       {:else}
@@ -422,7 +427,6 @@
           </div>
           <div class="row">
             <button type="button" disabled={lid.busy || !lid.url.trim()} aria-busy={lid.busy} onclick={checkLidarr}>Check connection</button>
-            {#if lid.note}<span class="hint bad">{lid.note}</span>{/if}
           </div>
         </article>
       {/if}

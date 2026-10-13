@@ -47,7 +47,9 @@
       [data, dups] = await Promise.all([getRepairs(), getDuplicates()]);
       error = null;
     } catch (e) {
-      error = e instanceof ApiError ? e.message : 'Unexpected error';
+      // Nothing shown yet: the page says so in place. Already shown: it stays, and a toast says the reload failed.
+      if (!data) error = e instanceof ApiError ? e.message : 'Unexpected error';
+      else toast.fail(e, 'Could not reload the repairs');
     }
   }
 

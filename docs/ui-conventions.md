@@ -68,8 +68,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   warnings, red for errors, with "Undo" when the action can be undone. Done and warnings go after a few seconds;
   errors stay until dismissed, replaced, or the page changes. Errors say what failed in plain words, never a bare
   status code.
-- **A page's own state stays in place** (`lib/Notice.svelte`): the page could not load, a field's question (the
-  Keep year), empty and loading states.
+- **A page's own state stays in place** (`lib/Notice.svelte`): the page could not load *and has nothing to show*, a
+  field's question (the Keep year), empty and loading states. Nothing temporary sits in the page: a reload or update
+  that fails while the page shows its content is a toast (once, gone when the server answers again), and so is the
+  answer to a check (Check connection: connected or why not).
 - **Waiting:** a thin bar along the top while something the user asked for loads (`lib/ProgressBar.svelte`): only
   after 300 ms, so quick answers show nothing. Background polling and actions shown at once (the player, playlist
   taps, the favourite) never show it (`quietly` in `api.ts`). The button that was tapped shows a spinner in place of

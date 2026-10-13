@@ -131,10 +131,26 @@ async function flush(view: State) {
 export async function refresh() {
   try {
     take(await getState(prefs.source || undefined));
+    if (unreachable) {
+      // Back: the toast that said otherwise goes.
+      if (toast.current?.text === unreachable) toast.dismiss();
+      unreachable = null;
+    }
   } catch (e) {
-    live.error = e instanceof ApiError ? e.message : 'Unexpected error';
+    const text = e instanceof ApiError ? e.message : 'Unexpected error';
+    if (!live.view) {
+      // Nothing to show yet: the page says so in place of its content.
+      live.error = text;
+    } else if (unreachable !== text) {
+      // Already showing: it stays as it is, and one toast says the server does not answer (not one per try).
+      unreachable = text;
+      toast.show({ text, tone: 'error' });
+    }
   }
 }
+
+/** The error a toast showed while the page kept what it had; cleared when the server answers again. */
+let unreachable: string | null = null;
 
 /** A state from the server, by the live channel or asked for: settles a pending command, then shows it. */
 function take(fresh: State) {
