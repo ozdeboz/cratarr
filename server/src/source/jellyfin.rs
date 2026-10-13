@@ -500,8 +500,28 @@ impl Source for JellyfinSource {
     fn files_changed<'a>(&'a self, changes: &'a [(String, bool)]) -> Fut<'a, ()> {
         Box::pin(async move {
             let kinds: Vec<(String, &str)> = changes.iter().map(|(p, on)| (p.clone(), if *on { "Created" } else { "Deleted" })).collect();
-            self.jf.library_changed(&kinds).await
+            self.jf.library_changed(&kinds).await?;
+            // A notice alone does not find new folders in a library Jellyfin does not watch: have each library that
+            // got one look now (see `Jellyfin::refresh_library`).
+            let created: Vec<&str> = changes.iter().filter(|(_, on)| *on).map(|(p, _)| p.as_str()).collect();
+            if created.is_empty() {
+                return Ok(());
+            }
+            let inside = |path: &str, location: &str| {
+                let l = location.trim_end_matches('/');
+                path.strip_prefix(l).is_some_and(|rest| rest.starts_with('/'))
+            };
+            for f in self.jf.virtual_folders().await? {
+                if created.iter().any(|p| f.locations.iter().any(|l| inside(p, l))) {
+                    self.jf.refresh_library(&f.item_id).await?;
+                }
+            }
+            Ok(())
         })
+    }
+
+    fn library_scan(&self) -> Fut<'_, super::LibraryScan> {
+        Box::pin(self.jf.library_scan())
     }
 
     fn library_roots<'a>(&'a self, library_id: &'a str) -> Fut<'a, Vec<String>> {

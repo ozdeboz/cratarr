@@ -8,6 +8,7 @@
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import Toasts from './lib/Toasts.svelte';
+  import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
   import { player } from './lib/live.svelte';
   import { poll } from './lib/live.svelte';
@@ -91,6 +92,7 @@
   // Connection line in the sidebar header.
   let status = $state<Status | null>(null);
   let statusFailed = $state(false);
+  let toldProblem: string | null = null;
   $effect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -98,6 +100,10 @@
       try {
         status = await getStatus();
         statusFailed = false;
+        // A server problem is said once, in a toast, when it first shows (the sidebar keeps showing it).
+        const problem = status.problems[0] ?? null;
+        if (problem && problem !== toldProblem) toast.show({ text: problem, tone: 'error' });
+        toldProblem = problem;
       } catch {
         statusFailed = true;
       }
@@ -116,7 +122,9 @@
       : !status
         ? null
         : status.connected
-          ? { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
+          ? status.problems.length
+            ? { ok: false, text: status.problems[0] }
+            : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
   const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, PLAYLISTS, INSIGHTS, REPAIRS] : [PLAYLISTS, INSIGHTS, REPAIRS]);

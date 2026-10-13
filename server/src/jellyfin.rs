@@ -313,6 +313,48 @@ impl Jellyfin {
         self.get("/Library/VirtualFolders").await
     }
 
+    /// Have one library look for new and gone folders now, as its Scan does (only that library). Measured
+    /// 2026-10-13: a new album folder in Music was found 10 s after this, where a "file changed" notice alone waits for
+    /// the library monitor (about 60 s) and does not look for new folders in a library it does not watch.
+    pub async fn refresh_library(&self, library_id: &str) -> Result<()> {
+        let path = format!(
+            "/Items/{library_id}/Refresh?Recursive=true&MetadataRefreshMode=Default&ImageRefreshMode=Default&ReplaceAllMetadata=false&ReplaceAllImages=false"
+        );
+        let url = format!("{}{path}", self.base);
+        let status = self.http.post(&url).send().await.with_context(|| format!("POST {path}"))?.status();
+        if !status.is_success() {
+            bail!("POST {path} returned {status}");
+        }
+        Ok(())
+    }
+
+    /// The whole-server library scan ("Scan Media Library"): its progress (percent) while it runs, and when it last
+    /// finished (epoch seconds).
+    pub async fn library_scan(&self) -> Result<crate::source::LibraryScan> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Task {
+            key: Option<String>,
+            state: Option<String>,
+            current_progress_percentage: Option<f64>,
+            last_execution_result: Option<Result_>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Result_ {
+            end_time_utc: Option<String>,
+        }
+        let tasks: Vec<Task> = self.get("/ScheduledTasks").await?;
+        let scan = tasks.into_iter().find(|t| t.key.as_deref() == Some("RefreshLibrary"));
+        Ok(match scan {
+            None => crate::source::LibraryScan::default(),
+            Some(t) => crate::source::LibraryScan {
+                running: (t.state.as_deref() == Some("Running")).then(|| t.current_progress_percentage.unwrap_or(0.0)),
+                last_end: t.last_execution_result.and_then(|r| r.end_time_utc).as_deref().and_then(crate::nowplaying::parse_iso_epoch),
+            },
+        })
+    }
+
     /// An administrator's id. Libraries are per-user views in Jellyfin's API, so asking which library an item is in
     /// needs a user; an administrator sees every library. Observed on 10.11: without a user, an item's ancestors are
     /// the physical folders (`Folder`, `AggregateFolder`), not its library; and `ParentId` is ignored once `Ids` is

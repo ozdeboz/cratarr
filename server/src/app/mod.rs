@@ -55,6 +55,8 @@ pub struct StatusView {
     /// The server's name with one source; "n of m sources" with several.
     pub server_name: Option<String>,
     pub version: &'static str,
+    /// What is wrong with the servers, one line each (a server that stopped processing changes).
+    pub problems: Vec<String>,
 }
 
 pub struct App {
@@ -124,6 +126,7 @@ impl App {
             sources,
             server_name,
             version: VERSION,
+            problems: self.library.problems(),
         }
     }
 
@@ -139,6 +142,7 @@ impl App {
             self.playlists.refresh_dead().await;
             self.library.retry_placement().await;
             self.settings.infer_naming().await;
+            self.library.watch_servers().await;
         }
         if pass % 120 == 0 {
             self.incoming.purge_trash().await;

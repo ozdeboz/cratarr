@@ -114,6 +114,7 @@ async fn follow(lib: &Arc<Library>, p: &Playing) {
             if now() - started > WAIT_SECS as f64 {
                 // Where "the server stopped processing changes" is told (decision 0013).
                 tracing::warn!("{}: the moved track never appeared within {WAIT_SECS} s; the player stays stopped", p.source);
+                lib.server_stuck(&p.source, &format!("moved files did not show up within {} min", WAIT_SECS / 60));
                 return;
             }
             let Some((_, s)) = lib.connected_sources().into_iter().find(|(id, _)| *id == p.source) else { return };

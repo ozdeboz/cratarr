@@ -135,6 +135,13 @@ pub struct PlaylistEvent {
     pub change: PlaylistChange,
 }
 
+/// A server's library scan: its progress while it runs, and when it last finished (epoch seconds).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LibraryScan {
+    pub running: Option<f64>,
+    pub last_end: Option<i64>,
+}
+
 /// An album as listed, before its details. `stamp` changes whenever the source saves the album again: its details
 /// are read again then.
 #[derive(Debug, Clone, PartialEq)]
@@ -341,6 +348,11 @@ pub trait Source: Send + Sync {
     /// Optional (decision 0013): give an item a user's data as `user_data` returned it. Safe to repeat.
     fn set_user_data<'a>(&'a self, _item: &'a str, _user: &'a str, _data: &'a serde_json::Value) -> Fut<'a, ()> {
         Box::pin(async { anyhow::bail!("this server keeps no play data") })
+    }
+
+    /// Optional: the server's library scan, to notice one that no longer moves (see `app::library::Watch`).
+    fn library_scan(&self) -> Fut<'_, LibraryScan> {
+        Box::pin(async { Ok(LibraryScan::default()) })
     }
 
     /// Optional: files appeared (`true`) or disappeared (`false`), paths as the server sees them, so it notices a

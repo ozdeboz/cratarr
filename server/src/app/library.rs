@@ -128,7 +128,26 @@ pub struct Library {
     tag_rules: std::sync::RwLock<crate::catalogue::Rules>,
     /// The naming template of Music (decision 0013): (saved, the one the library follows once worked out).
     naming: std::sync::RwLock<(Option<Template>, Option<Template>)>,
+    /// Servers that stopped processing changes, and their library scans as last seen (see `watch_servers`).
+    watch: std::sync::Mutex<Watch>,
 }
+
+/// A server that stopped processing changes (Jellyfin, 2026-10-13: after a playing file vanished, its library work
+/// hung until it was restarted; no new music appeared). Noticed from what Cratarr sees, never by putting load on it:
+/// its library scan not moving for `STALL_SECS`, or moved files never showing up (`server_stuck`). Cleared once a
+/// library scan finishes after it was noticed (a restart ends the stuck one; the next finishes), or after `STUCK_SECS`.
+#[derive(Default)]
+struct Watch {
+    /// By source: (since, what was seen).
+    stuck: std::collections::HashMap<String, (i64, String)>,
+    /// By source: the running scan's progress and since when it is at that.
+    scans: std::collections::HashMap<String, (f64, i64)>,
+}
+
+/// A library scan at the same progress this long has stopped.
+const STALL_SECS: i64 = 10 * 60;
+/// A "stopped processing" notice that nothing confirmed again is dropped after this long.
+const STUCK_SECS: i64 = 30 * 60;
 
 impl Library {
     /// `last_music`: where the Music libraries were last found (or CRATARR_PLAYLIST_DIR), used until a server answers.
@@ -169,7 +188,54 @@ impl Library {
             changing: Mutex::new(()),
             tag_rules: std::sync::RwLock::new(tag_rules),
             naming: std::sync::RwLock::new((naming, None)),
+            watch: std::sync::Mutex::new(Watch::default()),
         }))
+    }
+
+    /// A server stopped processing changes: moved files never showed up in it, say. The page says so (`problems`).
+    pub fn server_stuck(&self, source: &str, what: &str) {
+        tracing::warn!("{source} has stopped processing changes: {what}");
+        let mut w = self.watch.lock().unwrap_or_else(|p| p.into_inner());
+        w.stuck.entry(source.to_string()).or_insert((epoch_now(), what.to_string()));
+    }
+
+    /// What the page should say about the servers, one line each.
+    pub fn problems(&self) -> Vec<String> {
+        let w = self.watch.lock().unwrap_or_else(|p| p.into_inner());
+        let label = |id: &str| self.live().iter().find(|a| a.cfg.id == id).map(|a| label_of(&a.cfg)).unwrap_or_else(|| id.to_string());
+        w.stuck.keys().map(|id| format!("{} has stopped processing changes. Restarting it fixes this.", label(id))).collect()
+    }
+
+    /// Look at each server's library scan (one cheap request each): one at the same progress for `STALL_SECS` has
+    /// stopped; a scan that finished after a notice clears it.
+    pub(super) async fn watch_servers(&self) {
+        let now = epoch_now();
+        for (id, s) in self.connected_sources() {
+            let Ok(scan) = s.library_scan().await else { continue };
+            let mut w = self.watch.lock().unwrap_or_else(|p| p.into_inner());
+            let stalled = match scan.running {
+                Some(p) => {
+                    let (at, since) = *w.scans.entry(id.clone()).and_modify(|e| if e.0 != p { *e = (p, now) }).or_insert((p, now));
+                    let _ = at;
+                    now - since >= STALL_SECS
+                }
+                None => {
+                    w.scans.remove(&id);
+                    false
+                }
+            };
+            if stalled {
+                if !w.stuck.contains_key(&id) {
+                    tracing::warn!("{id} has stopped processing changes: its library scan has not moved for {} min", STALL_SECS / 60);
+                    w.stuck.insert(id.clone(), (now, "its library scan stopped moving".into()));
+                }
+            } else if let Some(&(since, _)) = w.stuck.get(&id)
+                && (scan.last_end.is_some_and(|end| end > since) || now - since > STUCK_SECS)
+            {
+                tracing::info!("{id} processes changes again");
+                w.stuck.remove(&id);
+            }
+        }
     }
 
     /// How Keep and Replace name an album in Music (decision 0013): the saved template, else the one the library

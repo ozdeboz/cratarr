@@ -202,6 +202,8 @@ export type Status = {
   incoming: boolean;
   sources: SourceTab[];
   version: string;
+  /** What is wrong with the servers, one line each (a server that stopped processing changes). */
+  problems: string[];
 };
 
 export const getStatus = () => quietly<Status>('/api/status');
