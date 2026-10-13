@@ -1,6 +1,7 @@
 # 0012: Playlists become the user's own Jellyfin playlists, kept in step with the .m3u files both ways
 
-- Status: accepted (2026-10-13)
+- Status: accepted (2026-10-13); its one switch for all playlists ("Playlists belong to") and the move out of
+  Music are replaced by per-playlist sync links (decision 0014). The sync engine stays.
 - Date: 2026-10-12
 - Builds on: decision 0011 (track identity, events). Changes decision 0002.
 

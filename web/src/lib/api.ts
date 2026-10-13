@@ -7,7 +7,24 @@ export type Playlist = {
   count: number;
   /** Entries that point at a missing file. */
   dead: number;
+  /** Where it is kept in step (decision 0014). */
+  links: Link[];
 };
+
+export type Direction = 'push' | 'two_way';
+/** Two-way: which side leads when both changed. */
+export type Conflict = 'newest' | 'playlist' | 'target';
+/** A sync link: a playlist kept in step on a target. */
+export type Link = {
+  /** "shared", or "user/<server>/<account>". */
+  target: string;
+  label: string;
+  direction: Direction;
+  conflict: Conflict;
+  status: { at: number; error: string | null } | null;
+};
+/** A target a playlist can be linked to. */
+export type TargetChoice = { target: string; label: string; push_only: boolean };
 
 export type NowPlaying = {
   /** The source it came from (covers are looked up there). */
@@ -157,6 +174,15 @@ export const deletePlaylist = (id: string) =>
 export const restorePlaylist = (id: string) =>
   post<{ restored: string }>(`/api/playlists/${encodeURIComponent(id)}/restore`, {});
 
+export const getTargets = () => request<TargetChoice[]>('/api/sync/targets');
+const linkPath = (id: string, target: string, extra: Record<string, string> = {}) =>
+  `/api/playlists/${encodeURIComponent(id)}/link?${new URLSearchParams({ target, ...extra })}`;
+/** Link a playlist to a target, or change how it is kept (the state wanted: safe to repeat). */
+export const linkPlaylist = (id: string, target: string, direction: Direction, conflict: Conflict) =>
+  request<null>(linkPath(id, target, { direction, conflict }), { method: 'PUT' });
+/** Take a link off; its copy on the target is deleted. */
+export const unlinkPlaylist = (id: string, target: string) => request<null>(linkPath(id, target), { method: 'DELETE' });
+
 export type Status = {
   connected: boolean;
   /** The server's name with one source; "n of m sources" with several. */
@@ -224,8 +250,6 @@ export type SourceView = SourceConfig & {
   choices: Record<string, Choice[]>;
   server_libraries: ServerLibrary[];
   error: string | null;
-  /** The last playlist sync, when this server's own playlists hold them (decision 0012). */
-  playlist_sync: { at: number; playlists: number; error: string | null } | null;
 };
 
 export type Kind = { id: string; label: string; fields: Field[] };

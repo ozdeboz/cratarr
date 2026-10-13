@@ -6,6 +6,7 @@
   import { toast, type Toast } from './lib/toast.svelte';
   import Popover from './lib/Popover.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
+  import Icon from './lib/Icon.svelte';
   import { longpress } from './lib/longpress';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
@@ -138,6 +139,7 @@
           >
             <span class="mark" aria-hidden="true">{p.member ? '✓' : '+'}</span>
             <span class="name">{p.name}</span>
+            {#if p.links.some((l) => l.target !== 'shared')}<span class="own" title={p.links.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
             <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}</span>
           </button>
         </li>
@@ -332,6 +334,13 @@
     -webkit-line-clamp: 2;
     line-clamp: 2;
     -webkit-box-orient: vertical;
+  }
+
+  /* Kept in an account's own playlists too (decision 0014). */
+  .own {
+    display: flex;
+    flex: none;
+    opacity: 0.65;
   }
 
   .n {

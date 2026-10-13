@@ -1,8 +1,21 @@
 <script lang="ts">
   // A playlist's menu (docs/ui-conventions.md), the same wherever a playlist is long-pressed: Play, Shuffle, Play next,
-  // Add to queue, then Rename and Delete, both done inside the popover. Success shows where it happens (the header,
-  // the list); only Delete says something, to offer Undo.
-  import { deletePlaylist, playPlaylist, renamePlaylist, restorePlaylist, type PlayMode } from './api';
+  // Add to queue, then Sync to…, Rename and Delete, each done inside the popover. Success shows where it happens (the
+  // header, the list); only Delete says something, to offer Undo.
+  import {
+    deletePlaylist,
+    getTargets,
+    linkPlaylist,
+    playPlaylist,
+    renamePlaylist,
+    restorePlaylist,
+    unlinkPlaylist,
+    type Conflict,
+    type Direction,
+    type Link,
+    type PlayMode,
+    type TargetChoice,
+  } from './api';
   import Popover from './Popover.svelte';
   import { prefs } from './prefs.svelte';
   import { refresh, untilNewTrack } from './live.svelte';
@@ -16,7 +29,7 @@
     ondeleted,
     onrestored,
   }: {
-    playlist: { id: string; name: string; count: number; dead: number };
+    playlist: { id: string; name: string; count: number; dead: number; links?: Link[] };
     anchor: DOMRect;
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
@@ -25,7 +38,40 @@
     onrestored?: (id: string) => void;
   } = $props();
 
-  let mode = $state<'menu' | 'rename' | 'delete'>('menu');
+  let mode = $state<'menu' | 'rename' | 'delete' | 'sync'>('menu');
+
+  // Sync to… (decision 0014): every target, on or off, and how it is kept. Each change is made at once.
+  let targets = $state<TargetChoice[] | null>(null);
+  let links = $state<Link[]>([]);
+  async function openSync() {
+    mode = 'sync';
+    links = [...(playlist.links ?? [])];
+    try {
+      targets = await getTargets();
+    } catch (e) {
+      fail(e, 'Could not list the targets');
+      mode = 'menu';
+    }
+  }
+  const linkOf = (target: string) => links.find((l) => l.target === target);
+  async function setLink(t: TargetChoice, on: boolean, direction: Direction = 'push', conflict: Conflict = 'newest') {
+    if (working) return;
+    working = true;
+    const before = links;
+    links = on
+      ? [...links.filter((l) => l.target !== t.target), { target: t.target, label: t.label, direction, conflict, status: null }]
+      : links.filter((l) => l.target !== t.target);
+    try {
+      if (on) await linkPlaylist(p.id, t.target, direction, conflict);
+      else await unlinkPlaylist(p.id, t.target);
+    } catch (e) {
+      links = before;
+      fail(e, 'Could not change the link');
+    } finally {
+      working = false;
+      refresh();
+    }
+  }
   let nameField = $state('');
   let working = $state(false);
   const p = $derived(playlist);
@@ -95,7 +141,12 @@
 </script>
 
 <Popover {anchor} label={p.name} {onclose}>
-  <div class="head">{p.name} <span>{p.count} {p.count === 1 ? 'track' : 'tracks'}{p.dead > 0 ? ` · ${missing(p.dead)}` : ''}</span></div>
+  <div class="head">
+    {p.name}
+    <span
+      >{p.count} {p.count === 1 ? 'track' : 'tracks'}{p.dead > 0 ? ` · ${missing(p.dead)}` : ''}{mode === 'sync' ? '' : (p.links ?? []).map((l) => ` · ${l.label}`).join('')}</span
+    >
+  </div>
   {#if mode === 'menu'}
     <div class="items" role="menu">
       <button role="menuitem" disabled={working} onclick={() => play('play')}>Play</button>
@@ -103,6 +154,7 @@
       <button role="menuitem" disabled={working} onclick={() => play('next')}>Play next</button>
       <button role="menuitem" disabled={working} onclick={() => play('last')}>Add to queue</button>
       <hr />
+      <button role="menuitem" onclick={openSync}>Sync to…</button>
       <button
         role="menuitem"
         onclick={() => {
@@ -126,6 +178,44 @@
         <button type="button" onclick={onclose}>Cancel</button>
       </div>
     </form>
+  {:else if mode === 'sync'}
+    <div class="form">
+      {#if !targets}
+        <p class="ask">…</p>
+      {:else}
+        {#each targets as t (t.target)}
+          {@const l = linkOf(t.target)}
+          <div class="target">
+            <label class="on"><input type="checkbox" checked={!!l} disabled={working} onchange={(e) => setLink(t, e.currentTarget.checked)} />{t.label}</label>
+            {#if l && !t.push_only}
+              <select
+                aria-label="Direction"
+                value={l.direction}
+                disabled={working}
+                onchange={(e) => setLink(t, true, e.currentTarget.value as Direction, l.conflict)}
+              >
+                <option value="push">Push</option>
+                <option value="two_way">Two-way</option>
+              </select>
+              {#if l.direction === 'two_way'}
+                <select
+                  aria-label="When both changed"
+                  value={l.conflict}
+                  disabled={working}
+                  onchange={(e) => setLink(t, true, l.direction, e.currentTarget.value as Conflict)}
+                >
+                  <option value="newest">Newest wins</option>
+                  <option value="playlist">Cratarr wins</option>
+                  <option value="target">{t.label} wins</option>
+                </select>
+              {/if}
+            {/if}
+            {#if l?.status?.error}<p class="error">{l.status.error}</p>{/if}
+          </div>
+        {/each}
+      {/if}
+      <div class="row"><button onclick={onclose}>Done</button></div>
+    </div>
   {:else}
     <div class="form">
       <p class="ask">Delete {p.name}? You can undo this right after.</p>
@@ -207,6 +297,41 @@
   .ask {
     margin: 0;
     font-size: 0.92rem;
+  }
+
+  /* Sync to…: one line per target, its settings beside it once linked. */
+  .target {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    min-height: 40px;
+  }
+
+  .target .on {
+    display: flex;
+    flex: 1 1 140px;
+    align-items: center;
+    gap: 8px;
+    overflow-wrap: anywhere;
+  }
+
+  .target select {
+    min-height: 34px;
+    padding: 0 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font: inherit;
+    font-size: 0.85rem;
+    color: inherit;
+  }
+
+  .target .error {
+    flex-basis: 100%;
+    margin: 0;
+    color: var(--danger);
+    font-size: 0.8rem;
   }
 
   .row {
