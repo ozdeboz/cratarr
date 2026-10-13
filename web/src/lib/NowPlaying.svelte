@@ -3,8 +3,11 @@
   // shell's sidebar on wide windows). It shows the cover, the track, the controls, the progress, the favourite and
   // how many playlists hold the track, laid out by lib/playerLayout.ts, on the blurred cover in its colours.
   import { untrack } from 'svelte';
+  import { incomingCoverUrl, jumpTo } from './api';
   import Icon from './Icon.svelte';
-  import { live, player } from './live.svelte';
+  import { live, player, refresh } from './live.svelte';
+  import TrackMenu from './TrackMenu.svelte';
+  import { toast } from './toast.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, position, send, toggleFavorite } from './remote.svelte';
@@ -16,6 +19,35 @@
   const src = $derived(coverSrc());
   const pos = $derived(position());
   const dur = $derived(duration());
+
+  // Info chips (decision 0019): what the server knows about the file and its plays, read-only.
+  const chips = $derived.by(() => {
+    const i = np?.info;
+    if (!i) return [];
+    const out: string[] = [];
+    if (i.explicit) out.push('Explicit');
+    if (i.play_count !== null) out.push(`${i.play_count} ${i.play_count === 1 ? 'play' : 'plays'}`);
+    const codec = [i.codec?.toUpperCase(), i.bitrate_kbps ? `${i.bitrate_kbps} kbps` : null].filter(Boolean).join(' @ ');
+    if (codec) out.push(codec);
+    const format = [i.bit_depth ? `${i.bit_depth}-bit` : null, i.sample_rate_hz ? `${+(i.sample_rate_hz / 1000).toFixed(1)} kHz` : null]
+      .filter(Boolean)
+      .join(' · ');
+    if (format) out.push(format);
+    return out;
+  });
+
+  // The track menu (the menu button, or a right-click on the cover) and the queue (decision 0019).
+  let menuAt = $state<DOMRect | null>(null);
+  let queueOpen = $state(false);
+  const openMenu = (e: Event) => (menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect());
+  async function jump(id: string) {
+    try {
+      await jumpTo(id, np?.source);
+      setTimeout(refresh, 700);
+    } catch (e) {
+      toast.fail(e, "The player didn't go to that track");
+    }
+  }
 
   // Closing: over the page the chevron, Esc and a swipe down close it; beside the page they fold it to the
   // mini-player until that is tapped (not remembered). Maximise puts it over the page, the sidebar button back beside
@@ -35,7 +67,11 @@
   }
   $effect(() => {
     if (place !== 'overlay') return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || menuAt) return;
+      if (queueOpen) queueOpen = false;
+      else close();
+    };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
   });
@@ -137,7 +173,7 @@
   });
   // What is shown changes the controls' height (a long title, the pill, a progress bar or none).
   $effect(() => {
-    void [np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.showProgress];
+    void [np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.showProgress, chips.length];
     untrack(() => requestAnimationFrame(relayout));
   });
 </script>
@@ -152,6 +188,7 @@
     class:drop-gaps={dropped('gaps')}
     class:drop-buttons={dropped('buttons')}
     class:drop-pill={dropped('pill')}
+    class:drop-chips={dropped('chips')}
     class:drop-title={dropped('title')}
     class:drop-times={dropped('times')}
     class:drop-progress={dropped('progress')}
@@ -167,7 +204,7 @@
     {/if}
     {#if np && src}
       {#key src}
-        <button class="cover-btn" aria-label="Play or pause" tabindex="-1" onclick={coverTap}>
+        <button class="cover-btn" aria-label="Play or pause" tabindex="-1" onclick={coverTap} oncontextmenu={(e) => (e.preventDefault(), openMenu(e))}>
           <img class="cover" {src} alt="" decoding="async" draggable="false" onerror={() => coverFailed(src)} />
         </button>
       {/key}
@@ -178,6 +215,11 @@
           {#if np.player}<span class="pill">{np.player}</span>{/if}
           <div class="title">{np.name}</div>
           <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
+          {#if chips.length}
+            <div class="chips" aria-label="About this track">
+              {#each chips as c (c)}<span>{c}</span>{/each}
+            </div>
+          {/if}
           <div class="row">
             <div class="transport" role="group" aria-label="Player controls">
               <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
@@ -219,6 +261,8 @@
       </div>
       {#if np}
         <div class="side">
+          <button class="act" aria-label="Track menu" aria-haspopup="menu" onclick={openMenu}><Icon name="menu" size={24} /></button>
+          <button class="act" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}><Icon name="playlists" size={24} /></button>
           {#if np.favorite !== null}
             <button class="fav" class:on={favorite()} disabled={live.pending} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
               ><Icon name="heart" size={26} /></button
@@ -233,7 +277,40 @@
       {/if}
     </div>
   </header>
+
+  {#if queueOpen && np}
+    <!-- The queue (decision 0019): the playing track, then what comes next as the player reports it; a tap plays it. -->
+    <div class="queue" role="dialog" aria-label="Queue">
+      <div class="qhead">
+        <button class="corner left" aria-label="Close the queue" onclick={() => (queueOpen = false)}><Icon name="collapse" size={26} /></button>
+        <span>Queue</span>
+      </div>
+      <div class="qnow">
+        {#if src}<img {src} alt="" />{/if}
+        <div><strong>{np.name}</strong><span>{np.artist ?? ''}</span></div>
+      </div>
+      {#if np.upcoming.length}
+        <ol>
+          {#each np.upcoming as t, i (t.id + ':' + i)}
+            <li>
+              <button onclick={() => jump(t.id)}>
+                {#if t.album_id}<img src={incomingCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
+                <div><strong>{t.name}</strong><span>{t.artist ?? ''}</span></div>
+                {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
+              </button>
+            </li>
+          {/each}
+        </ol>
+      {:else}
+        <p class="empty">Nothing comes next.</p>
+      {/if}
+    </div>
+  {/if}
 </div>
+
+{#if menuAt}
+  <TrackMenu anchor={menuAt} onclose={() => (menuAt = null)} />
+{/if}
 
 <style>
   /* The player's own surface: the cover, heavily blurred, under a veil (dark, or light in the light theme), as
@@ -478,11 +555,150 @@
     filter: drop-shadow(0 2px 1px color-mix(in srgb, var(--text) 25%, transparent));
   }
 
-  /* The favourite next to the count. */
+  /* The menu, the queue, the favourite and the count. */
   .side {
     display: flex;
     align-items: center;
-    gap: 20px;
+    gap: 14px;
+  }
+
+  .act {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: 50%;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  /* Info chips: small read-only pills in one row, scrolling sideways when they do not fit. */
+  .chips {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .chips span {
+    flex: none;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* The queue: a sheet over the player (Finamp's opens at 92 %), the playing track pinned at its top. */
+  .queue {
+    position: absolute;
+    inset: 8% 0 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    border-radius: 16px 16px 0 0;
+    background: var(--surface);
+    box-shadow: 0 -8px 30px rgb(0 0 0 / 0.4);
+  }
+
+  .qhead {
+    position: relative;
+    padding: 18px 16px 10px;
+    font-weight: 650;
+    text-align: center;
+  }
+
+  .qhead .corner {
+    top: 6px;
+  }
+
+  .qnow,
+  .queue li button {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 8px 16px;
+    text-align: left;
+  }
+
+  .qnow {
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--art-accent) 14%, transparent);
+  }
+
+  .qnow img,
+  .queue img,
+  .noimg {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    border-radius: 6px;
+    object-fit: cover;
+    background: var(--bg);
+  }
+
+  .qnow div,
+  .queue li div {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .qnow strong,
+  .qnow span,
+  .queue li strong,
+  .queue li div span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .qnow span,
+  .queue li div span,
+  .queue .d {
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+  .queue ol {
+    flex: 1;
+    margin: 0;
+    padding: 4px 0 calc(12px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+    list-style: none;
+  }
+
+  .queue li button {
+    min-height: 56px;
+    background: none;
+    border: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .queue li button:hover,
+  .queue li button:focus-visible {
+    background: color-mix(in srgb, var(--text) 7%, transparent);
+  }
+
+  .queue .d {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .empty {
+    margin: 16px;
+    color: var(--muted);
   }
 
   .fav {
@@ -549,6 +765,10 @@
   }
 
   header.drop-pill .pill {
+    display: none;
+  }
+
+  header.drop-chips .chips {
     display: none;
   }
 

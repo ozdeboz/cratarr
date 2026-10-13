@@ -47,6 +47,18 @@ export type NowPlaying = {
   favorite: boolean | null;
   /** What plays next, in order, as far as the player reports. */
   upcoming: Upcoming[];
+  /** What the server knows about the track's file and plays (the player's info chips, decision 0019). */
+  info?: TrackInfo | null;
+};
+
+/** Each field null when the server does not know it. */
+export type TrackInfo = {
+  play_count: number | null;
+  codec: string | null;
+  bitrate_kbps: number | null;
+  bit_depth: number | null;
+  sample_rate_hz: number | null;
+  explicit: boolean | null;
 };
 
 /** A track the player plays after the current one. */
@@ -131,6 +143,14 @@ export type PlayResult = { player: string; sent: number; total: number; unknown:
 
 export const playPlaylist = (playlistId: string, mode: PlayMode, source?: string) =>
   post<PlayResult>(`/api/playlists/${encodeURIComponent(playlistId)}/play${follow(source)}`, { mode });
+
+// The queue (decision 0019): one track after the current one or at the end, playing on from an upcoming track, and a
+// new playlist made of what plays and what comes next (tracks in the library only).
+export const queueTrack = (id: string, mode: 'next' | 'last', source?: string) =>
+  post<{ player: string }>(`/api/queue/add${follow(source)}`, { id, mode });
+export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
+export const playlistFromQueue = (name: string, source?: string) =>
+  post<{ playlist: string; added: number; left_out: number }>(`/api/queue/playlist${follow(source)}`, { name });
 
 /** Mark the playing track a favourite or not. Says the state wanted, so a retried request changes nothing more. */
 export const setFavorite = (on: boolean, source?: string) => {

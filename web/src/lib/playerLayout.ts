@@ -4,7 +4,7 @@
 
 /** What gives way when the player runs out of height, first to last. The title, play/pause and the playlist count
  *  never do. Step n is dropped at level n + 1. */
-export const STEPS = ['gaps', 'buttons', 'pill', 'title', 'times', 'progress'] as const;
+export const STEPS = ['gaps', 'buttons', 'pill', 'chips', 'title', 'times', 'progress'] as const;
 export type Step = (typeof STEPS)[number];
 
 /** The share of the largest possible cover that the cover may give up to keep each step, at a 300 px cover. */
@@ -12,6 +12,7 @@ const ALLOWANCE: Record<Step, number> = {
   gaps: 0.04,
   buttons: 0.04,
   pill: 0.08,
+  chips: 0.1,
   title: 0.12,
   times: 0.12,
   progress: 0.16,
