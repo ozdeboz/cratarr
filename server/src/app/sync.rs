@@ -475,16 +475,17 @@ impl Translate {
     }
 }
 
-/// `target` as a path relative to the folder `base` ("../lidarr-music/A/01.flac").
-pub(super) fn relative_to(base: &Path, target: &Path) -> Option<String> {
-    let (b, t): (Vec<_>, Vec<_>) = (base.components().collect(), target.components().collect());
-    let common = b.iter().zip(&t).take_while(|(x, y)| x == y).count();
-    if common == 0 {
-        return None;
+pub(super) use crate::playlists::relative_to;
+
+/// The server's list with the agreed tracks it no longer lists put back where they were, for those `linked` says
+/// have no server item now.
+fn with_unlinked_kept(base: &[i64], mut listed: Vec<i64>, linked: impl Fn(i64) -> bool) -> Vec<i64> {
+    for (at, track) in base.iter().enumerate() {
+        if !listed.contains(track) && !linked(*track) {
+            listed.insert(at.min(listed.len()), *track);
+        }
     }
-    let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), b.len() - common).collect();
-    parts.extend(t[common..].iter().map(|c| c.as_os_str().to_string_lossy().into_owned()));
-    Some(parts.join("/"))
+    listed
 }
 
 /// Put the server items Cratarr does not know back where they were.
@@ -704,6 +705,15 @@ async fn sync_content(
         blocking(move || t.from_server(&ids)).await?
     } else {
         (link.base.clone(), Vec::new())
+    };
+    // A track the server stopped listing while Cratarr has no server item for it was not taken out by anyone: its
+    // file moved (Keep, Replace, a restructure) and the server's new item is not linked yet. Read as a removal it
+    // would leave the playlist here; it stays, and goes back to the server once linked.
+    let server_tracks = if server_changed {
+        let (t, base, listed) = (tr.clone(), link.base.clone(), server_tracks);
+        blocking(move || with_unlinked_kept(&base, listed, |track| t.server_id(track).is_some())).await?
+    } else {
+        server_tracks
     };
     let (t, its) = (tr.clone(), items.clone());
     let file_on_server: Vec<i64> = blocking(move || t.on_server(&its).into_iter().map(|(t, _)| t).collect()).await?;
@@ -1081,6 +1091,47 @@ mod tests {
         store.set_entries("Chill", &lines(&["A/01.mp3", "A/02.mp3", "A/03.mp3"])).await.unwrap();
         sync().await.unwrap();
         assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/03.mp3", "A/01.mp3", "A/02.mp3"]));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn unlinked_tracks_the_server_dropped_go_back_where_they_were() {
+        let linked = |t: i64| t != 2;
+        // 2 has no server item now: put back. 3 has one and was taken out: a real removal.
+        assert_eq!(with_unlinked_kept(&[1, 2, 3, 4], vec![1, 4], linked), vec![1, 2, 4]);
+        assert_eq!(with_unlinked_kept(&[2, 1], vec![1], linked), vec![2, 1]);
+        assert_eq!(with_unlinked_kept(&[1, 2], vec![1, 2], linked), vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn a_moved_file_the_server_has_not_linked_yet_stays_in_the_playlist() {
+        let (d, cat, store) = library();
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        store.create("Chill").await.unwrap();
+        store.set_entries("Chill", &lines(&["A/01.mp3", "A/02.mp3", "A/03.mp3"])).await.unwrap();
+        let sync = || run(&store, &cat, &srv, &state);
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s2", "s3"]));
+
+        // A/02's server item is gone (its file moved) and the server's new item is not linked yet.
+        let keep: Vec<(String, i64, String)> = [1, 3, 4].iter().map(|i| (format!("s{i}"), 0, format!("A/0{i}.mp3"))).collect();
+        cat.record_links("srv", "lib", &keep, 2).unwrap();
+        cat.forget_unseen("srv", "lib", 2).unwrap();
+        srv.edit("Chill", |v| v.retain(|s| s != "s2"));
+        sync().await.unwrap();
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3", "A/03.mp3"]));
+
+        // Linked again under its new server item: the server gets it back.
+        cat.record_links("srv", "lib", &[("s2b".to_string(), 0, "A/02.mp3".to_string())], 3).unwrap();
+        sync().await.unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s2b", "s3"]));
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3", "A/03.mp3"]));
+
+        // Taken out in Finamp while linked: a real removal, followed here.
+        srv.edit("Chill", |v| v.retain(|s| s != "s3"));
+        sync().await.unwrap();
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3"]));
         std::fs::remove_dir_all(&d).ok();
     }
 

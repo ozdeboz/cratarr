@@ -33,6 +33,10 @@ owner decided on 2026-10-12, with both sessions, that this is a per-playlist cho
   target.
 - **New on a target:** a playlist made in Finamp by an account that has a two-way link becomes a new playlist in
   Cratarr, with a two-way link to it.
+- **A moved file is not a removal:** after a move (Keep, Replace, a restructure) the server lists the file's new
+  item only once it has scanned it and Cratarr has linked it. A track a two-way target stopped listing while Cratarr
+  has no server item for it stays in the playlist and goes back to the target once linked; a track taken out
+  while linked is a real removal.
 - **Gone on one side:** a playlist deleted in Cratarr loses all its targets' copies. A copy deleted on a two-way
   target deletes the playlist (it can be restored in Cratarr). On a push target the copy is made again.
 - **Restored:** a deleted playlist's links are put aside, not forgotten. Restoring it (its Undo) brings them all
