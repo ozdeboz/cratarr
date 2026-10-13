@@ -32,11 +32,16 @@ on one album only.
 - **No "primary artist" rule.** Cratarr's naming template offers no token that picks one artist out of a credit.
 - **Compilations go under `Various Artists/`,** MusicBrainz's name for them. On the reference install the 132 albums
   tagged "Various" get that album artist in the same pass that moves them.
-- **The folder shows the credit; the list tags link the artists.** The album-artist tag (`albumartist`) holds
-  MusicBrainz's credit as written ("King Tubby meets Lee 'Scratch' Perry"), and the folder is made from it.
-  `albumartists` (and `artists` per track) holds each artist apart, so a media server links the album to every one
-  of them (Jellyfin: "prefer non-standard artists tags" on, its own delimiter splitting off). This is how Picard
-  writes them. An album without a MusicBrainz id keeps its artists as listed, joined with "&" in the credit.
+- **The folder shows the credit; the list tags link the artists.** The album-artist tag (`albumartist`) holds the
+  credit as text ("King Tubby meets Lee 'Scratch' Perry"), and the folder is made from it. `albumartists` (and
+  `artists` per track) holds each artist apart, so a media server links the album to every one of them (Jellyfin:
+  "prefer non-standard artists tags" on, its own delimiter splitting off). This is how Picard writes them.
+- **Names come from the library, not from MusicBrainz.** MusicBrainz is used as evidence only: which release an album
+  is (checked against its track list), how many artists a one-string credit holds, and which spellings in the library
+  belong to one artist. Its names are not a naming source: a moniker is sometimes an artist of its own (Aphex Twin /
+  AFX) and sometimes another name of one (Caribou / Manitoba), and a credit is printed per release, so one artist's
+  credit varies ("Andre Bratten" on 2 of 7 releases). Following it would split one artist over several folders. The
+  owner settles spelling variants once; the folder follows the tags.
 - **Characters, as Picard does:** every character Windows cannot take becomes `_`: a `/` inside a value
   (`yes/and` → `yes_and`), `:` `?` `"` `*` `<` `>` `|` `\`, a folder name's last dot (`Howie B.` → `Howie B_`) and a
   name's first dot. The reference library used `-`, `!` and `'` for some of these (37 album folders, 259 tracks);
@@ -62,7 +67,9 @@ Why not one folder per primary artist:
   against them.
 - A new collaboration is a new first-level folder; reading the library root again for it costs what a flat library
   costs for every album. That happens for a few percent of new albums.
-- Moving the reference library to the nested layout is its own job, not scheduled: 2,230 folders move, and playlists
-  and play data follow them as on Keep (decisions 0011, 0013). Until then the flat template stays in use. Every file
-  changes path, so the offsite copy uploads the whole library again; the owner bundles the pending tag work into the
-  same pass, so that happens once.
+- Moving the reference library to the nested layout is its own job, done offline in one window with Cratarr stopped:
+  the tags are rewritten and every file moved from one old-to-new path list, `cratarr-server --rewrite-playlists`
+  rewrites the playlists (and Cratarr's backups of them) from the same list, and the catalogue is made afresh, which
+  makes every sync link merge afresh. Play data in the media server follows by path, outside Cratarr. Until then the
+  flat template stays in use. Every file changes path, so the offsite copy uploads the whole library again; the owner
+  bundles the pending tag work into the same pass, so that happens once.
