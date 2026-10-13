@@ -58,3 +58,47 @@ input {
   font: inherit;
   color: inherit;
 }
+
+/* A button whose action is under way (docs/ui-conventions.md → Feedback): its label gives way to a small spinner in
+   the same place, so nothing moves. Set aria-busy on the button that was tapped, with disabled. */
+button[aria-busy='true'] {
+  position: relative;
+  color: transparent !important;
+  cursor: progress;
+}
+
+button[aria-busy='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 1.1em;
+  height: 1.1em;
+  margin: auto;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: busy-spin 0.7s linear infinite;
+}
+
+@keyframes busy-spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button[aria-busy='true']::after {
+    animation-duration: 2s;
+  }
+}
+
+button[aria-busy='true']:disabled {
+  opacity: 1;
+}
+
+/* On a filled button the spinner takes the button's text colour. */
+button.primary[aria-busy='true']::after,
+button.solid[aria-busy='true']::after {
+  border-color: color-mix(in srgb, var(--accent-text) 30%, transparent);
+  border-top-color: var(--accent-text);
+}

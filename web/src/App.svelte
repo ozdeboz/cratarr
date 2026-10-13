@@ -8,6 +8,7 @@
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import Toasts from './lib/Toasts.svelte';
+  import ProgressBar from './lib/ProgressBar.svelte';
   import { player } from './lib/live.svelte';
   import { poll } from './lib/live.svelte';
   import { known } from './lib/sources.svelte';
@@ -180,6 +181,7 @@
   {/if}
 
   <Toasts />
+  <ProgressBar />
 
   <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
     {#each bar as p (p.id)}

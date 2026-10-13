@@ -123,7 +123,7 @@
         {#if confirming}
           <p class="ask">Point {tracks(safe.length)} in {inPlaylists(playlistsOf(safe).length)} at the new files?</p>
           <div class="row">
-            <button class="primary" onclick={() => run(applySafe, `Fixed ${tracks(safe.length)}`)} disabled={busy}>
+            <button class="primary" onclick={() => run(applySafe, `Fixed ${tracks(safe.length)}`)} disabled={busy} aria-busy={busy}>
               Fix {tracks(safe.length)}
             </button>
             <button onclick={() => (confirming = false)}>Cancel</button>

@@ -158,7 +158,7 @@
     >
       <input type="text" placeholder="Name" aria-label="Name of the new playlist" maxlength="100" bind:value={nameField} />
       <div class="row">
-        <button type="submit" class="primary" disabled={working || !nameField.trim()}>Create playlist</button>
+        <button type="submit" class="primary" disabled={working || !nameField.trim()} aria-busy={working}>Create playlist</button>
         <button type="button" onclick={() => (menu = null)}>Cancel</button>
       </div>
     </form>

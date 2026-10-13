@@ -70,6 +70,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   status code.
 - **A page's own state stays in place** (`lib/Notice.svelte`): the page could not load, a field's question (the
   Keep year), empty and loading states.
+- **Waiting:** a thin bar along the top while something the user asked for loads (`lib/ProgressBar.svelte`): only
+  after 300 ms, so quick answers show nothing. Background polling and actions shown at once (the player, playlist
+  taps, the favourite) never show it (`quietly` in `api.ts`). The button that was tapped shows a spinner in place of
+  its label (`aria-busy` with `disabled`) until the answer. No full-page spinners.
 - **Destructive actions** ask in place, naming what goes ("Delete Chill?"); nothing destructive happens on one tap.
 - **Loading:** "Loading…" in the content area; never an empty page. **Empty:** say why and what to do ("Nothing
   incoming." / "No Music library is set. Choose one in Settings → Libraries.").

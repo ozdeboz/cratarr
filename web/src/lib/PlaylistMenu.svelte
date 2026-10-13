@@ -120,7 +120,7 @@
     >
       <input type="text" aria-label="New name" maxlength="100" bind:value={nameField} />
       <div class="row">
-        <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === p.id}>Rename</button>
+        <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === p.id} aria-busy={working}>Rename</button>
         <button type="button" onclick={onclose}>Cancel</button>
       </div>
     </form>
@@ -128,7 +128,7 @@
     <div class="form">
       <p class="ask">Delete {p.name}? You can undo this right after.</p>
       <div class="row">
-        <button class="danger solid" disabled={working} onclick={remove}>Delete playlist</button>
+        <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>Delete playlist</button>
         <button onclick={onclose}>Cancel</button>
       </div>
     </div>

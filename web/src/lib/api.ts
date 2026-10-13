@@ -1,3 +1,4 @@
+import { track } from './progress.svelte';
 export type Playlist = {
   id: string;
   name: string;
@@ -67,7 +68,17 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** A request the user is waiting for: counted for the progress bar (lib/progress.svelte.ts). */
+function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return track(fetchJson<T>(path, init));
+}
+
+/** A request in the background (polling, checks while typing): no progress bar. */
+function quietly<T>(path: string, init?: RequestInit): Promise<T> {
+  return fetchJson<T>(path, init);
+}
+
+async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, init);
@@ -90,7 +101,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 /** `source`: follow that source; absent: whichever started playing most recently. */
 const follow = (source?: string) => (source ? `?source=${encodeURIComponent(source)}` : '');
 
-export const getState = (source?: string) => request<State>(`/api/state${follow(source)}`);
+export const getState = (source?: string) => quietly<State>(`/api/state${follow(source)}`);
 
 export const coverUrl = (np: NowPlaying) => `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
 
@@ -106,14 +117,14 @@ export const playPlaylist = (playlistId: string, mode: PlayMode, source?: string
 export const setFavorite = (on: boolean, source?: string) => {
   const q = new URLSearchParams({ on: String(on) });
   if (source) q.set('source', source);
-  return request<State>(`/api/favorite?${q}`, { method: 'POST' });
+  return quietly<State>(`/api/favorite?${q}`, { method: 'POST' }); // shown at once (optimistic)
 };
 
 /** Put the playing track in the playlist or take it out. Says the state wanted, so a retried request changes nothing more. */
 export const setMember = (playlistId: string, member: boolean, source?: string) => {
   const q = new URLSearchParams({ member: String(member) });
   if (source) q.set('source', source);
-  return request<State>(`/api/playlists/${encodeURIComponent(playlistId)}/toggle?${q}`, { method: 'POST' });
+  return quietly<State>(`/api/playlists/${encodeURIComponent(playlistId)}/toggle?${q}`, { method: 'POST' }); // shown at once
 };
 
 export type Repair = { playlist: string; from: string; to: string };
@@ -158,7 +169,7 @@ export type Status = {
   version: string;
 };
 
-export const getStatus = () => request<Status>('/api/status');
+export const getStatus = () => quietly<Status>('/api/status');
 
 export type FieldKind = 'url' | 'text' | 'secret' | 'choice' | 'multi_choice';
 
@@ -253,7 +264,7 @@ export type NamingView = {
 };
 /** Measure a template as typed; without one, the template in use. */
 export const checkNaming = (template?: string) =>
-  request<NamingView>(`/api/settings/naming${template === undefined ? '' : `?template=${encodeURIComponent(template)}`}`);
+  quietly<NamingView>(`/api/settings/naming${template === undefined ? '' : `?template=${encodeURIComponent(template)}`}`);
 
 /** How tag values are split when read; the files are never changed. */
 export type TagRules = {
@@ -279,7 +290,7 @@ export type CatalogueStatus = {
 
 export const getSettings = () => request<Settings>('/api/settings');
 
-export const getCatalogue = () => request<CatalogueStatus>('/api/catalogue');
+export const getCatalogue = () => quietly<CatalogueStatus>('/api/catalogue');
 
 /** A file the catalogue could not read properly. */
 export type FileProblem = {
@@ -383,7 +394,7 @@ export type IncomingSource = {
 
 /** `fresh` asks past the service worker's copy (which answers at once, see sw.js) for the server's latest. */
 export const getIncoming = (source?: string, fresh = false) =>
-  request<{ sources: IncomingSource[]; trash_days: number }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
+  quietly<{ sources: IncomingSource[]; trash_days: number }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
 /** Play an incoming album on the followed player; answers with the player's label. */
 export const playIncoming = (source: string, album: string) =>
   request<{ player: string }>(`/api/incoming/play/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, { method: 'POST' });
@@ -393,7 +404,7 @@ export const incomingCoverUrl = (source: string, album: string) =>
 export type Transport = 'previous' | 'play-pause' | 'next';
 /** Previous / play-pause / next on the player that plays now. */
 export const transport = (command: Transport, source?: string) =>
-  request<{ player: string }>(`/api/player/${command}${follow(source)}`, { method: 'POST' });
+  quietly<{ player: string }>(`/api/player/${command}${follow(source)}`, { method: 'POST' }); // shown at once
 
 /** Delete an Incoming album: it goes to the trash in its folder (Undo brings it back; emptied after the days set in Settings). */
 export const deleteIncoming = (source: string, album: string) =>
@@ -467,7 +478,7 @@ export type Job = {
   undo: string | null;
   why: string | null;
 };
-export const getJobs = () => request<Job[]>('/api/incoming/jobs');
+export const getJobs = () => quietly<Job[]>('/api/incoming/jobs');
 /** Take an album out of the queue while it waits or converts. */
 export const cancelJob = (id: number) => request<null>(`/api/incoming/jobs/${id}/cancel`, { method: 'POST' });
 

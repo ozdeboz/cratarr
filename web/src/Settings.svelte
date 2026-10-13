@@ -370,7 +370,7 @@
           </div>
 
           <div class="row">
-            <button type="button" disabled={d.busy} onclick={() => check(d)}>Check connection</button>
+            <button type="button" disabled={d.busy} aria-busy={d.busy} onclick={() => check(d)}>Check connection</button>
             {#if d.note}<span class="hint bad">{d.note}</span>{/if}
           </div>
         </article>
@@ -429,7 +429,7 @@
             </label>
           </div>
           <div class="row">
-            <button type="button" disabled={lid.busy || !lid.url.trim()} onclick={checkLidarr}>Check connection</button>
+            <button type="button" disabled={lid.busy || !lid.url.trim()} aria-busy={lid.busy} onclick={checkLidarr}>Check connection</button>
             {#if lid.note}<span class="hint bad">{lid.note}</span>{/if}
           </div>
         </article>
@@ -602,7 +602,7 @@
   {#if dirty}
     <div class="savebar" role="region" aria-label="Unsaved changes">
       <span>Unsaved changes</span>
-      <button class="primary" disabled={saving || !s?.settings_file} onclick={save}>Save</button>
+      <button class="primary" disabled={saving || !s?.settings_file} aria-busy={saving} onclick={save}>Save</button>
       <button disabled={saving} onclick={() => s && fill(s)}>Discard</button>
     </div>
   {/if}
