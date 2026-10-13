@@ -23,6 +23,7 @@
   import { live } from './lib/live.svelte';
   import { toast } from './lib/toast.svelte';
   import { jobs } from './lib/jobs.svelte';
+  import { on, stream } from './lib/events.svelte';
 
   let sources = $state<IncomingSource[] | null>(null);
   let trashDays = $state(14);
@@ -138,12 +139,20 @@
     }
   }
 
-  // A queued album finished: read the list again (it is in Music now, or back as it was).
+  // The live channel says when the list changed (albums came, or an action or its Undo went through): read it again.
+  $effect(() => on<{ area: string }>('changed', ({ area }) => area === 'incoming' && reload()));
+  // Back after it was down: what changed meanwhile was not told.
+  let wasConnected = stream.connected;
+  $effect(() => {
+    if (stream.connected && !wasConnected) reload();
+    wasConnected = stream.connected;
+  });
+  // Without it: a queued album finished, so read the list again (it is in Music now, or back as it was).
   let seenFinished = jobs.finished;
   $effect(() => {
     if (jobs.finished !== seenFinished) {
       seenFinished = jobs.finished;
-      reload();
+      if (!stream.connected) reload();
     }
   });
 
@@ -192,7 +201,7 @@
   }
 
   // The server follows the source every 30 s and keeps the list. First show whatever copy answers fastest (the
-  // service worker's), then ask for the latest, and keep asking every 30 s.
+  // service worker's), then ask for the latest; then every 30 s while the live channel is down.
   $effect(() => {
     const want = prefs.source || undefined;
     let stopped = false;
@@ -205,8 +214,11 @@
         if (!sources) error = e instanceof ApiError ? e.message : 'Unexpected error';
       }
     }
+    // The latest once; after that only while the live channel is down (it says when the list changes).
+    let first = true;
     async function follow() {
-      await load(true);
+      if (first || !stream.connected) await load(true);
+      first = false;
       if (!stopped) timer = setTimeout(follow, 30_000);
     }
     load(false).then(follow);

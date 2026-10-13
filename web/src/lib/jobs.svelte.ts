@@ -1,8 +1,9 @@
 // The conversion queue (decision 0013): albums waiting for their hi-res files to be converted before Keep or Replace.
 // Followed app-wide: the Incoming tab shows how many wait, Incoming's rows show their progress, and a finished job
 // says so in a toast on whatever page is open. Only jobs this page saw unfinished are told, so a reload never replays
-// old ones.
+// old ones. The live channel brings every change (`jobs`); only while it is down does this poll.
 import { getJobs, undoIncoming, type Job } from './api';
+import { on, stream } from './events.svelte';
 import { toast } from './toast.svelte';
 
 const ACTIVE_MS = 3_000;
@@ -51,10 +52,10 @@ class Jobs {
 
   #schedule() {
     clearTimeout(this.#timer);
-    if (this.#running) this.#timer = setTimeout(() => this.poke(), this.open.length ? ACTIVE_MS : IDLE_MS);
+    if (this.#running) this.#timer = setTimeout(() => this.#tick(), this.open.length ? ACTIVE_MS : IDLE_MS);
   }
 
-  /** Ask now (after queueing an album), then keep following. */
+  /** Ask now (after queueing an album, or with the live channel down), then keep following. */
   async poke() {
     await this.#refresh();
     this.#schedule();
@@ -63,11 +64,20 @@ class Jobs {
   /** Follow the queue; returns the stop. */
   start(): () => void {
     this.#running = true;
-    this.poke();
+    const off = on<Job[]>('jobs', (list) => this.apply(list));
+    this.#tick();
     return () => {
       this.#running = false;
+      off();
       clearTimeout(this.#timer);
     };
+  }
+
+  /** Poll only while the live channel is down. */
+  async #tick() {
+    if (!stream.connected) await this.#refresh();
+    clearTimeout(this.#timer);
+    if (this.#running) this.#timer = setTimeout(() => this.#tick(), this.open.length ? ACTIVE_MS : IDLE_MS);
   }
 }
 
