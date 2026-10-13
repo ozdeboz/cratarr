@@ -451,6 +451,8 @@ export type KeepPreview = {
   refused: { kind: 'needs_year' } | { kind: 'other'; detail: string } | null;
   /** Hi-res files converted to 16-bit/44.1 kHz first (Keep then waits in the queue). */
   convert: number;
+  /** Whether a Lidarr is set to be told to stop fetching it; without one it may fetch the album again. */
+  acquisition: boolean;
 };
 /** What Keep or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
 export type AlbumMoved = { undo: string | null; title: string; folder: string; queued: boolean };
@@ -475,6 +477,8 @@ export type ReplacePreview = {
   added: number;
   refused: { kind: 'needs_year' } | { kind: 'unmatched'; detail: string[] } | { kind: 'other'; detail: string } | null;
   convert: number;
+  /** Whether a Lidarr is set to be told to stop fetching it; without one it may fetch the album again. */
+  acquisition: boolean;
 };
 const replacePath = (source: string, album: string) =>
   `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;

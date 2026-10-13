@@ -80,8 +80,33 @@ pub fn revert(plan: &[Step]) -> Result<()> {
     apply(&back)
 }
 
+/// Make `dir` and any missing folders above it, each with the permission bits of the folder it is made in, so new
+/// folders look like their neighbours whatever the process's umask: a NAS's shared media folders are 2775 for a
+/// group, and Cratarr's default umask (022) made 2755 folders the group could not write in (seen 2026-10-13). Safe to
+/// repeat; setting the bits is best effort.
+pub fn create_dirs_like_parent(dir: &Path) -> std::io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    let parent = dir.parent().ok_or_else(|| std::io::Error::other("no folder above"))?;
+    create_dirs_like_parent(parent)?;
+    match std::fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(e) => return Err(e),
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(parent) {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(meta.permissions().mode() & 0o7777));
+        }
+    }
+    Ok(())
+}
+
 fn move_file(from: &Path, to: &Path) -> Result<()> {
-    std::fs::create_dir_all(to.parent().context("target has no folder")?)?;
+    create_dirs_like_parent(to.parent().context("target has no folder")?)?;
     match std::fs::rename(from, to) {
         Ok(()) => Ok(()),
         // Another file system: copy, make sure it is on disk, then remove the original.
@@ -114,6 +139,20 @@ mod tests {
         let p = std::env::temp_dir().join(format!("cratarr-moves-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
         std::fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_folders_take_the_permissions_of_the_folder_they_are_made_in() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tmp();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o2775)).unwrap();
+        create_dirs_like_parent(&root.join("Artist - Album (2000)/CD1")).unwrap();
+        for d in ["Artist - Album (2000)", "Artist - Album (2000)/CD1"] {
+            let mode = std::fs::metadata(root.join(d)).unwrap().permissions().mode() & 0o7777;
+            assert_eq!(mode, 0o2775, "{d}");
+        }
+        create_dirs_like_parent(&root.join("Artist - Album (2000)")).unwrap();
     }
 
     fn step(from: &Path, a: &str, to: &Path, b: &str) -> Step {

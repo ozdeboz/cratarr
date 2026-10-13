@@ -27,6 +27,8 @@
 
   let sources = $state<IncomingSource[] | null>(null);
   let trashDays = $state(14);
+  // Said in the Keep and Replace questions when no Lidarr is set to be told to stop fetching the album.
+  const NO_LIDARR = "Lidarr isn't set up in Settings, so it may fetch this album again.";
   let error = $state<string | null>(null);
   let noCover = $state<Record<string, boolean>>({});
   let filter = $state('');
@@ -370,7 +372,8 @@
         {:else}
           <p class="ask">
             Move {m.a.title} into Music as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
-              {` ${keep.convert} hi-res ${keep.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}
+              {` ${keep.convert} hi-res ${keep.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}{#if !keep.acquisition}
+              {` ${NO_LIDARR}`}{/if}
           </p>
         {/if}
         <div class="actions">
@@ -397,7 +400,8 @@
               ? `, ${swap.added} new`
               : ''}){#if swap.folder !== swap.old}, as <strong>{swap.folder}</strong>{/if}? The old copy stays in the trash for {trashDays}
             {trashDays === 1 ? 'day' : 'days'}.{#if swap.convert}
-              {` ${swap.convert} hi-res ${swap.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}
+              {` ${swap.convert} hi-res ${swap.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}{#if !swap.acquisition}
+              {` ${NO_LIDARR}`}{/if}
           </p>
         {/if}
         <div class="actions">

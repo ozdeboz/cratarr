@@ -51,7 +51,7 @@ pub fn trash(folder: &Path, rel: &str, now_epoch: i64) -> Result<String> {
     if dest.exists() {
         bail!("already in the trash: {token}");
     }
-    std::fs::create_dir_all(dest.parent().context("trash path has no parent")?)?;
+    crate::moves::create_dirs_like_parent(dest.parent().context("trash path has no parent")?)?;
     std::fs::rename(&src, &dest).with_context(|| format!("moving {rel} to the trash"))?;
     Ok(token)
 }
@@ -75,7 +75,7 @@ pub fn restore(folder: &Path, token: &str) -> Result<String> {
     if dest.exists() {
         bail!("{rel} exists again; not overwriting it");
     }
-    std::fs::create_dir_all(dest.parent().context("album path has no parent")?)?;
+    crate::moves::create_dirs_like_parent(dest.parent().context("album path has no parent")?)?;
     std::fs::rename(&src, &dest).with_context(|| format!("restoring {rel}"))?;
     // Leave no empty stamp or artist folders behind in the trash.
     let mut d = src.parent().map(Path::to_path_buf);

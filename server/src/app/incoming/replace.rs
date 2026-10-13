@@ -28,6 +28,8 @@ pub struct ReplacePreview {
     pub refused: Option<ReplaceRefused>,
     /// Hi-res files converted to CD format first (Replace then waits in the queue).
     pub convert: usize,
+    /// Whether a Lidarr is set, to be told to stop fetching the album; without one it may fetch it again.
+    pub acquisition: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,6 +153,7 @@ impl IncomingService {
         let (library, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
         let old = verdicts(std::slice::from_ref(&at.album), &library, &incoming).remove(&at.album.id).map(|v| v.library).unwrap_or_default();
         let convert = self.to_convert(&at).await.len();
+        let acquisition = self.acquisition().is_some();
         Ok(match self.plan_replace(&at, year).await? {
             Ok(p) => ReplacePreview {
                 title: at.album.title,
@@ -160,8 +163,9 @@ impl IncomingService {
                 added: p.plan.added,
                 refused: None,
                 convert,
+                acquisition,
             },
-            Err(r) => ReplacePreview { title: at.album.title, old, folder: None, tracks: 0, added: 0, refused: Some(r), convert },
+            Err(r) => ReplacePreview { title: at.album.title, old, folder: None, tracks: 0, added: 0, refused: Some(r), convert, acquisition },
         })
     }
 

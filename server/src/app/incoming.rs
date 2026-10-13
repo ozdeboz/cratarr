@@ -51,6 +51,8 @@ pub struct KeepPreview {
     pub refused: Option<KeepRefused>,
     /// Hi-res files converted to CD format first (Keep then waits in the queue).
     pub convert: usize,
+    /// Whether a Lidarr is set, to be told to stop fetching the album; without one it may fetch it again.
+    pub acquisition: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -696,9 +698,10 @@ impl IncomingService {
         let at = self.locate(source_id, album_id).await?;
         let (_, plan) = self.plan_keep(&at, year).await?;
         let convert = self.to_convert(&at).await.len();
+        let acquisition = self.acquisition().is_some();
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition },
         })
     }
 
