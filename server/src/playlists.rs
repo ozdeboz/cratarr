@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::m3u;
 
-const BACKUP_DIR: &str = ".cratarr-backups";
+pub const BACKUP_DIR: &str = ".cratarr-backups";
 const KEEP_BACKUPS: usize = 20;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -825,6 +825,19 @@ pub fn adopt_into_playlist_dir(music: &Path) -> Result<Vec<String>> {
         out.push(name[..name.len() - 4].to_string());
     }
     Ok(out)
+}
+
+
+/// `target` as a path relative to the folder `base` ("../lidarr-music/A/01.flac").
+pub fn relative_to(base: &Path, target: &Path) -> Option<String> {
+    let (b, t): (Vec<_>, Vec<_>) = (base.components().collect(), target.components().collect());
+    let common = b.iter().zip(&t).take_while(|(x, y)| x == y).count();
+    if common == 0 {
+        return None;
+    }
+    let mut parts: Vec<String> = std::iter::repeat_n("..".to_string(), b.len() - common).collect();
+    parts.extend(t[common..].iter().map(|c| c.as_os_str().to_string_lossy().into_owned()));
+    Some(parts.join("/"))
 }
 
 #[cfg(test)]

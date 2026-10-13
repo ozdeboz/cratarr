@@ -17,6 +17,7 @@ mod moves;
 mod naming;
 mod nowplaying;
 mod placement;
+mod playlist_rewrite;
 #[allow(dead_code)] // the playlist sync uses it (decision 0012)
 mod playlist_merge;
 mod ports;
@@ -54,6 +55,16 @@ fn healthcheck() -> i32 {
 async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
         std::process::exit(healthcheck());
+    }
+    if std::env::args().nth(1).as_deref() == Some("--rewrite-playlists") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(match playlist_rewrite::run(&args) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("{e:#}");
+                2
+            }
+        });
     }
     tracing_subscriber::fmt()
         // The tag reader warns about every MP3 whose length it has to estimate; that is normal and would flood the log.
