@@ -11,7 +11,8 @@
     type Repair,
     type Repairs,
   } from './lib/api';
-  import Notice, { type NoticeData } from './lib/Notice.svelte';
+  import Notice from './lib/Notice.svelte';
+  import { toast } from './lib/toast.svelte';
   import { getFileProblems, type FileProblem } from './lib/api';
 
   // Files the catalogue could not read properly, by kind, worst first.
@@ -38,7 +39,6 @@
   let data = $state<Repairs | null>(null);
   let dups = $state<DupGroup[]>([]);
   let error = $state<string | null>(null);
-  let notice = $state<NoticeData | null>(null);
   let confirming = $state(false);
   let busy = $state(false);
 
@@ -68,9 +68,9 @@
     confirming = false;
     try {
       const { playlists } = await action();
-      notice = { text: `${what} in ${inPlaylists(playlists.length)}.`, undo: () => undoChanges(playlists) };
+      toast.show({ text: `${what} in ${inPlaylists(playlists.length)}.`, undo: () => undoChanges(playlists) });
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
+      toast.fail(e, 'Something went wrong');
     } finally {
       busy = false;
       await load();
@@ -81,9 +81,9 @@
     busy = true;
     try {
       await undo(ids);
-      notice = { text: 'Undone.' };
+      toast.show({ text: 'Undone.' });
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
+      toast.fail(e, 'Could not undo');
     } finally {
       busy = false;
       await load();
@@ -109,8 +109,7 @@
 <main>
   <p class="lede">Missing and repeated tracks in playlists (every change can be undone), and music files that can't be read properly.</p>
 
-  {#if error}<Notice notice={{ text: error, tone: 'error' }} />{/if}
-  <Notice bind:notice />
+  {#if error}<Notice text={error} />{/if}
 
   {#if !data && !error}
     <p class="empty">Loading…</p>

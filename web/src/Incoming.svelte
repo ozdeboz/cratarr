@@ -16,7 +16,7 @@
   import { longpress } from './lib/longpress';
   import { prefs } from './lib/prefs.svelte';
   import { live } from './lib/live.svelte';
-  import Notice, { type NoticeData } from './lib/Notice.svelte';
+  import { toast } from './lib/toast.svelte';
 
   let sources = $state<IncomingSource[] | null>(null);
   let trashDays = $state(14);
@@ -25,7 +25,6 @@
   let filter = $state('');
   // What is playing (the shell polls it), so the album being listened to stands out.
   const playing = $derived(live.view?.now_playing ?? null);
-  let notice = $state<NoticeData | null>(null);
   let starting = $state<string | null>(null);
 
   // The open menu of one album (Play, Keep in Music, Delete album), anchored to it; `ask` = the in-place question.
@@ -49,7 +48,7 @@
     try {
       keep = await keepPreview(menu.source, menu.a.id);
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Could not work out the names', tone: 'error' };
+      toast.fail(e, 'Could not work out the names');
       menu = null;
     }
   }
@@ -70,9 +69,9 @@
     try {
       const { undo, title } = await keepIncoming(source, a.id, year.trim() || undefined);
       sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
-      notice = { text: `Kept ${title} in Music.`, undo: () => restore(undo) };
+      toast.show({ text: `Kept ${title} in Music.`, undo: () => restore(undo) });
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Could not keep the album', tone: 'error' };
+      toast.fail(e, 'Could not keep the album');
     } finally {
       working = false;
       menu = null;
@@ -94,9 +93,9 @@
     try {
       const { undo, title } = await deleteIncoming(source, a.id);
       sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
-      notice = { text: `Deleted ${title}.`, undo: () => restore(undo) };
+      toast.show({ text: `Deleted ${title}.`, undo: () => restore(undo) });
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Could not delete the album', tone: 'error' };
+      toast.fail(e, 'Could not delete the album');
     } finally {
       working = false;
       menu = null;
@@ -106,10 +105,9 @@
   async function restore(undo: string) {
     try {
       await undoIncoming(undo);
-      notice = null;
       await reload();
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Could not restore the album', tone: 'error' };
+      toast.fail(e, 'Could not restore the album');
     }
   }
 
@@ -119,7 +117,7 @@
     try {
       await playIncoming(source, a.id);
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Could not start playing', tone: 'error' };
+      toast.fail(e, 'Could not start playing');
     } finally {
       starting = null;
     }
@@ -162,9 +160,6 @@
 </script>
 
 <main>
-
-  <Notice bind:notice />
-
   {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if sources === null}

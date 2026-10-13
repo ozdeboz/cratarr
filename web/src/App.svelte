@@ -7,6 +7,7 @@
   import Icon, { type IconName } from './lib/Icon.svelte';
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
+  import Toasts from './lib/Toasts.svelte';
   import { player } from './lib/live.svelte';
   import { poll } from './lib/live.svelte';
   import { known } from './lib/sources.svelte';
@@ -172,6 +173,8 @@
       {/each}
     </div>
   {/if}
+
+  <Toasts />
 
   <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
     {#each bar as p (p.id)}

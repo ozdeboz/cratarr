@@ -63,9 +63,13 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 ## Feedback
 
-- **One notice style everywhere:** a line under the toolbar. Neutral for done ("Renamed to Chill."), amber for
-  warnings, red for errors, and an "Undo" link when the action can be undone. It disappears after a few seconds
-  unless it is an error.
+- **What an action did, or why it failed, is a toast** (`lib/toast.svelte.ts`): one at a time, floating above the
+  bottom bar (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
+  warnings, red for errors, with "Undo" when the action can be undone. Done and warnings go after a few seconds;
+  errors stay until dismissed, replaced, or the page changes. Errors say what failed in plain words, never a bare
+  status code.
+- **A page's own state stays in place** (`lib/Notice.svelte`): the page could not load, a field's question (the
+  Keep year), empty and loading states.
 - **Destructive actions** ask in place, naming what goes ("Delete Chill?"); nothing destructive happens on one tap.
 - **Loading:** "Loading…" in the content area; never an empty page. **Empty:** say why and what to do ("Nothing
   incoming." / "No Music library is set. Choose one in Settings → Libraries.").

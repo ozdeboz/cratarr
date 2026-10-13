@@ -2,17 +2,16 @@
   // A playlist's menu (docs/ui-conventions.md), the same wherever a playlist is long-pressed: Play, Shuffle, Play next,
   // Add to queue, then Rename and Delete, both done inside the popover. Success shows where it happens (the header,
   // the list); only Delete says something, to offer Undo.
-  import { ApiError, deletePlaylist, playPlaylist, renamePlaylist, restorePlaylist, type PlayMode } from './api';
-  import type { NoticeData } from './Notice.svelte';
+  import { deletePlaylist, playPlaylist, renamePlaylist, restorePlaylist, type PlayMode } from './api';
   import Popover from './Popover.svelte';
   import { prefs } from './prefs.svelte';
   import { refresh } from './live.svelte';
+  import { toast } from './toast.svelte';
 
   let {
     playlist,
     anchor,
     onclose,
-    onnotice,
     onrenamed,
     ondeleted,
     onrestored,
@@ -20,7 +19,6 @@
     playlist: { id: string; name: string; count: number; dead: number };
     anchor: DOMRect;
     onclose: () => void;
-    onnotice: (n: NoticeData) => void;
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
     /** The deletion was undone. */
@@ -32,7 +30,7 @@
   let working = $state(false);
   const p = $derived(playlist);
   const missing = (n: number) => `${n} missing ${n === 1 ? 'track' : 'tracks'}`;
-  const fail = (e: unknown, what: string) => onnotice({ text: e instanceof ApiError ? e.message : what, tone: 'error' });
+  const fail = (e: unknown, what: string) => toast.fail(e, what);
 
   async function play(how: PlayMode) {
     if (working) return;
@@ -71,7 +69,7 @@
     try {
       await deletePlaylist(id);
       ondeleted?.(id);
-      onnotice({
+      toast.show({
         text: `Deleted ${name}.`,
         undo: async () => {
           try {

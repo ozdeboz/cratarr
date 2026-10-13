@@ -1,40 +1,13 @@
-<script lang="ts" module>
-  /** One notice style everywhere (docs/ui-conventions.md): done, warning or error, optionally undoable. */
-  export type NoticeData = { text: string; tone?: 'done' | 'warn' | 'error'; undo?: () => void };
-</script>
-
 <script lang="ts">
-  let { notice = $bindable(null) }: { notice: NoticeData | null } = $props();
-
-  // Done and warning notices go away by themselves; an error stays until the next action replaces it.
-  $effect(() => {
-    if (!notice || notice.tone === 'error') return;
-    const t = setTimeout(() => (notice = null), 6000);
-    return () => clearTimeout(t);
-  });
+  // A page's own state in place, such as "the page could not load" (docs/ui-conventions.md → Feedback). What an
+  // action did goes in a toast instead (lib/toast.svelte.ts).
+  let { text, tone = 'error' }: { text: string; tone?: 'warn' | 'error' } = $props();
 </script>
 
-{#if notice}
-  <div class="notice {notice.tone ?? 'done'}" role={notice.tone === 'error' ? 'alert' : 'status'}>
-    <span>{notice.text}</span>
-    {#if notice.undo}
-      <button
-        class="undo"
-        onclick={() => {
-          const u = notice?.undo;
-          notice = null;
-          u?.();
-        }}>Undo</button
-      >
-    {/if}
-  </div>
-{/if}
+<p class="notice {tone}" role={tone === 'error' ? 'alert' : 'status'}>{text}</p>
 
 <style>
   .notice {
-    display: flex;
-    align-items: center;
-    gap: 12px;
     margin: 0 0 12px;
     padding: 10px 14px;
     border: 1px solid var(--border);
@@ -51,17 +24,5 @@
   .notice.error {
     border-color: var(--danger);
     color: var(--danger);
-  }
-
-  .undo {
-    margin-left: auto;
-    padding: 0;
-    background: none;
-    border: 0;
-    color: var(--accent);
-    font: inherit;
-    font-weight: 600;
-    text-decoration: underline;
-    cursor: pointer;
   }
 </style>

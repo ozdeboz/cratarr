@@ -44,7 +44,15 @@ export type State = {
   sources: SourceTab[];
 };
 
-export class ApiError extends Error {}
+/** `generic`: no words from the server, only its status; callers say what failed instead (see toast.fail). */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly generic = false,
+  ) {
+    super(message);
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
@@ -54,14 +62,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError('Cannot reach the Cratarr server');
   }
   if (!res.ok) {
-    let message = `Server returned ${res.status}`;
+    let message: string | null = null;
     try {
       const body = await res.json();
       if (typeof body.error === 'string') message = body.error;
     } catch {
-      /* keep the generic message */
+      /* no words from the server */
     }
-    throw new ApiError(message);
+    throw message ? new ApiError(message) : new ApiError(`Server returned ${res.status}`, true);
   }
   return res.json() as Promise<T>;
 }

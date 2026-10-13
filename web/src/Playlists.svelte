@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { ApiError, createPlaylist, setMember, type Playlist } from './lib/api';
+  import { createPlaylist, setMember, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, refresh } from './lib/live.svelte';
-  import Notice, { type NoticeData } from './lib/Notice.svelte';
+  import Notice from './lib/Notice.svelte';
+  import { toast, type Toast } from './lib/toast.svelte';
   import Popover from './lib/Popover.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import { longpress } from './lib/longpress';
@@ -10,7 +11,6 @@
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
   const view = $derived(live.view);
   const error = $derived(live.error);
-  let notice = $state<NoticeData | null>(null);
   let filter = $state('');
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
   const WIDTHS = [110, 140, 170, 210, 260, 340];
@@ -43,11 +43,11 @@
   async function tap(p: Playlist) {
     if (busy[p.id]) return;
     if (!np) {
-      notice = { text: 'Nothing is playing. Start a track to add it to playlists.', tone: 'warn' };
+      toast.show({ text: 'Nothing is playing. Start a track to add it to playlists.', tone: 'warn' });
       return;
     }
     if (!np.addable && !p.member) {
-      notice = { text: NOT_MUSIC, tone: 'warn' };
+      toast.show({ text: NOT_MUSIC, tone: 'warn' });
       return;
     }
     busy[p.id] = true;
@@ -55,7 +55,7 @@
     try {
       live.view = await setMember(p.id, !p.member, prefs.source || undefined);
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
+      toast.fail(e, 'Something went wrong');
     } finally {
       delete optimistic[p.id];
       delete busy[p.id];
@@ -64,15 +64,15 @@
 
   const missing = (n: number) => `${n} missing ${n === 1 ? 'track' : 'tracks'}`;
 
-  async function act(run: () => Promise<unknown>, done: NoticeData) {
+  async function act(run: () => Promise<unknown>, done: Toast) {
     if (working) return;
     working = true;
     try {
       await run();
-      notice = done;
+      toast.show(done);
       menu = null;
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Something went wrong', tone: 'error' };
+      toast.fail(e, 'Something went wrong');
     } finally {
       working = false;
       await refresh();
@@ -110,9 +110,8 @@
   </div>
 
   {#if error}
-    <Notice notice={{ text: error, tone: 'error' }} />
+    <Notice text={error} />
   {/if}
-  <Notice bind:notice />
 
   {#if !view && !error}
     <p class="empty">Loading…</p>
@@ -159,7 +158,7 @@
     </form>
   </Popover>
 {:else if menu?.kind === 'playlist'}
-  <PlaylistMenu playlist={menu.p} anchor={menu.anchor} onclose={() => (menu = null)} onnotice={(n) => (notice = n)} />
+  <PlaylistMenu playlist={menu.p} anchor={menu.anchor} onclose={() => (menu = null)} />
 {/if}
 
 <style>

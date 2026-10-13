@@ -18,7 +18,8 @@
     type CatalogueStatus,
   } from './lib/api';
   import { prefs, type Theme } from './lib/prefs.svelte';
-  import Notice, { type NoticeData } from './lib/Notice.svelte';
+  import Notice from './lib/Notice.svelte';
+  import { toast } from './lib/toast.svelte';
 
   // A server (a source, in the code) as the page edits it. Secrets typed here are kept apart: the server never sends saved ones.
   type Draft = SourceConfig & { secrets: Record<string, string>; view: SourceView | null; busy: boolean; note: string | null };
@@ -27,7 +28,6 @@
   let drafts = $state<Draft[]>([]);
   let loadError = $state<string | null>(null);
   let saving = $state(false);
-  let notice = $state<NoticeData | null>(null);
   let removing = $state<string | null>(null);
   let addKind = $state('');
 
@@ -170,14 +170,13 @@
   }
 
   async function save() {
-    notice = null;
     saving = true;
     try {
       const lidarr = lidarrChanged ? { url: lid.url.trim(), api_key: lid.key.trim() } : undefined;
       fill(await saveSettings(drafts.map(payload), { tag_rules: rules, lidarr, trash_days: trashDays }));
-      notice = { text: 'Saved and in use.' };
+      toast.show({ text: 'Saved and in use.' });
     } catch (e) {
-      notice = { text: e instanceof ApiError ? e.message : 'Unexpected error', tone: 'error' };
+      toast.fail(e, 'Could not save');
     } finally {
       saving = false;
     }
@@ -238,8 +237,7 @@
 </script>
 
 <main>
-  {#if loadError}<Notice notice={{ text: loadError, tone: 'error' }} />{/if}
-  <Notice bind:notice />
+  {#if loadError}<Notice text={loadError} />{/if}
 
   {#if s}
     {@const many = drafts.length > 1}

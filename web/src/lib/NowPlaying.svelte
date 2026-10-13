@@ -2,10 +2,11 @@
   // The now-playing header, part of the app shell: shown above every page. It reads the shared state (see
   // live.svelte.ts) and shows the track, its cover, the progress bar, and how many playlists hold it.
   import { untrack } from 'svelte';
-  import { ApiError, coverUrl, incomingCoverUrl, setFavorite, transport, type Transport } from './api';
+  import { coverUrl, incomingCoverUrl, setFavorite, transport, type Transport } from './api';
   import Icon from './Icon.svelte';
   import { live, player, refresh } from './live.svelte';
   import { prefs } from './prefs.svelte';
+  import { toast } from './toast.svelte';
 
   const np = $derived(live.view?.now_playing ?? null);
   const memberCount = $derived((live.view?.playlists ?? []).filter((p) => p.member).length);
@@ -21,20 +22,17 @@
   });
   const src = $derived(candidates.find((u) => !failed[u]) ?? null);
 
-  // Player controls. Success shows nothing (the header itself changes); only a failure says something, briefly.
+  // Player controls. Success shows nothing (the header itself changes); only a failure says something, in a toast.
   let sending = $state(false);
-  let failure = $state<string | null>(null);
   const paused = $derived(np?.progress?.paused ?? false);
   async function send(command: Transport) {
     if (sending || !np) return;
     sending = true;
-    failure = null;
     try {
       await transport(command, np.source);
       setTimeout(refresh, 700); // the player reports back within a moment
     } catch (e) {
-      failure = e instanceof ApiError ? e.message : "The player didn't respond";
-      setTimeout(() => (failure = null), 5000);
+      toast.fail(e, "The player didn't respond");
     } finally {
       sending = false;
     }
@@ -84,8 +82,7 @@
     try {
       live.view = await setFavorite(want.on, np.source);
     } catch (e) {
-      failure = e instanceof ApiError ? e.message : "The favourite didn't change";
-      setTimeout(() => (failure = null), 5000);
+      toast.fail(e, "The favourite didn't change");
     } finally {
       if (favWanted === want) favWanted = null;
     }
@@ -185,7 +182,6 @@
         </div>
       {/if}
       </div>
-      {#if failure}<span class="failure" role="alert">{failure}</span>{/if}
       {#if !np.addable}<span class="badge">Not in your Music, so it can't go in playlists.</span>{/if}
     {:else}
       <div class="title idle">Nothing is playing</div>
@@ -401,13 +397,6 @@
   .transport button:disabled {
     opacity: 0.5;
     cursor: progress;
-  }
-
-  .failure {
-    display: block;
-    margin-top: 6px;
-    color: var(--danger);
-    font-size: 0.8rem;
   }
 
   /* The cover and the title open full screen; they look as before. */

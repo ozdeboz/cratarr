@@ -2,7 +2,6 @@
   import { ApiError, getInsights, type Count, type Insights, type Proximity, type Signal } from './lib/api';
   import { live } from './lib/live.svelte';
   import Icon from './lib/Icon.svelte';
-  import Notice, { type NoticeData } from './lib/Notice.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import { prefs } from './lib/prefs.svelte';
   import ProximityGraph from './lib/ProximityGraph.svelte';
@@ -11,7 +10,6 @@
   let data = $state<Insights | null>(null);
   let error = $state<string | null>(null);
   let selected = $state<number | null>(null);
-  let notice = $state<NoticeData | null>(null);
   // The playlist menu, opened by a long-press on a point; `name` is the playlist's id.
   let menu = $state<{ name: string; anchor: DOMRect } | null>(null);
   // Deleted here (and not undone): left out of the graph until the next visit.
@@ -189,8 +187,6 @@
       </div>
     {/if}
   </div>
-
-  <Notice bind:notice />
 
   {#if error}
     <p class="error" role="alert">{error}</p>
@@ -370,7 +366,6 @@
     playlist={menuPlaylist(menu.name)}
     anchor={menu.anchor}
     onclose={() => (menu = null)}
-    onnotice={(n) => (notice = n)}
     onrenamed={renamed}
     ondeleted={(id) => {
       selected = null;
