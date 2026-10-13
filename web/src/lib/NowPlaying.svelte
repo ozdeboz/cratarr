@@ -225,7 +225,6 @@
         </div>
       {/if}
       </div>
-      {#if !np.addable}<span class="badge">Not in your Music, so it can't go in playlists.</span>{/if}
     {:else}
       <div class="title idle">Nothing is playing</div>
     {/if}
@@ -360,15 +359,6 @@
     white-space: nowrap;
   }
 
-  .badge {
-    display: inline-block;
-    margin-top: 8px;
-    padding: 2px 10px;
-    border: 1px solid var(--warn);
-    border-radius: 999px;
-    color: var(--warn);
-    font-size: 0.8rem;
-  }
 
   .count {
     flex: none;
