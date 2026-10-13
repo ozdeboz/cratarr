@@ -9,7 +9,7 @@
 Incoming lists what Lidarr fetched, with a verdict per album: new, an upgrade of an album in Music, or a duplicate
 of one. Delete is done (trash in the Incoming folder, Lidarr stops fetching, Undo). Two actions remain: Keep (a new
 album goes into Music) and Replace (an upgrade takes the place of the album in Music). Lidarr is not responsible for
-the collection: Music is the user's own, named the user's way.
+the collection: Music is the user's own, named the user's way, and never one of Lidarr's root folders (decision 0016).
 
 On the reference install, 2,230 of 2,231 Music folders are named `Artist - Album (Year)` with the original release
 year, and 1,993 of 2,000 sampled files `NN Artist - Title` (`D-NN …` on multi-disc albums), with a `cover.jpg`.
@@ -22,7 +22,8 @@ and more); the owner wants Music at 16-bit/44.1 kHz.
   template: folder and file names, not tags. Tags stay as they are.
   - The template is a per-library setting (Settings → Libraries), pre-filled by analysing the library's existing
     folders and files. The reference install's: `{albumartist} - {album} ({originalyear})` /
-    `{disc-}{track:02} {artist} - {title}`.
+    `{disc-}{track:02} {artist} - {title}`. Once Music is nested, it becomes one folder per album-artist credit:
+    `{albumartist}/{album} ({originalyear})` / … (decision 0016).
   - The year is the original release year (`originaldate`, else `date`). When neither is known, the confirm step asks
     for it once.
 - **Replace** puts an upgrade in the place of the album in Music. Each new file is paired with an old track
@@ -58,7 +59,11 @@ and more); the owner wants Music at 16-bit/44.1 kHz.
   - **The page:** the album's row shows "Waiting to convert" or "Converting n of N", and the Incoming tab shows a
     count. A toast says when an album is done or has failed, on whatever page is open.
 - **Lidarr stops fetching** an album that was kept or replaced (unmonitor through the acquisition port), as on Delete.
-  Otherwise Lidarr sees it gone from its folder and fetches it again.
+  Otherwise Lidarr sees it gone from its folder and fetches it again. When no Lidarr is set in Settings, the confirm
+  step says Lidarr may fetch the album again (seen on the first real Keep, 2026-10-13: the album stayed monitored).
+- **The media server hears of the move** by album folder, and the library that gets a new folder looks for it at
+  once. An album that is playing is stopped before its files move and goes on playing on its new item after
+  (decision 0017).
 - **Replaced old files go to the trash in the Incoming folder** (`.cratarr-trash`, decision 0010): the same disk as
   Music on the reference install, so an instant move, and outside the Music folder, so the Music backup never carries
   them. Kept for the trash days set in Settings.
@@ -94,4 +99,4 @@ not, since their sample positions would be wrong after resampling.
 - A replace that would lose a track does not happen; the album stays an upgrade in Incoming until a complete copy
   arrives or the owner deletes it.
 - Conversion quality is Cratarr's responsibility; the SoX comparison is the gate.
-- The order of work: Keep (no conversion: refuses hi-res until conversion lands), then Replace, then conversion.
+- The order of work was Keep, then Replace, then conversion; all three are in place since 2026-10-13.

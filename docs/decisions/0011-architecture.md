@@ -44,7 +44,11 @@ Hexagonal architecture was the starting point for this decision; what follows ta
    Tests aim at the core.
 3. **Ports only where something varies or a test needs a fake.** Each is a trait with one real adapter:
    - *media server*: today's `Source`, gaining optional native-playlist operations, and copying a track's play data
-     (plays, favourite) from one item to another;
+     (plays, favourite) from one item to another. Since added, all optional: hearing of moved folders
+     (`files_changed`, decision 0017), the state of its library scan (`library_scan`, decision 0017), an album's
+     track count, format and bitrate (`album_summary`, asked only where the catalogue cannot tell), a cheap summary
+     of what its players do (`players`, for the page's live channel), and playing tracks from a position
+     (`play_from`, decision 0017);
    - *playlist files*: the `.m3u` store;
    - *acquisition*: Lidarr, optional. Each call returns the state it replaced (which albums were monitored), so it
      can be undone. It is best effort: an action stands when Lidarr fails;
