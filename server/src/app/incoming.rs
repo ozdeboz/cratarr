@@ -920,10 +920,16 @@ impl IncomingService {
                 let f = folders.get(*folder as usize)?.display().to_string();
                 a.placement.root(&f).map(|root| format!("{root}{rel}"))
             };
+            // By album folder, not file by file: Jellyfin acted on the folder a Keep left (Incoming) but not on 12 new files
+            // in a folder it did not know yet (2026-10-13); told of the new folder itself, it scans it.
+            let folder_of = |(folder, rel): &(i64, String)| (*folder, rel.rsplit_once('/').map_or(rel.as_str(), |(dir, _)| dir).to_string());
             let mut changes: Vec<(String, bool)> = Vec::new();
             for (gone, came) in moved {
-                changes.extend(server_path(gone).map(|p| (p, false)));
-                changes.extend(server_path(came).map(|p| (p, true)));
+                for (path, created) in [(server_path(&folder_of(gone)), false), (server_path(&folder_of(came)), true)] {
+                    if let Some(p) = path.filter(|p| !changes.iter().any(|(q, _)| q == p)) {
+                        changes.push((p, created));
+                    }
+                }
             }
             if !changes.is_empty()
                 && let Err(e) = s.files_changed(&changes).await
