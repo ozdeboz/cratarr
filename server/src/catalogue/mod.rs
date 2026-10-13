@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS tracks (id INTEGER PRIMARY KEY AUTOINCREMENT, born IN
 /// trash.
 const PRESENT: &str = "gone_at IS NULL AND trashed IS NULL";
 
+/// The meta key of `Catalogue::generation`.
+const GENERATION: &str = "generation";
+
 /// How long a gone file waits to be recognised as moved before its track id is retired (decision 0011 §4).
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
@@ -208,8 +211,19 @@ impl Catalogue {
             cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, FAILED])?;
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
         }
+        // Track ids are this catalogue's own: one made afresh numbers them anew, and what holds ids from the old one
+        // (the sync's agreed lists) can tell by this.
+        if cat.meta(GENERATION).is_none() {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+            cat.set_meta(GENERATION, &now.to_string());
+        }
         cat.set_folders(folders)?;
         Ok(cat)
+    }
+
+    /// Which catalogue this is: set when it is made, the same for as long as its track ids are.
+    pub fn generation(&self) -> String {
+        self.meta(GENERATION).unwrap_or_default()
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -1043,6 +1057,20 @@ mod tests {
     /// Pretend the tags of every file waiting were read: a length (the test files are not audio).
     fn read_as_audio(cat: &Catalogue) {
         cat.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
+    }
+
+    #[test]
+    fn a_catalogue_keeps_its_generation_and_a_new_one_gets_its_own() {
+        let d = std::env::temp_dir().join(format!("cratarr-generation-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let file = d.join("catalogue.sqlite");
+        let first = Catalogue::open(Some(&file), Vec::new()).unwrap().generation();
+        assert!(!first.is_empty());
+        assert_eq!(Catalogue::open(Some(&file), Vec::new()).unwrap().generation(), first);
+        std::fs::remove_dir_all(&d).unwrap();
+        std::fs::create_dir_all(&d).unwrap();
+        assert_ne!(Catalogue::open(Some(&file), Vec::new()).unwrap().generation(), first);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     fn retired(cat: &Catalogue, track: i64) -> bool {

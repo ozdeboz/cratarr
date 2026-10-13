@@ -176,6 +176,12 @@ impl SyncState {
         Ok(())
     }
 
+    /// Forget every link's agreed list and change stamp (its track ids belong to a catalogue that is gone): the next
+    /// pass merges both sides as they are, adding what either has. Returns how many links.
+    pub fn forget_baselines(&self) -> Result<usize> {
+        Ok(self.db().execute("UPDATE links SET base = '[]', stamp = NULL", [])?)
+    }
+
     pub fn remove(&self, source: &str, user: &str, name: &str) -> Result<()> {
         self.db().execute("DELETE FROM links WHERE source = ?1 AND user = ?2 AND name = ?3", params![source, user, name])?;
         Ok(())
