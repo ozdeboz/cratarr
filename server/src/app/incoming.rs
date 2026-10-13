@@ -253,6 +253,8 @@ pub struct IncomingService {
     trash_days: std::sync::atomic::AtomicU32,
     /// Albums waiting for their hi-res files to be converted before Keep or Replace (survives restarts).
     queue: queue::Queue,
+    /// A server's Incoming list changed (albums came or went), for pages that follow it (`/api/events`).
+    lists_changed: tokio::sync::broadcast::Sender<()>,
 }
 
 impl IncomingService {
@@ -275,7 +277,14 @@ impl IncomingService {
             writable: Mutex::new(std::collections::HashMap::new()),
             trash_days: std::sync::atomic::AtomicU32::new(trash_days),
             queue: queue::Queue::open(data_dir.map(|d| std::path::PathBuf::from(d).join("convert-queue.json"))),
+            lists_changed: tokio::sync::broadcast::channel(16).0,
         }
+    }
+
+    /// Told when a background refresh finds a server's Incoming list changed: other albums than before.
+    #[allow(dead_code)] // until /api/events uses it
+    pub fn subscribe_incoming(&self) -> tokio::sync::broadcast::Receiver<()> {
+        self.lists_changed.subscribe()
     }
 
     /// Where new music comes from (the saved Lidarr), when one is set.
@@ -428,17 +437,28 @@ impl IncomingService {
     /// keeps the previous list. Cheap: only new or changed albums cost more than one request (see the
     /// server).
     pub async fn refresh(&self) {
+        let ids = |v: &IncomingSourceView| v.albums.iter().map(|a| a.id.clone()).collect::<std::collections::BTreeSet<_>>();
         let mut keep = std::collections::HashSet::new();
+        let mut changed = false;
         for (a, s, libraries) in self.incoming_sources() {
             let key = format!("{}\n{}", a.cfg.id, libraries.join("\n"));
             let fresh = Self::read_incoming(&a, &*s, &libraries).await;
             let mut cache = self.cache.lock().await;
             if fresh.error.is_none() || !cache.contains_key(&key) {
+                changed |= cache.get(&key).is_none_or(|old| ids(old) != ids(&fresh));
                 cache.insert(key.clone(), fresh);
             }
             keep.insert(key);
         }
-        self.cache.lock().await.retain(|k, _| keep.contains(k));
+        {
+            let mut cache = self.cache.lock().await;
+            let before = cache.len();
+            cache.retain(|k, _| keep.contains(k));
+            changed |= cache.len() != before;
+        }
+        if changed {
+            let _ = self.lists_changed.send(());
+        }
         // A deleted album stays hidden until the server's fresh list no longer has it (or Undo brings it back).
         let listed: std::collections::HashSet<String> =
             self.cache.lock().await.values().flat_map(|v| v.albums.iter().map(|a| a.id.clone())).collect();
