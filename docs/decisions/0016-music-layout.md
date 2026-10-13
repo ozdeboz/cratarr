@@ -30,6 +30,8 @@ on one album only.
 - **One folder per album-artist credit.** The folder is the `albumartist` tag, as written: `{albumartist}/{album}
   ({originalyear})` / `{disc-}{track:02} {artist} - {title}` on the reference install once it is nested.
 - **No "primary artist" rule.** Cratarr's naming template offers no token that picks one artist out of a credit.
+- **Compilations go under `Various Artists/`,** MusicBrainz's name for them. On the reference install the 132 albums
+  tagged "Various" get that album artist in the same pass that moves them.
 - **Music is never one of Lidarr's root folders.** Lidarr fetches into Incoming; Cratarr moves albums into Music and
   names them (decision 0013). Lidarr's one-artist-per-album model would want collaborations moved into one partner's
   folder, and its renames would undo the template.
@@ -52,4 +54,6 @@ Why not one folder per primary artist:
 - A new collaboration is a new first-level folder; reading the library root again for it costs what a flat library
   costs for every album. That happens for a few percent of new albums.
 - Moving the reference library to the nested layout is its own job, not scheduled: 2,230 folders move, and playlists
-  and play data follow them as on Keep (decisions 0011, 0013). Until then the flat template stays in use.
+  and play data follow them as on Keep (decisions 0011, 0013). Until then the flat template stays in use. Every file
+  changes path, so the offsite copy uploads the whole library again; the owner bundles the pending tag work into the
+  same pass, so that happens once.
