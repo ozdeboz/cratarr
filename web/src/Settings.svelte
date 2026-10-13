@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     ApiError,
+    checkNaming,
     getCatalogue,
     getSettings,
     previewLidarr,
@@ -16,6 +17,7 @@
     type SourceView,
     type TagRules,
     type CatalogueStatus,
+    type NamingView,
   } from './lib/api';
   import { prefs, type Theme } from './lib/prefs.svelte';
   import Notice from './lib/Notice.svelte';
@@ -39,6 +41,44 @@
   let cat = $state<CatalogueStatus | null>(null);
   let trashDays = $state(14);
 
+  // Music's naming template (decision 0013): the saved one, else the one the library follows, measured as it is typed.
+  let naming = $state('');
+  let namingInUse = $state('');
+  let namingCheck = $state<NamingView | null>(null);
+  let namingError = $state<string | null>(null);
+  let namingTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function loadNaming() {
+    try {
+      const v = await checkNaming();
+      namingInUse = v.template;
+      naming = v.template;
+      namingCheck = v;
+      namingError = null;
+    } catch {
+      /* no Music yet: the field stays hidden */
+    }
+  }
+
+  function typedNaming() {
+    clearTimeout(namingTimer);
+    namingTimer = setTimeout(async () => {
+      const typed = naming;
+      try {
+        const v = await checkNaming(typed);
+        if (typed !== naming) return;
+        namingCheck = v;
+        namingError = null;
+      } catch (e) {
+        if (typed !== naming) return;
+        namingCheck = null;
+        namingError = e instanceof ApiError ? e.message : 'Unexpected error';
+      }
+    }, 300);
+  }
+
+  const count = (n: number) => n.toLocaleString();
+
   // Lidarr as the page edits it; the saved key is never sent here.
   let lid = $state({ url: '', key: '', view: null as LidarrView | null, busy: false, note: null as string | null, removing: false });
 
@@ -53,6 +93,7 @@
     cat = next.catalogue;
     lid = { url: next.lidarr?.url ?? '', key: '', view: next.lidarr, busy: false, note: null, removing: false };
     trashDays = next.trash_days;
+    if (next.music_folder) loadNaming();
     drafts = next.sources.map((v) => ({
       id: v.id,
       kind: v.kind,
@@ -130,6 +171,7 @@
         lidarrChanged ||
         JSON.stringify(rules) !== JSON.stringify(s.tag_rules) ||
         trashDays !== s.trash_days ||
+        (!!namingInUse && naming.trim() !== namingInUse) ||
         JSON.stringify(drafts.map(payload)) !==
           JSON.stringify(s.sources.map((v) => payload({ ...v, secrets: {}, view: v, busy: false, note: null })))),
   );
@@ -173,7 +215,8 @@
     saving = true;
     try {
       const lidarr = lidarrChanged ? { url: lid.url.trim(), api_key: lid.key.trim() } : undefined;
-      fill(await saveSettings(drafts.map(payload), { tag_rules: rules, lidarr, trash_days: trashDays }));
+      const namingChanged = !!namingInUse && naming.trim() !== namingInUse;
+      fill(await saveSettings(drafts.map(payload), { tag_rules: rules, lidarr, trash_days: trashDays, naming: namingChanged ? naming.trim() : undefined }));
       toast.show({ text: 'Saved and in use.' });
     } catch (e) {
       toast.fail(e, 'Could not save');
@@ -446,6 +489,24 @@
         <p class="hint warn">Choose a Music library.</p>
       {/if}
 
+      {#if namingInUse}
+        <div class="sub fields">
+          <label>
+            <span class="l">Names in Music</span>
+            <input type="text" class="mono" bind:value={naming} oninput={typedNaming} spellcheck="false" autocomplete="off" />
+            {#if namingError}
+              <span class="hint bad">{namingError}</span>
+            {:else if namingCheck}
+              <span class="hint">
+                Matches {count(namingCheck.folders.matched)} of {count(namingCheck.folders.total)} folders and
+                {count(namingCheck.files.matched)} of {count(namingCheck.files.total)} files.
+              </span>
+              {#if namingCheck.example}<code class="hint example">{namingCheck.example}</code>{/if}
+            {/if}
+          </label>
+        </div>
+      {/if}
+
       {#if drafts.some((d) => d.enabled && d.libraries.incoming.length)}
         <div class="sub fields">
           <label>
@@ -578,6 +639,15 @@
     color: var(--muted);
     font-weight: 400;
     font-size: 0.8rem;
+  }
+
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+  }
+
+  .example {
+    overflow-wrap: anywhere;
   }
 
   .lede {

@@ -30,7 +30,7 @@ pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{PlayingService, StateView};
 pub use playlists::{PlayMode, PlayResult, PlaylistService};
-pub use settings::{SettingsService, SettingsView, SourceView};
+pub use settings::{NamingView, SettingsService, SettingsView, SourceView};
 
 use crate::config::Config;
 use crate::settings::{Origin, Saved};
@@ -68,7 +68,7 @@ pub struct App {
 impl App {
     pub async fn new(cfg: Config, saved: Saved, origin: Origin) -> Result<Arc<Self>> {
         let last_music = saved.music_folder.or_else(|| cfg.playlist_dir.clone());
-        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules).await?;
+        let library = Library::new(cfg.data_dir.clone(), last_music, saved.sources, saved.tag_rules, saved.naming).await?;
         let sync_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("playlist-sync.sqlite"));
         let journal_file = cfg.data_dir.as_ref().map(|d| std::path::PathBuf::from(d).join("journal.sqlite"));
         let journal = Arc::new(crate::journal::Journal::open(journal_file.as_deref())?);
@@ -130,6 +130,7 @@ impl App {
             self.incoming.catch_up().await;
             self.playlists.refresh_dead().await;
             self.library.retry_placement().await;
+            self.settings.infer_naming().await;
         }
         if pass % 120 == 0 {
             self.incoming.purge_trash().await;

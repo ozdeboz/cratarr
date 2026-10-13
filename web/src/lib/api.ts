@@ -226,7 +226,21 @@ export type Settings = {
   /** How long albums deleted from Incoming stay in the trash. */
   trash_days: number;
   catalogue: CatalogueStatus | null;
+  /** The saved naming template of Music; null: the one the library already follows. */
+  naming: string | null;
 };
+
+/** A naming template measured against Music (decision 0013). */
+export type NamingView = {
+  template: string;
+  folders: { matched: number; total: number };
+  files: { matched: number; total: number };
+  /** An album of the library named by it: folder/first file. */
+  example: string | null;
+};
+/** Measure a template as typed; without one, the template in use. */
+export const checkNaming = (template?: string) =>
+  request<NamingView>(`/api/settings/naming${template === undefined ? '' : `?template=${encodeURIComponent(template)}`}`);
 
 /** How tag values are split when read; the files are never changed. */
 export type TagRules = {
@@ -275,7 +289,10 @@ export type LidarrDraft = { url: string; api_key: string };
 export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);
 
 /** `lidarr` left out: keep the saved one. */
-export const saveSettings = (sources: SourceConfig[], extra: { tag_rules: TagRules; lidarr?: LidarrDraft; trash_days: number }) =>
+export const saveSettings = (
+  sources: SourceConfig[],
+  extra: { tag_rules: TagRules; lidarr?: LidarrDraft; trash_days: number; naming?: string },
+) =>
   request<Settings>('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

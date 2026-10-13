@@ -47,6 +47,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/settings/preview", post(preview))
         .route("/api/insights", get(insights))
         .route("/api/settings/lidarr", post(preview_lidarr))
+        .route("/api/settings/naming", get(naming))
         .route("/api/catalogue", get(catalogue_status))
         .route("/api/catalogue/problems", get(catalogue_problems))
         .fallback(crate::web::serve)
@@ -276,6 +277,16 @@ async fn status(State(app): State<Arc<App>>) -> Json<StatusView> {
     Json(app.status().await)
 }
 
+#[derive(Deserialize)]
+struct NamingQuery {
+    template: Option<String>,
+}
+
+/// A naming template measured against Music: the one typed (`?template=`), else the one in use.
+async fn naming(State(app): State<Arc<App>>, Query(q): Query<NamingQuery>) -> Result<Json<crate::app::NamingView>, ApiError> {
+    Ok(Json(app.settings.naming(q.template.as_deref()).await?))
+}
+
 async fn get_settings(State(app): State<Arc<App>>) -> Result<Json<SettingsView>, ApiError> {
     Ok(Json(app.settings.view().await.map_err(ToggleError::from)?))
 }
@@ -292,10 +303,13 @@ struct SaveBody {
     /// Omitted: keep the saved number.
     #[serde(default)]
     trash_days: Option<u32>,
+    /// Omitted: keep the saved template; blank: the one the library follows.
+    #[serde(default)]
+    naming: Option<String>,
 }
 
 async fn save_settings(State(app): State<Arc<App>>, Json(b): Json<SaveBody>) -> Result<Json<SettingsView>, ApiError> {
-    Ok(Json(app.settings.save(b.sources, b.tag_rules, b.lidarr, b.trash_days).await?))
+    Ok(Json(app.settings.save(b.sources, b.tag_rules, b.lidarr, b.trash_days, b.naming).await?))
 }
 
 async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::catalogue::Status>, ApiError> {

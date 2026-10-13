@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+
+use crate::naming::Template;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
@@ -124,6 +126,8 @@ pub struct Library {
     pub(super) changing: Mutex<()>,
     /// How tag values are split when read (decision 0008); saved with the sources.
     tag_rules: std::sync::RwLock<crate::catalogue::Rules>,
+    /// The naming template of Music (decision 0013): (saved, the one the library follows once worked out).
+    naming: std::sync::RwLock<(Option<Template>, Option<Template>)>,
 }
 
 impl Library {
@@ -133,7 +137,11 @@ impl Library {
         last_music: Option<String>,
         sources: Vec<SourceConfig>,
         tag_rules: crate::catalogue::Rules,
+        naming: Option<String>,
     ) -> Result<Arc<Self>> {
+        let naming = naming.and_then(|t| {
+            t.parse::<Template>().inspect_err(|e| tracing::warn!("the saved naming template is not usable ({e}); using the library's")).ok()
+        });
         let places = place_folders(data_dir.as_deref(), last_music.as_deref());
         let mut active = Vec::new();
         for s in sources {
@@ -160,7 +168,28 @@ impl Library {
             catalogue,
             changing: Mutex::new(()),
             tag_rules: std::sync::RwLock::new(tag_rules),
+            naming: std::sync::RwLock::new((naming, None)),
         }))
+    }
+
+    /// How Keep and Replace name an album in Music (decision 0013): the saved template, else the one the library
+    /// already follows (worked out in the background, see `SettingsService::infer_naming`), else the default.
+    pub fn template(&self) -> Template {
+        let (saved, inferred) = &*self.naming.read().unwrap_or_else(|p| p.into_inner());
+        saved.clone().or_else(|| inferred.clone()).unwrap_or_default()
+    }
+
+    /// (saved, inferred).
+    pub(super) fn templates(&self) -> (Option<Template>, Option<Template>) {
+        self.naming.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    pub(super) fn set_saved_template(&self, t: Option<Template>) {
+        self.naming.write().unwrap_or_else(|p| p.into_inner()).0 = t;
+    }
+
+    pub(super) fn set_inferred_template(&self, t: Template) {
+        self.naming.write().unwrap_or_else(|p| p.into_inner()).1 = Some(t);
     }
 
     pub(super) fn tag_rules(&self) -> crate::catalogue::Rules {

@@ -487,6 +487,31 @@ impl Catalogue {
         Ok(out)
     }
 
+    /// Every audio file of `folder` with its tags named in `names`, in path order: what a library's naming template is
+    /// judged from (decision 0013). Read-only; blocking.
+    pub fn folder_tags(&self, folder: i64, names: &[&str]) -> Result<Vec<(String, Vec<(String, String)>)>> {
+        let db = self.db();
+        let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        let mut index = std::collections::HashMap::new();
+        let mut st = db.prepare(&format!("SELECT rel FROM files WHERE folder = ?1 AND {PRESENT} ORDER BY rel"))?;
+        for rel in st.query_map(params![folder], |r| r.get::<_, String>(0))? {
+            let rel = rel?;
+            index.insert(rel.clone(), out.len());
+            out.push((rel, Vec::new()));
+        }
+        let mut st = db.prepare("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IS NOT NULL ORDER BY rel, n")?;
+        let rows = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        for row in rows {
+            let (rel, name, value) = row?;
+            if names.iter().any(|n| n.eq_ignore_ascii_case(&name))
+                && let Some(&i) = index.get(&rel)
+            {
+                out[i].1.push((name, value));
+            }
+        }
+        Ok(out)
+    }
+
     /// Every file in `folder` with the facts Insights counts: format, bitrate, length, size and the tags named in
     /// `TrackRow::TAGS` (raw values, not split). Read-only; blocking.
     pub fn track_rows(&self, folder: i64) -> Result<Vec<TrackRow>> {

@@ -72,7 +72,23 @@ pub struct SettingsView {
     /// How long albums deleted from Incoming stay in the trash.
     pub trash_days: u32,
     pub catalogue: Option<crate::catalogue::Status>,
+    /// The saved naming template of Music; `None`: the one the library follows (see `NamingView`).
+    pub naming: Option<String>,
 }
+
+/// A naming template measured against the Music library (decision 0013), for the Settings page.
+#[derive(Debug, Serialize)]
+pub struct NamingView {
+    /// The one measured: the one asked about, else the saved one, else the one the library follows.
+    pub template: String,
+    pub folders: crate::naming::Share,
+    pub files: crate::naming::Share,
+    /// An album of the library named by it: `folder/first file`.
+    pub example: Option<String>,
+}
+
+/// How long the library's names stay in memory for checking templates.
+const NAMES_SECS: i64 = 600;
 
 pub struct SettingsService {
     lib: Arc<Library>,
@@ -84,6 +100,8 @@ pub struct SettingsService {
     bind: String,
     settings_path: Option<PathBuf>,
     started: i64,
+    /// The Music library's albums as naming sees them, and when they were read (epoch seconds).
+    names: tokio::sync::Mutex<Option<(i64, Arc<Vec<crate::naming::Album>>)>>,
 }
 
 impl SettingsService {
@@ -107,7 +125,88 @@ impl SettingsService {
             bind,
             settings_path: data_dir.map(|d| PathBuf::from(d).join("settings.json")),
             started: epoch_now(),
+            names: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Music's albums with the tags naming reads, from the catalogue, kept for `NAMES_SECS`.
+    async fn music_names(&self) -> Result<Arc<Vec<crate::naming::Album>>> {
+        let mut kept = self.names.lock().await;
+        if let Some((at, albums)) = kept.as_ref().filter(|(at, _)| epoch_now() - at < NAMES_SECS) {
+            let _ = at;
+            return Ok(albums.clone());
+        }
+        let c = self.lib.catalogue();
+        let albums = tokio::task::spawn_blocking(move || -> Result<Vec<crate::naming::Album>> {
+            use crate::naming::{Album, Tags, Track};
+            let mut albums: Vec<Album> = Vec::new();
+            for (rel, tags) in c.folder_tags(0, &crate::naming::TAGS)? {
+                let (folder, file) = rel.rsplit_once('/').unwrap_or(("", &rel));
+                if albums.last().is_none_or(|a| a.folder != folder) {
+                    albums.push(Album { folder: folder.to_string(), tracks: Vec::new() });
+                }
+                if let Some(a) = albums.last_mut() {
+                    a.tracks.push(Track { file: file.to_string(), tags: Tags(tags) });
+                }
+            }
+            albums.retain(|a| !a.folder.is_empty());
+            Ok(albums)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
+        let albums = Arc::new(albums);
+        *kept = Some((epoch_now(), albums.clone()));
+        Ok(albums)
+    }
+
+    /// Work out the template Music already follows, once, when none is saved: what Keep and Replace use until one is.
+    /// Waits until the catalogue has read most of the library's tags.
+    pub(super) async fn infer_naming(&self) {
+        if self.lib.templates() != (None, None) {
+            return;
+        }
+        let Ok(albums) = self.music_names().await else { return };
+        let files: usize = albums.iter().map(|a| a.tracks.len()).sum();
+        let titled = albums.iter().flat_map(|a| &a.tracks).filter(|t| t.tags.first("title").is_some()).count();
+        if files == 0 || titled * 10 < files * 9 {
+            return;
+        }
+        let a = albums.clone();
+        if let Ok(found) = tokio::task::spawn_blocking(move || crate::naming::infer(&a)).await {
+            tracing::info!(
+                "naming: Music follows {} ({} of {} folders)",
+                found.template,
+                found.folders.matched,
+                found.folders.total
+            );
+            self.lib.set_inferred_template(found.template);
+        }
+    }
+
+    /// Measure a naming template against Music: `draft` as typed on the page, else the one in use.
+    pub async fn naming(&self, draft: Option<&str>) -> Result<NamingView, ToggleError> {
+        let draft = draft
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(|d| d.parse::<crate::naming::Template>().map_err(|e| ToggleError::BadSettings(e.to_string())))
+            .transpose()?;
+        let albums = self.music_names().await?;
+        if draft.is_none() && self.lib.templates() == (None, None) {
+            self.infer_naming().await;
+        }
+        let template = draft.unwrap_or_else(|| self.lib.template());
+        let view = tokio::task::spawn_blocking(move || {
+            let measured = crate::naming::check(&template, &albums);
+            NamingView {
+                template: template.to_string(),
+                folders: measured.folders,
+                files: measured.files,
+                example: crate::naming::example(&template, &albums),
+            }
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok(view)
     }
 
     fn kinds() -> Vec<KindView> {
@@ -200,6 +299,7 @@ impl SettingsService {
                 let c = self.lib.catalogue();
                 tokio::task::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok)
             },
+            naming: self.lib.templates().0.map(|t| t.to_string()),
         })
     }
 
@@ -226,12 +326,14 @@ impl SettingsService {
     /// check fails. The Music libraries' files hold the playlists, so Cratarr must see them, all in one folder.
     /// `tag_rules`: `None` keeps what is saved.
     /// `lidarr`: `None` keeps the saved one; a blank address removes it.
+    /// `naming`: `None` keeps the saved template; a blank one goes back to the one the library follows.
     pub async fn save(
         &self,
         drafts: Vec<SourceConfig>,
         tag_rules: Option<crate::catalogue::Rules>,
         lidarr: Option<settings::LidarrConfig>,
         trash_days: Option<u32>,
+        naming: Option<String>,
     ) -> Result<SettingsView, ToggleError> {
         let Some(path) = self.settings_path.clone() else { return Err(ToggleError::SettingsReadOnly) };
         let _one_at_a_time = self.lib.changing.lock().await;
@@ -252,6 +354,11 @@ impl SettingsService {
         if !(1..=3650).contains(&trash_days) {
             return Err(ToggleError::BadSettings("keep deleted albums for 1 to 3650 days".into()));
         }
+        let naming = match naming.as_deref().map(str::trim) {
+            None => self.lib.templates().0,
+            Some("") => None,
+            Some(t) => Some(t.parse::<crate::naming::Template>().map_err(|e| ToggleError::BadSettings(format!("Naming: {e}")))?),
+        };
         let saved: Vec<SourceConfig> = self.lib.live().iter().map(|a| a.cfg.clone()).collect();
         let merged = settings::merge(&saved, drafts)?;
         let mut next = Vec::with_capacity(merged.len());
@@ -292,11 +399,19 @@ impl SettingsService {
             )));
         }
         let music_folder = derive_folders(&next, self.lib.music().as_deref()).music;
-        let to_save = settings::Saved { sources: merged, music_folder, tag_rules: tag_rules.clone(), lidarr: lidarr.0.clone(), trash_days };
+        let to_save = settings::Saved {
+            sources: merged,
+            music_folder,
+            tag_rules: tag_rules.clone(),
+            lidarr: lidarr.0.clone(),
+            trash_days,
+            naming: naming.as_ref().map(|t| t.to_string()),
+        };
         tokio::task::spawn_blocking(move || settings::save(&path, &to_save))
             .await
             .map_err(|e| anyhow::anyhow!("saving settings: {e}"))??;
         self.lib.set_tag_rules(tag_rules);
+        self.lib.set_saved_template(naming);
         self.incoming.apply_settings(lidarr, trash_days);
         self.lib.switch_to(next).await?;
         // Servers may have changed: link their tracks again soon.

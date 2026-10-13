@@ -41,6 +41,10 @@ use serde::{Serialize, Serializer};
 /// The template a library with no albums starts with.
 pub const DEFAULT: &str = "{albumartist} - {album} ({originalyear})/{disc-}{track:02} {artist} - {title}";
 
+/// Every tag a template reads: what a library's names are judged from.
+pub const TAGS: [&str; 10] =
+    ["albumartist", "album", "artist", "title", "tracknumber", "discnumber", "originaldate", "originalyear", "date", "year"];
+
 /// The longest name, in bytes: well under the 255 of every common file system, with room for the folders above it in
 /// a Windows path. The reference library's longest is 147.
 pub const MAX_NAME_BYTES: usize = 180;
@@ -690,7 +694,26 @@ pub fn infer(albums: &[Album]) -> Inference {
     let best_folder = best(&folders, albums.len(), folder_score);
     let best_file = best(&files, file_total, file_score);
     let template = Template { folders: folders[best_folder].clone(), file: files[best_file].clone() };
+    measure(template, albums, &facts)
+}
 
+/// How closely a library's albums follow `template`, as [`infer`] measures the one it picks: what the Settings page
+/// shows for a template typed there.
+pub fn check(template: &Template, albums: &[Album]) -> Inference {
+    let facts: Vec<AlbumFacts> = albums.iter().map(|a| AlbumFacts::of(&a.tracks)).collect();
+    measure(template.clone(), albums, &facts)
+}
+
+/// One album named by `template`, as `folder/first file`: the first album it can name.
+pub fn example(template: &Template, albums: &[Album]) -> Option<String> {
+    albums.iter().find_map(|a| {
+        let names = template.render(&a.tracks).ok()?;
+        Some(format!("{}/{}", names.folder, names.files.first()?))
+    })
+}
+
+fn measure(template: Template, albums: &[Album], facts: &[AlbumFacts]) -> Inference {
+    let folder_of = |a: &Album| a.folder.trim_matches('/').to_string();
     let mut folder_share = Share { matched: 0, total: albums.len() };
     let mut file_share = Share::default();
     let mut counts: BTreeMap<(Kind, Cause), usize> = BTreeMap::new();
@@ -702,7 +725,7 @@ pub fn infer(albums: &[Album]) -> Inference {
             samples.push(Mismatch { kind, cause, folder: folder.to_string(), name: name.to_string(), rendered });
         }
     };
-    for (album, f) in albums.iter().zip(&facts) {
+    for (album, f) in albums.iter().zip(facts) {
         let real = folder_of(album);
         match render_folders(&template.folders, f, false) {
             Ok(r) if r == real => folder_share.matched += 1,
