@@ -35,6 +35,8 @@ owner decided on 2026-10-12, with both sessions, that this is a per-playlist cho
   Cratarr, with a two-way link to it.
 - **Gone on one side:** a playlist deleted in Cratarr loses all its targets' copies. A copy deleted on a two-way
   target deletes the playlist (it can be restored in Cratarr). On a push target the copy is made again.
+- **Restored:** a deleted playlist's links are put aside, not forgotten. Restoring it (its Undo) brings them all
+  back, and the next pass makes the copies again. A new playlist of the same name starts fresh, Shared.
 - **Taking a link off** deletes its copy on the target.
 - **Migration, self-contained:** on the first pass after deploying, every `.m3u` in Music moves into
   `.playlists` and gets a Shared link. Its copy is the same file at the same path, so nothing visible changes.

@@ -118,6 +118,10 @@ CREATE TABLE IF NOT EXISTS targets (
   playlist TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, user TEXT NOT NULL,
   direction TEXT NOT NULL, conflict TEXT NOT NULL, copy TEXT,
   PRIMARY KEY (playlist, kind, source, user)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS retired (
+  playlist TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, user TEXT NOT NULL,
+  direction TEXT NOT NULL, conflict TEXT NOT NULL,
+  PRIMARY KEY (playlist, kind, source, user)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
@@ -231,6 +235,41 @@ impl SyncState {
         Ok(())
     }
 
+    /// A link of a playlist that was deleted: put aside, so restoring the playlist brings it back.
+    pub fn retire_target(&self, playlist: &str, kind: &Kind) -> Result<()> {
+        let (k, source, user) = kind.columns();
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute(
+            "INSERT OR REPLACE INTO retired SELECT playlist, kind, source, user, direction, conflict FROM targets
+             WHERE playlist = ?1 AND kind = ?2 AND source = ?3 AND user = ?4",
+            params![playlist, k, source, user],
+        )?;
+        tx.execute("DELETE FROM targets WHERE playlist = ?1 AND kind = ?2 AND source = ?3 AND user = ?4", params![playlist, k, source, user])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Bring back the links put aside when the playlist was deleted. Returns how many.
+    pub fn revive_targets(&self, playlist: &str) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute(
+            "INSERT OR REPLACE INTO targets (playlist, kind, source, user, direction, conflict, copy)
+             SELECT playlist, kind, source, user, direction, conflict, NULL FROM retired WHERE playlist = ?1",
+            [playlist],
+        )?;
+        let n = tx.execute("DELETE FROM retired WHERE playlist = ?1", [playlist])?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// A new playlist of a deleted one's name: what was put aside is not its.
+    pub fn forget_retired(&self, playlist: &str) -> Result<()> {
+        self.db().execute("DELETE FROM retired WHERE playlist = ?1", [playlist])?;
+        Ok(())
+    }
+
     pub fn meta(&self, key: &str) -> Option<String> {
         use rusqlite::OptionalExtension;
         self.db().query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional().ok().flatten()
@@ -275,6 +314,13 @@ mod tests {
         assert_eq!(Kind::from_key(&user.key()), Some(user));
         assert_eq!(Kind::from_key("shared"), Some(Kind::Shared));
         assert_eq!(Kind::from_key("user/x"), None);
+        let mut shared = t(Kind::Shared, Direction::Push);
+        shared.playlist = "Calm".into();
+        s.retire_target("Calm", &Kind::Shared).unwrap();
+        assert!(s.targets().unwrap().iter().all(|t| t.playlist != "Calm"), "put aside");
+        assert_eq!(s.revive_targets("Calm").unwrap(), 1);
+        assert_eq!(s.targets().unwrap(), vec![shared], "back as it was");
+        assert_eq!(s.revive_targets("Calm").unwrap(), 0, "once");
         assert_eq!(s.meta("migrated"), None);
         s.set_meta("migrated", "1").unwrap();
         assert_eq!(s.meta("migrated").as_deref(), Some("1"));

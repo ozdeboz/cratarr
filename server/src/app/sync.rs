@@ -261,6 +261,27 @@ impl SyncService {
         Ok(())
     }
 
+    /// A restored playlist (its deletion undone) gets back the links it had, else it is Shared, as a new one.
+    pub(super) async fn restore_links(self: &Arc<Self>, playlist: &str) -> Result<(), ToggleError> {
+        let revived = {
+            let _one = self.one_at_a_time.lock().await;
+            self.state.revive_targets(playlist)?
+        };
+        if revived == 0 {
+            return self.link(playlist, Kind::Shared, Direction::Push, Conflict::Newest).await;
+        }
+        let me = self.clone();
+        tokio::spawn(async move { me.pass().await });
+        Ok(())
+    }
+
+    /// A new playlist: Shared, as playlists were before sync links; links a deleted one of the same name had are not
+    /// its.
+    pub(super) async fn new_playlist(self: &Arc<Self>, playlist: &str) -> Result<(), ToggleError> {
+        self.state.forget_retired(playlist)?;
+        self.link(playlist, Kind::Shared, Direction::Push, Conflict::Newest).await
+    }
+
     /// Take a link off: its copy on the target is deleted.
     pub(super) async fn unlink(&self, playlist: &str, kind: &Kind) -> Result<(), ToggleError> {
         let _one = self.one_at_a_time.lock().await;
@@ -318,7 +339,7 @@ impl SyncService {
                 let Some(text) = text else {
                     // The playlist is gone: its copy goes too.
                     self.remove_copy(t.copy.as_deref().unwrap_or(&t.playlist)).await?;
-                    self.state.remove_target(&t.playlist, &Kind::Shared)?;
+                    self.state.retire_target(&t.playlist, &Kind::Shared)?;
                     return Ok(());
                 };
                 if let Some(old) = t.copy.clone().filter(|old| old != &t.playlist) {
@@ -572,7 +593,7 @@ pub(super) async fn sync_server(
                 match store.delete(&l.name).await {
                     Ok(()) | Err(crate::playlists::StoreError::Unknown) => {
                         state.remove(source_id, user, &l.name)?;
-                        state.remove_target(&l.name, &kind)?;
+                        state.retire_target(&l.name, &kind)?;
                     }
                     Err(e) => tracing::warn!("playlist sync: cannot delete {}: {e:?}", l.name),
                 }
@@ -582,7 +603,7 @@ pub(super) async fn sync_server(
                 match s.delete_playlist(&l.remote).await {
                     Ok(()) => {
                         state.remove(source_id, user, &l.name)?;
-                        state.remove_target(&l.name, &kind)?;
+                        state.retire_target(&l.name, &kind)?;
                     }
                     // Kept: the next pass tries again (or finds it gone).
                     Err(e) => tracing::warn!("playlist sync: deleting {} on {source_id}: {e:#}", l.name),
@@ -590,14 +611,14 @@ pub(super) async fn sync_server(
             }
             (false, false) => {
                 state.remove(source_id, user, &l.name)?;
-                state.remove_target(&l.name, &kind)?;
+                state.retire_target(&l.name, &kind)?;
             }
             (true, true) => {}
         }
     }
     // A link to a playlist deleted before it ever had a copy there.
     for t in mine.iter().filter(|t| !has_file(&t.playlist) && !links.iter().any(|l| l.name == t.playlist)) {
-        state.remove_target(&t.playlist, &kind)?;
+        state.retire_target(&t.playlist, &kind)?;
     }
     // Read again: this pass renamed and deleted (the names at the start would make copies of what is gone).
     let links = state.links(source_id, user)?;

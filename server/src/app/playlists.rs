@@ -246,7 +246,7 @@ impl PlaylistService {
     /// A new playlist is Shared, as playlists were before sync links (decision 0014).
     pub async fn create(&self, name: &str) -> Result<(), ToggleError> {
         self.lib.store()?.create(name).await?;
-        self.sync.link(name, Kind::Shared, Direction::Push, Conflict::Newest).await
+        self.sync.new_playlist(name).await
     }
 
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), ToggleError> {
@@ -263,10 +263,10 @@ impl PlaylistService {
         Ok(())
     }
 
-    /// Its links went with it; it comes back Shared, as a new one.
+    /// It comes back with the links it had.
     pub async fn restore(&self, id: &str) -> Result<(), ToggleError> {
         self.lib.store()?.restore_deleted(id).await?;
-        self.sync.link(id, Kind::Shared, Direction::Push, Conflict::Newest).await
+        self.sync.restore_links(id).await
     }
 
     /// Re-check which playlist entries point at missing files (the library changes without the playlists).
