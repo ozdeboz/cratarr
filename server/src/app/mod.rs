@@ -31,6 +31,7 @@ pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{PlayingService, StateView};
 pub use playlists::{PlayMode, PlayResult, PlaylistService};
+pub use sync::TargetChoice;
 pub use events::connect as events;
 pub use settings::{NamingView, SettingsService, SettingsView, SourceView};
 
@@ -90,7 +91,6 @@ impl App {
         let playing = PlayingService::new(library.clone(), playlists.clone());
         let settings = SettingsService::new(
             library.clone(),
-            sync.clone(),
             files,
             playlists.clone(),
             incoming.clone(),

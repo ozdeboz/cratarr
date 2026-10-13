@@ -24,6 +24,8 @@ pub struct PlaylistView {
     pub count: usize,
     /// Entries that point at a file that does not exist.
     pub dead: usize,
+    /// Where it is kept in step (decision 0014); filled in by the playlist service.
+    pub links: Vec<crate::sync_state::LinkView>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -282,12 +284,6 @@ impl Store {
         }
     }
 
-    /// Whether the files are in the hidden `.playlists` folder (Jellyfin does not import them; the sync keeps the
-    /// user's own copies instead).
-    pub fn is_hidden(&self) -> bool {
-        !self.prefix.is_empty()
-    }
-
     /// A Music-relative entry as a line of this store's files.
     fn line(&self, entry: &str) -> String {
         format!("{}{entry}", self.prefix)
@@ -349,7 +345,7 @@ impl Store {
             let c = &cache[&id];
             let member = entry.is_some_and(|t| c.entries.contains(t));
             let dead = c.dead.unwrap_or(0);
-            out.push(PlaylistView { name: id.clone(), member, count: c.lines.len().saturating_sub(dead), dead, id });
+            out.push(PlaylistView { name: id.clone(), member, count: c.lines.len().saturating_sub(dead), dead, id, links: Vec::new() });
         }
         out.sort_by_key(|p| p.name.to_lowercase());
         Ok(out)
@@ -386,6 +382,15 @@ impl Store {
         }
         let bytes = tokio::fs::read(&path).await.with_context(|| format!("reading {id}.m3u"))?;
         Ok(m3u::entries(&String::from_utf8_lossy(&bytes)).map(|l| unprefixed(&l, &self.prefix)).collect())
+    }
+
+    /// A playlist's file as it is, for its copies; `None` when there is no such playlist.
+    pub async fn text(&self, id: &str) -> Option<String> {
+        if !valid_id(id) {
+            return None;
+        }
+        let bytes = tokio::fs::read(self.path_of(id)).await.ok()?;
+        Some(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
     }
 
     /// Open a playlist for editing. The caller must hold the write lock.
@@ -776,24 +781,13 @@ impl Store {
     }
 }
 
-/// What `move_into_hidden_folder` did.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Moved {
-    pub moved: Vec<String>,
-    /// Already in `.playlists` with the same content (an earlier run): the copy in Music was removed.
-    pub already: Vec<String>,
-    /// In both places with different content: both kept, nothing decided.
-    pub conflicts: Vec<String>,
-}
-
-/// Move the Music folder's playlist files into its hidden `.playlists` folder, each line given "../" in front so it
-/// still points at the same file (decision 0012). Safe to run again, and to interrupt: a file is written there in
-/// full (temporary file, then rename) before the one in Music goes. Backup copies (`*.bak.m3u`) stay where they are.
-/// Blocking.
-pub fn move_into_hidden_folder(music: &Path) -> Result<Moved> {
+/// Bring the Music folder's playlist files into its hidden `.playlists` folder (decision 0014): each is copied there
+/// with "../" in front of its lines, so they still point at the same files, unless one of that name is there already.
+/// The file in Music stays, as the playlist's shared copy (the media server keeps the playlist it imported). Returns
+/// the name of every playlist found in Music. Backup copies (`*.bak.m3u`) are left out. Safe to run again. Blocking.
+pub fn adopt_into_hidden_folder(music: &Path) -> Result<Vec<String>> {
     let hidden = music.join(HIDDEN_DIR);
     std::fs::create_dir_all(&hidden).with_context(|| format!("making {}", hidden.display()))?;
-    let mut out = Moved::default();
     let mut names: Vec<String> = std::fs::read_dir(music)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
@@ -801,28 +795,23 @@ pub fn move_into_hidden_folder(music: &Path) -> Result<Moved> {
         .filter(|n| !n.starts_with('.') && n.to_lowercase().ends_with(".m3u") && !is_backup_copy(&n[..n.len() - 4]))
         .collect();
     names.sort();
+    let mut out = Vec::new();
     for name in names {
-        let src = music.join(&name);
-        let text = std::fs::read_to_string(&src).with_context(|| format!("reading {name}"))?;
-        let new_text = m3u::with_prefix(&text, "../");
         let dest = hidden.join(&name);
-        if dest.exists() {
-            if std::fs::read_to_string(&dest).is_ok_and(|t| t == new_text) {
-                std::fs::remove_file(&src).with_context(|| format!("removing {name} from Music"))?;
-                out.already.push(name);
-            } else {
-                out.conflicts.push(name);
+        if !dest.exists() {
+            let src = music.join(&name);
+            let Ok(text) = std::fs::read_to_string(&src) else {
+                tracing::warn!("{name} is not valid UTF-8; left out");
+                continue;
+            };
+            let tmp = hidden.join(format!(".{name}.cratarr-tmp"));
+            std::fs::write(&tmp, m3u::with_prefix(&text, "../")).with_context(|| format!("writing {}", tmp.display()))?;
+            if let Ok(meta) = std::fs::metadata(&src) {
+                std::fs::set_permissions(&tmp, meta.permissions()).ok();
             }
-            continue;
+            std::fs::rename(&tmp, &dest).with_context(|| format!("copying {name} into {HIDDEN_DIR}"))?;
         }
-        let tmp = hidden.join(format!(".{name}.cratarr-tmp"));
-        std::fs::write(&tmp, &new_text).with_context(|| format!("writing {}", tmp.display()))?;
-        if let Ok(meta) = std::fs::metadata(&src) {
-            std::fs::set_permissions(&tmp, meta.permissions()).ok();
-        }
-        std::fs::rename(&tmp, &dest).with_context(|| format!("moving {name} into {HIDDEN_DIR}"))?;
-        std::fs::remove_file(&src).with_context(|| format!("removing {name} from Music"))?;
-        out.moved.push(name);
+        out.push(name[..name.len() - 4].to_string());
     }
     Ok(out)
 }
@@ -889,8 +878,8 @@ mod tests {
         assert_eq!(
             v,
             vec![
-                PlaylistView { id: "Analogic".into(), name: "Analogic".into(), member: false, count: 1, dead: 0 },
-                PlaylistView { id: "chill".into(), name: "chill".into(), member: true, count: 2, dead: 0 },
+                PlaylistView { id: "Analogic".into(), name: "Analogic".into(), member: false, count: 1, dead: 0, links: Vec::new() },
+                PlaylistView { id: "chill".into(), name: "chill".into(), member: true, count: 2, dead: 0, links: Vec::new() },
             ]
         );
     }
@@ -963,21 +952,19 @@ B/2.mp3
     }
 
     #[tokio::test]
-    async fn moved_into_the_hidden_folder_everything_still_points_at_the_same_files() {
+    async fn adopted_into_the_hidden_folder_everything_still_points_at_the_same_files() {
         let d = Dir::new();
         d.touch("A/1.mp3");
         d.write("Chill.m3u", "#EXTM3U\nA/1.mp3\ngone/2.mp3\n");
         d.write("Old.bak.m3u", "A/1.mp3\n");
-        let report = move_into_hidden_folder(&d.0).unwrap();
-        assert_eq!(report.moved, vec!["Chill.m3u".to_string()]);
+        assert_eq!(adopt_into_hidden_folder(&d.0).unwrap(), vec!["Chill".to_string()]);
         assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
-        assert!(!d.0.join("Chill.m3u").exists());
-        assert!(d.0.join("Old.bak.m3u").exists(), "backup copies stay");
-        // Run again: nothing more to do. A copy left in Music by a cut-short run is cleared.
-        d.write("Chill.m3u", "#EXTM3U\nA/1.mp3\ngone/2.mp3\n");
-        let again = move_into_hidden_folder(&d.0).unwrap();
-        assert_eq!(again.already, vec!["Chill.m3u".to_string()]);
-        assert!(!d.0.join("Chill.m3u").exists());
+        assert_eq!(d.read("Chill.m3u"), "#EXTM3U\nA/1.mp3\ngone/2.mp3\n", "the file in Music stays, as the shared copy");
+        assert!(!d.0.join(".playlists/Old.bak.m3u").exists(), "backup copies are left out");
+        // Run again: the one in .playlists is kept, whatever Music holds.
+        d.write("Chill.m3u", "B/9.mp3\n");
+        assert_eq!(adopt_into_hidden_folder(&d.0).unwrap(), vec!["Chill".to_string()]);
+        assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
         // The store finds them there, with Music-relative entries as before.
         let s = Store::in_music(&d.0);
         let v = s.view(Some("A/1.mp3")).await.unwrap();
@@ -985,20 +972,8 @@ B/2.mp3
         assert_eq!(s.entries("Chill").await.unwrap(), vec!["A/1.mp3".to_string(), "gone/2.mp3".to_string()]);
         s.set_member("Chill", "B/3.mp3", true).await.unwrap();
         assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n../B/3.mp3\n");
-        s.set_entries("Chill", &["B/3.mp3".to_string()]).await.unwrap();
-        assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../B/3.mp3\n");
-    }
-
-    #[test]
-    fn a_conflict_keeps_both_copies() {
-        let d = Dir::new();
-        std::fs::create_dir_all(d.0.join(".playlists")).unwrap();
-        d.write(".playlists/Chill.m3u", "../X/9.mp3\n");
-        d.write("Chill.m3u", "A/1.mp3\n");
-        let report = move_into_hidden_folder(&d.0).unwrap();
-        assert_eq!(report.conflicts, vec!["Chill.m3u".to_string()]);
-        assert!(d.0.join("Chill.m3u").exists());
-        assert_eq!(d.read(".playlists/Chill.m3u"), "../X/9.mp3\n");
+        assert_eq!(s.text("Chill").await.as_deref(), Some("#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n../B/3.mp3\n"));
+        assert_eq!(s.text("None").await, None);
     }
 
     #[tokio::test]

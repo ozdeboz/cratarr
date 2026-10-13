@@ -119,6 +119,26 @@ pub fn with_prefix(content: &str, prefix: &str) -> String {
     out
 }
 
+/// The inverse of `with_prefix`: `prefix` taken off the front of every entry line that has it, all else kept as is.
+pub fn without_prefix(content: &str, prefix: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    for line in content.split_inclusive('\n') {
+        if entry_of(line).is_some() {
+            let bom = line.starts_with('\u{feff}');
+            let body = line.trim_start_matches('\u{feff}');
+            if bom {
+                out.push('\u{feff}');
+            }
+            let lead = body.len() - body.trim_start().len();
+            out.push_str(&body[..lead]);
+            out.push_str(body[lead..].strip_prefix(prefix).unwrap_or(&body[lead..]));
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// Replace every line whose entry equals `from` with `to`, keeping the line's ending and a leading BOM.
 pub fn with_replaced(content: &str, from: &str, to: &str) -> (String, usize) {
     let mut replaced = 0;
@@ -189,6 +209,12 @@ mod tests {
 
     fn p(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_prefix_comes_off_exactly_as_it_went_on() {
+        let text = "\u{feff}#EXTM3U\r\n#EXTINF:1,A\r\nA/01.mp3\r\n  B/02.mp3\r\n\r\n../incoming/C/03.flac\r\n";
+        assert_eq!(without_prefix(&with_prefix(text, "../"), "../"), text);
     }
 
     #[test]

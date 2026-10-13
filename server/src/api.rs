@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -30,6 +30,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}", delete(delete_playlist))
         .route("/api/playlists/{id}/rename", post(rename_playlist))
         .route("/api/playlists/{id}/restore", post(restore_playlist))
+        .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
+        .route("/api/sync/targets", get(sync_targets))
         .route("/api/albums/duplicates", get(album_duplicates))
         .route("/api/duplicates", get(duplicates))
         .route("/api/duplicates/dedupe", post(dedupe))
@@ -259,6 +261,30 @@ async fn rename_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Js
 async fn delete_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
     app.playlists.delete(&id).await?;
     Ok(Json(json!({ "deleted": id })))
+}
+
+/// What a playlist can be linked to (decision 0014).
+async fn sync_targets(State(app): State<Arc<App>>) -> Json<Vec<crate::app::TargetChoice>> {
+    Json(app.playlists.targets().await)
+}
+
+#[derive(Deserialize)]
+struct LinkQuery {
+    target: String,
+    direction: Option<crate::sync_state::Direction>,
+    conflict: Option<crate::sync_state::Conflict>,
+}
+
+/// Link a playlist to a target, or change how it is kept (the state wanted: safe to repeat).
+async fn link_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<LinkQuery>) -> Result<Json<()>, ApiError> {
+    let direction = q.direction.unwrap_or(crate::sync_state::Direction::Push);
+    let conflict = q.conflict.unwrap_or(crate::sync_state::Conflict::Newest);
+    Ok(Json(app.playlists.link(&id, &q.target, direction, conflict).await?))
+}
+
+/// Take a link off; its copy on the target is deleted.
+async fn unlink_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<LinkQuery>) -> Result<Json<()>, ApiError> {
+    Ok(Json(app.playlists.unlink(&id, &q.target).await?))
 }
 
 async fn restore_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {

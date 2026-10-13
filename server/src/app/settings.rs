@@ -47,8 +47,6 @@ pub struct SourceView {
     pub server_libraries: Vec<placement::PlacedLibrary>,
     /// Why the source could not be connected or its choices not filled, if so.
     pub error: Option<String>,
-    /// How the last playlist sync with it went, when its playlists belong to one of its users (decision 0012).
-    pub playlist_sync: Option<super::sync::SyncStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,7 +90,6 @@ const NAMES_SECS: i64 = 600;
 
 pub struct SettingsService {
     lib: Arc<Library>,
-    sync: Arc<super::sync::SyncService>,
     files: Arc<dyn Files>,
     playlists: Arc<PlaylistService>,
     incoming: Arc<IncomingService>,
@@ -107,7 +104,6 @@ pub struct SettingsService {
 impl SettingsService {
     pub(super) fn new(
         lib: Arc<Library>,
-        sync: Arc<super::sync::SyncService>,
         files: Arc<dyn Files>,
         playlists: Arc<PlaylistService>,
         incoming: Arc<IncomingService>,
@@ -117,7 +113,6 @@ impl SettingsService {
     ) -> Self {
         Self {
             lib,
-            sync,
             files,
             playlists,
             incoming,
@@ -229,7 +224,6 @@ impl SettingsService {
             libraries: cfg.libraries.clone(),
             server_libraries: Vec::new(),
             error,
-            playlist_sync: self.sync.status(&cfg.id),
         };
         let Some(s) = source else { return view };
         let places = self.lib.place_folders();

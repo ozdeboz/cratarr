@@ -36,14 +36,6 @@ fn fields() -> Vec<Field> {
             help: Some("When several players play music at once, the page follows this one."),
             bound_to: &[],
         },
-        Field {
-            key: "playlist_user",
-            label: "Playlists belong to",
-            kind: FieldKind::Choice,
-            required: false,
-            help: Some("Your playlists become this account's own Jellyfin playlists, kept in step with Cratarr both ways."),
-            bound_to: &[],
-        },
     ]
 }
 
@@ -347,9 +339,6 @@ impl Source for JellyfinSource {
             let devices = devices.context("Jellyfin refused the API key")?;
             let mut out = BTreeMap::new();
             out.insert("player".into(), player_choices(&sessions.unwrap_or_default(), &devices));
-            let mut users = vec![Choice { value: String::new(), label: "Nobody (shared .m3u playlists)".into() }];
-            users.extend(self.jf.users().await.unwrap_or_default().into_iter().map(|(id, name)| Choice { value: id, label: name }));
-            out.insert("playlist_user".into(), users);
             Ok(out)
         })
     }
@@ -369,6 +358,10 @@ impl Source for JellyfinSource {
 
     fn sample_paths<'a>(&'a self, library_id: &'a str, n: usize) -> Fut<'a, Vec<String>> {
         Box::pin(self.jf.sample_paths(library_id, n))
+    }
+
+    fn users(&self) -> Fut<'_, Vec<(String, String)>> {
+        Box::pin(self.jf.users())
     }
 
     fn own_playlists<'a>(&'a self, user: &'a str) -> Fut<'a, Vec<super::OwnPlaylist>> {

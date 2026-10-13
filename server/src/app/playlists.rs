@@ -11,6 +11,7 @@ use super::ToggleError;
 use super::library::{Library, label_of};
 use crate::playlists::{DupGroup, PlaylistView, Repair, Repairs};
 use crate::source::{self, PlaylistChange, PlaylistEvent};
+use crate::sync_state::{Conflict, Direction, Kind};
 
 /// The most tracks one play sends: Finamp holds at most 100 in its queue (seen 2026-10-12; user: "we go by 100").
 pub const PLAY_MAX: usize = 100;
@@ -58,12 +59,32 @@ impl PlaylistService {
         Self { lib, sync }
     }
 
-    /// Every playlist, marked where it holds `entry` (the playing track's line).
+    /// Every playlist, marked where it holds `entry` (the playing track's line), with its links.
     pub(super) async fn view(&self, entry: Option<&str>) -> Result<Vec<PlaylistView>> {
-        match self.lib.store_opt() {
-            Some(store) => store.view(entry).await,
-            None => Ok(Vec::new()),
+        let Some(store) = self.lib.store_opt() else { return Ok(Vec::new()) };
+        let mut list = store.view(entry).await?;
+        let mut links = self.sync.links();
+        for p in &mut list {
+            p.links = links.remove(&p.id).unwrap_or_default();
         }
+        Ok(list)
+    }
+
+    /// What a playlist can be linked to.
+    pub async fn targets(&self) -> Vec<super::sync::TargetChoice> {
+        self.sync.choices().await
+    }
+
+    /// Link a playlist to a target (decision 0014), or change how it is kept.
+    pub async fn link(&self, id: &str, target: &str, direction: Direction, conflict: Conflict) -> Result<(), ToggleError> {
+        let kind = Kind::from_key(target).ok_or_else(|| ToggleError::Refused("not a target".into()))?;
+        self.sync.link(id, kind, direction, conflict).await
+    }
+
+    /// Take a link off: its copy on the target is deleted.
+    pub async fn unlink(&self, id: &str, target: &str) -> Result<(), ToggleError> {
+        let kind = Kind::from_key(target).ok_or_else(|| ToggleError::Refused("not a target".into()))?;
+        self.sync.unlink(id, &kind).await
     }
 
     /// Make `entry` a member of the playlist or not (`Some`), or flip it (`None`, older pages). Only a real change
@@ -128,8 +149,9 @@ impl PlaylistService {
         Ok(PlayResult { player, sent: ids.len(), total, unknown })
     }
 
+    /// After an edit: the playlist's copies follow (the shared one at once, the others with the next pass).
     fn tell_sources(&self, changes: Vec<(String, PlaylistChange)>) {
-        tell_sources(&self.lib, changes);
+        self.sync.changed(changes.into_iter().map(|(name, _)| name).collect());
     }
 
     /// 0 when there is no Music folder.
@@ -221,10 +243,10 @@ impl PlaylistService {
         Ok(removed)
     }
 
+    /// A new playlist is Shared, as playlists were before sync links (decision 0014).
     pub async fn create(&self, name: &str) -> Result<(), ToggleError> {
         self.lib.store()?.create(name).await?;
-        self.tell_sources(vec![(name.to_string(), PlaylistChange::Created)]);
-        Ok(())
+        self.sync.link(name, Kind::Shared, Direction::Push, Conflict::Newest).await
     }
 
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), ToggleError> {
@@ -241,10 +263,10 @@ impl PlaylistService {
         Ok(())
     }
 
+    /// Its links went with it; it comes back Shared, as a new one.
     pub async fn restore(&self, id: &str) -> Result<(), ToggleError> {
         self.lib.store()?.restore_deleted(id).await?;
-        self.tell_sources(vec![(id.to_string(), PlaylistChange::Created)]);
-        Ok(())
+        self.sync.link(id, Kind::Shared, Direction::Push, Conflict::Newest).await
     }
 
     /// Re-check which playlist entries point at missing files (the library changes without the playlists).
@@ -259,10 +281,6 @@ impl PlaylistService {
 /// path as it sees it.
 pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>) {
     let Some(music) = lib.music() else { return };
-    // Hidden from Jellyfin (decision 0012): the playlist sync keeps the servers' copies instead.
-    if lib.store_opt().is_some_and(|s| s.is_hidden()) {
-        return;
-    }
     for (a, s) in lib.connected() {
         let events: Vec<PlaylistEvent> = changes
             .iter()
