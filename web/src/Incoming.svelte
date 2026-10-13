@@ -10,6 +10,8 @@
     replaceIncoming,
     replacePreview,
     undoIncoming,
+    cancelJob,
+    type AlbumMoved,
     type KeepPreview,
     type ReplacePreview,
     type IncomingAlbum,
@@ -20,6 +22,7 @@
   import { prefs } from './lib/prefs.svelte';
   import { live } from './lib/live.svelte';
   import { toast } from './lib/toast.svelte';
+  import { jobs } from './lib/jobs.svelte';
 
   let sources = $state<IncomingSource[] | null>(null);
   let trashDays = $state(14);
@@ -41,6 +44,8 @@
     deletable: boolean;
     keepable: boolean;
     replaceable: boolean;
+    /** Its job in the conversion queue: only Cancel is offered then. */
+    job: number | null;
   } | null>(null);
   let keep = $state<KeepPreview | null>(null);
   let swap = $state<ReplacePreview | null>(null);
@@ -63,9 +68,8 @@
     if (working) return;
     working = true;
     try {
-      const { undo, title } = await replaceIncoming(source, a.id, year.trim() || undefined);
-      sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
-      toast.show({ text: `Replaced ${title} in Music.`, undo: () => restore(undo) });
+      const r = await replaceIncoming(source, a.id, year.trim() || undefined);
+      moved(source, a, r, 'Replaced');
     } catch (e) {
       toast.fail(e, 'Could not replace the album');
     } finally {
@@ -102,9 +106,8 @@
     if (working) return;
     working = true;
     try {
-      const { undo, title } = await keepIncoming(source, a.id, year.trim() || undefined);
-      sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
-      toast.show({ text: `Kept ${title} in Music.`, undo: () => restore(undo) });
+      const r = await keepIncoming(source, a.id, year.trim() || undefined);
+      moved(source, a, r, 'Kept');
     } catch (e) {
       toast.fail(e, 'Could not keep the album');
     } finally {
@@ -113,6 +116,36 @@
     }
   }
   let working = $state(false);
+
+  // Done: the album leaves the list. Queued (hi-res files to convert first): its row shows the progress instead, and
+  // the queue says when it is done.
+  function moved(source: string, a: IncomingAlbum, r: AlbumMoved, verb: string) {
+    if (r.queued) {
+      jobs.poke();
+      return;
+    }
+    sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
+    toast.show({ text: `${verb} ${r.title} in Music.`, undo: () => restore(r.undo!) });
+  }
+
+  async function cancel(id: number) {
+    menu = null;
+    try {
+      await cancelJob(id);
+      await jobs.poke();
+    } catch (e) {
+      toast.fail(e, 'Could not cancel it');
+    }
+  }
+
+  // A queued album finished: read the list again (it is in Music now, or back as it was).
+  let seenFinished = jobs.finished;
+  $effect(() => {
+    if (jobs.finished !== seenFinished) {
+      seenFinished = jobs.finished;
+      reload();
+    }
+  });
 
   async function reload() {
     try {
@@ -230,6 +263,7 @@
                     deletable: s.deletable.includes(a.id),
                     keepable: s.deletable.includes(a.id) && !s.verdicts?.[a.id],
                     replaceable: s.deletable.includes(a.id) && s.verdicts?.[a.id]?.kind === 'upgrade',
+                    job: jobs.of(s.id, a.id)?.id ?? null,
                   })}
               >
               {#if noCover[a.id]}
@@ -253,7 +287,13 @@
                   {#if a.added}<span>added {added(a.added)}</span>{/if}
                   {#each a.tags as t (t)}<span class="tag">{t}</span>{/each}
                 </div>
-                {#if s.verdicts?.[a.id]}
+                {#if jobs.of(s.id, a.id)}
+                  {@const job = jobs.of(s.id, a.id)!}
+                  <div class="job">
+                    {job.state === 'waiting' ? 'Waiting to convert' : `Converting ${job.done} of ${job.total}`}
+                    <div class="track" aria-hidden="true"><div style:width="{(100 * job.done) / Math.max(job.total, 1)}%"></div></div>
+                  </div>
+                {:else if s.verdicts?.[a.id]}
                   {@const v = s.verdicts[a.id]}
                   <div class="verdict" class:upgrade={v.kind === 'upgrade'} title={v.library}>
                     <span class="badge">{v.kind === 'upgrade' ? 'Upgrade' : 'In Music'}</span>
@@ -277,13 +317,17 @@
     {#if !m.ask}
       <div class="items" role="menu">
         <button role="menuitem" onclick={() => { menu = null; play(m.source, m.a); }}>Play</button>
-        {#if m.keepable}
+        {#if m.job !== null}
+          {@const id = m.job}
+          <hr />
+          <button role="menuitem" class="danger" onclick={() => cancel(id)}>Cancel conversion</button>
+        {:else if m.keepable}
           <button role="menuitem" onclick={askKeep}>Keep in Music</button>
         {/if}
         {#if m.replaceable}
           <button role="menuitem" onclick={askReplace}>Replace in Music</button>
         {/if}
-        {#if m.deletable}
+        {#if m.deletable && m.job === null}
           <hr />
           <button role="menuitem" class="danger" onclick={() => menu && (menu.ask = 'delete')}>Delete album</button>
         {/if}
@@ -298,7 +342,10 @@
         {:else if keep.refused}
           <p class="ask">Can't keep {m.a.title}: {keep.refused.detail}</p>
         {:else}
-          <p class="ask">Move {m.a.title} into Music as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?</p>
+          <p class="ask">
+            Move {m.a.title} into Music as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
+              {` ${keep.convert} hi-res ${keep.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}
+          </p>
         {/if}
         <div class="actions">
           {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
@@ -323,7 +370,8 @@
             Replace <strong>{swap.old}</strong> with this copy ({swap.tracks} {swap.tracks === 1 ? 'track' : 'tracks'}{swap.added
               ? `, ${swap.added} new`
               : ''}){#if swap.folder !== swap.old}, as <strong>{swap.folder}</strong>{/if}? The old copy stays in the trash for {trashDays}
-            {trashDays === 1 ? 'day' : 'days'}.
+            {trashDays === 1 ? 'day' : 'days'}.{#if swap.convert}
+              {` ${swap.convert} hi-res ${swap.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}
           </p>
         {/if}
         <div class="actions">
@@ -482,6 +530,28 @@
     margin-top: 3px;
     color: var(--muted);
     font-size: 0.8rem;
+  }
+
+  /* In the conversion queue: what it is at, and a thin bar of the files done. */
+  .job {
+    margin-top: 3px;
+    color: var(--accent);
+    font-size: 0.8rem;
+  }
+
+  .job .track {
+    max-width: 240px;
+    height: 3px;
+    margin-top: 4px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    overflow: hidden;
+  }
+
+  .job .track div {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.4s;
   }
 
   .verdict .badge {

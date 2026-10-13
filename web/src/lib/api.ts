@@ -401,13 +401,17 @@ export type KeepPreview = {
   folder: string | null;
   files: number;
   refused: { kind: 'needs_year' } | { kind: 'other'; detail: string } | null;
+  /** Hi-res files converted to 16-bit/44.1 kHz first (Keep then waits in the queue). */
+  convert: number;
 };
+/** What Keep or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
+export type AlbumMoved = { undo: string | null; title: string; folder: string; queued: boolean };
 const keepPath = (source: string, album: string) => `/api/incoming/keep/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
 export const keepPreview = (source: string, album: string, year?: string) =>
   request<KeepPreview>(`${keepPath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);
 /** Keep an Incoming album: it moves into Music, named the library's way (Undo brings it back). */
 export const keepIncoming = (source: string, album: string, year?: string) =>
-  request<{ undo: string; title: string; folder: string }>(keepPath(source, album), {
+  request<AlbumMoved>(keepPath(source, album), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(year ? { year } : {}),
@@ -422,6 +426,7 @@ export type ReplacePreview = {
   tracks: number;
   added: number;
   refused: { kind: 'needs_year' } | { kind: 'unmatched'; detail: string[] } | { kind: 'other'; detail: string } | null;
+  convert: number;
 };
 const replacePath = (source: string, album: string) =>
   `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
@@ -429,11 +434,29 @@ export const replacePreview = (source: string, album: string, year?: string) =>
   request<ReplacePreview>(`${replacePath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);
 /** Replace the album in Music with an upgrade: the old files go to the trash (Undo brings them back). */
 export const replaceIncoming = (source: string, album: string, year?: string) =>
-  request<{ undo: string; title: string; folder: string }>(replacePath(source, album), {
+  request<AlbumMoved>(replacePath(source, album), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(year ? { year } : {}),
   });
+
+/** An album in the conversion queue: waiting, converting (`done` of `total` files), or just finished. */
+export type Job = {
+  id: number;
+  source: string;
+  album_id: string;
+  title: string;
+  action: 'keep' | 'replace';
+  state: 'waiting' | 'converting' | 'done' | 'failed';
+  done: number;
+  total: number;
+  folder: string;
+  undo: string | null;
+  why: string | null;
+};
+export const getJobs = () => request<Job[]>('/api/incoming/jobs');
+/** Take an album out of the queue while it waits or converts. */
+export const cancelJob = (id: number) => request<null>(`/api/incoming/jobs/${id}/cancel`, { method: 'POST' });
 
 /** A name with a count: "Downtempo", 120 albums. */
 export type Count = { name: string; n: number };

@@ -13,6 +13,7 @@
   import { known } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
+  import { jobs } from './lib/jobs.svelte';
 
   type Page = { id: string; href: string; label: string; icon: IconName };
   // Main pages in order; Settings sits apart at the bottom of the sidebar.
@@ -82,6 +83,10 @@
     return poll();
   });
 
+  // The conversion queue, followed on every page: its count on the Incoming tab, a toast when an album is done.
+  $effect(() => jobs.start());
+  const waiting = $derived(jobs.open.length);
+
   // Connection line in the sidebar header.
   let status = $state<Status | null>(null);
   let statusFailed = $state(false);
@@ -135,7 +140,7 @@
 
     <nav aria-label="Pages">
       {#each MAIN as p (p.id)}
-        <a href={p.href} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}</a>
+        <a href={p.href} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </nav>
 
@@ -169,7 +174,7 @@
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
     <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages" onclickcapture={collapse}>
       {#each overflow as p (p.id)}
-        <a href={p.href} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}</a>
+        <a href={p.href} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </div>
   {/if}
@@ -178,7 +183,9 @@
 
   <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
     {#each bar as p (p.id)}
-      <a href={p.href} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} /><span>{p.label}</span></a>
+      <a href={p.href} aria-current={page === p.id ? 'page' : undefined}
+        ><span class="icon"><Icon name={p.icon} />{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
+      >
     {/each}
     {#if overflow.length}
       <button
@@ -268,6 +275,37 @@
   .bar button.active {
     color: var(--accent);
     font-weight: 600;
+  }
+
+  /* How many albums wait in the conversion queue, on the Incoming tab. */
+  .count {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    box-sizing: border-box;
+    border-radius: 9px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 18px;
+    text-align: center;
+  }
+
+  .sheet .count,
+  .sidebar .count {
+    margin-left: auto;
+  }
+
+  .bar .icon {
+    position: relative;
+    display: flex;
+  }
+
+  .bar .count {
+    position: absolute;
+    top: -6px;
+    left: calc(100% - 6px);
   }
 
   .scrim {

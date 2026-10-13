@@ -42,6 +42,21 @@ and more); the owner wants Music at 16-bit/44.1 kHz.
   resample (rubato), TPDF dither to 16 bit, encode (flacenc). The image stays small and any install can do it. Before
   it is trusted, its output is compared with SoX's on albums from the reference library; the comparison is recorded
   here. It runs in the background with progress; the album waits in Incoming until done.
+  - **Converted:** lossless files above CD format (`convert::needs_conversion`). Lossy files are left as they
+    are; conversion cannot improve them.
+  - **Checked first:** Keep or Replace checks its plan at once (year, names, track pairing, write access), so a
+    refusal shows straight away. Only then does it queue the album.
+  - **The queue:** one album and one file at a time, so the NAS stays free for the media server. It lives in
+    `convert-queue.json` in the data folder and survives a restart. A file already converted is not converted
+    again (the output is the same bytes, written whole or not at all).
+  - **Where files go:** each file is converted into the Incoming folder's `.cratarr-convert`. One plan of moves
+    then puts the originals in the trash and the converted files in their place. Then the action runs on what
+    is now a CD-format album, and its event records what was converted.
+  - **Undo:** puts the originals back (the converted files go to the trash). A failed action puts them back at
+    once, so the album stays in Incoming as it was.
+  - **Cancel:** possible while the album waits or converts; not once its files are being swapped in.
+  - **The page:** the album's row shows "Waiting to convert" or "Converting n of N", and the Incoming tab shows a
+    count. A toast says when an album is done or has failed, on whatever page is open.
 - **Lidarr stops fetching** an album that was kept or replaced (unmonitor through the acquisition port), as on Delete.
   Otherwise Lidarr sees it gone from its folder and fetches it again.
 - **Replaced old files go to the trash in the Incoming folder** (`.cratarr-trash`, decision 0010): the same disk as
