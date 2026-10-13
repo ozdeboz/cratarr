@@ -24,6 +24,7 @@ mod playlists;
 mod settings;
 mod source;
 mod sync_state;
+mod voice;
 mod web;
 
 use std::io::{Read, Write};

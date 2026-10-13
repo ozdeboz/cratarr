@@ -25,6 +25,15 @@ pub enum PlayMode {
     Last,
 }
 
+/// What was played for a spoken name.
+#[derive(Debug, Serialize)]
+pub struct PlayByName {
+    /// The playlist it was taken for.
+    pub playlist: String,
+    #[serde(flatten)]
+    pub played: PlayResult,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PlayResult {
     /// "Finamp on Lenovo Tab".
@@ -63,11 +72,32 @@ impl PlaylistService {
     pub(super) async fn view(&self, entry: Option<&str>) -> Result<Vec<PlaylistView>> {
         let Some(store) = self.lib.store_opt() else { return Ok(Vec::new()) };
         let mut list = store.view(entry).await?;
-        let mut links = self.sync.links();
+        let (mut links, mut spoken) = (self.sync.links(), self.sync.spoken());
         for p in &mut list {
             p.links = links.remove(&p.id).unwrap_or_default();
+            p.spoken = spoken.remove(&p.id).unwrap_or_default();
         }
         Ok(list)
+    }
+
+    /// Play the playlist meant by what was said (decision 0015): a voice assistant hands over free text.
+    pub async fn play_by_name(&self, said: &str, mode: PlayMode, want: Option<&str>) -> Result<PlayByName, ToggleError> {
+        let list = self.view(None).await?;
+        let named: Vec<crate::voice::Named> = list.iter().map(|p| crate::voice::Named { name: &p.id, spoken: &p.spoken }).collect();
+        let Some(id) = crate::voice::find(said, &named).map(str::to_string) else {
+            return Err(ToggleError::Refused(format!("No playlist like {}", said.trim())));
+        };
+        let played = self.play(&id, mode, want).await?;
+        Ok(PlayByName { playlist: id, played })
+    }
+
+    /// Set the other names a playlist is spoken as. Blank ones are dropped.
+    pub async fn set_spoken(&self, id: &str, names: &[String]) -> Result<(), ToggleError> {
+        if self.lib.store()?.entries(id).await.is_err() {
+            return Err(ToggleError::UnknownPlaylist);
+        }
+        let names: Vec<String> = names.iter().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
+        self.sync.set_spoken(id, &names)
     }
 
     /// What a playlist can be linked to.

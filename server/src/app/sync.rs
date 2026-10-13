@@ -215,6 +215,15 @@ impl SyncService {
         }
     }
 
+    /// The other names each playlist is spoken as, by playlist.
+    pub(super) fn spoken(&self) -> std::collections::HashMap<String, Vec<String>> {
+        self.state.spoken().unwrap_or_default()
+    }
+
+    pub(super) fn set_spoken(&self, playlist: &str, names: &[String]) -> Result<(), ToggleError> {
+        Ok(self.state.set_spoken(playlist, names)?)
+    }
+
     /// What a playlist can be linked to: Shared, and each account on each connected server that keeps playlists.
     pub(super) async fn choices(&self) -> Vec<TargetChoice> {
         let mut out = vec![TargetChoice { target: Kind::Shared.key(), label: "Shared".into(), push_only: true }];

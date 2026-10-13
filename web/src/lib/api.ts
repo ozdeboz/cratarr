@@ -9,6 +9,8 @@ export type Playlist = {
   dead: number;
   /** Where it is kept in step (decision 0014). */
   links: Link[];
+  /** Other names it is spoken as, for voice assistants (decision 0015). */
+  spoken: string[];
 };
 
 export type Direction = 'push' | 'two_way';
@@ -175,6 +177,13 @@ export const restorePlaylist = (id: string) =>
   post<{ restored: string }>(`/api/playlists/${encodeURIComponent(id)}/restore`, {});
 
 export const getTargets = () => request<TargetChoice[]>('/api/sync/targets');
+/** The other names a playlist is spoken as, exactly these. */
+export const setSpoken = (id: string, names: string[]) =>
+  request<null>(`/api/playlists/${encodeURIComponent(id)}/spoken`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names }),
+  });
 const linkPath = (id: string, target: string, extra: Record<string, string> = {}) =>
   `/api/playlists/${encodeURIComponent(id)}/link?${new URLSearchParams({ target, ...extra })}`;
 /** Link a playlist to a target, or change how it is kept (the state wanted: safe to repeat). */

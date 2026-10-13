@@ -26,6 +26,8 @@ pub struct PlaylistView {
     pub dead: usize,
     /// Where it is kept in step (decision 0014); filled in by the playlist service.
     pub links: Vec<crate::sync_state::LinkView>,
+    /// Other names it is spoken as (decision 0015); filled in by the playlist service.
+    pub spoken: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -165,7 +167,7 @@ fn track_key(name: &str) -> Option<&str> {
 }
 
 /// Dice similarity of the letter-and-digit bigrams of two titles, 0.0 to 1.0.
-fn similarity(a: &str, b: &str) -> f64 {
+pub(crate) fn similarity(a: &str, b: &str) -> f64 {
     let grams = |s: &str| -> Vec<(char, char)> {
         let c: Vec<char> = s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
         c.windows(2).map(|w| (w[0], w[1])).collect()
@@ -345,7 +347,15 @@ impl Store {
             let c = &cache[&id];
             let member = entry.is_some_and(|t| c.entries.contains(t));
             let dead = c.dead.unwrap_or(0);
-            out.push(PlaylistView { name: id.clone(), member, count: c.lines.len().saturating_sub(dead), dead, id, links: Vec::new() });
+            out.push(PlaylistView {
+                name: id.clone(),
+                member,
+                count: c.lines.len().saturating_sub(dead),
+                dead,
+                id,
+                links: Vec::new(),
+                spoken: Vec::new(),
+            });
         }
         out.sort_by_key(|p| p.name.to_lowercase());
         Ok(out)
@@ -878,8 +888,8 @@ mod tests {
         assert_eq!(
             v,
             vec![
-                PlaylistView { id: "Analogic".into(), name: "Analogic".into(), member: false, count: 1, dead: 0, links: Vec::new() },
-                PlaylistView { id: "chill".into(), name: "chill".into(), member: true, count: 2, dead: 0, links: Vec::new() },
+                PlaylistView { id: "Analogic".into(), name: "Analogic".into(), member: false, count: 1, dead: 0, links: Vec::new(), spoken: Vec::new() },
+                PlaylistView { id: "chill".into(), name: "chill".into(), member: true, count: 2, dead: 0, links: Vec::new(), spoken: Vec::new() },
             ]
         );
     }

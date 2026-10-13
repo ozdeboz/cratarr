@@ -9,6 +9,7 @@
     playPlaylist,
     renamePlaylist,
     restorePlaylist,
+    setSpoken,
     unlinkPlaylist,
     type Conflict,
     type Direction,
@@ -29,7 +30,7 @@
     ondeleted,
     onrestored,
   }: {
-    playlist: { id: string; name: string; count: number; dead: number; links?: Link[] };
+    playlist: { id: string; name: string; count: number; dead: number; links?: Link[]; spoken?: string[] };
     anchor: DOMRect;
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
@@ -38,7 +39,23 @@
     onrestored?: (id: string) => void;
   } = $props();
 
-  let mode = $state<'menu' | 'rename' | 'delete' | 'sync'>('menu');
+  let mode = $state<'menu' | 'rename' | 'delete' | 'sync' | 'spoken'>('menu');
+
+  // Spoken as… (decision 0015): other names a voice assistant may hear for it, comma-separated.
+  let spokenField = $state('');
+  async function saveSpoken() {
+    if (working) return;
+    working = true;
+    try {
+      await setSpoken(p.id, spokenField.split(',').map((s) => s.trim()).filter(Boolean));
+      onclose();
+    } catch (e) {
+      fail(e, 'Could not save the names');
+    } finally {
+      working = false;
+      refresh();
+    }
+  }
 
   // Sync to… (decision 0014): every target, on or off, and how it is kept. Each change is made at once.
   let targets = $state<TargetChoice[] | null>(null);
@@ -158,6 +175,13 @@
       <button
         role="menuitem"
         onclick={() => {
+          spokenField = (p.spoken ?? []).join(', ');
+          mode = 'spoken';
+        }}>Spoken as…</button
+      >
+      <button
+        role="menuitem"
+        onclick={() => {
           nameField = p.id;
           mode = 'rename';
         }}>Rename</button
@@ -175,6 +199,20 @@
       <input type="text" aria-label="New name" maxlength="100" bind:value={nameField} />
       <div class="row">
         <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === p.id} aria-busy={working}>Rename</button>
+        <button type="button" onclick={onclose}>Cancel</button>
+      </div>
+    </form>
+  {:else if mode === 'spoken'}
+    <form
+      class="form"
+      onsubmit={(e) => {
+        e.preventDefault();
+        saveSpoken();
+      }}
+    >
+      <input type="text" aria-label="Other names, comma-separated" placeholder="japanese, kokoro" bind:value={spokenField} />
+      <div class="row">
+        <button type="submit" class="primary" disabled={working} aria-busy={working}>Save</button>
         <button type="button" onclick={onclose}>Cancel</button>
       </div>
     </form>

@@ -32,6 +32,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/restore", post(restore_playlist))
         .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
         .route("/api/sync/targets", get(sync_targets))
+        .route("/api/play-by-name", post(play_by_name))
+        .route("/api/playlists/{id}/spoken", put(set_spoken))
         .route("/api/albums/duplicates", get(album_duplicates))
         .route("/api/duplicates", get(duplicates))
         .route("/api/duplicates/dedupe", post(dedupe))
@@ -261,6 +263,29 @@ async fn rename_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Js
 async fn delete_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
     app.playlists.delete(&id).await?;
     Ok(Json(json!({ "deleted": id })))
+}
+
+#[derive(Deserialize)]
+struct ByName {
+    name: String,
+    /// Default: shuffle (how the voice assistant has always played playlists).
+    mode: Option<crate::app::PlayMode>,
+}
+
+/// Play the playlist meant by a spoken name (decision 0015). Refused, with a sentence to say, when none fits.
+async fn play_by_name(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(b): Json<ByName>) -> Result<Json<crate::app::PlayByName>, ApiError> {
+    let mode = b.mode.unwrap_or(crate::app::PlayMode::Shuffle);
+    Ok(Json(app.playlists.play_by_name(&b.name, mode, f.source.as_deref()).await?))
+}
+
+#[derive(Deserialize)]
+struct Spoken {
+    names: Vec<String>,
+}
+
+/// The other names a playlist is spoken as, exactly these.
+async fn set_spoken(State(app): State<Arc<App>>, Path(id): Path<String>, Json(b): Json<Spoken>) -> Result<Json<()>, ApiError> {
+    Ok(Json(app.playlists.set_spoken(&id, &b.names).await?))
 }
 
 /// What a playlist can be linked to (decision 0014).

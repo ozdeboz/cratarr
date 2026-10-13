@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS retired (
   playlist TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL, user TEXT NOT NULL,
   direction TEXT NOT NULL, conflict TEXT NOT NULL,
   PRIMARY KEY (playlist, kind, source, user)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS spoken (playlist TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY (playlist, name)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
@@ -185,6 +186,7 @@ impl SyncState {
     pub fn rename(&self, from: &str, to: &str) -> Result<usize> {
         let db = self.db();
         db.execute("UPDATE OR REPLACE targets SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
+        db.execute("UPDATE OR REPLACE spoken SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
         Ok(db.execute("UPDATE links SET name = ?2 WHERE name = ?1", params![from, to])?)
     }
 
@@ -270,6 +272,31 @@ impl SyncState {
         Ok(())
     }
 
+    /// The other names each playlist is spoken as (decision 0015), by playlist.
+    pub fn spoken(&self) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT playlist, name FROM spoken ORDER BY playlist, name")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for row in rows {
+            let (p, n) = row?;
+            out.entry(p).or_default().push(n);
+        }
+        Ok(out)
+    }
+
+    /// A playlist's spoken names, exactly these.
+    pub fn set_spoken(&self, playlist: &str, names: &[String]) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute("DELETE FROM spoken WHERE playlist = ?1", [playlist])?;
+        for n in names {
+            tx.execute("INSERT OR IGNORE INTO spoken (playlist, name) VALUES (?1, ?2)", params![playlist, n])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn meta(&self, key: &str) -> Option<String> {
         use rusqlite::OptionalExtension;
         self.db().query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional().ok().flatten()
@@ -321,6 +348,11 @@ mod tests {
         assert_eq!(s.revive_targets("Calm").unwrap(), 1);
         assert_eq!(s.targets().unwrap(), vec![shared], "back as it was");
         assert_eq!(s.revive_targets("Calm").unwrap(), 0, "once");
+        s.set_spoken("Calm", &["quiet".to_string(), "still".to_string()]).unwrap();
+        s.rename("Calm", "Hush").unwrap();
+        assert_eq!(s.spoken().unwrap().get("Hush"), Some(&vec!["quiet".to_string(), "still".to_string()]));
+        s.set_spoken("Hush", &[]).unwrap();
+        assert!(s.spoken().unwrap().is_empty());
         assert_eq!(s.meta("migrated"), None);
         s.set_meta("migrated", "1").unwrap();
         assert_eq!(s.meta("migrated").as_deref(), Some("1"));
