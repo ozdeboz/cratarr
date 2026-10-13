@@ -2,7 +2,8 @@
 //! album being moved is the one playing, the player goes on with the old item. Once the server drops it (Jellyfin's
 //! real-time monitor does so about a minute after the files leave), the player's reports name an item that is gone:
 //! the server cannot say what plays (header, voice and favourites lose track), and Jellyfin's database refuses those
-//! reports, a failed write that left its write lock held and its library work hung (2026-10-13).
+//! reports. On 2026-10-13 its library work hung after them; why is not known, the refused reports were the only
+//! anomaly (decision 0017).
 //!
 //! So the player stops right before the move (a stopped player reports nothing), the server hears of the new folders
 //! at once and of the old ones only once the same track plays again, on its new item, from where it stopped, with the
