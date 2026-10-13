@@ -703,6 +703,7 @@ impl Source for JellyfinSource {
                 super::Transport::PlayPause if paused == Some(true) => "Unpause",
                 super::Transport::PlayPause => "Pause",
                 super::Transport::Next => "NextTrack",
+                super::Transport::Stop => "Stop",
             };
             // Every session of the device (see cast_targets). Verified on the tablet 2026-10-12, one command and one
             // session at a time: the reporting session ignores Pause, Unpause and NextTrack; the command-less

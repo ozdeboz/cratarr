@@ -1,15 +1,22 @@
 //! Carry on playing (decision 0013): Keep and Replace move files, which the server then knows by new items. When the
-//! album being moved is the one playing, the player goes on with the old item, which the server no longer has: it
-//! cannot say what plays, so the header, voice and favourites lose track. Once the server has the new items, the same
-//! track plays again from where it was, with the rest of the album after it.
+//! album being moved is the one playing, the player goes on with the old item. Once the server drops it (Jellyfin's
+//! real-time monitor does so about a minute after the files leave), the player's reports name an item that is gone:
+//! the server cannot say what plays (header, voice and favourites lose track), and Jellyfin's database refuses those
+//! reports, a failed write that left its write lock held and its library work hung (2026-10-13).
+//!
+//! So the player stops right before the move (a stopped player reports nothing), the server hears of the new folders
+//! at once and of the old ones only once the same track plays again, on its new item, from where it stopped, with the
+//! rest of the album after it.
 
 use std::sync::Arc;
 
-use super::IncomingService;
+use super::{IncomingService, Told, tell_moved};
 use crate::app::library::Library;
+use crate::journal::Event;
 
-/// How long to wait for the server to have the moved files.
-const WAIT_SECS: u64 = 15 * 60;
+/// How long to wait for the server to have the moved files: the player is stopped meanwhile. A server that takes
+/// longer has stopped processing changes (Jellyfin did, 2026-10-13).
+const WAIT_SECS: u64 = 3 * 60;
 /// How often to look.
 const EVERY_SECS: u64 = 5;
 
@@ -34,6 +41,24 @@ fn now() -> f64 {
 }
 
 impl IncomingService {
+    /// Stop the player before its album moves, keeping where it was. Best effort: when it cannot be stopped, carry-on
+    /// still follows (and the position keeps running).
+    pub(super) async fn hold(&self, p: &mut Playing) {
+        let Some((_, s)) = self.lib.connected_sources().into_iter().find(|(id, _)| *id == p.source) else { return };
+        if p.paused {
+            return;
+        }
+        match s.transport(crate::source::Transport::Stop).await {
+            Ok(player) => {
+                p.at_secs += now() - p.read_at;
+                p.read_at = now();
+                p.paused = true;
+                tracing::info!("stopped {player} while its album moves, {:.0} s into the track", p.at_secs);
+            }
+            Err(e) => tracing::warn!("{}: could not stop the player before moving its album: {e:#}", p.source),
+        }
+    }
+
     /// What plays from an album about to move: `order` is its tracks in album order as known after the move,
     /// `before` maps each id a playing file may have now to its id after. `None` when none of them plays.
     pub(super) async fn playing_among(&self, order: &[i64], before: &[(i64, i64)]) -> Option<Playing> {
@@ -65,15 +90,30 @@ fn before_ids(before: &[(i64, i64)], track: Option<i64>) -> Option<i64> {
 }
 
 /// After the move: wait in the background until the server has the new items, then play the track again from where
-/// it is now, with the rest of the album after it. Gives up when the player moved on to something else, or after
-/// `WAIT_SECS`.
-pub(super) fn carry_on(lib: Arc<Library>, p: Playing) {
+/// it is now, with the rest of the album after it; then tell the server the old folders are gone. Gives up (and tells
+/// it) when the player moved on to something else, or after `WAIT_SECS`.
+pub(super) fn carry_on(lib: Arc<Library>, p: Playing, event: &Event) {
+    let (title, moved) = match event {
+        Event::AlbumAdopted { title, moves, .. } => (title.clone(), moves.iter().map(|m| (m.from.clone(), m.to.clone())).collect()),
+        Event::AlbumReplaced { title, moves, replaced, .. } => {
+            (title.clone(), replaced.iter().chain(moves).map(|m| (m.from.clone(), m.to.clone())).collect())
+        }
+        Event::AlbumRejected { .. } => (String::new(), Vec::new()),
+    };
     tokio::spawn(async move {
+        follow(&lib, &p).await;
+        tell_moved(&lib, &title, &moved, Told::Gone).await;
+    });
+}
+
+async fn follow(lib: &Arc<Library>, p: &Playing) {
+    {
         let started = now();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(EVERY_SECS)).await;
             if now() - started > WAIT_SECS as f64 {
-                tracing::warn!("{}: the moved track never appeared; playback left as it is", p.source);
+                // Where "the server stopped processing changes" is told (decision 0013).
+                tracing::warn!("{}: the moved track never appeared within {WAIT_SECS} s; the player stays stopped", p.source);
                 return;
             }
             let Some((_, s)) = lib.connected_sources().into_iter().find(|(id, _)| *id == p.source) else { return };
@@ -100,11 +140,12 @@ pub(super) fn carry_on(lib: Arc<Library>, p: Playing) {
             if ids.is_empty() {
                 return;
             }
+            // A track that was paused comes back playing: it was stopped for the move, or paused by hand.
             match s.play_from(&ids, position).await {
                 Ok(player) => tracing::info!("carried on on {player} with the moved album, {position:.0} s in"),
                 Err(e) => tracing::warn!("{}: could not carry on with the moved album: {e:#}", p.source),
             }
             return;
         }
-    });
+    }
 }

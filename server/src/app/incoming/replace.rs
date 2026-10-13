@@ -284,7 +284,10 @@ impl IncomingService {
             ),
             _ => (Vec::new(), Vec::new()),
         };
-        let playing = self.playing_among(&order, &before).await;
+        let mut playing = self.playing_among(&order, &before).await;
+        if let Some(p) = playing.as_mut() {
+            self.hold(p).await;
+        }
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let files = self.files.clone();
         let moved = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
@@ -292,20 +295,21 @@ impl IncomingService {
             self.journal.forget(id)?;
             return Err(ToggleError::Refused(format!("{e:#}")));
         }
-        self.finish_replace(&event, false).await;
+        self.finish_replace(&event, false, playing.is_some()).await;
         self.journal.applied(id)?;
         self.hidden.lock().await.insert(at.album.id.clone());
         *self.owned.lock().await = None;
         c.poke();
         if let Some(p) = playing {
-            super::carry_on::carry_on(self.lib.clone(), p);
+            super::carry_on::carry_on(self.lib.clone(), p, &event);
         }
         Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
     }
 
     /// After the files moved (or moved back, `back`): the catalogue rows follow, the new files hold the old tracks'
     /// ids (or their own again), and the servers hear of it at once. Safe to repeat.
-    pub(super) async fn finish_replace(&self, event: &Event, back: bool) {
+    /// `hold_gone`: as for Keep (`finish_adopt`).
+    pub(super) async fn finish_replace(&self, event: &Event, back: bool, hold_gone: bool) {
         let Event::AlbumReplaced { moves, replaced, token, title, .. } = event else { return };
         let (c, moves_, replaced_, token) = (self.lib.catalogue(), moves.clone(), replaced.clone(), token.clone());
         let done = tokio::task::spawn_blocking(move || rows_follow(&c, &moves_, &replaced_, &token, back))
@@ -319,7 +323,7 @@ impl IncomingService {
         for m in replaced.iter().chain(moves) {
             changes.push(if back { (m.to.clone(), m.from.clone()) } else { (m.from.clone(), m.to.clone()) });
         }
-        self.tell_moved(title, &changes).await;
+        super::tell_moved(&self.lib, title, &changes, if hold_gone { super::Told::Came } else { super::Told::Both }).await;
     }
 
     /// Undo a Replace: the new files back into Incoming with their own ids, the old ones back from the trash with
@@ -335,7 +339,7 @@ impl IncomingService {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        self.finish_replace(&entry.event, true).await;
+        self.finish_replace(&entry.event, true, false).await;
         self.unconvert_rows(&entry.event).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
         self.resume_fetching(entry.id, title).await;

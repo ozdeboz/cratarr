@@ -518,6 +518,17 @@ impl IncomingService {
             token: token.clone(),
             release_group: dir.release_group.clone(),
         };
+        // Deleting the album that plays: the player stops first (a player going on with an item the server then drops
+        // reports on it, which Jellyfin refuses; decision 0013). Nothing is played after: it is gone.
+        let (c, f, d) = (catalogue.clone(), dir.folder, dir.dir.clone());
+        let tracks: Vec<i64> = tokio::task::spawn_blocking(move || {
+            c.album_tags(f, &d).unwrap_or_default().into_iter().filter_map(|(rel, _)| c.track_of(f, &rel)).collect()
+        })
+        .await
+        .unwrap_or_default();
+        if let Some(mut p) = self.playing_among(&tracks, &tracks.iter().map(|t| (*t, *t)).collect::<Vec<_>>()).await {
+            self.hold(&mut p).await;
+        }
         let id = self.journal.intend(now, &event)?;
         let (f, rel, files) = (folder.clone(), dir.dir.clone(), self.files.clone());
         let trashed = tokio::task::spawn_blocking(move || files.trash(&f, &rel, now)).await.map_err(|e| anyhow::anyhow!("{e}"));
@@ -579,8 +590,8 @@ impl IncomingService {
                         continue;
                     }
                 }
-                self.finish_adopt(&entry.event, false).await;
-                self.finish_replace(&entry.event, false).await;
+                self.finish_adopt(&entry.event, false, false).await;
+                self.finish_replace(&entry.event, false, false).await;
             }
             let result = if happened {
                 self.finish_reject(&entry.event).await;
@@ -809,7 +820,10 @@ impl IncomingService {
             Event::AlbumAdopted { moves, .. } => moves.iter().filter_map(|m| m.track).collect(),
             _ => Vec::new(),
         };
-        let playing = self.playing_among(&order, &order.iter().map(|t| (*t, *t)).collect::<Vec<_>>()).await;
+        let mut playing = self.playing_among(&order, &order.iter().map(|t| (*t, *t)).collect::<Vec<_>>()).await;
+        if let Some(p) = playing.as_mut() {
+            self.hold(p).await;
+        }
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let files = self.files.clone();
         let moved = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
@@ -817,13 +831,13 @@ impl IncomingService {
             self.journal.forget(id)?;
             return Err(ToggleError::Refused(format!("{e:#}")));
         }
-        self.finish_adopt(&event, false).await;
+        self.finish_adopt(&event, false, playing.is_some()).await;
         self.journal.applied(id)?;
         self.hidden.lock().await.insert(at.album.id.clone());
         *self.owned.lock().await = None;
         c.poke();
         if let Some(p) = playing {
-            carry_on::carry_on(self.lib.clone(), p);
+            carry_on::carry_on(self.lib.clone(), p, &event);
         }
         Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
     }
@@ -897,7 +911,9 @@ impl IncomingService {
 
     /// After the files moved (or moved back, `back`): the catalogue rows follow, track ids kept, and the servers hear
     /// of it at once. Safe to repeat.
-    async fn finish_adopt(&self, event: &Event, back: bool) {
+    /// `hold_gone`: tell the servers only where the files went; where they left is told later (carry-on, when the album
+    /// plays: its player must not go on with an item the server already dropped).
+    async fn finish_adopt(&self, event: &Event, back: bool, hold_gone: bool) {
         let Event::AlbumAdopted { moves, title, .. } = event else { return };
         let c = self.lib.catalogue();
         let pairs: Vec<((i64, String), (i64, String))> =
@@ -915,39 +931,9 @@ impl IncomingService {
         if let Err(e) = moved {
             tracing::warn!("catalogue: could not follow the files of {title}: {e:#}");
         }
-        self.tell_moved(title, &pairs).await;
+        tell_moved(&self.lib, title, &pairs, if hold_gone { Told::Came } else { Told::Both }).await;
     }
 
-    /// Tell each server, in its own paths, which files went and where they appeared: `(gone, came)`. The trash is
-    /// hidden from the servers, so neither side is told about it.
-    async fn tell_moved(&self, title: &str, moved: &[((i64, String), (i64, String))]) {
-        let folders = self.lib.catalogue().folders();
-        for (a, s) in self.lib.connected() {
-            let server_path = |(folder, rel): &(i64, String)| -> Option<String> {
-                if rel.starts_with(&format!("{}/", crate::trash::TRASH_DIR)) {
-                    return None;
-                }
-                let f = folders.get(*folder as usize)?.display().to_string();
-                a.placement.root(&f).map(|root| format!("{root}{rel}"))
-            };
-            // By album folder, not file by file: Jellyfin acted on the folder a Keep left (Incoming) but not on 12 new files
-            // in a folder it did not know yet (2026-10-13); told of the new folder itself, it scans it.
-            let folder_of = |(folder, rel): &(i64, String)| (*folder, rel.rsplit_once('/').map_or(rel.as_str(), |(dir, _)| dir).to_string());
-            let mut changes: Vec<(String, bool)> = Vec::new();
-            for (gone, came) in moved {
-                for (path, created) in [(server_path(&folder_of(gone)), false), (server_path(&folder_of(came)), true)] {
-                    if let Some(p) = path.filter(|p| !changes.iter().any(|(q, _)| q == p)) {
-                        changes.push((p, created));
-                    }
-                }
-            }
-            if !changes.is_empty()
-                && let Err(e) = s.files_changed(&changes).await
-            {
-                tracing::warn!("{}: could not tell it about {title}: {e:#}", a.cfg.id);
-            }
-        }
-    }
 
     /// Undo a Keep: the files back into Incoming, the catalogue rows with them, Lidarr fetching as before.
     async fn undo_keep(&self, entry: &Entry) -> Result<String, ToggleError> {
@@ -961,7 +947,7 @@ impl IncomingService {
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-        self.finish_adopt(&entry.event, true).await;
+        self.finish_adopt(&entry.event, true, false).await;
         self.unconvert_rows(&entry.event).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
         self.resume_fetching(entry.id, title).await;
@@ -1253,6 +1239,48 @@ impl IncomingService {
                 tracing::warn!("cover of {album_id} on {source_id}: {e:#}");
                 None
             }
+        }
+    }
+}
+
+/// Which side of a move to tell the servers about: the folders files went to, the ones they left, or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Told {
+    Both,
+    Came,
+    Gone,
+}
+
+/// Tell each server, in its own paths, which files went and where they appeared: `(gone, came)`. The trash is
+/// hidden from the servers, so neither side is told about it.
+pub(super) async fn tell_moved(lib: &Library, title: &str, moved: &[((i64, String), (i64, String))], which: Told) {
+    let folders = lib.catalogue().folders();
+    for (a, s) in lib.connected() {
+        let server_path = |(folder, rel): &(i64, String)| -> Option<String> {
+            if rel.starts_with(&format!("{}/", crate::trash::TRASH_DIR)) {
+                return None;
+            }
+            let f = folders.get(*folder as usize)?.display().to_string();
+            a.placement.root(&f).map(|root| format!("{root}{rel}"))
+        };
+        // By album folder, not file by file: Jellyfin acted on the folder a Keep left (Incoming) but not on 12 new files
+        // in a folder it did not know yet (2026-10-13); told of the new folder itself, it scans it.
+        let folder_of = |(folder, rel): &(i64, String)| (*folder, rel.rsplit_once('/').map_or(rel.as_str(), |(dir, _)| dir).to_string());
+        let mut changes: Vec<(String, bool)> = Vec::new();
+        for (gone, came) in moved {
+            for (path, created) in [(server_path(&folder_of(gone)), false), (server_path(&folder_of(came)), true)] {
+                if (created && which == Told::Gone) || (!created && which == Told::Came) {
+                    continue;
+                }
+                if let Some(p) = path.filter(|p| !changes.iter().any(|(q, _)| q == p)) {
+                    changes.push((p, created));
+                }
+            }
+        }
+        if !changes.is_empty()
+            && let Err(e) = s.files_changed(&changes).await
+        {
+            tracing::warn!("{}: could not tell it about {title}: {e:#}", a.cfg.id);
         }
     }
 }

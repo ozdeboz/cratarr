@@ -205,6 +205,8 @@ pub enum Transport {
     Previous,
     PlayPause,
     Next,
+    /// Stop playing (Keep and Replace, while they move the album that plays: decision 0013).
+    Stop,
 }
 
 pub trait Source: Send + Sync {
