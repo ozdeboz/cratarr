@@ -84,7 +84,8 @@
     } catch (e) {
       toast.fail(e, "The favourite didn't change");
     } finally {
-      if (favWanted === want) favWanted = null;
+      // By value: `favWanted` is a state proxy, never `===` the plain object it was given.
+      if (favWanted?.id === want.id && favWanted.on === want.on) favWanted = null;
     }
   }
 
