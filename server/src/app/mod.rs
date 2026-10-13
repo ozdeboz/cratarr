@@ -25,7 +25,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 pub use error::ToggleError;
-pub use incoming::{DeleteResult, IncomingService, IncomingView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
+pub use incoming::{DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{PlayingService, StateView};
@@ -77,8 +77,10 @@ impl App {
         sync.listen();
         let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone()));
         let files = crate::ports::disk();
-        let incoming = Arc::new(IncomingService::new(library.clone(), files.clone(), journal, saved.lidarr, saved.trash_days));
+        let incoming =
+            Arc::new(IncomingService::new(library.clone(), files.clone(), journal, saved.lidarr, saved.trash_days, cfg.data_dir.as_deref()));
         incoming.listen();
+        incoming.work();
         let playing = PlayingService::new(library.clone(), playlists.clone());
         let settings = SettingsService::new(
             library.clone(),

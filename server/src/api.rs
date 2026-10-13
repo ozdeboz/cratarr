@@ -42,6 +42,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/incoming/undo", post(undo_incoming))
         .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
         .route("/api/incoming/replace/{source}/{album}", get(replace_preview).post(replace_incoming))
+        .route("/api/incoming/jobs", get(incoming_jobs))
+        .route("/api/incoming/jobs/{id}/cancel", post(cancel_job))
         .route("/api/incoming/play/{source}/{album}", post(play_incoming))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
@@ -174,6 +176,15 @@ async fn replace_incoming(
 ) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let year = body.map(|Json(b)| b).unwrap_or_default().year;
     Ok(Json(app.incoming.replace(&source, &album, year.as_deref()).await?))
+}
+
+/// Albums waiting for their hi-res files to be converted before Keep or Replace, and those just finished.
+async fn incoming_jobs(State(app): State<Arc<App>>) -> Json<Vec<crate::app::JobView>> {
+    Json(app.incoming.jobs())
+}
+
+async fn cancel_job(State(app): State<Arc<App>>, Path(id): Path<u64>) -> Result<Json<()>, ApiError> {
+    Ok(Json(app.incoming.cancel(id).await?))
 }
 
 async fn incoming_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {

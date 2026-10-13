@@ -9,8 +9,6 @@
 //! The shape follows decision 0011: the decisions (what needs converting, to what rate, how long the output is, how
 //! a sample is quantised) are pure functions; `to_cd_flac` is the shell that reads and writes around them.
 
-// Not wired into the app yet: decision 0013 lands conversion after Keep and Replace.
-#![allow(dead_code)]
 
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Seek, SeekFrom, Write};
@@ -34,6 +32,10 @@ use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
+
+/// Inside each Incoming folder: where converted files are made, before they take the originals' place. Hidden, so
+/// media servers, Lidarr and the catalogue leave it alone.
+pub const STAGING_DIR: &str = ".cratarr-convert";
 
 /// The CD sample rate.
 pub const CD_RATE: u32 = 44_100;

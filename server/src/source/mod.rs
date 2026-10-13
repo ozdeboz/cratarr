@@ -126,7 +126,7 @@ pub struct PlaylistEvent {
 }
 
 /// An album as a source sees it. Paths are the source's own (see `placement`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct Album {
     pub id: String,
     pub title: String,

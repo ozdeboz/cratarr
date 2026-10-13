@@ -15,7 +15,9 @@ use super::library::{Active, Library, epoch_now, label_of};
 use crate::journal::{Entry, Event, EventId, Journal, TrackMove};
 use crate::ports::{Acquisition, Files};
 
+mod queue;
 mod replace;
+pub use queue::JobView;
 pub use replace::ReplacePreview;
 
 /// The handler name in the journal for telling Lidarr (decision 0011 §6). Its result is what it stopped fetching.
@@ -47,6 +49,8 @@ pub struct KeepPreview {
     pub files: usize,
     /// Why Keep cannot go ahead as it is (`needs_year`: the page asks for the year and tries again).
     pub refused: Option<KeepRefused>,
+    /// Hi-res files converted to CD format first (Keep then waits in the queue).
+    pub convert: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,32 +63,27 @@ pub enum KeepRefused {
 
 #[derive(Debug, Serialize)]
 pub struct KeepResult {
-    /// Pass to undo.
-    pub undo: String,
+    /// Pass to undo; `None` while queued (the job has it once done).
+    pub undo: Option<String>,
     pub title: String,
     pub folder: String,
+    /// Waiting for its hi-res files to be converted first.
+    pub queued: bool,
 }
 
 /// An Incoming album located on disk: the server's album, its catalogue folder, and that folder's path.
 struct Located {
+    /// The server it is on.
+    source: String,
     album: source::Album,
     dir: IncomingDir,
     root: PathBuf,
 }
 
-/// Whether an audio file is beyond 16-bit/44.1 kHz (decision 0013: such albums are converted on the way in, which is
-/// not built yet, so Keep refuses them for now).
-fn is_hi_res(path: &std::path::Path) -> bool {
-    use lofty::prelude::*;
-    let read = || -> Result<lofty::file::TaggedFile> {
-        let probe = lofty::probe::Probe::open(path)?
-            .options(lofty::config::ParseOptions::new().read_tags(false).read_cover_art(false))
-            .guess_file_type()?;
-        Ok(probe.read()?)
-    };
-    let Ok(file) = read() else { return false };
-    let props = file.properties();
-    props.sample_rate().is_some_and(|r| r > 44_100) || props.bit_depth().is_some_and(|b| b > 16)
+/// The files of an album (`rels`, inside `dir`) that are lossless beyond CD format: converted on the way in (decision
+/// 0013). Reads only their headers. Blocking.
+fn to_convert(root: &std::path::Path, dir: &str, rels: &[String]) -> Vec<String> {
+    rels.iter().filter(|rel| crate::convert::needs_conversion(&root.join(dir).join(rel)).ok().flatten().is_some()).cloned().collect()
 }
 
 /// Every file under `dir` (recursively), relative to it, leaving out hidden files and folders.
@@ -252,6 +251,8 @@ pub struct IncomingService {
     writable: Mutex<std::collections::HashMap<PathBuf, (i64, bool)>>,
     /// Saved with the sources.
     trash_days: std::sync::atomic::AtomicU32,
+    /// Albums waiting for their hi-res files to be converted before Keep or Replace (survives restarts).
+    queue: queue::Queue,
 }
 
 impl IncomingService {
@@ -261,6 +262,7 @@ impl IncomingService {
         journal: Arc<Journal>,
         lidarr: Option<settings::LidarrConfig>,
         trash_days: u32,
+        data_dir: Option<&str>,
     ) -> Self {
         Self {
             lib,
@@ -272,6 +274,7 @@ impl IncomingService {
             journal,
             writable: Mutex::new(std::collections::HashMap::new()),
             trash_days: std::sync::atomic::AtomicU32::new(trash_days),
+            queue: queue::Queue::open(data_dir.map(|d| std::path::PathBuf::from(d).join("convert-queue.json"))),
         }
     }
 
@@ -445,6 +448,7 @@ impl IncomingService {
     /// Delete an Incoming album: into the trash inside its folder (Undo brings it back; emptied after
     /// the trash days set in Settings), and Lidarr stops fetching it.
     pub async fn delete(&self, source_id: &str, album_id: &str) -> Result<DeleteResult, ToggleError> {
+        self.refuse_if_queued(album_id)?;
         let album = self
             .cache
             .lock()
@@ -624,7 +628,7 @@ impl IncomingService {
             .get(dir.folder as usize)
             .cloned()
             .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
-        Ok(Located { album, dir, root })
+        Ok(Located { source: source_id.to_string(), album, dir, root })
     }
 
     /// Work out Keep for an album: its new names, or why not. Reads the disk and the catalogue; changes nothing.
@@ -639,11 +643,6 @@ impl IncomingService {
                 .into_iter()
                 .map(|(rel, tags)| (rel.strip_prefix(&prefix).unwrap_or(&rel).to_string(), crate::naming::Tags(tags)))
                 .collect();
-            if music_files.iter().any(|(rel, _)| is_hi_res(&root.join(&dir).join(rel))) {
-                return Ok(Err(KeepRefused::Other(
-                    "this album is hi-res; converting it to 16-bit/44.1 kHz on the way in is not there yet".into(),
-                )));
-            }
             let others: Vec<String> =
                 files_under(&root.join(&dir)).into_iter().filter(|f| !music_files.iter().any(|(m, _)| m == f)).collect();
             let template = crate::naming::Template::default();
@@ -665,18 +664,62 @@ impl IncomingService {
     pub async fn keep_preview(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
         let at = self.locate(source_id, album_id).await?;
         let (_, plan) = self.plan_keep(&at, year).await?;
+        let convert = self.to_convert(&at).await.len();
         Ok(match plan {
-            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None },
-            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r) },
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert },
         })
+    }
+
+    /// The album's music files that need converting first.
+    async fn to_convert(&self, at: &Located) -> Vec<String> {
+        let (c, folder, dir, root) = (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone());
+        tokio::task::spawn_blocking(move || {
+            let prefix = format!("{dir}/");
+            let rels: Vec<String> = c
+                .album_tags(folder, &dir)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(rel, _)| rel.strip_prefix(&prefix).unwrap_or(&rel).to_string())
+                .collect();
+            to_convert(&root, &dir, &rels)
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// Keep (decision 0013): move a new album from Incoming into Music, named per the library's template. Write-ahead
     /// like Delete; the files and catalogue rows move (track ids kept); Lidarr stops fetching it, and the moved
     /// files' new server items get the old ones' play data (handlers). Undo puts it all back.
+    /// Hi-res files are converted first, in the queue: the plan is checked now, so a refusal shows at once.
     pub async fn keep(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
         let (music, plan) = self.plan_keep(&at, year).await?;
+        let plan = plan.map_err(|r| match r {
+            KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
+            KeepRefused::Other(why) => ToggleError::Refused(why),
+        })?;
+        if !self.can_write(&at.root).await || !self.can_write(&music).await {
+            return Err(ToggleError::Refused("Cratarr cannot write in Incoming or Music".into()));
+        }
+        let convert = self.to_convert(&at).await;
+        if !convert.is_empty() {
+            return Ok(self.enqueue(source_id, at, queue::Action::Keep, year, convert, plan.folder));
+        }
+        self.keep_now(&at, year, Vec::new(), None).await
+    }
+
+    /// Keep, its files ready (`converted`: what conversion did just before). `job`: the queued job doing it, told
+    /// the event's id as soon as it is intended.
+    async fn keep_now(
+        &self,
+        at: &Located,
+        year: Option<&str>,
+        converted: Vec<crate::journal::Converted>,
+        job: Option<u64>,
+    ) -> Result<KeepResult, ToggleError> {
+        let (music, plan) = self.plan_keep(at, year).await?;
         let plan = plan.map_err(|r| match r {
             KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
             KeepRefused::Other(why) => ToggleError::Refused(why),
@@ -711,16 +754,20 @@ impl IncomingService {
             }
         }
         let event = Event::AlbumAdopted {
-            source: source_id.to_string(),
+            source: at.source.clone(),
             album_id: at.album.id.clone(),
             title: at.album.title.clone(),
             from_dir: (at.dir.folder, at.dir.dir.clone()),
             to_dir: (0, plan.folder.clone()),
             moves,
             release_group: at.dir.release_group.clone(),
+            converted,
         };
         let now = epoch_now();
         let id = self.journal.intend(now, &event)?;
+        if let Some(job) = job {
+            self.queue.intended(job, id);
+        }
         self.journal.done(id, PLAYDATA_PLAN, now, &serde_json::to_value(&play).map_err(anyhow::Error::from)?)?;
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let files = self.files.clone();
@@ -734,7 +781,54 @@ impl IncomingService {
         self.hidden.lock().await.insert(at.album.id.clone());
         *self.owned.lock().await = None;
         c.poke();
-        Ok(KeepResult { undo: id.to_string(), title: at.album.title, folder: plan.folder })
+        Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
+    }
+
+    /// Refused while the album waits in the conversion queue (Cancel it first).
+    fn refuse_if_queued(&self, album_id: &str) -> Result<(), ToggleError> {
+        match self.queue.busy(album_id) {
+            true => Err(ToggleError::Refused("that album is being converted".into())),
+            false => Ok(()),
+        }
+    }
+
+    /// The moves that undo an album action, in order: its own moves back, then any conversion undone (the converted
+    /// files into the trash, the originals back from it). One plan, so all of it happens or none. `None` when a
+    /// folder is no longer in use.
+    fn undo_steps(&self, event: &Event) -> Option<Vec<crate::moves::Step>> {
+        let mut back: Vec<crate::moves::Step> =
+            self.steps(event)?.into_iter().rev().map(|s| crate::moves::Step { from: s.to, to: s.from }).collect();
+        let (Event::AlbumAdopted { from_dir, converted, .. } | Event::AlbumReplaced { from_dir, converted, .. }) = event else {
+            return Some(back);
+        };
+        let root = self.lib.catalogue().folders().get(from_dir.0 as usize)?.clone();
+        let at = |rel: &str| (root.clone(), rel.to_string());
+        for c in converted {
+            back.push(crate::moves::Step { from: at(&c.converted), to: at(&queue::converted_trash(c)?) });
+        }
+        for c in converted {
+            back.push(crate::moves::Step { from: at(&c.trashed), to: at(&c.original) });
+        }
+        Some(back)
+    }
+
+    /// After an Undo moved them back: the rows of converted files that were renamed (a WAV became FLAC) go back to
+    /// the originals' names, track ids kept. Safe to repeat.
+    async fn unconvert_rows(&self, event: &Event) {
+        let (Event::AlbumAdopted { from_dir, converted, .. } | Event::AlbumReplaced { from_dir, converted, .. }) = event else { return };
+        let (c, folder, converted) = (self.lib.catalogue(), from_dir.0, converted.clone());
+        let done = tokio::task::spawn_blocking(move || -> Result<()> {
+            for v in converted.iter().filter(|v| v.converted != v.original && !c.has_row(folder, &v.original)) {
+                c.move_files(folder, &v.converted, folder, &v.original)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .and_then(|r| r);
+        if let Err(e) = done {
+            tracing::warn!("catalogue: could not put the originals' rows back: {e:#}");
+        }
     }
 
     /// The file moves of an album action, as paths on disk, in order (Replace: the old files out first); `None` when
@@ -811,13 +905,14 @@ impl IncomingService {
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back in Incoming")));
         }
-        let steps = self.steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
+        let steps = self.undo_steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let files = self.files.clone();
-        tokio::task::spawn_blocking(move || files.move_back(&steps))
+        tokio::task::spawn_blocking(move || files.move_all(&steps))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         self.finish_adopt(&entry.event, true).await;
+        self.unconvert_rows(&entry.event).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
         self.resume_fetching(entry.id, title).await;
         self.hidden.lock().await.remove(album_id);

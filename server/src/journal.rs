@@ -41,6 +41,9 @@ pub enum Event {
         /// Every file, audio and others.
         moves: Vec<TrackMove>,
         release_group: Option<String>,
+        /// Hi-res files converted to CD format just before (Undo puts the originals back).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        converted: Vec<Converted>,
     },
     /// Replace (decision 0013): an upgrade took the place of an album in Music. Every old track had a match (else
     /// Replace is refused). Recorded after the catalogue rows moved and the ids were handed on.
@@ -58,6 +61,8 @@ pub enum Event {
         /// Puts the old files back on Undo.
         token: String,
         release_group: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        converted: Vec<Converted>,
     },
 }
 
@@ -81,6 +86,18 @@ pub struct TrackMove {
     /// Replace: the track id a new file had before it took over an old one's (given back on Undo).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub was: Option<i64>,
+}
+
+/// One hi-res file converted to CD format before Keep or Replace (decision 0013), in the album's Incoming folder
+/// (`from_dir.0`): paths relative to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Converted {
+    /// Where the original was.
+    pub original: String,
+    /// Where the original is now: in the trash.
+    pub trashed: String,
+    /// The converted file, before the action moved it (its `from` in `moves`).
+    pub converted: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

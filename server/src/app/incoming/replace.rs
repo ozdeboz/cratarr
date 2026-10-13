@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::{IncomingService, KeepResult, Located, PLAYDATA_PLAN, PlayData, files_under, is_hi_res, verdicts};
+use super::{IncomingService, KeepResult, Located, PLAYDATA_PLAN, PlayData, files_under, queue, verdicts};
 use crate::app::ToggleError;
 use crate::app::library::epoch_now;
 use crate::incoming::{AlbumFile, ReplacePlan, ReplaceRefusal};
@@ -26,6 +26,8 @@ pub struct ReplacePreview {
     /// New tracks the old album does not have.
     pub added: usize,
     pub refused: Option<ReplaceRefused>,
+    /// Hi-res files converted to CD format first (Replace then waits in the queue).
+    pub convert: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,6 +102,14 @@ fn rows_follow(c: &crate::catalogue::Catalogue, moves: &[TrackMove], replaced: &
     c.set_tracks(&tracks)
 }
 
+fn refused(r: ReplaceRefused) -> ToggleError {
+    ToggleError::Refused(match r {
+        ReplaceRefused::NeedsYear => "the album's year is not known".into(),
+        ReplaceRefused::Unmatched(titles) => format!("no match for {}", titles.join(", ")),
+        ReplaceRefused::Other(why) => why,
+    })
+}
+
 impl IncomingService {
     /// Work out Replace for an album: the album it replaces and what moves, or why not. Changes nothing.
     async fn plan_replace(&self, at: &Located, year: Option<&str>) -> Result<Result<Planned, ReplaceRefused>, ToggleError> {
@@ -112,11 +122,6 @@ impl IncomingService {
         let (c, folder, dir, root, year) = (self.lib.catalogue(), at.dir.folder, at.dir.dir.clone(), at.root.clone(), year.map(str::to_string));
         tokio::task::spawn_blocking(move || -> Result<Result<Planned, ReplaceRefused>> {
             let new = album_files(&c, folder, &dir)?;
-            if new.iter().any(|f| is_hi_res(&root.join(&dir).join(&f.rel))) {
-                return Ok(Err(ReplaceRefused::Other(
-                    "this album is hi-res; converting it to 16-bit/44.1 kHz on the way in is not there yet".into(),
-                )));
-            }
             let old = album_files(&c, 0, &old_dir)?;
             let new_others: Vec<String> = files_under(&root.join(&dir)).into_iter().filter(|f| !new.iter().any(|m| &m.rel == f)).collect();
             let plan = match crate::incoming::plan_replace(&Default::default(), &old, &new, &new_others, year.as_deref()) {
@@ -144,6 +149,7 @@ impl IncomingService {
         let at = self.locate(source_id, album_id).await?;
         let (library, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
         let old = verdicts(std::slice::from_ref(&at.album), &library, &incoming).remove(&at.album.id).map(|v| v.library).unwrap_or_default();
+        let convert = self.to_convert(&at).await.len();
         Ok(match self.plan_replace(&at, year).await? {
             Ok(p) => ReplacePreview {
                 title: at.album.title,
@@ -152,23 +158,41 @@ impl IncomingService {
                 tracks: p.plan.takes_over.len(),
                 added: p.plan.added,
                 refused: None,
+                convert,
             },
-            Err(r) => ReplacePreview { title: at.album.title, old, folder: None, tracks: 0, added: 0, refused: Some(r) },
+            Err(r) => ReplacePreview { title: at.album.title, old, folder: None, tracks: 0, added: 0, refused: Some(r), convert },
         })
     }
 
     /// Replace (decision 0013): the old album's files go to the trash in the Incoming folder, the new ones into Music
     /// named per the library's template, each taking over its old track's id. Lidarr stops fetching the album and the
     /// old tracks' play data goes to the new server items (handlers). Undo puts it all back.
+    /// Hi-res files are converted first, in the queue: the plan is checked now, so a refusal shows at once.
     pub async fn replace(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
-        let Planned { old_dir, old_files, plan } = self.plan_replace(&at, year).await?.map_err(|r| {
-            ToggleError::Refused(match r {
-                ReplaceRefused::NeedsYear => "the album's year is not known".into(),
-                ReplaceRefused::Unmatched(titles) => format!("no match for {}", titles.join(", ")),
-                ReplaceRefused::Other(why) => why,
-            })
-        })?;
+        let planned = self.plan_replace(&at, year).await?.map_err(refused)?;
+        let music = PathBuf::from(self.lib.music().unwrap_or_default());
+        if !self.can_write(&at.root).await || !self.can_write(&music).await {
+            return Err(ToggleError::Refused("Cratarr cannot write in Incoming or Music".into()));
+        }
+        let convert = self.to_convert(&at).await;
+        if !convert.is_empty() {
+            return Ok(self.enqueue(source_id, at, queue::Action::Replace, year, convert, planned.plan.folder));
+        }
+        self.replace_now(&at, year, Vec::new(), None).await
+    }
+
+    /// Replace, its files ready (`converted`: what conversion did just before). `job`: the queued job doing it, told
+    /// the event's id as soon as it is intended.
+    pub(super) async fn replace_now(
+        &self,
+        at: &Located,
+        year: Option<&str>,
+        converted: Vec<crate::journal::Converted>,
+        job: Option<u64>,
+    ) -> Result<KeepResult, ToggleError> {
+        let Planned { old_dir, old_files, plan } = self.plan_replace(at, year).await?.map_err(refused)?;
         let music = PathBuf::from(self.lib.music().unwrap_or_default());
         if !self.can_write(&at.root).await || !self.can_write(&music).await {
             return Err(ToggleError::Refused("Cratarr cannot write in Incoming or Music".into()));
@@ -221,7 +245,7 @@ impl IncomingService {
             }
         }
         let event = Event::AlbumReplaced {
-            source: source_id.to_string(),
+            source: at.source.clone(),
             album_id: at.album.id.clone(),
             title: at.album.title.clone(),
             from_dir: (inc, dir),
@@ -230,8 +254,12 @@ impl IncomingService {
             replaced,
             token,
             release_group: at.dir.release_group.clone(),
+            converted,
         };
         let id = self.journal.intend(now, &event)?;
+        if let Some(job) = job {
+            self.queue.intended(job, id);
+        }
         self.journal.done(id, PLAYDATA_PLAN, now, &serde_json::to_value(&play).map_err(anyhow::Error::from)?)?;
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let files = self.files.clone();
@@ -245,7 +273,7 @@ impl IncomingService {
         self.hidden.lock().await.insert(at.album.id.clone());
         *self.owned.lock().await = None;
         c.poke();
-        Ok(KeepResult { undo: id.to_string(), title: at.album.title, folder: plan.folder })
+        Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
     }
 
     /// After the files moved (or moved back, `back`): the catalogue rows follow, the new files hold the old tracks'
@@ -274,13 +302,14 @@ impl IncomingService {
         if entry.undone {
             return Err(ToggleError::Refused(format!("{title} is already back in Incoming")));
         }
-        let steps = self.steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
+        let steps = self.undo_steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let files = self.files.clone();
-        tokio::task::spawn_blocking(move || files.move_back(&steps))
+        tokio::task::spawn_blocking(move || files.move_all(&steps))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?
             .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         self.finish_replace(&entry.event, true).await;
+        self.unconvert_rows(&entry.event).await;
         self.journal.mark_undone(entry.id, epoch_now())?;
         self.resume_fetching(entry.id, title).await;
         self.hidden.lock().await.remove(album_id);

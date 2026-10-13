@@ -46,20 +46,30 @@ fn renames(event: &Event, folders: &[PathBuf], back: bool) -> HashMap<String, St
     };
     match event {
         Event::AlbumRejected { .. } => {}
-        Event::AlbumAdopted { moves, .. } => {
+        Event::AlbumAdopted { moves, from_dir, converted, .. } => {
             for m in moves {
-                let (f, t) = (line(&m.from), line(&m.to));
-                if back { add(t, f) } else { add(f, t) }
+                // A converted file that was renamed (a WAV became FLAC): its lines may still name the original.
+                let original = converted.iter().find(|c| c.converted == m.from.1).map(|c| (from_dir.0, c.original.clone()));
+                let (f, t) = (line(original.as_ref().unwrap_or(&m.from)), line(&m.to));
+                if back {
+                    add(t, f)
+                } else {
+                    add(line(&m.from), t.clone());
+                    add(f, t)
+                }
             }
         }
         // The old files' lines go to the new file that inherited their track; back, a new file's line goes to the
         // old file it replaced (else to where it came from).
-        Event::AlbumReplaced { moves, replaced, .. } => {
+        Event::AlbumReplaced { moves, replaced, from_dir, converted, .. } => {
             for m in moves {
                 let old = replaced.iter().find(|r| r.track.is_some() && r.track == m.track);
+                let original = converted.iter().find(|c| c.converted == m.from.1).map(|c| (from_dir.0, c.original.clone()));
+                let from = original.unwrap_or_else(|| m.from.clone());
                 if back {
-                    add(line(&m.to), old.map_or_else(|| line(&m.from), |r| line(&r.from)));
+                    add(line(&m.to), old.map_or_else(|| line(&from), |r| line(&r.from)));
                 } else {
+                    add(line(&from), line(&m.to));
                     add(line(&m.from), line(&m.to));
                     if let Some(r) = old {
                         add(line(&r.from), line(&m.to));
@@ -287,6 +297,7 @@ mod tests {
             to_dir: (0, "X - New (2020)".into()),
             moves: vec![mv(7, (1, "X/New/01.flac"), (0, "X - New (2020)/01.flac")), mv(8, (1, "X/New/02.flac"), (0, "X - New (2020)/02.flac"))],
             release_group: None,
+            converted: Vec::new(),
         }
     }
 
@@ -371,6 +382,7 @@ mod tests {
             replaced: vec![mv(7, (0, "X - Up/01.mp3"), (1, ".trash/X - Up/01.mp3"))],
             token: "t".into(),
             release_group: None,
+            converted: Vec::new(),
         };
         let forward = renames(&event, &folders, false);
         assert_eq!(forward.get("X - Up/01.mp3").map(String::as_str), Some("X - Up/01.flac"));

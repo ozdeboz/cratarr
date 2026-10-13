@@ -14,7 +14,8 @@ pub struct Step {
 }
 
 /// `rel` must be a plain relative path: no `..`, no root, not into a hidden folder (backups), except a trash entry
-/// (`.cratarr-trash/<stamp>/…`: Replace moves the old files there, decision 0013).
+/// (`.cratarr-trash/<stamp>/…`: Replace moves the old files there) and converted files waiting to take the originals'
+/// place (`.cratarr-convert/…`, decision 0013).
 fn checked(rel: &str) -> Result<PathBuf> {
     let p = Path::new(rel);
     let plain = |rest: &Path| rest.components().all(|c| matches!(c, Component::Normal(n) if !n.to_string_lossy().starts_with('.')));
@@ -23,7 +24,8 @@ fn checked(rel: &str) -> Result<PathBuf> {
         let stamp = rest.components().next()?.as_os_str().to_str()?;
         Some(!stamp.is_empty() && stamp.bytes().all(|b| b.is_ascii_digit()) && rest.components().count() > 1 && plain(rest))
     };
-    let ok = !rel.is_empty() && !rel.contains('\0') && (plain(p) || in_trash() == Some(true));
+    let staged = || p.strip_prefix(crate::convert::STAGING_DIR).is_ok_and(|rest| rest.components().count() > 1 && plain(rest));
+    let ok = !rel.is_empty() && !rel.contains('\0') && (plain(p) || in_trash() == Some(true) || staged());
     if !ok {
         bail!("not a plain path inside a library: {rel:?}");
     }
@@ -181,7 +183,7 @@ mod tests {
     #[test]
     fn paths_must_stay_inside_and_out_of_hidden_folders() {
         let r = tmp();
-        for bad in ["../x", "/etc/passwd", ".cratarr-trash/x/A", ".cratarr-trash/1", ".cratarr-trash/1/.h/A", ".backups/A", "A/../../x", ""] {
+        for bad in ["../x", "/etc/passwd", ".cratarr-trash/x/A", ".cratarr-trash/1", ".cratarr-trash/1/.h/A", ".cratarr-convert/x", ".backups/A", "A/../../x", ""] {
             assert!(apply(&[step(&r, bad, &r, "ok")]).is_err(), "{bad}");
             assert!(apply(&[step(&r, "ok", &r, bad)]).is_err(), "{bad}");
         }
