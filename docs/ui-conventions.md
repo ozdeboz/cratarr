@@ -41,10 +41,11 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   the album; on Insights' graph highlight the playlist and its closest playlists.
 - **Long-press (right-click with a mouse) opens the item's menu** when the item has more than one other action: a
   small popover anchored to the item, styled like the rest of the app, pointing at it, flipping to stay on screen.
-  The same component on every page. For a playlist: Play, Shuffle, Play next, Add to queue, Rename, Delete.
+  The same component on every page. For a playlist: Play, Shuffle, Play next, Add to queue, Sync to…, Spoken as…,
+  Rename, Delete.
   Esc, a tap outside or scrolling closes it. With a single other action, the long-press does that action directly.
-- Inside the popover: actions as a short list, destructive ones last and in red. Rename and the delete confirmation
-  happen inside the same popover, not in a separate dialog.
+- Inside the popover: actions as a short list, destructive ones last and in red. Sync to…, Spoken as…, Rename
+  and the delete confirmation happen inside the same popover, not in a separate dialog.
 - A long-press never also triggers the tap, and suppresses the browser's own menu and text selection.
 
 ## Words
