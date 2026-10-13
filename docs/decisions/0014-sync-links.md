@@ -38,8 +38,9 @@ owner decided on 2026-10-12, with both sessions, that this is a per-playlist cho
 - **Restored:** a deleted playlist's links are put aside, not forgotten. Restoring it (its Undo) brings them all
   back, and the next pass makes the copies again. A new playlist of the same name starts fresh, Shared.
 - **Taking a link off** deletes its copy on the target.
-- **Migration, self-contained:** on the first pass after deploying, every `.m3u` in Music moves into
-  `.playlists` and gets a Shared link. Its copy is the same file at the same path, so nothing visible changes.
+- **Migration, self-contained:** on the first pass after deploying, every `.m3u` in Music is copied into
+  `.playlists` and gets a Shared link. The file in Music stays, as that link's copy: same path, same content, so
+  nothing visible changes and the media server keeps the playlist (and its id) it imported.
   This runs once, recorded in the sync state, so the copies are never mistaken for playlists again.
 
 ## Consequences
