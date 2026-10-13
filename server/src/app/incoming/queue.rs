@@ -294,7 +294,6 @@ impl IncomingService {
     }
 
     /// The whole queue after every change (`jobs` for the first look, and after falling behind).
-    #[allow(dead_code)] // until /api/events uses it
     pub fn subscribe_jobs(&self) -> tokio::sync::broadcast::Receiver<Vec<JobView>> {
         self.queue.subscribe()
     }

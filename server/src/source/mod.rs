@@ -267,6 +267,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
     }
 
+    /// Optional: a short summary of what the server's players do now (track, paused, queue), compared to notice a
+    /// change cheaply (the page's live channel). `None`: this server cannot say; the whole state is asked instead.
+    fn players(&self) -> Fut<'_, Option<String>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// Optional: mark a track a favourite (or not) for the account of the player playing it. Returns the state now.
     /// Safe to repeat.
     fn set_favorite<'a>(&'a self, _track: &'a str, _on: bool) -> Fut<'a, bool> {

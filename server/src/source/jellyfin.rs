@@ -525,6 +525,23 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn players(&self) -> Fut<'_, Option<String>> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await?;
+            let mut lines: Vec<String> = sessions
+                .iter()
+                .filter_map(|s| {
+                    let item = s.now_playing_item.as_ref()?;
+                    let paused = s.play_state.as_ref().and_then(|p| p.is_paused).unwrap_or(false);
+                    let queue: Vec<&str> = s.now_playing_queue_full_items.iter().map(|i| i.id.as_str()).collect();
+                    Some(format!("{} {} {paused} {}", s.id.as_deref().unwrap_or(""), item.id, queue.join(",")))
+                })
+                .collect();
+            lines.sort();
+            Ok(Some(lines.join("\n")))
+        })
+    }
+
     fn set_favorite<'a>(&'a self, track: &'a str, on: bool) -> Fut<'a, bool> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;

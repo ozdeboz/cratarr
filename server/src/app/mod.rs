@@ -10,6 +10,7 @@
 //! - `settings`: the Settings page.
 
 mod error;
+mod events;
 mod follow;
 mod incoming;
 mod insights;
@@ -30,6 +31,7 @@ pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{PlayingService, StateView};
 pub use playlists::{PlayMode, PlayResult, PlaylistService};
+pub use events::connect as events;
 pub use settings::{NamingView, SettingsService, SettingsView, SourceView};
 
 use crate::config::Config;
@@ -63,6 +65,10 @@ pub struct App {
     pub incoming: Arc<IncomingService>,
     pub insights: InsightsService,
     pub settings: SettingsService,
+    /// What happened to albums (decision 0011); the live channel tells the pages.
+    pub journal: Arc<crate::journal::Journal>,
+    /// Notices when a player changes, for the live channel.
+    pub events: events::PlayerWatch,
 }
 
 impl App {
@@ -78,7 +84,7 @@ impl App {
         let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone()));
         let files = crate::ports::disk();
         let incoming =
-            Arc::new(IncomingService::new(library.clone(), files.clone(), journal, saved.lidarr, saved.trash_days, cfg.data_dir.as_deref()));
+            Arc::new(IncomingService::new(library.clone(), files.clone(), journal.clone(), saved.lidarr, saved.trash_days, cfg.data_dir.as_deref()));
         incoming.listen();
         incoming.work();
         let playing = PlayingService::new(library.clone(), playlists.clone());
@@ -93,7 +99,7 @@ impl App {
             origin,
         );
         let insights = InsightsService::new(library.clone());
-        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, insights, settings }))
+        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, insights, settings, journal, events: Default::default() }))
     }
 
     /// For the navigation header.

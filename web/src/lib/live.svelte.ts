@@ -9,6 +9,7 @@ import { ApiError, getState, setMember, type NowPlaying, type State } from './ap
 import { prefs } from './prefs.svelte';
 import { remember } from './sources.svelte';
 import { toast } from './toast.svelte';
+import { on, open, close, stream } from './events.svelte';
 
 /** How a server answer relates to the expected result: it, something else, or not yet. */
 export type Settled = 'yes' | 'no' | 'wait';
@@ -40,9 +41,12 @@ export const player = $state({ full: false });
 export function expect(np: NowPlaying, settled: (server: NowPlaying | null) => Settled, { ms = 8000, quiet = false } = {}) {
   const shown = live.view?.now_playing ?? null;
   if (shown && shown.id !== np.id) live.before = shown;
-  expecting = { np, settled, until: Date.now() + ms, quiet };
+  const e: Expectation = { np, settled, until: Date.now() + ms, quiet };
+  expecting = e;
   live.pending = true;
   if (live.view) live.view = { ...live.view, now_playing: np };
+  // The live channel only speaks when something changed: when nothing does, ask once the time is up.
+  setTimeout(() => expecting === e && refresh(), ms + 100);
 }
 
 /** The command failed: back to what the server shows. */
@@ -80,10 +84,20 @@ async function flush(view: State) {
   if (last && !expecting) live.view = last;
 }
 
-/** Ask the server now (the shell's poll calls this; pages call it after an action that changed playlists). */
+/** Ask the server now (pages call it after an action that changed playlists; the shell's poll while the live channel
+ *  is down). */
 export async function refresh() {
   try {
-    let view = await getState(prefs.source || undefined);
+    take(await getState(prefs.source || undefined));
+  } catch (e) {
+    live.error = e instanceof ApiError ? e.message : 'Unexpected error';
+  }
+}
+
+/** A state from the server, by the live channel or asked for: settles a pending command, then shows it. */
+function take(fresh: State) {
+  let view = fresh;
+  {
     remember(view.sources);
     if (expecting) {
       const e = expecting;
@@ -106,22 +120,30 @@ export async function refresh() {
     }
     live.view = view;
     live.error = null;
-  } catch (e) {
-    live.error = e instanceof ApiError ? e.message : 'Unexpected error';
   }
 }
 
-/** Keep `live` current: every 2 s while the page is visible, every 5 s while hidden. Returns a stop function. */
+/** Keep `live` current: from the live channel (events.svelte.ts) while it is open, asking every 2 s (5 s while the
+ *  page is hidden) while it is not, and every 30 s regardless. Returns a stop function. */
 export function poll(): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout>;
+  let last = 0;
+  const off = on<State>('state', (view) => {
+    last = Date.now();
+    take(view);
+  });
+  open(prefs.source || undefined);
   async function tick() {
-    await refresh();
-    if (!stopped) timer = setTimeout(tick, document.hidden ? 5000 : 2000);
+    const quiet = Date.now() - last;
+    if (!stream.connected || quiet > 30_000) await refresh();
+    if (!stopped) timer = setTimeout(tick, stream.connected ? 5000 : document.hidden ? 5000 : 2000);
   }
   tick();
   return () => {
     stopped = true;
     clearTimeout(timer);
+    off();
+    close();
   };
 }

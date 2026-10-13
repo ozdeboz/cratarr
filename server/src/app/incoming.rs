@@ -282,7 +282,6 @@ impl IncomingService {
     }
 
     /// Told when a background refresh finds a server's Incoming list changed: other albums than before.
-    #[allow(dead_code)] // until /api/events uses it
     pub fn subscribe_incoming(&self) -> tokio::sync::broadcast::Receiver<()> {
         self.lists_changed.subscribe()
     }

@@ -20,6 +20,7 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/state", get(state))
+        .route("/api/events", get(events))
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
@@ -72,6 +73,18 @@ struct Follow {
 struct Membership {
     source: Option<String>,
     member: Option<bool>,
+}
+
+/// The page's live channel (server-sent events, app/events.rs): `state`, `jobs` and `changed`, each when it changes.
+async fn events(
+    State(app): State<Arc<App>>,
+    Query(f): Query<Follow>,
+) -> axum::response::sse::Sse<impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+    use tokio_stream::StreamExt;
+    let rx = crate::app::events(&app, f.source);
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .map(|m| Ok(axum::response::sse::Event::default().event(m.name).data(m.data)));
+    axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15)))
 }
 
 async fn state(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<StateView>, ApiError> {
