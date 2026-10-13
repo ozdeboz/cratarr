@@ -42,6 +42,30 @@ The owner chose each point (2026-10-14).
   skips to the next or previous track, swipe up shows the playlists (closes full screen over the Playlists page).
   Swipe down still closes it.
 
+### The chrome around it, like Finamp's (decided 2026-10-14, after reading Finamp's source)
+
+Finamp's chrome as read: `lib/components/now_playing_bar.dart` (the mini-player), `lib/main.dart` (the sidebar wraps
+every page), `lib/screens/player_screen.dart` and `lib/screens/blurred_player_screen_background.dart`.
+
+- **The navigation:** the sidebar from 1024 px stays as it is; below that the bar of pages moves from the bottom to
+  the **top** (icons with labels, up to five, the rest under More), so the bottom edge is free for the mini-player.
+- **The now-playing header above the page goes.** In its place, on Playlists and Incoming, a **mini-player along the
+  bottom**, as Finamp's: a floating bar 64 px high, 12 px from the edges, corners 12 px; the cover with play/pause on
+  it; the title (scrolling when it does not fit); artist and time (position / length); a heart (the favourite). The
+  whole bar fills from the left as the track plays, in the colour taken from the cover. Tap or swipe up opens the full
+  player, swipe left or right skips. **Swipe down does nothing** (in Finamp it stops playback and clears the queue;
+  Cratarr is a remote across the room, and a stray swipe is not worth that).
+- **On a phone the full player covers everything,** the navigation too; the chevron or a swipe down brings the page
+  back. It slides up when it opens (300 ms) and fades when it closes, as Finamp's.
+- **Wide windows show the sidebar by themselves** whenever something plays (Finamp's split screen), with no
+  mini-player. Its chevron folds it to the mini-player until the bar is tapped (not remembered); maximise puts the
+  player over the page and is remembered, as is the button that takes it back beside the page.
+- **Toasts** float above the mini-player (or the bottom edge without it); beside the sidebar from 1024 px as before.
+- **The full player takes its look from the cover:** the cover, heavily blurred under a dark veil (light theme: a
+  light one), as its background, and its accent colour (progress, the play button's tint, the mini-player's fill)
+  taken from the cover's most vivid colour and kept readable against the background; between tracks the colours fade
+  over a second.
+
 ## Consequences
 
 - The tablet in landscape gets a cover the height of the screen with the controls beside it, instead of a small one
