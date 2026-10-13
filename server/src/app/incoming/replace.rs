@@ -275,6 +275,16 @@ impl IncomingService {
             self.queue.intended(job, id);
         }
         self.journal.done(id, PLAYDATA_PLAN, now, &serde_json::to_value(&play).map_err(anyhow::Error::from)?)?;
+        // Playing from either copy: carried on with the new one after the move (the old items go). A file of the old
+        // album is known by the id its upgrade takes over; a file of the upgrade by its own id until then.
+        let (order, before): (Vec<i64>, Vec<(i64, i64)>) = match &event {
+            Event::AlbumReplaced { moves, .. } => (
+                moves.iter().filter_map(|m| m.track).collect(),
+                moves.iter().filter_map(|m| m.track.map(|t| (m.was.unwrap_or(t), t))).chain(moves.iter().filter_map(|m| m.track.map(|t| (t, t)))).collect(),
+            ),
+            _ => (Vec::new(), Vec::new()),
+        };
+        let playing = self.playing_among(&order, &before).await;
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let files = self.files.clone();
         let moved = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
@@ -287,6 +297,9 @@ impl IncomingService {
         self.hidden.lock().await.insert(at.album.id.clone());
         *self.owned.lock().await = None;
         c.poke();
+        if let Some(p) = playing {
+            super::carry_on::carry_on(self.lib.clone(), p);
+        }
         Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
     }
 

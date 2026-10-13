@@ -520,7 +520,7 @@ impl Jellyfin {
     /// Ask a session to play these items now, replacing what it plays. Finamp honours this (it ignores some other
     /// remote commands, such as next-track).
     pub async fn play_now(&self, session_id: &str, item_ids: &[String]) -> Result<()> {
-        self.play_command(session_id, "PlayNow", item_ids).await
+        self.play_command(session_id, "PlayNow", item_ids, None).await
     }
 
     /// A playback control for one session: `PlayPause`, `NextTrack` or `PreviousTrack` (Jellyfin's names).
@@ -533,14 +533,19 @@ impl Jellyfin {
         Ok(())
     }
 
-    /// `command`: PlayNow, PlayNext or PlayLast. At most 240 ids fit in one request (decision 0006).
-    pub async fn play_command(&self, session_id: &str, command: &str, item_ids: &[String]) -> Result<()> {
+    /// `command`: PlayNow, PlayNext or PlayLast. At most 240 ids fit in one request (decision 0006). `start_ticks`: where
+    /// in the first track to start (PlayNow).
+    pub async fn play_command(&self, session_id: &str, command: &str, item_ids: &[String], start_ticks: Option<i64>) -> Result<()> {
         let url = format!("{}/Sessions/{session_id}/Playing", self.base);
         let ids = item_ids.join(",");
+        let mut query = vec![("playCommand", command.to_string()), ("itemIds", ids)];
+        if let Some(t) = start_ticks {
+            query.push(("startPositionTicks", t.to_string()));
+        }
         let status = self
             .http
             .post(&url)
-            .query(&[("playCommand", command), ("itemIds", ids.as_str())])
+            .query(&query)
             .send()
             .await
             .context("POST /Sessions/{id}/Playing")?

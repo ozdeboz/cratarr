@@ -314,6 +314,51 @@ fn to_track((i, library_id): (PlayingItem, Option<String>)) -> Track {
     Track { id: i.id, title: i.name, artist: i.album_artist, album: i.album, album_id: i.album_id, path: i.path, library_id }
 }
 
+impl JellyfinSource {
+    /// Send tracks to the player the page follows (every session of its device). `start_ticks`: where in the first
+    /// track to start (PlayNow only).
+    async fn cast(&self, ids: &[String], how: super::PlayHow, start_ticks: Option<i64>) -> Result<String> {
+        let sessions = self.jf.sessions().await?;
+        let targets = cast_targets(&sessions, &self.player);
+        let Some(first) = targets.first() else {
+            if self.player.app.is_some() {
+                bail!("{} is not open", self.player.value().replace(SEP, " on "));
+            }
+            bail!("no player is playing music; start one, or choose a player in Settings");
+        };
+        let label = [first.client.as_deref(), first.device_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" on ");
+        // Finamp re-sorts a multi-track PlayNext/PlayLast batch by track number, so those go one track per
+        // command (decision 0006).
+        let commands: Vec<(&str, Vec<String>)> = match how {
+            super::PlayHow::Now => vec![("PlayNow", ids.to_vec())],
+            // In file order, not reversed: Finamp puts each "play next" track after the ones already queued
+            // as next (verified on the tablet 2026-10-12: reversed sending played them backwards).
+            super::PlayHow::Next => ids.iter().map(|i| ("PlayNext", vec![i.clone()])).collect(),
+            super::PlayHow::Last => ids.iter().map(|i| ("PlayLast", vec![i.clone()])).collect(),
+        };
+        let mut last_error = None;
+        let mut sent = 0;
+        for t in &targets {
+            let session = t.id.as_deref().unwrap_or_default();
+            let mut ok = true;
+            for (cmd, batch) in &commands {
+                if let Err(e) = self.jf.play_command(session, cmd, batch, start_ticks).await {
+                    last_error = Some(e);
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                sent += 1;
+            }
+        }
+        match (sent, last_error) {
+            (0, Some(e)) => Err(e),
+            _ => Ok(label),
+        }
+    }
+}
+
 impl Source for JellyfinSource {
     fn status(&self) -> Fut<'_, Status> {
         Box::pin(async move {
@@ -679,46 +724,11 @@ impl Source for JellyfinSource {
     }
 
     fn play_tracks<'a>(&'a self, ids: &'a [String], how: super::PlayHow) -> Fut<'a, String> {
-        Box::pin(async move {
-            let sessions = self.jf.sessions().await?;
-            let targets = cast_targets(&sessions, &self.player);
-            let Some(first) = targets.first() else {
-                if self.player.app.is_some() {
-                    bail!("{} is not open", self.player.value().replace(SEP, " on "));
-                }
-                bail!("no player is playing music; start one, or choose a player in Settings");
-            };
-            let label = [first.client.as_deref(), first.device_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" on ");
-            // Finamp re-sorts a multi-track PlayNext/PlayLast batch by track number, so those go one track per
-            // command (decision 0006).
-            let commands: Vec<(&str, Vec<String>)> = match how {
-                super::PlayHow::Now => vec![("PlayNow", ids.to_vec())],
-                // In file order, not reversed: Finamp puts each "play next" track after the ones already queued
-                // as next (verified on the tablet 2026-10-12: reversed sending played them backwards).
-                super::PlayHow::Next => ids.iter().map(|i| ("PlayNext", vec![i.clone()])).collect(),
-                super::PlayHow::Last => ids.iter().map(|i| ("PlayLast", vec![i.clone()])).collect(),
-            };
-            let mut last_error = None;
-            let mut sent = 0;
-            for t in &targets {
-                let session = t.id.as_deref().unwrap_or_default();
-                let mut ok = true;
-                for (cmd, batch) in &commands {
-                    if let Err(e) = self.jf.play_command(session, cmd, batch).await {
-                        last_error = Some(e);
-                        ok = false;
-                        break;
-                    }
-                }
-                if ok {
-                    sent += 1;
-                }
-            }
-            match (sent, last_error) {
-                (0, Some(e)) => Err(e),
-                _ => Ok(label),
-            }
-        })
+        Box::pin(self.cast(ids, how, None))
+    }
+
+    fn play_from<'a>(&'a self, ids: &'a [String], start_secs: f64) -> Fut<'a, String> {
+        Box::pin(self.cast(ids, super::PlayHow::Now, Some((start_secs * 10_000_000.0) as i64)))
     }
 
     fn album_cover<'a>(&'a self, album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {

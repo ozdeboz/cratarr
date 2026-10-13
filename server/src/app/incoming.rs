@@ -15,6 +15,7 @@ use super::library::{Active, Library, epoch_now, label_of};
 use crate::journal::{Entry, Event, EventId, Journal, TrackMove};
 use crate::ports::{Acquisition, Files};
 
+mod carry_on;
 mod queue;
 mod replace;
 pub use queue::JobView;
@@ -803,6 +804,12 @@ impl IncomingService {
             self.queue.intended(job, id);
         }
         self.journal.done(id, PLAYDATA_PLAN, now, &serde_json::to_value(&play).map_err(anyhow::Error::from)?)?;
+        // Playing from this album: carried on with its new copy after the move (the old items go).
+        let order: Vec<i64> = match &event {
+            Event::AlbumAdopted { moves, .. } => moves.iter().filter_map(|m| m.track).collect(),
+            _ => Vec::new(),
+        };
+        let playing = self.playing_among(&order, &order.iter().map(|t| (*t, *t)).collect::<Vec<_>>()).await;
         let steps = self.steps(&event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let files = self.files.clone();
         let moved = tokio::task::spawn_blocking(move || files.move_all(&steps)).await.map_err(|e| anyhow::anyhow!("{e}"));
@@ -815,6 +822,9 @@ impl IncomingService {
         self.hidden.lock().await.insert(at.album.id.clone());
         *self.owned.lock().await = None;
         c.poke();
+        if let Some(p) = playing {
+            carry_on::carry_on(self.lib.clone(), p);
+        }
         Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
     }
 

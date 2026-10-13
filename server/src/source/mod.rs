@@ -357,6 +357,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this server cannot play music") })
     }
 
+    /// Optional: play these tracks now on the player the page follows, the first from `start_secs` in (to carry on
+    /// where a moved file was). Returns the player's label.
+    fn play_from<'a>(&'a self, _ids: &'a [String], _start_secs: f64) -> Fut<'a, String> {
+        Box::pin(async { anyhow::bail!("this server cannot play music from a position") })
+    }
+
     /// Optional: an album's cover image (content type, bytes). Lets Cratarr show covers of music outside the playlist
     /// folder without giving the page the source's address or key.
     fn album_cover<'a>(&'a self, _album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {
