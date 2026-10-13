@@ -22,6 +22,9 @@ type Expectation = {
   quiet: boolean;
 };
 let expecting: Expectation | null = null;
+/** The tracks a run of commands passes through, from the one shown before the first: the server may still show any
+ *  of them while it catches up (Next pressed twice: the first skip not yet done when the second is shown). */
+let passing: string[] = [];
 
 export const live = $state<{
   view: State | null;
@@ -41,7 +44,15 @@ export const player = $state({ full: false });
 export function expect(np: NowPlaying, settled: (server: NowPlaying | null) => Settled, { ms = 8000, quiet = false } = {}) {
   const shown = live.view?.now_playing ?? null;
   if (shown && shown.id !== np.id) live.before = shown;
-  const e: Expectation = { np, settled, until: Date.now() + ms, quiet };
+  if (!expecting) passing = [];
+  if (shown && !passing.includes(shown.id)) passing.push(shown.id);
+  const e: Expectation = {
+    np,
+    // A track along the way is not an answer yet; only the command's own result, or another track, is.
+    settled: (s) => (s && s.id !== np.id && passing.includes(s.id) ? 'wait' : settled(s)),
+    until: Date.now() + ms,
+    quiet,
+  };
   expecting = e;
   live.pending = true;
   if (live.view) live.view = { ...live.view, now_playing: np };
@@ -62,6 +73,7 @@ export function queueTap(playlist: string) {
 
 function end(error?: string) {
   expecting = null;
+  passing = [];
   live.pending = false;
   live.queued = [];
   if (error) toast.show({ text: error, tone: 'error' });
@@ -104,6 +116,7 @@ function take(fresh: State) {
       const verdict = e.settled(view.now_playing);
       if (verdict === 'yes') {
         expecting = null;
+        passing = [];
         live.pending = false;
         if (live.queued.length) flush(view);
       } else if (verdict === 'no') {
