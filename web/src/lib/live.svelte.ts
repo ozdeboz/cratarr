@@ -202,15 +202,23 @@ export function poll(): () => void {
     take(view);
   });
   open(prefs.source || undefined);
+  // A tab not being looked at asks nothing (its stream is closed too, see events.svelte.ts); back in view, it asks at once.
   async function tick() {
     const quiet = Date.now() - last;
-    if (!stream.connected || quiet > 30_000) await refresh();
-    if (!stopped) timer = setTimeout(tick, stream.connected ? 5000 : document.hidden ? 5000 : 2000);
+    if (!document.hidden && (!stream.connected || quiet > 30_000)) await refresh();
+    if (!stopped) timer = setTimeout(tick, stream.connected ? 5000 : 2000);
   }
+  const back = () => {
+    if (document.hidden || stopped) return;
+    clearTimeout(timer);
+    tick();
+  };
+  document.addEventListener('visibilitychange', back);
   tick();
   return () => {
     stopped = true;
     clearTimeout(timer);
+    document.removeEventListener('visibilitychange', back);
     off();
     close();
   };
