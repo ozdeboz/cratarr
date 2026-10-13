@@ -20,7 +20,7 @@
   import Popover from './lib/Popover.svelte';
   import { longpress } from './lib/longpress';
   import { prefs } from './lib/prefs.svelte';
-  import { live } from './lib/live.svelte';
+  import { live, untilNewTrack } from './lib/live.svelte';
   import { toast } from './lib/toast.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { on, stream } from './lib/events.svelte';
@@ -193,6 +193,8 @@
     starting = a.id;
     try {
       await playIncoming(source, a.id);
+      // Show the album's track once it plays, not the states on the way.
+      await untilNewTrack();
     } catch (e) {
       toast.fail(e, 'Could not start playing');
     } finally {

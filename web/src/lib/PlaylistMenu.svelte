@@ -5,7 +5,7 @@
   import { deletePlaylist, playPlaylist, renamePlaylist, restorePlaylist, type PlayMode } from './api';
   import Popover from './Popover.svelte';
   import { prefs } from './prefs.svelte';
-  import { refresh } from './live.svelte';
+  import { refresh, untilNewTrack } from './live.svelte';
   import { toast } from './toast.svelte';
 
   let {
@@ -38,7 +38,9 @@
     onclose();
     try {
       await playPlaylist(p.id, how, prefs.source || undefined);
-      refresh();
+      // Play and Shuffle change what plays: show the new track once it is there, not the states on the way.
+      if (how === 'play' || how === 'shuffle') await untilNewTrack();
+      else refresh();
     } catch (e) {
       fail(e, 'Could not start playing');
     } finally {

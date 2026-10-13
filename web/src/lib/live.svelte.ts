@@ -10,6 +10,7 @@ import { prefs } from './prefs.svelte';
 import { remember } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { on, open, close, stream } from './events.svelte';
+import { track } from './progress.svelte';
 
 /** How a server answer relates to the expected result: it, something else, or not yet. */
 export type Settled = 'yes' | 'no' | 'wait';
@@ -22,6 +23,35 @@ type Expectation = {
   quiet: boolean;
 };
 let expecting: Expectation | null = null;
+/** After a play command whose first track is not known: the track shown when it was sent (see `untilNewTrack`). */
+let holding: { from: string | null; done: () => void } | null = null;
+/** Since when the server says nothing plays, while the header still shows a track (see `take`). */
+let emptySince = 0;
+/** "Nothing plays" is believed only after this long: between tracks and while a player switches, servers briefly say
+ *  so. */
+const EMPTY_MS = 3000;
+
+/** After a play command (a playlist, an album): keep showing what plays, with the progress bar running, until the
+ *  server reports another track; then show it, once. The states a player passes through on the way (nothing, the
+ *  old track again) are never shown. Gives up after `ms`, with a toast. */
+export function untilNewTrack(ms = 10_000): Promise<void> {
+  const from = live.view?.now_playing?.id ?? null;
+  return track(
+    new Promise<void>((resolve) => {
+      const h = { from, done: resolve };
+      holding = h;
+      setTimeout(() => {
+        if (holding !== h) return;
+        holding = null;
+        toast.show({ text: "The player didn't follow.", tone: 'error' });
+        resolve();
+        refresh();
+      }, ms);
+      refresh();
+    }),
+  );
+}
+
 /** The tracks a run of commands passes through, from the one shown before the first: the server may still show any
  *  of them while it catches up (Next pressed twice: the first skip not yet done when the second is shown). */
 let passing: string[] = [];
@@ -111,6 +141,32 @@ function take(fresh: State) {
   let view = fresh;
   {
     remember(view.sources);
+    const shown = live.view?.now_playing ?? null;
+    const keep = () => (view = { ...view, now_playing: shown, playlists: live.view?.playlists ?? view.playlists });
+    if (holding) {
+      const np = view.now_playing;
+      if (np && np.id !== holding.from) {
+        const h = holding;
+        holding = null;
+        h.done();
+      } else {
+        keep();
+        live.view = view;
+        return;
+      }
+    }
+    // Nothing plays: believed once it lasts (the live channel only speaks again when something changes, so look again).
+    if (!view.now_playing && shown && !expecting) {
+      emptySince ||= Date.now();
+      if (Date.now() - emptySince < EMPTY_MS) {
+        setTimeout(refresh, EMPTY_MS + 100 - (Date.now() - emptySince));
+        keep();
+        live.view = view;
+        return;
+      }
+    } else {
+      emptySince = 0;
+    }
     if (expecting) {
       const e = expecting;
       const verdict = e.settled(view.now_playing);
@@ -127,9 +183,8 @@ function take(fresh: State) {
       } else {
         view = { ...view, now_playing: e.np };
       }
-    } else {
-      const shown = live.view?.now_playing ?? null;
-      if (shown && view.now_playing && shown.id !== view.now_playing.id) live.before = shown;
+    } else if (shown && view.now_playing && shown.id !== view.now_playing.id) {
+      live.before = shown;
     }
     live.view = view;
     live.error = null;
