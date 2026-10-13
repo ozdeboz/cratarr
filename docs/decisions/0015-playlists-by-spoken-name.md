@@ -31,11 +31,18 @@ The assistant already knows how to wake the player and cast tracks to it, and th
 - **No fallback to Jellyfin's copies** when Cratarr does not answer: one path. The assistant says that Cratarr is
   not answering, as it reports its other failures.
 - **The assistant side stays the assistant's.** It owns its sentences, which device plays, waking it, and casting.
-  On the reference install that is one sentence trigger, which outranks Home Assistant's built-in media search, a
-  `rest_command`, and the existing play script taking track ids.
+  On the reference install:
+  - the existing `PlayPlaylist` intent, its sentence "play {playlist} [music|playlist|songs]" with a free-text name
+    in place of the fixed list;
+  - a `rest_command` to Cratarr;
+  - the play script taking track ids.
+
+  Not a sentence trigger: Home Assistant runs every trigger that matches, so a catch-all "play {name}" would also
+  fire with each other "play …" automation. An intent is matched only when no trigger did. With a word after the
+  name ("play chill music") it outranks the built-in media search; a bare "play chill" goes to that search.
 
 ## Consequences
 
-- A voice assistant needs network access to Cratarr. Behind sign-in (planned, as Jellyseerr does with Jellyfin) it
+- A voice assistant needs network access to Cratarr. Behind sign-in (planned, as Seerr does with Jellyfin) it
   will need an API key: a Voice assistant card in Settings will hold it, with a snippet to copy.
 - Buttons and dashboards that hold Jellyfin playlist ids can move to asking by name, and a rename then breaks nothing.

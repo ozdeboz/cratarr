@@ -227,9 +227,10 @@ fn find_repair(dir: &Path, entry: &str, listings: &mut HashMap<String, Vec<Strin
     (close.len() == 1).then(|| (false, format!("{folder}/{}", close[0])))
 }
 
-/// Where the playlist files live once Jellyfin must not import them (decision 0012): a hidden folder in Music, which
-/// Jellyfin skips. Lines there carry "../" in front of the Music-relative entry.
-pub const HIDDEN_DIR: &str = ".playlists";
+/// The playlist folder: where the playlists live (decisions 0012, 0014), inside Music. Its name starts with a dot so
+/// the media server does not import the files (its copies are made by the sync links). Lines there carry "../" in
+/// front of the Music-relative entry.
+pub const PLAYLIST_DIR: &str = ".playlists";
 
 fn unprefixed(line: &str, prefix: &str) -> String {
     line.strip_prefix(prefix).unwrap_or(line).to_string()
@@ -274,13 +275,13 @@ impl Store {
         Self { base: dir.clone(), dir, prefix: String::new(), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
     }
 
-    /// The Music folder's playlists: in its hidden `.playlists` folder once that exists (decision 0012), else in the
-    /// folder itself.
+    /// The Music folder's playlists: in its playlist folder (`.playlists`) once that exists, else in the folder
+    /// itself.
     pub fn in_music(music: impl Into<PathBuf>) -> Self {
         let base = music.into();
-        let hidden = base.join(HIDDEN_DIR);
-        if hidden.is_dir() {
-            Self { dir: hidden, base, prefix: "../".into(), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
+        let dir = base.join(PLAYLIST_DIR);
+        if dir.is_dir() {
+            Self { dir, base, prefix: "../".into(), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
         } else {
             Self::new(base)
         }
@@ -791,13 +792,13 @@ impl Store {
     }
 }
 
-/// Bring the Music folder's playlist files into its hidden `.playlists` folder (decision 0014): each is copied there
+/// Bring the playlist files in Music into the playlist folder (`.playlists`, decision 0014): each is copied there
 /// with "../" in front of its lines, so they still point at the same files, unless one of that name is there already.
 /// The file in Music stays, as the playlist's shared copy (the media server keeps the playlist it imported). Returns
 /// the name of every playlist found in Music. Backup copies (`*.bak.m3u`) are left out. Safe to run again. Blocking.
-pub fn adopt_into_hidden_folder(music: &Path) -> Result<Vec<String>> {
-    let hidden = music.join(HIDDEN_DIR);
-    crate::moves::create_dirs_like_parent(&hidden).with_context(|| format!("making {}", hidden.display()))?;
+pub fn adopt_into_playlist_dir(music: &Path) -> Result<Vec<String>> {
+    let folder = music.join(PLAYLIST_DIR);
+    crate::moves::create_dirs_like_parent(&folder).with_context(|| format!("making {}", folder.display()))?;
     let mut names: Vec<String> = std::fs::read_dir(music)?
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
@@ -807,19 +808,19 @@ pub fn adopt_into_hidden_folder(music: &Path) -> Result<Vec<String>> {
     names.sort();
     let mut out = Vec::new();
     for name in names {
-        let dest = hidden.join(&name);
+        let dest = folder.join(&name);
         if !dest.exists() {
             let src = music.join(&name);
             let Ok(text) = std::fs::read_to_string(&src) else {
                 tracing::warn!("{name} is not valid UTF-8; left out");
                 continue;
             };
-            let tmp = hidden.join(format!(".{name}.cratarr-tmp"));
+            let tmp = folder.join(format!(".{name}.cratarr-tmp"));
             std::fs::write(&tmp, m3u::with_prefix(&text, "../")).with_context(|| format!("writing {}", tmp.display()))?;
             if let Ok(meta) = std::fs::metadata(&src) {
                 std::fs::set_permissions(&tmp, meta.permissions()).ok();
             }
-            std::fs::rename(&tmp, &dest).with_context(|| format!("copying {name} into {HIDDEN_DIR}"))?;
+            std::fs::rename(&tmp, &dest).with_context(|| format!("copying {name} into {PLAYLIST_DIR}"))?;
         }
         out.push(name[..name.len() - 4].to_string());
     }
@@ -962,18 +963,18 @@ B/2.mp3
     }
 
     #[tokio::test]
-    async fn adopted_into_the_hidden_folder_everything_still_points_at_the_same_files() {
+    async fn adopted_into_the_playlist_folder_everything_still_points_at_the_same_files() {
         let d = Dir::new();
         d.touch("A/1.mp3");
         d.write("Chill.m3u", "#EXTM3U\nA/1.mp3\ngone/2.mp3\n");
         d.write("Old.bak.m3u", "A/1.mp3\n");
-        assert_eq!(adopt_into_hidden_folder(&d.0).unwrap(), vec!["Chill".to_string()]);
+        assert_eq!(adopt_into_playlist_dir(&d.0).unwrap(), vec!["Chill".to_string()]);
         assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
         assert_eq!(d.read("Chill.m3u"), "#EXTM3U\nA/1.mp3\ngone/2.mp3\n", "the file in Music stays, as the shared copy");
         assert!(!d.0.join(".playlists/Old.bak.m3u").exists(), "backup copies are left out");
         // Run again: the one in .playlists is kept, whatever Music holds.
         d.write("Chill.m3u", "B/9.mp3\n");
-        assert_eq!(adopt_into_hidden_folder(&d.0).unwrap(), vec!["Chill".to_string()]);
+        assert_eq!(adopt_into_playlist_dir(&d.0).unwrap(), vec!["Chill".to_string()]);
         assert_eq!(d.read(".playlists/Chill.m3u"), "#EXTM3U\n../A/1.mp3\n../gone/2.mp3\n");
         // The store finds them there, with Music-relative entries as before.
         let s = Store::in_music(&d.0);

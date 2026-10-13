@@ -321,7 +321,7 @@ impl SyncService {
         }
         let Some(music) = self.lib.music() else { return Ok(()) };
         let m = PathBuf::from(&music);
-        let names = blocking(move || crate::playlists::adopt_into_hidden_folder(&m)).await??;
+        let names = blocking(move || crate::playlists::adopt_into_playlist_dir(&m)).await??;
         for name in &names {
             let shared = Target {
                 playlist: name.clone(),
@@ -334,7 +334,7 @@ impl SyncService {
         }
         self.state.set_meta(ADOPTED, &epoch_now().to_string())?;
         self.lib.reopen_store();
-        tracing::info!("adopted {} playlist(s) from Music into {}, each linked Shared", names.len(), crate::playlists::HIDDEN_DIR);
+        tracing::info!("adopted {} playlist(s) from Music into {}, each linked Shared", names.len(), crate::playlists::PLAYLIST_DIR);
         Ok(())
     }
 
