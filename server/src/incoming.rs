@@ -376,7 +376,7 @@ fn spelling_key(name: &str) -> String {
     name.chars().flat_map(char::to_lowercase).map(crate::albums::unaccented).collect()
 }
 
-/// The plan with each of its folders spelled as Music already spells it (decision 0019): Lidarr's "DARKSIDE/Spiral
+/// The plan with each of its folders spelled as Music already spells it (decision 0020): Lidarr's "DARKSIDE/Spiral
 /// (2014)" goes into the "Darkside/" that is there, instead of beside it. `existing(parent)` lists the folder names in
 /// `parent` ("" for Music itself). A folder Music has under one other spelling only is taken; with none, or several,
 /// the rendered name stays.

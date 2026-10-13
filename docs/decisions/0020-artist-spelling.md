@@ -1,4 +1,4 @@
-# 0019: An album goes into the folder Music already has, whatever its capitals and accents
+# 0020: An album goes into the folder Music already has, whatever its capitals and accents
 
 - Status: accepted
 - Date: 2026-10-14
