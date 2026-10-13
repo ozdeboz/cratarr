@@ -16,14 +16,15 @@
 //!
 //! Names are safe on any file system and over SMB from Windows. The rules follow the reference library where it is
 //! consistent (2,230 folders, 24,269 files, majority where it is not):
-//! - `/` in a value separates a list, as ID3v2.3 writes several artists: `A/B` → `A & B`, `A/B/C` → `A, B & C`.
-//!   When a part beside the slash has at most two characters (`AC/DC`, `30/70`, `4/4`), the slash is part of the
-//!   name and becomes `,`;
+//! - `/` in a value is part of it (`yes/and`, `AC/DC`, a credit like `Low Flung / Other Joe`) and becomes `_`, as
+//!   MusicBrainz Picard does (its default "directory separators character"). Several artists are told apart by the
+//!   list tags (`albumartists`, `artists`), not by slashes in the text tags (Cratarr decision 0016);
 //! - `:` → `-` (`Title: Subtitle` → `Title- Subtitle`), `?` → `!`, `"` → `'`, and `*` `<` `>` `|` `\` → `-`;
 //! - control characters are dropped (tabs and line breaks become a space);
 //! - everything else stays: accents, other scripts, other punctuation, double spaces, dots inside a name;
-//! - no name starts with a space or a dot (a hidden file). A folder name does not end with a dot or a space (Windows
-//!   drops them); a file name ends with its extension, so `R.E.M..mp3` is fine;
+//! - no name starts with a space or a dot (a hidden file). A folder name does not end with a space, and a dot at its
+//!   end becomes `_` (`Howie B.` → `Howie B_`), as Picard does: Windows cannot take either. A file name ends with its
+//!   extension, so `R.E.M..mp3` is fine;
 //! - at most [`MAX_NAME_BYTES`] per name, cut at a character; Windows device names (`CON`, `NUL`, `COM1` …) get `_`.
 //!
 //! [`infer`] finds the template a library already follows: it renders every album with candidate templates and
@@ -453,37 +454,9 @@ fn text(tags: &Tags, name: &str) -> Option<String> {
     tags.first(name).map(clean).filter(|v| !v.trim().is_empty())
 }
 
-/// Makes one tag value safe for a name: the list and character rules above. Edges and length are a whole name's.
+/// Makes one tag value safe for a name: the character rules above. Edges and length are a whole name's.
 pub fn clean(value: &str) -> String {
-    join_list(&list_parts(value)).chars().filter_map(replace).collect()
-}
-
-/// A value split at its list slashes. A slash beside a part of at most two characters stays (`AC/DC`).
-fn list_parts(value: &str) -> Vec<String> {
-    let short = |s: &str| s.trim().chars().count() <= 2;
-    let mut parts: Vec<String> = Vec::new();
-    for piece in value.split('/') {
-        if piece.trim().is_empty() {
-            continue;
-        }
-        match parts.last_mut() {
-            Some(last) if short(last) || short(piece) => {
-                last.push('/');
-                last.push_str(piece);
-            }
-            _ => parts.push(piece.to_string()),
-        }
-    }
-    parts.into_iter().map(|p| p.trim().to_string()).collect()
-}
-
-/// `A`, `A & B`, `A, B & C`.
-fn join_list(parts: &[String]) -> String {
-    match parts {
-        [] => String::new(),
-        [one] => one.clone(),
-        [init @ .., last] => format!("{} & {last}", init.join(", ")),
-    }
+    value.chars().filter_map(replace).collect()
 }
 
 fn replace(c: char) -> Option<char> {
@@ -491,7 +464,7 @@ fn replace(c: char) -> Option<char> {
         ':' | '*' | '<' | '>' | '|' | '\\' => Some('-'),
         '?' => Some('!'),
         '"' => Some('\''),
-        '/' => Some(','),
+        '/' => Some('_'),
         '\t' | '\n' | '\r' => Some(' '),
         c if c.is_control() => None,
         c => Some(c),
@@ -544,8 +517,12 @@ fn finish(name: &str, ext: &str) -> String {
         }
         stem.truncate(cut);
     }
-    let end: &[char] = if ext.is_empty() { &[' ', '.'] } else { &[' '] };
-    let mut stem = stem.trim_end_matches(end).to_string();
+    let mut stem = stem.trim_end_matches(' ').to_string();
+    // A folder's last dot becomes `_`, as Picard does (`./` → `_/`): Windows drops a trailing dot.
+    if ext.is_empty() && stem.ends_with('.') {
+        stem.pop();
+        stem.push('_');
+    }
     if stem.is_empty() {
         stem.push('_');
     }
@@ -886,23 +863,21 @@ mod tests {
     }
 
     #[test]
-    fn slashes_separate_lists_except_inside_short_names() {
-        assert_eq!(clean("Daft Punk/Pharrell Williams"), "Daft Punk & Pharrell Williams");
-        assert_eq!(clean("Brian Eno/David Byrne/Holger Czukay"), "Brian Eno, David Byrne & Holger Czukay");
-        assert_eq!(clean("Highway / Rodeo"), "Highway & Rodeo");
-        assert_eq!(clean("AC/DC"), "AC,DC");
-        assert_eq!(clean("4/4"), "4,4");
-        assert_eq!(clean("AC/DC/Motörhead"), "AC,DC & Motörhead");
+    fn a_slash_is_part_of_the_value_and_becomes_an_underscore() {
+        assert_eq!(clean("yes/and"), "yes_and");
+        assert_eq!(clean("AC/DC"), "AC_DC");
+        assert_eq!(clean("Low Flung / Other Joe"), "Low Flung _ Other Joe");
+        assert_eq!(clean("Improvisations And Edits Tokyo 09/26/2001"), "Improvisations And Edits Tokyo 09_26_2001");
+        assert_eq!(clean("King Tubby meets Lee 'Scratch' Perry"), "King Tubby meets Lee 'Scratch' Perry");
         assert_eq!(clean("Simon & Garfunkel"), "Simon & Garfunkel");
-        assert_eq!(clean("Moby//Gwen Stefani/"), "Moby & Gwen Stefani");
     }
 
     #[test]
     fn a_repeated_tag_counts_by_its_first_value() {
         let tr = track("x.mp3", &[("albumartist", "Various Artists"), ("albumartist", "Various"), ("albumartist", "Various Artists")]);
         assert_eq!(text(&tr.tags, "albumartist").unwrap(), "Various Artists");
-        let tr = track("x.mp3", &[("artist", " "), ("artist", "Run-DMC/Aerosmith")]);
-        assert_eq!(text(&tr.tags, "artist").unwrap(), "Run-DMC & Aerosmith");
+        let tr = track("x.mp3", &[("artist", " "), ("artist", "Cos/Mes")]);
+        assert_eq!(text(&tr.tags, "artist").unwrap(), "Cos_Mes");
     }
 
     #[test]
@@ -917,7 +892,8 @@ mod tests {
 
     #[test]
     fn name_edges_and_length_are_safe() {
-        assert_eq!(finish("R.E.M.", ""), "R.E.M");
+        assert_eq!(finish("R.E.M.", ""), "R.E.M_");
+        assert_eq!(finish("Howie B. ", ""), "Howie B_");
         assert_eq!(finish("01 R.E.M. - Stand.", "mp3"), "01 R.E.M. - Stand..mp3");
         assert_eq!(finish("...And You Will Know Us by the Trail of Dead - Source Tags & Codes (2002)", ""), "And You Will Know Us by the Trail of Dead - Source Tags & Codes (2002)");
         assert_eq!(finish(" . ", ""), "_");

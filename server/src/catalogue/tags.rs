@@ -75,6 +75,13 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
     })
 }
 
+/// Names for keys lofty has no item for, by the raw key's last part: Vorbis `ALBUMARTISTS`, MP4
+/// `----:com.apple.iTunes:ALBUMARTISTS` (Picard writes the album's artists apart there, decision 0016).
+fn by_raw_key(raw: &str) -> Option<&'static str> {
+    let last = raw.rsplit(':').next().unwrap_or(raw);
+    last.eq_ignore_ascii_case("albumartists").then_some("albumartists")
+}
+
 /// Read a file and say what, if anything, is wrong with it. The normal mode is tried first; if it fails, the relaxed
 /// mode tells a damaged field (seen: a TIPL frame with a broken UTF-16 byte-order mark, which the normal mode gives
 /// up the whole file for) from a file that cannot be read at all.
@@ -153,9 +160,10 @@ fn read_with(path: &Path, mode: ParsingMode) -> Result<FileTags> {
             let Some(value) = item.value().text() else { continue };
             let key = item.key();
             let raw = key.map_key(tag_type).map(str::to_string).unwrap_or_else(|| format!("{key:?}"));
+            let name = normalised(key).or_else(|| by_raw_key(&raw));
             // ID3v2 keeps several values of one frame in one string, separated by NUL.
             for v in value.split('\0').map(str::trim).filter(|v| !v.is_empty()) {
-                out.items.push((raw.clone(), normalised(key), v.to_string()));
+                out.items.push((raw.clone(), name, v.to_string()));
             }
         }
     }

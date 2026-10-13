@@ -162,8 +162,12 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
                 let mut m: HashMap<String, f64> = HashMap::new();
                 for rel in set {
                     let Some(r) = by_rel.get(rel) else { continue };
-                    let raw: Vec<String> = r.tag(field).map(str::to_string).collect();
-                    for v in rules.values(field, &raw).into_iter().collect::<HashSet<_>>() {
+                    let values = if field == "artist" {
+                        r.artists(rules, field)
+                    } else {
+                        rules.values(field, &r.tag(field).map(str::to_string).collect::<Vec<_>>())
+                    };
+                    for v in values.into_iter().collect::<HashSet<_>>() {
                         *m.entry(v).or_default() += 1.0;
                     }
                 }
@@ -303,8 +307,8 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
         }
         let values = |field: &str| rules.values(field, &r.tag(field).map(str::to_string).collect::<Vec<_>>());
         a.genres.extend(values("genre"));
-        a.album_artists.extend(values("albumartist"));
-        let artists: HashSet<String> = values("artist").into_iter().collect();
+        a.album_artists.extend(r.artists(rules, "albumartist"));
+        let artists: HashSet<String> = r.artists(rules, "artist").into_iter().collect();
         a.common_artists = Some(match a.common_artists.take() {
             None => artists,
             Some(c) => c.intersection(&artists).cloned().collect(),

@@ -148,11 +148,25 @@ pub struct TrackRow {
 
 #[allow(dead_code)] // wired up with the Insights page (after the App split, decision 0011)
 impl TrackRow {
-    pub const TAGS: [&'static str; 7] = ["album", "albumartist", "artist", "title", "genre", "date", "originaldate"];
+    pub const TAGS: [&'static str; 9] =
+        ["album", "albumartist", "albumartists", "artist", "artists", "title", "genre", "date", "originaldate"];
 
     /// The raw values of one tag.
     pub fn tag<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
         self.tags.iter().filter(move |(n, _)| n == name).map(|(_, v)| v.as_str())
+    }
+
+    /// The artists of `field` (`artist` or `albumartist`), split per `rules`: from its list tag (`artists`,
+    /// `albumartists`) when the file has one, since that names each artist apart while the text tag holds the credit
+    /// as written ("King Tubby meets Lee 'Scratch' Perry", decision 0016); else from the text tag.
+    pub fn artists(&self, rules: &Rules, field: &str) -> Vec<String> {
+        let list = match field {
+            "albumartist" => "albumartists",
+            "artist" => "artists",
+            other => other,
+        };
+        let from = if self.tag(list).next().is_some() { list } else { field };
+        rules.values(from, &self.tag(from).map(str::to_string).collect::<Vec<_>>())
     }
 }
 

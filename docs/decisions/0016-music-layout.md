@@ -32,6 +32,13 @@ on one album only.
 - **No "primary artist" rule.** Cratarr's naming template offers no token that picks one artist out of a credit.
 - **Compilations go under `Various Artists/`,** MusicBrainz's name for them. On the reference install the 132 albums
   tagged "Various" get that album artist in the same pass that moves them.
+- **The folder shows the credit; the list tags link the artists.** The album-artist tag (`albumartist`) holds
+  MusicBrainz's credit as written ("King Tubby meets Lee 'Scratch' Perry"), and the folder is made from it.
+  `albumartists` (and `artists` per track) holds each artist apart, so a media server links the album to every one
+  of them (Jellyfin: "prefer non-standard artists tags" on, its own delimiter splitting off). This is how Picard
+  writes them. An album without a MusicBrainz id keeps its artists as listed, joined with "&" in the credit.
+- **Characters, as Picard does:** a `/` inside a value becomes `_` (`yes/and` → `yes_and`), and so does a folder
+  name's last dot (`Howie B.` → `Howie B_`); Windows cannot take either.
 - **Music is never one of Lidarr's root folders.** Lidarr fetches into Incoming; Cratarr moves albums into Music and
   names them (decision 0013). Lidarr's one-artist-per-album model would want collaborations moved into one partner's
   folder, and its renames would undo the template.

@@ -39,6 +39,7 @@ fn name_of(frame: &str) -> Option<&'static str> {
 fn txxx_name(description: &str) -> Option<&'static str> {
     Some(match description.to_ascii_lowercase().as_str() {
         "artists" => "artists",
+        "albumartists" => "albumartists",
         "musicbrainz release group id" => "musicbrainz_releasegroupid",
         "musicbrainz album id" => "musicbrainz_albumid",
         "musicbrainz artist id" => "musicbrainz_artistid",
