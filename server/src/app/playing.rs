@@ -31,6 +31,20 @@ pub struct NowPlayingView {
     pub player: Option<String>,
     /// Whether the player's account has it as a favourite; `None` when not known.
     pub favorite: Option<bool>,
+    /// What plays next, in order, as far as the player reports (the page moves on at once when Next is pressed).
+    pub upcoming: Vec<UpcomingView>,
+}
+
+/// A track the player plays after the current one.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct UpcomingView {
+    pub id: String,
+    pub name: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_id: Option<String>,
+    pub addable: bool,
+    pub duration_secs: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,6 +143,19 @@ impl PlayingService {
         let entry = np.as_ref().and_then(|(a, p)| a.entry(music.as_deref(), &p.track));
         let playlists = self.playlists.view(entry.as_deref()).await?;
         let now_playing = np.map(|(a, p)| NowPlayingView {
+            upcoming: p
+                .upcoming
+                .into_iter()
+                .map(|u| UpcomingView {
+                    addable: a.entry(music.as_deref(), &u.track).is_some(),
+                    id: u.track.id,
+                    name: u.track.title,
+                    artist: u.track.artist,
+                    album: u.track.album,
+                    album_id: u.track.album_id,
+                    duration_secs: u.duration_secs,
+                })
+                .collect(),
             source: a.cfg.id.clone(),
             addable: entry.is_some(),
             progress: p.progress,

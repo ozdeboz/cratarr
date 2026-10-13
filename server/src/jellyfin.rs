@@ -29,6 +29,10 @@ pub struct Session {
     pub device_name: Option<String>,
     pub now_playing_item: Option<PlayingItem>,
     pub play_state: Option<PlayState>,
+    /// What the player plays after the current track, in order, as far as it reports (Finamp: the next few, never
+    /// the ones before; seen 2026-10-13).
+    #[serde(default)]
+    pub now_playing_queue_full_items: Vec<PlayingItem>,
 }
 
 /// A device Jellyfin remembers. Note: a session's `Client` and `DeviceId` do not always match the device's
@@ -824,6 +828,7 @@ mod tests {
                 run_time_ticks: None,
             }),
             play_state: None,
+            now_playing_queue_full_items: Vec::new(),
         }
     }
 
@@ -841,7 +846,7 @@ mod tests {
 
     #[test]
     fn nothing_playing_gives_none() {
-        let s = vec![Session { id: None, user_id: None, supports_remote_control: None, supported_commands: None, last_activity_date: None, last_playback_check_in: None, client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None }];
+        let s = vec![Session { id: None, user_id: None, supports_remote_control: None, supported_commands: None, last_activity_date: None, last_playback_check_in: None, client: Some("Finamp".into()), device_name: None, now_playing_item: None, play_state: None, now_playing_queue_full_items: Vec::new() }];
         assert!(pick_now_playing(&s, finamp).is_none());
         assert!(pick_now_playing(&[], finamp).is_none());
     }

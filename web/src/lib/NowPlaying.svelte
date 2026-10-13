@@ -2,9 +2,9 @@
   // The now-playing header, part of the app shell: shown above every page. It reads the shared state (see
   // live.svelte.ts) and shows the track, its cover, the progress bar, and how many playlists hold it.
   import { untrack } from 'svelte';
-  import { coverUrl, incomingCoverUrl, setFavorite, transport, type Transport } from './api';
+  import { ApiError, coverUrl, incomingCoverUrl, setFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
   import Icon from './Icon.svelte';
-  import { live, player, refresh } from './live.svelte';
+  import { expect, expectFailed, live, player, refresh } from './live.svelte';
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
 
@@ -22,19 +22,61 @@
   });
   const src = $derived(candidates.find((u) => !failed[u]) ?? null);
 
-  // Player controls. Success shows nothing (the header itself changes); only a failure says something, in a toast.
-  let sending = $state(false);
+  // Player controls. The header shows the result at once (live.svelte.ts: `expect`) and the server confirms it; only
+  // a failure says something, in a toast.
   const paused = $derived(np?.progress?.paused ?? false);
+  /** Within this many seconds of the start, Previous goes to the track before; later it restarts the track. */
+  const RESTART_SECS = 3;
+
+  /** What the header shows when `next` starts playing. */
+  function starting(next: { id: string; name: string; artist: string | null; album: string | null; album_id: string | null; addable: boolean }, duration: number | null, upcoming: Upcoming[]): NowPlaying {
+    const at = np!;
+    return {
+      ...at,
+      ...next,
+      progress: { position_secs: 0, duration_secs: duration, paused: at.progress?.paused ?? false, estimated: false },
+      favorite: at.favorite === null ? null : false,
+      upcoming,
+    };
+  }
+
+  function show(command: Transport) {
+    if (!np) return;
+    const was = np;
+    if (command === 'next' && was.upcoming.length) {
+      const [next, ...rest] = was.upcoming;
+      expect(starting(next, next.duration_secs, rest), (s) => (!s ? 'wait' : s.id === next.id ? 'yes' : s.id === was.id ? 'wait' : 'no'));
+    } else if (command === 'previous' && position > RESTART_SECS) {
+      const at = position;
+      expect({ ...was, progress: was.progress && { ...was.progress, position_secs: 0 } }, (s) =>
+        !s ? 'wait' : s.id !== was.id ? 'no' : (s.progress?.position_secs ?? 0) < Math.max(RESTART_SECS, at - 2) ? 'yes' : 'wait',
+      );
+    } else if (command === 'previous' && live.before && live.before.id !== was.id) {
+      const back = live.before;
+      const here: Upcoming = { ...was, duration_secs: was.progress?.duration_secs ?? null };
+      expect(
+        starting(back, back.progress?.duration_secs ?? null, [here, ...was.upcoming]),
+        (s) => (!s ? 'wait' : s.id === back.id ? 'yes' : s.id === was.id ? 'wait' : 'no'),
+        // The player may restart the track instead: then it stays, without an error.
+        { ms: 4000, quiet: true },
+      );
+    } else if (command === 'play-pause' && was.progress) {
+      const want = !was.progress.paused;
+      expect({ ...was, progress: { ...was.progress, paused: want, position_secs: position } }, (s) =>
+        !s ? 'no' : s.id !== was.id ? 'no' : s.progress?.paused === want ? 'yes' : 'wait',
+      );
+    }
+  }
+
   async function send(command: Transport) {
-    if (sending || !np) return;
-    sending = true;
+    if (!np) return;
+    const source = np.source;
+    show(command);
     try {
-      await transport(command, np.source);
+      await transport(command, source);
       setTimeout(refresh, 700); // the player reports back within a moment
     } catch (e) {
-      toast.fail(e, "The player didn't respond");
-    } finally {
-      sending = false;
+      expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond");
     }
   }
 
@@ -76,7 +118,7 @@
   let favWanted = $state<{ id: string; on: boolean } | null>(null);
   const favorite = $derived(np && favWanted?.id === np.id ? favWanted.on : (np?.favorite ?? false));
   async function toggleFavorite() {
-    if (!np || np.favorite === null) return;
+    if (!np || np.favorite === null || live.pending) return;
     const want = { id: np.id, on: !favorite };
     favWanted = want;
     try {
@@ -150,11 +192,11 @@
       <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
       <div class="row">
       <div class="transport" role="group" aria-label="Player controls">
-        <button aria-label="Previous track" disabled={sending} onclick={() => send('previous')}><Icon name="previous" size={18} /></button>
-        <button class="main" aria-label={paused ? 'Play' : 'Pause'} disabled={sending} onclick={() => send('play-pause')}
+        <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={18} /></button>
+        <button class="main" aria-label={paused ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
           ><Icon name={paused ? 'play' : 'pause'} size={20} /></button
         >
-        <button aria-label="Next track" disabled={sending} onclick={() => send('next')}><Icon name="next" size={18} /></button>
+        <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={18} /></button>
       </div>
       {#if np.progress && prefs.showProgress}
         <div
@@ -192,7 +234,7 @@
     <div class="side">
     <div class="acts">
       {#if np.favorite !== null}
-        <button class="fav" class:on={favorite} aria-label={favorite ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite} onclick={toggleFavorite}
+        <button class="fav" class:on={favorite} disabled={live.pending} aria-label={favorite ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite} onclick={toggleFavorite}
           ><Icon name="heart" size={player.full ? 26 : 18} /></button
         >
       {/if}
@@ -200,9 +242,9 @@
         <button class="expand" aria-label="Full screen" aria-expanded="false" onclick={open}><Icon name="expand" size={16} /></button>
       {/if}
     </div>
-    <div class="count" aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
+    <div class="count" class:pending={live.pending} aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
       <span>in</span>
-      <strong>{memberCount}</strong>
+      <strong>{live.pending ? '–' : memberCount}</strong>
       <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
     </div>
     </div>
@@ -395,9 +437,9 @@
     color: var(--accent-text);
   }
 
-  .transport button:disabled {
+  .fav:disabled,
+  .count.pending {
     opacity: 0.5;
-    cursor: progress;
   }
 
   /* The cover and the title open full screen; they look as before. */

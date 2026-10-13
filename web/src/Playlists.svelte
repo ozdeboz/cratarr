@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createPlaylist, setMember, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
-  import { live, refresh } from './lib/live.svelte';
+  import { live, queueTap, refresh } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
   import { toast, type Toast } from './lib/toast.svelte';
   import Popover from './lib/Popover.svelte';
@@ -48,6 +48,11 @@
     }
     if (!np.addable && !p.member) {
       toast.show({ text: NOT_MUSIC, tone: 'warn' });
+      return;
+    }
+    // The player is moving to another track: the tap waits for it (live.svelte.ts).
+    if (live.pending) {
+      queueTap(p.id);
       return;
     }
     busy[p.id] = true;
@@ -116,13 +121,14 @@
   {#if !view && !error}
     <p class="empty">Loading…</p>
   {:else}
-    <ul class="grid" style:--min="{WIDTHS[prefs.zoom]}px">
+    <ul class="grid" class:pending={live.pending} style:--min="{WIDTHS[prefs.zoom]}px">
       {#each items as p (p.id)}
         <li>
           <button
             class="chip"
             class:member={p.member}
             class:busy={busy[p.id]}
+            class:queued={live.queued.includes(p.id)}
             class:idle={!np}
             class:blocked={!!np && !np.addable && !p.member}
             aria-pressed={p.member}
@@ -277,6 +283,32 @@
 
   .chip.busy {
     opacity: 0.7;
+  }
+
+  /* The player is moving to another track: its playlists are not known yet, so the chips are dimmed, and a tapped one
+     pulses until the tap goes through (live.svelte.ts). */
+  .grid.pending .chip:not(.queued) {
+    opacity: 0.45;
+  }
+
+  .chip.queued {
+    border-color: var(--accent);
+    animation: waiting 1s ease-in-out infinite alternate;
+  }
+
+  @keyframes waiting {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0.55;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chip.queued {
+      animation: none;
+    }
   }
 
   /* Track outside Music: adding is refused, so the add chips look blocked (tapping explains why). */

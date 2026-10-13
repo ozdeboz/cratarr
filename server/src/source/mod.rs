@@ -95,6 +95,16 @@ pub struct Playing {
     pub started_at: Option<i64>,
     /// Whether the player's account has marked the track a favourite; `None` when that is not known.
     pub favorite: Option<bool>,
+    /// What plays next, in order, as far as the player reports: the page shows the next track at once when Next is
+    /// pressed, before the player confirms.
+    pub upcoming: Vec<Upcoming>,
+}
+
+/// A track the player plays after the current one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Upcoming {
+    pub track: Track,
+    pub duration_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]

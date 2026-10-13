@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail};
 
-use super::{Choice, Field, FieldKind, Fut, Kind, Library, Playing, PlaylistChange, PlaylistEvent, Source, Status, Track, Values, text};
+use super::{Choice, Field, FieldKind, Fut, Kind, Library, Playing, PlaylistChange, PlaylistEvent, Source, Status, Track, Upcoming, Values, text};
 use crate::jellyfin::{AlbumSummary, Device, Jellyfin, PlayingItem, Session, pick_now_playing};
 use crate::nowplaying::{Started, has_audio_history, playing_from_activity, progress};
 
@@ -505,7 +505,23 @@ impl Source for JellyfinSource {
                 Some(user) => self.jf.is_favorite(&user, &id).await.ok(),
                 None => None,
             };
-            Ok(Some(Playing { track: to_track(found), progress, started_at, player, favorite }))
+            // The player's queue, from the session that plays this track (the preferred player's first).
+            let mut playing_it: Vec<&Session> =
+                sessions.iter().filter(|s| s.now_playing_item.as_ref().is_some_and(|i| i.id == id)).collect();
+            playing_it.sort_by_key(|s| !self.prefers()(s));
+            let upcoming = playing_it
+                .first()
+                .map(|s| {
+                    s.now_playing_queue_full_items
+                        .iter()
+                        .map(|i| Upcoming {
+                            duration_secs: i.run_time_ticks.map(|t| t as f64 / 10_000_000.0),
+                            track: to_track((i.clone(), found.1.clone())),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Ok(Some(Playing { track: to_track(found), progress, started_at, player, favorite, upcoming }))
         })
     }
 

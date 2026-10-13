@@ -25,6 +25,19 @@ export type NowPlaying = {
   player: string | null;
   /** Whether the player's account has it as a favourite; null when not known. */
   favorite: boolean | null;
+  /** What plays next, in order, as far as the player reports. */
+  upcoming: Upcoming[];
+};
+
+/** A track the player plays after the current one. */
+export type Upcoming = {
+  id: string;
+  name: string;
+  artist: string | null;
+  album: string | null;
+  album_id: string | null;
+  addable: boolean;
+  duration_secs: number | null;
 };
 
 export type Progress = {
