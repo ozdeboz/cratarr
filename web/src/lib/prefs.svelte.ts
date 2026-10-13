@@ -15,6 +15,8 @@ export type Prefs = {
   /** Insights: the open tab, and which signals bring playlists together in Related. */
   insightsTab: 'statistics' | 'related';
   signals: { tracks: boolean; genre: boolean; artists: boolean };
+  /** The full-screen player's width when it shows beside the page (decision 0018). */
+  playerWidth: number;
 };
 
 const KEY = 'cratarr-prefs';
@@ -27,6 +29,7 @@ export const DEFAULTS: Prefs = {
   source: '',
   insightsTab: 'statistics',
   signals: { tracks: true, genre: true, artists: true },
+  playerWidth: 400,
 };
 
 function read(): Prefs {
@@ -39,6 +42,7 @@ function read(): Prefs {
       if (typeof saved.membersFirst === 'boolean') p.membersFirst = saved.membersFirst;
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
       if (typeof saved.source === 'string') p.source = saved.source;
+      if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (saved.insightsTab === 'statistics' || saved.insightsTab === 'related') p.insightsTab = saved.insightsTab;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {

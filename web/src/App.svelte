@@ -10,7 +10,8 @@
   import Toasts from './lib/Toasts.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
-  import { player } from './lib/live.svelte';
+  import { untrack } from 'svelte';
+  import { inSidebar, player } from './lib/live.svelte';
   import { poll } from './lib/live.svelte';
   import { known } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
@@ -43,15 +44,22 @@
   let page = $state(fromHash());
   // What plays only matters where it is acted on: Playlists (add it) and Incoming (play an album).
   const withPlayer = $derived(page === 'playlists' || page === 'incoming');
-  // The full-screen player goes back to its normal size whenever the navigation is used (also on the page already
-  // shown) or the page changes; while it is full, the page behind it does not scroll.
-  const collapse = () => (player.full = false);
+  // The full-screen player over the page goes back to its normal size whenever the navigation is used (also on the
+  // page already shown) or the page changes; while it is over the page, the page behind it does not scroll. Beside
+  // the page (decision 0018) it stays.
+  const collapse = () => {
+    if (!inSidebar()) player.full = false;
+  };
   $effect(() => {
     page;
-    collapse();
+    untrack(collapse);
   });
   $effect(() => {
-    document.documentElement.style.overflow = player.full && withPlayer ? 'hidden' : '';
+    if (!player.full) player.max = false;
+  });
+  const sidebar = $derived(withPlayer && inSidebar());
+  $effect(() => {
+    document.documentElement.style.overflow = player.full && withPlayer && !sidebar ? 'hidden' : '';
   });
   // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bottom bar.
   const wide = window.matchMedia('(min-width: 1024px)');
@@ -62,6 +70,49 @@
     return () => wide.removeEventListener('change', on);
   });
   let moreOpen = $state(false);
+
+  // Room for the player beside the page (decision 0018): a content area of at least 800 × 500 px, the page keeping
+  // 400 px and the player 275 px. Its width is dragged at its edge and remembered.
+  const NAV_WIDTH = 240;
+  const BAR_HEIGHT = 72;
+  let area = $state({ w: 0, h: 0 });
+  $effect(() => {
+    const on = () => (area = { w: innerWidth - (phone ? 0 : NAV_WIDTH), h: innerHeight - (phone ? BAR_HEIGHT : 0) });
+    on();
+    addEventListener('resize', on);
+    return () => removeEventListener('resize', on);
+  });
+  $effect(() => {
+    player.roomy = area.w >= 800 && area.h >= 500;
+  });
+  const PLAYER_MIN = 275;
+  const PAGE_MIN = 400;
+  const fitWidth = (w: number) => Math.round(Math.min(Math.max(w, PLAYER_MIN), area.w - PAGE_MIN));
+  let dragged = $state<number | null>(null);
+  const playerWidth = $derived(fitWidth(dragged ?? prefs.playerWidth));
+  let contentEl = $state<HTMLElement>();
+  function grip(e: PointerEvent) {
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const right = contentEl!.getBoundingClientRect().right;
+    const move = (m: PointerEvent) => (dragged = fitWidth(right - m.clientX));
+    const up = () => {
+      if (dragged !== null) prefs.playerWidth = dragged;
+      dragged = null;
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+  function gripKey(e: KeyboardEvent) {
+    const step = e.key === 'ArrowLeft' ? 16 : e.key === 'ArrowRight' ? -16 : 0;
+    if (!step) return;
+    e.preventDefault();
+    prefs.playerWidth = fitWidth(playerWidth + step);
+  }
 
   $effect(() => {
     const on = () => {
@@ -159,10 +210,11 @@
     </div>
   </aside>
 
-  <div class="content">
+  <div class="content" class:with-side={sidebar} style:--player-w="{playerWidth}px" bind:this={contentEl}>
+    <div class="page">
     {#if withPlayer}
       {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
-      <div class="np-bar" class:full={player.full}><NowPlaying /></div>
+      {#if !sidebar}<div class="np-bar" class:full={player.full}><NowPlaying /></div>{/if}
     {/if}
     {#if page === 'settings'}
       <Settings />
@@ -176,6 +228,23 @@
       <Insights />
     {:else}
       <Playlists />
+    {/if}
+    </div>
+    {#if sidebar}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+      <div
+        class="grip"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Player width"
+        aria-valuenow={playerWidth}
+        aria-valuemin={PLAYER_MIN}
+        aria-valuemax={area.w - PAGE_MIN}
+        tabindex="0"
+        onpointerdown={grip}
+        onkeydown={gripKey}
+      ></div>
+      <aside class="player-side" aria-label="Player"><NowPlaying place="side" /></aside>
     {/if}
   </div>
 
@@ -218,6 +287,57 @@
   .content {
     min-width: 0;
     padding-bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+
+  /* The player beside the page (decision 0018): page | grip | player, the player as tall as the window above the
+     bottom bar and staying in place while the page scrolls. */
+  .content.with-side {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 10px var(--player-w);
+    align-items: start;
+  }
+
+  .page {
+    min-width: 0;
+  }
+
+  .grip,
+  .player-side {
+    position: sticky;
+    top: 0;
+    height: calc(100dvh - 72px - env(safe-area-inset-bottom));
+  }
+
+  /* The edge between page and player: a line, with a handle in the middle that shows it can be dragged. */
+  .grip {
+    display: grid;
+    place-items: center;
+    cursor: col-resize;
+    touch-action: none;
+    background: linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat;
+  }
+
+  .grip::after {
+    content: '';
+    width: 6px;
+    height: 44px;
+    border-radius: 3px;
+    background: var(--muted);
+    opacity: 0.6;
+  }
+
+  .grip:hover::after,
+  .grip:focus-visible::after {
+    background: var(--accent);
+    opacity: 1;
+  }
+
+  .player-side {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--bg);
   }
 
   /* Same place and look as a page's own empty state. */
@@ -387,6 +507,11 @@
 
     .content {
       padding-bottom: 0;
+    }
+
+    .grip,
+    .player-side {
+      height: 100dvh;
     }
 
     .np-bar.full {

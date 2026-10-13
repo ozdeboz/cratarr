@@ -5,8 +5,14 @@
   import { ApiError, coverUrl, incomingCoverUrl, setFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
   import Icon from './Icon.svelte';
   import { expect, expectFailed, live, player, refresh } from './live.svelte';
+  import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
+
+  /** `bar`: the header above the page, which also opens full screen over it; `side`: the full-screen player beside
+   *  the page (the shell's sidebar, decision 0018). */
+  let { place = 'bar' }: { place?: 'bar' | 'side' } = $props();
+  const full = $derived(place === 'side' || player.full);
 
   const np = $derived(live.view?.now_playing ?? null);
   const memberCount = $derived((live.view?.playlists ?? []).filter((p) => p.member).length);
@@ -132,26 +138,48 @@
   }
 
   // Full screen: opened from the cover, the title or the expand button; closed by the collapse button, Esc, a swipe
-  // down, or the navigation (see App.svelte).
+  // down, or the navigation over the page (see App.svelte). Beside the page it has a maximise button; maximised, a
+  // button takes it back beside the page.
   const open = () => (player.full = true);
   const close = () => (player.full = false);
   $effect(() => {
-    if (!player.full) return;
+    if (!full) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
   });
-  // A swipe down closes it too (an extra to the collapse button and Esc).
+
+  /** Swipe up: the playlists that hold the track, on the Playlists page (full screen closes over it; beside it, it
+   *  stays). */
+  function toPlaylists() {
+    if (place === 'bar') close();
+    if (location.hash.split('?')[0] !== '#/' && location.hash !== '') location.hash = '#/';
+  }
+
+  // Gestures (decision 0018). Anywhere: swipe down closes, swipe up shows the playlists. On the cover: swipe left or
+  // right skips, a tap plays or pauses, a double-tap toggles the favourite. A swipe never also counts as a tap.
   let head = $state<HTMLElement>();
+  let swiped = false;
   $effect(() => {
-    if (!player.full || !head) return;
-    let from: { x: number; y: number } | null = null;
-    const down = (e: PointerEvent) => (from = { x: e.clientX, y: e.clientY });
+    if (!full || !head) return;
+    let from: { x: number; y: number; cover: boolean } | null = null;
+    const down = (e: PointerEvent) =>
+      (from = { x: e.clientX, y: e.clientY, cover: !!(e.target as Element).closest?.('.cover-btn') });
     const up = (e: PointerEvent) => {
       if (!from) return;
       const [dx, dy] = [e.clientX - from.x, e.clientY - from.y];
+      const onCover = from.cover;
       from = null;
-      if (dy > 80 && dy > 2 * Math.abs(dx)) close();
+      if (onCover && Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
+        swiped = true;
+        send(dx < 0 ? 'next' : 'previous');
+      } else if (dy > 80 && dy > 2 * Math.abs(dx)) {
+        swiped = true;
+        close();
+      } else if (dy < -80 && -dy > 2 * Math.abs(dx)) {
+        swiped = true;
+        toPlaylists();
+      }
     };
     const el = head;
     el.addEventListener('pointerdown', down);
@@ -162,6 +190,72 @@
     };
   });
 
+  /** A tap waits this long for a second one (double-tap: favourite) before it plays or pauses. */
+  const DOUBLE_TAP_MS = 250;
+  let tapTimer: ReturnType<typeof setTimeout> | null = null;
+  function coverTap() {
+    if (!full) return open();
+    if (swiped) {
+      swiped = false;
+      return;
+    }
+    if (tapTimer) {
+      clearTimeout(tapTimer);
+      tapTimer = null;
+      toggleFavorite();
+      return;
+    }
+    tapTimer = setTimeout(() => {
+      tapTimer = null;
+      send('play-pause');
+    }, DOUBLE_TAP_MS);
+  }
+
+  // Layout (decision 0018, lib/playerLayout.ts): on every resize, and when the track changes, the player measures its
+  // controls with steps dropped one by one and settles on what gives way, the cover's size and the orientation.
+  let controls = $state<HTMLElement>();
+  let layout = $state<Fit | null>(null);
+  const dropped = (step: (typeof STEPS)[number]) => !!layout && layout.level > STEPS.indexOf(step);
+
+  function relayout() {
+    const el = head;
+    const box = controls;
+    if (!el || !box) return;
+    const cs = getComputedStyle(el);
+    const width = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const height = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    if (width <= 0 || height <= 0) return;
+    // Measuring sets the classes directly and puts them back afterwards; the state then sets the outcome.
+    const before = { cls: el.className, controls: el.style.getPropertyValue('--controls') };
+    const measure = (landscape: boolean, level: number, controlsWidth: number) => {
+      el.classList.toggle('landscape', landscape);
+      STEPS.forEach((step, i) => el.classList.toggle(`drop-${step}`, level > i));
+      el.style.setProperty('--controls', `${controlsWidth}px`);
+      return box.getBoundingClientRect().height;
+    };
+    const next = fit(width, height, measure);
+    el.className = before.cls;
+    el.style.setProperty('--controls', before.controls);
+    if (!layout || next.landscape !== layout.landscape || next.level !== layout.level || next.cover !== layout.cover || next.controls !== layout.controls) {
+      layout = next;
+    }
+  }
+
+  $effect(() => {
+    if (!full || !head) {
+      layout = null;
+      return;
+    }
+    const ro = new ResizeObserver(() => relayout());
+    ro.observe(head);
+    return () => ro.disconnect();
+  });
+  // What is shown changes the controls' height (a long title, the pill, a progress bar or none).
+  $effect(() => {
+    void [np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.showProgress, full];
+    if (full) untrack(() => requestAnimationFrame(relayout));
+  });
+
   function clock(secs: number) {
     const s = Math.floor(secs);
     const mm = String(Math.floor((s % 3600) / 60));
@@ -170,21 +264,43 @@
   }
 </script>
 
-<header class:full={player.full} bind:this={head}>
-  {#if player.full}
-    <button class="collapse" aria-label="Back to normal size" onclick={close}><Icon name="collapse" size={26} /></button>
+<header
+  class:full
+  class:in-sidebar={place === 'side'}
+  class:landscape={full && layout?.landscape}
+  class:drop-gaps={full && dropped('gaps')}
+  class:drop-buttons={full && dropped('buttons')}
+  class:drop-pill={full && dropped('pill')}
+  class:drop-title={full && dropped('title')}
+  class:drop-times={full && dropped('times')}
+  class:drop-progress={full && dropped('progress')}
+  style:--cover={full && layout ? `${layout.cover}px` : null}
+  style:--controls={full && layout ? `${layout.controls}px` : null}
+  bind:this={head}
+>
+  {#if full}
+    {#if place === 'side'}
+      <button class="collapse" aria-label="Close the player" onclick={close}><Icon name="collapse" size={26} /></button>
+      <button class="maximise" aria-label="Over the page" onclick={() => (player.max = true)}><Icon name="expand" size={20} /></button>
+    {:else}
+      <button class="collapse" aria-label="Back to normal size" onclick={close}><Icon name="collapse" size={26} /></button>
+      {#if player.roomy}
+        <button class="maximise" aria-label="Beside the page" onclick={() => (player.max = false)}><Icon name="sidebar" size={22} /></button>
+      {/if}
+    {/if}
   {/if}
   {#if np && src}
     {#key src}
-      <button class="cover-btn" aria-label="Full screen" tabindex={player.full ? -1 : 0} onclick={open}>
-        <img class="cover" {src} alt="" decoding="async" onerror={() => (failed[src] = true)} />
+      <button class="cover-btn" aria-label={full ? 'Play or pause' : 'Full screen'} tabindex={full ? -1 : 0} onclick={coverTap}>
+        <img class="cover" {src} alt="" decoding="async" draggable="false" onerror={() => (failed[src] = true)} />
       </button>
     {/key}
   {/if}
+  <div class="controls" bind:this={controls}>
   <div class="np">
     {#if np}
       {#if np.player}<span class="pill">{np.player}</span>{/if}
-      {#if player.full}
+      {#if full}
         <div class="title">{np.name}</div>
       {:else}
         <button class="title" onclick={open}>{np.name}</button>
@@ -192,11 +308,11 @@
       <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
       <div class="row">
       <div class="transport" role="group" aria-label="Player controls">
-        <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={18} /></button>
+        <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={full ? 24 : 18} /></button>
         <button class="main" aria-label={paused ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
-          ><Icon name={paused ? 'play' : 'pause'} size={20} /></button
+          ><Icon name={paused ? 'play' : 'pause'} size={full ? 32 : 20} /></button
         >
-        <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={18} /></button>
+        <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={full ? 24 : 18} /></button>
       </div>
       {#if np.progress && prefs.showProgress}
         <div
@@ -234,10 +350,10 @@
     <div class="acts">
       {#if np.favorite !== null}
         <button class="fav" class:on={favorite} disabled={live.pending} aria-label={favorite ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite} onclick={toggleFavorite}
-          ><Icon name="heart" size={player.full ? 26 : 18} /></button
+          ><Icon name="heart" size={full ? 26 : 18} /></button
         >
       {/if}
-      {#if !player.full}
+      {#if !full}
         <button class="expand" aria-label="Full screen" aria-expanded="false" onclick={open}><Icon name="expand" size={16} /></button>
       {/if}
     </div>
@@ -248,6 +364,7 @@
     </div>
     </div>
   {/if}
+  </div>
 </header>
 
 <style>
@@ -420,11 +537,18 @@
     cursor: pointer;
   }
 
+  /* Play/pause in Finamp's shape: a rounded square (a quarter of its size as radius), tinted with the text colour,
+     its icon lifted by a soft shadow. Previous and next are plain icons. */
   .transport button.main {
     width: 40px;
     height: 40px;
-    background: var(--accent);
-    color: var(--accent-text);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--text) 15%, transparent);
+    color: var(--text);
+  }
+
+  .transport button.main :global(svg) {
+    filter: drop-shadow(0 2px 1px color-mix(in srgb, var(--text) 25%, transparent));
   }
 
   .fav:disabled,
@@ -523,7 +647,8 @@
   }
 
   .expand,
-  .collapse {
+  .collapse,
+  .maximise {
     display: grid;
     flex: none;
     place-items: center;
@@ -537,26 +662,48 @@
     cursor: pointer;
   }
 
-  /* Full screen: one centred column, everything larger. It fills the panel above the navigation and no more; the
-     cover gives up height so the rest fits. Only below the cover's smallest size does the panel scroll. */
+  /* The track's column and the count stay separate grid cells in the header; full screen they become one block. */
+  .controls {
+    display: contents;
+  }
+
+  /* Full screen (decision 0018): the cover and the controls share the panel above the navigation, or the sidebar
+     beside the page. lib/playerLayout.ts decides, by measuring, the cover's size (--cover), the controls' width
+     (--controls), portrait or landscape, and which elements give way (drop-*, first to last: gaps, large buttons,
+     the player pill, the title's second line, the time labels, the progress bar). Spare room goes evenly around the
+     cover and the controls. Only when even a minimal cover does not fit does the panel scroll. */
   header.full {
     box-sizing: border-box;
     position: relative;
-    display: flex;
+    display: grid;
     flex: 1 1 0;
     min-height: 0;
-    flex-direction: column;
-    align-items: center;
-    justify-content: safe center;
-    gap: 20px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'cover' 'controls';
+    justify-items: center;
+    align-content: space-evenly;
+    row-gap: 24px;
     padding: 56px 0 24px;
     border-bottom: 0;
     text-align: center;
     touch-action: pan-x;
   }
 
+  header.full.landscape {
+    grid-template-columns: var(--cover) var(--controls);
+    grid-template-areas: 'cover controls';
+    justify-content: space-evenly;
+    align-content: center;
+    align-items: center;
+    column-gap: 24px;
+  }
+
   header.full::before {
     inset: 0;
+  }
+
+  header.full.in-sidebar {
+    padding: 56px 16px 24px;
   }
 
   header.full .collapse {
@@ -565,25 +712,54 @@
     left: 0;
   }
 
+  header.full.in-sidebar .collapse {
+    left: 8px;
+  }
+
+  header.full .maximise {
+    position: absolute;
+    top: 10px;
+    right: 0;
+  }
+
+  header.full.in-sidebar .maximise {
+    right: 8px;
+  }
+
   header.full .cover-btn {
-    flex: 0 1 min(78vw, 440px);
-    min-height: 96px;
-    cursor: default;
+    grid-area: cover;
+    width: var(--cover, min(78vw, 440px));
+    height: var(--cover, min(78vw, 440px));
+    cursor: pointer;
+    touch-action: none;
   }
 
   header.full .cover {
-    width: auto;
+    width: 100%;
     height: 100%;
-    aspect-ratio: 1;
     border-radius: 14px;
+    user-select: none;
+  }
+
+  header.full .controls {
+    grid-area: controls;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    width: min(100%, var(--controls, 560px));
   }
 
   header.full .np {
     flex: none;
-    width: min(100%, 560px);
+    width: 100%;
   }
 
   header.full .title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     font-size: 1.6rem;
     white-space: normal;
   }
@@ -591,7 +767,6 @@
   header.full .sub {
     margin-top: 6px;
     font-size: 1.05rem;
-    white-space: normal;
   }
 
   header.full .row {
@@ -611,13 +786,14 @@
   }
 
   header.full .transport button {
-    width: 56px;
-    height: 56px;
+    width: 48px;
+    height: 48px;
   }
 
   header.full .transport button.main {
-    width: 76px;
-    height: 76px;
+    width: 62px;
+    height: 62px;
+    border-radius: 16px;
   }
 
   header.full .acts button {
@@ -629,5 +805,42 @@
   header.full .side {
     flex-direction: row;
     gap: 20px;
+  }
+
+  /* What gives way, in this order. */
+  header.full.drop-gaps .controls {
+    gap: 8px;
+  }
+
+  header.full.drop-gaps .row {
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  header.full.drop-buttons .transport {
+    gap: 14px;
+  }
+
+  header.full.drop-buttons .transport button.main {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+  }
+
+  header.full.drop-pill .pill {
+    display: none;
+  }
+
+  header.full.drop-title .title {
+    display: block;
+    white-space: nowrap;
+  }
+
+  header.full.drop-times .progress .t {
+    display: none;
+  }
+
+  header.full.drop-progress .progress {
+    display: none;
   }
 </style>
