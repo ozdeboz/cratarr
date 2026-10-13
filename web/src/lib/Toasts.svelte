@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Renders lib/toast.svelte.ts, once, in the app shell: floating above the bottom bar on phones, at the bottom of the
+  // Renders lib/toast.svelte.ts, once, in the app shell: floating above the mini-player (or the bottom edge), at the bottom of the
   // content beside the sidebar from 1024 px. It never moves the page. Done and warning toasts go after 6 s (10 s with
   // Undo); errors stay until tapped away, replaced, or the page changes. Touching or hovering it holds the timer; a
   // swipe sideways or down dismisses it.
@@ -73,7 +73,7 @@
 <style>
   .region {
     position: fixed;
-    inset: auto 0 calc(72px + env(safe-area-inset-bottom) + 8px);
+    inset: auto 0 calc(var(--bottom-h, 0px) + env(safe-area-inset-bottom) + 8px);
     z-index: 25;
     display: flex;
     justify-content: center;
@@ -83,7 +83,7 @@
 
   @media (min-width: 1024px) {
     .region {
-      inset: auto 0 24px 240px;
+      inset: auto 0 calc(var(--bottom-h, 0px) + 24px) 240px;
     }
   }
 

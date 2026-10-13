@@ -970,10 +970,10 @@
     font-weight: 600;
   }
 
-  /* Appears only with unsaved changes; above the phone's bottom bar. */
+  /* Appears only with unsaved changes, at the bottom of the screen. */
   .savebar {
     position: sticky;
-    bottom: calc(80px + env(safe-area-inset-bottom));
+    bottom: calc(8px + env(safe-area-inset-bottom));
     z-index: 5;
     display: flex;
     align-items: center;

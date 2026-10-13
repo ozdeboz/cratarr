@@ -1,3 +1,10 @@
+/* The player's colour from the cover (decision 0018), registered so it can fade between tracks. */
+@property --art-accent {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #3ddc97;
+}
+
 :root {
   --bg: #0f1115;
   --surface: #181b22;

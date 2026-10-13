@@ -67,13 +67,14 @@ export const live = $state<{
   before: NowPlaying | null;
 }>({ view: null, error: null, pending: false, queued: [], before: null });
 
-/** The full-screen player (decision 0018). `full`: it is open. Where it shows: beside the page in a sidebar when the
- *  content area has room (`roomy`, set by the shell), unless maximised (`max`); otherwise over the page, everything
- *  but the navigation. Using the navigation closes it only over the page. */
-export const player = $state({ full: false, max: false, roomy: false });
+/** Where the player shows (decision 0018). `roomy` (set by the shell): the content area has room for it beside the
+ *  page. Then it shows there by itself while something plays, unless the browser chose the page-covering player
+ *  (`prefs.sidebar`, Maximise) or it was folded to the mini-player for now (`min`, not remembered). Otherwise the
+ *  mini-player shows, and `full` opens the player over everything. */
+export const player = $state({ full: false, min: false, roomy: false });
 
-/** The player shows beside the page, not over it. */
-export const inSidebar = () => player.full && player.roomy && !player.max;
+/** The player shows beside the page. */
+export const inSidebar = () => player.roomy && prefs.sidebar && !player.min && !!live.view?.now_playing;
 
 /** Show `np` now as the result of a player command, until the server settles it (or `ms` passes). */
 export function expect(np: NowPlaying, settled: (server: NowPlaying | null) => Settled, { ms = 8000, quiet = false } = {}) {

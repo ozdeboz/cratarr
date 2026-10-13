@@ -8,20 +8,32 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Pages:** Incoming (only when an Incoming library is set), Playlists, Insights, Repairs, Settings. One thing lives in one
   place: no setting, list or action appears on two pages.
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
-- **The now-playing header is part of the app shell**, sticky above the pages where what plays is acted on: Playlists
-  and Incoming. Repairs, Insights and Settings have no player. It shows the cover (library cover, else the
-  album image from the server), title, artist · album, progress, "in N playlists", and the transport controls
-  (previous, play/pause, next), a favourite heart (the player's account's Jellyfin favourite) and an expand button.
-  The active player is always named in a small pill, even when there is only one. Below 480 px the count, heart and
-  expand sit under the cover, so the track's column has the width, and the progress bar takes its own line.
-- **Full-screen player:** opened from the cover, the title or the expand button; it covers the page but never the
-  navigation, which stays usable and closes it when used. Also closed by its collapse button, Esc, or a swipe down.
-  It shows the same things, larger, in one centred column, and always fits without scrolling.
-  Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`).
+- **Navigation:** from 1024 px a sidebar on the left; below it a bar of pages fixed along the **top** (icon and label,
+  up to five, the rest under More).
+- **The player is part of the app shell** (decision 0018, after Finamp), on the pages where what plays is acted on:
+  Playlists and Incoming. Repairs, Insights and Settings have no player.
+  - **Mini-player** (`lib/MiniPlayer.svelte`): a bar floating along the bottom, 64 px high, 12 px from the edges,
+    corners 12 px: the cover with play/pause on it, the title (scrolling when it does not fit), artist and time, and
+    the heart (the player's account's Jellyfin favourite). The bar fills from the left as the track plays, in the
+    cover's colour. Tap or swipe up opens the full player; swipe left or right skips; swipe down does nothing.
+  - **Full player** (`lib/NowPlaying.svelte`): the cover (library cover, else the album image from the server), the
+    active player named in a small pill (even when there is only one), title, artist · album, the transport controls
+    (previous, play/pause as a rounded square, next), progress, the heart and "in N playlists". It lays itself out
+    for its space (`lib/playerLayout.ts`): portrait or landscape, whichever gives the larger cover; when short of
+    height the gaps, the large buttons, the pill, the title's second line, the time labels and the progress bar give
+    way, in that order. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
+    cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere: swipe up shows the
+    playlists, swipe down closes.
+  - **Where it shows:** with room for it (a content area of 800 × 500 px or more) the full player sits beside the page
+    by itself while something plays, resizable at its edge (handle in the middle), the width remembered; its chevron
+    folds it to the mini-player until that is tapped. Otherwise the mini-player shows, and opens the full player
+    **over everything**, navigation included (slides up, fades out); its chevron, Esc or a swipe down close it, and
+    so does changing page. Maximise (beside the page) and back-beside-the-page (over it) are remembered.
+  Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`,
+  `lib/remote.svelte.ts`).
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
-  not in Settings. The player choice is in the now-playing header ("Playing on Finamp · Lenovo Tab ▾"), not in
-  the sidebar.
+  not in Settings. The player choice ("Playing on Finamp · Lenovo Tab ▾") sits with the player, not in Settings.
 - **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser
   (Insights: Statistics, Related). Its switches (Related: shared tracks, genre, artists) sit in the same toolbar.
 - **The playlist panel (Insights → Related only):** selecting a point shows a button at the graph's top right that
@@ -65,7 +77,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 ## Feedback
 
 - **What an action did, or why it failed, is a toast** (`lib/toast.svelte.ts`): one at a time, floating above the
-  bottom bar (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
+  mini-player, or the bottom edge without it (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
   warnings, red for errors, with "Undo" when the action can be undone. Done and warnings go after a few seconds;
   errors stay until dismissed, replaced, or the page changes. Errors say what failed in plain words, never a bare
   status code.

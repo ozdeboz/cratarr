@@ -7,11 +7,14 @@
   import Icon, { type IconName } from './lib/Icon.svelte';
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
+  import MiniPlayer from './lib/MiniPlayer.svelte';
+  import { fade, fly } from 'svelte/transition';
+  import { quadInOut } from 'svelte/easing';
   import Toasts from './lib/Toasts.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
-  import { inSidebar, player } from './lib/live.svelte';
+  import { inSidebar, live, player } from './lib/live.svelte';
   import { poll } from './lib/live.svelte';
   import { known } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
@@ -44,24 +47,24 @@
   let page = $state(fromHash());
   // What plays only matters where it is acted on: Playlists (add it) and Incoming (play an album).
   const withPlayer = $derived(page === 'playlists' || page === 'incoming');
-  // The full-screen player over the page goes back to its normal size whenever the navigation is used (also on the
-  // page already shown) or the page changes; while it is over the page, the page behind it does not scroll. Beside
-  // the page (decision 0018) it stays.
-  const collapse = () => {
-    if (!inSidebar()) player.full = false;
-  };
+  // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
+  // otherwise the mini-player along the bottom (`mini`), which opens it over everything (`overlay`). The player over
+  // everything closes when the page changes or the navigation is used, and the page behind it does not scroll.
+  const collapse = () => (player.full = false);
   $effect(() => {
     page;
     untrack(collapse);
   });
-  $effect(() => {
-    if (!player.full) player.max = false;
-  });
   const sidebar = $derived(withPlayer && inSidebar());
+  const overlay = $derived(withPlayer && player.full && !sidebar);
+  const mini = $derived(withPlayer && !sidebar && !!live.view?.now_playing);
   $effect(() => {
-    document.documentElement.style.overflow = player.full && withPlayer && !sidebar ? 'hidden' : '';
+    if (sidebar) untrack(collapse);
   });
-  // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bottom bar.
+  $effect(() => {
+    document.documentElement.style.overflow = overlay ? 'hidden' : '';
+  });
+  // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bar of pages along the top.
   const wide = window.matchMedia('(min-width: 1024px)');
   let phone = $state(!wide.matches);
   $effect(() => {
@@ -74,10 +77,17 @@
   // Room for the player beside the page (decision 0018): a content area of at least 800 × 500 px, the page keeping
   // 400 px and the player 275 px. Its width is dragged at its edge and remembered.
   const NAV_WIDTH = 240;
-  const BAR_HEIGHT = 72;
+  const TOP_BAR = 65;
+  /** The mini-player's height with its margin, kept free under the page and the toasts. */
+  const MINI_SPACE = 88;
+  $effect(() => {
+    const root = document.documentElement.style;
+    root.setProperty('--top-h', phone ? `${TOP_BAR}px` : '0px');
+    root.setProperty('--bottom-h', mini ? `${MINI_SPACE}px` : '0px');
+  });
   let area = $state({ w: 0, h: 0 });
   $effect(() => {
-    const on = () => (area = { w: innerWidth - (phone ? 0 : NAV_WIDTH), h: innerHeight - (phone ? BAR_HEIGHT : 0) });
+    const on = () => (area = { w: innerWidth - (phone ? 0 : NAV_WIDTH), h: innerHeight - (phone ? TOP_BAR : 0) });
     on();
     addEventListener('resize', on);
     return () => removeEventListener('resize', on);
@@ -214,7 +224,6 @@
     <div class="page">
     {#if withPlayer}
       {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
-      {#if !sidebar}<div class="np-bar" class:full={player.full}><NowPlaying /></div>{/if}
     {/if}
     {#if page === 'settings'}
       <Settings />
@@ -247,6 +256,16 @@
       <aside class="player-side" aria-label="Player"><NowPlaying place="side" /></aside>
     {/if}
   </div>
+
+  {#if mini}
+    <div class="mini-dock"><MiniPlayer /></div>
+  {/if}
+  {#if overlay}
+    <!-- Over everything, as Finamp's: it slides up when it opens and fades when it closes. -->
+    <div class="overlay" role="dialog" aria-label="Player" in:fly={{ y: innerHeight, duration: 300, easing: quadInOut }} out:fade={{ duration: 200 }}>
+      <NowPlaying place="overlay" />
+    </div>
+  {/if}
 
   {#if moreOpen}
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
@@ -284,9 +303,27 @@
     display: none;
   }
 
+  /* Below 1024 px the bar of pages is fixed along the top; the mini-player floats along the bottom (decision 0018).
+     The page keeps clear of both (--top-h, --bottom-h, set by the script). */
   .content {
     min-width: 0;
-    padding-bottom: calc(72px + env(safe-area-inset-bottom));
+    padding-top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
+    padding-bottom: calc(var(--bottom-h, 0px) + env(safe-area-inset-bottom));
+  }
+
+  .mini-dock {
+    position: fixed;
+    inset: auto 12px calc(12px + env(safe-area-inset-bottom));
+    z-index: 18;
+  }
+
+  .overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
   }
 
   /* The player beside the page (decision 0018): page | grip | player, the player as tall as the window above the
@@ -304,8 +341,8 @@
   .grip,
   .player-side {
     position: sticky;
-    top: 0;
-    height: calc(100dvh - 72px - env(safe-area-inset-bottom));
+    top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
+    height: calc(100dvh - var(--top-h, 0px) - env(safe-area-inset-top));
   }
 
   /* The edge between page and player: a line, with a handle in the middle that shows it can be dragged. */
@@ -349,37 +386,16 @@
     font-size: 0.9rem;
   }
 
-  /* The now-playing header stays on top of every page while it scrolls; same side padding as the pages. */
-  .np-bar {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    padding: 0 clamp(12px, 2vw, 32px);
-    background: var(--bg);
-  }
-
-  /* Full screen: the content area, the navigation left visible (the bottom bar here, the sidebar from 1024 px). */
-  .np-bar.full {
-    position: fixed;
-    inset: 0;
-    z-index: 15;
-    display: flex;
-    flex-direction: column;
-    /* Runs on under the bottom bar (which stays on top), so no strip of the page shows between them. */
-    padding-bottom: calc(72px + env(safe-area-inset-bottom));
-    overflow-y: auto;
-  }
-
   .bar {
     position: fixed;
-    inset: auto 0 0;
+    inset: 0 0 auto;
     z-index: 20;
     display: flex;
     justify-content: space-around;
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    padding: calc(6px + env(safe-area-inset-top)) 8px 6px;
     background: color-mix(in srgb, var(--surface) 88%, transparent);
     backdrop-filter: blur(12px);
-    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
   }
 
   .bar a,
@@ -449,7 +465,7 @@
 
   .sheet {
     position: fixed;
-    inset: auto 8px calc(72px + env(safe-area-inset-bottom));
+    inset: calc(var(--top-h, 0px) + env(safe-area-inset-top) + 8px) 8px auto;
     z-index: 21;
     display: grid;
     gap: 2px;
@@ -505,18 +521,14 @@
       border-right: 1px solid var(--border);
     }
 
-    .content {
-      padding-bottom: 0;
-    }
-
     .grip,
     .player-side {
+      top: 0;
       height: 100dvh;
     }
 
-    .np-bar.full {
-      inset: 0 0 0 240px;
-      padding-bottom: 0;
+    .mini-dock {
+      left: calc(240px + 12px);
     }
 
     .bar,
