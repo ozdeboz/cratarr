@@ -52,3 +52,9 @@ The owner chose (2026-10-14):
 - Jumping in the queue depends on what the player does with the media server's play command; it is tried on the real
   player before it ships, and dropped if the player cannot do it without losing its queue.
 - The rest of Finamp's player stays out until Cratarr plays music itself.
+
+## Amendment (2026-10-14): seeking by dragging
+
+With the local player (decision 0022) Cratarr plays music itself, so seeking by dragging moved out of "later": playing
+on this device the progress bar is Finamp's slider (the handle and the time follow the finger, the player seeks on
+release). Seeking the server's player waits until it has been tried on the real player, as jumping in the queue does.

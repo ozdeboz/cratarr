@@ -23,7 +23,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     for its space (`lib/playerLayout.ts`, a port of Finamp's layout): portrait or landscape, whichever gives the
     larger cover; spare room spreads its three groups (track name; chips, progress and buttons; the actions row);
     when short of height the large gaps, the large play button, the pill, the small gaps, the info chips, the
-    title's second line and the progress bar give way, in that order. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
+    title's second line and the progress bar give way, in that order. Playing on this device the progress bar is a
+    slider (Finamp's): drag the handle and the time follows, the player seeks on release; arrow keys move 5 s. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
     cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere: swipe up shows the
     playlists, swipe down closes.
   - **Where it shows:** with room for it (a content area of 800 × 500 px or more) the full player sits beside the page

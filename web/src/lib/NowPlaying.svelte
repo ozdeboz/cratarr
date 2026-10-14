@@ -14,8 +14,8 @@
   import { toast } from './toast.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
-  import { shownPlaylists } from './output.svelte';
+  import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playUpcoming, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
+  import { isLocal, shownPlaylists } from './output.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
@@ -34,8 +34,51 @@
   });
   // Finamp's cover: a hard cut when the image is there at once, which it always is here (remote.svelte.ts shows a
   // cover once it has loaded), so it never fades in.
-  const pos = $derived(position());
   const dur = $derived(duration());
+
+  // Seeking (decision 0019, now that Cratarr plays music itself): as Finamp's slider, the handle and the time follow
+  // the finger and the player seeks only on release. Only on this device for now: seeking the server's player is
+  // tried on it first.
+  const canSeek = $derived(isLocal() && !!dur);
+  /** Where the handle is held (seconds), and after release until the player is there. */
+  let held = $state<number | null>(null);
+  let heldTimer: ReturnType<typeof setTimeout> | undefined;
+  const pos = $derived(held ?? position());
+  const at = (e: PointerEvent, el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (dur ?? 0);
+  };
+  function seekDown(e: PointerEvent) {
+    if (!canSeek) return;
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    clearTimeout(heldTimer);
+    held = at(e, el);
+  }
+  function seekMove(e: PointerEvent) {
+    if (held === null || !(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
+    held = at(e, e.currentTarget as HTMLElement);
+  }
+  function seekUp(e: PointerEvent) {
+    const el = e.currentTarget as HTMLElement;
+    if (held === null || !el.hasPointerCapture(e.pointerId)) return;
+    release(at(e, el));
+  }
+  /** Seek, and keep the handle there until the player has moved (no jump back to the old position). */
+  function release(secs: number) {
+    held = secs;
+    seekTo(secs);
+    heldTimer = setTimeout(() => (held = null), 600);
+  }
+  function seekKey(e: KeyboardEvent) {
+    if (!canSeek || !dur) return;
+    const now = position();
+    const to =
+      e.key === 'ArrowLeft' ? now - 5 : e.key === 'ArrowRight' ? now + 5 : e.key === 'Home' ? 0 : e.key === 'End' ? dur - 1 : null;
+    if (to === null) return;
+    e.preventDefault();
+    release(Math.min(dur, Math.max(0, to)));
+  }
 
   // Info chips (decision 0019): what the server knows about the file and its plays, read-only.
   const chips = $derived.by(() => {
@@ -106,7 +149,11 @@
   $effect(() => {
     if (!head) return;
     let from: { x: number; y: number; cover: boolean } | null = null;
-    const down = (e: PointerEvent) => (from = { x: e.clientX, y: e.clientY, cover: !!(e.target as Element).closest?.('.cover-btn') });
+    const down = (e: PointerEvent) => {
+      // The seek bar's drags are its own.
+      if ((e.target as Element).closest?.('.seek')) return;
+      from = { x: e.clientX, y: e.clientY, cover: !!(e.target as Element).closest?.('.cover-btn') };
+    };
     const up = (e: PointerEvent) => {
       if (!from) return;
       const [dx, dy] = [e.clientX - from.x, e.clientY - from.y];
@@ -275,16 +322,26 @@
                   : undefined}
             >
               <span class="t">{np.progress.estimated ? '≈' : ''}{clockText(pos)}</span>
+              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
               <div
-                class="bar"
-                role="progressbar"
+                class="seek"
+                class:can={canSeek}
+                class:held={held !== null}
+                role={canSeek ? 'slider' : 'progressbar'}
+                tabindex={canSeek ? 0 : undefined}
                 aria-label={np.progress.paused ? 'Track position, paused' : 'Track position'}
                 aria-valuemin={0}
                 aria-valuemax={dur ?? undefined}
                 aria-valuenow={Math.floor(pos)}
                 aria-valuetext={dur ? `${clockText(pos)} of ${clockText(dur)}` : clockText(pos)}
+                onpointerdown={seekDown}
+                onpointermove={seekMove}
+                onpointerup={seekUp}
+                onpointercancel={() => (held = null)}
+                onkeydown={seekKey}
               >
-                <div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div>
+                <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
+                {#if canSeek}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
               </div>
               <span class="t">{dur ? clockText(dur) : '–:––'}</span>
             </div>
@@ -572,6 +629,41 @@
 
   .progress .t:last-child {
     text-align: right;
+  }
+
+  /* Finamp's slider: 24 px to hold, the track in the middle, a round handle when it can seek. */
+  .seek {
+    position: relative;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    height: 24px;
+  }
+
+  .seek.can {
+    cursor: pointer;
+    touch-action: none;
+  }
+
+  .seek:focus-visible {
+    outline: 2px solid var(--art-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  .thumb {
+    position: absolute;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    margin: -7px 0 0 -7px;
+    border-radius: 50%;
+    background: var(--art-accent);
+    pointer-events: none;
+  }
+
+  .seek.held .thumb {
+    transform: scale(1.3);
   }
 
   .bar {
