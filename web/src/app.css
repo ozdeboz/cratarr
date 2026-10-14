@@ -58,6 +58,9 @@ body {
   color: var(--text);
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   -webkit-tap-highlight-color: transparent;
+  /* No pull-to-refresh (nor the bounce at the ends): a reload drops what plays in this browser and the open panel's
+     place, so a swipe down at the top must never reload the app. */
+  overscroll-behavior-y: none;
 }
 
 button,
