@@ -798,7 +798,7 @@
     padding: 0;
     border: 0;
     background: none;
-    color: var(--muted);
+    color: var(--accent);
     cursor: pointer;
   }
 
