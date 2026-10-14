@@ -75,6 +75,17 @@ export const live = $state<{
  *  mini-player shows, and `full` opens the player over everything. */
 export const player = $state({ full: false, min: false, roomy: false });
 
+// Closing what was opened (✕, Esc, Back) closes the panel (decision 0025, amending 0023's stack): the player does not
+// show in its place but folds to the mini-player, whose tap brings it back.
+$effect.root(() => {
+  let was = panel.open;
+  $effect(() => {
+    const now = panel.open;
+    if (was !== null && now === null) player.min = true;
+    was = now;
+  });
+});
+
 /** Something plays, where the output is. */
 const somethingPlays = () => (prefs.output === 'local' ? local.index >= 0 : !!live.view?.now_playing);
 

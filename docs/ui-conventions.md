@@ -58,7 +58,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   Info (what Insights knows of it: how focused, its closest playlists), Export, Repair, Sync, for the selection (one playlist, or several ticked with Select); the panel opens on Tracks, a
   tab with nothing to do says so, and switching adds a Back step only while the panel is full-screen. Several
   playlists: their covers and count in the header, ✕ alone in the bar, and on Tracks a folding section per playlist
-  (read-only). Its bar has ✕, the heart (Finamp's playlist
+  (read-only). ✕ (and Esc, Back) closes the panel: the player folds to the mini-player rather than showing in its
+  place (decision 0025). Its bar has ✕, the heart (Finamp's playlist
   favourite), the pencil (edit mode, on Tracks) and the menu; in
   edit mode Cancel, Names and Save. Rows as the queue's; edit mode as Finamp's playlist edit screen: Names swaps the
   info beside the cover for Name and Spoken as (where Finamp has its name field); rows with handle and ✕, swipe to

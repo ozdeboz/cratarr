@@ -41,6 +41,9 @@ The player is different: it is always about one track, in one view. The owner se
 - **The address** holds the selection and the tab: `?open=Chill&open=Analogic&tab=export` (a crate:
   `?open=crate:…`). A reload brings both back. Switching tabs adds a Back step only while the panel is full-screen
   (Back then returns to the previous tab before closing); beside the page, and for ticking, the address is replaced.
+- **✕ closes the panel** (and Esc and Back): what was opened goes and the player does not show in its place; it folds
+  to the mini-player, whose tap brings it back beside the page. This amends 0023's stack, where closing showed the
+  player that lay under it. Folding the player (its chevron) ends in the same state.
 - **The Repairs page goes.** Its playlist parts are the Repair tab. What is about the library's files (files that
   cannot be read, damaged tags, no tags, no length) moves to a new page, **Health**, beside Settings on every screen
   size.
