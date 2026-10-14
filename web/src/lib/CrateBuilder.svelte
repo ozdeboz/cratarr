@@ -18,7 +18,7 @@
   } from './api';
   import { CRATE, crates, loadCrates } from './crates.svelte';
   import Icon from './Icon.svelte';
-  import { closePlaylist, openPlaylist } from './panel.svelte';
+  import { closePlaylist, openPlaylist, panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
 
@@ -34,6 +34,7 @@
   $effect(() => {
     const key = draftKey;
     const which = id;
+    void panel.again;
     draft = null;
     let kept: Draft | null = null;
     try {

@@ -2,6 +2,7 @@
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
 import { getCrates, type Crate } from './api';
 import { prefs } from './prefs.svelte';
+import { openPlaylist } from './panel.svelte';
 
 export const crates = $state<{ list: Crate[] | null; error: string | null }>({ list: null, error: null });
 
@@ -25,3 +26,14 @@ export const EDIT_CRATE = 'crate-edit:';
 export const builderOf = (open: string | null): { id: string | null } | null =>
   open === NEW_CRATE ? { id: null } : open?.startsWith(EDIT_CRATE) ? { id: open.slice(EDIT_CRATE.length) } : null;
 export const crateName = (id: string) => crates.list?.find((c) => c.id === id)?.name ?? id;
+
+/** A new crate, named in the name sheet (as a new playlist is): the builder opens on a fresh draft of that name, saved
+ *  only with its Save (a crate without conditions would hold the whole library). */
+export function startCrate(name: string) {
+  try {
+    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions: [] }));
+  } catch {
+    /* the builder starts empty */
+  }
+  openPlaylist(NEW_CRATE);
+}

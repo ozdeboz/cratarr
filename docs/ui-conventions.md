@@ -64,6 +64,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   edit mode Cancel, Names and Save. Rows as the queue's; edit mode as Finamp's playlist edit screen: Names swaps the
   info beside the cover for Name and Spoken as (where Finamp has its name field); rows with handle and ✕, swipe to
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
+- **New playlist, New crate** ask for the name in the same sheet (`lib/NameSheet.svelte`), from the + in the page's top
+  right corner (`lib/NewButton.svelte`: its label beside it on a wide page, by container query); a new crate then opens
+  in the builder with that name, saved with its Save.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crates (Favourites, Unlisted, Unlisted
   favourites) as chips with their live counts, styled as the playlist chips (the open one bordered). A crate opens in
   the panel as a playlist does, without the statistics and editing; its rows come in pages, newest first; the arrow-into-a-box icon
@@ -90,7 +93,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
 - **The Playlists page's controls** are two sections: the actions it always needs (the button that shows or hides the
-  filter section, Select as an icon (two stacked squares, the front one ticked; highlighted while on, a tap again ends it); Open N while selecting; Size; + or ⋮ in the corner), and the filter section
+  filter section, Select as an icon (two stacked squares, the front one ticked; highlighted while on, a tap again ends it); Open N while selecting; Size; + or ⋮ in the corner; the + gets its label, "New playlist", once the page is wide enough), and the filter section
   (the filter, A–Z / ✓ first, Favourites only: a heart, filled when on), which folds away, remembered by the browser. Folded away while a filter applies, its button is
   in the accent.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,

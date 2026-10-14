@@ -2,8 +2,9 @@
   // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (Favourites, Unlisted,
   // Unlisted favourites), each a chip with its live count, styled as the playlist chips; a tap opens it in the panel
   // (decision 0023), where it plays and is sorted like a playlist, and can be saved as one.
-  import { crates, CRATE, EDIT_CRATE, loadCrates, NEW_CRATE } from './lib/crates.svelte';
-  import Icon from './lib/Icon.svelte';
+  import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
+  import NameSheet from './lib/NameSheet.svelte';
+  import NewButton from './lib/NewButton.svelte';
   import { shownPlaylists } from './lib/output.svelte';
   import { openPlaylist, panel } from './lib/panel.svelte';
   import Notice from './lib/Notice.svelte';
@@ -14,6 +15,9 @@
     void listsKey;
     loadCrates();
   });
+
+  // New crate: named in the same sheet as a new playlist, then built in the panel.
+  let naming = $state(false);
 </script>
 
 <main>
@@ -22,9 +26,8 @@
   {:else if !crates.list}
     <p class="empty">Loading…</p>
   {:else}
-    <div class="toolbar">
-      <button class="new" onclick={() => openPlaylist(NEW_CRATE)}><Icon name="plus" size={18} /><span>New crate</span></button>
-    </div>
+    <!-- The page's top right corner: New crate, as New playlist on Playlists. -->
+    <div class="toolbar"><NewButton label="New crate" onclick={() => (naming = true)} /></div>
     <ul class="grid">
       {#each crates.list as c (c.id)}
         <li>
@@ -38,29 +41,31 @@
   {/if}
 </main>
 
+{#if naming}
+  <NameSheet
+    title="New crate"
+    what="crate"
+    action="Create crate"
+    onsubmit={(name) => {
+      naming = false;
+      startCrate(name);
+    }}
+    onclose={() => (naming = false)}
+  />
+{/if}
+
 <style>
+  /* The page answers to its own width (beside the player or not): a container, as Playlists. */
   main {
-    padding: 16px clamp(12px, 2vw, 32px) 48px;
+    position: relative;
+    padding: 14px clamp(12px, 2vw, 32px) 48px;
+    container-type: inline-size;
   }
 
+  /* The toolbar's row: the corner's New crate sits in it (as Playlists' first row). */
   .toolbar {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-
-  .new {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
     min-height: 44px;
-    padding: 0 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--surface);
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
+    margin-bottom: 14px;
   }
 
   .grid {

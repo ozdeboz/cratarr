@@ -5,8 +5,9 @@
   import { live, queueTap, refresh } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
   import { toast, type Toast } from './lib/toast.svelte';
-  import MenuSheet from './lib/MenuSheet.svelte';
+  import NewButton from './lib/NewButton.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
+  import NameSheet from './lib/NameSheet.svelte';
   import Icon from './lib/Icon.svelte';
   import { isLocal, setPlayingMember, shownPlaylists } from './lib/output.svelte';
   import { pending, playing } from './lib/remote.svelte';
@@ -54,7 +55,6 @@
   // playlists' (Select's ⋮, decision 0025).
   type Menu = { kind: 'playlist'; p: Playlist; anchor: DOMRect } | { kind: 'new'; anchor: DOMRect } | { kind: 'selection' };
   let menu = $state<Menu | null>(null);
-  let nameField = $state('');
   let working = $state(false);
 
   const np = $derived(playing());
@@ -128,14 +128,10 @@
   }
 
   function openNew(e: MouseEvent) {
-    nameField = '';
     menu = { kind: 'new', anchor: (e.currentTarget as HTMLElement).getBoundingClientRect() };
   }
 
-  const create = () => {
-    const name = nameField.trim();
-    if (name) act(() => createPlaylist(name), { text: `Created ${name}.` });
-  };
+  const create = (name: string) => act(() => createPlaylist(name), { text: `Created ${name}.` });
 
 </script>
 
@@ -146,7 +142,7 @@
       ><Icon name="moreVert" size={22} /></button
     >
   {:else}
-    <button class="new corner" aria-label="New playlist" onclick={openNew}><Icon name="plus" size={22} /></button>
+    <NewButton label="New playlist" onclick={openNew} />
   {/if}
 
   <!-- The page's controls in two sections: what it always needs (the button that shows or hides the other section,
@@ -277,18 +273,7 @@
 </main>
 
 {#if menu?.kind === 'new'}
-  <MenuSheet label="New playlist" title="New playlist" onclose={() => (menu = null)}>
-    <form
-      class="form"
-      onsubmit={(e) => {
-        e.preventDefault();
-        create();
-      }}
-    >
-      <input type="text" placeholder="Name" aria-label="Name of the new playlist" maxlength="100" bind:value={nameField} />
-      <button type="submit" class="primary" disabled={working || !nameField.trim()} aria-busy={working}>Create playlist</button>
-    </form>
-  </MenuSheet>
+  <NameSheet title="New playlist" what="playlist" action="Create playlist" onsubmit={create} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'playlist'}
   <PlaylistMenu playlists={[menu.p]} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'selection'}
@@ -304,9 +289,15 @@
     container-type: inline-size;
   }
 
-  /* The corner's + or ⋮: the actions keep clear of it. */
+  /* The corner's + (with its label on a wide page) or ⋮: the actions keep clear of it. */
   .tools > .row:first-child {
     padding-right: 56px;
+  }
+
+  @container (min-width: 560px) {
+    .tools > .row:first-child {
+      padding-right: 170px;
+    }
   }
 
   .tools {
@@ -347,8 +338,7 @@
     color: var(--accent);
   }
 
-  input[type='search'],
-  input[type='text'] {
+  input[type='search'] {
     min-height: 44px;
     padding: 0 14px;
     background: var(--bg);
@@ -681,37 +671,4 @@
     color: var(--muted);
   }
 
-  /* The "New playlist" sheet's form */
-
-  .form {
-    display: grid;
-    gap: 12px;
-    padding: 0 16px 8px;
-  }
-
-  .form input {
-    min-height: 44px;
-    padding: 0 12px;
-    background: color-mix(in srgb, var(--bg) 70%, transparent);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font: inherit;
-    color: inherit;
-  }
-
-  .form button.primary {
-    min-height: 44px;
-    border: 0;
-    border-radius: 10px;
-    background: var(--accent);
-    color: var(--accent-text);
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .form button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
 </style>
