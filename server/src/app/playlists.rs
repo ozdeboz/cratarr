@@ -73,6 +73,40 @@ fn shuffle<T>(items: &mut [T]) {
     }
 }
 
+/// Whether `entries` only reorders or leaves out lines of `expected` (each line at most as often as it was there).
+fn is_rearrangement(expected: &[String], entries: &[String]) -> bool {
+    let mut left: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for e in expected {
+        *left.entry(e.as_str()).or_default() += 1;
+    }
+    entries.iter().all(|e| match left.get_mut(e.as_str()) {
+        Some(n) if *n > 0 => {
+            *n -= 1;
+            true
+        }
+        _ => false,
+    })
+}
+
+#[cfg(test)]
+mod edit_tests {
+    use super::is_rearrangement;
+
+    fn v(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn an_edit_may_only_reorder_or_leave_out_its_own_lines() {
+        let was = v(&["a", "b", "b", "c"]);
+        assert!(is_rearrangement(&was, &v(&["c", "b", "a", "b"])), "reordered");
+        assert!(is_rearrangement(&was, &v(&["b", "c"])), "some left out");
+        assert!(is_rearrangement(&was, &[]), "all left out");
+        assert!(!is_rearrangement(&was, &v(&["a", "d"])), "a line it did not have");
+        assert!(!is_rearrangement(&was, &v(&["a", "a"])), "a line more often than it was there");
+    }
+}
+
 pub struct PlaylistService {
     lib: Arc<Library>,
     /// Keeps the user's own server playlists in step (decision 0012).
@@ -350,6 +384,19 @@ impl PlaylistService {
     pub async fn create(&self, name: &str) -> Result<(), ToggleError> {
         self.lib.store()?.create(name).await?;
         self.sync.new_playlist(name).await
+    }
+
+    /// A playlist edited in its view (decision 0023): its lines put in a new order or left out, as one write. Only the
+    /// lines it has (`expected`, as the view showed them) can be kept; it is refused when the playlist changed since.
+    pub async fn edit(&self, id: &str, expected: &[String], entries: &[String]) -> Result<(), ToggleError> {
+        if !is_rearrangement(expected, entries) {
+            return Err(ToggleError::Refused("An edit can only reorder or remove the playlist's own lines.".into()));
+        }
+        if !self.lib.store()?.set_entries_if(id, expected, entries).await? {
+            return Err(ToggleError::Refused("The playlist changed meanwhile: look at it again.".into()));
+        }
+        self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
+        Ok(())
     }
 
     /// A new playlist holding these entries, in order (a playlist made from the queue, decision 0019).

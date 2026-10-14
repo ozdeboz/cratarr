@@ -35,6 +35,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/covers", get(playlist_covers))
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/rows", get(playlist_rows))
+        .route("/api/playlists/{id}/entries", put(edit_playlist))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
         .route("/api/playlists/{id}/play", post(play_playlist))
@@ -192,6 +193,19 @@ async fn favorites(
 async fn playlist_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Response, ApiError> {
     let (source, rows) = app.playlists.rows(&id, f.source.as_deref()).await?;
     Ok(Json(json!({ "source": source, "rows": rows })).into_response())
+}
+
+/// A playlist edited in its view (decision 0023): `entries` (its lines, reordered or some left out) replaces `expected`
+/// (the lines as the view showed them); refused when the playlist changed since.
+#[derive(Deserialize)]
+struct Edit {
+    expected: Vec<String>,
+    entries: Vec<String>,
+}
+
+async fn edit_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(e): Json<Edit>) -> Result<Json<serde_json::Value>, ApiError> {
+    app.playlists.edit(&id, &e.expected, &e.entries).await?;
+    Ok(Json(json!({ "playlist": id, "entries": e.entries.len() })))
 }
 
 /// A playlist's tracks for the local player: the server they are on and their ids in file order (decision 0022).
