@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick as settled } from 'svelte';
   import { createPlaylist, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap, refresh } from './lib/live.svelte';
@@ -21,6 +22,15 @@
   $effect(() => void loadPlaylistFavorites());
   const error = $derived(live.error);
   let filter = $state('');
+  // On a narrow page the filter field starts as a magnifier; open, it lies over the rest of its row (Esc, ✕, or
+  // leaving it empty folds it again).
+  let searching = $state(false);
+  let searchField = $state<HTMLInputElement>();
+  async function openSearch() {
+    searching = true;
+    await settled();
+    searchField?.focus();
+  }
   /** The filter section's Favourites toggle: only favourite playlists. */
   let favouritesOnly = $state(false);
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
@@ -141,24 +151,48 @@
       aria-label={prefs.filterOpen ? 'Hide the filter' : 'Show the filter'}
       onclick={() => (prefs.filterOpen = !prefs.filterOpen)}><Icon name="filter" size={22} /></button
     >
-    {#if select.on}
-      <!-- Select (decision 0025): a chip's name ticks it; on a phone, open them in the panel. Their menu is the ⋮ in
-           the page's top right corner. -->
-      <button class="new" onclick={endSelect}>Cancel</button>
-      {#if select.picked.length && !showsPicked()}
-        <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
-      {/if}
-    {:else}
-      <button class="new toggle" aria-label="Select" title="Select" onclick={startSelect}><Icon name="copyCheck" size={22} /></button>
-    {/if}
+    <!-- Select (decision 0025): on, it is highlighted, a chip's name ticks it, and a tap on it again ends it. The ticked
+         ones' menu is the ⋮ in the page's top right corner; on a phone they open in the panel with Open N. -->
+    <button
+      class="new toggle select"
+      aria-pressed={select.on}
+      aria-label="Select"
+      title="Select"
+      onclick={() => (select.on ? endSelect() : startSelect())}><Icon name="copyCheck" size={22} /></button
+    >
     <div class="seg size" role="group" aria-label="Size">
-      <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}><Icon name="minus" size={22} /></button>
-      <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}><Icon name="plus" size={22} /></button>
+      <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}><Icon name="zoomOut" size={22} /></button>
+      <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}><Icon name="zoomIn" size={22} /></button>
     </div>
+    {#if select.on && select.picked.length && !showsPicked()}
+      <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
+    {/if}
     </div>
     {#if prefs.filterOpen}
-      <div class="row" id="playlist-filter">
-        <input type="search" placeholder="Filter playlists" aria-label="Filter playlists" bind:value={filter} />
+      <div class="row filters" id="playlist-filter">
+        <button class="new toggle magnifier" class:active={filter.trim() !== ''} aria-label="Filter playlists" aria-expanded={searching} onclick={openSearch}
+          ><Icon name="search" size={22} /></button
+        >
+        <div class="search" class:open={searching}>
+          <input
+            type="search"
+            placeholder="Filter playlists"
+            aria-label="Filter playlists"
+            bind:value={filter}
+            bind:this={searchField}
+            onkeydown={(e) => e.key === 'Escape' && (searching = false)}
+            onblur={() => filter.trim() === '' && (searching = false)}
+          />
+          <button
+            class="clear"
+            aria-label="Clear the filter"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => {
+              filter = '';
+              searching = false;
+            }}><Icon name="close" size={20} /></button
+          >
+        </div>
         <div class="seg" role="group" aria-label="Order">
           <button aria-pressed={!prefs.membersFirst} onclick={() => (prefs.membersFirst = false)}>A–Z</button>
           <button aria-pressed={prefs.membersFirst} onclick={() => (prefs.membersFirst = true)} title="Playlists with the playing track first"
@@ -252,9 +286,11 @@
 {/if}
 
 <style>
+  /* The page answers to its own width (beside the player or not), not the window's: a container. */
   main {
     position: relative;
     padding: 14px clamp(12px, 2vw, 32px) 48px;
+    container-type: inline-size;
   }
 
   /* The corner's + or ⋮: the actions keep clear of it. */
@@ -282,7 +318,8 @@
     color: inherit;
   }
 
-  /* Favourites only: on, the heart is filled, in the accent. */
+  /* Favourites only and Select: on, in the accent (the heart filled). */
+  button.new.select[aria-pressed='true'],
   button.new.fav[aria-pressed='true'] {
     border-color: var(--accent);
     background: var(--accent);
@@ -312,7 +349,71 @@
 
   input[type='search'] {
     flex: 1 1 220px;
+    min-width: 0;
     background: var(--surface);
+  }
+
+  /* The filter field: in its row while the page is wide enough for the row on one line (the field at its 220 px
+     beside the order and the heart); narrower, a magnifier, and once opened lying over the row. */
+  .filters {
+    position: relative;
+  }
+
+  .search {
+    display: flex;
+    flex: 1 1 220px;
+  }
+
+  .search input {
+    flex: 1;
+  }
+
+  button.new.magnifier,
+  .search .clear {
+    display: none;
+  }
+
+  @container (max-width: 439px) {
+    button.new.magnifier {
+      display: grid;
+    }
+
+    .search {
+      display: none;
+    }
+
+    .search.open {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      background: var(--bg);
+    }
+
+    .search.open input {
+      align-self: stretch;
+      padding-right: 48px;
+    }
+
+    /* One ✕: ours (it also folds the field), not the browser's. */
+    .search.open input::-webkit-search-cancel-button {
+      display: none;
+    }
+
+    .search.open .clear {
+      position: absolute;
+      right: 0;
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: inherit;
+      cursor: pointer;
+    }
   }
 
   .seg {
@@ -324,7 +425,7 @@
     background: var(--surface);
   }
 
-  /* Size: − and + as the toolbar's icons, with a line between them. */
+  /* Size: zoom out and in (magnifiers, apart from New playlist's +), with a line between them. */
   .seg.size button {
     display: grid;
     place-items: center;
