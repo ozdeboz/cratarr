@@ -36,6 +36,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/rows", get(playlist_rows))
         .route("/api/playlists/favorites", get(playlist_favorites))
+        .route("/api/crates", get(crates))
+        .route("/api/crates/{id}/rows", get(crate_rows))
+        .route("/api/crates/{id}/playlist", post(crate_playlist))
         .route("/api/playlists/{id}/favorite", post(playlist_favorite))
         .route("/api/playlists/{id}/entries", put(edit_playlist))
         .route("/api/playlists/{id}/toggle", post(toggle))
@@ -195,6 +198,36 @@ async fn favorites(
 async fn playlist_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Response, ApiError> {
     let (source, rows) = app.playlists.rows(&id, f.source.as_deref()).await?;
     Ok(Json(json!({ "source": source, "rows": rows })).into_response())
+}
+
+/// The permanent crates and their sizes (decision 0024).
+async fn crates(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<Vec<crate::app::CrateView>>, ApiError> {
+    Ok(Json(app.playlists.crates(f.source.as_deref()).await?))
+}
+
+/// A page of a crate's rows: `offset` and `limit` (at most 500, default 200).
+#[derive(Deserialize)]
+struct Page {
+    source: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    limit: Option<usize>,
+}
+
+async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Response, ApiError> {
+    let limit = q.limit.unwrap_or(200).clamp(1, 500);
+    let (source, total, rows) = app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit).await?;
+    Ok(Json(json!({ "source": source, "total": total, "rows": rows })).into_response())
+}
+
+async fn crate_playlist(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    Query(f): Query<Follow>,
+    Json(req): Json<NameRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let added = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "added": added }))))
 }
 
 /// Which playlists are favourites (by name), as Finamp's playlist hearts (decision 0023).

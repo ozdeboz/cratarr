@@ -351,6 +351,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { Ok(BTreeMap::new()) })
     }
 
+    /// Optional: every track the account the source plays for has as a favourite (its ids), for the Favourites crate
+    /// (decision 0024).
+    fn favorite_tracks(&self) -> Fut<'_, Vec<String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
     /// Optional: which playlists (by name) are favourites of the account the source plays for (decision 0023, as
     /// Finamp's playlist hearts). A Cratarr playlist can be there more than once (imported, and an account's own copy):
     /// it is a favourite when any of them is.

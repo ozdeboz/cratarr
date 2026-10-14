@@ -758,6 +758,14 @@ impl Jellyfin {
         Ok(page.items.into_iter().map(|i| (i.id, i.user_data.and_then(|u| u.is_favorite).unwrap_or(false))).collect())
     }
 
+    /// The audio items `user` has as favourites (their ids).
+    pub async fn favorite_audio(&self, user: &str) -> Result<Vec<String>> {
+        anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
+        let page: ItemsPage<IdOnly> =
+            self.get(&format!("/Items?IncludeItemTypes=Audio&Recursive=true&Filters=IsFavorite&UserId={user}")).await?;
+        Ok(page.items.into_iter().map(|i| i.id).collect())
+    }
+
     /// Count one play of the item for `user`: the play count up by one, last played now, played (decision 0022). Jellyfin's
     /// own "mark played" only makes the count at least one, so the count is read and written back.
     pub async fn count_play(&self, item: &str, user: &str) -> Result<()> {

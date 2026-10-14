@@ -455,6 +455,30 @@ impl Catalogue {
             .collect()
     }
 
+    /// The files present in a folder, newest first (when the catalogue first saw the track; a moved file keeps its time),
+    /// for the crates (decision 0024). Blocking.
+    pub fn files_newest_first(&self, folder: i64) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare(&format!(
+            "SELECT rel FROM files LEFT JOIN tracks ON tracks.id = files.track WHERE folder = ?1 AND {PRESENT} ORDER BY tracks.born DESC, rel"
+        ))?;
+        let rels = st.query_map(params![folder], |r| r.get::<_, String>(0))?;
+        Ok(rels.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The files of a folder that these server track ids are; ids not known there are left out. Blocking.
+    pub fn rels_of(&self, source: &str, folder: i64, ids: &[String]) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT rel FROM source_ids WHERE source = ?1 AND track_id = ?2 AND folder = ?3")?;
+        let mut out = std::collections::HashSet::new();
+        for id in ids {
+            if let Some(rel) = st.query_row(params![source, id, folder], |r| r.get::<_, String>(0)).optional()? {
+                out.insert(rel);
+            }
+        }
+        Ok(out)
+    }
+
     /// What the catalogue knows of each of these files of a folder, in order: a playlist's rows (decision 0023). Files
     /// it has not read leave the facts empty. Blocking.
     pub fn file_rows(&self, source: &str, folder: i64, rels: &[String]) -> Result<Vec<FileRow>> {
@@ -1289,6 +1313,25 @@ mod tests {
             "the first value of a tag that has several"
         );
         assert_eq!(rows[2], FileRow::default());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn crates_see_a_folders_files_newest_first_and_map_server_ids_to_files() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        let (one, two) = ("A - B (2020)/01 One.mp3".to_string(), "A - B (2020)/02 Two.flac".to_string());
+        // Two seen later than One.
+        let db = cat.db();
+        db.execute("INSERT INTO tracks (born) VALUES (100), (200)", []).unwrap();
+        db.execute("UPDATE files SET track = (SELECT id FROM tracks WHERE born = 100) WHERE rel = ?1", params![one]).unwrap();
+        db.execute("UPDATE files SET track = (SELECT id FROM tracks WHERE born = 200) WHERE rel = ?1", params![two]).unwrap();
+        drop(db);
+        assert_eq!(cat.files_newest_first(0).unwrap(), vec![two.clone(), one.clone()]);
+        cat.record_links("jellyfin", "lib", &[("t1".into(), 0, one.clone())], 100).unwrap();
+        let found = cat.rels_of("jellyfin", 0, &["t1".into(), "unknown".into()]).unwrap();
+        assert_eq!(found, [one].into_iter().collect(), "unknown ids are left out");
         std::fs::remove_dir_all(&d).ok();
     }
 
