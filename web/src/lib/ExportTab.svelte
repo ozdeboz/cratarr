@@ -110,9 +110,9 @@
   </p>
 
   {#if ready}
-    <a class="go" href={exportUrl(choice)} download>{label}</a>
+    <a class="go" href={exportUrl(choice)} download><Icon name="download" size={20} /><span>{label}</span></a>
   {:else}
-    <span class="go off" aria-disabled="true">{label}</span>
+    <span class="go off" aria-disabled="true"><Icon name="download" size={20} /><span>{label}</span></span>
   {/if}
 </div>
 
@@ -249,6 +249,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 8px;
     min-height: 44px;
     border-radius: 10px;
     background: var(--accent);
