@@ -22,6 +22,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/state", get(state))
         .route("/api/events", get(events))
         .route("/api/cover/{source}/{id}", get(cover))
+        .route("/api/stream/{source}/{id}", get(stream))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
         .route("/api/playlists/{id}/play", post(play_playlist))
@@ -124,6 +125,87 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
         )
             .into_response(),
     }
+}
+
+#[derive(Deserialize)]
+struct StreamFrom {
+    /// Start at the frame holding this sample (FLAC only), for seeking.
+    #[serde(default)]
+    from: u64,
+}
+
+/// A track's audio for the local player (decision 0022): FLAC as fragmented MP4, MP3 as it is, read from Cratarr's own
+/// mount one piece at a time (a fragment of about a second, or 64 KB) so memory stays small.
+async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<StreamFrom>) -> Response {
+    use crate::stream::{FlacToMp4, Kind};
+    let cat = app.library.catalogue();
+    let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
+    let Some((path, kind)) = found else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
+    };
+    let Some(kind) = kind else {
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(json!({ "error": "Only FLAC and MP3 play here for now." }))).into_response();
+    };
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(2);
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    match kind {
+        Kind::Flac => {
+            let from = q.from;
+            let opened = tokio::task::spawn_blocking(move || FlacToMp4::open(&path, from)).await;
+            let mut flac = match opened {
+                Ok(Ok(f)) => f,
+                Ok(Err(e)) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mp4"));
+            let info = flac.info().clone();
+            headers.insert("x-sample-rate", HeaderValue::from(info.sample_rate));
+            if let Some(total) = info.total_samples {
+                headers.insert("x-total-samples", HeaderValue::from(total));
+            }
+            tokio::task::spawn_blocking(move || {
+                if tx.blocking_send(Ok(flac.init().into())).is_err() {
+                    return;
+                }
+                loop {
+                    let next = match flac.next_fragment() {
+                        Ok(Some(f)) => Ok(f.into()),
+                        Ok(None) => return,
+                        Err(e) => Err(std::io::Error::other(format!("{e:#}"))),
+                    };
+                    let failed = next.is_err();
+                    // A closed channel: the page stopped reading (a skip, a seek); stop reading the file too.
+                    if tx.blocking_send(next).is_err() || failed {
+                        return;
+                    }
+                }
+            });
+        }
+        Kind::Mp3 => {
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let Ok(mut file) = tokio::fs::File::open(&path).await else { return };
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    match file.read(&mut buf).await {
+                        Ok(0) => return,
+                        Ok(n) => {
+                            if tx.send(Ok(axum::body::Bytes::copy_from_slice(&buf[..n]))).await.is_err() {
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e)).await;
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+    }
+    (headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
 }
 
 async fn incoming(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::IncomingView> {

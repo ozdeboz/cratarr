@@ -24,6 +24,7 @@ mod ports;
 mod playlists;
 mod settings;
 mod source;
+mod stream;
 mod sync_state;
 mod voice;
 mod web;
