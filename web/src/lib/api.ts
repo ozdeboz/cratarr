@@ -470,6 +470,8 @@ export const trackDetails = (source: string, id: string) =>
   quietly<{ id: string; name: string; artist: string | null; album: string | null; album_id: string | null }>(
     `/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}`,
   );
+export const incomingTrackIds = (source: string, album: string) =>
+  request<{ source: string; ids: string[] }>(`/api/incoming/tracks/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
 export const handover = (ids: string[], index: number, positionSecs: number, source?: string) =>
   post<{ player: string }>(`/api/player/handover${follow(source)}`, { ids, index, position_secs: positionSecs });
 /** Previous / play-pause / next on the player that plays now. */

@@ -2,7 +2,7 @@
 // this browser (local, lib/localPlayer.svelte.ts). The player shows either the same way: the local queue is presented
 // as a now-playing view like the server's. Switching moves the music: the queue and the position go to the other side,
 // which plays from there, and the side that played stops.
-import { handover, playlistTrackIds, trackDetails, transport, type NowPlaying, type PlayMode } from './api';
+import { handover, incomingTrackIds, playlistTrackIds, trackDetails, transport, type NowPlaying, type PlayMode } from './api';
 import { live, refresh } from './live.svelte';
 import { local, playQueue, enqueue, seek, stop, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
@@ -21,7 +21,7 @@ export function localNowPlaying(): NowPlaying | null {
     artist: t.artist,
     album: t.album,
     album_id: t.album_id,
-    addable: true,
+    addable: t.addable ?? true,
     progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, estimated: false },
     player: 'This device',
     favorite: null,
@@ -31,7 +31,7 @@ export function localNowPlaying(): NowPlaying | null {
       artist: u.artist,
       album: u.album,
       album_id: u.album_id,
-      addable: true,
+      addable: u.addable ?? true,
       duration_secs: null,
     })),
   };
@@ -49,7 +49,7 @@ async function fill(from: number) {
     try {
       const d = await trackDetails(t.source, t.id);
       const j = local.queue.findIndex((q) => q.source === t.source && q.id === t.id && !q.name);
-      if (j >= 0) local.queue[j] = { ...local.queue[j], name: d.name, artist: d.artist, album: d.album, album_id: d.album_id };
+      if (j >= 0) local.queue[j] = { ...local.queue[j], name: d.name, artist: d.artist, album: d.album, album_id: local.queue[j].album_id ?? d.album_id };
     } catch {
       asked.delete(key);
     }
@@ -72,6 +72,15 @@ export async function playPlaylistHere(id: string, mode: PlayMode): Promise<bool
   const tracks: LocalTrack[] = order.map((tid) => ({ source, id: tid, name: '', artist: null, album: null, album_id: null }));
   if (mode === 'next' || mode === 'last') enqueue(tracks, mode);
   else playQueue(tracks, 0);
+  return true;
+}
+
+/** Plays an Incoming album here when the output is this browser (its tracks are not in Music: never addable). */
+export async function playIncomingHere(source: string, album: string): Promise<boolean> {
+  if (!isLocal()) return false;
+  const r = await incomingTrackIds(source, album);
+  if (!r.ids.length) throw new Error('That album has no tracks.');
+  playQueue(r.ids.map((id) => ({ source: r.source, id, name: '', artist: null, album: null, album_id: album, addable: false })), 0);
   return true;
 }
 

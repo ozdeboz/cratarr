@@ -273,6 +273,11 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this source cannot play music") })
     }
 
+    /// An album's track ids in play order, for the local player (decision 0022).
+    fn album_track_ids<'a>(&'a self, _album_id: &'a str) -> Fut<'a, Vec<String>> {
+        Box::pin(async { anyhow::bail!("this server cannot list an album's tracks") })
+    }
+
     /// Whether this source implements [`Source::track_paths`], which the catalogue uses to know its track ids.
     fn lists_tracks(&self) -> bool {
         false

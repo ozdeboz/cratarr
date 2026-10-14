@@ -15,6 +15,8 @@ export type LocalTrack = {
   artist: string | null;
   album: string | null;
   album_id: string | null;
+  /** False for a track outside the Music library (Incoming): it cannot go in a playlist. */
+  addable?: boolean;
 };
 
 /** One appended track: its queue index, where its sample 0 sits in the stream (s), and its length (s; null while

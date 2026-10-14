@@ -677,6 +677,10 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn album_track_ids<'a>(&'a self, album_id: &'a str) -> Fut<'a, Vec<String>> {
+        Box::pin(async move { self.jf.album_track_ids(album_id).await })
+    }
+
     fn play_album<'a>(&'a self, album_id: &'a str) -> Fut<'a, String> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;

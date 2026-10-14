@@ -23,6 +23,8 @@
   import { prefs } from './lib/prefs.svelte';
   import { live, untilNewTrack } from './lib/live.svelte';
   import { toast } from './lib/toast.svelte';
+  import { playIncomingHere } from './lib/output.svelte';
+  import { playing as nowPlaying } from './lib/remote.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { on, stream } from './lib/events.svelte';
 
@@ -34,7 +36,7 @@
   let noCover = $state<Record<string, boolean>>({});
   let filter = $state('');
   // What is playing (the shell polls it), so the album being listened to stands out.
-  const playing = $derived(live.view?.now_playing ?? null);
+  const playing = $derived(nowPlaying());
   let starting = $state<string | null>(null);
 
   // The open menu of one album (Play, Keep or Replace in Music, Delete album), anchored to it; `ask` = the in-place
@@ -206,6 +208,8 @@
     if (starting) return;
     starting = a.id;
     try {
+      // Here when the output is this browser (decision 0022), else on the server's player.
+      if (await playIncomingHere(source, a.id)) return;
       await playIncoming(source, a.id);
       // Show the album's track once it plays, not the states on the way.
       await untilNewTrack();
