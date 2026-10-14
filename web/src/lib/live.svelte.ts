@@ -5,6 +5,7 @@
 // agrees, says otherwise, or does not move at all. The server always wins: a different outcome is shown quietly, no
 // change at all as an error. Playlist taps made meanwhile wait (`queued`) and go to the track they were made on once
 // the server confirms it; otherwise they are dropped, never added to another track.
+import { untrack } from 'svelte';
 import { ApiError, getState, setMember, type NowPlaying, type State } from './api';
 import { prefs } from './prefs.svelte';
 import { local } from './localPlayer.svelte';
@@ -238,8 +239,17 @@ function take(fresh: State) {
 }
 
 /** Keep `live` current: from the live channel (events.svelte.ts) while it is open, asking every 2 s (5 s while the
- *  page is hidden) while it is not, and every 30 s regardless. Returns a stop function. */
+ *  page is hidden) while it is not, and every 30 s regardless. Returns a stop function.
+ *
+ *  Untracked: started in an effect, what it reads on the way (whether the channel is open) must not become the
+ *  effect's dependency. It was (until 0.5.3): the channel opening re-ran the effect, whose cleanup closed the channel
+ *  and whose run opened it again and asked for the state, some 200 times a second; one phone's tab took the server and
+ *  the media server down (2026-10-14). */
 export function poll(): () => void {
+  return untrack(follow);
+}
+
+function follow(): () => void {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout>;
   let last = 0;

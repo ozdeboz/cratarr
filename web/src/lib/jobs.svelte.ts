@@ -2,6 +2,7 @@
 // Followed app-wide: the Incoming tab shows how many wait, Incoming's rows show their progress, and a finished job
 // says so in a toast on whatever page is open. Only jobs this page saw unfinished are told, so a reload never replays
 // old ones. The live channel brings every change (`jobs`); only while it is down does this poll.
+import { untrack } from 'svelte';
 import { getJobs, type Job } from './api';
 import { on, stream } from './events.svelte';
 import { toast } from './toast.svelte';
@@ -62,11 +63,12 @@ class Jobs {
     this.#schedule();
   }
 
-  /** Follow the queue; returns the stop. */
+  /** Follow the queue; returns the stop. Untracked, as live.svelte.ts's poll: started in an effect, its first look at
+   *  the live channel must not make the channel's opening re-run it. */
   start(): () => void {
     this.#running = true;
     const off = on<Job[]>('jobs', (list) => this.apply(list));
-    this.#tick();
+    untrack(() => this.#tick());
     return () => {
       this.#running = false;
       off();

@@ -19,7 +19,7 @@ use crate::settings::{Folders, SourceConfig};
 use crate::source::{self, Source};
 
 /// One enabled source, for the page's source picker.
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SourceTab {
     pub id: String,
     pub label: String,

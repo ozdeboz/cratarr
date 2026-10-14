@@ -13,7 +13,7 @@ use crate::nowplaying::Progress;
 use crate::playlists::PlaylistView;
 use crate::source::{self, Playing, TrackInfo};
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct NowPlayingView {
     /// Which source this came from; covers are looked up there.
     pub source: String,
@@ -38,7 +38,7 @@ pub struct NowPlayingView {
 }
 
 /// A track the player plays after the current one.
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct UpcomingView {
     pub id: String,
     pub name: String,
@@ -49,7 +49,7 @@ pub struct UpcomingView {
     pub duration_secs: Option<f64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StateView {
     pub now_playing: Option<NowPlayingView>,
     pub playlists: Vec<PlaylistView>,
@@ -90,11 +90,40 @@ pub struct PlayingService {
     /// The info chips of the last track asked about: the page asks for the state every few seconds, the file does not
     /// change meanwhile (the play count is read again for the next track).
     info: Mutex<Option<(String, Option<TrackInfo>)>>,
+    /// The last state worked out: when, for which source followed, and it. Whoever asks within `STATE_REUSE` gets it,
+    /// and one asks at a time: the pages (and the live channel) asking often, or a page caught in a loop, cost the media
+    /// server one question at a time at most (2026-10-14: one tab's loop of 200 a second took it down).
+    state_kept: tokio::sync::Mutex<Option<(std::time::Instant, Option<String>, StateView)>>,
 }
+
+/// How long a state worked out is answered again.
+const STATE_REUSE: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl PlayingService {
     pub(super) fn new(lib: Arc<Library>, playlists: Arc<PlaylistService>) -> Self {
-        Self { lib, playlists, info: Mutex::new(None) }
+        Self { lib, playlists, info: Mutex::new(None), state_kept: tokio::sync::Mutex::new(None) }
+    }
+
+    /// What plays and which playlists hold it: as worked out within the last second, else afresh.
+    pub async fn state(&self, want: Option<&str>) -> Result<StateView> {
+        let mut kept = self.state_kept.lock().await;
+        if let Some((at, w, view)) = kept.as_ref()
+            && w.as_deref() == want
+            && at.elapsed() < STATE_REUSE
+        {
+            return Ok(view.clone());
+        }
+        let view = self.work_out_state(want).await?;
+        *kept = Some((std::time::Instant::now(), want.map(str::to_string), view.clone()));
+        Ok(view)
+    }
+
+    /// After a change (a favourite, a playlist's membership): worked out afresh, and kept for whoever asks next.
+    async fn fresh_state(&self, want: Option<&str>) -> Result<StateView> {
+        let mut kept = self.state_kept.lock().await;
+        let view = self.work_out_state(want).await?;
+        *kept = Some((std::time::Instant::now(), want.map(str::to_string), view.clone()));
+        Ok(view)
     }
 
     /// A track's info chips, from the cache when it is the last one asked about. `None` when the source cannot tell.
@@ -280,10 +309,10 @@ impl PlayingService {
         source.set_favorite(&playing.track.id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
         // The crates' kept favourites are asked for again (decision 0024).
         crate::crates::favourites_changed();
-        Ok(self.state(want).await?)
+        Ok(self.fresh_state(want).await?)
     }
 
-    pub async fn state(&self, want: Option<&str>) -> Result<StateView> {
+    async fn work_out_state(&self, want: Option<&str>) -> Result<StateView> {
         let (np, sources) = self.playing(want).await?;
         let music = self.lib.music();
         let entry = np.as_ref().and_then(|(a, p)| a.entry(music.as_deref(), &p.track));
@@ -332,7 +361,7 @@ impl PlayingService {
         self.lib.store()?;
         let entry = active.entry(self.lib.music().as_deref(), &playing.track).ok_or(ToggleError::NotInLibrary)?;
         self.playlists.set_entry(playlist_id, &entry, member).await?;
-        Ok(self.state(want).await?)
+        Ok(self.fresh_state(want).await?)
     }
 
     /// The connected source with that id and its track with that id.
