@@ -72,8 +72,9 @@ function mp3Head(b: Uint8Array): Mp3Head | null | 'invalid' {
   let i = 0;
   if (b.length < 10) return null;
   if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) i = 10 + ((b[6] << 21) | (b[7] << 14) | (b[8] << 7) | b[9]);
+  const tagEnd = i; // the ID3 tag can be large (embedded covers of several MB): the limit below counts from its end
   while (i + 4 <= b.length && !(b[i] === 0xff && (b[i + 1] & 0xe0) === 0xe0)) i++;
-  if (i + 200 > b.length) return b.length > 1 << 22 ? 'invalid' : null; // wait for the first frame and its header
+  if (i + 200 > b.length) return b.length > tagEnd + (1 << 22) ? 'invalid' : null; // wait for the first frame and its header
   const version = (b[i + 1] >> 3) & 3; // 3 = MPEG1, 2 = MPEG2, 0 = MPEG2.5
   const rates = version === 3 ? [44100, 48000, 32000] : version === 2 ? [22050, 24000, 16000] : [11025, 12000, 8000];
   const rate = rates[(b[i + 2] >> 2) & 3] ?? 44100;
@@ -147,6 +148,8 @@ async function appendTrack(index: number, from: number, gen: number) {
   appending = true;
   appendingIndex = index;
   const ctl = (fetching = new AbortController());
+  /** This track's segment, once placed in the stream. */
+  let placedSegment = null as Segment | null; // set inside place(), which TypeScript does not follow
   try {
     const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${from > 0 ? `?from=${Math.floor(from * 44100)}` : ''}`, {
       signal: ctl.signal,
@@ -179,6 +182,14 @@ async function appendTrack(index: number, from: number, gen: number) {
         mime = kind;
       }
       await waitUpdate();
+      // The track before can end mid-frame (an MP3's last bytes are no whole frame, or its fetch was cut): the parser
+      // then still waits for the rest, and neither the mode nor the offset may change ("PARSING_MEDIA_SEGMENT").
+      // abort() drops that partial frame, which lies past that track's end (appendWindowEnd) anyway. A stream that was
+      // ended (the queue's last track was in; more were added since) must be reopened first: removing nothing does it.
+      if (ms?.readyState === 'ended') sb.remove(ms.duration, Infinity);
+      // Until every removal is done (this one, a cut's, played audio dropped): nothing below may run while one does.
+      while (sb.updating) await waitUpdate();
+      if (ms?.readyState === 'open') sb.abort();
       // FLAC's fragments carry their own sample times (tfdt; after a seek they start at the frame holding the sample
       // asked for), so it runs in segments mode with the offset at the track's sample 0. MP3 has no times of its own:
       // sequence mode, the offset at its first decoded sample (the encoder delay before sample 0).
@@ -191,6 +202,7 @@ async function appendTrack(index: number, from: number, gen: number) {
       sb.timestampOffset = kind === MP4 ? start : start - skip / rate;
       segment.length = length;
       segments.push(segment);
+      placedSegment = segment;
       placed = true;
     };
     if (kind === MP4) {
@@ -244,7 +256,9 @@ async function appendTrack(index: number, from: number, gen: number) {
     // Skip what cannot play, as a player does, unless it was the only thing.
     if (index < local.queue.length - 1) {
       lastAppended = index;
-      segments.push({ index, start: streamEnd, length: 0 });
+      // Placed already (it failed midway): that segment becomes the empty one, not a second segment for the track.
+      if (placedSegment) placedSegment.length = 0;
+      else segments.push({ index, start: streamEnd, length: 0 });
     }
   } finally {
     // Not when a newer append is under way (this one was cut).
@@ -267,9 +281,12 @@ async function fresh(index: number, from = 0, play = true) {
   local.position = from;
   local.error = null;
   ms = new MediaSource();
-  audio.src = URL.createObjectURL(ms);
+  const url = URL.createObjectURL(ms);
+  audio.src = url;
   if (play) audio.play().catch(() => {});
   await new Promise((r) => ms!.addEventListener('sourceopen', r, { once: true }));
+  // The element holds the stream now; the URL is no longer needed (each seek or jump makes a new one).
+  URL.revokeObjectURL(url);
   if (gen !== generation) return;
   await appendTrack(index, from, gen);
 }
@@ -388,7 +405,8 @@ function cutFrom(at: number) {
   }
   if (at > lastAppended) return;
   const keep = segments.filter((s) => s.index < at);
-  if (!keep.length || !sb || ms?.readyState !== 'open') return;
+  // An ended stream counts too (the queue's last track was in): the removal below reopens it.
+  if (!keep.length || !sb || !ms || ms.readyState === 'closed') return;
   const last = keep[keep.length - 1];
   const end = last.start + (last.length ?? 0);
   segments = keep;
