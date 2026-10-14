@@ -80,6 +80,44 @@ between polls and only re-syncs to the server on a track change, a pause or resu
 - Loosely coupled: talks to Jellyfin through its public API.
 - Dependable after months untouched: few dependencies, pinned builds, tests around the parts that matter.
 
+## Standard setup
+
+One container, the music read and written as the library's own owner, its data on a volume of its own:
+
+```yaml
+services:
+  cratarr:
+    image: cratarr:0.6.2           # pin the tag; update by changing it
+    user: "1000:1000"              # the user and group that own the music files (the *arr apps' PUID:PGID)
+    ports: ["8080:8080"]
+    environment:
+      CRATARR_DATA_DIR: /data
+    volumes:
+      - /srv/music:/music          # writable: the folder holding the music libraries (Music, Incoming...)
+      - /srv/cratarr:/data         # settings, catalogue, journal; back it up
+    mem_limit: 256m
+    restart: unless-stopped
+```
+
+- **One writable mount for the music libraries**, their parent folder, so Keep moves an album from Incoming into
+  Music by renaming it (instant, nothing copied) and Delete moves it into that folder's trash
+  ([decision 0010](docs/decisions/0010-writable-libraries.md)). Point the media server and Lidarr at the same
+  folders; Cratarr finds each library inside the mount by the paths the server reports.
+- **When that parent also holds other media** (films, series, downloads), don't give Cratarr all of it: mount the
+  parent read-only and each music library over it writable (`/srv/media:/media:ro`, then `/srv/media/Music:/media/Music`
+  and `/srv/media/incoming:/media/incoming`). Everything works the same, except that Keep then crosses two mounts
+  and copies the album before removing the original (seconds per album).
+- **The same owner as the music**: the container's `user` is the files' owner and group, so what Cratarr writes
+  (playlists, backups, moved albums) keeps the library's ownership; no `PUID` or `UMASK` is needed.
+- **Memory**: the process itself stays small (tens of MB), but a container's memory limit also counts the cache of
+  the files it reads, its catalogue database among them (about 7 KB per track, ~200 MB for 30,000 tracks). Give it
+  at least that much (256 MB for a library of that size): with less, every Crates request reads the catalogue from
+  disk again, and starting can be killed for lack of memory.
+- **No login**: keep it on your LAN or VPN, or behind a reverse proxy that authenticates; the proxy's HTTPS also
+  makes the page installable as an app.
+- Settings (sources, libraries, Lidarr) are made on the Settings page and kept in `/data/settings.json`, readable by
+  its owner only.
+
 ## Configuration
 
 The container: one writable mount that holds your music libraries, such as their parent folder (Settings says which

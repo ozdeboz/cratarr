@@ -380,8 +380,12 @@
   }
 
   /* Extra large: a large row with more to say, an album's: its lines wrap and keep their own colours. */
-  .xl {
+  /* Room all round, so a cover stays inside the border of a viewed row. */
+  .xl,
+  .xl.led {
     min-height: 84px;
+    padding: 6px;
+    border-radius: 12px;
   }
 
   .xl .main {
