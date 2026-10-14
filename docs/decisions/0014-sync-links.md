@@ -4,6 +4,7 @@
 - Date: 2026-10-13
 - Supersedes: the "Playlists belong to" switch of 0012 (its sync engine stays)
 - Builds on: 0002 (playlists are `.m3u` files), 0007 (export), 0012 (own Jellyfin playlists)
+- Amended by: 0025 (links are set in the panel's Sync tab, for one playlist or several; the menu's Sync to… opens it)
 
 ## Context
 

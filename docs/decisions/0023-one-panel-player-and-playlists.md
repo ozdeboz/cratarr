@@ -4,6 +4,7 @@
 - Date: 2026-10-14
 - Builds on: 0018 (the player and its chrome), 0019 (the remote's features), 0021 (menus are sheets), 0022 (the local
   player)
+- Superseded in part by: 0025 (a selection of playlists in tabs; the address)
 
 ## Context
 
