@@ -16,6 +16,7 @@
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playUpcoming, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
+  import { moveUpcoming } from './localPlayer.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
@@ -101,6 +102,59 @@
   let queueOpen = $state(false);
   let outputOpen = $state(false);
   const openMenu = (e: Event) => (menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect());
+  // Reordering the queue (Finamp's handle at the end of a row): only this device's queue can be changed, the server's
+  // player takes no reorder command. The row follows the finger, the rows it passes make room; the queue changes on
+  // release.
+  let drag = $state<{ from: number; to: number; dy: number } | null>(null);
+  let qlist = $state<HTMLElement>();
+  let dragStart = { y: 0, scroll: 0, rowH: 56 };
+  let scrollTimer: ReturnType<typeof setInterval> | undefined;
+  function dragDown(e: PointerEvent, i: number) {
+    if (!isLocal() || !qlist) return;
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    dragStart = { y: e.clientY, scroll: qlist.scrollTop, rowH: el.closest('li')!.getBoundingClientRect().height };
+    drag = { from: i, to: i, dy: 0 };
+    navigator.vibrate?.(10);
+  }
+  function dragTo(y: number) {
+    if (!drag || !qlist || !np) return;
+    const dy = y - dragStart.y + (qlist.scrollTop - dragStart.scroll);
+    const to = Math.min(np.upcoming.length - 1, Math.max(0, drag.from + Math.round(dy / dragStart.rowH)));
+    drag = { ...drag, dy, to };
+  }
+  let lastY = 0;
+  function dragMove(e: PointerEvent) {
+    if (!drag || !qlist) return;
+    lastY = e.clientY;
+    dragTo(lastY);
+    // Near the list's top or bottom edge it scrolls, and the row goes along.
+    const r = qlist.getBoundingClientRect();
+    const speed = lastY < r.top + 48 ? -8 : lastY > r.bottom - 48 ? 8 : 0;
+    clearInterval(scrollTimer);
+    if (speed)
+      scrollTimer = setInterval(() => {
+        qlist!.scrollTop += speed;
+        dragTo(lastY);
+      }, 16);
+  }
+  function dragEnd() {
+    clearInterval(scrollTimer);
+    if (!drag) return;
+    const { from, to } = drag;
+    drag = null;
+    if (from !== to) moveUpcoming(from, to);
+  }
+  /** Where a row is drawn during a drag: the dragged one under the finger, the ones it passed one row over. */
+  function offset(j: number): number {
+    if (!drag) return 0;
+    const { from, to, dy } = drag;
+    if (j === from) return dy;
+    if (from < to && j > from && j <= to) return -dragStart.rowH;
+    if (to < from && j >= to && j < from) return dragStart.rowH;
+    return 0;
+  }
+
   async function jump(i: number) {
     try {
       await playUpcoming(i);
@@ -395,14 +449,24 @@
         <div><strong>{np.name}</strong><span>{np.artist ?? ''}</span></div>
       </div>
       {#if np.upcoming.length}
-        <ol>
+        <ol bind:this={qlist} class:dragging={!!drag}>
           {#each np.upcoming as t, i (t.id + ':' + i)}
-            <li>
-              <button onclick={() => jump(i)}>
+            <li class:lifted={drag?.from === i} style:transform={drag ? `translateY(${offset(i)}px)` : null}>
+              <button class="row" onclick={() => jump(i)}>
                 {#if t.album_id}<img src={incomingCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
                 <div><strong>{t.name}</strong><span>{t.artist ?? ''}</span></div>
                 {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
               </button>
+              {#if isLocal()}
+                <button
+                  class="grip"
+                  aria-label="Drag to reorder"
+                  onpointerdown={(e) => dragDown(e, i)}
+                  onpointermove={dragMove}
+                  onpointerup={dragEnd}
+                  onpointercancel={dragEnd}><Icon name="order" size={22} /></button
+                >
+              {/if}
             </li>
           {/each}
         </ol>
@@ -792,7 +856,46 @@
   }
 
   .qnow,
-  .queue li button {
+  .queue li {
+    display: flex;
+    align-items: center;
+    background: var(--surface);
+  }
+
+  /* While a row is dragged the others slide aside; the dragged one follows the finger, lifted. */
+  .queue ol.dragging li {
+    transition: transform 200ms ease;
+  }
+
+  .queue ol.dragging li.lifted {
+    position: relative;
+    z-index: 1;
+    transition: none;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 0.3);
+  }
+
+  .queue li .grip {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 56px;
+    margin-right: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text);
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .queue ol.dragging .grip {
+    cursor: grabbing;
+  }
+
+  .queue li .row {
+    flex: 1;
+    min-width: 0;
     box-sizing: border-box;
     display: flex;
     align-items: center;
@@ -849,7 +952,7 @@
     list-style: none;
   }
 
-  .queue li button {
+  .queue li .row {
     min-height: 56px;
     background: none;
     border: 0;
@@ -858,8 +961,8 @@
     cursor: pointer;
   }
 
-  .queue li button:hover,
-  .queue li button:focus-visible {
+  .queue li .row:hover,
+  .queue li .row:focus-visible {
     background: color-mix(in srgb, var(--text) 7%, transparent);
   }
 

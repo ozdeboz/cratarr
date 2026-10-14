@@ -56,6 +56,8 @@ let streamEnd = 0;
 let generation = 0;
 let fetching: AbortController | null = null;
 let appending = false;
+/** The queue index being fetched and appended (while `appending`). */
+let appendingIndex = -1;
 /** The last queue index appended to the stream. */
 let lastAppended = -1;
 
@@ -103,10 +105,12 @@ async function waitUpdate() {
 }
 
 /** Appends bytes, making room by dropping played audio when the browser's buffer is full. */
-async function appendBytes(bytes: Uint8Array<ArrayBuffer>, gen: number) {
+async function appendBytes(bytes: Uint8Array<ArrayBuffer>, gen: number, signal?: AbortSignal) {
   for (let attempt = 0; attempt < 5; attempt++) {
-    if (gen !== generation || !sb) return;
+    if (gen !== generation || !sb || signal?.aborted) return;
     await waitUpdate();
+    // Cut meanwhile (the queue changed after this track): nothing more of it goes in.
+    if (gen !== generation || !sb || signal?.aborted) return;
     try {
       sb.appendBuffer(bytes);
       await waitUpdate();
@@ -139,10 +143,11 @@ async function appendTrack(index: number, from: number, gen: number) {
   const t = local.queue[index];
   if (!t) return;
   appending = true;
-  fetching = new AbortController();
+  appendingIndex = index;
+  const ctl = (fetching = new AbortController());
   try {
     const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${from > 0 ? `?from=${Math.floor(from * 44100)}` : ''}`, {
-      signal: fetching.signal,
+      signal: ctl.signal,
     });
     if (!res.ok) {
       let text = '';
@@ -212,16 +217,17 @@ async function appendTrack(index: number, from: number, gen: number) {
         await place(h.rate, h.delay, h.samples);
         chunk = joined;
       }
-      await appendBytes(chunk, gen);
+      await appendBytes(chunk, gen, ctl.signal);
     }
     if (!placed && head.length) {
       const h = mp3Head(head);
       if (h && h !== 'invalid') {
         await place(h.rate, h.delay, h.samples);
-        await appendBytes(head, gen);
+        await appendBytes(head, gen, ctl.signal);
       }
     }
-    if (gen !== generation) return;
+    // A new stream, or the queue changed after this track (cutFrom): it no longer counts as appended.
+    if (gen !== generation || ctl.signal.aborted) return;
     // A length the header did not give: what the stream now holds.
     if (segment.length === null && sb && sb.buffered.length) segment.length = sb.buffered.end(sb.buffered.length - 1) - start;
     streamEnd = start + (segment.length ?? 0);
@@ -239,7 +245,8 @@ async function appendTrack(index: number, from: number, gen: number) {
       segments.push({ index, start: streamEnd, length: 0 });
     }
   } finally {
-    if (gen === generation) appending = false;
+    // Not when a newer append is under way (this one was cut).
+    if (gen === generation && fetching === ctl) appending = false;
   }
 }
 
@@ -342,24 +349,47 @@ export function enqueue(tracks: LocalTrack[], how: 'next' | 'last') {
   if (local.index < 0) return playQueue(tracks);
   const at = how === 'next' ? local.index + 1 : local.queue.length;
   local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
-  // Inserted before something already appended: that track is no longer next in the stream.
-  if (at <= lastAppended) {
-    const keep = segments.filter((s) => s.index < at);
-    if (keep.length && sb && ms?.readyState === 'open') {
-      const cut = keep[keep.length - 1];
-      const end = cut.start + (cut.length ?? 0);
-      segments = keep;
-      streamEnd = end;
-      lastAppended = at - 1;
-      waitUpdate().then(() => {
-        try {
-          sb?.remove(end, Infinity);
-        } catch {
-          /* nothing appended there */
-        }
-      });
-    }
+  cutFrom(at);
+}
+
+/** Moves upcoming track `from` to place `to` (queue indexes, both after the playing track): the queue sheet's drag. */
+export function move(from: number, to: number) {
+  const n = local.queue.length;
+  if (from === to || from <= local.index || to <= local.index || from >= n || to >= n) return;
+  const q = [...local.queue];
+  const [t] = q.splice(from, 1);
+  q.splice(to, 0, t);
+  local.queue = q;
+  cutFrom(Math.min(from, to));
+}
+
+/** As `move`, counted in what comes next (0 = the track after the playing one), as the queue sheet lists it. */
+export const moveUpcoming = (from: number, to: number) => move(local.index + 1 + from, local.index + 1 + to);
+
+/** The queue changed from index `at` on: what the stream holds (or is fetching) from there is no longer what comes
+ *  next. It is dropped, and the tick appends the new next track gaplessly after the last one kept. */
+function cutFrom(at: number) {
+  if (appending && appendingIndex >= at) {
+    fetching?.abort();
+    appending = false;
   }
+  if (at > lastAppended) return;
+  const keep = segments.filter((s) => s.index < at);
+  if (!keep.length || !sb || ms?.readyState !== 'open') return;
+  const last = keep[keep.length - 1];
+  const end = last.start + (last.length ?? 0);
+  segments = keep;
+  streamEnd = end;
+  lastAppended = at - 1;
+  (async () => {
+    // An append that was under way finishes first; the aborted one adds nothing after it.
+    while (sb?.updating) await waitUpdate();
+    try {
+      sb?.remove(end, Infinity);
+    } catch {
+      /* nothing appended there */
+    }
+  })();
 }
 
 export function togglePlay() {
