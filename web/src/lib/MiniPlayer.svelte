@@ -56,6 +56,17 @@
     last = { x: e.clientX, t: e.timeStamp };
     if (Math.abs(mx) > 8 || Math.abs(my) > 8) moved = true;
   }
+  /** Opened by a tap or a swipe: the bar is gone at once, so the click that follows the same tap would land on what
+   *  lay under it (a playlist's chip, ticking it in Select). That one click is swallowed. */
+  function swallowTheTapsClick() {
+    const stop = (e: Event) => {
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    addEventListener('click', stop, { capture: true, once: true });
+    setTimeout(() => removeEventListener('click', stop, { capture: true }), 500);
+  }
+
   function up(e: PointerEvent) {
     if (!from || e.pointerId !== from.id) return;
     const [mx, my] = [e.clientX - from.x, e.clientY - from.y];
@@ -63,8 +74,10 @@
     from = null;
     const flick = Math.abs(speed) > 0.7 && Math.sign(speed) === Math.sign(mx);
     if (dragging && (Math.abs(mx) > width * 0.4 || flick)) send(mx < 0 ? 'next' : 'previous');
-    else if (!dragging && my < -64 * 0.15 && -my > Math.abs(mx)) openPlayer();
-    else if (!moved) openPlayer();
+    else if ((!dragging && my < -64 * 0.15 && -my > Math.abs(mx)) || !moved) {
+      swallowTheTapsClick();
+      openPlayer();
+    }
     dragging = false;
     dx = 0;
   }
