@@ -27,7 +27,13 @@ The owner chose (2026-10-14):
     (what plays and what comes next, saved as a Cratarr playlist; only tracks in the library).
   - **A queue view**, opened by a button in the player (swipe up stays the playlists): the current track, then what
     comes next as the player reports it. A tap plays that track. Nothing else: no reordering or removing.
-- **Never:** lyrics; choosing the output device (the browser and the system decide where a web app's sound goes).
+- **Never:** lyrics; choosing the device's audio output (speaker, Bluetooth; the browser and the system decide where
+  a web app's sound goes).
+- **Output = local or remote** (owner, 2026-10-14), for when Cratarr plays music itself: Finamp's output button
+  becomes a switch between **local** (Cratarr plays in the browser) and **remote** (it controls a media-server player,
+  as today: Finamp on the tablet), handing the queue and the position over. In two stages: first the local player
+  without telling the media server about itself; later it reports itself as a media-server player (a Jellyfin
+  session), so the server, and through it Home Assistant, can see and control it. Not in the remote-only version.
 - **Later, when Cratarr is a player itself:** shuffle and repeat, seeking by dragging, the sleep timer, speed, radio
   and instant mix, downloads, the "Playing from" source, artist and album pages, editing the queue, keyboard
   shortcuts.
