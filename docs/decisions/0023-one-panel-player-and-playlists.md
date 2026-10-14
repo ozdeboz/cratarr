@@ -38,8 +38,9 @@ The owner decided (2026-10-14):
   - It stays open when the window crosses the breakpoint (turning the tablet): on a phone size the layer opens with it.
   - One panel width, whatever it shows.
   - It stays open while changing page.
-- **Opening:** "Open" in the playlist menu (everywhere the menu is: the Playlists grid, Insights); with a mouse also a
-  double-click on a chip. A tap on a chip stays "add or remove the playing track". Opening another playlist replaces
+- **Opening:** "Open" in the playlist menu (everywhere the menu is: the Playlists grid, Insights). Since the chips got
+  Finamp's check/plus circle (owner, 2026-10-14), a chip is two buttons: its label opens the playlist, the circle adds or
+  removes the playing track (this replaces the double-click first planned). Opening another playlist replaces
   the open one (no stack of playlists); opening the open one scrolls it to the top.
 - **The playlist view:**
   - Its header: the mosaic, the name, "N tracks · length", the sync chips, the playlist menu, Play and Shuffle (on the

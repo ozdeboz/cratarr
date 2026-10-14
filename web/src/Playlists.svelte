@@ -10,6 +10,7 @@
   import { isLocal, setPlayingMember, shownPlaylists } from './lib/output.svelte';
   import { pending, playing } from './lib/remote.svelte';
   import { longpress } from './lib/longpress';
+  import { openPlaylist } from './lib/panel.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
   const view = $derived(live.view);
@@ -137,27 +138,32 @@
     <ul class="grid" class:pending={pending()} style:--min="{WIDTHS[prefs.zoom]}px">
       {#each items as p (p.id)}
         <li>
-          <button
+          <!-- The label opens the playlist (decision 0023); the circle adds or removes the playing track. -->
+          <div
             class="chip"
             class:member={p.member}
             class:busy={busy[p.id]}
             class:queued={live.queued.includes(p.id)}
             class:idle={!np}
             class:blocked={!!np && !np.addable && !p.member}
-            aria-pressed={p.member}
             title={p.dead > 0 ? missing(p.dead) : undefined}
-            onclick={() => tap(p)}
             use:longpress={(anchor) => (menu = { kind: 'playlist', p, anchor })}
           >
-            <span class="name">{p.name}</span>
-            {#if prefs.pinned.includes(p.id)}<span class="pinned" title="Pinned"><Icon name="pin" size={13} /></span>{/if}
-            {#if p.links.some((l) => l.target !== 'shared')}<span class="own" title={p.links.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
-            <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}</span>
+            <button class="label" aria-label={`Open ${p.name}`} onclick={() => openPlaylist(p.id)}>
+              <span class="name">{p.name}</span>
+              {#if prefs.pinned.includes(p.id)}<span class="pinned" title="Pinned"><Icon name="pin" size={13} /></span>{/if}
+              {#if p.links.some((l) => l.target !== 'shared')}<span class="own" title={p.links.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
+              <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}</span>
+            </button>
             <span class="sep" aria-hidden="true"></span>
-            <span class="state" aria-hidden="true"
-              ><Icon name={p.member ? 'circleCheck' : np && !np.addable ? 'circleDashedPlus' : 'circlePlus'} size={26} /></span
+            <button
+              class="state"
+              aria-pressed={p.member}
+              aria-label={p.member ? `Take the playing track out of ${p.name}` : `Add the playing track to ${p.name}`}
+              onclick={() => tap(p)}
+              ><Icon name={p.member ? 'circleCheck' : np && !np.addable ? 'circleDashedPlus' : 'circlePlus'} size={26} /></button
             >
-          </button>
+          </div>
         </li>
       {/each}
     </ul>
@@ -338,10 +344,30 @@
     background: color-mix(in srgb, var(--text) 35%, transparent);
   }
 
+  .label {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    align-self: stretch;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
   .state {
     flex: none;
     display: flex;
+    padding: 0;
+    border: 0;
+    background: none;
     color: var(--accent);
+    cursor: pointer;
   }
 
   .name {
