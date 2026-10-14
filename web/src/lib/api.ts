@@ -189,6 +189,10 @@ export const getDuplicates = () => request<DupGroup[]>('/api/duplicates');
 export const dedupe = (playlist: string) => post<{ removed: number }>('/api/duplicates/dedupe', { playlist });
 
 export const createPlaylist = (name: string) => post<{ playlist: string }>('/api/playlists', { name });
+
+/** A playlist's first albums (up to four, in playlist order), for the mosaic in its menu (decision 0021). */
+export const playlistCovers = (id: string) =>
+  quietly<{ source: string; album_id: string }[]>(`/api/playlists/${encodeURIComponent(id)}/covers`);
 export const renamePlaylist = (id: string, to: string) =>
   post<{ playlist: string }>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to });
 export const deletePlaylist = (id: string) =>

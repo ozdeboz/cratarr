@@ -51,13 +51,19 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 - **Tap does the page's main action** on an item: on Playlists add or remove the playing track; on Incoming play
   the album; on Insights' graph highlight the playlist and its closest playlists.
-- **Long-press (right-click with a mouse) opens the item's menu** when the item has more than one other action: a
-  small popover anchored to the item, styled like the rest of the app, pointing at it, flipping to stay on screen.
-  The same component on every page. For a playlist: Play, Shuffle, Play next, Add to queue, Sync to…, Spoken as…,
-  Rename, Delete.
-  Esc, a tap outside or scrolling closes it. With a single other action, the long-press does that action directly.
-- Inside the popover: actions as a short list, destructive ones last and in red. Sync to…, Spoken as…, Rename
-  and the delete confirmation happen inside the same popover, not in a separate dialog.
+- **Long-press (right-click with a mouse) opens the item's menu** when the item has more than one other action. Every
+  menu is a **bottom sheet like Finamp's track menu** (decision 0021, `lib/MenuSheet.svelte` + `lib/MenuEntry.svelte`),
+  the same component on every page: at most 500 px wide, rising from the bottom, a drag handle; the item on a card at
+  its top (its image: a cover, or a playlist's mosaic of its first four albums; its title; small chips; for a track
+  the heart); its playback actions as a row of large icons with small labels; then the other entries as rows with an
+  icon in the accent colour. The sheet takes its look from the item's image (blurred behind it, its accent).
+  For a playlist: Play, Shuffle, Play next, Add to queue; Sync to…, Spoken as…, Rename, Delete. For the playing track
+  (the player's menu button, or a right-click on its cover): Play next, Add to queue; Add to playlist, the favourite,
+  New playlist from the queue. A tap on the backdrop, Esc, Back or dragging the sheet down closes it. With a single
+  other action, the long-press does that action directly.
+- Inside the sheet: destructive entries last and in red. Sync to…, Spoken as…, Rename, the playlists for a track and
+  the delete confirmation are steps inside the same sheet (it grows or shrinks to fit, a back arrow returns), not a
+  separate dialog.
 - A long-press never also triggers the tap, and suppresses the browser's own menu and text selection.
 
 ## Words

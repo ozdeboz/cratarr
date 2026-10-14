@@ -364,7 +364,6 @@
 {#if menu}
   <PlaylistMenu
     playlist={menuPlaylist(menu.name)}
-    anchor={menu.anchor}
     onclose={() => (menu = null)}
     onrenamed={renamed}
     ondeleted={(id) => {

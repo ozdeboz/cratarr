@@ -17,7 +17,8 @@
     type IncomingAlbum,
     type IncomingSource,
   } from './lib/api';
-  import Popover from './lib/Popover.svelte';
+  import MenuEntry from './lib/MenuEntry.svelte';
+  import MenuSheet from './lib/MenuSheet.svelte';
   import { longpress } from './lib/longpress';
   import { prefs } from './lib/prefs.svelte';
   import { live, untilNewTrack } from './lib/live.svelte';
@@ -340,24 +341,40 @@
 
 {#if menu}
   {@const m = menu}
-  <Popover anchor={m.anchor} label={m.a.title} onclose={() => (menu = null)}>
-    <div class="head">{m.a.title} <span>{m.a.artist ?? 'Unknown artist'}</span></div>
+  <!-- The album's menu: a sheet as every menu (decision 0021). -->
+  <MenuSheet
+    label={m.a.title}
+    onclose={() => (menu = null)}
+    images={[incomingCoverUrl(m.source, m.a.id)]}
+    title={m.a.title}
+    chips={[m.a.artist ?? 'Unknown artist']}
+    actions={m.ask
+      ? []
+      : [
+          {
+            icon: 'play',
+            label: 'Play',
+            onclick: () => {
+              menu = null;
+              play(m.source, m.a);
+            },
+          },
+        ]}
+    onback={m.ask ? () => menu && (menu.ask = false) : null}
+  >
     {#if !m.ask}
-      <div class="items" role="menu">
-        <button role="menuitem" onclick={() => { menu = null; play(m.source, m.a); }}>Play</button>
+      <div role="menu">
         {#if m.job !== null}
           {@const id = m.job}
-          <hr />
-          <button role="menuitem" class="danger" onclick={() => cancel(id)}>Cancel conversion</button>
+          <MenuEntry icon="close" label="Cancel conversion" danger onclick={() => cancel(id)} />
         {:else if m.keepable}
-          <button role="menuitem" onclick={askKeep}>Keep in Music</button>
+          <MenuEntry icon="check" label="Keep in Music" onclick={askKeep} />
         {/if}
         {#if m.replaceable}
-          <button role="menuitem" onclick={askReplace}>Replace in Music</button>
+          <MenuEntry icon="swap" label="Replace in Music" onclick={askReplace} />
         {/if}
         {#if m.deletable && m.job === null}
-          <hr />
-          <button role="menuitem" class="danger" onclick={() => menu && (menu.ask = 'delete')}>Delete album</button>
+          <MenuEntry icon="trash" label="Delete album" danger onclick={() => menu && (menu.ask = 'delete')} />
         {/if}
       </div>
     {:else if m.ask === 'keep'}
@@ -420,7 +437,7 @@
         </div>
       </div>
     {/if}
-  </Popover>
+  </MenuSheet>
 {/if}
 
 <style>
@@ -598,56 +615,15 @@
     color: var(--accent);
   }
 
-  /* Album menu (same look as the playlist menu) */
-  .head {
-    padding: 8px 10px 6px;
-    font-weight: 650;
-    overflow-wrap: anywhere;
-  }
-
-  .head span {
-    display: block;
-    color: var(--muted);
-    font-size: 0.8rem;
-    font-weight: 400;
-  }
-
-  .items {
-    display: grid;
-  }
-
-  .items button {
-    min-height: 44px;
-    padding: 0 10px;
-    text-align: left;
-    background: none;
-    border: 0;
-    border-radius: 8px;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .items hr {
-    margin: 4px 6px;
-    border: 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .items button:hover,
-  .items button:focus-visible {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
-  }
-
-  .danger,
-  .items button.danger {
+  /* The album menu's steps (inside the sheet, decision 0021) */
+  .danger {
     color: var(--danger);
   }
 
   .form {
     display: grid;
-    gap: 10px;
-    padding: 6px;
+    gap: 12px;
+    padding: 0 16px 8px;
   }
 
   .ask {

@@ -1,33 +1,36 @@
 <script lang="ts">
-  // The playing track's menu in the player (decision 0019): ☰, or a right-click on the cover. Play next, add to queue,
-  // the favourite, the playlists that hold it (a tap adds or removes, as on the Playlists page), and a new playlist
-  // made of what plays and what comes next.
+  // The playing track's menu (decisions 0019, 0021): the menu button in the player, or a right-click on its cover. A
+  // sheet as Finamp's track menu: the track on the card (with the heart), Play next and Add to queue as the large
+  // actions, then: Add to playlist (the playlists as toggle cards, a tap adds or removes), the favourite, and a new
+  // playlist made of what plays and what comes next.
   import { playlistFromQueue, queueTrack, setMember } from './api';
   import { live, refresh } from './live.svelte';
-  import Popover from './Popover.svelte';
+  import MenuEntry from './MenuEntry.svelte';
+  import MenuSheet from './MenuSheet.svelte';
   import { prefs } from './prefs.svelte';
-  import { favorite, toggleFavorite } from './remote.svelte';
+  import { coverSrc, favorite, toggleFavorite } from './remote.svelte';
   import { toast } from './toast.svelte';
 
-  let { anchor, onclose }: { anchor: DOMRect; onclose: () => void } = $props();
+  let { onclose }: { onclose: () => void } = $props();
 
   const np = $derived(live.view?.now_playing ?? null);
-  // Playlists holding the track first, then the rest by name (as the Playlists page's "first").
+  const src = $derived(coverSrc());
+  // Playlists holding the track first, then the rest by name.
   const playlists = $derived(
     [...(live.view?.playlists ?? [])].sort((a, b) => Number(b.member) - Number(a.member) || a.name.localeCompare(b.name)),
   );
 
-  let mode = $state<'menu' | 'new'>('menu');
+  let step = $state<'menu' | 'lists' | 'new'>('menu');
   let working = $state(false);
   let nameField = $state('');
 
   async function queue(how: 'next' | 'last') {
     if (!np) return;
     working = true;
+    onclose();
     try {
       await queueTrack(np.id, how, np.source);
       toast.show({ text: how === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
-      onclose();
       setTimeout(refresh, 700);
     } catch (e) {
       toast.fail(e, how === 'next' ? "It couldn't be put next" : "It couldn't be added to the queue");
@@ -47,7 +50,7 @@
 
   async function makePlaylist() {
     const name = nameField.trim();
-    if (!name) return;
+    if (!name || working) return;
     working = true;
     try {
       const made = await playlistFromQueue(name, np?.source);
@@ -64,32 +67,44 @@
 </script>
 
 {#if np}
-  <Popover {anchor} label={np.name} {onclose}>
-    <div class="head">
-      {np.name}
-      <span>{[np.artist, np.album].filter(Boolean).join(' · ')}</span>
-    </div>
-    {#if mode === 'menu'}
-      <div class="items" role="menu">
-        <button role="menuitem" disabled={working} onclick={() => queue('next')}>Play next</button>
-        <button role="menuitem" disabled={working} onclick={() => queue('last')}>Add to queue</button>
+  <MenuSheet
+    label={np.name}
+    {onclose}
+    images={src ? [src] : []}
+    title={np.name}
+    chips={[np.artist, np.album].filter((c): c is string => !!c)}
+    heart={np.favorite === null ? null : { on: favorite(), disabled: live.pending, toggle: toggleFavorite }}
+    actions={step === 'menu'
+      ? [
+          { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },
+          { icon: 'playlists', label: 'Add to queue', onclick: () => queue('last'), disabled: working },
+        ]
+      : []}
+    onback={step === 'menu' ? null : () => (step = 'menu')}
+  >
+    {#if step === 'menu'}
+      <div role="menu">
+        {#if np.addable}
+          <MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />
+        {/if}
         {#if np.favorite !== null}
-          <button role="menuitem" disabled={live.pending} onclick={toggleFavorite}
-            >{favorite() ? 'Remove from favourites' : 'Add to favourites'}</button
-          >
+          <MenuEntry icon="heart" label={favorite() ? 'Remove from favourites' : 'Add to favourites'} disabled={live.pending} onclick={toggleFavorite} />
         {/if}
-        {#if np.addable && playlists.length}
-          <hr />
-          <div class="lists" role="group" aria-label="Playlists">
-            {#each playlists as p (p.id)}
-              <button role="menuitemcheckbox" aria-checked={p.member} class:member={p.member} disabled={live.pending} onclick={() => toggle(p.id, p.member)}
-                ><span class="mark" aria-hidden="true">{p.member ? '✓' : '+'}</span>{p.name}</button
-              >
-            {/each}
-          </div>
-        {/if}
-        <hr />
-        <button role="menuitem" onclick={() => (mode = 'new')}>New playlist from the queue</button>
+        <MenuEntry
+          icon="plus"
+          label="New playlist from the queue"
+          onclick={() => {
+            nameField = '';
+            step = 'new';
+          }}
+        />
+      </div>
+    {:else if step === 'lists'}
+      <div class="heading">Add to / remove from playlists</div>
+      <div role="group" aria-label="Playlists">
+        {#each playlists as p (p.id)}
+          <MenuEntry label={p.name} checked={p.member} disabled={live.pending} onclick={() => toggle(p.id, p.member)} />
+        {/each}
       </div>
     {:else}
       <form
@@ -99,127 +114,53 @@
           makePlaylist();
         }}
       >
+        <div class="heading">New playlist from the queue</div>
         <input type="text" aria-label="Name of the new playlist" placeholder="Name" maxlength="100" bind:value={nameField} />
-        <div class="row">
-          <button type="submit" class="primary" disabled={working || !nameField.trim()} aria-busy={working}>Make playlist</button>
-          <button type="button" onclick={onclose}>Cancel</button>
-        </div>
+        <button type="submit" class="primary" disabled={working || !nameField.trim()} aria-busy={working}>Make playlist</button>
       </form>
     {/if}
-  </Popover>
+  </MenuSheet>
 {/if}
 
 <style>
-  .head {
-    padding: 8px 10px 6px;
-    font-weight: 650;
-    overflow-wrap: anywhere;
-  }
-
-  .head span {
-    display: block;
-    color: var(--muted);
-    font-size: 0.8rem;
-    font-weight: 400;
-  }
-
-  .items {
-    display: grid;
-    min-width: 240px;
-  }
-
-  .items button {
-    min-height: 44px;
-    padding: 0 10px;
-    text-align: left;
-    background: none;
-    border: 0;
-    border-radius: 8px;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .items hr {
-    margin: 4px 6px;
-    border: 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .items button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .items button:hover,
-  .items button:focus-visible {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
-  }
-
-  /* The playlists: a scrolling list inside the menu, the ones holding the track marked. */
-  .lists {
-    display: grid;
-    max-height: min(40vh, 320px);
-    overflow-y: auto;
-  }
-
-  .lists button {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 40px;
-  }
-
-  .lists .mark {
-    width: 1em;
-    color: var(--muted);
+  .heading {
+    padding: 0 16px 12px;
+    font-size: 18px;
     text-align: center;
-  }
-
-  .lists button.member .mark {
-    color: var(--accent);
   }
 
   .form {
     display: grid;
-    gap: 10px;
-    padding: 6px;
+    gap: 12px;
+    padding: 0 16px 8px;
+  }
+
+  .form .heading {
+    padding: 0 0 4px;
   }
 
   .form input {
-    min-height: 40px;
+    min-height: 44px;
     padding: 0 12px;
-    background: var(--bg);
+    background: color-mix(in srgb, var(--bg) 70%, transparent);
     border: 1px solid var(--border);
     border-radius: 10px;
     font: inherit;
     color: inherit;
   }
 
-  .row {
-    display: flex;
-    gap: 8px;
-  }
-
-  .row button {
-    min-height: 40px;
-    padding: 0 14px;
-    background: var(--surface);
-    border: 1px solid var(--border);
+  .primary {
+    min-height: 44px;
+    border: 0;
     border-radius: 10px;
+    background: var(--art-accent, var(--accent));
+    color: var(--accent-text);
     font: inherit;
-    color: inherit;
+    font-weight: 600;
     cursor: pointer;
   }
 
-  .row button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
-  }
-
-  .row button:disabled {
+  .primary:disabled {
     opacity: 0.5;
     cursor: default;
   }

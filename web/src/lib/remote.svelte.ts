@@ -174,6 +174,23 @@ $effect.root(() => {
   });
 });
 
+/** The accent for any cover (the menus, decision 0021); null for a grey cover or one that does not load. */
+export function accentOf(src: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+      try {
+        resolve(accentFrom(img));
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
 function dark() {
   const t = document.documentElement.dataset.theme;
   return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;

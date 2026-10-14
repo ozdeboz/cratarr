@@ -1,7 +1,8 @@
 <script lang="ts">
-  // A playlist's menu (docs/ui-conventions.md), the same wherever a playlist is long-pressed: Play, Shuffle, Play next,
-  // Add to queue, then Sync to…, Rename and Delete, each done inside the popover. Success shows where it happens (the
-  // header, the list); only Delete says something, to offer Undo.
+  // A playlist's menu (docs/ui-conventions.md, decision 0021), the same wherever a playlist is long-pressed: a sheet as
+  // Finamp's track menu, the playlist on its card (a mosaic of its first albums' covers), Play, Shuffle, Play next and
+  // Add to queue as the large actions, then Sync to…, Spoken as…, Rename and Delete, each done inside the sheet.
+  // Success shows where it happens (the header, the list); only Delete says something, to offer Undo.
   import {
     deletePlaylist,
     getTargets,
@@ -16,22 +17,23 @@
     type Link,
     type PlayMode,
     type TargetChoice,
+    incomingCoverUrl,
+    playlistCovers,
   } from './api';
-  import Popover from './Popover.svelte';
+  import MenuEntry from './MenuEntry.svelte';
+  import MenuSheet from './MenuSheet.svelte';
   import { prefs } from './prefs.svelte';
   import { refresh, untilNewTrack } from './live.svelte';
   import { toast } from './toast.svelte';
 
   let {
     playlist,
-    anchor,
     onclose,
     onrenamed,
     ondeleted,
     onrestored,
   }: {
     playlist: { id: string; name: string; count: number; dead: number; links?: Link[]; spoken?: string[] };
-    anchor: DOMRect;
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
@@ -40,6 +42,21 @@
   } = $props();
 
   let mode = $state<'menu' | 'rename' | 'delete' | 'sync' | 'spoken'>('menu');
+
+  // The card's image: the covers of the playlist's first four albums (one cover when it has fewer).
+  let covers = $state<string[]>([]);
+  $effect(() => {
+    const id = playlist.id;
+    let gone = false;
+    playlistCovers(id)
+      .then((list) => {
+        if (gone) return;
+        const urls = list.map((c) => incomingCoverUrl(c.source, c.album_id));
+        covers = urls.length >= 4 ? urls.slice(0, 4) : urls.slice(0, 1);
+      })
+      .catch(() => {});
+    return () => (gone = true);
+  });
 
   // Spoken as… (decision 0015): other names a voice assistant may hear for it, comma-separated.
   let spokenField = $state('');
@@ -157,36 +174,46 @@
   }
 </script>
 
-<Popover {anchor} label={p.name} {onclose}>
-  <div class="head">
-    {p.name}
-    <span
-      >{p.count} {p.count === 1 ? 'track' : 'tracks'}{p.dead > 0 ? ` · ${missing(p.dead)}` : ''}{mode === 'sync' ? '' : (p.links ?? []).map((l) => ` · ${l.label}`).join('')}</span
-    >
-  </div>
+<MenuSheet
+  label={p.name}
+  {onclose}
+  images={covers}
+  title={p.name}
+  chips={[
+    `${p.count} ${p.count === 1 ? 'track' : 'tracks'}`,
+    ...(p.dead > 0 ? [missing(p.dead)] : []),
+    ...(p.links ?? []).map((l) => l.label),
+  ]}
+  actions={mode === 'menu'
+    ? [
+        { icon: 'play', label: 'Play', onclick: () => play('play'), disabled: working },
+        { icon: 'shuffle', label: 'Shuffle', onclick: () => play('shuffle'), disabled: working },
+        { icon: 'playNext', label: 'Play next', onclick: () => play('next'), disabled: working },
+        { icon: 'playlists', label: 'Add to queue', onclick: () => play('last'), disabled: working },
+      ]
+    : []}
+  onback={mode === 'menu' ? null : () => (mode = 'menu')}
+>
   {#if mode === 'menu'}
-    <div class="items" role="menu">
-      <button role="menuitem" disabled={working} onclick={() => play('play')}>Play</button>
-      <button role="menuitem" disabled={working} onclick={() => play('shuffle')}>Shuffle</button>
-      <button role="menuitem" disabled={working} onclick={() => play('next')}>Play next</button>
-      <button role="menuitem" disabled={working} onclick={() => play('last')}>Add to queue</button>
-      <hr />
-      <button role="menuitem" onclick={openSync}>Sync to…</button>
-      <button
-        role="menuitem"
+    <div role="menu">
+      <MenuEntry icon="link" label="Sync to…" onclick={openSync} />
+      <MenuEntry
+        icon="mic"
+        label="Spoken as…"
         onclick={() => {
           spokenField = (p.spoken ?? []).join(', ');
           mode = 'spoken';
-        }}>Spoken as…</button
-      >
-      <button
-        role="menuitem"
+        }}
+      />
+      <MenuEntry
+        icon="pencil"
+        label="Rename"
         onclick={() => {
           nameField = p.id;
           mode = 'rename';
-        }}>Rename</button
-      >
-      <button role="menuitem" class="danger" onclick={() => (mode = 'delete')}>Delete</button>
+        }}
+      />
+      <MenuEntry icon="trash" label="Delete" danger onclick={() => (mode = 'delete')} />
     </div>
   {:else if mode === 'rename'}
     <form
@@ -196,11 +223,9 @@
         rename();
       }}
     >
+      <div class="heading">Rename</div>
       <input type="text" aria-label="New name" maxlength="100" bind:value={nameField} />
-      <div class="row">
-        <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === p.id} aria-busy={working}>Rename</button>
-        <button type="button" onclick={onclose}>Cancel</button>
-      </div>
+      <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === p.id} aria-busy={working}>Rename</button>
     </form>
   {:else if mode === 'spoken'}
     <form
@@ -210,14 +235,13 @@
         saveSpoken();
       }}
     >
+      <div class="heading">Spoken as</div>
       <input type="text" aria-label="Other names, comma-separated" placeholder="japanese, kokoro" bind:value={spokenField} />
-      <div class="row">
-        <button type="submit" class="primary" disabled={working} aria-busy={working}>Save</button>
-        <button type="button" onclick={onclose}>Cancel</button>
-      </div>
+      <button type="submit" class="primary" disabled={working} aria-busy={working}>Save</button>
     </form>
   {:else if mode === 'sync'}
     <div class="form">
+      <div class="heading">Sync to</div>
       {#if !targets}
         <p class="ask">…</p>
       {:else}
@@ -252,80 +276,32 @@
           </div>
         {/each}
       {/if}
-      <div class="row"><button onclick={onclose}>Done</button></div>
+      <button class="plain" onclick={onclose}>Done</button>
     </div>
   {:else}
     <div class="form">
       <p class="ask">Delete {p.name}? You can undo this right after.</p>
-      <div class="row">
-        <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>Delete playlist</button>
-        <button onclick={onclose}>Cancel</button>
-      </div>
+      <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>Delete playlist</button>
     </div>
   {/if}
-</Popover>
+</MenuSheet>
 
 <style>
-  .head {
-    padding: 8px 10px 6px;
-    font-weight: 650;
-    overflow-wrap: anywhere;
-  }
-
-  .head span {
-    display: block;
-    color: var(--muted);
-    font-size: 0.8rem;
-    font-weight: 400;
-  }
-
-  .items {
-    display: grid;
-  }
-
-  .items button {
-    min-height: 44px;
-    padding: 0 10px;
-    text-align: left;
-    background: none;
-    border: 0;
-    border-radius: 8px;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .items hr {
-    margin: 4px 6px;
-    border: 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .items button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .items button:hover,
-  .items button:focus-visible {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
-  }
-
-  .danger,
-  .items button.danger {
-    color: var(--danger);
+  .heading {
+    font-size: 18px;
+    text-align: center;
   }
 
   .form {
     display: grid;
-    gap: 10px;
-    padding: 6px;
+    gap: 12px;
+    padding: 0 16px 8px;
   }
 
-  .form input {
-    min-height: 40px;
+  .form input[type='text'] {
+    min-height: 44px;
     padding: 0 12px;
-    background: var(--bg);
+    background: color-mix(in srgb, var(--bg) 70%, transparent);
     border: 1px solid var(--border);
     border-radius: 10px;
     font: inherit;
@@ -334,7 +310,8 @@
 
   .ask {
     margin: 0;
-    font-size: 0.92rem;
+    font-size: 0.95rem;
+    text-align: center;
   }
 
   /* Sync to…: one line per target, its settings beside it once linked. */
@@ -357,7 +334,7 @@
   .target select {
     min-height: 34px;
     padding: 0 8px;
-    background: var(--bg);
+    background: color-mix(in srgb, var(--bg) 70%, transparent);
     border: 1px solid var(--border);
     border-radius: 8px;
     font: inherit;
@@ -372,38 +349,32 @@
     font-size: 0.8rem;
   }
 
-  .row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .row button {
-    min-height: 40px;
-    padding: 0 14px;
-    background: var(--bg);
-    border: 1px solid var(--border);
+  .form button {
+    min-height: 44px;
+    border: 0;
     border-radius: 10px;
     font: inherit;
-    color: inherit;
     cursor: pointer;
   }
 
-  .row button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
+  .form button.primary {
+    background: var(--art-accent, var(--accent));
     color: var(--accent-text);
     font-weight: 600;
   }
 
-  .row button.danger.solid {
+  .form button.plain {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: inherit;
+  }
+
+  .form button.danger.solid {
     background: var(--danger);
-    border-color: var(--danger);
     color: #fff;
     font-weight: 600;
   }
 
-  .row button:disabled {
+  .form button:disabled {
     opacity: 0.5;
     cursor: default;
   }

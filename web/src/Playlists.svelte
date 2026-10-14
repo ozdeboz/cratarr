@@ -4,7 +4,7 @@
   import { live, queueTap, refresh } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
   import { toast, type Toast } from './lib/toast.svelte';
-  import Popover from './lib/Popover.svelte';
+  import MenuSheet from './lib/MenuSheet.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import Icon from './lib/Icon.svelte';
   import { longpress } from './lib/longpress';
@@ -20,7 +20,7 @@
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
 
-  // The open menu: a playlist's (lib/PlaylistMenu) or the "New playlist" one; anchored to what opened it.
+  // The open menu (a sheet, decision 0021): a playlist's (lib/PlaylistMenu) or the "New playlist" one.
   type Menu = { kind: 'playlist'; p: Playlist; anchor: DOMRect } | { kind: 'new'; anchor: DOMRect };
   let menu = $state<Menu | null>(null);
   let nameField = $state('');
@@ -150,7 +150,7 @@
 </main>
 
 {#if menu?.kind === 'new'}
-  <Popover anchor={menu.anchor} label="New playlist" onclose={() => (menu = null)}>
+  <MenuSheet label="New playlist" title="New playlist" onclose={() => (menu = null)}>
     <form
       class="form"
       onsubmit={(e) => {
@@ -159,14 +159,11 @@
       }}
     >
       <input type="text" placeholder="Name" aria-label="Name of the new playlist" maxlength="100" bind:value={nameField} />
-      <div class="row">
-        <button type="submit" class="primary" disabled={working || !nameField.trim()} aria-busy={working}>Create playlist</button>
-        <button type="button" onclick={() => (menu = null)}>Cancel</button>
-      </div>
+      <button type="submit" class="primary" disabled={working || !nameField.trim()} aria-busy={working}>Create playlist</button>
     </form>
-  </Popover>
+  </MenuSheet>
 {:else if menu?.kind === 'playlist'}
-  <PlaylistMenu playlist={menu.p} anchor={menu.anchor} onclose={() => (menu = null)} />
+  <PlaylistMenu playlist={menu.p} onclose={() => (menu = null)} />
 {/if}
 
 <style>
@@ -367,39 +364,36 @@
     color: var(--muted);
   }
 
-  /* Popover contents */
+  /* The "New playlist" sheet's form */
 
   .form {
     display: grid;
-    gap: 10px;
-    padding: 6px;
+    gap: 12px;
+    padding: 0 16px 8px;
   }
 
-  .row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-
-  .row button {
-    min-height: 40px;
-    padding: 0 14px;
-    background: var(--bg);
+  .form input {
+    min-height: 44px;
+    padding: 0 12px;
+    background: color-mix(in srgb, var(--bg) 70%, transparent);
     border: 1px solid var(--border);
     border-radius: 10px;
     font: inherit;
     color: inherit;
+  }
+
+  .form button.primary {
+    min-height: 44px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font: inherit;
+    font-weight: 600;
     cursor: pointer;
   }
 
-  .row button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
-  }
-
-  .row button:disabled {
+  .form button:disabled {
     opacity: 0.5;
     cursor: default;
   }

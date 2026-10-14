@@ -309,7 +309,7 @@
 </div>
 
 {#if menuAt}
-  <TrackMenu anchor={menuAt} onclose={() => (menuAt = null)} />
+  <TrackMenu onclose={() => (menuAt = null)} />
 {/if}
 
 <style>
