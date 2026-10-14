@@ -172,14 +172,16 @@ export type Axis = {
 };
 export const getCrateAxes = (source?: string) => quietly<Axis[]>(`/api/crates/axes${follow(source)}`);
 export const getCrate = (id: string) => quietly<CrateDef>(`/api/crates/${encodeURIComponent(id)}`);
-export const createCrate = (name: string, conditions: Condition[]) => post<{ id: string }>('/api/crates', { name, conditions });
+/** Every change answers with its undo token (`undo`, decision 0026), for `withUndo`. */
+type Undo = { undo: string | null };
+export const createCrate = (name: string, conditions: Condition[]) => post<{ id: string } & Undo>('/api/crates', { name, conditions });
 export const updateCrate = (id: string, name: string, conditions: Condition[]) =>
-  request<{ id: string }>(`/api/crates/${encodeURIComponent(id)}`, {
+  request<{ id: string } & Undo>(`/api/crates/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, conditions }),
   });
-export const deleteCrate = (id: string) => request<{ deleted: string }>(`/api/crates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const deleteCrate = (id: string) => request<{ deleted: string } & Undo>(`/api/crates/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** The builder's live preview: how many tracks unsaved conditions select, and the first of them. */
 export const previewCrate = (conditions: Condition[], limit: number, source?: string) => {
   const q = new URLSearchParams({ limit: String(limit) });
@@ -201,11 +203,11 @@ export const crateRows = (id: string, offset: number, limit: number, source?: st
 };
 /** Make playlist: the crate's tracks now, as a new ordinary playlist (a snapshot). */
 export const crateToPlaylist = (id: string, name: string, source?: string, favourites: CrateFavourites = 'all') =>
-  post<{ playlist: string; added: number }>(`/api/crates/${encodeURIComponent(id)}/playlist${follow(source)}`, { name, favourites });
+  post<{ playlist: string; added: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/playlist${follow(source)}`, { name, favourites });
 export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
 /** `ids`: the queue to make it from (the local player's); without, the server's player's queue. */
 export const playlistFromQueue = (name: string, source?: string, ids?: string[]) =>
-  post<{ playlist: string; added: number; left_out: number }>(`/api/queue/playlist${follow(source)}`, ids ? { name, ids } : { name });
+  post<{ playlist: string; added: number; left_out: number } & Undo>(`/api/queue/playlist${follow(source)}`, ids ? { name, ids } : { name });
 
 /** Mark the playing track a favourite or not. Says the state wanted, so a retried request changes nothing more. */
 export const setFavorite = (on: boolean, source?: string) => {
@@ -230,20 +232,22 @@ const post = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
 /** Apply every safe repair, or only those of these playlists (the panel's Repair tab, decision 0025). */
-export const applySafe = (playlists?: string[]) => post<{ playlists: string[] }>('/api/repairs/apply', playlists ? { kind: 'safe', playlists } : { kind: 'safe' });
+export const applySafe = (playlists?: string[]) =>
+  post<{ playlists: string[] } & Undo>('/api/repairs/apply', playlists ? { kind: 'safe', playlists } : { kind: 'safe' });
 
 /** Apply one offered repair (used for the ones that need a look). */
-export const applyOne = (r: Repair) => post<{ playlists: string[] }>('/api/repairs/apply', { kind: 'one', ...r });
+export const applyOne = (r: Repair) => post<{ playlists: string[] } & Undo>('/api/repairs/apply', { kind: 'one', ...r });
 
-/** Put playlists back as they were before their last change. */
-export const undo = (playlists: string[]) => post<{ restored: number }>('/api/undo', { playlists });
+/** The one undo (decision 0026): an action's tokens, undone newest first; the redo's tokens come back (none for
+ *  Incoming's, whose albums' titles come back instead). */
+export const undo = (tokens: string[]) => post<{ redo: string[]; restored: string[] }>('/api/undo', { tokens });
 
 export type DupGroup = { playlist: string; extra: number; entries: { entry: string; copies: number }[] };
 
 export const getDuplicates = () => request<DupGroup[]>('/api/duplicates');
-export const dedupe = (playlist: string) => post<{ removed: number }>('/api/duplicates/dedupe', { playlist });
+export const dedupe = (playlist: string) => post<{ removed: number } & Undo>('/api/duplicates/dedupe', { playlist });
 
-export const createPlaylist = (name: string) => post<{ playlist: string }>('/api/playlists', { name });
+export const createPlaylist = (name: string) => post<{ playlist: string } & Undo>('/api/playlists', { name });
 
 /** What to export (decision 0007): playlists by name, with their tracks or not, the tracks in one folder or the
  *  library's, and the playlists as they are or combined into one of this name. */
@@ -284,7 +288,7 @@ export const playlistRows = (id: string, source?: string) =>
 /** Saves a playlist edited in its view (decision 0023): its lines reordered or some left out (`entries`), replacing
  *  `expected` (the lines as the view showed them); refused when it changed since. */
 export const editPlaylist = (id: string, expected: string[], entries: string[]) =>
-  request<{ playlist: string; entries: number }>(`/api/playlists/${encodeURIComponent(id)}/entries`, {
+  request<{ playlist: string; entries: number } & Undo>(`/api/playlists/${encodeURIComponent(id)}/entries`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ expected, entries }),
@@ -293,11 +297,9 @@ export const editPlaylist = (id: string, expected: string[], entries: string[]) 
 export const playlistCovers = (id: string) =>
   quietly<{ source: string; album_id: string }[]>(`/api/playlists/${encodeURIComponent(id)}/covers`);
 export const renamePlaylist = (id: string, to: string) =>
-  post<{ playlist: string }>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to });
+  post<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to });
 export const deletePlaylist = (id: string) =>
-  request<{ deleted: string }>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
-export const restorePlaylist = (id: string) =>
-  post<{ restored: string }>(`/api/playlists/${encodeURIComponent(id)}/restore`, {});
+  request<{ deleted: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 export const getTargets = () => request<TargetChoice[]>('/api/sync/targets');
 /** The other names a playlist is spoken as, exactly these. */
@@ -309,7 +311,7 @@ export const spokenNames = (text: string) =>
     .filter(Boolean);
 
 export const setSpoken = (id: string, names: string[]) =>
-  request<null>(`/api/playlists/${encodeURIComponent(id)}/spoken`, {
+  request<Undo>(`/api/playlists/${encodeURIComponent(id)}/spoken`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ names }),
@@ -622,13 +624,6 @@ export const transport = (command: Transport, source?: string) =>
 export const deleteIncoming = (source: string, album: string) =>
   request<{ undo: string; title: string }>(`/api/incoming/delete/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, {
     method: 'POST',
-  });
-/** Undo an Incoming action (Delete, Keep, Replace) by the key it returned. */
-export const undoIncoming = (undo: string) =>
-  request<{ restored: string }>('/api/incoming/undo', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ undo }),
   });
 
 /** What Keep would do with an album: its new folder in Music, or why not (`needs_year`: ask for the year). */

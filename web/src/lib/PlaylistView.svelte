@@ -27,7 +27,8 @@
   } from './api';
   import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, favouritesOf, loadCrates } from './crates.svelte';
   import { Reorder } from './reorder.svelte';
-  import { renameEverywhere } from './rename.svelte';
+  import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
+  import { undos, withUndo } from './undo.svelte';
   import { isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import { insights, plural } from './insights.svelte';
@@ -85,13 +86,14 @@
   let source = $state('');
   let error = $state<string | null>(null);
   let shownFor = '';
-  /** Bumped after a save: the rows are asked for again (a reorder changes no count). */
+  /** Bumped after a save: the rows are asked for again (a reorder changes no count), as after an undo or redo. */
   let saved = $state(0);
   $effect(() => {
     const want = id;
     void p?.count;
     void p?.dead;
     void saved;
+    void undos.n;
     void listsKey;
     if (!want || multi) return;
     const c = crateOf(want);
@@ -280,7 +282,10 @@
     making.saving = true;
     const name = making.name.trim();
     try {
-      await crateToPlaylist(crate, name, prefs.source || undefined, favouritesOf(crate));
+      const { added, undo } = await crateToPlaylist(crate, name, prefs.source || undefined, favouritesOf(crate));
+      withUndo(`Made ${name}: ${added} ${added === 1 ? 'track' : 'tracks'}.`, [undo], {
+        after: (undone) => (undone ? followDelete(name) : followCreate(name)),
+      });
       making = null;
       refresh();
       loadCrates();
@@ -385,15 +390,26 @@
     if (!editing || !rows) return;
     if (!tracksChanged && !nameChanged) return void (editing = null);
     editing.saving = true;
+    // Fixed now: once renamed, the panel follows the new name, and what changed would no longer show.
+    const [from, to, renamed] = [id, newName, nameChanged];
+    const tokens: (string | null)[] = [];
     try {
       if (tracksChanged)
-        await editPlaylist(
-          id,
-          rows.map((r) => r.entry),
-          editing.rows.map((x) => x.r.entry),
+        tokens.push(
+          (
+            await editPlaylist(
+              id,
+              rows.map((r) => r.entry),
+              editing.rows.map((x) => x.r.entry),
+            )
+          ).undo,
         );
       // Last: the writes above still name it as it was. The open panel follows the new name.
-      if (nameChanged) await renameEverywhere(id, newName);
+      if (renamed) tokens.push(await renameEverywhere(from, to));
+      // One Undo for both (the rename undone first, then the tracks under the old name).
+      withUndo(`Saved ${to}.`, tokens, {
+        after: (undone) => renamed && (undone ? followRename(to, from) : followRename(from, to)),
+      });
       editing = null;
       saved++;
       refresh();

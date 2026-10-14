@@ -23,6 +23,8 @@
   import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
+  import { withUndo } from './undo.svelte';
+  import { followCreate, followDelete } from './follow.svelte';
 
   let {
     onclose,
@@ -151,7 +153,9 @@
       const ids = isLocal() ? local.queue.slice(Math.max(0, local.index)).map((t) => t.id) : undefined;
       const made = await playlistFromQueue(name, t?.source, ids);
       const left = made.left_out ? `, ${made.left_out} not in the library left out` : '';
-      toast.show({ text: `Made ${made.playlist}: ${made.added} ${made.added === 1 ? 'track' : 'tracks'}${left}.`, tone: 'done' });
+      withUndo(`Made ${made.playlist}: ${made.added} ${made.added === 1 ? 'track' : 'tracks'}${left}.`, [made.undo], {
+        after: (undone) => (undone ? followDelete(made.playlist) : followCreate(made.playlist)),
+      });
       onclose();
       refresh();
     } catch (e) {

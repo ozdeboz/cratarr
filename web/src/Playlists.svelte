@@ -4,7 +4,9 @@
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap, refresh } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
-  import { toast, type Toast } from './lib/toast.svelte';
+  import { toast } from './lib/toast.svelte';
+  import { withUndo } from './lib/undo.svelte';
+  import { followCreate, followDelete } from './lib/follow.svelte';
   import NewButton from './lib/NewButton.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import NameSheet from './lib/NameSheet.svelte';
@@ -112,12 +114,12 @@
 
   const missing = (n: number) => `${n} missing ${n === 1 ? 'track' : 'tracks'}`;
 
-  async function act(run: () => Promise<unknown>, done: Toast) {
+  async function create(name: string) {
     if (working) return;
     working = true;
     try {
-      await run();
-      toast.show(done);
+      const { undo } = await createPlaylist(name);
+      withUndo(`Created ${name}.`, [undo], { after: (undone) => (undone ? followDelete(name) : followCreate(name)) });
       menu = null;
     } catch (e) {
       toast.fail(e, 'Something went wrong');
@@ -130,8 +132,6 @@
   function openNew(e: MouseEvent) {
     menu = { kind: 'new', anchor: (e.currentTarget as HTMLElement).getBoundingClientRect() };
   }
-
-  const create = (name: string) => act(() => createPlaylist(name), { text: `Created ${name}.` });
 
 </script>
 

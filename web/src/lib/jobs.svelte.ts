@@ -2,9 +2,10 @@
 // Followed app-wide: the Incoming tab shows how many wait, Incoming's rows show their progress, and a finished job
 // says so in a toast on whatever page is open. Only jobs this page saw unfinished are told, so a reload never replays
 // old ones. The live channel brings every change (`jobs`); only while it is down does this poll.
-import { getJobs, undoIncoming, type Job } from './api';
+import { getJobs, type Job } from './api';
 import { on, stream } from './events.svelte';
 import { toast } from './toast.svelte';
+import { withUndo } from './undo.svelte';
 
 const ACTIVE_MS = 3_000;
 const IDLE_MS = 30_000;
@@ -94,15 +95,9 @@ function tell(ended: Job[]) {
   if (!done.length) return;
   const verb = done.every((j) => j.action === 'keep') ? 'Kept' : done.every((j) => j.action === 'replace') ? 'Replaced' : 'Moved';
   const what = done.length === 1 ? done[0].title : `${done.length} albums`;
-  toast.show({
-    text: `${verb} ${what} ${verb === 'Moved' ? 'into' : 'in'} Music.`,
-    undo: async () => {
-      try {
-        await Promise.all(done.map((j) => undoIncoming(j.undo!)));
-        jobs.finished++;
-      } catch (e) {
-        toast.fail(e, 'Could not undo it');
-      }
-    },
-  });
+  withUndo(
+    `${verb} ${what} ${verb === 'Moved' ? 'into' : 'in'} Music.`,
+    done.map((j) => j.undo),
+    { undone: `${what} ${done.length === 1 ? 'is' : 'are'} back in Incoming.`, after: () => jobs.finished++ },
+  );
 }

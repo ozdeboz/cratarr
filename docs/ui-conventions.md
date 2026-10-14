@@ -155,9 +155,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 - **What an action did, or why it failed, is a toast** (`lib/toast.svelte.ts`): one at a time, floating above the
   mini-player, or the bottom edge without it (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
-  warnings, red for errors, with "Undo" when the action can be undone. Done and warnings go after a few seconds;
-  errors stay until dismissed, replaced, or the page changes. Errors say what failed in plain words, never a bare
-  status code.
+  warnings, red for errors. Done and warnings go after a few seconds; errors stay until dismissed, replaced, or the
+  page changes (not when the panel opens or closes). Errors say what failed in plain words, never a bare status code.
+- **Undo is in the toast right after the action, and only there** (decision 0026, `lib/undo.svelte.ts`): every change
+  to playlists, crates or Incoming says what it did with Undo (`withUndo`); Undo says "Undone." with Redo; Redo says
+  the action's words again, with Undo. A refused undo says why ("It changed since; nothing was undone."). What one tap
+  undoes by tapping again (a track into a playlist, a heart, a pin) has no Undo.
 - **A page's own state stays in place** (`lib/Notice.svelte`): the page could not load *and has nothing to show*, a
   field's question (the Keep year), empty and loading states. Nothing temporary sits in the page: a reload or update
   that fails while the page shows its content is a toast (once, gone when the server answers again), and so is the

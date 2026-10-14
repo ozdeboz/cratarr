@@ -22,6 +22,7 @@
   import { closePlaylist, openPlaylist, panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
+  import { withUndo } from './undo.svelte';
 
   let { id }: { id: string | null } = $props();
 
@@ -122,11 +123,19 @@
     return () => clearTimeout(t);
   });
 
+  /** After a crate's undo or redo: the list follows, and a crate that is gone no longer shows in the panel. */
+  async function followCrate(crate: string) {
+    await loadCrates();
+    if (panel.open === CRATE + crate && !crates.list?.some((c) => c.id === crate)) closePlaylist();
+  }
+
   async function save() {
     if (!draft || !draft.name.trim() || saving) return;
     saving = true;
+    const name = draft.name.trim();
     try {
       const saved = id ? await updateCrate(id, draft.name, draft.conditions) : await createCrate(draft.name, draft.conditions);
+      withUndo(id ? `Saved ${name}.` : `Created ${name}.`, [saved.undo], { after: () => followCrate(saved.id) });
       forget();
       await loadCrates();
       openPlaylist(CRATE + saved.id);
@@ -148,8 +157,11 @@
   async function remove_crate() {
     if (!id) return;
     if (!confirmDelete) return void (confirmDelete = true);
+    const crate = id;
+    const name = draft?.name.trim() || crate;
     try {
-      await deleteCrate(id);
+      const { undo } = await deleteCrate(crate);
+      withUndo(`Deleted ${name}.`, [undo], { after: () => followCrate(crate) });
       forget();
       await loadCrates();
       closePlaylist();

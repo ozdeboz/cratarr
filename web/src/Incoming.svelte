@@ -9,7 +9,6 @@
     keepPreview,
     replaceIncoming,
     replacePreview,
-    undoIncoming,
     cancelJob,
     type AlbumMoved,
     type KeepPreview,
@@ -23,6 +22,7 @@
   import { prefs } from './lib/prefs.svelte';
   import { live, untilNewTrack } from './lib/live.svelte';
   import { toast } from './lib/toast.svelte';
+  import { withUndo } from './lib/undo.svelte';
   import { playIncomingHere } from './lib/output.svelte';
   import { playing as nowPlaying } from './lib/remote.svelte';
   import { jobs } from './lib/jobs.svelte';
@@ -131,7 +131,7 @@
       return;
     }
     sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
-    toast.show({ text: `${verb} ${r.title} in Music.`, undo: () => restore(r.undo!) });
+    withUndo(`${verb} ${r.title} in Music.`, [r.undo], { undone: `${r.title} is back in Incoming.`, after: reload });
   }
 
   async function cancel(id: number) {
@@ -186,21 +186,12 @@
     try {
       const { undo, title } = await deleteIncoming(source, a.id);
       sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
-      toast.show({ text: `Deleted ${title}.`, undo: () => restore(undo) });
+      withUndo(`Deleted ${title}.`, [undo], { undone: `${title} is back in Incoming.`, after: reload });
     } catch (e) {
       toast.fail(e, 'Could not delete the album');
     } finally {
       working = false;
       menu = null;
-    }
-  }
-
-  async function restore(undo: string) {
-    try {
-      await undoIncoming(undo);
-      await reload();
-    } catch (e) {
-      toast.fail(e, 'Could not restore the album');
     }
   }
 

@@ -5,14 +5,14 @@
   // Shuffle, Play next and Add to queue as the large actions (several: one playlist after another, each track once),
   // then Open, the favourite, Pin, Export… and Sync to… (they open the panel on that tab), Spoken as… and Rename (one
   // playlist only), and Delete (one Undo for all), each done inside the sheet.
-  // Success shows where it happens (the header, the list); only Delete says something, to offer Undo.
-  import { deletePlaylist, restorePlaylist, setSpoken, spokenNames, type Link, type PlayMode, incomingCoverUrl, playlistCovers } from './api';
+  // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
+  // (decision 0026).
+  import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, incomingCoverUrl, playlistCovers } from './api';
   import MenuEntry from './MenuEntry.svelte';
   import { startPlaylists } from './output.svelte';
-  import { openSelection, panel, playlistDeleted, type Tab } from './panel.svelte';
-  import { selectDeleted } from './select.svelte';
-  import { renameEverywhere } from './rename.svelte';
-  import { insights } from './insights.svelte';
+  import { openSelection, panel, type Tab } from './panel.svelte';
+  import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
+  import { withUndo } from './undo.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './favourites.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { prefs } from './prefs.svelte';
@@ -25,15 +25,12 @@
     onclose,
     onrenamed,
     ondeleted,
-    onrestored,
   }: {
     /** One or more (in the order ticked). */
     playlists: Item[];
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
-    /** The deletion was undone. */
-    onrestored?: (id: string) => void;
   } = $props();
 
   let mode = $state<'menu' | 'rename' | 'delete' | 'spoken'>('menu');
@@ -78,7 +75,8 @@
     if (working || !one) return;
     working = true;
     try {
-      await setSpoken(one.id, spokenNames(spokenField));
+      const { undo } = await setSpoken(one.id, spokenNames(spokenField));
+      withUndo(`Saved the names of ${one.name}.`, [undo]);
       onclose();
     } catch (e) {
       fail(e, 'Could not save the names');
@@ -122,8 +120,10 @@
     if (!one || !to || to === one.id || working) return;
     working = true;
     try {
-      await renameEverywhere(one.id, to);
-      onrenamed?.(one.id, to);
+      const from = one.id;
+      const undo = await renameEverywhere(from, to);
+      withUndo(`Renamed ${one.name} to ${to}.`, [undo], { after: (undone) => (undone ? followRename(to, from) : followRename(from, to)) });
+      onrenamed?.(from, to);
       onclose();
     } catch (e) {
       fail(e, 'Something went wrong');
@@ -138,13 +138,12 @@
     working = true;
     const list = playlists.map((x) => ({ id: x.id, name: x.name }));
     const gone: string[] = [];
+    const tokens: (string | null)[] = [];
     try {
       for (const { id } of list) {
-        await deletePlaylist(id);
+        tokens.push((await deletePlaylist(id)).undo);
         gone.push(id);
-        playlistDeleted(id);
-        selectDeleted(id);
-        insights.deleted(id);
+        followDelete(id);
         ondeleted?.(id);
       }
       onclose();
@@ -155,21 +154,8 @@
       refresh();
     }
     if (!gone.length) return;
-    toast.show({
-      text: gone.length === 1 ? `Deleted ${list.find((x) => x.id === gone[0])?.name ?? gone[0]}.` : `Deleted ${gone.length} playlists.`,
-      undo: async () => {
-        try {
-          for (const id of gone) {
-            await restorePlaylist(id);
-            insights.restored(id);
-            onrestored?.(id);
-          }
-        } catch (e) {
-          fail(e, gone.length === 1 ? 'Could not restore the playlist' : 'Could not restore the playlists');
-        } finally {
-          refresh();
-        }
-      },
+    withUndo(gone.length === 1 ? `Deleted ${list.find((x) => x.id === gone[0])?.name ?? gone[0]}.` : `Deleted ${gone.length} playlists.`, tokens, {
+      after: (undone) => gone.forEach(undone ? followCreate : followDelete),
     });
   }
 </script>

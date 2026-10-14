@@ -10,7 +10,6 @@
     getDuplicates,
     getRepairs,
     playlistRows,
-    undo,
     type DupGroup,
     type PlaylistRow,
     type Repair,
@@ -19,6 +18,7 @@
   import { shownPlaylists } from './output.svelte';
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
+  import { withUndo } from './undo.svelte';
 
   let { ids }: { ids: string[] } = $props();
 
@@ -74,29 +74,16 @@
   const inPlaylists = (n: number) => `${n} ${n === 1 ? 'playlist' : 'playlists'}`;
   const several = $derived(ids.length > 1);
 
-  async function run(action: () => Promise<{ playlists: string[] }>, what: string) {
+  /** A fix: the playlists it changed and its undo token (or one per write). */
+  async function run(action: () => Promise<{ playlists: string[]; undo: string | null | (string | null)[] }>, what: string) {
     if (busy) return;
     busy = true;
     confirming = false;
     try {
-      const { playlists } = await action();
-      toast.show({ text: several ? `${what} in ${inPlaylists(playlists.length)}.` : `${what}.`, undo: () => undoChanges(playlists) });
+      const { playlists, undo } = await action();
+      withUndo(several ? `${what} in ${inPlaylists(playlists.length)}.` : `${what}.`, [undo].flat(), { after: load });
     } catch (e) {
       toast.fail(e, 'Something went wrong');
-    } finally {
-      busy = false;
-      refresh();
-      await load();
-    }
-  }
-
-  async function undoChanges(playlists: string[]) {
-    busy = true;
-    try {
-      await undo(playlists);
-      toast.show({ text: 'Undone.' });
-    } catch (e) {
-      toast.fail(e, 'Could not undo');
     } finally {
       busy = false;
       refresh();
@@ -112,16 +99,18 @@
         const by = new Map<string, Set<string>>();
         for (const x of items) by.set(x.playlist, (by.get(x.playlist) ?? new Set()).add(x.row.entry));
         const done: string[] = [];
+        const undo: (string | null)[] = [];
         for (const [playlist, gone] of by) {
           const all = (await playlistRows(playlist, prefs.source || undefined)).rows.map((r) => r.entry);
-          await editPlaylist(
+          const r = await editPlaylist(
             playlist,
             all,
             all.filter((e) => !gone.has(e)),
           );
           done.push(playlist);
+          undo.push(r.undo);
         }
-        return { playlists: done };
+        return { playlists: done, undo };
       },
       `Removed ${tracks(n)}`,
     );
@@ -213,10 +202,7 @@
               <button
                 onclick={() =>
                   run(
-                    async () => {
-                      await dedupe(g.playlist);
-                      return { playlists: [g.playlist] };
-                    },
+                    async () => ({ playlists: [g.playlist], undo: (await dedupe(g.playlist)).undo }),
                     `Removed ${g.extra} repeated ${g.extra === 1 ? 'track' : 'tracks'}`,
                   )}
                 disabled={busy}>Remove {g.extra === 1 ? 'repeat' : 'repeats'}</button

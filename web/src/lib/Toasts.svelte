@@ -1,7 +1,7 @@
 <script lang="ts">
   // Renders lib/toast.svelte.ts, once, in the app shell: floating above the mini-player (or the bottom edge), at the bottom of the
   // content beside the sidebar from 1024 px. It never moves the page. Done and warning toasts go after 6 s (10 s with
-  // Undo); errors stay until tapped away, replaced, or the page changes. Touching or hovering it holds the timer; a
+  // its Undo or Redo); errors stay until tapped away, replaced, or the page changes. Touching or hovering it holds the timer; a
   // swipe sideways or down dismisses it.
   import { toast } from './toast.svelte';
 
@@ -11,12 +11,19 @@
   $effect(() => {
     if (!t || t.tone === 'error' || held) return;
     const id = t.id;
-    const timer = setTimeout(() => toast.current?.id === id && toast.dismiss(), t.undo ? 10_000 : 6000);
+    const timer = setTimeout(() => toast.current?.id === id && toast.dismiss(), t.act ? 10_000 : 6000);
     return () => clearTimeout(timer);
   });
 
+  // The page changing takes it away; the panel opening or closing (the address's `?…`) does not: a deleted playlist's
+  // panel closes, and its Undo must stay.
   $effect(() => {
-    const away = () => toast.dismiss();
+    const page = () => location.hash.split('?')[0];
+    let was = page();
+    const away = () => {
+      if (page() !== was) toast.dismiss();
+      was = page();
+    };
     addEventListener('hashchange', away);
     return () => removeEventListener('hashchange', away);
   });
@@ -54,14 +61,14 @@
         }}
       >
         <span class="text">{t.text}</span>
-        {#if t.undo}
+        {#if t.act}
           <button
             class="act"
             onclick={() => {
-              const u = t.undo;
+              const run = t.act?.run;
               toast.dismiss();
-              u?.();
-            }}>Undo</button
+              run?.();
+            }}>{t.act.label}</button
           >
         {/if}
         <button class="close" aria-label="Dismiss" onclick={() => toast.dismiss()}>×</button>

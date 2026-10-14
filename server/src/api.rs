@@ -724,7 +724,9 @@ struct UndoRequest {
 }
 
 /// The one undo (decision 0026): every token an action returned, undone newest first. Playlist and crate changes
-/// answer with their redo tokens; Incoming's (its event ids) with the albums' titles.
+/// answer with their redo tokens, in the order they were made: undone newest first in turn, the redo does the action
+/// again in its own order (an edit before the rename that followed it). Incoming's tokens (its event ids) answer with
+/// the albums' titles.
 async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
     let (mut redo, mut restored) = (Vec::new(), Vec::new());
     for token in req.tokens.iter().rev() {
@@ -734,7 +736,6 @@ async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Resu
             restored.push(app.incoming.undo(token).await?);
         }
     }
-    redo.reverse();
     Ok(Json(json!({ "redo": redo, "restored": restored })))
 }
 
