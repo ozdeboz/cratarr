@@ -278,7 +278,7 @@ pub struct PlaylistService {
     journal: Arc<Journal>,
     /// The favourite tracks' lines for the crates: when, for which server, at which change count (see
     /// `favourite_lines`).
-    favourites_kept: tokio::sync::Mutex<Option<(std::time::Instant, String, u64, HashSet<String>)>>,
+    favourites_kept: tokio::sync::Mutex<Option<(std::time::Instant, String, u64, Option<HashSet<String>>)>>,
 }
 
 impl PlaylistService {
@@ -599,9 +599,14 @@ impl PlaylistService {
     pub async fn crates(&self, want: Option<&str>) -> Result<Vec<CrateView>, ToggleError> {
         let own = self.crate_store.list().await?;
         let all: Vec<(bool, CrateDef)> = crates::permanent().into_iter().map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
-        // The favourites are needed for the toggle's counts, whatever the crates' own conditions.
-        let lib = self.crate_library(want, true).await?;
         let set = self.crate_store.all_favourites().await?;
+        // The favourites are asked for only when a crate shows by them (its conditions, or its toggle): asking the
+        // media server for every favourite is slow, and a list of crates that need none must not wait for it. The
+        // other settings' counts are then unknown (null) until it is asked.
+        let needed = all.iter().any(|(_, c)| {
+            crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::None) != crates::Favourites::All
+        });
+        let lib = self.crate_library(want, needed).await?;
         let count = |conditions: Vec<crates::Condition>| {
             (!crates::needs_favourites(&conditions) || lib.favourites.is_some()).then(|| lib.select(&conditions).len())
         };
@@ -747,27 +752,31 @@ impl PlaylistService {
         Ok(CrateLibrary { source: sid, files, membership, favourites })
     }
 
-    /// The favourite tracks' lines, from the media server, kept a minute (or until Cratarr changes a favourite).
+    /// The favourite tracks' lines, from the media server, kept a minute (or until Cratarr changes a favourite). One
+    /// asks at a time, and a failure is kept a minute too: the query is a heavy one for the server, and asking again on
+    /// every request while it struggles makes it struggle more.
     async fn favourite_lines(&self, sid: &str, source: &Arc<dyn source::Source>) -> Option<HashSet<String>> {
         const KEEP: std::time::Duration = std::time::Duration::from_secs(60);
         let generation = crates::favourites_generation();
-        if let Some((at, s, g, lines)) = self.favourites_kept.lock().await.as_ref()
+        let mut kept = self.favourites_kept.lock().await;
+        if let Some((at, s, g, lines)) = kept.as_ref()
             && at.elapsed() < KEEP
             && s == sid
             && *g == generation
         {
-            return Some(lines.clone());
+            return lines.clone();
         }
         let ids = match source.favorite_tracks().await {
             Ok(ids) => ids,
             Err(e) => {
                 tracing::warn!("favourites for the crates: {e:#}");
+                *kept = Some((std::time::Instant::now(), sid.to_string(), generation, None));
                 return None;
             }
         };
         let (c, s) = (self.lib.catalogue(), sid.to_string());
         let lines = tokio::task::spawn_blocking(move || c.rels_of(&s, 0, &ids)).await.ok()?.ok()?;
-        *self.favourites_kept.lock().await = Some((std::time::Instant::now(), sid.to_string(), generation, lines.clone()));
+        *kept = Some((std::time::Instant::now(), sid.to_string(), generation, Some(lines.clone())));
         Some(lines)
     }
 
