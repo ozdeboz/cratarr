@@ -1,12 +1,13 @@
 <script lang="ts">
   // The panel's Export tab (decisions 0007, 0025): the selected playlists (each can be left out; more are ticked with the
-  // Playlists page's Select), the three options, what it will hold, and the download (a link: the browser shows its
-  // progress, and closing it cancels).
+  // Playlists page's Select: beside the page, on its chips; full-screen, Add playlists goes there), the three options,
+  // what it will hold, and the download (a link: the browser shows its progress, and closing it cancels).
   import { exportPreview, exportUrl, type ExportChoice, type ExportPreview } from './api';
   import { exporting } from './export.svelte';
   import Icon from './Icon.svelte';
+  import { inSidebar } from './live.svelte';
   import { shownPlaylists } from './output.svelte';
-  import { addMore, leaveOut, tickingBeside } from './select.svelte';
+  import { addMore, leaveOut } from './select.svelte';
 
   let { ids }: { ids: string[] } = $props();
 
@@ -75,7 +76,7 @@
       </li>
     {/each}
   </ul>
-  {#if !tickingBeside()}
+  {#if !inSidebar()}
     <button class="more" onclick={addMore}><Icon name="plus" size={18} /><span>Add playlists</span></button>
   {/if}
 

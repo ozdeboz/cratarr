@@ -2,7 +2,7 @@
 // opening it alone; the chip's circle keeps adding or removing the playing track. Beside the page the panel shows the
 // selection as it is ticked; on a phone (the panel covers the page) it is ticked first and opened with "Open N".
 import { sidePanel } from './live.svelte';
-import { closePlaylist, keepOpen, openSelection, panel } from './panel.svelte';
+import { closePlaylist, openSelection, panel } from './panel.svelte';
 
 export const select = $state({ on: false, picked: [] as string[] });
 
@@ -46,17 +46,11 @@ export function leaveOut(id: string) {
 }
 
 const onPlaylists = () => (location.hash.split('?')[0] || '#/') === '#/';
-/** Select is on the Playlists page beside this panel: ticks there show here at once. */
-export const tickingBeside = () => select.on && sidePanel() && onPlaylists();
 
-/** Add playlists (the Export tab): Select on the Playlists page, with what is selected. Beside the page the panel
- *  stays; on a phone it closes, so the chips show. */
+/** Add playlists (the full-screen panel's Export tab): Select on the Playlists page, with what is selected; the panel
+ *  closes so the chips show. (Beside the page they show already: ticking them adds.) */
 export function addMore() {
   if (!select.on) startSelect();
-  if (sidePanel()) {
-    if (!onPlaylists()) location.hash = keepOpen('#/');
-    return;
-  }
   closePlaylist(() => !onPlaylists() && (location.hash = '#/'));
 }
 
