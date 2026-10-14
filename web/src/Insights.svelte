@@ -95,7 +95,7 @@
           aria-expanded={prefs.relatedFilterOpen}
           aria-controls="related-filter"
           aria-label={prefs.relatedFilterOpen ? 'Hide the filter' : 'Show the filter'}
-          onclick={() => (prefs.relatedFilterOpen = !prefs.relatedFilterOpen)}><Icon name="filter" size={22} /></button
+          onclick={() => (prefs.relatedFilterOpen = !prefs.relatedFilterOpen)}><Icon name="share" size={22} /></button
         >
       {/if}
     </div>
