@@ -3,9 +3,12 @@
 import { untrack } from 'svelte';
 import { ApiError, coverUrl, incomingCoverUrl, setFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
+import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek } from './localPlayer.svelte';
+import { isLocal, localNowPlaying } from './output.svelte';
 import { toast } from './toast.svelte';
 
-const playing = () => live.view?.now_playing ?? null;
+/** What plays where the output is: the server's player, or this browser (decision 0022). */
+export const playing = () => (isLocal() ? localNowPlaying() : (live.view?.now_playing ?? null));
 
 // Cover: the library's cover file for a library track; otherwise (or when there is none) the album's image from the
 // server, which also covers music outside the library, such as Incoming. Candidates that fail are skipped.
@@ -57,6 +60,7 @@ $effect.root(() => {
 
 export const duration = (): number | null => playing()?.progress?.duration_secs ?? null;
 export function position(): number {
+  if (isLocal()) return local.position;
   const a = clock.anchor;
   if (!a) return 0;
   const p = a.paused ? a.pos : a.pos + Math.max(0, clock.tick - a.at) / 1000;
@@ -117,6 +121,12 @@ function show(command: Transport) {
 }
 
 export async function send(command: Transport) {
+  if (isLocal()) {
+    if (command === 'play-pause') localToggle();
+    else if (command === 'next') localNext();
+    else if (command === 'previous') localPrevious();
+    return;
+  }
   const np = playing();
   if (!np) return;
   show(command);
@@ -127,6 +137,20 @@ export async function send(command: Transport) {
     expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond");
   }
 }
+
+/** Plays upcoming track `i` (the queue view's tap): within the local stream, or the server's player jumps. */
+export async function playUpcoming(i: number) {
+  if (isLocal()) return localJump(local.index + 1 + i);
+  const np = playing();
+  const t = np?.upcoming[i];
+  if (!np || !t) return;
+  const { jumpTo } = await import('./api');
+  await jumpTo(t.id, np.source);
+  setTimeout(refresh, 700);
+}
+
+/** Seeks the local player (the remote one cannot be dragged yet, decision 0019). */
+export const seekTo = (secs: number) => isLocal() && localSeek(secs);
 
 // Favourite: shown as the server reports it; a tap shows the new state at once and asks for it.
 const fav = $state<{ wanted: { id: string; on: boolean } | null }>({ wanted: null });

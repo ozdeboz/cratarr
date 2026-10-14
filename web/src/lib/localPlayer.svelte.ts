@@ -1,0 +1,427 @@
+// The local player (decision 0022): Cratarr plays in the browser, gapless, through one continuous MSE stream. Each
+// track comes from the server (/api/stream: FLAC repackaged as fragmented MP4, MP3 as it is) and is appended to the
+// same stream right after the one before: MP3 trimmed by its LAME header's encoder delay at the start and to its exact
+// length at the end (measured to the sample with tools/gapless-lab), FLAC placed at its own sample positions. The next
+// track is appended while the current one plays; what has been played is dropped from the buffer again.
+//
+// The stream's time is mapped back to "which track, how far in" through the segments: one per appended track, from
+// where its sample 0 sits in the stream. Skipping to an appended track moves within the stream (no gap, no reload);
+// anything else (a jump back, a seek outside what is loaded) starts a fresh stream at that point.
+
+export type LocalTrack = {
+  source: string;
+  id: string;
+  name: string;
+  artist: string | null;
+  album: string | null;
+  album_id: string | null;
+};
+
+/** One appended track: its queue index, where its sample 0 sits in the stream (s), and its length (s; null while
+ *  unknown). */
+type Segment = { index: number; start: number; length: number | null };
+
+export const local = $state({
+  queue: [] as LocalTrack[],
+  /** The playing track's index in `queue`; -1 when nothing is loaded. */
+  index: -1,
+  paused: true,
+  /** Seconds into the playing track. */
+  position: 0,
+  /** The playing track's length (s), when known. */
+  duration: null as number | null,
+  /** The last thing that failed, in plain words. */
+  error: null as string | null,
+});
+
+const MP4 = 'audio/mp4; codecs="flac"';
+const MPEG = 'audio/mpeg';
+/** Keep this much ahead in the stream before fetching the next track (s). */
+const AHEAD = 30;
+/** Drop played audio older than this behind the playing position (s). */
+const BEHIND = 30;
+/** Previous restarts the track after this many seconds (Finamp: 5). */
+const RESTART_AFTER = 5;
+
+const audio = typeof Audio === 'undefined' ? null : new Audio();
+let ms: MediaSource | null = null;
+let sb: SourceBuffer | null = null;
+let mime: string | null = null;
+let segments: Segment[] = [];
+/** Stream time where the next appended track's sample 0 goes. */
+let streamEnd = 0;
+/** Bumped by every fresh stream; work for an older one stops. */
+let generation = 0;
+let fetching: AbortController | null = null;
+let appending = false;
+/** The last queue index appended to the stream. */
+let lastAppended = -1;
+
+// --- MP3: the LAME/Xing header (the measured rule: only the encoder delay precedes the first real sample) ---
+
+type Mp3Head = { rate: number; delay: number; samples: number | null };
+
+/** Parses the first frame of an MP3 for its sample rate and LAME gapless information; null when more bytes are needed. */
+function mp3Head(b: Uint8Array): Mp3Head | null | 'invalid' {
+  let i = 0;
+  if (b.length < 10) return null;
+  if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) i = 10 + ((b[6] << 21) | (b[7] << 14) | (b[8] << 7) | b[9]);
+  while (i + 4 <= b.length && !(b[i] === 0xff && (b[i + 1] & 0xe0) === 0xe0)) i++;
+  if (i + 200 > b.length) return b.length > 1 << 22 ? 'invalid' : null; // wait for the first frame and its header
+  const version = (b[i + 1] >> 3) & 3; // 3 = MPEG1, 2 = MPEG2, 0 = MPEG2.5
+  const rates = version === 3 ? [44100, 48000, 32000] : version === 2 ? [22050, 24000, 16000] : [11025, 12000, 8000];
+  const rate = rates[(b[i + 2] >> 2) & 3] ?? 44100;
+  const mono = (b[i + 3] & 0xc0) === 0xc0;
+  const side = version === 3 ? (mono ? 17 : 32) : mono ? 9 : 17;
+  const x = i + 4 + side;
+  const tag = String.fromCharCode(b[x], b[x + 1], b[x + 2], b[x + 3]);
+  if (tag !== 'Xing' && tag !== 'Info') return { rate, delay: 0, samples: null };
+  const flags = (b[x + 4] << 24) | (b[x + 5] << 16) | (b[x + 6] << 8) | b[x + 7];
+  let p = x + 8;
+  let frames: number | null = null;
+  if (flags & 1) {
+    frames = ((b[p] << 24) | (b[p + 1] << 16) | (b[p + 2] << 8) | b[p + 3]) >>> 0;
+    p += 4;
+  }
+  if (flags & 2) p += 4;
+  if (flags & 4) p += 100;
+  if (flags & 8) p += 4;
+  const isLame = String.fromCharCode(b[p], b[p + 1], b[p + 2], b[p + 3]) === 'LAME' || String.fromCharCode(b[p], b[p + 1], b[p + 2], b[p + 3]) === 'Lavc';
+  const d = p + 21;
+  const delay = isLame ? (b[d] << 4) | (b[d + 1] >> 4) : 0;
+  const padding = isLame ? ((b[d + 1] & 0x0f) << 8) | b[d + 2] : 0;
+  const perFrame = version === 3 ? 1152 : 576;
+  return { rate, delay, samples: frames === null ? null : frames * perFrame - delay - padding };
+}
+
+// --- the stream ---
+
+async function waitUpdate() {
+  if (sb?.updating) await new Promise((r) => sb!.addEventListener('updateend', r, { once: true }));
+}
+
+/** Appends bytes, making room by dropping played audio when the browser's buffer is full. */
+async function appendBytes(bytes: Uint8Array<ArrayBuffer>, gen: number) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (gen !== generation || !sb) return;
+    await waitUpdate();
+    try {
+      sb.appendBuffer(bytes);
+      await waitUpdate();
+      return;
+    } catch (e) {
+      if ((e as DOMException).name !== 'QuotaExceededError') throw e;
+      await evict(5);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  throw new Error('The browser has no room for more audio.');
+}
+
+/** Drops played audio more than `keep` seconds behind the playing position. */
+async function evict(keep = BEHIND) {
+  if (!sb || !audio || !sb.buffered.length) return;
+  const until = audio.currentTime - keep;
+  if (until <= sb.buffered.start(0) + 1) return;
+  await waitUpdate();
+  try {
+    sb.remove(sb.buffered.start(0), until);
+    await waitUpdate();
+  } catch {
+    /* the stream moved on; nothing to drop */
+  }
+}
+
+/** Fetches queue track `index` and appends it to the stream, starting `from` seconds into it (a seek). */
+async function appendTrack(index: number, from: number, gen: number) {
+  const t = local.queue[index];
+  if (!t) return;
+  appending = true;
+  fetching = new AbortController();
+  try {
+    const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${from > 0 ? `?from=${Math.floor(from * 44100)}` : ''}`, {
+      signal: fetching.signal,
+    });
+    if (!res.ok) {
+      let text = '';
+      try {
+        text = (await res.json()).error ?? '';
+      } catch {
+        /* no words */
+      }
+      throw new Error(text || `${t.name} could not be loaded.`);
+    }
+    const type = res.headers.get('content-type') ?? '';
+    const kind = type.startsWith('audio/mp4') ? MP4 : MPEG;
+    const reader = res.body!.getReader();
+    // The track's sample 0 goes to `start` in the stream (before the stream's 0 when starting mid-track).
+    const start = streamEnd - from;
+    let head = new Uint8Array(0);
+    let placed = false;
+    let length: number | null = null;
+    const segment: Segment = { index, start, length: null };
+    const place = async (rate: number, skip: number, samples: number | null) => {
+      if (!sb) {
+        sb = ms!.addSourceBuffer(kind);
+        mime = kind;
+      } else if (mime !== kind) {
+        await waitUpdate();
+        sb.changeType(kind);
+        mime = kind;
+      }
+      await waitUpdate();
+      // FLAC's fragments carry their own sample times (tfdt; after a seek they start at the frame holding the sample
+      // asked for), so it runs in segments mode with the offset at the track's sample 0. MP3 has no times of its own:
+      // sequence mode, the offset at its first decoded sample (the encoder delay before sample 0).
+      const mode: AppendMode = kind === MP4 ? 'segments' : 'sequence';
+      if (sb.mode !== mode) sb.mode = mode;
+      length = samples === null ? null : samples / rate;
+      sb.appendWindowEnd = Infinity;
+      sb.appendWindowStart = Math.max(0, streamEnd);
+      if (length !== null) sb.appendWindowEnd = start + length;
+      sb.timestampOffset = kind === MP4 ? start : start - skip / rate;
+      segment.length = length;
+      segments.push(segment);
+      placed = true;
+    };
+    if (kind === MP4) {
+      const rate = Number(res.headers.get('x-sample-rate')) || 44100;
+      const total = Number(res.headers.get('x-total-samples')) || null;
+      await place(rate, 0, total);
+    }
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (gen !== generation) {
+        reader.cancel().catch(() => {});
+        return;
+      }
+      if (done) break;
+      let chunk = value as Uint8Array<ArrayBuffer>;
+      if (!placed) {
+        const joined = new Uint8Array(head.length + chunk.length);
+        joined.set(head);
+        joined.set(chunk, head.length);
+        const h = mp3Head(joined);
+        if (h === null) {
+          head = joined;
+          continue;
+        }
+        if (h === 'invalid') throw new Error(`${t.name} is not a playable MP3.`);
+        await place(h.rate, h.delay, h.samples);
+        chunk = joined;
+      }
+      await appendBytes(chunk, gen);
+    }
+    if (!placed && head.length) {
+      const h = mp3Head(head);
+      if (h && h !== 'invalid') {
+        await place(h.rate, h.delay, h.samples);
+        await appendBytes(head, gen);
+      }
+    }
+    if (gen !== generation) return;
+    // A length the header did not give: what the stream now holds.
+    if (segment.length === null && sb && sb.buffered.length) segment.length = sb.buffered.end(sb.buffered.length - 1) - start;
+    streamEnd = start + (segment.length ?? 0);
+    lastAppended = index;
+    if (index === local.queue.length - 1 && ms?.readyState === 'open') {
+      await waitUpdate();
+      ms.endOfStream();
+    }
+  } catch (e) {
+    if ((e as DOMException).name === 'AbortError' || gen !== generation) return;
+    local.error = e instanceof Error ? e.message : String(e);
+    // Skip what cannot play, as a player does, unless it was the only thing.
+    if (index < local.queue.length - 1) {
+      lastAppended = index;
+      segments.push({ index, start: streamEnd, length: 0 });
+    }
+  } finally {
+    if (gen === generation) appending = false;
+  }
+}
+
+/** Starts a fresh stream at queue track `index`, `from` seconds in. */
+async function fresh(index: number, from = 0, play = true) {
+  if (!audio) return;
+  const gen = ++generation;
+  fetching?.abort();
+  appending = false;
+  segments = [];
+  streamEnd = 0;
+  lastAppended = index - 1;
+  sb = null;
+  mime = null;
+  local.index = index;
+  local.position = from;
+  local.error = null;
+  ms = new MediaSource();
+  audio.src = URL.createObjectURL(ms);
+  if (play) audio.play().catch(() => {});
+  await new Promise((r) => ms!.addEventListener('sourceopen', r, { once: true }));
+  if (gen !== generation) return;
+  await appendTrack(index, from, gen);
+}
+
+/** Which segment the stream is in now, and how far into its track. */
+function where(): { seg: Segment; offset: number } | null {
+  if (!audio) return null;
+  const t = audio.currentTime;
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const s = segments[i];
+    if (t >= s.start - 0.001) return { seg: s, offset: t - s.start };
+  }
+  return segments[0] ? { seg: segments[0], offset: 0 } : null;
+}
+
+// The clock: the playing track and position, the next track fetched ahead, played audio dropped, the lock screen kept
+// up to date. Four times a second is plenty for the display; the audio itself runs on its own.
+let lastShown = -1;
+function tick() {
+  if (!audio || local.index < 0) return;
+  local.paused = audio.paused;
+  const w = where();
+  if (w) {
+    if (w.seg.index !== local.index) local.index = w.seg.index;
+    local.position = Math.max(0, w.offset);
+    local.duration = w.seg.length;
+  }
+  if (local.index !== lastShown) {
+    lastShown = local.index;
+    showOnLockScreen();
+  }
+  const gen = generation;
+  if (!appending && lastAppended >= local.index && lastAppended < local.queue.length - 1 && streamEnd - audio.currentTime < AHEAD) {
+    appendTrack(lastAppended + 1, 0, gen);
+  }
+  if (!appending) evict();
+  if ('mediaSession' in navigator && local.duration && Number.isFinite(local.duration)) {
+    try {
+      navigator.mediaSession.setPositionState({ duration: local.duration, position: Math.min(local.position, local.duration), playbackRate: 1 });
+    } catch {
+      /* not supported */
+    }
+  }
+}
+if (audio) {
+  setInterval(tick, 250);
+  audio.addEventListener('play', tick);
+  audio.addEventListener('pause', tick);
+  audio.addEventListener('ended', () => {
+    local.paused = true;
+  });
+}
+
+function showOnLockScreen() {
+  if (!('mediaSession' in navigator)) return;
+  const t = local.queue[local.index];
+  if (!t) return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: t.name,
+    artist: t.artist ?? '',
+    album: t.album ?? '',
+    artwork: [{ src: `/api/cover/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}` }],
+  });
+}
+
+/** The engine's audio element, for measuring (tools/gapless-lab, web/engine-lab.html); never for playback control. */
+export const engineAudio = () => audio;
+
+// --- what the player and the lock screen ask of it ---
+
+/** Plays `tracks` from `index`. */
+export function playQueue(tracks: LocalTrack[], index = 0) {
+  local.queue = tracks;
+  fresh(index, 0);
+}
+
+/** Adds tracks after the playing one (`next`) or at the end (`last`). */
+export function enqueue(tracks: LocalTrack[], how: 'next' | 'last') {
+  if (local.index < 0) return playQueue(tracks);
+  const at = how === 'next' ? local.index + 1 : local.queue.length;
+  local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
+  // Inserted before something already appended: that track is no longer next in the stream.
+  if (at <= lastAppended) {
+    const keep = segments.filter((s) => s.index < at);
+    if (keep.length && sb && ms?.readyState === 'open') {
+      const cut = keep[keep.length - 1];
+      const end = cut.start + (cut.length ?? 0);
+      segments = keep;
+      streamEnd = end;
+      lastAppended = at - 1;
+      waitUpdate().then(() => {
+        try {
+          sb?.remove(end, Infinity);
+        } catch {
+          /* nothing appended there */
+        }
+      });
+    }
+  }
+}
+
+export function togglePlay() {
+  if (!audio) return;
+  if (audio.paused) audio.play().catch(() => {});
+  else audio.pause();
+}
+
+/** To queue track `index`: within the stream when it is already appended (gapless), else a fresh stream. */
+export function jump(index: number) {
+  if (!audio || index < 0 || index >= local.queue.length) return;
+  const seg = segments.find((s) => s.index === index);
+  if (seg && audio.buffered.length && seg.start >= audio.buffered.start(0)) {
+    audio.currentTime = seg.start;
+    local.index = index;
+    if (audio.paused) audio.play().catch(() => {});
+  } else {
+    fresh(index, 0, true);
+  }
+}
+
+export const next = () => jump(local.index + 1);
+
+export function previous() {
+  if (local.position > RESTART_AFTER) seek(0);
+  else jump(Math.max(0, local.index - 1));
+}
+
+/** To `secs` into the playing track: within what is loaded, else a fresh stream from there. */
+export function seek(secs: number) {
+  if (!audio) return;
+  const w = where();
+  const target = w ? w.seg.start + secs : secs;
+  for (let i = 0; i < audio.buffered.length; i++) {
+    if (target >= audio.buffered.start(i) && target <= audio.buffered.end(i)) {
+      audio.currentTime = target;
+      return;
+    }
+  }
+  fresh(local.index, secs, !audio.paused);
+}
+
+/** Stops and forgets the queue (switching output to elsewhere). Returns where it was, for the handover. */
+export function stop(): { queue: LocalTrack[]; index: number; position: number } {
+  const was = { queue: local.queue, index: local.index, position: local.position };
+  generation++;
+  fetching?.abort();
+  audio?.pause();
+  if (audio) audio.removeAttribute('src');
+  local.queue = [];
+  local.index = -1;
+  local.paused = true;
+  return was;
+}
+
+if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+  const ms_ = navigator.mediaSession;
+  ms_.setActionHandler('play', () => audio?.play());
+  ms_.setActionHandler('pause', () => audio?.pause());
+  ms_.setActionHandler('nexttrack', () => next());
+  ms_.setActionHandler('previoustrack', () => previous());
+  try {
+    ms_.setActionHandler('seekto', (d) => d.seekTime !== undefined && seek(d.seekTime));
+  } catch {
+    /* older browsers */
+  }
+}

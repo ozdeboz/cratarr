@@ -20,6 +20,8 @@ export type Prefs = {
   /** Wide windows show the player beside the page (true) or the mini-player with the player over the page (false,
    *  after Maximise). */
   sidebar: boolean;
+  /** Where music plays (decision 0019 / 0022): on a server's player (`remote`) or in this browser (`local`). */
+  output: 'remote' | 'local';
 };
 
 const KEY = 'cratarr-prefs';
@@ -34,6 +36,7 @@ export const DEFAULTS: Prefs = {
   signals: { tracks: true, genre: true, artists: true },
   playerWidth: 400,
   sidebar: true,
+  output: 'remote',
 };
 
 function read(): Prefs {
@@ -48,6 +51,7 @@ function read(): Prefs {
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;
+      if (saved.output === 'remote' || saved.output === 'local') p.output = saved.output;
       if (saved.insightsTab === 'statistics' || saved.insightsTab === 'related') p.insightsTab = saved.insightsTab;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {

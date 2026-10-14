@@ -8,12 +8,14 @@
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { prefs } from './prefs.svelte';
-  import { coverSrc, favorite, toggleFavorite } from './remote.svelte';
+  import { coverSrc, favorite, playing, toggleFavorite } from './remote.svelte';
+  import { enqueue } from './localPlayer.svelte';
+  import { isLocal } from './output.svelte';
   import { toast } from './toast.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
-  const np = $derived(live.view?.now_playing ?? null);
+  const np = $derived(playing());
   const src = $derived(coverSrc());
   // Playlists holding the track first, then the rest by name.
   const playlists = $derived(
@@ -29,7 +31,8 @@
     working = true;
     onclose();
     try {
-      await queueTrack(np.id, how, np.source);
+      if (isLocal()) enqueue([{ source: np.source, id: np.id, name: np.name, artist: np.artist, album: np.album, album_id: np.album_id }], how);
+      else await queueTrack(np.id, how, np.source);
       toast.show({ text: how === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
       setTimeout(refresh, 700);
     } catch (e) {

@@ -21,6 +21,7 @@
     playlistCovers,
   } from './api';
   import MenuEntry from './MenuEntry.svelte';
+  import { isLocal, playPlaylistHere } from './output.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { prefs } from './prefs.svelte';
   import { refresh, untilNewTrack } from './live.svelte';
@@ -117,8 +118,10 @@
     working = true;
     onclose();
     try {
-      await playPlaylist(p.id, how, prefs.source || undefined);
+      // Here when the output is this browser (decision 0022), else on the server's player.
+      if (!(await playPlaylistHere(p.id, how))) await playPlaylist(p.id, how, prefs.source || undefined);
       // Play and Shuffle change what plays: show the new track once it is there, not the states on the way.
+      if (isLocal()) return;
       if (how === 'play' || how === 'shuffle') await untilNewTrack();
       else refresh();
     } catch (e) {

@@ -8,9 +8,9 @@
   import Icon from './Icon.svelte';
   import { live, player } from './live.svelte';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, position, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, playing, position, send, toggleFavorite } from './remote.svelte';
 
-  const np = $derived(live.view?.now_playing ?? null);
+  const np = $derived(playing());
   const src = $derived(coverSrc());
   const pos = $derived(position());
   const dur = $derived(duration());

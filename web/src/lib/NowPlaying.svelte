@@ -6,18 +6,19 @@
   import { linear } from 'svelte/easing';
   import { fade, fly } from 'svelte/transition';
   import { DECELERATE_CSS, decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
-  import { incomingCoverUrl, jumpTo } from './api';
+  import { incomingCoverUrl } from './api';
   import Icon from './Icon.svelte';
   import { live, player, refresh } from './live.svelte';
   import TrackMenu from './TrackMenu.svelte';
+  import OutputSheet from './OutputSheet.svelte';
   import { toast } from './toast.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, position, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
-  const np = $derived(live.view?.now_playing ?? null);
+  const np = $derived(playing());
   const memberCount = $derived((live.view?.playlists ?? []).filter((p) => p.member).length);
   const src = $derived(coverSrc());
   // The backdrop list: the current blurred cover, and while it fades in, the one before it.
@@ -65,11 +66,11 @@
   // The track menu (the menu button, or a right-click on the cover) and the queue (decision 0019).
   let menuAt = $state<DOMRect | null>(null);
   let queueOpen = $state(false);
+  let outputOpen = $state(false);
   const openMenu = (e: Event) => (menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect());
-  async function jump(id: string) {
+  async function jump(i: number) {
     try {
-      await jumpTo(id, np?.source);
-      setTimeout(refresh, 700);
+      await playUpcoming(i);
     } catch (e) {
       toast.fail(e, "The player didn't go to that track");
     }
@@ -319,6 +320,7 @@
             <strong>{live.pending ? '–' : memberCount}</strong>
             <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
           </div>
+          <button class="act" aria-label="Play on" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={24} /></button>
           <button class="act" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}><Icon name="playlists" size={24} /></button>
         </div>
       {/if}
@@ -349,7 +351,7 @@
         <ol>
           {#each np.upcoming as t, i (t.id + ':' + i)}
             <li>
-              <button onclick={() => jump(t.id)}>
+              <button onclick={() => jump(i)}>
                 {#if t.album_id}<img src={incomingCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
                 <div><strong>{t.name}</strong><span>{t.artist ?? ''}</span></div>
                 {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
@@ -366,6 +368,9 @@
 
 {#if menuAt}
   <TrackMenu onclose={() => (menuAt = null)} />
+{/if}
+{#if outputOpen}
+  <OutputSheet onclose={() => (outputOpen = false)} />
 {/if}
 
 <style>

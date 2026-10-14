@@ -7,6 +7,7 @@
 // the server confirms it; otherwise they are dropped, never added to another track.
 import { ApiError, getState, setMember, type NowPlaying, type State } from './api';
 import { prefs } from './prefs.svelte';
+import { local } from './localPlayer.svelte';
 import { remember } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { on, open, close, stream } from './events.svelte';
@@ -74,7 +75,8 @@ export const live = $state<{
 export const player = $state({ full: false, min: false, roomy: false });
 
 /** The player shows beside the page. */
-export const inSidebar = () => player.roomy && prefs.sidebar && !player.min && !!live.view?.now_playing;
+export const inSidebar = () =>
+  player.roomy && prefs.sidebar && !player.min && (prefs.output === 'local' ? local.index >= 0 : !!live.view?.now_playing);
 
 /** Show `np` now as the result of a player command, until the server settles it (or `ms` passes). */
 export function expect(np: NowPlaying, settled: (server: NowPlaying | null) => Settled, { ms = 8000, quiet = false } = {}) {

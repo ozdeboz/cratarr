@@ -8,6 +8,7 @@
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
+  import { playing } from './lib/remote.svelte';
   import { fade, fly } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
   import { reducedMotion } from './lib/motion';
@@ -58,7 +59,7 @@
   });
   const sidebar = $derived(withPlayer && inSidebar());
   const overlay = $derived(withPlayer && player.full && !sidebar);
-  const mini = $derived(withPlayer && !sidebar && !!live.view?.now_playing);
+  const mini = $derived(withPlayer && !sidebar && !!playing());
   $effect(() => {
     if (sidebar) untrack(collapse);
   });

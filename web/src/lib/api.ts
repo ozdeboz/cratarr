@@ -460,7 +460,18 @@ export const playIncoming = (source: string, album: string) =>
 export const incomingCoverUrl = (source: string, album: string) =>
   `/api/incoming/cover/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
 
-export type Transport = 'previous' | 'play-pause' | 'next';
+export type Transport = 'previous' | 'play-pause' | 'next' | 'stop';
+
+// The local player (decision 0022): a playlist's track ids, a track's details, and handing a queue to the server's
+// player (from a track and a position).
+export const playlistTrackIds = (id: string, source?: string) =>
+  request<{ source: string; ids: string[]; unknown: number }>(`/api/playlists/${encodeURIComponent(id)}/tracks${follow(source)}`);
+export const trackDetails = (source: string, id: string) =>
+  quietly<{ id: string; name: string; artist: string | null; album: string | null; album_id: string | null }>(
+    `/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}`,
+  );
+export const handover = (ids: string[], index: number, positionSecs: number, source?: string) =>
+  post<{ player: string }>(`/api/player/handover${follow(source)}`, { ids, index, position_secs: positionSecs });
 /** Previous / play-pause / next on the player that plays now. */
 export const transport = (command: Transport, source?: string) =>
   quietly<{ player: string }>(`/api/player/${command}${follow(source)}`, { method: 'POST' }); // shown at once
