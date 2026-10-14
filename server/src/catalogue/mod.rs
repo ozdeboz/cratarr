@@ -28,8 +28,9 @@ use crate::source::Source;
 
 /// Tags read per batch; the lock is released between batches.
 const TAG_BATCH: usize = 100;
-/// Tracks asked of a server per page (measured on Jellyfin 10.11: 500 in about 5 s).
-const PAGE: usize = 500;
+/// Tracks asked of a server per page (measured on Jellyfin 10.11: 500 in about 5 s; on 2026-10-14, busy, 500 took
+/// more than the 20 s a request may take, so 250).
+const PAGE: usize = 250;
 /// Between passes when nothing asks for one sooner.
 const PASS_EVERY: Duration = Duration::from_secs(300);
 /// A full listing of each server library at least this often, to forget tracks the server dropped.
@@ -1028,9 +1029,25 @@ async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -
 ");
     let full = started - last_full >= FULL_EVERY_SECS || cat.meta(&format!("full-folders:{id}")).as_deref() != Some(&folders);
     let since = (!full).then_some(last_pass);
+    // A full listing that failed goes on from its last page the next pass, instead of asking for everything again:
+    // (library, next page's start, when that listing began). What it began with stays the mark for what was not seen.
+    let progress = format!("full-from:{id}");
+    let resume = full
+        .then(|| cat.meta(&progress))
+        .flatten()
+        .and_then(|v| {
+            let mut p = v.split(' ');
+            Some((p.next()?.to_string(), p.next()?.parse::<usize>().ok()?, p.next()?.parse::<i64>().ok()?))
+        })
+        .and_then(|(lib, from, began)| libraries.iter().position(|l| l.id == lib).map(|i| (i, from, began)));
+    let began = resume.map_or(started, |r| r.2);
     let mut roots = Roots::default();
-    for lib in &libraries {
-        let mut start = 0;
+    for (i, lib) in libraries.iter().enumerate() {
+        let mut start = match resume {
+            Some((at, _, _)) if i < at => continue,
+            Some((at, from, _)) if i == at => from,
+            _ => 0,
+        };
         loop {
             let page = source.track_paths(&lib.id, since, start, PAGE).await?;
             let n = page.items.len();
@@ -1052,15 +1069,22 @@ async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -
             if n < PAGE || start >= page.total {
                 break;
             }
+            if full {
+                cat.set_meta(&progress, &format!("{} {start} {began}", lib.id));
+            }
         }
         if full {
             let (cat2, sid, lid) = (cat.clone(), id.to_string(), lib.id.clone());
-            tokio::task::spawn_blocking(move || cat2.forget_unseen(&sid, &lid, started)).await??;
+            tokio::task::spawn_blocking(move || cat2.forget_unseen(&sid, &lid, began)).await??;
+            if let Some(next) = libraries.get(i + 1) {
+                cat.set_meta(&progress, &format!("{} 0 {began}", next.id));
+            }
         }
     }
     if full {
-        cat.set_meta(&format!("full:{id}"), &started.to_string());
+        cat.set_meta(&format!("full:{id}"), &began.to_string());
         cat.set_meta(&format!("full-folders:{id}"), &folders);
+        cat.set_meta(&progress, "");
     }
     cat.set_meta(&format!("pass:{id}"), &started.to_string());
     Ok(())
