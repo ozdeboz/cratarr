@@ -324,11 +324,14 @@ struct Page {
     #[serde(default)]
     offset: usize,
     limit: Option<usize>,
+    /// The crate panel's favourites toggle: `all` (default), `only`, `none`.
+    #[serde(default)]
+    favourites: crate::crates::Favourites,
 }
 
 async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(200).clamp(1, 500);
-    let (source, total, rows) = app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit).await?;
+    let (source, total, rows) = app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, q.favourites).await?;
     Ok(Json(json!({ "source": source, "total": total, "rows": rows })).into_response())
 }
 
@@ -375,13 +378,21 @@ async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(
     Ok(Json(json!({ "source": source, "total": total, "rows": rows })).into_response())
 }
 
+/// Make playlist: the crate's tracks now, as the panel shows them (its favourites toggle).
+#[derive(Deserialize)]
+struct CratePlaylistRequest {
+    name: String,
+    #[serde(default)]
+    favourites: crate::crates::Favourites,
+}
+
 async fn crate_playlist(
     State(app): State<Arc<App>>,
     Path(id): Path<String>,
     Query(f): Query<Follow>,
-    Json(req): Json<NameRequest>,
+    Json(req): Json<CratePlaylistRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let added = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name).await?;
+    let added = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name, req.favourites).await?;
     Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "added": added }))))
 }
 

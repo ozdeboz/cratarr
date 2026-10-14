@@ -61,3 +61,17 @@ The owner decided (2026-10-14):
   media server's favourites; a crate's rows are the playlist view's rows, so the panel shows them the same way.
 - The phone's top bar has one page more: Repairs moves under More.
 - `docs/ui-conventions.md` describes the page.
+
+## Amendment (2026-10-14): the favourites toggle
+
+The owner decided:
+
+- **A crate's favourites are a toggle, not a crate.** In a crate's panel, Play next and Add to queue give way to one
+  button that cycles **No favourites → Only favourites → All tracks** (back to No favourites); its icon and label say
+  what the crate shows now: a crossed-out heart, a filled heart, an outline heart. A crate not set yet shows No
+  favourites. It is a view, remembered per crate by the browser, not part of the crate: the server adds the condition
+  when the crate is looked at, so the list, its count, Play, Shuffle and Make playlist all follow it.
+- **The permanent crates Favourites and Unlisted favourites go;** Unlisted stays. The library's favourites as a whole
+  are a crate of one's own without conditions, on Only favourites.
+- A crate keeps Play and Shuffle; Play next and Add to queue stay with playlists.
+- The crate chips on the Crates page count the crate itself (All tracks).

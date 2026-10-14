@@ -67,9 +67,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **New playlist, New crate** ask for the name in the same sheet (`lib/NameSheet.svelte`), from the + in the page's top
   right corner (`lib/NewButton.svelte`: its label beside it on a wide page, by container query); a new crate then opens
   in the builder with that name, saved with its Save.
-- **Crates** (decision 0024, between Incoming and Playlists): the permanent crates (Favourites, Unlisted, Unlisted
-  favourites) as chips with their live counts, styled as the playlist chips (the open one bordered). A crate opens in
-  the panel as a playlist does, without the statistics and editing; its rows come in pages, newest first; the arrow-into-a-box icon
+- **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as chips
+  with their live counts, styled as the playlist chips (the open one bordered). A crate opens in the panel as a
+  playlist does, without the statistics and editing, with Play, Shuffle and its favourites toggle (No favourites,
+  Only favourites, All tracks; decision 0024, amended) as its actions; its rows come in pages, newest first; the arrow-into-a-box icon
   (where a playlist has the pencil) makes a playlist of it, which then opens. "New crate" (and the pencil on one's own
   crate) opens the **crate builder** in the panel: a name, then conditions as cards (the axis, an is/NOT toggle, its
   values as chips, a range as two numbers, a yes/no axis as just its name; negated cards tinted red), "Add condition"

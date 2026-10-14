@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (Favourites, Unlisted,
-  // Unlisted favourites), each a chip with its live count, styled as the playlist chips; a tap opens it in the panel
+  // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the permanent
+  // Unlisted, and one's own), each a chip with its live count, styled as the playlist chips; a tap opens it in the panel
   // (decision 0023), where it plays and is sorted like a playlist, and can be saved as one.
   import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
   import NameSheet from './lib/NameSheet.svelte';

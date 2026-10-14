@@ -385,9 +385,17 @@ impl PlaylistService {
     }
 
     /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size.
-    pub async fn crate_rows(&self, id: &str, want: Option<&str>, offset: usize, limit: usize) -> Result<(String, usize, Vec<PlaylistRow>), ToggleError> {
+    /// With the panel's favourites toggle (`fav`).
+    pub async fn crate_rows(
+        &self,
+        id: &str,
+        want: Option<&str>,
+        offset: usize,
+        limit: usize,
+        fav: crates::Favourites,
+    ) -> Result<(String, usize, Vec<PlaylistRow>), ToggleError> {
         let def = self.crate_def(id).await?;
-        self.crate_page(&def.conditions, want, offset, limit).await
+        self.crate_page(&fav.with(&def.conditions), want, offset, limit).await
     }
 
     /// The builder's live preview: an unsaved crate's size and first rows (decision 0024, issue 6).
@@ -406,9 +414,9 @@ impl PlaylistService {
     }
 
     /// Make playlist: the crate's tracks now, as a new, ordinary playlist (a snapshot; decision 0024).
-    pub async fn crate_to_playlist(&self, id: &str, want: Option<&str>, name: &str) -> Result<usize, ToggleError> {
+    pub async fn crate_to_playlist(&self, id: &str, want: Option<&str>, name: &str, fav: crates::Favourites) -> Result<usize, ToggleError> {
         let def = self.crate_def(id).await?;
-        let (_, lines) = self.crate_lines_of(&def.conditions, want).await?;
+        let (_, lines) = self.crate_lines_of(&fav.with(&def.conditions), want).await?;
         if lines.is_empty() {
             return Err(ToggleError::Refused("That crate is empty.".into()));
         }

@@ -27,7 +27,7 @@
     spokenNames,
     type PlaylistRow,
   } from './api';
-  import { crateName, crateOf, crates, EDIT_CRATE, loadCrates } from './crates.svelte';
+  import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, favouritesOf, loadCrates } from './crates.svelte';
   import { Reorder } from './reorder.svelte';
   import { renameEverywhere } from './rename.svelte';
   import { isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, setPlaylistFavorites } from './favourites.svelte';
@@ -89,19 +89,21 @@
     void saved;
     void listsKey;
     if (!want || multi) return;
-    if (want !== shownFor) {
+    const c = crateOf(want);
+    const fav = c ? favouritesOf(c) : 'all';
+    const key = `${want}\n${fav}`;
+    if (key !== shownFor) {
       rows = null;
       error = null;
     }
-    const c = crateOf(want);
     // A crate keeps the pages it has (at least the first) when it is asked for again.
     const asked = c
-      ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined)
+      ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav)
       : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length }));
     asked.then(
       (r) => {
-        if (want !== id) return;
-        shownFor = want;
+        if (want !== id || (c && favouritesOf(c) !== fav)) return;
+        shownFor = key;
         rows = r.rows;
         source = r.source;
         total = r.total;
@@ -199,6 +201,14 @@
     { mode: 'next', icon: 'playNext', label: 'Play next' },
     { mode: 'last', icon: 'playlists', label: 'Add to queue' },
   ];
+  // A crate plays and shuffles; in place of Play next and Add to queue, its favourites toggle (decision 0024, amended):
+  // its icon and label say what the crate shows now.
+  const FAVOURITES = {
+    all: { icon: 'heart', label: 'All tracks', filled: false },
+    only: { icon: 'heart', label: 'Only favourites', filled: true },
+    none: { icon: 'heartOff', label: 'No favourites', filled: false },
+  } as const;
+  const favState = $derived(crate ? FAVOURITES[favouritesOf(crate)] : null);
   // A crate's next page, when the end of the list comes into view.
   let more = $state<HTMLElement>();
   let loadingMore = false;
@@ -210,7 +220,7 @@
       if (!e.isIntersecting || loadingMore || !rows || rows.length >= total) return;
       loadingMore = true;
       try {
-        const r = await crateRows(c, rows.length, PAGE, prefs.source || undefined);
+        const r = await crateRows(c, rows.length, PAGE, prefs.source || undefined, favouritesOf(c));
         if (crate === c && rows) {
           rows = [...rows, ...r.rows];
           loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
@@ -259,7 +269,7 @@
     making.saving = true;
     const name = making.name.trim();
     try {
-      await crateToPlaylist(crate, name, prefs.source || undefined);
+      await crateToPlaylist(crate, name, prefs.source || undefined, favouritesOf(crate));
       making = null;
       refresh();
       loadCrates();
@@ -447,9 +457,14 @@
       </div>
       {#if !editing && !making}
       <div class="actions" role="group" aria-label="Play">
-        {#each ACTIONS as a (a.mode)}
+        {#each crate ? ACTIONS.slice(0, 2) : ACTIONS as a (a.mode)}
           <button onclick={() => act(a.mode)} disabled={multi ? !chosenCount : !playable.length}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
         {/each}
+        {#if crate && favState}
+          <button class="favs" class:filled={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} onclick={() => crate && cycleFavourites(crate)}
+            ><Icon name={favState.icon} size={28} /><span>{favState.label}</span></button
+          >
+        {/if}
       </div>
       {/if}
     </header>
@@ -871,6 +886,11 @@
     font-size: 12px;
     font-weight: 300;
     line-height: 1.4;
+  }
+
+  /* The crate's favourites toggle: Only favourites fills its heart. */
+  .actions .favs.filled :global(svg) {
+    fill: currentColor;
   }
 
   .actions button:disabled {

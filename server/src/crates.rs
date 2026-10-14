@@ -46,15 +46,33 @@ pub struct CrateDef {
     pub conditions: Vec<Condition>,
 }
 
-/// The permanent crates, in the same model (decision 0024).
+/// The permanent crates, in the same model (decision 0024). Favourites and Unlisted favourites went (amended
+/// 2026-10-14): any crate shows only its favourites, or none of them, with the panel's favourites toggle.
 pub fn permanent() -> Vec<CrateDef> {
-    let favourite = Condition { axis: "favourite".into(), not: false, value: Value::Yes };
     let unlisted = Condition { axis: "playlist".into(), not: true, value: Value::AnyOf { values: Vec::new() } };
-    vec![
-        CrateDef { id: "favourites".into(), name: "Favourites".into(), conditions: vec![favourite.clone()] },
-        CrateDef { id: "unlisted".into(), name: "Unlisted".into(), conditions: vec![unlisted.clone()] },
-        CrateDef { id: "unlisted-favourites".into(), name: "Unlisted favourites".into(), conditions: vec![unlisted, favourite] },
-    ]
+    vec![CrateDef { id: "unlisted".into(), name: "Unlisted".into(), conditions: vec![unlisted] }]
+}
+
+/// The crate panel's favourites toggle (decision 0024, amended): all a crate's tracks, only its favourites, or none of
+/// them. A view, not part of the crate: it adds one condition when the crate is looked at.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Favourites {
+    #[default]
+    All,
+    Only,
+    None,
+}
+
+impl Favourites {
+    /// The crate's conditions with the toggle's.
+    pub fn with(self, conditions: &[Condition]) -> Vec<Condition> {
+        let mut all = conditions.to_vec();
+        if self != Favourites::All {
+            all.push(Condition { axis: "favourite".into(), not: self == Favourites::None, value: Value::Yes });
+        }
+        all
+    }
 }
 
 pub fn is_permanent(id: &str) -> bool {
@@ -339,15 +357,18 @@ mod tests {
     }
 
     #[test]
-    fn the_permanent_crates_are_conditions_like_any_other() {
+    fn the_permanent_crate_is_conditions_like_any_other_and_the_favourites_toggle_adds_one() {
         let (files, membership, favourites) = library();
         let w = World { membership: &membership, favourites: Some(&favourites) };
-        let by = |id: &str| select(&files, &permanent().into_iter().find(|c| c.id == id).unwrap().conditions, &w);
-        assert_eq!(by("favourites"), vec!["a", "b"]);
-        assert_eq!(by("unlisted"), vec!["b", "d"]);
-        assert_eq!(by("unlisted-favourites"), vec!["b"]);
+        assert_eq!(permanent().iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["unlisted"]);
+        let unlisted = &permanent()[0].conditions;
+        assert_eq!(select(&files, unlisted, &w), vec!["b", "d"]);
+        assert_eq!(select(&files, &Favourites::All.with(unlisted), &w), vec!["b", "d"]);
+        assert_eq!(select(&files, &Favourites::Only.with(unlisted), &w), vec!["b"], "only its favourites");
+        assert_eq!(select(&files, &Favourites::None.with(unlisted), &w), vec!["d"], "none of them");
+        assert_eq!(select(&files, &Favourites::Only.with(&[]), &w), vec!["a", "b"], "the whole library's favourites");
         let unknown = World { membership: &membership, favourites: None };
-        assert!(select(&files, &permanent()[0].conditions, &unknown).is_empty(), "favourites not known: nothing, not everything");
+        assert!(select(&files, &Favourites::Only.with(unlisted), &unknown).is_empty(), "favourites not known: nothing, not everything");
     }
 
     #[test]
@@ -394,7 +415,7 @@ mod tests {
         let rock = vec![Condition { axis: "genre".into(), not: false, value: Value::AnyOf { values: vec!["rock".into()] } }];
         let id = store.save(None, "Rock", rock.clone()).await.unwrap();
         assert!(store.save(None, "rock", rock.clone()).await.is_err(), "names are unique, case ignored");
-        assert!(store.save(None, "Favourites", rock.clone()).await.is_err(), "a permanent crate's name");
+        assert!(store.save(None, "Unlisted", rock.clone()).await.is_err(), "a permanent crate's name");
         assert_eq!(store.save(Some(&id), "Rock all", rock.clone()).await.unwrap(), id, "a rename keeps the id");
         let again = CrateStore::new(dir.to_str());
         assert_eq!(again.list().await.unwrap()[0].name, "Rock all", "kept in crates.json");
