@@ -43,9 +43,10 @@ $effect.root(() => {
   $effect(() => {
     const a = clock.anchor;
     if (!a || a.paused) return;
+    // Finamp's position updates come about five times a second and the bar steps with them (no smoothing).
     const t = setInterval(() => {
       if (!document.hidden) clock.tick = performance.now();
-    }, 250);
+    }, 200);
     return () => clearInterval(t);
   });
 });

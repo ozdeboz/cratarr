@@ -9,7 +9,8 @@
   import NowPlaying from './lib/NowPlaying.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
   import { fade, fly } from 'svelte/transition';
-  import { quadInOut } from 'svelte/easing';
+  import { linear, quadInOut } from 'svelte/easing';
+  import { reducedMotion } from './lib/motion';
   import Toasts from './lib/Toasts.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
@@ -261,8 +262,9 @@
     <div class="mini-dock"><MiniPlayer /></div>
   {/if}
   {#if overlay}
-    <!-- Over everything, as Finamp's: it slides up when it opens and fades when it closes. -->
-    <div class="overlay" role="dialog" aria-label="Player" in:fly={{ y: innerHeight, duration: 300, easing: quadInOut }} out:fade={{ duration: 200 }}>
+    <!-- Over everything, as Finamp's: it slides up when it opens (300 ms, easeInOutQuad) and fades when it closes
+         (300 ms, linear). -->
+    <div class="overlay" role="dialog" aria-label="Player" in:fly={{ y: innerHeight, duration: reducedMotion() ? 0 : 300, easing: quadInOut }} out:fade={{ duration: reducedMotion() ? 0 : 300, easing: linear }}>
       <NowPlaying place="overlay" />
     </div>
   {/if}

@@ -9,8 +9,8 @@
   // (a form, a list) given as children. It rises from the bottom; a tap on the backdrop, Esc or dragging it down closes
   // it. It takes its look from the item's image: blurred behind it, and its accent.
   import type { Snippet } from 'svelte';
-  import { cubicOut } from 'svelte/easing';
   import { fade, fly } from 'svelte/transition';
+  import { decelerate, SHEET_IN, SHEET_OUT } from './motion';
   import Icon from './Icon.svelte';
   import { accentOf } from './remote.svelte';
 
@@ -23,6 +23,7 @@
     heart = null,
     actions = [],
     onback = null,
+    step = 'menu',
     children,
   }: {
     label: string;
@@ -35,6 +36,8 @@
     actions?: SheetAction[];
     /** In a step: back to the entries (Esc too). */
     onback?: (() => void) | null;
+    /** Which step shows: a change fades the new content in (500 ms) while the sheet resizes. */
+    step?: string;
     children: Snippet;
   } = $props();
 
@@ -95,7 +98,7 @@
   });
 </script>
 
-<div class="backdrop" role="presentation" onclick={onclose} transition:fade={{ duration: 200 }}></div>
+<div class="backdrop" role="presentation" onclick={onclose} transition:fade={{ duration: SHEET_OUT }}></div>
 <div
   class="sheet"
   role="dialog"
@@ -110,8 +113,8 @@
   onpointermove={move}
   onpointerup={up}
   onpointercancel={up}
-  in:fly={{ y: 400, duration: 250, easing: cubicOut }}
-  out:fly={{ y: 400, duration: 200 }}
+  in:fly={{ y: 400, duration: SHEET_IN, easing: decelerate }}
+  out:fly={{ y: 400, duration: SHEET_OUT, easing: decelerate }}
 >
   {#if images[0]}<img class="blur" src={images[0]} alt="" aria-hidden="true" />{/if}
   <div class="veil"></div>
@@ -147,7 +150,9 @@
           {/each}
         </div>
       {/if}
-      {@render children()}
+      {#key step}
+        <div in:fade={{ duration: 500 }}>{@render children()}</div>
+      {/key}
     </div>
   </div>
 </div>
@@ -178,11 +183,11 @@
     background: var(--surface);
     color: var(--text);
     touch-action: none;
-    transition: transform 200ms ease, --art-accent 1s;
+    transition: transform 200ms linear;
   }
 
   .sheet.dragging {
-    transition: --art-accent 1s;
+    transition: none;
   }
 
   .blur {
@@ -308,7 +313,7 @@
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
-    transition: height 300ms ease-in-out;
+    transition: height 500ms ease-in-out;
   }
 
   /* Finamp's playback row: 96 px, the actions spread evenly, a 28 px icon over a small light label, no fill. */

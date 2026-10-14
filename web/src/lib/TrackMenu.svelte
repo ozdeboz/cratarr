@@ -81,6 +81,7 @@
         ]
       : []}
     onback={step === 'menu' ? null : () => (step = 'menu')}
+    {step}
   >
     {#if step === 'menu'}
       <div role="menu">

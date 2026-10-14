@@ -3,7 +3,8 @@
   // play/pause on it, the title (scrolling when it does not fit), artist and time, and the heart. The whole bar fills
   // from the left as the track plays, in the cover's colour. Tap or swipe up: the full player (beside the page when
   // there is room, else over it). Swipe left or right: next or previous; the bar follows the finger and springs
-  // back. Swipe down does nothing (Finamp stops and clears the queue; not on a remote across the room).
+  // back. Swipe down does nothing (Finamp stops and clears the queue; not on a remote across the room). The title does
+  // not scroll (Finamp's default).
   import Icon from './Icon.svelte';
   import { live, player } from './live.svelte';
   import { prefs } from './prefs.svelte';
@@ -21,17 +22,22 @@
     else player.full = true;
   }
 
-  // Swipes: horizontal ones move the bar with the finger and skip past 25 % of its width (Finamp's Dismissible);
-  // upward ones open the player past 15 % of its height; a tap opens it too.
+  // Swipes, as Finamp's Dismissible: horizontal ones move the bar with the finger and skip past 40 % of its width or on
+  // a flick (700 px/s), springing back in 200 ms; upward ones open the player past 15 % of its height; a tap opens
+  // it too.
   let dx = $state(0);
   let dragging = $state(false);
-  let from: { x: number; y: number; id: number } | null = null;
+  let from: { x: number; y: number; id: number; t: number } | null = null;
+  let last: { x: number; t: number } = { x: 0, t: 0 };
+  let speed = 0; // px per ms, horizontal, from the last two moves
   let moved = false;
   let el = $state<HTMLElement>();
 
   function down(e: PointerEvent) {
     if ((e.target as Element).closest('.own')) return; // the play button and the heart act on their own
-    from = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    from = { x: e.clientX, y: e.clientY, id: e.pointerId, t: e.timeStamp };
+    last = { x: e.clientX, t: e.timeStamp };
+    speed = 0;
     moved = false;
   }
   function move(e: PointerEvent) {
@@ -42,6 +48,8 @@
       el?.setPointerCapture(e.pointerId);
     }
     if (dragging) dx = mx;
+    if (e.timeStamp > last.t) speed = (e.clientX - last.x) / (e.timeStamp - last.t);
+    last = { x: e.clientX, t: e.timeStamp };
     if (Math.abs(mx) > 8 || Math.abs(my) > 8) moved = true;
   }
   function up(e: PointerEvent) {
@@ -49,26 +57,14 @@
     const [mx, my] = [e.clientX - from.x, e.clientY - from.y];
     const width = el?.clientWidth ?? 300;
     from = null;
-    if (dragging && Math.abs(mx) > width * 0.25) send(mx < 0 ? 'next' : 'previous');
-    else if (!dragging && my < -64 * 0.15 * 2 && -my > Math.abs(mx)) openPlayer();
+    const flick = Math.abs(speed) > 0.7 && Math.sign(speed) === Math.sign(mx);
+    if (dragging && (Math.abs(mx) > width * 0.4 || flick)) send(mx < 0 ? 'next' : 'previous');
+    else if (!dragging && my < -64 * 0.15 && -my > Math.abs(mx)) openPlayer();
     else if (!moved) openPlayer();
     dragging = false;
     dx = 0;
   }
 
-  // The title scrolls when it does not fit (Finamp's marquee).
-  let titleBox = $state<HTMLElement>();
-  let titleText = $state<HTMLElement>();
-  let overflow = $state(0);
-  $effect(() => {
-    void np?.name;
-    if (!titleBox || !titleText) return;
-    const measure = () => (overflow = Math.max(0, titleText!.scrollWidth - titleBox!.clientWidth));
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(titleBox);
-    return () => ro.disconnect();
-  });
 </script>
 
 {#if np}
@@ -99,9 +95,7 @@
     <div class="body">
       <div class="fill" aria-hidden="true"></div>
       <div class="text">
-        <div class="title" bind:this={titleBox}>
-          <span bind:this={titleText} class:scroll={overflow > 0} style:--overflow="{overflow}px">{np.name}</span>
-        </div>
+        <div class="title">{np.name}</div>
         <div class="sub">
           <span class="artist">{np.artist ?? ''}</span>
           {#if np.progress}<span class="time">{clockText(pos)} / {dur ? clockText(dur) : '–:––'}</span>{/if}
@@ -129,11 +123,11 @@
     cursor: pointer;
     touch-action: pan-y;
     user-select: none;
-    transition: transform 200ms ease, --art-accent 1s;
+    transition: transform 200ms linear, --art-accent 1s linear;
   }
 
   .mini.dragging {
-    transition: --art-accent 1s;
+    transition: --art-accent 1s linear;
   }
 
   .cover-wrap {
@@ -185,7 +179,6 @@
     width: calc(var(--share) * 100%);
     border-radius: 0 12px 12px 0;
     background: color-mix(in srgb, var(--art-accent) 55%, var(--bg));
-    transition: width 250ms linear;
   }
 
   .text {
@@ -195,33 +188,13 @@
     padding: 0 8px 0 12px;
   }
 
+  /* One line, cut off with an ellipsis: Finamp's default (its scrolling title is an option, off by default). */
   .title {
     overflow: hidden;
     font-size: 0.92rem;
     font-weight: 600;
+    text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .title span {
-    display: inline-block;
-  }
-
-  .title span.scroll {
-    animation: marquee 12s linear infinite;
-  }
-
-  @keyframes marquee {
-    0%,
-    15% {
-      transform: translateX(0);
-    }
-    70%,
-    85% {
-      transform: translateX(calc(-1 * var(--overflow)));
-    }
-    100% {
-      transform: translateX(0);
-    }
   }
 
   .sub {
@@ -268,8 +241,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .title span.scroll {
-      animation: none;
+    .mini {
+      transition: none;
     }
   }
 </style>

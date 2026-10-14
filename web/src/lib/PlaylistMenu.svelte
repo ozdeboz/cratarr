@@ -193,6 +193,7 @@
       ]
     : []}
   onback={mode === 'menu' ? null : () => (mode = 'menu')}
+  step={mode}
 >
   {#if mode === 'menu'}
     <div role="menu">

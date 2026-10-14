@@ -3,6 +3,9 @@
   // shell's sidebar on wide windows). It shows the cover, the track, the controls, the progress, the favourite and
   // how many playlists hold the track, laid out by lib/playerLayout.ts, on the blurred cover in its colours.
   import { untrack } from 'svelte';
+  import { linear } from 'svelte/easing';
+  import { fade, fly } from 'svelte/transition';
+  import { DECELERATE_CSS, decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { incomingCoverUrl, jumpTo } from './api';
   import Icon from './Icon.svelte';
   import { live, player, refresh } from './live.svelte';
@@ -17,6 +20,29 @@
   const np = $derived(live.view?.now_playing ?? null);
   const memberCount = $derived((live.view?.playlists ?? []).filter((p) => p.member).length);
   const src = $derived(coverSrc());
+  // The backdrop list: the current blurred cover, and while it fades in, the one before it.
+  let backdrops = $state<{ key: number; src: string }[]>([]);
+  let backdropKey = 0;
+  $effect(() => {
+    const s = src;
+    untrack(() => {
+      if (!s) backdrops = [];
+      else if (backdrops.at(-1)?.src !== s) backdrops = [{ key: ++backdropKey, src: s }];
+    });
+  });
+  // Finamp's cover: a hard cut when the image is there at once; otherwise it fades in (ease-in) for as long as it took
+  // to load, at most 700 ms.
+  let coverAsked = 0;
+  $effect(() => {
+    void src;
+    coverAsked = performance.now();
+  });
+  function coverLoaded(e: Event) {
+    const img = e.currentTarget as HTMLImageElement;
+    const took = performance.now() - coverAsked;
+    if (reducedMotion() || took < 50) return;
+    img.animate([{ opacity: 0 }, { opacity: 1 }], { duration: Math.min(700, took), easing: 'ease-in' });
+  }
   const pos = $derived(position());
   const dur = $derived(duration());
 
@@ -180,9 +206,11 @@
 </script>
 
 <div class="player" class:in-sidebar={place === 'side'} style:--art-accent={art.accent ?? 'var(--accent)'}>
-  {#if src}
-    {#key src}<img class="backdrop" {src} alt="" aria-hidden="true" />{/key}
-  {/if}
+  <!-- The blurred cover: a new one fades in over the old one in a second (Finamp's background), the old one staying
+       until it is covered. -->
+  {#each backdrops as b (b.key)}
+    <img class="backdrop" src={b.src} alt="" aria-hidden="true" in:fade={{ duration: reducedMotion() ? 0 : 1000, easing: linear }} out:fade={{ duration: 0, delay: reducedMotion() ? 0 : 1000 }} />
+  {/each}
   <div class="veil"></div>
   <header
     class:landscape={layout?.landscape}
@@ -215,7 +243,7 @@
             onclick={coverTap}
             oncontextmenu={(e) => (e.preventDefault(), openMenu(e))}
           >
-            <img class="cover" {src} alt="" decoding="async" draggable="false" onerror={() => coverFailed(src)} />
+            <img class="cover" {src} alt="" decoding="async" draggable="false" onload={coverLoaded} onerror={() => coverFailed(src)} />
           </button>
         {/key}
       {/if}
@@ -299,8 +327,16 @@
   </header>
 
   {#if queueOpen && np}
-    <!-- The queue (decision 0019): the playing track, then what comes next as the player reports it; a tap plays it. -->
-    <div class="queue" role="dialog" aria-label="Queue">
+    <!-- The queue (decision 0019): the playing track, then what comes next as the player reports it; a tap plays it.
+         A bottom sheet as Finamp's (in 250 ms decelerating, out 200 ms, over a dark backdrop). -->
+    <div class="qback" role="presentation" onclick={() => (queueOpen = false)} transition:fade={{ duration: SHEET_OUT }}></div>
+    <div
+      class="queue"
+      role="dialog"
+      aria-label="Queue"
+      in:fly={{ y: 600, duration: SHEET_IN, easing: decelerate }}
+      out:fly={{ y: 600, duration: SHEET_OUT, easing: decelerate }}
+    >
       <div class="qhead">
         <button class="corner left" aria-label="Close the queue" onclick={() => (queueOpen = false)}><Icon name="collapse" size={26} /></button>
         <span>Queue</span>
@@ -343,7 +379,13 @@
     min-height: 0;
     overflow: hidden;
     background: var(--bg);
-    transition: --art-accent 1s;
+    transition: --art-accent 1s linear;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .player {
+      transition: none;
+    }
   }
 
   .backdrop {
@@ -549,7 +591,6 @@
     height: 100%;
     background: var(--art-accent);
     transform-origin: left;
-    transition: transform 250ms linear;
   }
 
   .progress.paused .fill {
@@ -631,6 +672,13 @@
     font-size: 0.75rem;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+
+  .qback {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: rgb(0 0 0 / 0.54);
   }
 
   /* The queue: a sheet over the player (Finamp's opens at 92 %), the playing track pinned at its top. */

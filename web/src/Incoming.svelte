@@ -361,6 +361,7 @@
           },
         ]}
     onback={m.ask ? () => menu && (menu.ask = false) : null}
+    step={m.ask || 'menu'}
   >
     {#if !m.ask}
       <div role="menu">
