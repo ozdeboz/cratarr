@@ -170,10 +170,13 @@
       <button aria-label="Smaller" disabled={nextZoom(-1) === null} onclick={() => zoom(-1)}><Icon name="zoomOut" size={22} /></button>
       <button aria-label="Larger" disabled={nextZoom(1) === null} onclick={() => zoom(1)}><Icon name="zoomIn" size={22} /></button>
     </div>
-    {#if select.on && select.picked.length && !showsPicked()}
-      <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
-    {/if}
     </div>
+    {#if select.on && select.picked.length && !showsPicked()}
+      <!-- Open N: a row of its own, at the right (the first row keeps the corner free). -->
+      <div class="row open-picked">
+        <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
+      </div>
+    {/if}
     {#if prefs.filterOpen}
       <div class="row filters" id="playlist-filter">
         <button class="new toggle magnifier" class:active={filter.trim() !== ''} aria-label="Filter playlists" aria-expanded={searching} onclick={openSearch}
@@ -481,6 +484,10 @@
     width: 44px;
     padding: 0;
     color: inherit;
+  }
+
+  .tools .row.open-picked {
+    justify-content: flex-end;
   }
 
   button.new.primary {
