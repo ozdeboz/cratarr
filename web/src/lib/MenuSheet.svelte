@@ -18,7 +18,7 @@
   let {
     label,
     onclose,
-    images = [],
+    images = null,
     title,
     chips = [],
     heart = null,
@@ -29,8 +29,9 @@
   }: {
     label: string;
     onclose: () => void;
-    /** The item's image: one cover, or up to four for a playlist's mosaic (2 × 2). */
-    images?: string[];
+    /** The item's image: one cover, or up to four for a playlist's mosaic (2 × 2); [] while it loads. Without (null,
+     *  the default) the sheet has no image at all (the legend, a name to enter): the card is only its title and chips. */
+    images?: string[] | null;
     title: string;
     chips?: string[];
     heart?: { on: boolean; disabled?: boolean; toggle: () => void } | null;
@@ -45,7 +46,7 @@
   // The accent from the first image, fading in once known.
   let accent = $state<string | null>(null);
   $effect(() => {
-    const src = images[0];
+    const src = images?.[0];
     accent = null;
     if (!src) return;
     let gone = false;
@@ -120,12 +121,14 @@
   in:fly|global={{ y: 400, duration: SHEET_IN, easing: decelerate }}
   out:fly|global={{ y: 400, duration: SHEET_OUT, easing: decelerate }}
 >
-  {#if images[0]}<img class="blur" src={images[0]} alt="" aria-hidden="true" />{/if}
+  {#if images?.[0]}<img class="blur" src={images[0]} alt="" aria-hidden="true" />{/if}
   <div class="veil"></div>
   <div class="handle" aria-hidden="true"></div>
 
-  <div class="card">
-    {#if images.length >= 4}
+  <div class="card" class:bare={images === null}>
+    {#if images === null}
+      <!-- no image: the title and chips alone -->
+    {:else if images.length >= 4}
       <div class="art mosaic">{#each images.slice(0, 4) as src, i (i)}<img {src} alt="" />{/each}</div>
     {:else if images[0]}
       <img class="art" src={images[0]} alt="" />
@@ -242,6 +245,18 @@
 
   :global([data-theme='light']) .card {
     background: rgb(255 255 255 / 0.15);
+  }
+
+  /* No image: the card is just its title (and chips), the height they need, on the sheet itself. */
+  .card.bare,
+  :global([data-theme='light']) .card.bare {
+    height: auto;
+    background: none;
+  }
+
+  .card.bare .info {
+    gap: 8px;
+    padding: 2px 16px 6px;
   }
 
   .art {
