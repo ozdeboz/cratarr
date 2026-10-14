@@ -135,7 +135,7 @@
 
 </script>
 
-<main>
+<main class:ticked={select.on && select.picked.length > 0}>
   <!-- The page's top right corner: New playlist (+), or with playlists ticked their menu (⋮, decision 0025). -->
   {#if select.on && select.picked.length}
     <button class="new corner" aria-label="Menu of the ticked playlists" onclick={() => (menu = { kind: 'selection' })}
@@ -170,13 +170,14 @@
       <button aria-label="Smaller" disabled={nextZoom(-1) === null} onclick={() => zoom(-1)}><Icon name="zoomOut" size={22} /></button>
       <button aria-label="Larger" disabled={nextZoom(1) === null} onclick={() => zoom(1)}><Icon name="zoomIn" size={22} /></button>
     </div>
-    </div>
     {#if select.on && select.picked.length && !showsPicked()}
-      <!-- Open N: a row of its own, at the right (the first row keeps the corner free). -->
-      <div class="row open-picked">
-        <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
-      </div>
+      <!-- Open N: at the right end of the row (beside the corner); on a small page its icon only. -->
+      {@const openLabel = select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}
+      <button class="new primary open-picked" aria-label={openLabel} title={openLabel} onclick={openPicked}
+        ><Icon name="playlists" size={22} /><span class="open-text">{openLabel}</span></button
+      >
     {/if}
+    </div>
     {#if prefs.filterOpen}
       <div class="row filters" id="playlist-filter">
         <button class="new toggle magnifier" class:active={filter.trim() !== ''} aria-label="Filter playlists" aria-expanded={searching} onclick={openSearch}
@@ -300,6 +301,11 @@
   @container (min-width: 400px) {
     .tools > .row:first-child {
       padding-right: 170px;
+    }
+
+    /* With playlists ticked the corner is the ⋮, without a label. */
+    main.ticked .tools > .row:first-child {
+      padding-right: 56px;
     }
   }
 
@@ -486,8 +492,26 @@
     color: inherit;
   }
 
-  .tools .row.open-picked {
-    justify-content: flex-end;
+  .open-picked {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding: 0 10px;
+  }
+
+  .open-picked .open-text {
+    display: none;
+  }
+
+  @container (min-width: 480px) {
+    .open-picked {
+      padding: 0 14px 0 10px;
+    }
+
+    .open-picked .open-text {
+      display: inline;
+    }
   }
 
   button.new.primary {
