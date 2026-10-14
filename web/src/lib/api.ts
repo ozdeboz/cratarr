@@ -210,6 +210,15 @@ export const playlistRows = (id: string, source?: string) =>
     `/api/playlists/${encodeURIComponent(id)}/rows${source ? `?source=${encodeURIComponent(source)}` : ''}`,
   );
 
+/** Saves a playlist edited in its view (decision 0023): its lines reordered or some left out (`entries`), replacing
+ *  `expected` (the lines as the view showed them); refused when it changed since. */
+export const editPlaylist = (id: string, expected: string[], entries: string[]) =>
+  request<{ playlist: string; entries: number }>(`/api/playlists/${encodeURIComponent(id)}/entries`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expected, entries }),
+  });
+
 export const playlistCovers = (id: string) =>
   quietly<{ source: string; album_id: string }[]>(`/api/playlists/${encodeURIComponent(id)}/covers`);
 export const renamePlaylist = (id: string, to: string) =>

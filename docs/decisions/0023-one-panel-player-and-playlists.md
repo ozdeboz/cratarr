@@ -74,7 +74,11 @@ The owner decided (2026-10-14):
   1. A track menu for any track, not only the playing one: needed by the playlist view's and the queue's rows alike.
   2. The read-only playlist view, the panel's stack and layers, and the Insights consolidation.
   3. Editing: remove (swipe) and reorder (handle), written to the `.m3u` through the store (backed up, with undo). A
-     linked playlist's edits travel with its sync (decision 0014).
+     linked playlist's edits travel with its sync (decision 0014). As built (2026-10-14), as Finamp's playlist edit
+     screen: an edit mode entered with the pencil in the view's bar (a swipe left outside it stays Play next); rows get
+     the reorder handle and ✕, a swipe left removes too; removed tracks wait under "Removed tracks" to be restored to
+     their place; Save writes the playlist once (only reordering or leaving out its own lines, refused when it changed
+     since), Cancel drops the edit.
 
 ## Consequences
 

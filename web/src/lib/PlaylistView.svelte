@@ -5,7 +5,10 @@
   // (Related, a section until it gets a tab); then the tracks in file order. A tap on a track plays the playlist from
   // there on the chosen output, a swipe left plays it next, a long-press is its menu; the heart adds it to playlists
   // (long-press: favourite). Lines the server does not know, or files that are missing, show by file name, dimmed.
-  import { coverUrl, incomingCoverUrl, playlistCovers, playlistRows, queueTrack, type PlaylistRow } from './api';
+  // Edit mode (the pencil; Finamp's playlist edit screen): rows get the reorder handle and ✕ (a swipe left removes too),
+  // removed tracks wait in their own section to be restored, and Save writes the playlist once (Cancel drops it).
+  import { coverUrl, editPlaylist, incomingCoverUrl, playlistCovers, playlistRows, queueTrack, type PlaylistRow } from './api';
+  import { Reorder } from './reorder.svelte';
   import { loadFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import { insights, plural } from './insights.svelte';
@@ -32,10 +35,13 @@
   let source = $state('');
   let error = $state<string | null>(null);
   let shownFor = '';
+  /** Bumped after a save: the rows are asked for again (a reorder changes no count). */
+  let saved = $state(0);
   $effect(() => {
     const want = id;
     void p?.count;
     void p?.dead;
+    void saved;
     if (!want) return;
     if (want !== shownFor) {
       rows = null;
@@ -143,9 +149,70 @@
     }
   }
 
-  // Esc closes it (when no sheet of its own is open).
+  // Edit mode: a working copy of the rows (each with its place in the file, so a restored one goes back there).
+  type Item = { r: PlaylistRow; at: number };
+  let editing = $state<{ rows: Item[]; removed: Item[]; saving: boolean } | null>(null);
+  const editingFor = $derived(editing ? id : null);
   $effect(() => {
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !menuOpen && !trackMenu && closePlaylist();
+    // Another playlist opened (or this one closed): the edit is dropped.
+    if (editingFor !== null && editingFor !== id) editing = null;
+  });
+  const changed = $derived(
+    !!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)),
+  );
+  function startEdit() {
+    if (!rows) return;
+    navigator.vibrate?.(8);
+    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], saving: false };
+  }
+  const reorder = new Reorder(
+    () => scroller,
+    () => editing?.rows.length ?? 0,
+    (from, to) => {
+      if (!editing) return;
+      const list = [...editing.rows];
+      const [x] = list.splice(from, 1);
+      list.splice(to, 0, x);
+      editing.rows = list;
+    },
+  );
+  function removeAt(i: number) {
+    if (!editing) return;
+    const [x] = editing.rows.splice(i, 1);
+    editing.removed = [...editing.removed, x];
+  }
+  function restore(x: Item) {
+    if (!editing) return;
+    editing.removed = editing.removed.filter((y) => y !== x);
+    const before = editing.rows.findIndex((y) => y.at > x.at);
+    editing.rows.splice(before < 0 ? editing.rows.length : before, 0, x);
+  }
+  const removeSwiped = (i: number) => {
+    setTimeout(() => removeAt(i), 200);
+    return 'away' as const;
+  };
+  async function save() {
+    if (!editing || !rows) return;
+    if (!changed) return void (editing = null);
+    editing.saving = true;
+    try {
+      await editPlaylist(
+        id,
+        rows.map((r) => r.entry),
+        editing.rows.map((x) => x.r.entry),
+      );
+      editing = null;
+      saved++;
+      refresh();
+    } catch (e) {
+      toast.fail(e, "The playlist wasn't saved");
+      if (editing) editing.saving = false;
+    }
+  }
+
+  // Esc closes it (when no sheet of its own is open; in edit mode Cancel is the way out).
+  $effect(() => {
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !menuOpen && !trackMenu && !editing && closePlaylist();
     addEventListener('keydown', esc);
     return () => removeEventListener('keydown', esc);
   });
@@ -153,8 +220,16 @@
 
 <section class="view" aria-label={id}>
   <div class="bar">
-    <button class="icon" aria-label="Close the playlist" onclick={closePlaylist}><Icon name="close" size={24} /></button>
-    <button class="icon" aria-label={`Menu of ${id}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
+    {#if editing}
+      <button class="barbtn" onclick={() => (editing = null)} disabled={editing.saving}>Cancel</button>
+      <button class="barbtn save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}>Save</button>
+    {:else}
+      <button class="icon" aria-label="Close the playlist" onclick={closePlaylist}><Icon name="close" size={24} /></button>
+      <span class="end">
+        {#if rows && p}<button class="icon" aria-label={`Edit ${id}`} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
+        <button class="icon" aria-label={`Menu of ${id}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
+      </span>
+    {/if}
   </div>
 
   <div class="scroll" bind:this={scroller}>
@@ -172,6 +247,7 @@
           {#if p?.dead}<p class="line dead"><span>{p.dead} missing</span></p>{/if}
         </div>
       </div>
+      {#if !editing}
       <div class="actions" role="group" aria-label="Play">
         {#each ACTIONS as a (a.mode)}
           <button onclick={() => act(a.mode)} disabled={!playable.length}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
@@ -180,9 +256,44 @@
       {#if np && np.addable && p && !p.member}
         <button class="add-playing" onclick={addPlaying}><Icon name="plus" size={18} /><span>Add what's playing</span></button>
       {/if}
+      {/if}
     </header>
 
-    {#if point && (closest.length || point.focus !== null)}
+    {#if editing}
+      <ol class="rows edit" class:dragging={!!reorder.drag}>
+        {#each editing.rows as x, i (x.at)}
+          {@const r = x.r}
+          <li class:off={!r.id || r.missing} class:lifted={reorder.drag?.from === i} style:transform={reorder.drag ? `translateY(${reorder.offset(i)}px)` : null}>
+            <div class="slide" use:swipe={{ enabled: !reorder.drag && !editing.saving, onswipe: () => removeSwiped(i) }}>
+              <span class="row">
+                <span class="cover">{#if r.id && !r.missing}<img src={coverUrl({ source, id: r.id })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}</span>
+                <span class="text"><strong>{r.name ?? r.file}</strong><span class="sub">{r.missing ? 'Missing file' : !r.id ? 'Not matched yet' : (r.artist ?? '')}</span></span>
+              </span>
+              <button class="tool" aria-label={`Remove ${r.name ?? r.file}`} onclick={() => removeAt(i)}><Icon name="close" size={22} /></button>
+              <button class="tool grip" aria-label="Drag to reorder" onpointerdown={(e) => reorder.down(e, i)} onpointermove={reorder.move} onpointerup={reorder.end} onpointercancel={reorder.end}
+                ><Icon name="order" size={24} /></button
+              >
+            </div>
+          </li>
+        {/each}
+      </ol>
+      {#if editing.removed.length}
+        <h3 class="removed-head">Removed tracks</h3>
+        <ol class="rows">
+          {#each editing.removed as x (x.at)}
+            <li class="off">
+              <div class="slide">
+                <span class="row">
+                  <span class="cover">{#if x.r.id && !x.r.missing}<img src={coverUrl({ source, id: x.r.id })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}</span>
+                  <span class="text"><strong>{x.r.name ?? x.r.file}</strong><span class="sub">{x.r.artist ?? ''}</span></span>
+                </span>
+                <button class="tool" aria-label={`Restore ${x.r.name ?? x.r.file}`} onclick={() => restore(x)}><Icon name="back" size={22} /></button>
+              </div>
+            </li>
+          {/each}
+        </ol>
+      {/if}
+    {:else if point && (closest.length || point.focus !== null)}
       <section class="related" aria-label="Related">
         {#if point.focus !== null && insights.focus[at] !== undefined}
           <p class="note">More focused than {Math.round(100 * insights.focus[at])}% of your playlists</p>
@@ -198,7 +309,9 @@
       </section>
     {/if}
 
-    {#if error}
+    {#if editing}
+      <!-- the edit list is above -->
+    {:else if error}
       <p class="error" role="alert">{error}</p>
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
@@ -260,6 +373,66 @@
     padding: 4px 4px 0;
   }
 
+  .end {
+    display: flex;
+  }
+
+  /* Edit mode's Cancel and Save, where ✕ and the menu are otherwise. */
+  .barbtn {
+    min-height: 40px;
+    margin: 4px 8px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .barbtn.save {
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+
+  .barbtn:disabled {
+    opacity: 0.6;
+  }
+
+  .tool {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .grip {
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .rows.edit.dragging li {
+    transition: transform 200ms ease;
+  }
+
+  .rows.edit.dragging li.lifted {
+    z-index: 1;
+    transition: none;
+  }
+
+  .removed-head {
+    margin: 16px 16px 4px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
   .icon {
     display: grid;
     place-items: center;
@@ -277,7 +450,8 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding-bottom: calc(32px + env(safe-area-inset-bottom));
+    /* On a phone the mini-player floats over the end of the list (as Finamp's now-playing bar): room to scroll past it. */
+    padding-bottom: calc(32px + var(--mini-h, 0px) + env(safe-area-inset-bottom));
   }
 
   .head {

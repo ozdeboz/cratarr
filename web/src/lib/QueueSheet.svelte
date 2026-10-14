@@ -15,6 +15,7 @@
   import { longpress } from './longpress';
   import RowHeart from './RowHeart.svelte';
   import { swipe } from './swipe';
+  import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import { local, jump as localJump, moveUpcoming, removeUpcoming } from './localPlayer.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
@@ -103,55 +104,13 @@
     else pull = 0;
   }
 
-  // Reordering (this device): Finamp's handle starts the drag at once; the row follows the finger, the rows it passes
-  // make room, the list scrolls near its edges, the queue changes on release.
-  let drag = $state<{ from: number; to: number; dy: number } | null>(null);
-  let dragStart = { y: 0, scroll: 0, rowH: 70 };
-  let scrollTimer: ReturnType<typeof setInterval> | undefined;
-  let lastY = 0;
-  function dragDown(e: PointerEvent, i: number) {
-    if (!here || !list) return;
-    const el = e.currentTarget as HTMLElement;
-    el.setPointerCapture(e.pointerId);
-    dragStart = { y: e.clientY, scroll: list.scrollTop, rowH: el.closest('li')!.getBoundingClientRect().height };
-    drag = { from: i, to: i, dy: 0 };
-    tick();
-  }
-  function dragTo(y: number) {
-    if (!drag || !list || !np) return;
-    const dy = y - dragStart.y + (list.scrollTop - dragStart.scroll);
-    const to = Math.min(np.upcoming.length - 1, Math.max(0, drag.from + Math.round(dy / dragStart.rowH)));
-    drag = { ...drag, dy, to };
-  }
-  function dragMove(e: PointerEvent) {
-    if (!drag || !list) return;
-    lastY = e.clientY;
-    dragTo(lastY);
-    const r = list.getBoundingClientRect();
-    const speed = lastY < r.top + 48 ? -8 : lastY > r.bottom - 48 ? 8 : 0;
-    clearInterval(scrollTimer);
-    if (speed)
-      scrollTimer = setInterval(() => {
-        list!.scrollTop += speed;
-        dragTo(lastY);
-      }, 16);
-  }
-  function dragEnd() {
-    clearInterval(scrollTimer);
-    if (!drag) return;
-    const { from, to } = drag;
-    drag = null;
-    heavy();
-    if (from !== to) moveUpcoming(from, to);
-  }
-  function offset(j: number): number {
-    if (!drag) return 0;
-    const { from, to, dy } = drag;
-    if (j === from) return dy;
-    if (from < to && j > from && j <= to) return -dragStart.rowH;
-    if (to < from && j >= to && j < from) return dragStart.rowH;
-    return 0;
-  }
+  // Reordering (this device; lib/reorder.svelte.ts): the queue changes on release.
+  const reorder = new Reorder(
+    () => list,
+    () => np?.upcoming.length ?? 0,
+    (from, to) => moveUpcoming(from, to),
+  );
+  const drag = $derived(reorder.drag);
 
   // Swipe left removes (this device; lib/swipe.ts): the row slides out, then the track leaves the queue.
   const removeSwiped = (i: number) => {
@@ -237,7 +196,7 @@
       {#if np.upcoming.length}
         <ol class="rows" class:dragging={!!drag}>
           {#each np.upcoming as t, i (t.id + ':' + i)}
-            <li class:lifted={drag?.from === i} style:transform={drag ? `translateY(${offset(i)}px)` : null}>
+            <li class:lifted={drag?.from === i} style:transform={drag ? `translateY(${reorder.offset(i)}px)` : null}>
               <button
                 class="row"
                 onclick={() => play(i)}
@@ -253,10 +212,10 @@
                 <button
                   class="grip"
                   aria-label="Drag to reorder"
-                  onpointerdown={(e) => dragDown(e, i)}
-                  onpointermove={dragMove}
-                  onpointerup={dragEnd}
-                  onpointercancel={dragEnd}><Icon name="order" size={24} /></button
+                  onpointerdown={(e) => reorder.down(e, i)}
+                  onpointermove={reorder.move}
+                  onpointerup={reorder.end}
+                  onpointercancel={reorder.end}><Icon name="order" size={24} /></button
                 >
               {/if}
             </li>

@@ -338,11 +338,11 @@
     z-index: 22;
   }
 
-  /* An opened playlist without room beside the page (decision 0023): full height, ending above the mini-player; over
-     the page and its navigation, under the mini-player and the player. */
+  /* An opened playlist without room beside the page (decision 0023): full height over the page and its navigation, the
+     mini-player floating over its end (its list leaves room for it, --mini-h), the player over everything. */
   .playlist-layer {
     position: fixed;
-    inset: 0 0 calc(var(--mini-h) + env(safe-area-inset-bottom));
+    inset: 0;
     z-index: 21;
     display: flex;
     flex-direction: column;
