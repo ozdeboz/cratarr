@@ -58,7 +58,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
   tap on the label opens the playlist (decision 0023). A favourite playlist has a small red heart (Finamp's list mark)
-  above the problems' dot, in the dot's place, so the chip gets no wider. When the playing
+  above the problems' dot, in the dot's place, so the chip gets no wider. The playlist open in the panel has a border
+  in the accent and no extra fill: fill means "holds the playing track", the border "is shown in the panel". When the playing
   track is outside Music (it cannot go in playlists), the chips it is not in are quieter and their plus circle is
   dashed (Finamp's mark for a playlist it cannot add to); a tap says why.
 - **Pinned playlists** (the playlist menu: Pin to top / Unpin) come first on the Playlists page, in the order they

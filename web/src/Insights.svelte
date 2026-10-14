@@ -42,7 +42,7 @@
     if (i === null || !shown) return;
     const name = shown.playlists[i]?.name;
     const open = untrack(() => panel.open);
-    if (open && name && name !== open) openPlaylist(name, { replace: true });
+    if (open && name && name !== open) openPlaylist(name);
   });
 
   // The legend: a sheet from the graph's button (it explains the graph; it is not about a playlist).

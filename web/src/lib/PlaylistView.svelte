@@ -315,7 +315,7 @@
           <h3>Closest playlists</h3>
           <ul>
             {#each closest as c (c.index)}
-              <li><button class="link" onclick={() => openPlaylist(c.name, { replace: true })}>{c.name}</button><span class="note">{c.shares}</span></li>
+              <li><button class="link" onclick={() => openPlaylist(c.name)}>{c.name}</button><span class="note">{c.shares}</span></li>
             {/each}
           </ul>
         {/if}

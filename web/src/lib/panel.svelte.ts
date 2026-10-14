@@ -35,15 +35,15 @@ addEventListener('hashchange', () => {
   if (!open) pushed = false;
 });
 
-/** Opens a playlist in the panel. `replace`: instead of the open one, without a step in the history (following a
- *  selection, a "closest" link). */
-export function openPlaylist(name: string, { replace = false } = {}) {
+/** Opens a playlist in the panel. One that is already open is replaced, without a step in the history (no stack of
+ *  playlists: ✕ and Back then close it rather than going to the one before). */
+export function openPlaylist(name: string) {
   panel.playerTop = false;
   if (panel.open === name) {
     panel.again++;
     return;
   }
-  if (replace && panel.open) {
+  if (panel.open) {
     history.replaceState(null, '', address(name));
     panel.open = name;
     return;

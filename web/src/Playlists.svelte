@@ -10,7 +10,7 @@
   import { isLocal, setPlayingMember, shownPlaylists } from './lib/output.svelte';
   import { pending, playing } from './lib/remote.svelte';
   import { longpress } from './lib/longpress';
-  import { openPlaylist } from './lib/panel.svelte';
+  import { openPlaylist, panel } from './lib/panel.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites } from './lib/favourites.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
@@ -149,6 +149,7 @@
             class:queued={live.queued.includes(p.id)}
             class:idle={!np}
             class:blocked={!!np && !np.addable && !p.member}
+            class:open={panel.open === p.id}
             title={p.dead > 0 ? missing(p.dead) : undefined}
             use:longpress={(anchor) => (menu = { kind: 'playlist', p, anchor })}
           >
@@ -304,6 +305,11 @@
 
   .chip.member {
     background: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  /* The playlist open in the panel (decision 0023): a border only, so it reads apart from the fill of membership. */
+  .chip.open {
+    box-shadow: inset 0 0 0 2px var(--accent);
   }
 
   /* Nothing playing: the chips only open their menu, so they look quieter. */
