@@ -10,8 +10,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
 - **Navigation:** from 1024 px a sidebar on the left; below it a bar of pages fixed along the **top** (icon and label,
   up to five, the rest under More).
-- **The player is part of the app shell** (decision 0018, after Finamp), on the pages where what plays is acted on:
-  Playlists and Incoming. Repairs, Insights and Settings have no player.
+- **The player is part of the app shell** (decision 0018, after Finamp), on every page: since Cratarr plays music
+  itself (decision 0022) it is a player, not only a remote for adding what plays. The server picker stays on the pages
+  that act on what a server plays: Playlists and Incoming.
   - **Mini-player** (`lib/MiniPlayer.svelte`): a bar floating along the bottom, 64 px high, 12 px from the edges,
     corners 12 px: the cover with play/pause on it, the title (scrolling when it does not fit), artist and time, and
     the heart (the player's account's Jellyfin favourite). The bar fills from the left as the track plays, in the

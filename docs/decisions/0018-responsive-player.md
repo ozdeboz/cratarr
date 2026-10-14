@@ -49,7 +49,8 @@ every page), `lib/screens/player_screen.dart` and `lib/screens/blurred_player_sc
 
 - **The navigation:** the sidebar from 1024 px stays as it is; below that the bar of pages moves from the bottom to
   the **top** (icons with labels, up to five, the rest under More), so the bottom edge is free for the mini-player.
-- **The now-playing header above the page goes.** In its place, on Playlists and Incoming, a **mini-player along the
+- **The now-playing header above the page goes.** In its place, on Playlists and Incoming (on every page since
+  2026-10-14, see the amendment below), a **mini-player along the
   bottom**, as Finamp's: a floating bar 64 px high, 12 px from the edges, corners 12 px; the cover with play/pause on
   it; the title (scrolling when it does not fit); artist and time (position / length); a heart (the favourite). The
   whole bar fills from the left as the track plays, in the colour taken from the cover. Tap or swipe up opens the full
@@ -93,3 +94,11 @@ settings (cover minimum padding 1.5 %, cover priority 8), in `lib/playerLayout.t
   when even the title and play/pause no longer fit beside a minimal cover.
 - The layout runs on every resize of the player; it measures a handful of elements and settles in at most seven steps.
 - `docs/ui-conventions.md` describes the full-screen player this way from now on.
+
+## Amendment (2026-10-14): the player on every page
+
+The owner decided that the player belongs to the app shell on **every** page, not only on Playlists and Incoming:
+with the local player (decision 0022) Cratarr plays music itself, so the player is a player in its own right, not
+only a remote for adding what plays to playlists. The mini-player, the player beside the page and the player over
+everything show on Repairs, Insights and Settings too. The server picker stays on Playlists and Incoming, the pages
+that act on what a server plays.

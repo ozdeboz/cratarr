@@ -47,8 +47,9 @@
             ? 'insights'
             : 'playlists';
   let page = $state(fromHash());
-  // What plays only matters where it is acted on: Playlists (add it) and Incoming (play an album).
-  const withPlayer = $derived(page === 'playlists' || page === 'incoming');
+  // The server picker belongs to the pages that act on what a server plays: Playlists (add it) and Incoming (play an
+  // album). The player itself is part of the shell on every page (decision 0018, amended: Cratarr plays music itself).
+  const withPicker = $derived(page === 'playlists' || page === 'incoming');
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
   // otherwise the mini-player along the bottom (`mini`), which opens it over everything (`overlay`). The player over
   // everything closes when the page changes or the navigation is used, and the page behind it does not scroll.
@@ -57,9 +58,9 @@
     page;
     untrack(collapse);
   });
-  const sidebar = $derived(withPlayer && inSidebar());
-  const overlay = $derived(withPlayer && player.full && !sidebar);
-  const mini = $derived(withPlayer && !sidebar && !!playing());
+  const sidebar = $derived(inSidebar());
+  const overlay = $derived(player.full && !sidebar);
+  const mini = $derived(!sidebar && !!playing());
   $effect(() => {
     if (sidebar) untrack(collapse);
   });
@@ -224,7 +225,7 @@
 
   <div class="content" class:with-side={sidebar} style:--player-w="{playerWidth}px" bind:this={contentEl}>
     <div class="page">
-    {#if withPlayer}
+    {#if withPicker}
       {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
     {/if}
     {#if page === 'settings'}
