@@ -66,6 +66,25 @@ every page), `lib/screens/player_screen.dart` and `lib/screens/blurred_player_sc
   taken from the cover's most vivid colour and kept readable against the background; between tracks the colours fade
   over a second.
 
+### Ported precisely (2026-10-14, owner: "port it more precisely")
+
+The first version approximated Finamp; it is now a port of Finamp's `PlayerHideableController` with its default
+settings (cover minimum padding 1.5 %, cover priority 8), in `lib/playerLayout.ts`:
+
+- **Order of what gives way** (Finamp's `verticalHideOrder`): large gaps, the large play button, the player pill (in
+  the place of Finamp's bottom-actions row, which Cratarr keeps because it holds the playlist count), small gaps, the
+  info chips, the title's second line, the progress bar (its time labels go with it, as Finamp's slider).
+- **The cover's allowance** per step is Finamp's: 1.5 % + `maxShrink` (1, 1, 2, 2, 3, 3, 4) × 8 × (the cover's size
+  over 300 px, between 1 and 3) per side.
+- **Spare height** as Finamp's `_controlsInternalHeight`: a third goes between the controls' three groups (track
+  name; chips, progress and buttons; the actions row), up to 40 % of their height; of the rest a third goes under
+  the controls and two thirds around the cover.
+- **Widths:** portrait controls up to 1000 px, the buttons spread across them; landscape controls between 50 % and
+  65 % of the width (at most 800 px), the cover on the left with 3 % of the height around it, the groups spaced
+  4 / 4 / 10 / 4.
+- **Orientation:** as Finamp's on the web: the larger cover wins, judged with the controls halfway between all shown
+  and all dropped.
+
 ## Consequences
 
 - The tablet in landscape gets a cover the height of the screen with the controls beside it, instead of a small one

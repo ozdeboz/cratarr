@@ -19,9 +19,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   - **Full player** (`lib/NowPlaying.svelte`): the cover (library cover, else the album image from the server), the
     active player named in a small pill (even when there is only one), title, artist · album, the transport controls
     (previous, play/pause as a rounded square, next), progress, the heart and "in N playlists". It lays itself out
-    for its space (`lib/playerLayout.ts`): portrait or landscape, whichever gives the larger cover; when short of
-    height the gaps, the large buttons, the pill, the title's second line, the time labels and the progress bar give
-    way, in that order. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
+    for its space (`lib/playerLayout.ts`, a port of Finamp's layout): portrait or landscape, whichever gives the
+    larger cover; spare room spreads its three groups (track name; chips, progress and buttons; the actions row);
+    when short of height the large gaps, the large play button, the pill, the small gaps, the info chips, the
+    title's second line and the progress bar give way, in that order. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
     cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere: swipe up shows the
     playlists, swipe down closes.
   - **Where it shows:** with room for it (a content area of 800 × 500 px or more) the full player sits beside the page

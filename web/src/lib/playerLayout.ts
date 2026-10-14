@@ -1,63 +1,104 @@
-// The full-screen player's layout (decision 0018): a space budget, not breakpoints. The player measures its own
-// controls at each step and decides which elements give way, how large the cover is, and whether the cover sits
-// above the controls (portrait) or beside them (landscape).
+// The full player's layout (decision 0018), ported from Finamp's `PlayerHideableController`
+// (lib/screens/player_screen.dart, branch `redesign`, read 2026-10-14) with its default settings. Finamp adds up fixed
+// sizes per element; Cratarr measures its controls instead (`measure`), so the rules stay right when a font or a
+// button changes. Everything else follows Finamp's code, step for step.
 
-/** What gives way when the player runs out of height, first to last. The title, play/pause and the playlist count
- *  never do. Step n is dropped at level n + 1. */
-export const STEPS = ['gaps', 'buttons', 'pill', 'chips', 'title', 'times', 'progress'] as const;
+/** What gives way when the player runs out of height, first to last (Finamp's `verticalHideOrder`). Finamp's bottom
+ *  actions row is Cratarr's player pill here: Cratarr's own row (menu, queue, favourite and the playlist count) never
+ *  gives way, nor do the title, the artist line and previous / play / next. Step n is dropped at level n + 1. */
+export const STEPS = ['gapsBig', 'buttons', 'pill', 'gapsSmall', 'chips', 'title', 'progress'] as const;
 export type Step = (typeof STEPS)[number];
 
-/** The share of the largest possible cover that the cover may give up to keep each step, at a 300 px cover. */
-const ALLOWANCE: Record<Step, number> = {
-  gaps: 0.04,
-  buttons: 0.04,
-  pill: 0.08,
-  chips: 0.1,
-  title: 0.12,
-  times: 0.12,
-  progress: 0.16,
+/** Finamp's `maxShrink`: how far (percent of the cover's size, per side, times the cover priority) the cover may shrink
+ *  so that this step can stay. */
+const MAX_SHRINK: Record<Step, number> = {
+  gapsBig: 1,
+  buttons: 1,
+  pill: 2,
+  gapsSmall: 2,
+  chips: 3,
+  title: 3,
+  progress: 4,
 };
-/** The cover never gets smaller than this; below it the panel scrolls. */
-export const MIN_COVER = 96;
-/** The controls' width: in portrait at most this, in landscape a share of the width within these bounds. */
-const CONTROLS_MAX = 560;
-const LANDSCAPE_SHARE = 0.45;
-const LANDSCAPE_MIN = 280;
-/** Between the cover and the controls (and around the cover in landscape). */
-const GAP = 24;
 
-/** A larger cover may give up more: 1× up to 300 px, growing to 3× from 900 px. */
-function allowance(step: Step, largest: number): number {
-  const scale = Math.min(3, Math.max(1, (largest - 300) / 300));
-  return Math.min(0.6, ALLOWANCE[step] * scale);
+/** Finamp's defaults: `playerScreenCoverMinimumPadding` 1.5 (%), `prioritizeCoverFactor` 8. */
+const MIN_PADDING = 1.5;
+const PRIORITIZE_COVER = 8;
+/** Finamp: portrait controls at most 1000 wide, landscape at most 800. */
+const PORTRAIT_MAX = 1000;
+const LANDSCAPE_MAX = 800;
+/** The controls' narrowest sensible width (Finamp's unhideable elements plus the buttons: 144 + 14 + 96 px). */
+const CONTROLS_MIN_WIDTH = 254;
+/** The cover never gets smaller than this. */
+export const MIN_COVER = 96;
+
+export type Fit = {
+  landscape: boolean;
+  /** Steps 0..level-1 are dropped. */
+  level: number;
+  /** The cover's own square size. */
+  cover: number;
+  /** The box the cover sits in (centred, with Finamp's padding around it). */
+  album: { width: number; height: number };
+  /** The controls' box: the groups spread evenly inside it. */
+  controls: { width: number; height: number };
+};
+
+type Measure = (landscape: boolean, level: number, controlsWidth: number) => number;
+
+/** Finamp's `_controlsInternalHeight`: with room to spare a third of it goes between the controls' groups, until they
+ *  have 40 % padding inside; the rest goes outside them. */
+const internalHeight = (total: number, natural: number) => Math.min((total - natural) / 3 + natural, natural * 1.4);
+
+function portrait(width: number, height: number, measure: Measure): Fit {
+  const maxAlbum = Math.min(width, height);
+  const controlsWidth = Math.min(width, PORTRAIT_MAX);
+  const scale = Math.min(3, Math.max(1, (maxAlbum - 300) / 300));
+  // Drop steps in order until the controls fit beside a cover shrunk by at most the next step's allowance.
+  let level = 0;
+  while (level < STEPS.length) {
+    const padding = MIN_PADDING + MAX_SHRINK[STEPS[level]] * PRIORITIZE_COVER * scale;
+    const target = height - maxAlbum * (1 - (padding / 100) * 2);
+    if (measure(false, level, controlsWidth) < target) break;
+    level += 1;
+  }
+  const natural = measure(false, level, controlsWidth);
+  const desired = height - maxAlbum * (1 - (MIN_PADDING / 100) * 2);
+  const padded = Math.max(natural, desired);
+  const inside = internalHeight(padded, natural);
+  // A third of the remaining padding goes under the controls, two thirds into the cover's region.
+  const under = (padded - inside) / 3;
+  const album = { width, height: Math.max(1, height - inside - under) };
+  const pad = MIN_PADDING / 100;
+  const cover = Math.max(MIN_COVER, Math.floor(Math.min(album.width * (1 - 2 * pad), album.height * (1 - 2 * pad))));
+  return { landscape: false, level, cover, album, controls: { width: controlsWidth, height: Math.round(inside) } };
 }
 
-export type Fit = { landscape: boolean; level: number; cover: number; controls: number };
-
-/** Lays the player out in a box of `width` × `height`. `measure(landscape, level, controlsWidth)` returns the
- *  controls' height with steps `0..level-1` dropped. */
-export function fit(width: number, height: number, measure: (landscape: boolean, level: number, controlsWidth: number) => number): Fit {
-  // Portrait: the controls under the cover. Drop steps while keeping the next one would cost the cover more than its
-  // allowance.
-  const pw = Math.min(width, CONTROLS_MAX);
-  // The largest cover there can be: with everything that can give way gone (the title and play/pause always need
-  // room, so the whole short side is never on offer). Each step's allowance is a share of this.
-  const largest = Math.max(MIN_COVER, Math.min(width, height - measure(false, STEPS.length, pw) - GAP));
+function landscape(width: number, height: number, measure: Measure): Fit {
+  // Finamp: never more than 65 % of the width for the controls (unless the rest is only cover padding), at least 50 %.
+  const desired = Math.min(Math.max(CONTROLS_MIN_WIDTH, width / 2), width - height);
+  const maxWidth = Math.max(width * ((PRIORITIZE_COVER * 2 + 49) / 100), width - height);
+  const minWidth = Math.max(CONTROLS_MIN_WIDTH, width * ((PRIORITIZE_COVER * 2 + 34) / 100));
+  const target = Math.min(Math.max(desired, minWidth), Math.max(minWidth, maxWidth));
+  const controlsWidth = Math.min(target, LANDSCAPE_MAX);
   let level = 0;
-  let cover = Math.min(width, height - measure(false, 0, pw) - GAP);
-  while (level < STEPS.length && cover < largest * (1 - allowance(STEPS[level], largest))) {
-    level += 1;
-    cover = Math.min(width, height - measure(false, level, pw) - GAP);
-  }
-  const portrait: Fit = { landscape: false, level, cover: Math.max(MIN_COVER, Math.floor(cover)), controls: pw };
+  while (level < STEPS.length && measure(true, level, controlsWidth) >= height) level += 1;
+  const natural = measure(true, level, controlsWidth);
+  const album = { width: Math.max(1, width - target), height };
+  // Finamp's landscape cover: 3 % of the height around it (less on the side of the controls), then its own padding.
+  const edge = height * 0.03;
+  const inner = { width: album.width - edge - Math.max(0, edge - 20), height: height - 2 * edge };
+  const pad = MIN_PADDING / 100;
+  const cover = Math.max(MIN_COVER, Math.floor(Math.min(inner.width * (1 - 2 * pad), inner.height * (1 - 2 * pad))));
+  return { landscape: true, level, cover, album, controls: { width: controlsWidth, height: Math.round(internalHeight(height, natural)) } };
+}
 
-  // Landscape: the controls beside the cover; the cover takes the height, so only the controls' own height counts.
-  const lw = Math.min(CONTROLS_MAX, Math.max(LANDSCAPE_MIN, Math.round(width * LANDSCAPE_SHARE)));
-  let llevel = 0;
-  while (llevel < STEPS.length && measure(true, llevel, lw) > height) llevel += 1;
-  const lcover = Math.floor(Math.min(width - lw - GAP, height));
-  const landscape: Fit = { landscape: true, level: llevel, cover: lcover, controls: lw };
-
-  // The layout that gives the larger cover wins (not the device's orientation).
-  return lcover > portrait.cover && lcover >= MIN_COVER ? landscape : portrait;
+/** Lays the player out in a box of `width` × `height`. On the web Finamp picks the orientation that gives the larger
+ *  cover, from an estimate of the controls (halfway between all shown and all dropped). */
+export function fit(width: number, height: number, measure: Measure): Fit {
+  const estimate = (measure(false, 0, Math.min(width, PORTRAIT_MAX)) + measure(false, STEPS.length, Math.min(width, PORTRAIT_MAX))) / 2;
+  const landscapeWidth = Math.max(CONTROLS_MIN_WIDTH, width / 2);
+  const landscapeAlbum = Math.min(width - landscapeWidth, height);
+  const portraitAlbum = Math.min(width, height - estimate);
+  return landscapeAlbum > portraitAlbum ? landscape(width, height, measure) : portrait(width, height, measure);
 }

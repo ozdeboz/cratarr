@@ -149,20 +149,21 @@
     const width = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
     const height = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
     if (width <= 0 || height <= 0) return;
-    // Measuring sets the classes directly and puts them back afterwards; the state then sets the outcome.
-    const before = { cls: el.className, controls: el.style.getPropertyValue('--controls') };
+    // Measuring sets the classes and the box's width directly (its height free) and puts them back afterwards; the
+    // state then sets the outcome.
+    const before = { cls: el.className, width: box.style.width, height: box.style.height };
     const measure = (landscape: boolean, level: number, controlsWidth: number) => {
       el.classList.toggle('landscape', landscape);
       STEPS.forEach((step, i) => el.classList.toggle(`drop-${step}`, level > i));
-      el.style.setProperty('--controls', `${controlsWidth}px`);
+      box.style.width = `${controlsWidth}px`;
+      box.style.height = 'auto';
       return box.getBoundingClientRect().height;
     };
     const next = fit(width, height, measure);
     el.className = before.cls;
-    el.style.setProperty('--controls', before.controls);
-    if (!layout || next.landscape !== layout.landscape || next.level !== layout.level || next.cover !== layout.cover || next.controls !== layout.controls) {
-      layout = next;
-    }
+    box.style.width = before.width;
+    box.style.height = before.height;
+    if (JSON.stringify(next) !== JSON.stringify(layout)) layout = next;
   }
 
   $effect(() => {
@@ -185,15 +186,13 @@
   <div class="veil"></div>
   <header
     class:landscape={layout?.landscape}
-    class:drop-gaps={dropped('gaps')}
+    class:drop-gapsBig={dropped('gapsBig')}
     class:drop-buttons={dropped('buttons')}
     class:drop-pill={dropped('pill')}
+    class:drop-gapsSmall={dropped('gapsSmall')}
     class:drop-chips={dropped('chips')}
     class:drop-title={dropped('title')}
-    class:drop-times={dropped('times')}
     class:drop-progress={dropped('progress')}
-    style:--cover={layout ? `${layout.cover}px` : null}
-    style:--controls={layout ? `${layout.controls}px` : null}
     bind:this={head}
   >
     <button class="corner left" aria-label={place === 'side' ? 'Fold the player' : 'Close the player'} onclick={close}><Icon name="collapse" size={26} /></button>
@@ -202,64 +201,84 @@
     {:else if player.roomy}
       <button class="corner right" aria-label="Beside the page" onclick={toSidebar}><Icon name="sidebar" size={22} /></button>
     {/if}
-    {#if np && src}
-      {#key src}
-        <button class="cover-btn" aria-label="Play or pause" tabindex="-1" onclick={coverTap} oncontextmenu={(e) => (e.preventDefault(), openMenu(e))}>
-          <img class="cover" {src} alt="" decoding="async" draggable="false" onerror={() => coverFailed(src)} />
-        </button>
-      {/key}
-    {/if}
-    <div class="controls" bind:this={controls}>
-      <div class="np">
+    <!-- Finamp's layout: the cover's region, then the controls' box with three groups spread in it (track name,
+         controls, actions); in landscape side by side. Sizes from lib/playerLayout.ts. -->
+    <div class="album" style:width={layout ? `${layout.album.width}px` : null} style:height={layout ? `${layout.album.height}px` : null}>
+      {#if np && src}
+        {#key src}
+          <button
+            class="cover-btn"
+            style:width={layout ? `${layout.cover}px` : null}
+            style:height={layout ? `${layout.cover}px` : null}
+            aria-label="Play or pause"
+            tabindex="-1"
+            onclick={coverTap}
+            oncontextmenu={(e) => (e.preventDefault(), openMenu(e))}
+          >
+            <img class="cover" {src} alt="" decoding="async" draggable="false" onerror={() => coverFailed(src)} />
+          </button>
+        {/key}
+      {/if}
+    </div>
+    <div
+      class="controls"
+      bind:this={controls}
+      style:width={layout ? `${layout.controls.width}px` : null}
+      style:height={layout ? `${layout.controls.height}px` : null}
+    >
+      <i class="sp a"></i>
+      <div class="track">
         {#if np}
           {#if np.player}<span class="pill">{np.player}</span>{/if}
           <div class="title">{np.name}</div>
           <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
-          {#if chips.length}
-            <div class="chips" aria-label="About this track">
-              {#each chips as c (c)}<span>{c}</span>{/each}
-            </div>
-          {/if}
-          <div class="row">
-            <div class="transport" role="group" aria-label="Player controls">
-              <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
-              <button class="main" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
-                ><Icon name={paused() ? 'play' : 'pause'} size={32} /></button
-              >
-              <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={24} /></button>
-            </div>
-            {#if np.progress && prefs.showProgress}
-              <div
-                class="progress"
-                class:paused={np.progress.paused}
-                class:estimated={np.progress.estimated}
-                title={np.progress.estimated
-                  ? 'Estimated: no player reports this track, so this counts from when it started'
-                  : np.progress.paused
-                    ? 'Paused'
-                    : undefined}
-              >
-                <span class="t">{np.progress.estimated ? '≈' : ''}{clockText(pos)}</span>
-                <div
-                  class="bar"
-                  role="progressbar"
-                  aria-label={np.progress.paused ? 'Track position, paused' : 'Track position'}
-                  aria-valuemin={0}
-                  aria-valuemax={dur ?? undefined}
-                  aria-valuenow={Math.floor(pos)}
-                  aria-valuetext={dur ? `${clockText(pos)} of ${clockText(dur)}` : clockText(pos)}
-                >
-                  <div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div>
-                </div>
-                <span class="t">{dur ? clockText(dur) : '–:––'}</span>
-              </div>
-            {/if}
-          </div>
         {:else}
           <div class="title idle">Nothing is playing</div>
         {/if}
       </div>
       {#if np}
+        <i class="sp b"></i>
+        <div class="area">
+          {#if chips.length}
+            <div class="chips" aria-label="About this track">
+              {#each chips as c, i (i)}<span>{c}</span>{/each}
+            </div>
+          {/if}
+          {#if np.progress && prefs.showProgress}
+            <div
+              class="progress"
+              class:paused={np.progress.paused}
+              class:estimated={np.progress.estimated}
+              title={np.progress.estimated
+                ? 'Estimated: no player reports this track, so this counts from when it started'
+                : np.progress.paused
+                  ? 'Paused'
+                  : undefined}
+            >
+              <span class="t">{np.progress.estimated ? '≈' : ''}{clockText(pos)}</span>
+              <div
+                class="bar"
+                role="progressbar"
+                aria-label={np.progress.paused ? 'Track position, paused' : 'Track position'}
+                aria-valuemin={0}
+                aria-valuemax={dur ?? undefined}
+                aria-valuenow={Math.floor(pos)}
+                aria-valuetext={dur ? `${clockText(pos)} of ${clockText(dur)}` : clockText(pos)}
+              >
+                <div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div>
+              </div>
+              <span class="t">{dur ? clockText(dur) : '–:––'}</span>
+            </div>
+          {/if}
+          <div class="transport" role="group" aria-label="Player controls">
+            <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
+            <button class="main" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
+              ><Icon name={paused() ? 'play' : 'pause'} size={32} /></button
+            >
+            <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={24} /></button>
+          </div>
+        </div>
+        <i class="sp c"></i>
         <div class="side">
           <button class="act" aria-label="Track menu" aria-haspopup="menu" onclick={openMenu}><Icon name="menu" size={24} /></button>
           <button class="act" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}><Icon name="playlists" size={24} /></button>
@@ -275,6 +294,7 @@
           </div>
         </div>
       {/if}
+      <i class="sp d"></i>
     </div>
   </header>
 
@@ -343,38 +363,78 @@
     pointer-events: none;
   }
 
-  /* lib/playerLayout.ts decides, by measuring, the cover's size (--cover), the controls' width (--controls), portrait
-     or landscape, and which elements give way (drop-*, first to last: gaps, large buttons, the player pill, the
-     title's second line, the time labels, the progress bar). Spare room goes evenly around the cover and the
-     controls. Only when even a minimal cover does not fit does the player scroll. */
+  /* Finamp's player layout (lib/playerLayout.ts): portrait = the cover's region (the cover centred in it) over the
+     controls' box; landscape = the cover's region on the left, the controls' box centred in the rest. Inside the box
+     its three groups are spread evenly (Finamp's spaceEvenly; in landscape its spacers 4 / 4 / 10 / 4). What gives
+     way (drop-*): the large gaps, the large play button, the player pill, the small gaps, the info chips, the title's
+     second line, the progress bar. */
   header {
     box-sizing: border-box;
     position: relative;
-    display: grid;
+    display: flex;
     flex: 1 1 0;
+    flex-direction: column;
+    align-items: center;
     min-height: 0;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: 'cover' 'controls';
-    justify-items: center;
-    align-content: space-evenly;
-    row-gap: 24px;
-    padding: 56px clamp(12px, 3vw, 24px) calc(24px + env(safe-area-inset-bottom));
+    padding: 53px 0 env(safe-area-inset-bottom);
     overflow-y: auto;
     text-align: center;
     touch-action: pan-x;
   }
 
-  .in-sidebar header {
-    padding: 56px 16px 24px;
+  header.landscape {
+    flex-direction: row;
+    padding-top: 36px;
   }
 
-  header.landscape {
-    grid-template-columns: var(--cover) var(--controls);
-    grid-template-areas: 'cover controls';
-    justify-content: space-evenly;
-    align-content: center;
-    align-items: center;
-    column-gap: 24px;
+  .album {
+    flex: none;
+    display: grid;
+    place-items: center;
+    max-width: 100%;
+  }
+
+  .controls {
+    box-sizing: border-box;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    max-width: 100%;
+    padding: 0 12px;
+  }
+
+  header.landscape .controls {
+    margin-inline: auto;
+  }
+
+  /* Finamp's Spacers: equal in portrait, 4 / 4 / 10 / 4 in landscape; a small minimum keeps the groups apart. */
+  .sp {
+    display: block;
+    flex: 1 1 0;
+    min-height: 12px;
+  }
+
+  header.landscape .sp.a,
+  header.landscape .sp.b,
+  header.landscape .sp.d {
+    flex-grow: 4;
+  }
+
+  header.landscape .sp.c {
+    flex-grow: 10;
+  }
+
+  .track,
+  .area,
+  .side {
+    flex: none;
+  }
+
+  .area {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
   }
 
   .corner {
@@ -401,10 +461,9 @@
   }
 
   .cover-btn {
-    grid-area: cover;
     display: block;
-    width: var(--cover, min(78vw, 440px));
-    height: var(--cover, min(78vw, 440px));
+    width: min(78vw, 440px);
+    height: min(78vw, 440px);
     padding: 0;
     background: none;
     border: 0;
@@ -422,20 +481,6 @@
     background: var(--surface);
     box-shadow: 0 4px 24px rgb(0 0 0 / 0.3);
     user-select: none;
-  }
-
-  .controls {
-    grid-area: controls;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 20px;
-    width: min(100%, var(--controls, 560px));
-  }
-
-  .np {
-    width: 100%;
-    min-width: 0;
   }
 
   .pill {
@@ -471,14 +516,6 @@
     font-size: 1.05rem;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .row {
-    display: flex;
-    flex-direction: column-reverse;
-    align-items: center;
-    gap: 18px;
-    margin-top: 22px;
   }
 
   .progress {
@@ -523,10 +560,11 @@
     opacity: 0.5;
   }
 
+  /* Finamp's buttons row: as wide as the controls, the buttons spread evenly. */
   .transport {
     display: flex;
     align-items: center;
-    gap: 28px;
+    justify-content: space-evenly;
   }
 
   .transport button {
@@ -559,7 +597,7 @@
   .side {
     display: flex;
     align-items: center;
-    gap: 14px;
+    justify-content: space-evenly;
   }
 
   .act {
@@ -580,7 +618,6 @@
     display: flex;
     justify-content: center;
     gap: 6px;
-    margin-top: 10px;
     overflow-x: auto;
     scrollbar-width: none;
   }
@@ -745,17 +782,12 @@
   }
 
   /* What gives way, in this order. */
-  header.drop-gaps .controls {
-    gap: 8px;
+  header.drop-gapsBig .sp {
+    min-height: 6px;
   }
 
-  header.drop-gaps .row {
-    gap: 8px;
-    margin-top: 10px;
-  }
-
-  header.drop-buttons .transport {
-    gap: 14px;
+  header.drop-gapsBig .area {
+    gap: 10px;
   }
 
   header.drop-buttons .transport button.main {
@@ -768,6 +800,14 @@
     display: none;
   }
 
+  header.drop-gapsSmall .sp {
+    min-height: 0;
+  }
+
+  header.drop-gapsSmall .area {
+    gap: 4px;
+  }
+
   header.drop-chips .chips {
     display: none;
   }
@@ -776,10 +816,6 @@
     display: block;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  header.drop-times .progress .t {
-    display: none;
   }
 
   header.drop-progress .progress {
