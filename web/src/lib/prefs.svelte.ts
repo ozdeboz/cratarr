@@ -24,7 +24,7 @@ export type Prefs = {
   output: 'remote' | 'local';
   /** Playlists pinned to the top of the Playlists page, in the order pinned (ids). */
   pinned: string[];
-  /** The Playlists page's filter section (the filter, order and size) is shown. */
+  /** The Playlists page's filter section (the filter and the order) is shown. */
   filterOpen: boolean;
 };
 

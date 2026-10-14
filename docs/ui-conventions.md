@@ -89,8 +89,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
 - **The Playlists page's controls** are two sections: the actions it always needs (the button that shows or hides the
-  filter section, Select; Cancel and Open N while selecting; + or ⋮ in the corner), and the filter section (the filter,
-  A–Z / ✓ first, Size), which folds away, remembered by the browser. Folded away while a filter applies, its button is
+  filter section, Select as an icon (two stacked squares, the front one ticked); Cancel and Open N while selecting; Size; + or ⋮ in the corner), and the filter section
+  (the filter, A–Z / ✓ first), which folds away, remembered by the browser. Folded away while a filter applies, its button is
   in the accent.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. Where music plays is chosen at the player (its output button), not in Settings.

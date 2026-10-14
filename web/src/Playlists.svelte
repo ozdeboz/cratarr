@@ -126,8 +126,8 @@
     <button class="new corner" aria-label="New playlist" onclick={openNew}><Icon name="plus" size={22} /></button>
   {/if}
 
-  <!-- The page's controls in two sections: the actions it always needs (with the button that shows or hides the other
-       section), and the filter section (the filter, order and size), which folds away; remembered by the browser. -->
+  <!-- The page's controls in two sections: what it always needs (the button that shows or hides the other section,
+       Select, Size), and the filter section (the filter and the order), which folds away; remembered by the browser. -->
   <div class="tools">
     <div class="row">
     <button
@@ -146,8 +146,13 @@
         <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
       {/if}
     {:else}
-      <button class="new" onclick={startSelect}>Select</button>
+      <button class="new toggle" aria-label="Select" title="Select" onclick={startSelect}><Icon name="copyCheck" size={22} /></button>
     {/if}
+    <div class="seg" role="group" aria-label="Size">
+      <span class="lbl" aria-hidden="true">Size</span>
+      <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
+      <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
+    </div>
     </div>
     {#if prefs.filterOpen}
       <div class="row" id="playlist-filter">
@@ -157,11 +162,6 @@
           <button aria-pressed={prefs.membersFirst} onclick={() => (prefs.membersFirst = true)} title="Playlists with the playing track first"
             >✓ first</button
           >
-        </div>
-        <div class="seg" role="group" aria-label="Size">
-          <span class="lbl" aria-hidden="true">Size</span>
-          <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
-          <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
         </div>
       </div>
     {/if}
@@ -245,7 +245,7 @@
 <style>
   main {
     position: relative;
-    padding: 0 clamp(12px, 2vw, 32px) 48px;
+    padding: 14px clamp(12px, 2vw, 32px) 48px;
   }
 
   /* The corner's + or ⋮: the actions keep clear of it. */
@@ -256,7 +256,7 @@
   .tools {
     display: grid;
     gap: 12px;
-    margin: 14px 0;
+    margin: 0 0 14px;
   }
 
   .tools .row {
