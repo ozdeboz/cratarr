@@ -16,14 +16,14 @@
   import RowHeart from './RowHeart.svelte';
   import { swipe } from './swipe';
   import { Reorder } from './reorder.svelte';
-  import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
+  import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
   import { local, jump as localJump, moveUpcoming, removeUpcoming } from './localPlayer.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { isLocal } from './output.svelte';
   import { clockText, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
   import { toast } from './toast.svelte';
 
-  let { src, onclose, onmenu }: { src: string | null; onclose: () => void; onmenu: (e: Event) => void } = $props();
+  let { src, onclose }: { src: string | null; onclose: () => void } = $props();
 
   const np = $derived(playing());
   const pos = $derived(position());
@@ -60,7 +60,10 @@
   });
 
   // A row's menu: the whole menu (long-press on the row) or straight to its playlists (the row's heart).
-  let menuFor = $state<{ track: MenuTrack; start: 'menu' | 'lists' } | null>(null);
+  let menuFor = $state<{ track: MenuTrack; start: 'menu' | 'lists'; queue: QueuePlace | null } | null>(null);
+  // Shown or not; what it is for stays while it slides out.
+  let menuShown = $state(false);
+  const showMenu = (m: { track: MenuTrack; start: 'menu' | 'lists'; queue: QueuePlace | null }) => ((menuFor = m), (menuShown = true));
   const asTrack = (t: { id: string; name: string; artist: string | null; album: string | null; album_id: string | null }, source: string): MenuTrack => ({
     source,
     id: t.id,
@@ -69,9 +72,10 @@
     album: t.album,
     album_id: t.album_id,
   });
-  function rowMenu(track: MenuTrack) {
+  /** A row's menu, about its place in the queue; the playing track's card gives the playing track's own menu. */
+  function rowMenu(track: MenuTrack, queue: QueuePlace | null) {
     tick();
-    menuFor = { track, start: 'menu' };
+    showMenu({ track, start: 'menu', queue });
   }
 
   async function play(i: number) {
@@ -121,7 +125,7 @@
 
 <!-- Finamp's row heart (lib/RowHeart.svelte): a tap opens its playlists, a long-press makes it a favourite or not. -->
 {#snippet rowHeart(t: MenuTrack)}
-  <RowHeart source={t.source} id={t.id} name={t.name} onopen={() => (menuFor = { track: t, start: 'lists' })} />
+  <RowHeart source={t.source} id={t.id} name={t.name} onopen={() => showMenu({ track: t, start: 'lists', queue: null })} />
 {/snippet}
 
 {#if np}
@@ -153,7 +157,7 @@
           <ol class="rows" transition:fade={{ duration: 150, easing: linear }}>
             {#each previous as t, j (t.id + ':' + j)}
               <li>
-                <button class="row" onclick={() => (tick(), localJump(j))} use:longpress={() => rowMenu(asTrack(t, t.source))}>
+                <button class="row" onclick={() => (tick(), localJump(j))} use:longpress={() => rowMenu(asTrack(t, t.source), { list: 'previous', at: j })}>
                   {#if t.album_id}<img src={incomingCoverUrl(t.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
                   <div><strong>{t.name || '…'}</strong><span>{t.artist ?? ''}</span></div>
                 </button>
@@ -165,7 +169,8 @@
       {/if}
 
       <!-- The playing track: Finamp's card, filling in the cover's colour as it plays. -->
-      <div class="now" style:--done={dur ? Math.min(1, pos / dur) : 0}>
+      <!-- The playing track: a long-press or right-click is its menu, as every row's (decision 0023). -->
+      <div class="now" style:--done={dur ? Math.min(1, pos / dur) : 0} use:longpress={() => rowMenu(asTrack(np, np.source), null)}>
         <span class="done" aria-hidden="true"></span>
         <button class="ncover" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}>
           {#if src}<img {src} alt="" />{:else}<span class="noimg"></span>{/if}
@@ -181,7 +186,6 @@
             ><Icon name="heart" size={28} /></button
           >
         {/if}
-        <button class="nbtn" aria-label="Track menu" aria-haspopup="menu" onclick={onmenu}><Icon name="more" size={28} /></button>
       </div>
 
       <div class="sec qsec">
@@ -200,7 +204,7 @@
               <button
                 class="row"
                 onclick={() => play(i)}
-                use:longpress={() => rowMenu(asTrack(t, np.source))}
+                use:longpress={() => rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i })}
                 use:swipe={{ enabled: here && !drag, onswipe: () => removeSwiped(i) }}
               >
                 {#if t.album_id}<img src={incomingCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
@@ -228,11 +232,12 @@
   </div>
 {/if}
 
-{#if menuFor}
+{#if menuShown && menuFor}
   <TrackMenu
     track={menuFor.track}
     start={menuFor.start}
-    onclose={() => (menuFor = null)}
+    queue={menuFor.queue}
+    onclose={() => (menuShown = false)}
   />
 {/if}
 

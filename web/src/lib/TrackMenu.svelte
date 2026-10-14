@@ -1,6 +1,8 @@
 <script lang="ts" module>
   /** A track the menu is for, when it is not the playing one (a queue row, a playlist row; decision 0023). */
   export type MenuTrack = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null };
+  /** Where a queue row's track is: `upcoming` (what comes next, 0 = the next) or `previous` (this device's played ones). */
+  export type QueuePlace = { list: 'upcoming' | 'previous'; at: number };
 </script>
 
 <script lang="ts">
@@ -8,12 +10,16 @@
   // its cover) or any other's (a long-press on a row). A sheet as Finamp's track menu: the track on the card (with the
   // heart), Play next and Add to queue as the large actions, then: Add to playlist (the playlists as toggle cards, a tap
   // adds or removes), the favourite, and for the playing track a new playlist made of what plays and what comes next.
+  // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
+  // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
+  // queue last (this device, as the row's swipe).
   import { coverUrl, incomingCoverUrl, playlistFromQueue, queueTrack, setTrackFavorite, setTrackMember, trackState, type TrackState } from './api';
   import { refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
-  import { enqueue, local } from './localPlayer.svelte';
+  import { enqueue, jump as localJump, local, moveUpcoming, removeUpcoming } from './localPlayer.svelte';
+  import { playUpcoming } from './remote.svelte';
   import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
@@ -22,7 +28,8 @@
     onclose,
     track = null,
     start = 'menu',
-  }: { onclose: () => void; track?: MenuTrack | null; start?: 'menu' | 'lists' } = $props();
+    queue: place = null,
+  }: { onclose: () => void; track?: MenuTrack | null; start?: 'menu' | 'lists'; queue?: QueuePlace | null } = $props();
 
   const np = $derived(playing());
   /** The menu is for what plays (no track given, or the given one plays). */
@@ -73,13 +80,47 @@
     }
   }
 
+  // A queue row's actions.
+  const here = $derived(isLocal());
+  // Each action reads what it is for before closing: the opener drops the menu's track and place on close.
+  async function playNow() {
+    const at = place;
+    if (!at) return;
+    onclose();
+    try {
+      if (at.list === 'previous') localJump(at.at);
+      else await playUpcoming(at.at);
+    } catch (e) {
+      toast.fail(e, "The player didn't go to that track");
+    }
+  }
+  async function playNextFromQueue() {
+    const at = place;
+    if (!at) return;
+    // On this device an upcoming track moves to be next; otherwise (a played one, the server's player) a copy goes next.
+    if (here && at.list === 'upcoming') {
+      onclose();
+      moveUpcoming(at.at, 0);
+      return;
+    }
+    await queue('next');
+  }
+  function removeFromQueue() {
+    const at = place;
+    if (!at || !here || at.list !== 'upcoming') return;
+    onclose();
+    removeUpcoming(at.at);
+  }
+  const movesHere = $derived(!!place && here && place.list === 'upcoming');
+
   async function queue(how: 'next' | 'last') {
-    if (!t) return;
+    const tr = t;
+    if (!tr) return;
     working = true;
     onclose();
     try {
-      if (isLocal()) enqueue([{ source: t.source, id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id }], how);
-      else await queueTrack(t.id, how, t.source);
+      if (isLocal()) enqueue([{ source: tr.source, id: tr.id, name: tr.name, artist: tr.artist, album: tr.album, album_id: tr.album_id }], how);
+      else await queueTrack(tr.id, how, tr.source);
       toast.show({ text: how === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
       setTimeout(refresh, 700);
     } catch (e) {
@@ -129,12 +170,17 @@
     title={t.name}
     chips={[t.artist, t.album].filter((c): c is string => !!c)}
     heart={heartKnown ? { on: heartOn, disabled: busy, toggle: heart } : null}
-    actions={step === 'menu'
-      ? [
-          { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },
-          { icon: 'playlists', label: 'Add to queue', onclick: () => queue('last'), disabled: working },
-        ]
-      : []}
+    actions={step !== 'menu'
+      ? []
+      : place && !forPlaying
+        ? [
+            { icon: 'play', label: 'Play now', onclick: playNow, disabled: working },
+            { icon: 'playNext', label: movesHere ? 'Play next' : 'Play again next', onclick: playNextFromQueue, disabled: working },
+          ]
+        : [
+            { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },
+            { icon: 'playlists', label: 'Add to queue', onclick: () => queue('last'), disabled: working },
+          ]}
     onback={step === 'menu' ? null : () => (step = 'menu')}
     {step}
   >
@@ -155,6 +201,9 @@
               step = 'new';
             }}
           />
+        {/if}
+        {#if movesHere && !forPlaying}
+          <MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />
         {/if}
       </div>
     {:else if step === 'lists'}

@@ -38,7 +38,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     cover, the heart and the track menu; "Playing from …" (or "Playing on …" for the server's player) and "i / n
     (time left)" pinned under it; then what comes next, 70 px rows (60 px cover, title up to two lines, artist,
     length). A tap plays a row. Playing on this device a row's handle reorders and a swipe left past 65 % removes it,
-    with no undo, as Finamp; the server's player takes neither command.
+    with no undo, as Finamp; the server's player takes neither command. A long-press or right-click opens a menu, the
+    same everywhere in the sheet: on the playing track's card (it has no ⋯) the playing track's own menu; on a row a
+    menu about its place in the queue: Play now and Play next (moving it there on this device; "Play again next", a
+    copy, on the server's player), then Add to playlist, the favourite and Remove from queue (this device).
   - **Output** (`lib/OutputSheet.svelte`, decisions 0019 and 0022): the speaker button in the actions row (menu,
     heart, count, output, queue) opens a "Play on" sheet: This device, and the server's player by its name, the
     current one checked. Choosing the other one moves the music there (the queue and the position) and stops the side

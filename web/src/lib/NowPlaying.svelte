@@ -370,7 +370,7 @@
   </header>
 
   {#if queueOpen && np}
-    <QueueSheet src={src} onclose={() => (queueOpen = false)} onmenu={openMenu} />
+    <QueueSheet src={src} onclose={() => (queueOpen = false)} />
   {/if}
 </div>
 
