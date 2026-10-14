@@ -43,10 +43,14 @@ $effect.root(() => {
   $effect(() => {
     const a = clock.anchor;
     if (!a || a.paused) return;
-    // Finamp's position updates come about five times a second and the bar steps with them (no smoothing).
+    // Finamp's position stream (its audio_service fork, `AudioService.position`): 800 updates per track, every
+    // length / 800, kept between 16 and 200 ms; the bar moves with each (no smoothing in between). Every 200 ms for a
+    // track over 160 s, more often for shorter ones; each step is a fraction of a pixel.
+    const length = untrack(() => duration());
+    const every = Math.min(200, Math.max(16, length ? (length * 1000) / 800 : 200));
     const t = setInterval(() => {
       if (!document.hidden) clock.tick = performance.now();
-    }, 200);
+    }, every);
     return () => clearInterval(t);
   });
 });
