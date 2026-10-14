@@ -1,8 +1,10 @@
 <script lang="ts">
   // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the permanent
   // Unlisted, and one's own), each a chip with its live count, styled as the playlist chips; a tap opens it in the panel
-  // (decision 0023), where it plays and is sorted like a playlist, and can be saved as one.
-  import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
+  // (decision 0023), where it plays and is sorted like a playlist, and can be saved as one. Where a favourite playlist's
+  // chip has its small heart, a crate's shows its favourites setting (the panel's toggle sets it).
+  import { crates, CRATE, EDIT_CRATE, FAVOURITES, favouritesOf, loadCrates, startCrate } from './lib/crates.svelte';
+  import Icon from './lib/Icon.svelte';
   import NameSheet from './lib/NameSheet.svelte';
   import NewButton from './lib/NewButton.svelte';
   import { shownPlaylists } from './lib/output.svelte';
@@ -30,10 +32,12 @@
     <div class="toolbar"><NewButton label="New crate" onclick={() => (naming = true)} /></div>
     <ul class="grid">
       {#each crates.list as c (c.id)}
+        {@const fav = FAVOURITES[favouritesOf(c.id)]}
         <li>
           <button class="chip" class:own={!c.permanent} class:open={panel.open === CRATE + c.id || panel.open === EDIT_CRATE + c.id} aria-label={`Open ${c.name}`} onclick={() => openPlaylist(CRATE + c.id)}>
             <span class="name">{c.name}</span>
             <span class="n">{c.count === null ? '–' : c.count.toLocaleString()}</span>
+            <span class="flags"><span class="heart" class:filled={fav.filled} title={fav.label} aria-label={fav.label}><Icon name={fav.icon} size={10} /></span></span>
           </button>
         </li>
       {/each}
@@ -110,6 +114,26 @@
     font-size: 0.8rem;
     font-variant-numeric: tabular-nums;
     opacity: 0.65;
+  }
+
+  /* In a favourite playlist's small heart's place after its count (Playlists), in the chip's accent: filled for Only
+     favourites. */
+  .flags {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 10px;
+    margin-left: -4px;
+  }
+
+  .heart {
+    display: flex;
+    color: var(--accent);
+  }
+
+  .heart.filled :global(svg) {
+    fill: currentColor;
   }
 
   .empty {

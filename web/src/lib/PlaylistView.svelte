@@ -25,7 +25,7 @@
     queueTracks,
     type PlaylistRow,
   } from './api';
-  import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, favouritesOf, loadCrates } from './crates.svelte';
+  import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, FAVOURITES, favouritesOf, loadCrates } from './crates.svelte';
   import { Reorder } from './reorder.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { undos, withUndo } from './undo.svelte';
@@ -210,11 +210,6 @@
   ];
   // A crate plays and shuffles; in place of Play next and Add to queue, its favourites toggle (decision 0024, amended):
   // its icon and label say what the crate shows now.
-  const FAVOURITES = {
-    all: { icon: 'heart', label: 'All tracks', filled: false },
-    only: { icon: 'heart', label: 'Only favourites', filled: true },
-    none: { icon: 'heartOff', label: 'No favourites', filled: false },
-  } as const;
   const favState = $derived(crate ? FAVOURITES[favouritesOf(crate)] : null);
   // A crate's next page, when the end of the list comes into view.
   let more = $state<HTMLElement>();

@@ -28,6 +28,12 @@ const favs = $state<Record<string, CrateFavourites>>(
   })(),
 );
 export const favouritesOf = (id: string): CrateFavourites => favs[id] ?? 'none';
+/** How each setting shows, on the panel's toggle and the Crates page's rows: a variation on the heart. */
+export const FAVOURITES = {
+  all: { icon: 'heart', label: 'All tracks', filled: false },
+  only: { icon: 'heart', label: 'Only favourites', filled: true },
+  none: { icon: 'heartOff', label: 'No favourites', filled: false },
+} as const;
 const NEXT: Record<CrateFavourites, CrateFavourites> = { none: 'only', only: 'all', all: 'none' };
 /** A tap on the toggle: No favourites, Only favourites, All tracks, and round again. */
 export function cycleFavourites(id: string) {
