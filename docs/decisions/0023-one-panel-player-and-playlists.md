@@ -83,7 +83,8 @@ The owner decided (2026-10-14):
      screen: an edit mode entered with the pencil in the view's bar (a swipe left outside it stays Play next); rows get
      the reorder handle and ✕, a swipe left removes too; removed tracks wait under "Removed tracks" to be restored to
      their place; Save writes the playlist once (only reordering or leaving out its own lines, refused when it changed
-     since), Cancel drops the edit.
+     since), Cancel drops the edit. "Names" (beside Save) shows the playlist's name and the names it is spoken as
+     (decision 0015) in place of the info beside the cover; Save renames it last, and the panel, pin and heart follow.
 
 ## Consequences
 

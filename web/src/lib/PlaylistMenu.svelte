@@ -7,7 +7,6 @@
     deletePlaylist,
     getTargets,
     linkPlaylist,
-    renamePlaylist,
     restorePlaylist,
     setSpoken,
     spokenNames,
@@ -22,9 +21,10 @@
   } from './api';
   import MenuEntry from './MenuEntry.svelte';
   import { startPlaylist } from './output.svelte';
-  import { openPlaylist, panel, playlistDeleted, playlistRenamed } from './panel.svelte';
+  import { openPlaylist, panel, playlistDeleted } from './panel.svelte';
+  import { renameEverywhere } from './rename.svelte';
   import { insights } from './insights.svelte';
-  import { isPlaylistFavorite, loadPlaylistFavorites, playlistFavoriteRenamed, togglePlaylistFavorite } from './favourites.svelte';
+  import { isPlaylistFavorite, loadPlaylistFavorites, togglePlaylistFavorite } from './favourites.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { prefs, togglePin } from './prefs.svelte';
   import { refresh } from './live.svelte';
@@ -136,12 +136,7 @@
     if (!to || to === p.id || working) return;
     working = true;
     try {
-      await renamePlaylist(p.id, to);
-      // A pinned playlist stays pinned, in its place; an open one stays open; Insights follows.
-      prefs.pinned = prefs.pinned.map((x) => (x === p.id ? to : x));
-      playlistRenamed(p.id, to);
-      playlistFavoriteRenamed(p.id, to);
-      insights.renamed(p.id, to);
+      await renameEverywhere(p.id, to);
       onrenamed?.(p.id, to);
       onclose();
     } catch (e) {

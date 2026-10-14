@@ -9,6 +9,7 @@
   // removed tracks wait in their own section to be restored, and Save writes the playlist once (Cancel drops it).
   import { coverUrl, editPlaylist, incomingCoverUrl, playlistCovers, playlistRows, queueTrack, setSpoken, spokenNames, type PlaylistRow } from './api';
   import { Reorder } from './reorder.svelte';
+  import { renameEverywhere } from './rename.svelte';
   import { isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, togglePlaylistFavorite } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import { insights, plural } from './insights.svelte';
@@ -152,9 +153,10 @@
   }
 
   // Edit mode: a working copy of the rows (each with its place in the file, so a restored one goes back there), and of
-  // the names the playlist is also spoken as (decision 0015), at the top as Finamp's edit screen has its name.
+  // the playlist's name and the names it is also spoken as (decision 0015). "Names" in the bar shows those two in
+  // place of the info beside the cover (Finamp's edit screen has its name field there).
   type Item = { r: PlaylistRow; at: number };
-  let editing = $state<{ rows: Item[]; removed: Item[]; spoken: string; saving: boolean } | null>(null);
+  let editing = $state<{ rows: Item[]; removed: Item[]; name: string; spoken: string; names: boolean; saving: boolean } | null>(null);
   const editingFor = $derived(editing ? id : null);
   $effect(() => {
     // Another playlist opened (or this one closed): the edit is dropped.
@@ -162,10 +164,12 @@
   });
   const tracksChanged = $derived(!!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)));
   const spokenChanged = $derived(!!editing && spokenNames(editing.spoken).join('\n') !== (p?.spoken ?? []).join('\n'));
+  const newName = $derived(editing ? editing.name.trim() : '');
+  const nameChanged = $derived(!!editing && newName !== '' && newName !== id);
   function startEdit() {
     if (!rows) return;
     navigator.vibrate?.(8);
-    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], spoken: (p?.spoken ?? []).join(', '), saving: false };
+    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], name: id, spoken: (p?.spoken ?? []).join(', '), names: false, saving: false };
   }
   const reorder = new Reorder(
     () => scroller,
@@ -195,7 +199,7 @@
   };
   async function save() {
     if (!editing || !rows) return;
-    if (!tracksChanged && !spokenChanged) return void (editing = null);
+    if (!tracksChanged && !spokenChanged && !nameChanged) return void (editing = null);
     editing.saving = true;
     try {
       if (tracksChanged)
@@ -205,6 +209,8 @@
           editing.rows.map((x) => x.r.entry),
         );
       if (spokenChanged) await setSpoken(id, spokenNames(editing.spoken));
+      // Last: the writes above still name it as it was. The open panel follows the new name.
+      if (nameChanged) await renameEverywhere(id, newName);
       editing = null;
       saved++;
       refresh();
@@ -226,7 +232,10 @@
   <div class="bar">
     {#if editing}
       <button class="barbtn" onclick={() => (editing = null)} disabled={editing.saving}>Cancel</button>
-      <button class="barbtn save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}>Save</button>
+      <span class="end">
+        <button class="barbtn" aria-pressed={editing.names} onclick={() => editing && (editing.names = !editing.names)} disabled={editing.saving}>Names</button>
+        <button class="barbtn save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}>Save</button>
+      </span>
     {:else}
       <button class="icon" aria-label="Close the playlist" onclick={closePlaylist}><Icon name="close" size={24} /></button>
       <span class="end">
@@ -245,6 +254,18 @@
         <div class="art" class:mosaic={covers.length === 4}>
           {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name="albums" size={48} /></span>{/each}
         </div>
+        {#if editing?.names}
+          <div class="info fields">
+            <label class="field">
+              <span>Name</span>
+              <input type="text" maxlength="100" bind:value={editing.name} disabled={editing.saving} />
+            </label>
+            <label class="field">
+              <span>Spoken as</span>
+              <input type="text" placeholder="Other names, comma-separated" bind:value={editing.spoken} disabled={editing.saving} />
+            </label>
+          </div>
+        {:else}
         <div class="info">
           <h2>{id}</h2>
           <p class="line"><Icon name="music" size={20} /><span>{p ? plural(p.count, 'track') : rows ? plural(rows.length, 'track') : 'Loading…'}{#if length}&nbsp;({clockText(length)}){/if}</span></p>
@@ -253,13 +274,8 @@
           {/if}
           {#if p?.dead}<p class="line dead"><span>{p.dead} missing</span></p>{/if}
         </div>
+        {/if}
       </div>
-      {#if editing}
-        <label class="field">
-          <span>Spoken as</span>
-          <input type="text" placeholder="Other names, comma-separated" bind:value={editing.spoken} disabled={editing.saving} />
-        </label>
-      {/if}
       {#if !editing}
       <div class="actions" role="group" aria-label="Play">
         {#each ACTIONS as a (a.mode)}
@@ -415,6 +431,10 @@
     font-weight: 600;
   }
 
+  .barbtn[aria-pressed='true'] {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
   .barbtn:disabled {
     opacity: 0.6;
   }
@@ -446,7 +466,12 @@
     transition: none;
   }
 
-  /* Edit mode's fields, at the top as Finamp's edit screen has its name field. */
+  /* Edit mode's Name and Spoken as, in place of the info beside the cover. */
+  .info.fields {
+    justify-content: center;
+    gap: 8px;
+  }
+
   .field {
     display: grid;
     gap: 4px;
