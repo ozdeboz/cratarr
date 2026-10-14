@@ -413,7 +413,7 @@
            against Save. -->
       <button class="icon" aria-label="Close the playlist" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
-        <button class="barbtn iconic" aria-label="Cancel" onclick={() => (editing = null)} disabled={editing.saving}><Icon name="reset" size={18} /><span>Cancel</span></button>
+        <button class="barbtn iconic" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" onclick={() => (editing = null)} disabled={editing.saving}><Icon name="reset" size={18} /><span>Cancel</span></button>
         <button class="barbtn save iconic" aria-label="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={18} /><span>Save</span></button>
         <PanelPlace />
       </span>
@@ -732,6 +732,11 @@
     .barbtn.iconic {
       padding: 0 10px;
     }
+  }
+
+  /* Cancel with changes made: it throws them away, so it reads as destructive. */
+  .barbtn.destructive {
+    color: var(--danger, #c33);
   }
 
   .barbtn.save {
