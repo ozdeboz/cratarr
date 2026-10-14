@@ -41,6 +41,20 @@ true gapless about 3,000 lines and at least two listening evenings):
 - **First a feasibility spike**, before the rest is built: a FLAC album and an MP3 album played gaplessly through MSE
   on the tablet, from the repackaged stream, judged by ear by the owner.
 
+## Feasibility (2026-10-14)
+
+Measured to the sample with the gapless lab (`tools/gapless-lab`): reproducible noise cut into three tracks at awkward
+points, played through one MSE stream, recorded silently by the page and compared with what a perfect player outputs.
+On the owner's tablet (Chrome 155, Android 10) and on Windows: **no jump at any boundary** for FLAC (repackaged into
+fragmented MP4), for MP3, and for FLAC, MP3 and FLAC mixed in one stream (switching format with `changeType`).
+
+- **MP3 is trimmed by LAME's encoder delay only** (the `delay` field of its LAME header) at the start, and to its exact
+  length at the end. Chrome's decoder drops the Info frame and adds no decoder delay; the textbook trim (1152 + delay +
+  529) cut 1681 samples too many, heard as a click.
+- MP3 has no timestamps of its own, so the stream runs in **sequence mode**; `timestampOffset` places each track.
+- A page in the background on Android is paused: the player keeps playing from the lock screen through Media Session,
+  but the lab needs its page in front.
+
 ## Consequences
 
 - The server gains a streaming module (files, ranges, FLAC to fragmented MP4) and routes for track lists (a playlist,
