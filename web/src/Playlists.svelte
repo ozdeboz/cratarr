@@ -149,8 +149,8 @@
       <button class="new toggle" aria-label="Select" title="Select" onclick={startSelect}><Icon name="copyCheck" size={22} /></button>
     {/if}
     <div class="seg size" role="group" aria-label="Size">
-      <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
-      <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
+      <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}><Icon name="minus" size={22} /></button>
+      <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}><Icon name="plus" size={22} /></button>
     </div>
     </div>
     {#if prefs.filterOpen}
@@ -303,7 +303,14 @@
     background: var(--surface);
   }
 
-  /* Size: − and + with a line between them. */
+  /* Size: − and + as the toolbar's icons, with a line between them. */
+  .seg.size button {
+    display: grid;
+    place-items: center;
+    padding: 0 12px;
+    color: var(--text);
+  }
+
   .seg.size button + button {
     border-left: 1px solid var(--border);
   }
