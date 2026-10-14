@@ -12,11 +12,10 @@ export function startSelect() {
   select.picked = [...panel.selection];
 }
 
-/** Cancel: Select ends; a selection of several in the panel closes with it (one playlist stays open). */
+/** Select ends (a tap on it again); the panel keeps what it shows. */
 export function endSelect() {
   select.on = false;
   select.picked = [];
-  if (panel.selection.length > 1) closePlaylist();
 }
 
 /** The panel shows exactly what is ticked. */
