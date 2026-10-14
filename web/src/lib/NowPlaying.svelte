@@ -433,6 +433,7 @@
     min-height: 0;
     padding: 53px 0 env(safe-area-inset-bottom);
     overflow-y: auto;
+    overscroll-behavior: contain;
     text-align: center;
     touch-action: pan-x;
   }

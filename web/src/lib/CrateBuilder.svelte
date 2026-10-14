@@ -287,6 +287,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 8px 12px calc(32px + var(--mini-h, 0px) + env(safe-area-inset-bottom));
   }
 

@@ -751,6 +751,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
     /* On a phone the mini-player floats over the end of the list (as Finamp's now-playing bar): room to scroll past it. */
     padding-bottom: calc(32px + var(--mini-h, 0px) + env(safe-area-inset-bottom));
   }

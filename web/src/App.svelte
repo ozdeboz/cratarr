@@ -279,7 +279,8 @@
         onpointerdown={grip}
         onkeydown={gripKey}
       ></div>
-      <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'}>
+      <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
+      <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={mini ? `${MINI_SPACE}px` : '0px'}>
         {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if builderOf(panel.open)}<CrateBuilder id={builderOf(panel.open)!.id} />{:else}<PlaylistView />{/if}
       </aside>
     {/if}
@@ -416,11 +417,14 @@
     opacity: 1;
   }
 
+  /* The panel scrolls on its own: a scroll in it never moves the page beside it (nor where it has nothing to scroll). */
   .player-side {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    overflow: hidden;
+    overscroll-behavior: contain;
     background: var(--bg);
   }
 
