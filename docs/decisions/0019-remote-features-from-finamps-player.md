@@ -34,6 +34,13 @@ The owner chose (2026-10-14):
   as today: Finamp on the tablet), handing the queue and the position over. In two stages: first the local player
   without telling the media server about itself; later it reports itself as a media-server player (a Jellyfin
   session), so the server, and through it Home Assistant, can see and control it. Not in the remote-only version.
+  Settled with the owner (2026-10-14):
+  - **Switching moves the music:** the queue and the position go to the new side, which plays from there; the old side
+    stops (as Finamp's and Spotify's devices).
+  - **The switch is the player's output button** (Finamp's place for it), opening a sheet with "This device" and the
+    media server's players; it replaces today's player picker ("Playing on Finamp · Lenovo Tab ▾").
+  - **Stage 1 is accepted without Home Assistant:** local playback is for the phone or headphones; until stage 2 Home
+    Assistant does not see it (the amp's in-use sensor and the salon routing keep following Finamp on the tablet).
 - **Later, when Cratarr is a player itself:** shuffle and repeat, seeking by dragging, the sleep timer, speed, radio
   and instant mix, downloads, the "Playing from" source, artist and album pages, editing the queue, keyboard
   shortcuts.
