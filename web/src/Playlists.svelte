@@ -21,6 +21,8 @@
   $effect(() => void loadPlaylistFavorites());
   const error = $derived(live.error);
   let filter = $state('');
+  /** The filter section's Favourites toggle: only favourite playlists. */
+  let favouritesOnly = $state(false);
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
   const WIDTHS = [110, 140, 170, 210, 260, 340];
   const setZoom = (next: number) => (prefs.zoom = Math.min(WIDTHS.length - 1, Math.max(0, next)));
@@ -43,6 +45,7 @@
       return { ...p, member, count: p.count + (member === p.member ? 0 : member ? 1 : -1) };
     });
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
+    if (favouritesOnly) list = list.filter((p) => isPlaylistFavorite(p.id));
     // Pinned ones first, in the order pinned; "✓ first" applies within the pinned and within the rest.
     const pin = (id: string) => {
       const i = prefs.pinned.indexOf(id);
@@ -132,7 +135,7 @@
     <div class="row">
     <button
       class="new toggle"
-      class:active={!prefs.filterOpen && filter.trim() !== ''}
+      class:active={!prefs.filterOpen && (filter.trim() !== '' || favouritesOnly)}
       aria-expanded={prefs.filterOpen}
       aria-controls="playlist-filter"
       aria-label={prefs.filterOpen ? 'Hide the filter' : 'Show the filter'}
@@ -162,6 +165,13 @@
             >✓ first</button
           >
         </div>
+        <button
+          class="new toggle fav"
+          aria-pressed={favouritesOnly}
+          aria-label="Favourites only"
+          title="Favourites only"
+          onclick={() => (favouritesOnly = !favouritesOnly)}><Icon name="heart" size={22} /></button
+        >
       </div>
     {/if}
   </div>
@@ -270,6 +280,17 @@
     width: 44px;
     padding: 0;
     color: inherit;
+  }
+
+  /* Favourites only: on, the heart is filled, in the accent. */
+  button.new.fav[aria-pressed='true'] {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  button.new.fav[aria-pressed='true'] :global(svg) {
+    fill: currentColor;
   }
 
   /* Folded away while a filter applies: the button says so, since chips are missing. */
