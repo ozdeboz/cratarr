@@ -28,6 +28,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
         .route("/api/playlists/{id}/play", post(play_playlist))
+        .route("/api/player/handover", post(handover))
         .route("/api/player/{command}", post(transport))
         .route("/api/playlists", post(create_playlist))
         .route("/api/playlists/{id}", delete(delete_playlist))
@@ -517,6 +518,34 @@ async fn transport(
     let command: crate::source::Transport = serde_json::from_value(json!(command))
         .map_err(|_| ToggleError::CannotPlay("unknown player command (previous, play-pause, next)".into()))?;
     Ok(Json(json!({ "player": app.playing.transport(f.source.as_deref(), command).await? })))
+}
+
+/// The local player hands its queue to the server's player (decision 0019 / 0022): these tracks, from `index`, starting
+/// `position_secs` into that one.
+#[derive(Deserialize)]
+struct Handover {
+    ids: Vec<String>,
+    index: usize,
+    position_secs: f64,
+}
+
+async fn handover(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(h): Json<Handover>) -> Response {
+    let sources = app.library.connected_sources();
+    let found = match f.source.as_deref() {
+        Some(want) => sources.into_iter().find(|(s, _)| s == want),
+        None => sources.into_iter().next(),
+    };
+    let Some((_, source)) = found else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "No server is connected." }))).into_response();
+    };
+    let ids = h.ids.get(h.index..).unwrap_or_default();
+    if ids.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Nothing to hand over." }))).into_response();
+    }
+    match source.play_from(ids, h.position_secs.max(0.0)).await {
+        Ok(player) => Json(json!({ "player": player })).into_response(),
+        Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+    }
 }
 
 async fn play_playlist(
