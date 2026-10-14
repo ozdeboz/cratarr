@@ -77,7 +77,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
   tap on the label opens the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
   label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone "Open N playlists");
-  the circle keeps adding or removing the playing track; a ⋮ in the page's top right corner is the ticked playlists' menu (Play,
+  the circle keeps adding or removing the playing track; with playlists ticked, a ⋮ in the page's top right corner (where
+  + New playlist is otherwise) is their menu (Play,
   Shuffle, Play next, Add to queue; favourite, pin, Delete). A ticked playlist has the border of the one open in the
   panel: one state, one look. A favourite playlist has a small red heart (Finamp's list mark)
   above the problems' dot, in the dot's place, so the chip gets no wider. The playlist open in the panel has a border
@@ -87,6 +88,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Pinned playlists** (the playlist menu: Pin to top / Unpin) come first on the Playlists page, in the order they
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
+- **The Playlists page's controls** are two sections: the actions it always needs (the button that shows or hides the
+  filter section, Select; Cancel and Open N while selecting; + or ⋮ in the corner), and the filter section (the filter,
+  A–Z / ✓ first, Size), which folds away, remembered by the browser. Folded away while a filter applies, its button is
+  in the accent.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. Where music plays is chosen at the player (its output button), not in Settings.
 - **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser

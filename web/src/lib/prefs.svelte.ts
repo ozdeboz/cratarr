@@ -24,6 +24,8 @@ export type Prefs = {
   output: 'remote' | 'local';
   /** Playlists pinned to the top of the Playlists page, in the order pinned (ids). */
   pinned: string[];
+  /** The Playlists page's filter section (the filter, order and size) is shown. */
+  filterOpen: boolean;
 };
 
 const KEY = 'cratarr-prefs';
@@ -40,6 +42,7 @@ export const DEFAULTS: Prefs = {
   sidebar: true,
   output: 'remote',
   pinned: [],
+  filterOpen: true,
 };
 
 function read(): Prefs {
@@ -50,6 +53,7 @@ function read(): Prefs {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
       if (typeof saved.membersFirst === 'boolean') p.membersFirst = saved.membersFirst;
+      if (typeof saved.filterOpen === 'boolean') p.filterOpen = saved.filterOpen;
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;

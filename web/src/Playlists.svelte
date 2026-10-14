@@ -116,26 +116,28 @@
 
 </script>
 
-<main class:selecting={select.on}>
-  {#if select.on}
-    <button class="new more" aria-label="Menu of the ticked playlists" disabled={!select.picked.length} onclick={() => (menu = { kind: 'selection' })}
+<main>
+  <!-- The page's top right corner: New playlist (+), or with playlists ticked their menu (⋮, decision 0025). -->
+  {#if select.on && select.picked.length}
+    <button class="new corner" aria-label="Menu of the ticked playlists" onclick={() => (menu = { kind: 'selection' })}
       ><Icon name="moreVert" size={22} /></button
     >
+  {:else}
+    <button class="new corner" aria-label="New playlist" onclick={openNew}><Icon name="plus" size={22} /></button>
   {/if}
 
+  <!-- The page's controls in two sections: the actions it always needs (with the button that shows or hides the other
+       section), and the filter section (the filter, order and size), which folds away; remembered by the browser. -->
   <div class="tools">
-    <input type="search" placeholder="Filter playlists" aria-label="Filter playlists" bind:value={filter} />
-    <div class="seg" role="group" aria-label="Order">
-      <button aria-pressed={!prefs.membersFirst} onclick={() => (prefs.membersFirst = false)}>A–Z</button>
-      <button aria-pressed={prefs.membersFirst} onclick={() => (prefs.membersFirst = true)} title="Playlists with the playing track first"
-        >✓ first</button
-      >
-    </div>
-    <div class="seg" role="group" aria-label="Size">
-      <span class="lbl" aria-hidden="true">Size</span>
-      <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
-      <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
-    </div>
+    <div class="row">
+    <button
+      class="new toggle"
+      class:active={!prefs.filterOpen && filter.trim() !== ''}
+      aria-expanded={prefs.filterOpen}
+      aria-controls="playlist-filter"
+      aria-label={prefs.filterOpen ? 'Hide the filter' : 'Show the filter'}
+      onclick={() => (prefs.filterOpen = !prefs.filterOpen)}><Icon name="filter" size={22} /></button
+    >
     {#if select.on}
       <!-- Select (decision 0025): a chip's name ticks it; on a phone, open them in the panel. Their menu is the ⋮ in
            the page's top right corner. -->
@@ -144,8 +146,24 @@
         <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
       {/if}
     {:else}
-      <button class="new" onclick={openNew}>New playlist</button>
       <button class="new" onclick={startSelect}>Select</button>
+    {/if}
+    </div>
+    {#if prefs.filterOpen}
+      <div class="row" id="playlist-filter">
+        <input type="search" placeholder="Filter playlists" aria-label="Filter playlists" bind:value={filter} />
+        <div class="seg" role="group" aria-label="Order">
+          <button aria-pressed={!prefs.membersFirst} onclick={() => (prefs.membersFirst = false)}>A–Z</button>
+          <button aria-pressed={prefs.membersFirst} onclick={() => (prefs.membersFirst = true)} title="Playlists with the playing track first"
+            >✓ first</button
+          >
+        </div>
+        <div class="seg" role="group" aria-label="Size">
+          <span class="lbl" aria-hidden="true">Size</span>
+          <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
+          <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
+        </div>
+      </div>
     {/if}
   </div>
 
@@ -230,16 +248,35 @@
     padding: 0 clamp(12px, 2vw, 32px) 48px;
   }
 
-  /* Select's ⋮: in the page's top right corner, the toolbar keeping clear of it. */
-  main.selecting .tools {
+  /* The corner's + or ⋮: the actions keep clear of it. */
+  .tools > .row:first-child {
     padding-right: 56px;
   }
 
   .tools {
-    display: flex;
+    display: grid;
     gap: 12px;
     margin: 14px 0;
+  }
+
+  .tools .row {
+    display: flex;
+    gap: 12px;
     flex-wrap: wrap;
+  }
+
+  button.new.toggle {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    padding: 0;
+    color: inherit;
+  }
+
+  /* Folded away while a filter applies: the button says so, since chips are missing. */
+  button.new.toggle.active {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   input[type='search'],
@@ -301,7 +338,7 @@
     cursor: pointer;
   }
 
-  button.new.more {
+  button.new.corner {
     position: absolute;
     top: 14px;
     right: clamp(12px, 2vw, 32px);
