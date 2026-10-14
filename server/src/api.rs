@@ -44,6 +44,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}", get(crate_get).put(crate_update).delete(crate_delete))
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
+        .route("/api/crates/{id}/favourites", put(crate_favourites))
         .route("/api/playlists/{id}/favorite", post(playlist_favorite))
         .route("/api/playlists/{id}/entries", put(edit_playlist))
         .route("/api/playlists/{id}/toggle", post(toggle))
@@ -322,9 +323,8 @@ struct Page {
     #[serde(default)]
     offset: usize,
     limit: Option<usize>,
-    /// The crate panel's favourites toggle: `all` (default), `only`, `none`.
-    #[serde(default)]
-    favourites: crate::crates::Favourites,
+    /// The favourites toggle's setting the page shows (it may be on its way to the server); the saved one without.
+    favourites: Option<crate::crates::Favourites>,
 }
 
 async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Response, ApiError> {
@@ -380,8 +380,21 @@ async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(
 #[derive(Deserialize)]
 struct CratePlaylistRequest {
     name: String,
-    #[serde(default)]
+}
+
+#[derive(Deserialize)]
+struct CrateFavouritesRequest {
     favourites: crate::crates::Favourites,
+}
+
+/// A crate's favourites toggle (decision 0024, amended): `all`, `only` or `none`, kept for every device.
+async fn crate_favourites(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    Json(req): Json<CrateFavouritesRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    app.playlists.set_crate_favourites(&id, req.favourites).await?;
+    Ok(Json(json!({ "crate": id, "favourites": req.favourites })))
 }
 
 async fn crate_playlist(
@@ -390,7 +403,7 @@ async fn crate_playlist(
     Query(f): Query<Follow>,
     Json(req): Json<CratePlaylistRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let (added, undo) = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name, req.favourites).await?;
+    let (added, undo) = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name).await?;
     Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "added": added, "undo": undo }))))
 }
 

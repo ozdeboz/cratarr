@@ -59,8 +59,19 @@ impl CrateLibrary {
 pub struct CrateView {
     pub id: String,
     pub name: String,
-    pub count: Option<usize>,
+    /// Its favourites toggle's setting (decision 0024, amended).
+    pub favourites: crates::Favourites,
+    /// How many tracks it has with each setting of the toggle (the page shows the one it is set to, and the next at
+    /// once on a tap); `None` where the favourites are not known (no server connected).
+    pub counts: CrateCounts,
     pub permanent: bool,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct CrateCounts {
+    pub all: Option<usize>,
+    pub only: Option<usize>,
+    pub none: Option<usize>,
 }
 
 /// One line of a playlist as its view shows it (decision 0023). `entry` is the line as the `.m3u` has it (library-
@@ -588,11 +599,21 @@ impl PlaylistService {
     pub async fn crates(&self, want: Option<&str>) -> Result<Vec<CrateView>, ToggleError> {
         let own = self.crate_store.list().await?;
         let all: Vec<(bool, CrateDef)> = crates::permanent().into_iter().map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
-        let lib = self.crate_library(want, all.iter().any(|(_, c)| crates::needs_favourites(&c.conditions))).await?;
+        // The favourites are needed for the toggle's counts, whatever the crates' own conditions.
+        let lib = self.crate_library(want, true).await?;
+        let set = self.crate_store.all_favourites().await?;
+        let count = |conditions: Vec<crates::Condition>| {
+            (!crates::needs_favourites(&conditions) || lib.favourites.is_some()).then(|| lib.select(&conditions).len())
+        };
         Ok(all
             .into_iter()
             .map(|(permanent, c)| CrateView {
-                count: if crates::needs_favourites(&c.conditions) && lib.favourites.is_none() { None } else { Some(lib.select(&c.conditions).len()) },
+                counts: CrateCounts {
+                    all: count(crates::Favourites::All.with(&c.conditions)),
+                    only: count(crates::Favourites::Only.with(&c.conditions)),
+                    none: count(crates::Favourites::None.with(&c.conditions)),
+                },
+                favourites: set.get(&c.id).copied().unwrap_or(crates::Favourites::None),
                 id: c.id,
                 name: c.name,
                 permanent,
@@ -619,16 +640,28 @@ impl PlaylistService {
 
     /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size.
     /// With the panel's favourites toggle (`fav`).
+    /// A page of a crate's rows, as its favourites toggle is set (`fav`, else as saved).
     pub async fn crate_rows(
         &self,
         id: &str,
         want: Option<&str>,
         offset: usize,
         limit: usize,
-        fav: crates::Favourites,
+        fav: Option<crates::Favourites>,
     ) -> Result<(String, usize, Vec<PlaylistRow>), ToggleError> {
         let def = self.crate_def(id).await?;
+        let fav = match fav {
+            Some(f) => f,
+            None => self.crate_store.favourites(id).await?,
+        };
         self.crate_page(&fav.with(&def.conditions), want, offset, limit).await
+    }
+
+    /// Sets a crate's favourites toggle (decision 0024, amended): one setting per crate, for every device. Not journaled:
+    /// a tap undoes it by tapping again.
+    pub async fn set_crate_favourites(&self, id: &str, fav: crates::Favourites) -> Result<(), ToggleError> {
+        self.crate_def(id).await?;
+        Ok(self.crate_store.set_favourites(id, fav).await?)
     }
 
     /// The builder's live preview: an unsaved crate's size and first rows (decision 0024, issue 6).
@@ -647,15 +680,10 @@ impl PlaylistService {
     }
 
     /// Make playlist: the crate's tracks now, as a new, ordinary playlist (a snapshot; decision 0024).
-    /// Returns how many tracks it got, and the undo token.
-    pub async fn crate_to_playlist(
-        &self,
-        id: &str,
-        want: Option<&str>,
-        name: &str,
-        fav: crates::Favourites,
-    ) -> Result<(usize, Option<String>), ToggleError> {
+    /// The crate as its favourites toggle is set. Returns how many tracks it got, and the undo token.
+    pub async fn crate_to_playlist(&self, id: &str, want: Option<&str>, name: &str) -> Result<(usize, Option<String>), ToggleError> {
         let def = self.crate_def(id).await?;
+        let fav = self.crate_store.favourites(id).await?;
         let (_, lines) = self.crate_lines_of(&fav.with(&def.conditions), want).await?;
         if lines.is_empty() {
             return Err(ToggleError::Refused("That crate is empty.".into()));

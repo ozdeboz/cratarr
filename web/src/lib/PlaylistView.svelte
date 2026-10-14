@@ -25,7 +25,7 @@
     queueTracks,
     type PlaylistRow,
   } from './api';
-  import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, FAVOURITES, favouritesOf, loadCrates } from './crates.svelte';
+  import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, FAVOURITES, favouritesOf, favouritesSaved, loadCrates } from './crates.svelte';
   import { Reorder } from './reorder.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { undos, withUndo } from './undo.svelte';
@@ -97,7 +97,9 @@
     void listsKey;
     if (!want || multi) return;
     const c = crateOf(want);
-    const fav = c ? favouritesOf(c) : 'all';
+    // As the toggle shows it (the server's saved setting until the crates are known).
+    const shownFav = () => (c && crates.list ? favouritesOf(c) : undefined);
+    const fav = shownFav();
     const key = `${want}\n${fav}`;
     if (key !== shownFor) {
       rows = null;
@@ -109,7 +111,7 @@
       : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length }));
     asked.then(
       (r) => {
-        if (want !== id || (c && favouritesOf(c) !== fav)) return;
+        if (want !== id || shownFav() !== fav) return;
         shownFor = key;
         rows = r.rows;
         source = r.source;
@@ -277,7 +279,8 @@
     making.saving = true;
     const name = making.name.trim();
     try {
-      const { added, undo } = await crateToPlaylist(crate, name, prefs.source || undefined, favouritesOf(crate));
+      await favouritesSaved();
+      const { added, undo } = await crateToPlaylist(crate, name, prefs.source || undefined);
       withUndo(`Made ${name}: ${added} ${added === 1 ? 'track' : 'tracks'}.`, [undo], {
         after: (undone) => (undone ? followDelete(name) : followCreate(name)),
       });

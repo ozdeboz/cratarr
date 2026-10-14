@@ -154,7 +154,14 @@ export const queueTracks = (ids: string[], mode: 'next' | 'last', source?: strin
 
 /** A crate (decision 0024): a permanent one or one's own; `count` null when not known (the server's favourites could
  *  not be read). */
-export type Crate = { id: string; name: string; count: number | null; permanent: boolean };
+/** `favourites`: its toggle's setting; `counts`: its size with each setting (null: the favourites are not known). */
+export type Crate = {
+  id: string;
+  name: string;
+  favourites: CrateFavourites;
+  counts: Record<CrateFavourites, number | null>;
+  permanent: boolean;
+};
 
 /** One condition of a crate: an axis, what it is tested against, negated or not. */
 export type CrateValue = { kind: 'yes' } | { kind: 'any_of'; values: string[] } | { kind: 'range'; min: number | null; max: number | null };
@@ -196,14 +203,23 @@ export const getCrates = (source?: string) => quietly<Crate[]>(`/api/crates${fol
 /** A page of a crate's rows (newest first) and the crate's size. */
 /** The crate panel's favourites toggle (decision 0024, amended): all its tracks, only the favourites, or none. */
 export type CrateFavourites = 'all' | 'only' | 'none';
-export const crateRows = (id: string, offset: number, limit: number, source?: string, favourites: CrateFavourites = 'all') => {
-  const q = new URLSearchParams({ offset: String(offset), limit: String(limit), favourites });
+/** `favourites`: the toggle's setting as the page shows it (a tap may be on its way); the saved one without. */
+export const crateRows = (id: string, offset: number, limit: number, source?: string, favourites?: CrateFavourites) => {
+  const q = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (favourites) q.set('favourites', favourites);
   if (source) q.set('source', source);
   return quietly<{ source: string; total: number; rows: PlaylistRow[] }>(`/api/crates/${encodeURIComponent(id)}/rows?${q}`);
 };
-/** Make playlist: the crate's tracks now, as a new ordinary playlist (a snapshot). */
-export const crateToPlaylist = (id: string, name: string, source?: string, favourites: CrateFavourites = 'all') =>
-  post<{ playlist: string; added: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/playlist${follow(source)}`, { name, favourites });
+/** Make playlist: the crate's tracks now, as its favourites toggle is set, as a new ordinary playlist (a snapshot). */
+export const crateToPlaylist = (id: string, name: string, source?: string) =>
+  post<{ playlist: string; added: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/playlist${follow(source)}`, { name });
+/** A crate's favourites toggle, kept on the server for every device. */
+export const setCrateFavourites = (id: string, favourites: CrateFavourites) =>
+  request<{ crate: string; favourites: CrateFavourites }>(`/api/crates/${encodeURIComponent(id)}/favourites`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ favourites }),
+  });
 export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
 /** `ids`: the queue to make it from (the local player's); without, the server's player's queue. */
 export const playlistFromQueue = (name: string, source?: string, ids?: string[]) =>

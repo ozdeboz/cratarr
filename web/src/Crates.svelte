@@ -33,10 +33,11 @@
     <ul class="grid">
       {#each crates.list as c (c.id)}
         {@const fav = FAVOURITES[favouritesOf(c.id)]}
+        {@const n = c.counts[favouritesOf(c.id)]}
         <li>
           <button class="chip" class:own={!c.permanent} class:open={panel.open === CRATE + c.id || panel.open === EDIT_CRATE + c.id} aria-label={`Open ${c.name}`} onclick={() => openPlaylist(CRATE + c.id)}>
             <span class="name">{c.name}</span>
-            <span class="n">{c.count === null ? '–' : c.count.toLocaleString()}</span>
+            <span class="n">{n === null ? '–' : n.toLocaleString()}</span>
             <span class="flags"><span class="heart" class:filled={fav.filled} title={fav.label} aria-label={fav.label}><Icon name={fav.icon} size={10} /></span></span>
           </button>
         </li>

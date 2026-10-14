@@ -69,9 +69,20 @@ The owner decided:
 - **A crate's favourites are a toggle, not a crate.** In a crate's panel, Play next and Add to queue give way to one
   button that cycles **No favourites → Only favourites → All tracks** (back to No favourites); its icon and label say
   what the crate shows now: a crossed-out heart, a filled heart, an outline heart. A crate not set yet shows No
-  favourites. It is a view, remembered per crate by the browser, not part of the crate: the server adds the condition
+  favourites. It is a view, remembered per crate (on the server, amended below), not part of the crate: the server adds the condition
   when the crate is looked at, so the list, its count, Play, Shuffle and Make playlist all follow it.
 - **The permanent crates Favourites and Unlisted favourites go;** Unlisted stays. The library's favourites as a whole
   are a crate of one's own without conditions, on Only favourites.
 - A crate keeps Play and Shuffle; Play next and Add to queue stay with playlists.
-- The crate chips on the Crates page count the crate itself (All tracks).
+- ~~The crate chips on the Crates page count the crate itself (All tracks).~~ Replaced below.
+
+## Amendment (2026-10-14, later): the setting is the server's
+
+The owner decided: crates live on the server, so their favourites setting does too. It is kept beside the crates in
+`crates.json` (`favourites`, by crate id, the permanent crates' as well; a crate not in it shows No favourites), the
+same on every device, and set with `PUT /api/crates/{id}/favourites`; a change to a crate's definition keeps it, and
+it is not journaled (decision 0026: a tap undoes it by tapping again). The crates list gives each crate's setting and
+its size with each of the three, so a chip on the Crates page shows the size and a small heart (in a favourite
+playlist's heart's place, filled, outlined or crossed) for its setting, and a tap shows the next at once. The panel's
+rows still name the setting they show (a tap may be on its way to the server); Make playlist waits for it and uses
+the saved one. The settings a browser kept before are sent to the server once, then forgotten there.

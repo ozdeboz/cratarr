@@ -54,8 +54,10 @@ pub fn permanent() -> Vec<CrateDef> {
 }
 
 /// The crate panel's favourites toggle (decision 0024, amended): all a crate's tracks, only its favourites, or none of
-/// them. A view, not part of the crate: it adds one condition when the crate is looked at.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+/// them. Not part of the crate's definition (its undo, its conditions): one setting per crate, kept beside the crates
+/// in `crates.json` (amended 2026-10-14; it was the browser's), and it adds one condition when the crate is looked at.
+/// A crate not set yet shows no favourites.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Favourites {
     #[default]
@@ -217,17 +219,20 @@ pub fn favourites_generation() -> u64 {
 
 // --- One's own crates, kept in crates.json ---
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Stored {
     version: u32,
     crates: Vec<CrateDef>,
+    /// Each crate's favourites setting (permanent ones too), by id; a crate not in it shows none.
+    #[serde(default)]
+    favourites: BTreeMap<String, Favourites>,
 }
 
 /// One's own crates (decision 0024, issue 2): one file in Cratarr's data folder, the version before each change kept
 /// beside it (`crates.json.bak`). Without a data folder they live in memory only.
 pub struct CrateStore {
     path: Option<PathBuf>,
-    memory: tokio::sync::Mutex<Option<Vec<CrateDef>>>,
+    memory: tokio::sync::Mutex<Option<Stored>>,
 }
 
 impl CrateStore {
@@ -235,7 +240,7 @@ impl CrateStore {
         Self { path: data_dir.map(|d| PathBuf::from(d).join("crates.json")), memory: tokio::sync::Mutex::new(None) }
     }
 
-    pub async fn list(&self) -> Result<Vec<CrateDef>> {
+    async fn stored(&self) -> Result<Stored> {
         let mut slot = self.memory.lock().await;
         if slot.is_none() {
             *slot = Some(self.read().await?);
@@ -243,22 +248,45 @@ impl CrateStore {
         Ok(slot.clone().unwrap_or_default())
     }
 
-    async fn read(&self) -> Result<Vec<CrateDef>> {
-        let Some(path) = &self.path else { return Ok(Vec::new()) };
+    pub async fn list(&self) -> Result<Vec<CrateDef>> {
+        Ok(self.stored().await?.crates)
+    }
+
+    /// A crate's favourites setting (none until set).
+    pub async fn favourites(&self, id: &str) -> Result<Favourites> {
+        Ok(self.stored().await?.favourites.get(id).copied().unwrap_or(Favourites::None))
+    }
+
+    /// Every crate's favourites setting that was set.
+    pub async fn all_favourites(&self) -> Result<BTreeMap<String, Favourites>> {
+        Ok(self.stored().await?.favourites)
+    }
+
+    pub async fn set_favourites(&self, id: &str, favourites: Favourites) -> Result<()> {
+        let mut s = self.stored().await?;
+        s.favourites.insert(id.to_string(), favourites);
+        self.write_stored(s).await
+    }
+
+    async fn read(&self) -> Result<Stored> {
+        let Some(path) = &self.path else { return Ok(Stored::default()) };
         match tokio::fs::read(path).await {
-            Ok(bytes) => {
-                let s: Stored = serde_json::from_slice(&bytes).with_context(|| format!("reading {}", path.display()))?;
-                Ok(s.crates)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Ok(bytes) => serde_json::from_slice(&bytes).with_context(|| format!("reading {}", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Stored::default()),
             Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
         }
     }
 
-    /// Replaces the crates as one write (the previous file kept as `.bak`).
+    /// Replaces the crates as one write (the previous file kept as `.bak`); their favourites settings stay.
     async fn write(&self, crates: Vec<CrateDef>) -> Result<()> {
+        let s = self.stored().await?;
+        self.write_stored(Stored { crates, ..s }).await
+    }
+
+    async fn write_stored(&self, mut s: Stored) -> Result<()> {
+        s.version = VERSION;
         if let Some(path) = &self.path {
-            let bytes = serde_json::to_vec_pretty(&Stored { version: VERSION, crates: crates.clone() })?;
+            let bytes = serde_json::to_vec_pretty(&s)?;
             if tokio::fs::try_exists(path).await.unwrap_or(false) {
                 tokio::fs::copy(path, path.with_extension("json.bak")).await.context("keeping the crates' previous version")?;
             }
@@ -266,7 +294,7 @@ impl CrateStore {
             tokio::fs::write(&tmp, bytes).await.context("writing the crates")?;
             tokio::fs::rename(&tmp, path).await.context("writing the crates")?;
         }
-        *self.memory.lock().await = Some(crates);
+        *self.memory.lock().await = Some(s);
         Ok(())
     }
 
@@ -431,8 +459,15 @@ mod tests {
         assert!(store.save(None, "rock", rock.clone()).await.is_err(), "names are unique, case ignored");
         assert!(store.save(None, "Unlisted", rock.clone()).await.is_err(), "a permanent crate's name");
         assert_eq!(store.save(Some(&id), "Rock all", rock.clone()).await.unwrap(), id, "a rename keeps the id");
+        assert_eq!(store.favourites(&id).await.unwrap(), Favourites::None, "a new crate shows no favourites");
+        store.set_favourites(&id, Favourites::Only).await.unwrap();
+        store.set_favourites("unlisted", Favourites::All).await.unwrap();
         let again = CrateStore::new(dir.to_str());
         assert_eq!(again.list().await.unwrap()[0].name, "Rock all", "kept in crates.json");
+        assert_eq!(again.favourites(&id).await.unwrap(), Favourites::Only, "the setting too");
+        assert_eq!(again.favourites("unlisted").await.unwrap(), Favourites::All, "a permanent crate's as well");
+        again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
+        assert_eq!(again.favourites(&id).await.unwrap(), Favourites::Only, "a change to the crate keeps it");
         assert!(dir.join("crates.json.bak").exists(), "the version before kept");
         assert!(again.delete(&id).await.unwrap());
         assert!(again.list().await.unwrap().is_empty());
