@@ -67,6 +67,11 @@
   const chosenDead = $derived(chosen.reduce((n, x) => n + x.dead, 0));
   // The heart: on when every selected playlist is a favourite; a tap sets all of them.
   const allFav = $derived(ids.length > 0 && ids.every((x) => isPlaylistFavorite(x)));
+  // The pin (Pin to top, as in the menu): on when every selected playlist is pinned; a tap pins or unpins all of them.
+  const allPinned = $derived(ids.length > 0 && ids.every((x) => prefs.pinned.includes(x)));
+  function togglePins() {
+    prefs.pinned = allPinned ? prefs.pinned.filter((x) => !ids.includes(x)) : [...prefs.pinned, ...ids.filter((x) => !prefs.pinned.includes(x))];
+  }
   const chosenCount = $derived(chosen.reduce((n, x) => n + x.count, 0));
   const np = $derived(playing());
   /** A crate's size (its rows come in pages). */
@@ -435,6 +440,9 @@
       <button class="icon" aria-label={multi ? 'Close the playlists' : 'Close the playlist'} onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
         {#if p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
+        <button class="icon" class:fav={allPinned} aria-pressed={allPinned} aria-label={allPinned ? 'Unpin' : 'Pin to top'} title={allPinned ? 'Unpin' : 'Pin to top'} onclick={togglePins}
+          ><Icon name="pin" size={22} /></button
+        >
         <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
           ><Icon name="heart" size={24} /></button
         >
@@ -693,9 +701,18 @@
     align-items: center;
   }
 
-  /* Finamp's playlist heart: filled when it is a favourite. */
+  /* Finamp's playlist heart: filled when it is a favourite; the pin filled when pinned. */
   .icon.fav :global(svg) {
     fill: currentColor;
+  }
+
+  /* The narrowest panel: the bar's icons a little closer, so ✕, the pencil, the pin, the heart, the menu and the
+     place button fit on one line. */
+  @container (max-width: 299px) {
+    .bar .icon,
+    .bar :global(.place) {
+      width: 42px;
+    }
   }
 
   /* Edit mode's Cancel and Save, where ✕ and the menu are otherwise. */
