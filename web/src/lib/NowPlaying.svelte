@@ -281,12 +281,12 @@
         <i class="sp c"></i>
         <div class="side">
           <button class="act" aria-label="Track menu" aria-haspopup="menu" onclick={openMenu}><Icon name="menu" size={24} /></button>
-          <button class="act" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}><Icon name="playlists" size={24} /></button>
           {#if np.favorite !== null}
             <button class="fav" class:on={favorite()} disabled={live.pending} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
               ><Icon name="heart" size={26} /></button
             >
           {/if}
+          <button class="act" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}><Icon name="playlists" size={24} /></button>
           <div class="count" class:pending={live.pending} aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
             <span>in</span>
             <strong>{live.pending ? '–' : memberCount}</strong>
