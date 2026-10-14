@@ -149,11 +149,12 @@
             onclick={() => tap(p)}
             use:longpress={(anchor) => (menu = { kind: 'playlist', p, anchor })}
           >
-            <span class="mark" aria-hidden="true">{p.member ? '✓' : '+'}</span>
             <span class="name">{p.name}</span>
             {#if prefs.pinned.includes(p.id)}<span class="pinned" title="Pinned"><Icon name="pin" size={13} /></span>{/if}
             {#if p.links.some((l) => l.target !== 'shared')}<span class="own" title={p.links.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
             <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}</span>
+            <span class="sep" aria-hidden="true"></span>
+            <span class="state" aria-hidden="true"><Icon name={p.member ? 'circleCheck' : 'circlePlus'} size={26} /></span>
           </button>
         </li>
       {/each}
@@ -259,21 +260,23 @@
     list-style: none;
   }
 
+  /* Finamp's add-to-playlist entries (its toggleable list tile): tinted in the accent, 10 % when the playing track is not
+     in the playlist and 30 % when it is; the name, the count, a divider and the check or plus circle. */
   .chip {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     width: 100%;
-    min-height: 56px;
-    padding: 8px 14px;
+    min-height: 48px;
+    padding: 6px 8px 6px 12px;
     text-align: left;
-    background: var(--surface);
-    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border: 0;
     border-radius: 12px;
+    color: var(--text);
     cursor: pointer;
     transition:
       background 120ms,
-      border-color 120ms,
       transform 80ms;
   }
 
@@ -282,10 +285,7 @@
   }
 
   .chip.member {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
   }
 
   /* Nothing playing: the chips only open their menu, so they look quieter. */
@@ -304,7 +304,7 @@
   }
 
   .chip.queued {
-    border-color: var(--accent);
+    outline: 1.5px solid var(--accent);
     animation: waiting 1s ease-in-out infinite alternate;
   }
 
@@ -326,14 +326,20 @@
   /* Track outside Music: adding is refused, so the add chips look blocked (tapping explains why). */
   .chip.blocked {
     opacity: 0.5;
-    border-style: dashed;
+    outline: 1.5px dashed var(--border);
   }
 
-  .mark {
+  .sep {
     flex: none;
-    width: 1.2em;
-    text-align: center;
-    font-weight: 700;
+    width: 1.5px;
+    height: 24px;
+    background: color-mix(in srgb, var(--text) 35%, transparent);
+  }
+
+  .state {
+    flex: none;
+    display: flex;
+    color: var(--accent);
   }
 
   .name {
