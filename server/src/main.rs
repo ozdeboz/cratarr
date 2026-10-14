@@ -5,6 +5,7 @@ mod catalogue;
 mod config;
 mod convert;
 mod covers;
+mod crates;
 mod incoming;
 mod insights;
 mod journal;

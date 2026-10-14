@@ -306,6 +306,11 @@ impl Library {
         slot.1 = slot.0.music.as_ref().map(|m| Arc::new(Store::in_music(m)));
     }
 
+    /// Where Cratarr keeps its own files (none: in memory only).
+    pub(super) fn data_dir(&self) -> Option<&str> {
+        self.data_dir.as_deref()
+    }
+
     /// The folders a server's libraries are looked for in now.
     pub(super) fn place_folders(&self) -> Vec<String> {
         place_folders(self.data_dir.as_deref(), self.music().as_deref())

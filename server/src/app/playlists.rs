@@ -9,6 +9,9 @@ use serde::Serialize;
 
 use super::ToggleError;
 use super::library::{Library, label_of};
+use std::collections::{HashMap, HashSet};
+
+use crate::crates::{self, CrateDef};
 use crate::playlists::{DupGroup, PlaylistView, Repair, Repairs};
 use crate::source::{self, PlaylistChange, PlaylistEvent};
 use crate::sync_state::{Conflict, Direction, Kind};
@@ -34,39 +37,29 @@ pub struct ByName {
     pub tracks: Vec<String>,
 }
 
-/// The permanent crates (decision 0024): id and name.
-const CRATES: [(&str, &str); 3] = [("favourites", "Favourites"), ("unlisted", "Unlisted"), ("unlisted-favourites", "Unlisted favourites")];
+/// What crates are worked out on (see `PlaylistService::crate_library`).
+struct CrateLibrary {
+    source: String,
+    files: Vec<crates::Facts>,
+    membership: HashMap<String, Vec<String>>,
+    favourites: Option<HashSet<String>>,
+}
 
-/// A crate as the Crates page lists it.
+impl CrateLibrary {
+    fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
+        let w = crates::World { membership: &self.membership, favourites: self.favourites.as_ref() };
+        crates::select(&self.files, conditions, &w).into_iter().map(str::to_string).collect()
+    }
+}
+
+/// A crate as the Crates page lists it (decision 0024); `count` is `None` when not known (the server's favourites could
+/// not be read).
 #[derive(Debug, Serialize)]
 pub struct CrateView {
-    pub id: &'static str,
-    pub name: &'static str,
+    pub id: String,
+    pub name: String,
     pub count: Option<usize>,
-}
-
-/// What the crates are made of (see `PlaylistService::crate_parts`).
-struct CrateParts {
-    source: String,
-    /// Music's files, newest first.
-    files: Vec<String>,
-    /// Every line of every playlist.
-    listed: std::collections::HashSet<String>,
-    /// The favourite tracks' files; `None` when not asked for or not known.
-    favourites: Option<std::collections::HashSet<String>>,
-}
-
-impl CrateParts {
-    /// A crate's files, newest first.
-    fn select(&self, id: &str) -> Vec<String> {
-        let unlisted = id != "favourites";
-        let favourite = id != "unlisted";
-        self.files
-            .iter()
-            .filter(|f| (!unlisted || !self.listed.contains(*f)) && (!favourite || self.favourites.as_ref().is_some_and(|s| s.contains(*f))))
-            .cloned()
-            .collect()
-    }
+    pub permanent: bool,
 }
 
 /// One line of a playlist as its view shows it (decision 0023). `entry` is the line as the `.m3u` has it (library-
@@ -124,27 +117,6 @@ fn is_rearrangement(expected: &[String], entries: &[String]) -> bool {
 }
 
 #[cfg(test)]
-mod crate_tests {
-    use super::CrateParts;
-
-    #[test]
-    fn the_permanent_crates_cut_the_library_newest_first() {
-        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        let parts = CrateParts {
-            source: "jf".into(),
-            files: s(&["new", "listed-fav", "fav", "old"]),
-            listed: s(&["listed-fav", "gone"]).into_iter().collect(),
-            favourites: Some(s(&["listed-fav", "fav"]).into_iter().collect()),
-        };
-        assert_eq!(parts.select("unlisted"), s(&["new", "fav", "old"]));
-        assert_eq!(parts.select("favourites"), s(&["listed-fav", "fav"]));
-        assert_eq!(parts.select("unlisted-favourites"), s(&["fav"]));
-        let unknown = CrateParts { favourites: None, ..parts };
-        assert!(unknown.select("favourites").is_empty(), "favourites not known: nothing, not everything");
-    }
-}
-
-#[cfg(test)]
 mod edit_tests {
     use super::is_rearrangement;
 
@@ -167,11 +139,17 @@ pub struct PlaylistService {
     lib: Arc<Library>,
     /// Keeps the user's own server playlists in step (decision 0012).
     sync: Arc<super::sync::SyncService>,
+    /// One's own crates (decision 0024).
+    crate_store: crates::CrateStore,
+    /// The favourite tracks' lines for the crates: when, for which server, at which change count (see
+    /// `favourite_lines`).
+    favourites_kept: tokio::sync::Mutex<Option<(std::time::Instant, String, u64, HashSet<String>)>>,
 }
 
 impl PlaylistService {
     pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>) -> Self {
-        Self { lib, sync }
+        let crate_store = crates::CrateStore::new(lib.data_dir());
+        Self { lib, sync, crate_store, favourites_kept: tokio::sync::Mutex::new(None) }
     }
 
     /// Every playlist, marked where it holds `entry` (the playing track's line), with its links.
@@ -335,35 +313,54 @@ impl PlaylistService {
             .ok_or_else(|| ToggleError::Refused("No server is connected.".into()))
     }
 
-    /// The permanent crates with how many tracks each holds now (decision 0024). `None`: not known (the server's
-    /// favourites could not be asked for).
+    /// Every crate (the permanent ones first, then one's own) with how many tracks it holds now (decision 0024).
     pub async fn crates(&self, want: Option<&str>) -> Result<Vec<CrateView>, ToggleError> {
-        let parts = self.crate_parts(want, true, true).await?;
-        Ok(CRATES
-            .iter()
-            .map(|(id, name)| CrateView {
-                id,
-                name,
-                count: if *id != "unlisted" && parts.favourites.is_none() { None } else { Some(parts.select(id).len()) },
+        let own = self.crate_store.list().await?;
+        let all: Vec<(bool, CrateDef)> = crates::permanent().into_iter().map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
+        let lib = self.crate_library(want, all.iter().any(|(_, c)| crates::needs_favourites(&c.conditions))).await?;
+        Ok(all
+            .into_iter()
+            .map(|(permanent, c)| CrateView {
+                count: if crates::needs_favourites(&c.conditions) && lib.favourites.is_none() { None } else { Some(lib.select(&c.conditions).len()) },
+                id: c.id,
+                name: c.name,
+                permanent,
             })
             .collect())
     }
 
-    /// A crate's lines, newest first, and the server they are for.
-    async fn crate_lines(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<String>), ToggleError> {
-        if !CRATES.iter().any(|(c, _)| *c == id) {
-            return Err(ToggleError::UnknownPlaylist);
+    /// A crate's definition: a permanent one, or one's own.
+    pub async fn crate_def(&self, id: &str) -> Result<CrateDef, ToggleError> {
+        if let Some(c) = crates::permanent().into_iter().find(|c| c.id == id) {
+            return Ok(c);
         }
-        let parts = self.crate_parts(want, id != "favourites", id != "unlisted").await?;
-        if id != "unlisted" && parts.favourites.is_none() {
+        self.crate_store.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
+    }
+
+    /// The lines these conditions select, newest first, and the server they are for.
+    async fn crate_lines_of(&self, conditions: &[crates::Condition], want: Option<&str>) -> Result<(String, Vec<String>), ToggleError> {
+        let lib = self.crate_library(want, crates::needs_favourites(conditions)).await?;
+        if crates::needs_favourites(conditions) && lib.favourites.is_none() {
             return Err(ToggleError::CannotPlay("The server's favourites could not be read.".into()));
         }
-        Ok((parts.source.clone(), parts.select(id)))
+        Ok((lib.source.clone(), lib.select(conditions)))
     }
 
     /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size.
     pub async fn crate_rows(&self, id: &str, want: Option<&str>, offset: usize, limit: usize) -> Result<(String, usize, Vec<PlaylistRow>), ToggleError> {
-        let (source, lines) = self.crate_lines(id, want).await?;
+        let def = self.crate_def(id).await?;
+        self.crate_page(&def.conditions, want, offset, limit).await
+    }
+
+    /// The builder's live preview: an unsaved crate's size and first rows (decision 0024, issue 6).
+    pub async fn crate_page(
+        &self,
+        conditions: &[crates::Condition],
+        want: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(String, usize, Vec<PlaylistRow>), ToggleError> {
+        let (source, lines) = self.crate_lines_of(conditions, want).await?;
         let total = lines.len();
         let page: Vec<String> = lines.into_iter().skip(offset).take(limit).collect();
         let rows = self.rows_of(page, &source).await?;
@@ -372,7 +369,8 @@ impl PlaylistService {
 
     /// Make playlist: the crate's tracks now, as a new, ordinary playlist (a snapshot; decision 0024).
     pub async fn crate_to_playlist(&self, id: &str, want: Option<&str>, name: &str) -> Result<usize, ToggleError> {
-        let (_, lines) = self.crate_lines(id, want).await?;
+        let def = self.crate_def(id).await?;
+        let (_, lines) = self.crate_lines_of(&def.conditions, want).await?;
         if lines.is_empty() {
             return Err(ToggleError::Refused("That crate is empty.".into()));
         }
@@ -380,31 +378,69 @@ impl PlaylistService {
         Ok(lines.len())
     }
 
-    /// What the crates are made of: Music's files newest first, the lines in playlists, and the favourite files.
-    async fn crate_parts(&self, want: Option<&str>, listed: bool, favourites: bool) -> Result<CrateParts, ToggleError> {
+    /// Saves one's own crate (a new one without `id`); returns its id.
+    pub async fn crate_save(&self, id: Option<&str>, name: &str, conditions: Vec<crates::Condition>) -> Result<String, ToggleError> {
+        if id.is_some_and(crates::is_permanent) {
+            return Err(ToggleError::Refused("A permanent crate cannot be changed.".into()));
+        }
+        self.crate_store.save(id, name, conditions).await.map_err(ToggleError::Refused)
+    }
+
+    pub async fn crate_delete(&self, id: &str) -> Result<(), ToggleError> {
+        if crates::is_permanent(id) {
+            return Err(ToggleError::Refused("A permanent crate cannot be deleted.".into()));
+        }
+        if !self.crate_store.delete(id).await? {
+            return Err(ToggleError::UnknownPlaylist);
+        }
+        Ok(())
+    }
+
+    /// The axes and their domains in this library, for the builder (decision 0024, issue 4).
+    pub async fn crate_axes(&self, want: Option<&str>) -> Result<Vec<crates::AxisView>, ToggleError> {
+        let lib = self.crate_library(want, false).await?;
+        let playlists: Vec<String> = self.lib.store()?.snapshot().await?.into_iter().map(|(name, _, _)| name).collect();
+        Ok(crates::axes(&lib.files, &playlists))
+    }
+
+    /// What a crate is worked out on: Music's files newest first with their facts, which playlists hold each line, and
+    /// (when needed) the favourites, kept for a minute (decision 0024, issue 5).
+    async fn crate_library(&self, want: Option<&str>, favourites: bool) -> Result<CrateLibrary, ToggleError> {
         let (sid, source) = self.source_of(want)?;
         let c = self.lib.catalogue();
-        let files = tokio::task::spawn_blocking(move || c.files_newest_first(0)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
-        let listed = if listed {
-            self.lib.store()?.snapshot().await?.into_iter().flat_map(|(_, lines, _)| lines).collect()
-        } else {
-            std::collections::HashSet::new()
-        };
-        let favourites = if favourites {
-            match source.favorite_tracks().await {
-                Ok(ids) => {
-                    let (c, s) = (self.lib.catalogue(), sid.clone());
-                    Some(tokio::task::spawn_blocking(move || c.rels_of(&s, 0, &ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
-                }
-                Err(e) => {
-                    tracing::warn!("favourites for the crates: {e:#}");
-                    None
-                }
+        let files = tokio::task::spawn_blocking(move || c.crate_facts(0)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let mut membership: HashMap<String, Vec<String>> = HashMap::new();
+        for (name, lines, _) in self.lib.store()?.snapshot().await? {
+            for line in lines {
+                membership.entry(line).or_default().push(name.clone());
             }
-        } else {
-            None
+        }
+        let favourites = if favourites { self.favourite_lines(&sid, &source).await } else { None };
+        Ok(CrateLibrary { source: sid, files, membership, favourites })
+    }
+
+    /// The favourite tracks' lines, from the media server, kept a minute (or until Cratarr changes a favourite).
+    async fn favourite_lines(&self, sid: &str, source: &Arc<dyn source::Source>) -> Option<HashSet<String>> {
+        const KEEP: std::time::Duration = std::time::Duration::from_secs(60);
+        let generation = crates::favourites_generation();
+        if let Some((at, s, g, lines)) = self.favourites_kept.lock().await.as_ref()
+            && at.elapsed() < KEEP
+            && s == sid
+            && *g == generation
+        {
+            return Some(lines.clone());
+        }
+        let ids = match source.favorite_tracks().await {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!("favourites for the crates: {e:#}");
+                return None;
+            }
         };
-        Ok(CrateParts { source: sid, files, listed, favourites })
+        let (c, s) = (self.lib.catalogue(), sid.to_string());
+        let lines = tokio::task::spawn_blocking(move || c.rels_of(&s, 0, &ids)).await.ok()?.ok()?;
+        *self.favourites_kept.lock().await = Some((std::time::Instant::now(), sid.to_string(), generation, lines.clone()));
+        Some(lines)
     }
 
     /// A playlist's tracks as a server's ids, in file order (`want` = the server to use, default the first connected

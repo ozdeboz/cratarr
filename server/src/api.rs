@@ -36,7 +36,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/rows", get(playlist_rows))
         .route("/api/playlists/favorites", get(playlist_favorites))
-        .route("/api/crates", get(crates))
+        .route("/api/crates", get(crates).post(crate_create))
+        .route("/api/crates/axes", get(crate_axes))
+        .route("/api/crates/preview", post(crate_preview))
+        .route("/api/crates/{id}", get(crate_get).put(crate_update).delete(crate_delete))
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
         .route("/api/playlists/{id}/favorite", post(playlist_favorite))
@@ -217,6 +220,49 @@ struct Page {
 async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(200).clamp(1, 500);
     let (source, total, rows) = app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit).await?;
+    Ok(Json(json!({ "source": source, "total": total, "rows": rows })).into_response())
+}
+
+/// One's own crate as the builder sends it (decision 0024).
+#[derive(Deserialize)]
+struct CrateBody {
+    name: String,
+    conditions: Vec<crate::crates::Condition>,
+}
+
+async fn crate_create(State(app): State<Arc<App>>, Json(b): Json<CrateBody>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let id = app.playlists.crate_save(None, &b.name, b.conditions).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
+}
+
+async fn crate_update(State(app): State<Arc<App>>, Path(id): Path<String>, Json(b): Json<CrateBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = app.playlists.crate_save(Some(&id), &b.name, b.conditions).await?;
+    Ok(Json(json!({ "id": id })))
+}
+
+async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<crate::crates::CrateDef>, ApiError> {
+    Ok(Json(app.playlists.crate_def(&id).await?))
+}
+
+async fn crate_delete(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    app.playlists.crate_delete(&id).await?;
+    Ok(Json(json!({ "deleted": id })))
+}
+
+/// The axes the builder draws its controls from, with their domains in this library.
+async fn crate_axes(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<Vec<crate::crates::AxisView>>, ApiError> {
+    Ok(Json(app.playlists.crate_axes(f.source.as_deref()).await?))
+}
+
+/// The builder's live preview: an unsaved crate's size and first rows.
+#[derive(Deserialize)]
+struct Preview {
+    conditions: Vec<crate::crates::Condition>,
+}
+
+async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let (source, total, rows) = app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit).await?;
     Ok(Json(json!({ "source": source, "total": total, "rows": rows })).into_response())
 }
 

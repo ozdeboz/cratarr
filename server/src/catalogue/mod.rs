@@ -466,6 +466,39 @@ impl Catalogue {
         Ok(rels.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The files present in a folder, newest first, with what the crates' axes test (decision 0024): genres, year,
+    /// BPM. Blocking.
+    pub fn crate_facts(&self, folder: i64) -> Result<Vec<crate::crates::Facts>> {
+        let rels = self.files_newest_first(folder)?;
+        let db = self.db();
+        let mut st = db.prepare("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ('genre', 'date', 'originaldate', 'bpm') ORDER BY rel, n")?;
+        let mut by: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for row in st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
+            let (rel, name, value) = row?;
+            by.entry(rel).or_default().push((name, value));
+        }
+        Ok(rels
+            .into_iter()
+            .map(|rel| {
+                let tags = by.remove(&rel).unwrap_or_default();
+                let first: BTreeMap<&str, &str> =
+                    tags.iter().rev().map(|(n, v)| (n.as_str(), v.as_str())).collect::<BTreeMap<_, _>>();
+                let mut genres: Vec<String> = Vec::new();
+                for (n, v) in &tags {
+                    if n == "genre" && !genres.iter().any(|g| g.eq_ignore_ascii_case(v)) {
+                        genres.push(v.clone());
+                    }
+                }
+                crate::crates::Facts {
+                    year: crate::crates::year_of(&first),
+                    bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)),
+                    genres,
+                    rel,
+                }
+            })
+            .collect())
+    }
+
     /// The files of a folder that these server track ids are; ids not known there are left out. Blocking.
     pub fn rels_of(&self, source: &str, folder: i64, ids: &[String]) -> Result<std::collections::HashSet<String>> {
         let db = self.db();
