@@ -332,6 +332,19 @@
   const tracksChanged = $derived(!!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)));
   const newName = $derived(editing ? editing.name.trim() : '');
   const nameChanged = $derived(!!editing && newName !== '' && newName !== id);
+  // The pencil beside the name in edit mode: the caret goes to the name's end, as a tap on the name puts it there.
+  let nameEl = $state<HTMLElement>();
+  function editName() {
+    const el = nameEl;
+    if (!el) return;
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
   function startEdit() {
     if (!rows) return;
     navigator.vibrate?.(8);
@@ -448,8 +461,11 @@
         {:else}
         <div class="info">
           {#if editing}
-            <!-- The name, editable where it is and looking the same. -->
+            <!-- The name, editable where it is and looking the same; the pencil beside it says so (and puts the caret
+                 in it too). -->
+            <div class="name-row">
             <h2
+              bind:this={nameEl}
               class="editable"
               contenteditable="plaintext-only"
               class:saving={editing.saving}
@@ -467,6 +483,8 @@
                 if ((el.textContent ?? '').length > 100) el.textContent = (el.textContent ?? '').slice(0, 100);
               }}
             ></h2>
+            <button class="name-pen" aria-label="Rename" title="Rename" disabled={editing.saving} onclick={editName}><Icon name="pencil" size={16} /></button>
+            </div>
           {:else}
             <h2>{title}</h2>
           {/if}
@@ -758,6 +776,30 @@
   h2.editable {
     cursor: text;
     outline: none;
+  }
+
+  .name-row {
+    display: flex;
+    align-items: flex-start;
+    min-width: 0;
+  }
+
+  .name-row h2 {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .name-pen {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
   }
 
   /* While it saves the name is not written in. */
