@@ -230,6 +230,13 @@ export const restorePlaylist = (id: string) =>
 
 export const getTargets = () => request<TargetChoice[]>('/api/sync/targets');
 /** The other names a playlist is spoken as, exactly these. */
+/** The names a playlist is also spoken as, from what was typed (comma-separated). */
+export const spokenNames = (text: string) =>
+  text
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
 export const setSpoken = (id: string, names: string[]) =>
   request<null>(`/api/playlists/${encodeURIComponent(id)}/spoken`, {
     method: 'PUT',

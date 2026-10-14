@@ -7,7 +7,7 @@
   // (long-press: favourite). Lines the server does not know, or files that are missing, show by file name, dimmed.
   // Edit mode (the pencil; Finamp's playlist edit screen): rows get the reorder handle and ✕ (a swipe left removes too),
   // removed tracks wait in their own section to be restored, and Save writes the playlist once (Cancel drops it).
-  import { coverUrl, editPlaylist, incomingCoverUrl, playlistCovers, playlistRows, queueTrack, type PlaylistRow } from './api';
+  import { coverUrl, editPlaylist, incomingCoverUrl, playlistCovers, playlistRows, queueTrack, setSpoken, spokenNames, type PlaylistRow } from './api';
   import { Reorder } from './reorder.svelte';
   import { loadFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
@@ -149,21 +149,21 @@
     }
   }
 
-  // Edit mode: a working copy of the rows (each with its place in the file, so a restored one goes back there).
+  // Edit mode: a working copy of the rows (each with its place in the file, so a restored one goes back there), and of
+  // the names the playlist is also spoken as (decision 0015), at the top as Finamp's edit screen has its name.
   type Item = { r: PlaylistRow; at: number };
-  let editing = $state<{ rows: Item[]; removed: Item[]; saving: boolean } | null>(null);
+  let editing = $state<{ rows: Item[]; removed: Item[]; spoken: string; saving: boolean } | null>(null);
   const editingFor = $derived(editing ? id : null);
   $effect(() => {
     // Another playlist opened (or this one closed): the edit is dropped.
     if (editingFor !== null && editingFor !== id) editing = null;
   });
-  const changed = $derived(
-    !!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)),
-  );
+  const tracksChanged = $derived(!!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)));
+  const spokenChanged = $derived(!!editing && spokenNames(editing.spoken).join('\n') !== (p?.spoken ?? []).join('\n'));
   function startEdit() {
     if (!rows) return;
     navigator.vibrate?.(8);
-    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], saving: false };
+    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], spoken: (p?.spoken ?? []).join(', '), saving: false };
   }
   const reorder = new Reorder(
     () => scroller,
@@ -193,14 +193,16 @@
   };
   async function save() {
     if (!editing || !rows) return;
-    if (!changed) return void (editing = null);
+    if (!tracksChanged && !spokenChanged) return void (editing = null);
     editing.saving = true;
     try {
-      await editPlaylist(
-        id,
-        rows.map((r) => r.entry),
-        editing.rows.map((x) => x.r.entry),
-      );
+      if (tracksChanged)
+        await editPlaylist(
+          id,
+          rows.map((r) => r.entry),
+          editing.rows.map((x) => x.r.entry),
+        );
+      if (spokenChanged) await setSpoken(id, spokenNames(editing.spoken));
       editing = null;
       saved++;
       refresh();
@@ -247,6 +249,12 @@
           {#if p?.dead}<p class="line dead"><span>{p.dead} missing</span></p>{/if}
         </div>
       </div>
+      {#if editing}
+        <label class="field">
+          <span>Spoken as</span>
+          <input type="text" placeholder="Other names, comma-separated" bind:value={editing.spoken} disabled={editing.saving} />
+        </label>
+      {/if}
       {#if !editing}
       <div class="actions" role="group" aria-label="Play">
         {#each ACTIONS as a (a.mode)}
@@ -425,6 +433,26 @@
   .rows.edit.dragging li.lifted {
     z-index: 1;
     transition: none;
+  }
+
+  /* Edit mode's fields, at the top as Finamp's edit screen has its name field. */
+  .field {
+    display: grid;
+    gap: 4px;
+    padding: 0 6px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .field input {
+    min-height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
   }
 
   .removed-head {

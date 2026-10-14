@@ -50,8 +50,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **An opened playlist** (decision 0023, `lib/PlaylistView.svelte`): in the panel beside the page, or on a phone a
   full-height layer with the mini-player floating over its end. Its bar has ✕, the pencil (edit mode) and the menu; in
-  edit mode Cancel and Save. Rows as the queue's; edit mode as Finamp's playlist edit screen (handle, ✕, swipe to
-  remove, "Removed tracks" to restore), written once on Save.
+  edit mode Cancel and Save. Rows as the queue's; edit mode as Finamp's playlist edit screen ("Spoken as" at the top,
+  where Finamp has the name; rows with handle and ✕, swipe to remove, "Removed tracks" to restore), written once on
+  Save.
 - **Playlist chips** (the Playlists page) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a

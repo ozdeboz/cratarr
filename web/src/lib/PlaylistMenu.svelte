@@ -10,6 +10,7 @@
     renamePlaylist,
     restorePlaylist,
     setSpoken,
+    spokenNames,
     unlinkPlaylist,
     type Conflict,
     type Direction,
@@ -66,7 +67,7 @@
     if (working) return;
     working = true;
     try {
-      await setSpoken(p.id, spokenField.split(',').map((s) => s.trim()).filter(Boolean));
+      await setSpoken(p.id, spokenNames(spokenField));
       onclose();
     } catch (e) {
       fail(e, 'Could not save the names');
