@@ -172,6 +172,13 @@ impl PlaylistService {
         Ok(PlayResult { player, sent: ids.len(), total, unknown })
     }
 
+    /// A playlist's tracks for the local player (decision 0022): the server they are known on, their ids in file order,
+    /// and how many lines it does not know.
+    pub async fn track_ids(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<String>, usize), ToggleError> {
+        let (active, _, ids, unknown) = self.server_ids(id, want).await?;
+        Ok((active.cfg.id.clone(), ids, unknown))
+    }
+
     /// A playlist's tracks as a server's ids, in file order (`want` = the server to use, default the first connected
     /// one), and how many lines it does not know (missing files, or not linked yet).
     async fn server_ids(

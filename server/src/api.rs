@@ -23,6 +23,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/events", get(events))
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/stream/{source}/{id}", get(stream))
+        .route("/api/track/{source}/{id}", get(track_info))
+        .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
         .route("/api/playlists/{id}/play", post(play_playlist))
@@ -125,6 +127,24 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
         )
             .into_response(),
     }
+}
+
+/// A track's title, artist and album, for the local player's queue (decision 0022).
+async fn track_info(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Response {
+    let Some((_, src)) = app.library.connected_sources().into_iter().find(|(s, _)| *s == source) else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "That server is not connected." }))).into_response();
+    };
+    match src.track(&id).await {
+        Ok(t) => Json(json!({ "id": t.id, "name": t.title, "artist": t.artist, "album": t.album, "album_id": t.album_id }))
+            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+    }
+}
+
+/// A playlist's tracks for the local player: the server they are on and their ids in file order (decision 0022).
+async fn playlist_tracks(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Response, ApiError> {
+    let (source, ids, unknown) = app.playlists.track_ids(&id, f.source.as_deref()).await?;
+    Ok(Json(json!({ "source": source, "ids": ids, "unknown": unknown })).into_response())
 }
 
 #[derive(Deserialize)]
