@@ -23,7 +23,7 @@
   import MenuEntry from './MenuEntry.svelte';
   import { isLocal, playPlaylistHere } from './output.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { prefs } from './prefs.svelte';
+  import { prefs, togglePin } from './prefs.svelte';
   import { refresh, untilNewTrack } from './live.svelte';
   import { toast } from './toast.svelte';
 
@@ -137,6 +137,8 @@
     working = true;
     try {
       await renamePlaylist(p.id, to);
+      // A pinned playlist stays pinned, in its place.
+      prefs.pinned = prefs.pinned.map((x) => (x === p.id ? to : x));
       onrenamed?.(p.id, to);
       onclose();
     } catch (e) {
@@ -200,6 +202,14 @@
 >
   {#if mode === 'menu'}
     <div role="menu">
+      <MenuEntry
+        icon="pin"
+        label={prefs.pinned.includes(p.id) ? 'Unpin' : 'Pin to top'}
+        onclick={() => {
+          togglePin(p.id);
+          onclose();
+        }}
+      />
       <MenuEntry icon="link" label="Sync to…" onclick={openSync} />
       <MenuEntry
         icon="mic"

@@ -22,6 +22,8 @@ export type Prefs = {
   sidebar: boolean;
   /** Where music plays (decision 0019 / 0022): on a server's player (`remote`) or in this browser (`local`). */
   output: 'remote' | 'local';
+  /** Playlists pinned to the top of the Playlists page, in the order pinned (ids). */
+  pinned: string[];
 };
 
 const KEY = 'cratarr-prefs';
@@ -37,10 +39,11 @@ export const DEFAULTS: Prefs = {
   playerWidth: 400,
   sidebar: true,
   output: 'remote',
+  pinned: [],
 };
 
 function read(): Prefs {
-  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals } };
+  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[] };
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (saved && typeof saved === 'object') {
@@ -52,6 +55,7 @@ function read(): Prefs {
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;
       if (saved.output === 'remote' || saved.output === 'local') p.output = saved.output;
+      if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');
       if (saved.insightsTab === 'statistics' || saved.insightsTab === 'related') p.insightsTab = saved.insightsTab;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {
@@ -71,9 +75,14 @@ function read(): Prefs {
 
 export const prefs = $state<Prefs>(read());
 
-/** Back to the default look; the followed source is not a display matter and stays. */
+/** Back to the default look; the followed source and the pins are not display matters and stay. */
 export function resetPrefs() {
-  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source });
+  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, pinned: prefs.pinned });
+}
+
+/** Pin a playlist to the top of the Playlists page (after those pinned before it), or unpin it. */
+export function togglePin(id: string) {
+  prefs.pinned = prefs.pinned.includes(id) ? prefs.pinned.filter((p) => p !== id) : [...prefs.pinned, id];
 }
 
 // Remember every change and apply the theme (app.css reads data-theme; no attribute = follow the system).

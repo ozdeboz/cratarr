@@ -41,6 +41,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`,
   `lib/remote.svelte.ts`).
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
+- **Pinned playlists** (the playlist menu: Pin to top / Unpin) come first on the Playlists page, in the order they
+  were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
+  are remembered by the browser, like the sort order and size; a rename keeps the pin.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. Where music plays is chosen at the player (its output button), not in Settings.
 - **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser

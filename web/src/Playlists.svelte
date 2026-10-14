@@ -36,8 +36,17 @@
       return { ...p, member, count: p.count + (member === p.member ? 0 : member ? 1 : -1) };
     });
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
-    if (prefs.membersFirst) list = [...list].sort((a, b) => Number(b.member) - Number(a.member));
-    return list;
+    // Pinned ones first, in the order pinned; "✓ first" applies within the pinned and within the rest.
+    const pin = (id: string) => {
+      const i = prefs.pinned.indexOf(id);
+      return i < 0 ? Infinity : i;
+    };
+    return [...list].sort((a, b) => {
+      const [pa, pb] = [pin(a.id), pin(b.id)];
+      if ((pa === Infinity) !== (pb === Infinity)) return pa === Infinity ? 1 : -1;
+      if (prefs.membersFirst && a.member !== b.member) return Number(b.member) - Number(a.member);
+      return pa === Infinity ? 0 : pa - pb;
+    });
   });
 
   const memberCount = $derived(shownPlaylists().filter((p) => optimistic[p.id] ?? p.member).length);
@@ -142,6 +151,7 @@
           >
             <span class="mark" aria-hidden="true">{p.member ? '✓' : '+'}</span>
             <span class="name">{p.name}</span>
+            {#if prefs.pinned.includes(p.id)}<span class="pinned" title="Pinned"><Icon name="pin" size={13} /></span>{/if}
             {#if p.links.some((l) => l.target !== 'shared')}<span class="own" title={p.links.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
             <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}</span>
           </button>
@@ -337,7 +347,8 @@
   }
 
   /* Kept in an account's own playlists too (decision 0014). */
-  .own {
+  .own,
+  .pinned {
     display: flex;
     flex: none;
     opacity: 0.65;
