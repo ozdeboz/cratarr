@@ -152,8 +152,44 @@ export const queueTrack = (id: string, mode: 'next' | 'last', source?: string) =
 export const queueTracks = (ids: string[], mode: 'next' | 'last', source?: string) =>
   post<{ player: string }>(`/api/queue/add${follow(source)}`, { ids, mode });
 
-/** A permanent crate (decision 0024); `count` null when not known (the server's favourites could not be read). */
-export type Crate = { id: string; name: string; count: number | null };
+/** A crate (decision 0024): a permanent one or one's own; `count` null when not known (the server's favourites could
+ *  not be read). */
+export type Crate = { id: string; name: string; count: number | null; permanent: boolean };
+
+/** One condition of a crate: an axis, what it is tested against, negated or not. */
+export type CrateValue = { kind: 'yes' } | { kind: 'any_of'; values: string[] } | { kind: 'range'; min: number | null; max: number | null };
+export type Condition = { axis: string; not: boolean; value: CrateValue };
+export type CrateDef = { id: string; name: string; conditions: Condition[] };
+/** An axis the builder draws a control for, with its domain in this library. */
+export type Axis = {
+  key: string;
+  label: string;
+  kind: 'yes_no' | 'values' | 'membership' | 'range';
+  values: string[];
+  min: number | null;
+  max: number | null;
+  known: number;
+};
+export const getCrateAxes = (source?: string) => quietly<Axis[]>(`/api/crates/axes${follow(source)}`);
+export const getCrate = (id: string) => quietly<CrateDef>(`/api/crates/${encodeURIComponent(id)}`);
+export const createCrate = (name: string, conditions: Condition[]) => post<{ id: string }>('/api/crates', { name, conditions });
+export const updateCrate = (id: string, name: string, conditions: Condition[]) =>
+  request<{ id: string }>(`/api/crates/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, conditions }),
+  });
+export const deleteCrate = (id: string) => request<{ deleted: string }>(`/api/crates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+/** The builder's live preview: how many tracks unsaved conditions select, and the first of them. */
+export const previewCrate = (conditions: Condition[], limit: number, source?: string) => {
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (source) q.set('source', source);
+  return quietly<{ source: string; total: number; rows: PlaylistRow[] }>(`/api/crates/preview?${q}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conditions }),
+  });
+};
 export const getCrates = (source?: string) => quietly<Crate[]>(`/api/crates${follow(source)}`);
 /** A page of a crate's rows (newest first) and the crate's size. */
 export const crateRows = (id: string, offset: number, limit: number, source?: string) => {

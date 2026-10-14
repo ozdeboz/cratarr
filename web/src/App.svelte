@@ -20,6 +20,8 @@
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
   import { closePlaylist, keepOpen, panel } from './lib/panel.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
+  import CrateBuilder from './lib/CrateBuilder.svelte';
+  import { builderOf } from './lib/crates.svelte';
   import { poll } from './lib/live.svelte';
   import { known } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
@@ -272,14 +274,14 @@
         onkeydown={gripKey}
       ></div>
       <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'}>
-        {#if panelShowsPlayer()}<NowPlaying place="side" />{:else}<PlaylistView />{/if}
+        {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if builderOf(panel.open)}<CrateBuilder id={builderOf(panel.open)!.id} />{:else}<PlaylistView />{/if}
       </aside>
     {/if}
   </div>
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={mini ? `${MINI_SPACE}px` : '0px'} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      <PlaylistView />
+      {#if builderOf(panel.open)}<CrateBuilder id={builderOf(panel.open)!.id} />{:else}<PlaylistView />{/if}
     </div>
   {/if}
   {#if mini}

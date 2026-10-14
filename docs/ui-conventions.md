@@ -57,7 +57,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crates (Favourites, Unlisted, Unlisted
   favourites) as chips with their live counts, styled as the playlist chips (the open one bordered). A crate opens in
   the panel as a playlist does, without the statistics and editing; its rows come in pages, newest first; the save icon
-  (where a playlist has the pencil) makes a playlist of it, which then opens.
+  (where a playlist has the pencil) makes a playlist of it, which then opens. "New crate" (and the pencil on one's own
+  crate) opens the **crate builder** in the panel: a name, then conditions as cards (the axis, an is/NOT toggle, its
+  values as chips, a range as two numbers, a yes/no axis as just its name; negated cards tinted red), "Add condition"
+  offering the server's axes, and below a live preview (the count and the first tracks). Cancel and Save in the bar;
+  Delete at the end for one's own crate (a second tap confirms). The draft is kept in the browser until Save or
+  Cancel.
 - **Playlist chips** (the Playlists page) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a

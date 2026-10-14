@@ -24,7 +24,7 @@
     spokenNames,
     type PlaylistRow,
   } from './api';
-  import { crateName, crateOf, loadCrates } from './crates.svelte';
+  import { crateName, crateOf, crates, EDIT_CRATE, loadCrates } from './crates.svelte';
   import { Reorder } from './reorder.svelte';
   import { renameEverywhere } from './rename.svelte';
   import { isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, togglePlaylistFavorite } from './favourites.svelte';
@@ -48,6 +48,7 @@
   /** The open crate's id, when a crate is open (not a playlist). */
   const crate = $derived(crateOf(panel.open));
   const title = $derived(crate ? crateName(crate) : id);
+  const isPermanentCrate = $derived(!!crate && (crates.list?.find((c) => c.id === crate)?.permanent ?? true));
   const p = $derived(crate ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
   const np = $derived(playing());
   /** A crate's size (its rows come in pages). */
@@ -334,7 +335,10 @@
       <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
     {:else if crate}
       <button class="icon" aria-label="Close the crate" onclick={closePlaylist}><Icon name="close" size={24} /></button>
-      <button class="icon" aria-label="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="save" size={22} /></button>
+      <span class="end">
+        {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => openPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
+        <button class="icon" aria-label="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="save" size={22} /></button>
+      </span>
     {:else}
       <button class="icon" aria-label="Close the playlist" onclick={closePlaylist}><Icon name="close" size={24} /></button>
       <span class="end">
