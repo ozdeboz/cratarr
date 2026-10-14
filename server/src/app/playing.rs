@@ -307,8 +307,8 @@ impl PlayingService {
         let source = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == active.cfg.id).map(|(_, s)| s);
         let source = source.ok_or(ToggleError::NothingPlaying)?;
         source.set_favorite(&playing.track.id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
-        // The crates' kept favourites are asked for again (decision 0024).
-        crate::crates::favourites_changed();
+        // The crates' kept favourites take it at once (decision 0024).
+        crate::crates::favourite_changed(&active.cfg.id, &playing.track.id, on);
         Ok(self.fresh_state(want).await?)
     }
 
@@ -403,7 +403,7 @@ impl PlayingService {
     pub async fn track_favorite(&self, source_id: &str, id: &str, on: bool) -> Result<TrackStateView, ToggleError> {
         let (_, s, _) = self.find(source_id, id).await?;
         s.set_favorite(id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
-        crate::crates::favourites_changed();
+        crate::crates::favourite_changed(source_id, id, on);
         self.track_state(source_id, id).await
     }
 

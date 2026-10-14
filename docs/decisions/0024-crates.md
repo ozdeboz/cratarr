@@ -86,3 +86,13 @@ its size with each of the three, so a chip on the Crates page shows the size and
 playlist's heart's place, filled, outlined or crossed) for its setting, and a tap shows the next at once. The panel's
 rows still name the setting they show (a tap may be on its way to the server); Make playlist waits for it and uses
 the saved one. The settings a browser kept before are sent to the server once, then forgotten there.
+
+## Amendment (2026-10-14, evening): favourites answered from what was heard last
+
+Issue 5's "kept about a minute" made the Crates page wait: Jellyfin took a minute to list 4,786 favourites (about
+13 ms each, however paged), so every visit after a quiet minute waited for it, and a browser gave up ("Cannot reach
+the Cratarr server"). Now the server answers from the favourites it heard last, at once, and asks again in the
+background once they are a minute old (one asking at a time; a server that does not answer keeps what was heard, and is
+asked again a minute later). Cratarr's own heart changes are applied to what was heard at once, instead of having it
+asked for again. Only the very first asking waits, and that one starts when Cratarr starts. A request waiting for it
+holds nothing large meanwhile: those waiting with the library's facts in hand were the likely cause of a 64 MB restart.

@@ -276,15 +276,110 @@ pub struct PlaylistService {
     crate_store: crates::CrateStore,
     /// Where every change is kept for its undo (decision 0026).
     journal: Arc<Journal>,
-    /// The favourite tracks' lines for the crates: when, for which server, at which change count (see
-    /// `favourite_lines`).
-    favourites_kept: tokio::sync::Mutex<Option<(std::time::Instant, String, u64, Option<HashSet<String>>)>>,
+    /// The favourite tracks' lines for the crates (see `favourite_lines`).
+    favourites: Arc<FavouritesKept>,
+}
+
+/// The media server's favourites as the crates last heard them, and the one asking for them now.
+#[derive(Default)]
+struct FavouritesKept {
+    last: std::sync::Mutex<Option<Kept>>,
+    asking: Arc<tokio::sync::Mutex<()>>,
+}
+
+#[derive(Clone)]
+struct Kept {
+    at: std::time::Instant,
+    source: String,
+    /// The last of Cratarr's own changes (`crates::favourite_changed`) the answer holds.
+    upto: u64,
+    /// `None`: the server did not answer.
+    lines: Option<Arc<HashSet<String>>>,
+}
+
+impl FavouritesKept {
+    fn kept(&self, source: &str) -> Option<Kept> {
+        self.last.lock().unwrap_or_else(|e| e.into_inner()).clone().filter(|k| k.source == source)
+    }
+
+    /// Ask the server (the caller holds `asking`). When it does not answer, what was heard before is kept, for another
+    /// minute before asking again.
+    async fn ask(&self, c: Arc<crate::catalogue::Catalogue>, source: &str, from: &Arc<dyn source::Source>) -> Kept {
+        let upto = crates::favourite_changes_made();
+        let lines = match from.favorite_tracks().await {
+            Ok(ids) => {
+                let s = source.to_string();
+                match tokio::task::spawn_blocking(move || c.rels_of(&s, 0, &ids)).await {
+                    Ok(Ok(lines)) => Some(Arc::new(lines)),
+                    Ok(Err(e)) => {
+                        tracing::warn!("favourites for the crates: {e:#}");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::warn!("favourites for the crates: {e}");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("favourites for the crates: {e:#}");
+                None
+            }
+        };
+        let now = std::time::Instant::now();
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        let kept = match (lines, last.clone().filter(|k| k.source == source && k.lines.is_some())) {
+            (Some(lines), _) => {
+                crates::favourite_changes_held(source, upto);
+                Kept { at: now, source: source.to_string(), upto, lines: Some(lines) }
+            }
+            (None, Some(before)) => Kept { at: now, ..before },
+            (None, None) => Kept { at: now, source: source.to_string(), upto, lines: None },
+        };
+        *last = Some(kept.clone());
+        kept
+    }
+
+    /// The kept lines with Cratarr's own changes made since applied.
+    async fn with_changes(kept: Kept, c: Arc<crate::catalogue::Catalogue>) -> Option<HashSet<String>> {
+        let lines = kept.lines?;
+        let changes = crates::favourite_changes_since(&kept.source, kept.upto);
+        if changes.is_empty() {
+            return Some((*lines).clone());
+        }
+        let s = kept.source;
+        let lines = tokio::task::spawn_blocking(move || {
+            let mut lines = (*lines).clone();
+            for (track, on) in changes {
+                let of = c.rels_of(&s, 0, std::slice::from_ref(&track))?;
+                if on {
+                    lines.extend(of);
+                } else {
+                    lines.retain(|l| !of.contains(l));
+                }
+            }
+            anyhow::Ok(lines)
+        });
+        lines.await.ok()?.ok()
+    }
 }
 
 impl PlaylistService {
     pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>) -> Self {
         let crate_store = crates::CrateStore::new(lib.data_dir());
-        Self { lib, sync, crate_store, journal, favourites_kept: tokio::sync::Mutex::new(None) }
+        Self { lib, sync, crate_store, journal, favourites: Arc::default() }
+    }
+
+    /// Ask the media server for the favourites once, at start, when a crate shows by them: the first visit to Crates
+    /// then need not wait the minute that may take.
+    pub async fn warm_favourites(&self) {
+        let Ok(set) = self.crate_store.all_favourites().await else { return };
+        let needed = crates::permanent().into_iter().chain(self.crate_store.list().await.unwrap_or_default()).any(|c| {
+            crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::None) != crates::Favourites::All
+        });
+        if let (true, Ok((sid, source))) = (needed, self.source_of(None)) {
+            self.favourite_lines(&sid, &source).await;
+        }
     }
 
     /// Keep a change in the journal; its undo token (decision 0026). A journal that cannot be written costs only the
@@ -740,6 +835,8 @@ impl PlaylistService {
     /// (when needed) the favourites, kept for a minute (decision 0024, issue 5).
     async fn crate_library(&self, want: Option<&str>, favourites: bool) -> Result<CrateLibrary, ToggleError> {
         let (sid, source) = self.source_of(want)?;
+        // First, so a request waiting for them holds nothing large meanwhile.
+        let favourites = if favourites { self.favourite_lines(&sid, &source).await } else { None };
         let c = self.lib.catalogue();
         let files = tokio::task::spawn_blocking(move || c.crate_facts(0)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let mut membership: HashMap<String, Vec<String>> = HashMap::new();
@@ -748,36 +845,39 @@ impl PlaylistService {
                 membership.entry(line).or_default().push(name.clone());
             }
         }
-        let favourites = if favourites { self.favourite_lines(&sid, &source).await } else { None };
         Ok(CrateLibrary { source: sid, files, membership, favourites })
     }
 
-    /// The favourite tracks' lines, from the media server, kept a minute (or until Cratarr changes a favourite). One
-    /// asks at a time, and a failure is kept a minute too: the query is a heavy one for the server, and asking again on
-    /// every request while it struggles makes it struggle more.
+    /// The favourite tracks' lines, from the media server. What was heard last is answered at once, with Cratarr's own
+    /// changes since applied; when it is a minute old, it is asked for again in the background. Only the first asking
+    /// (nothing heard yet from this server) waits. One asks at a time: Jellyfin took a minute for 4,786 favourites
+    /// (2026-10-14), and asking again while it works makes it slower. A server that does not answer is asked again a
+    /// minute later.
     async fn favourite_lines(&self, sid: &str, source: &Arc<dyn source::Source>) -> Option<HashSet<String>> {
         const KEEP: std::time::Duration = std::time::Duration::from_secs(60);
-        let generation = crates::favourites_generation();
-        let mut kept = self.favourites_kept.lock().await;
-        if let Some((at, s, g, lines)) = kept.as_ref()
-            && at.elapsed() < KEEP
-            && s == sid
-            && *g == generation
-        {
-            return lines.clone();
-        }
-        let ids = match source.favorite_tracks().await {
-            Ok(ids) => ids,
-            Err(e) => {
-                tracing::warn!("favourites for the crates: {e:#}");
-                *kept = Some((std::time::Instant::now(), sid.to_string(), generation, None));
-                return None;
+        let f = &self.favourites;
+        let kept = match f.kept(sid) {
+            Some(k) => {
+                if k.at.elapsed() >= KEEP
+                    && let Ok(turn) = f.asking.clone().try_lock_owned()
+                {
+                    let (f, c, s, from) = (f.clone(), self.lib.catalogue(), sid.to_string(), source.clone());
+                    tokio::spawn(async move {
+                        let _turn = turn;
+                        f.ask(c, &s, &from).await;
+                    });
+                }
+                k
+            }
+            None => {
+                let _turn = f.asking.lock().await;
+                match f.kept(sid) {
+                    Some(k) => k,
+                    None => f.ask(self.lib.catalogue(), sid, source).await,
+                }
             }
         };
-        let (c, s) = (self.lib.catalogue(), sid.to_string());
-        let lines = tokio::task::spawn_blocking(move || c.rels_of(&s, 0, &ids)).await.ok()?.ok()?;
-        *kept = Some((std::time::Instant::now(), sid.to_string(), generation, Some(lines.clone())));
-        Some(lines)
+        FavouritesKept::with_changes(kept, self.lib.catalogue()).await
     }
 
     /// A playlist's tracks as a server's ids, in file order (`want` = the server to use, default the first connected

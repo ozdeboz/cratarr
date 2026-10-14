@@ -5,7 +5,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -206,15 +205,35 @@ pub fn needs_favourites(conditions: &[Condition]) -> bool {
 
 // --- Freshness of the media server's favourites (decision 0024, issue 5) ---
 
-static FAVOURITES_CHANGED: AtomicU64 = AtomicU64::new(0);
+/// The favourites Cratarr itself changed, numbered: (number, server, track id, favourite now). The kept favourites
+/// take these at once instead of being asked for again: asking Jellyfin for 4,786 took a minute (2026-10-14).
+static FAVOURITES_CHANGED: std::sync::Mutex<(u64, Vec<(u64, String, String, bool)>)> = std::sync::Mutex::new((0, Vec::new()));
 
-/// Cratarr itself changed a favourite: the kept favourites are asked for again.
-pub fn favourites_changed() {
-    FAVOURITES_CHANGED.fetch_add(1, Ordering::Relaxed);
+fn favourite_log() -> std::sync::MutexGuard<'static, (u64, Vec<(u64, String, String, bool)>)> {
+    FAVOURITES_CHANGED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub fn favourites_generation() -> u64 {
-    FAVOURITES_CHANGED.load(Ordering::Relaxed)
+/// Cratarr itself made `track` a favourite on `source` (`on`), or not.
+pub fn favourite_changed(source: &str, track: &str, on: bool) {
+    let mut log = favourite_log();
+    log.0 += 1;
+    let n = log.0;
+    log.1.push((n, source.to_string(), track.to_string(), on));
+}
+
+/// The number of the latest change: an answer asked for now holds every change up to it.
+pub fn favourite_changes_made() -> u64 {
+    favourite_log().0
+}
+
+/// The changes on `source` after number `after`, oldest first: (track id, favourite now).
+pub fn favourite_changes_since(source: &str, after: u64) -> Vec<(String, bool)> {
+    favourite_log().1.iter().filter(|(n, s, _, _)| *n > after && s == source).map(|(_, _, t, on)| (t.clone(), *on)).collect()
+}
+
+/// An answer from `source` holds its changes up to `upto`: those are no longer needed.
+pub fn favourite_changes_held(source: &str, upto: u64) {
+    favourite_log().1.retain(|(n, s, _, _)| *n > upto || s != source);
 }
 
 // --- One's own crates, kept in crates.json ---
@@ -472,5 +491,20 @@ mod tests {
         assert!(again.delete(&id).await.unwrap());
         assert!(again.list().await.unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn own_favourite_changes_are_numbered_per_server_and_dropped_once_heard() {
+        // Its own server names: the log is shared by every test.
+        let before = favourite_changes_made();
+        favourite_changed("test-a", "t1", true);
+        favourite_changed("test-b", "t2", true);
+        favourite_changed("test-a", "t1", false);
+        assert_eq!(favourite_changes_since("test-a", before), vec![("t1".to_string(), true), ("t1".to_string(), false)]);
+        let held = favourite_changes_made();
+        favourite_changed("test-a", "t3", true);
+        favourite_changes_held("test-a", held);
+        assert_eq!(favourite_changes_since("test-a", before), vec![("t3".to_string(), true)]);
+        assert_eq!(favourite_changes_since("test-b", before), vec![("t2".to_string(), true)]);
     }
 }
