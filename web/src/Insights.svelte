@@ -5,7 +5,7 @@
   import { live } from './lib/live.svelte';
   import Icon from './lib/Icon.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
-  import { openPlaylist, panel } from './lib/panel.svelte';
+  import { viewPlaylist, panel } from './lib/panel.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import { prefs } from './lib/prefs.svelte';
   import ProximityGraph from './lib/ProximityGraph.svelte';
@@ -29,10 +29,10 @@
 
   const me = $derived(shown && selected !== null ? (shown.playlists[selected] ?? null) : null);
 
-  // The opened playlist and the graph's selection are one (decision 0023): opening a playlist selects it here, and
-  // selecting another point while one is open shows that one in the panel instead.
+  // The viewed playlist and the graph's selection are one (decision 0023): viewing a playlist selects it here, and
+  // selecting another point while one is viewed shows that one in the panel instead.
   $effect(() => {
-    const name = panel.open;
+    const name = panel.viewed;
     if (!shown || !name) return;
     const i = insights.indexOf(name);
     if (i >= 0 && untrack(() => selected) !== i) selected = i;
@@ -41,8 +41,8 @@
     const i = selected;
     if (i === null || !shown) return;
     const name = shown.playlists[i]?.name;
-    const open = untrack(() => panel.open);
-    if (open && name && name !== open) openPlaylist(name);
+    const viewed = untrack(() => panel.viewed);
+    if (viewed && name && name !== viewed) viewPlaylist(name);
   });
 
   // The legend: a sheet from the graph's button (it explains the graph; it is not about a playlist).
@@ -187,11 +187,11 @@
             onmenu={(i, anchor) => (menu = { name: shown.playlists[i].name, anchor })}
           />
         {/key}
-        {#if me && panel.open !== me.name}
-          <button class="open" onclick={() => openPlaylist(me.name)}><Icon name="listOpen" size={18} /><span>Open {me.name}</span></button>
+        {#if me && panel.viewed !== me.name}
+          <button class="corner" onclick={() => viewPlaylist(me.name)}><Icon name="squareArrowOutUpRight" size={18} /><span>View {me.name}</span></button>
         {/if}
         <!-- The legend explains the graph: always at hand, in the graph's corner. -->
-        <button class="open legend-btn" onclick={() => (legendOpen = true)}><Icon name="info" size={18} /><span>Legend</span></button>
+        <button class="corner legend-btn" onclick={() => (legendOpen = true)}><Icon name="info" size={18} /><span>Legend</span></button>
       </div>
     </div>
     {#if !me}
@@ -269,7 +269,8 @@
     width: min(100%, 900px);
   }
 
-  .open {
+  /* A button in the graph's corner: View (top), Legend (bottom). */
+  .corner {
     position: absolute;
     top: 10px;
     right: 10px;
@@ -284,13 +285,13 @@
     border-radius: 10px;
     font-weight: 600;
   }
-  .open.legend-btn {
+  .corner.legend-btn {
     top: auto;
     bottom: 10px;
   }
 
 
-  .open span {
+  .corner span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

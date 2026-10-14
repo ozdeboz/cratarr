@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use anyhow::{Context, Result, bail};
 
 use super::{Choice, Field, FieldKind, Fut, Kind, Library, Playing, PlaylistChange, PlaylistEvent, Source, Status, Track, Upcoming, Values, text};
-use crate::jellyfin::{Device, Jellyfin, PlayingItem, Session, pick_now_playing};
+use crate::jellyfin::{AlbumTrackItem, Device, Jellyfin, PlayingItem, Session, pick_now_playing};
 use crate::nowplaying::{Started, has_audio_history, playing_from_activity, progress};
 
 pub const KIND: Kind = Kind { id: "jellyfin", label: "Jellyfin", fields, connect };
@@ -365,6 +365,21 @@ fn track_info(d: &crate::jellyfin::MediaDetails) -> super::TrackInfo {
 fn from_track(queue: &[String], track: &str) -> Vec<String> {
     let from = queue.iter().position(|i| i == track).unwrap_or(0);
     queue[from..].iter().take(240).cloned().collect()
+}
+
+/// A track's artists as its tags credit them, else the album's.
+fn album_track(i: AlbumTrackItem) -> super::AlbumTrack {
+    let artist = if i.artists.is_empty() { i.album_artist.clone() } else { Some(i.artists.join(", ")) };
+    super::AlbumTrack {
+        id: i.id,
+        title: i.name,
+        artist,
+        album: i.album,
+        album_artist: i.album_artist,
+        year: i.production_year,
+        path: i.path,
+        duration_secs: i.run_time_ticks.map(|t| t as f64 / 10_000_000.0),
+    }
 }
 
 fn to_track((i, library_id): (PlayingItem, Option<String>)) -> Track {
@@ -829,8 +844,8 @@ impl Source for JellyfinSource {
         })
     }
 
-    fn album_track_ids<'a>(&'a self, album_id: &'a str) -> Fut<'a, Vec<String>> {
-        Box::pin(async move { self.jf.album_track_ids(album_id).await })
+    fn tracks_of_album<'a>(&'a self, album_id: &'a str) -> Fut<'a, Vec<super::AlbumTrack>> {
+        Box::pin(async move { Ok(self.jf.tracks_of_album(album_id).await?.into_iter().map(album_track).collect()) })
     }
 
     fn play_album<'a>(&'a self, album_id: &'a str) -> Fut<'a, String> {
@@ -844,7 +859,7 @@ impl Source for JellyfinSource {
                 bail!("no player is playing music; choose a player in Settings");
             };
             let label = [first.client.as_deref(), first.device_name.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" on ");
-            let tracks = self.jf.album_track_ids(album_id).await?;
+            let tracks: Vec<String> = self.jf.tracks_of_album(album_id).await?.into_iter().map(|t| t.id).collect();
             if tracks.is_empty() {
                 bail!("that album has no tracks");
             }

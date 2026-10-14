@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  // An opened playlist (decision 0023), in the panel beside the page or in its own layer, styled as Finamp's playlist
+  // A viewed playlist (decision 0023), in the panel beside the page or in its own layer, styled as Finamp's playlist
   // screen (lib/components/AlbumScreen) in less room: a bar with ✕ and the menu; the covers beside the name, "N tracks
   // (length)" and the genres; Play, Shuffle, Play next and Add to queue as icons over labels; what Insights knows of it
   // (Related: the Info tab); then the tracks in file order. A tap on a track plays the playlist from
@@ -8,12 +8,15 @@
   // (long-press: favourite). Lines the server does not know, or files that are missing, show by file name, dimmed.
   // Edit mode (the pencil; Finamp's playlist edit screen): rows get the reorder handle and ✕ (a swipe left removes too),
   // removed tracks wait in their own section to be restored, and Save writes the playlist once (Cancel drops it).
-  // A crate (decision 0024, `?open=crate:…`) shows the same way, without the statistics (genres, length, Related) and
+  // A crate (decision 0024, `?view=crate:…`) shows the same way, without the statistics (genres, length, Related) and
   // without editing; its rows come in pages (newest first), and the save icon makes a playlist of it (a snapshot).
   // Playlists show in tabs (decision 0025): Tracks, Info, Export, Repair, Sync, under the header, for the selection: one
   // playlist as above, or several (the Playlists page's Select): their covers and count in the header, and on Tracks a
   // section per playlist, in the order ticked, each folding, read-only. A crate has no tabs.
+  // An album (`?view=album:<server>/<id>`, from the Incoming page or a track's View album) shows as a crate does, its
+  // tracks in play order, with all four actions: an album, like a crate, is a list of tracks but no playlist file.
   import {
+    albumView,
     coverUrl,
     crateRows,
     crateToPlaylist,
@@ -36,7 +39,7 @@
   import { enqueue, type LocalTrack } from './localPlayer.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
-  import { closePlaylist, openPlaylist, panel, setTab, TABS } from './panel.svelte';
+  import { albumOf, closePlaylist, viewPlaylist, panel, setTab, TABS } from './panel.svelte';
   import { inSidebar } from './live.svelte';
   import ExportTab from './ExportTab.svelte';
   import PlaylistItem from './PlaylistItem.svelte';
@@ -51,22 +54,29 @@
   import { work } from './panelWork.svelte';
   import { prefs } from './prefs.svelte';
   import { clockText, paused, playing } from './remote.svelte';
+  import { on } from './events.svelte';
   import RowHeart from './RowHeart.svelte';
   import { swipe } from './swipe';
   import { toast } from './toast.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import type { PlayMode } from './api';
 
-  const id = $derived(panel.open ?? '');
-  /** The open crate's id, when a crate is open (not a playlist). */
-  const crate = $derived(crateOf(panel.open));
+  const id = $derived(panel.viewed ?? '');
+  /** The viewed crate's id, when a crate is viewed (not a playlist). */
+  const crate = $derived(crateOf(panel.viewed));
+  /** The viewed album (an Incoming one, or a track's), when an album is viewed. */
+  const album = $derived(albumOf(panel.viewed));
+  /** A crate or an album: tracks without a playlist's file (no tabs, no editing, no statistics). */
+  const plain = $derived(!!crate || !!album);
+  /** What the album's tracks say of it: its name, artist and year. */
+  let albumHead = $state<{ title: string; artist: string | null; year: number | null } | null>(null);
   /** The selected playlists; several: Tracks shows a section per playlist (decision 0025). */
   const ids = $derived(panel.selection);
   const multi = $derived(ids.length > 1);
-  const tab = $derived(crate ? 'tracks' : panel.tab);
-  const title = $derived(crate ? crateName(crate) : multi ? `${ids.length} playlists` : id);
+  const tab = $derived(plain ? 'tracks' : panel.tab);
+  const title = $derived(crate ? crateName(crate) : album ? (albumHead?.title ?? '') : multi ? `${ids.length} playlists` : id);
   const isPermanentCrate = $derived(!!crate && (crates.list?.find((c) => c.id === crate)?.permanent ?? true));
-  const p = $derived(crate || multi ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
+  const p = $derived(plain || multi ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
   /** The selected playlists, in the order ticked (for the menu, the counts). */
   const selected = $derived(ids.flatMap((x) => shownPlaylists().filter((y) => y.id === x)));
   const chosen = $derived(multi ? selected : []);
@@ -85,8 +95,12 @@
   const PAGE = 200;
   // A crate changes as tracks are sorted into playlists (Unlisted) or hearted: asked for again when the playlists change.
   const listsKey = $derived(crate ? shownPlaylists().map((x) => x.count).join(',') : '');
+  // An Incoming album changes as Lidarr adds to it (or it is kept or deleted elsewhere): asked for again when Incoming
+  // changes.
+  let incomingChanged = $state(0);
+  $effect(() => on<{ area: string }>('changed', ({ area }) => area === 'incoming' && album && incomingChanged++));
 
-  // The rows: asked for when the playlist opens and again when it changes (its counts, from the shell's state).
+  // The rows: asked for when the playlist is viewed and again when it changes (its counts, from the shell's state).
   let rows = $state<PlaylistRow[] | null>(null);
   let source = $state('');
   let error = $state<string | null>(null);
@@ -100,8 +114,10 @@
     void saved;
     void undos.n;
     void listsKey;
+    void incomingChanged;
     if (!want || multi) return;
     const c = crateOf(want);
+    const a = albumOf(want);
     // As the toggle shows it (the server's saved setting until the crates are known).
     const shownFav = () => (c && crates.list ? favouritesOf(c) : undefined);
     const fav = shownFav();
@@ -109,15 +125,22 @@
     if (key !== shownFor) {
       rows = null;
       error = null;
+      albumHead = null;
     }
     // A crate keeps the pages it has (at least the first) when it is asked for again.
     const asked = c
       ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav)
-      : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length }));
+      : a
+        ? albumView(a.source, a.id).then((r) => {
+            if (want === id) albumHead = { title: r.title, artist: r.artist, year: r.year };
+            return { ...r, total: r.rows.length };
+          })
+        : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length }));
     asked.then(
       (r) => {
         if (want !== id || shownFav() !== fav) return;
         shownFor = key;
+        error = null;
         rows = r.rows;
         source = r.source;
         total = r.total;
@@ -135,6 +158,11 @@
     const want = id;
     covers = [];
     if (!want || crateOf(want)) return;
+    const a = albumOf(want);
+    if (a) {
+      covers = [incomingCoverUrl(a.source, a.id)];
+      return;
+    }
     if (multi) {
       // Several: the first cover of each of the first four, as a mosaic.
       const first = ids.slice(0, 4);
@@ -157,8 +185,9 @@
 
   const length = $derived(rows ? rows.reduce((a, r) => a + (r.duration_secs ?? 0), 0) : 0);
   const playable = $derived(rows ? rows.filter((r) => r.id && !r.missing) : []);
+  // An album's tracks carry its id: its cover, and the Incoming page's mark on what plays.
   const tracksOf = (list: PlaylistRow[], src = source): LocalTrack[] =>
-    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: null }));
+    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album?.id ?? null }));
 
   // Several playlists: each section's rows, asked for when it comes into view; a section folds.
   let sections = $state<Record<string, { rows: PlaylistRow[]; source: string } | { error: string }>>({});
@@ -197,7 +226,7 @@
 
   $effect(() => void loadPlaylistFavorites());
 
-  // Opening it again scrolls it to the top.
+  // Viewing it again scrolls it to the top.
   let scroller = $state<HTMLElement>();
   $effect(() => {
     void panel.again;
@@ -206,7 +235,7 @@
 
   let menuOpen = $state(false);
   let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists' } | null>(null);
-  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: null });
+  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? null });
 
   // Finamp's playback actions: a new queue (Play, Shuffle), or the whole playlist next or at the end of the queue.
   const ACTIONS: { mode: PlayMode; icon: IconName; label: string }[] = [
@@ -247,7 +276,7 @@
   async function act(mode: PlayMode) {
     navigator.vibrate?.(8);
     try {
-      if (crate) await actOnCrate(mode);
+      if (plain) await actOnRows(mode);
       else await startPlaylists([...ids], mode);
       if (mode === 'next' || mode === 'last') toast.show({ text: mode === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
     } catch (e) {
@@ -255,8 +284,8 @@
     }
   }
 
-  /** A crate's actions work on the tracks it has shown so far (its pages, newest first). */
-  async function actOnCrate(mode: PlayMode) {
+  /** A crate's or an album's actions work on the tracks it has shown (a crate's pages so far, newest first). */
+  async function actOnRows(mode: PlayMode) {
     const tracks = tracksOf(playable);
     if (mode === 'play' || mode === 'shuffle') {
       const order = mode === 'shuffle' ? [...tracks].sort(() => Math.random() - 0.5) : tracks;
@@ -271,13 +300,13 @@
     setTimeout(refresh, 700);
   }
 
-  // Make playlist (the save icon): the crate's tracks now as a new playlist, which then opens here. Its name in progress
+  // Make playlist (the save icon): the crate's tracks now as a new playlist, which then shows here. Its name in progress
   // outlives this view (panelWork: going over the page or back beside it builds the view again).
   type Making = { name: string; saving: boolean };
-  let making = $state<Making | null>(work.making && work.making.for === untrack(() => panel.open) ? (work.making.state as Making) : null);
+  let making = $state<Making | null>(work.making && work.making.for === untrack(() => panel.viewed) ? (work.making.state as Making) : null);
   $effect(() => {
     const m = making;
-    work.making = m ? { for: untrack(() => panel.open) ?? '', state: m } : null;
+    work.making = m ? { for: untrack(() => panel.viewed) ?? '', state: m } : null;
   });
   async function makePlaylist() {
     if (!making || !crate || !making.name.trim()) return;
@@ -292,7 +321,7 @@
       making = null;
       refresh();
       loadCrates();
-      openPlaylist(name);
+      viewPlaylist(name);
     } catch (e) {
       toast.fail(e, "The playlist wasn't made");
       if (making) making.saving = false;
@@ -332,14 +361,14 @@
   // The edit under way outlives this view (panelWork), as Make playlist's name does.
   type Item = { r: PlaylistRow; at: number };
   type Editing = { rows: Item[]; removed: Item[]; name: string; saving: boolean };
-  let editing = $state<Editing | null>(work.editing && work.editing.for === untrack(() => panel.open) ? (work.editing.state as Editing) : null);
+  let editing = $state<Editing | null>(work.editing && work.editing.for === untrack(() => panel.viewed) ? (work.editing.state as Editing) : null);
   $effect(() => {
     const e = editing;
-    work.editing = e ? { for: untrack(() => panel.open) ?? '', state: e } : null;
+    work.editing = e ? { for: untrack(() => panel.viewed) ?? '', state: e } : null;
   });
   const editingFor = $derived(editing ? id : null);
   $effect(() => {
-    // Another playlist opened (or this one closed): the edit is dropped.
+    // Another playlist viewed (or this one closed): the edit is dropped.
     if (editingFor !== null && editingFor !== id) editing = null;
   });
   const tracksChanged = $derived(!!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)));
@@ -407,7 +436,7 @@
             )
           ).undo,
         );
-      // Last: the writes above still name it as it was. The open panel follows the new name.
+      // Last: the writes above still name it as it was. The panel's view follows the new name.
       if (renamed) tokens.push(await renameEverywhere(from, to));
       // One Undo for both (the rename undone first, then the tracks under the old name).
       withUndo(`Saved ${to}.`, tokens, {
@@ -430,7 +459,7 @@
   });
 </script>
 
-<section class="view" aria-label={id}>
+<section class="view" aria-label={title}>
   <div class="bar" class:editing={!!editing}>
     {#if editing}
       <!-- ✕ stays in its corner while editing (closing drops the edit), as the place button in the other; Cancel sits
@@ -451,10 +480,13 @@
     {:else if crate}
       <button class="icon" aria-label="Close the crate" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
-        {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => openPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
+        {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => viewPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
         <button class="icon" aria-label="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
         <PanelPlace />
       </span>
+    {:else if album}
+      <button class="icon" aria-label="Close the album" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
+      <span class="end"><PanelPlace /></span>
     {:else}
       <button class="icon" aria-label={multi ? 'Close the playlists' : 'Close the playlist'} onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
@@ -521,6 +553,9 @@
             <p class="line"><Icon name="music" size={20} /><span>{plural(chosenCount, 'track')}</span></p>
             <p class="line"><Icon name="playlists" size={20} /><span>{ids.join(', ')}</span></p>
           {:else}
+            {#if album && albumHead?.artist}
+              <p class="line"><Icon name="user" size={20} /><span>{albumHead.artist}{#if albumHead.year}&nbsp;({albumHead.year}){/if}</span></p>
+            {/if}
             <p class="line"><Icon name="music" size={20} /><span>{p ? plural(p.count, 'track') : rows ? plural(rows.length, 'track') : 'Loading…'}{#if length}&nbsp;({clockText(length)}){/if}</span></p>
           {/if}
           {#if point && !multi}
@@ -544,7 +579,7 @@
       {/if}
     </header>
 
-    {#if !crate && !editing}
+    {#if !plain && !editing}
       <div class="tabs" role="tablist" aria-label="About the playlist">
         {#each TABS as t (t.tab)}
           <button role="tab" aria-selected={tab === t.tab} onclick={() => setTab(t.tab, !inSidebar())}>{t.label}</button>
@@ -637,7 +672,7 @@
       <p class="empty">No tracks yet.</p>
     {:else if rows}
       <ol class="rows">
-        {#each rows as r, i (i)}{@render trackRow(r, source, id, rows)}{/each}
+        {#each rows as r, i (i)}{@render trackRow(r, source, title, rows)}{/each}
       </ol>
       {#if crate && rows.length < total}<p class="empty" bind:this={more}>Loading…</p>{/if}
     {:else}
@@ -646,7 +681,7 @@
   </div>
 </section>
 
-<!-- The Info tab's part for one playlist: how focused it is, and its closest playlists as large rows (a tap opens one). -->
+<!-- The Info tab's part for one playlist: how focused it is, and its closest playlists as large rows (a tap views one). -->
 {#snippet about(pid: string)}
   {@const i = insights.indexOf(pid)}
   {@const pt = i >= 0 ? insights.shown!.playlists[i] : null}
@@ -667,8 +702,8 @@
                 p={shownPlaylists().find((x) => x.id === c.name) ?? { id: c.name, name: c.name }}
                 size="large"
                 sub={c.shares}
-                label={`Open ${c.name}`}
-                onclick={() => openPlaylist(c.name)}
+                label={`View ${c.name}`}
+                onclick={() => viewPlaylist(c.name)}
               />
             </li>
           {/each}
@@ -1166,7 +1201,7 @@
     height: 70px;
     padding: 6px 8px 0;
     box-sizing: border-box;
-    /* Only rows on screen are drawn (a 500-track playlist opens fast). */
+    /* Only rows on screen are drawn (a 500-track playlist shows fast). */
     content-visibility: auto;
     contain-intrinsic-size: auto 70px;
     /* The row is opaque over what its swipe shows. */

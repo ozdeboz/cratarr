@@ -3,14 +3,14 @@
   // playlist, the panel's ⋮, or the ⋮ for the ticked ones (one or several). A sheet as Finamp's track menu: the
   // playlist on its card (a mosaic of its first albums' covers; for several, their covers and "3 playlists"), Play,
   // Shuffle, Play next and Add to queue as the large actions (several: one playlist after another, each track once),
-  // then Open, the favourite, Pin, Export… and Sync to… (they open the panel on that tab), Spoken as… and Rename (one
+  // then View, the favourite, Pin, Export… and Sync to… (they show the panel on that tab), Spoken as… and Rename (one
   // playlist only), and Delete (one Undo for all), each done inside the sheet.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
   import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, incomingCoverUrl, playlistCovers } from './api';
   import MenuEntry from './MenuEntry.svelte';
   import { startPlaylists } from './output.svelte';
-  import { openSelection, panel, type Tab } from './panel.svelte';
+  import { viewSelection, panel, type Tab } from './panel.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { withUndo } from './undo.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './favourites.svelte';
@@ -86,9 +86,9 @@
     }
   }
 
-  /** Open, Export… and Sync to…: the panel shows these playlists, on that tab (decision 0025). */
-  function openTab(tab: Tab) {
-    openSelection([...ids], tab);
+  /** View, Export… and Sync to…: the panel shows these playlists, on that tab (decision 0025). */
+  function viewTab(tab: Tab) {
+    viewSelection([...ids], tab);
     onclose();
   }
   let nameField = $state('');
@@ -182,7 +182,7 @@
   {#if mode === 'menu'}
     <div role="menu">
       {#if !shown}
-        <MenuEntry icon="listOpen" label="Open" onclick={() => openTab('tracks')} />
+        <MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => viewTab('tracks')} />
       {/if}
       <MenuEntry
         icon="heart"
@@ -193,8 +193,8 @@
         }}
       />
       <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
-      <MenuEntry icon="download" label="Export…" onclick={() => openTab('export')} />
-      <MenuEntry icon="link" label="Sync to…" onclick={() => openTab('sync')} />
+      <MenuEntry icon="download" label="Export…" onclick={() => viewTab('export')} />
+      <MenuEntry icon="link" label="Sync to…" onclick={() => viewTab('sync')} />
       {#if one}
         <MenuEntry
           icon="mic"

@@ -597,7 +597,7 @@ export const trackDetails = (source: string, id: string) =>
 
 /** A given track's playlists and favourite: for the local player's track (decision 0022), what `State` is for the
  *  server's player's. `favorite` null: not known. */
-export type TrackState = { addable: boolean; favorite: boolean | null; playlists: Playlist[]; info: TrackInfo | null };
+export type TrackState = { addable: boolean; album_id: string | null; favorite: boolean | null; playlists: Playlist[]; info: TrackInfo | null };
 
 export const trackState = (source: string, id: string) => quietly<TrackState>(`${trackPath(source, id)}/playlists`);
 
@@ -628,8 +628,10 @@ export const setPlaylistFavorite = (id: string, on: boolean, source?: string) =>
 
 /** The local player played most of the track: one play counts in the media server (decision 0022). */
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });
-export const incomingTrackIds = (source: string, album: string) =>
-  request<{ source: string; ids: string[] }>(`/api/incoming/tracks/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
+/** An album as its view in the panel shows it: its tracks in play order, as a playlist's rows (decision 0023). */
+export type AlbumView = { source: string; title: string; artist: string | null; year: number | null; rows: PlaylistRow[] };
+export const albumView = (source: string, album: string) =>
+  quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
 export const handover = (ids: string[], index: number, positionSecs: number, source?: string) =>
   post<{ player: string }>(`/api/player/handover${follow(source)}`, { ids, index, position_secs: positionSecs });
 /** Previous / play-pause / next on the player that plays now. */

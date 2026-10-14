@@ -16,9 +16,9 @@
   import { longpress } from './lib/longpress';
   import { fromAction } from 'svelte/attachments';
   import PlaylistItem from './lib/PlaylistItem.svelte';
-  import { openPlaylist, panel } from './lib/panel.svelte';
+  import { viewPlaylist, panel } from './lib/panel.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites } from './lib/favourites.svelte';
-  import { endSelect, openPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
+  import { endSelect, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
   const view = $derived(live.view);
@@ -160,7 +160,7 @@
       onclick={() => (prefs.filterOpen = !prefs.filterOpen)}><Icon name="filter" size={22} /></button
     >
     <!-- Select (decision 0025): on, it is highlighted, a chip's name ticks it, and a tap on it again ends it. The ticked
-         ones' menu is the ⋮ in the page's top right corner; on a phone they open in the panel with Open N. -->
+         ones' menu is the ⋮ in the page's top right corner; on a phone they are viewed in the panel with View N. -->
     <button
       class="new toggle select"
       aria-pressed={select.on}
@@ -173,10 +173,10 @@
       <button aria-label="Larger" disabled={nextZoom(1) === null} onclick={() => zoom(1)}><Icon name="zoomIn" size={22} /></button>
     </div>
     {#if select.on && select.picked.length && !showsPicked()}
-      <!-- Open N: at the right end of the row (beside the corner); on a small page its icon only. -->
-      {@const openLabel = select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}
-      <button class="new primary open-picked" aria-label={openLabel} title={openLabel} onclick={openPicked}
-        ><Icon name="playlists" size={22} /><span class="open-text">{openLabel}</span></button
+      <!-- View N: at the right end of the row (beside the corner); on a small page its icon only. -->
+      {@const viewLabel = select.picked.length === 1 ? 'View 1 playlist' : `View ${select.picked.length} playlists`}
+      <button class="new primary view-picked" aria-label={viewLabel} title={viewLabel} onclick={viewPicked}
+        ><Icon name="playlists" size={22} /><span class="view-text">{viewLabel}</span></button
       >
     {/if}
     </div>
@@ -232,7 +232,7 @@
     <ul class="grid" class:pending={pending()} style:--min="{WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
       {#each items as p (p.id)}
         <li>
-          <!-- The label opens the playlist (decision 0023), in Select ticks it (decision 0025); the circle adds or removes
+          <!-- The label views the playlist (decision 0023), in Select ticks it (decision 0025); the circle adds or removes
                the playing track. The border: in the panel's selection (or ticked). -->
           <PlaylistItem
             {p}
@@ -242,8 +242,8 @@
               .join(' ')}
             strong={p.member}
             active={select.on ? select.picked.includes(p.id) : panel.selection.includes(p.id)}
-            label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `Open ${p.name}`}
-            onclick={() => (select.on ? tick(p.id) : openPlaylist(p.id))}
+            label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `View ${p.name}`}
+            onclick={() => (select.on ? tick(p.id) : viewPlaylist(p.id))}
             attach={fromAction(longpress, () => (anchor: DOMRect) => (menu = { kind: 'playlist', p, anchor }))}
           >
             {#snippet action()}
@@ -479,7 +479,7 @@
     color: inherit;
   }
 
-  .open-picked {
+  .view-picked {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -487,16 +487,16 @@
     padding: 0 10px;
   }
 
-  .open-picked .open-text {
+  .view-picked .view-text {
     display: none;
   }
 
   @container (min-width: 480px) {
-    .open-picked {
+    .view-picked {
       padding: 0 14px 0 10px;
     }
 
-    .open-picked .open-text {
+    .view-picked .view-text {
       display: inline;
     }
   }
@@ -523,7 +523,7 @@
   }
 
   /* The chips are medium rows (lib/Row.svelte, Finamp's add-to-playlist tile); what is the page's own is how adding
-     the playing track stands. Nothing playing: the chips only open, so they look quieter. */
+     the playing track stands. Nothing playing: the chips only view, so they look quieter. */
   .grid :global(.chip.idle) {
     opacity: 0.6;
   }

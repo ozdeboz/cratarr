@@ -15,7 +15,7 @@
     return () => clearTimeout(timer);
   });
 
-  // The page changing takes it away; the panel opening or closing (the address's `?…`) does not: a deleted playlist's
+  // The page changing takes it away; the panel's view coming or going (the address's `?…`) does not: a deleted playlist's
   // panel closes, and its Undo must stay.
   $effect(() => {
     const page = () => location.hash.split('?')[0];

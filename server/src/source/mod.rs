@@ -170,6 +170,19 @@ pub struct AlbumDetails {
     pub bitrate_kbps: Option<u32>,
 }
 
+/// One of an album's tracks, in play order, with what it says of its album. `path` is the source's own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlbumTrack {
+    pub id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub year: Option<u32>,
+    pub path: Option<String>,
+    pub duration_secs: Option<f64>,
+}
+
 /// An album as a source sees it. Paths are the source's own (see `placement`).
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct Album {
@@ -285,8 +298,8 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this source cannot play music") })
     }
 
-    /// An album's track ids in play order, for the local player (decision 0022).
-    fn album_track_ids<'a>(&'a self, _album_id: &'a str) -> Fut<'a, Vec<String>> {
+    /// An album's tracks in play order: its view in the panel, and the local player (decision 0022).
+    fn tracks_of_album<'a>(&'a self, _album_id: &'a str) -> Fut<'a, Vec<AlbumTrack>> {
         Box::pin(async { anyhow::bail!("this server cannot list an album's tracks") })
     }
 

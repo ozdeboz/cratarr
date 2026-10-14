@@ -19,7 +19,7 @@
   import { CRATE, crates, loadCrates } from './crates.svelte';
   import Icon from './Icon.svelte';
   import PanelPlace from './PanelPlace.svelte';
-  import { closePlaylist, openPlaylist, panel } from './panel.svelte';
+  import { closePlaylist, viewPlaylist, panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
   import Row from './Row.svelte';
@@ -128,7 +128,7 @@
   /** After a crate's undo or redo: the list follows, and a crate that is gone no longer shows in the panel. */
   async function followCrate(crate: string) {
     await loadCrates();
-    if (panel.open === CRATE + crate && !crates.list?.some((c) => c.id === crate)) closePlaylist();
+    if (panel.viewed === CRATE + crate && !crates.list?.some((c) => c.id === crate)) closePlaylist();
   }
 
   async function save() {
@@ -140,7 +140,7 @@
       withUndo(id ? `Saved ${name}.` : `Created ${name}.`, [saved.undo], { after: () => followCrate(saved.id) });
       forget();
       await loadCrates();
-      openPlaylist(CRATE + saved.id);
+      viewPlaylist(CRATE + saved.id);
     } catch (e) {
       toast.fail(e, "The crate wasn't saved");
     } finally {
@@ -150,7 +150,7 @@
 
   function cancel() {
     forget();
-    if (id) openPlaylist(CRATE + id);
+    if (id) viewPlaylist(CRATE + id);
     else closePlaylist();
   }
 
