@@ -34,7 +34,18 @@
   let favouritesOnly = $state(false);
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
   const WIDTHS = [110, 140, 170, 210, 260, 340];
-  const setZoom = (next: number) => (prefs.zoom = Math.min(WIDTHS.length - 1, Math.max(0, next)));
+  // The grid stretches its chips to fill a row, so two sizes can give the same columns at this width: a zoom step goes
+  // to the next size that changes them (and a button is off when none would).
+  let gridWidth = $state(0);
+  const columnsAt = (i: number) => Math.max(1, Math.floor((gridWidth + 10) / (WIDTHS[i] + 10)));
+  const nextZoom = (dir: -1 | 1) => {
+    for (let i = prefs.zoom + dir; i >= 0 && i < WIDTHS.length; i += dir) if (columnsAt(i) !== columnsAt(prefs.zoom)) return i;
+    return null;
+  };
+  const zoom = (dir: -1 | 1) => {
+    const i = nextZoom(dir);
+    if (i !== null) prefs.zoom = i;
+  };
   // Taps flip the chip at once; the server's answer replaces this guess.
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
@@ -160,8 +171,8 @@
       onclick={() => (select.on ? endSelect() : startSelect())}><Icon name="copyCheck" size={22} /></button
     >
     <div class="seg size" role="group" aria-label="Size">
-      <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}><Icon name="zoomOut" size={22} /></button>
-      <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}><Icon name="zoomIn" size={22} /></button>
+      <button aria-label="Smaller" disabled={nextZoom(-1) === null} onclick={() => zoom(-1)}><Icon name="zoomOut" size={22} /></button>
+      <button aria-label="Larger" disabled={nextZoom(1) === null} onclick={() => zoom(1)}><Icon name="zoomIn" size={22} /></button>
     </div>
     {#if select.on && select.picked.length && !showsPicked()}
       <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
@@ -216,7 +227,7 @@
   {#if !view && !error}
     <p class="empty">Loading…</p>
   {:else}
-    <ul class="grid" class:pending={pending()} style:--min="{WIDTHS[prefs.zoom]}px">
+    <ul class="grid" class:pending={pending()} style:--min="{WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
       {#each items as p (p.id)}
         <li>
           <!-- The label opens the playlist (decision 0023), in Select ticks it (decision 0025); the circle adds or removes
@@ -355,17 +366,23 @@
 
   /* The filter field: in its row while the page is wide enough for the row on one line (the field at its 220 px
      beside the order and the heart); narrower, a magnifier, and once opened lying over the row. */
-  .filters {
+  /* The row never wraps: the field takes what the order and the heart leave (an input's own minimum width would push
+     them to a line of their own), and below the container query's width it folds to the magnifier. */
+  .tools .row.filters {
     position: relative;
+    flex-wrap: nowrap;
   }
 
   .search {
     display: flex;
-    flex: 1 1 220px;
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .search input {
-    flex: 1;
+    flex: 1 1 0;
+    width: 100%;
+    min-width: 0;
   }
 
   button.new.magnifier,
