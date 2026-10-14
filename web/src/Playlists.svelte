@@ -148,8 +148,7 @@
     {:else}
       <button class="new toggle" aria-label="Select" title="Select" onclick={startSelect}><Icon name="copyCheck" size={22} /></button>
     {/if}
-    <div class="seg" role="group" aria-label="Size">
-      <span class="lbl" aria-hidden="true">Size</span>
+    <div class="seg size" role="group" aria-label="Size">
       <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
       <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
     </div>
@@ -304,10 +303,9 @@
     background: var(--surface);
   }
 
-  .seg .lbl {
-    padding: 0 4px 0 14px;
-    color: var(--muted);
-    font-size: 0.85rem;
+  /* Size: − and + with a line between them. */
+  .seg.size button + button {
+    border-left: 1px solid var(--border);
   }
 
   .seg button {
