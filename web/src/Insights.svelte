@@ -173,9 +173,9 @@
         {/key}
         {#if me && panel.open !== me.name}
           <button class="open" onclick={() => openPlaylist(me.name)}><Icon name="listOpen" size={18} /><span>Open {me.name}</span></button>
-        {:else if !me}
-          <button class="open" onclick={() => (legendOpen = true)}><Icon name="panel" size={18} /><span>Legend</span></button>
         {/if}
+        <!-- The legend explains the graph: always at hand, in the graph's corner. -->
+        <button class="open legend-btn" onclick={() => (legendOpen = true)}><Icon name="info" size={18} /><span>Legend</span></button>
       </div>
     </div>
     {#if !me}
@@ -268,6 +268,11 @@
     border-radius: 10px;
     font-weight: 600;
   }
+  .open.legend-btn {
+    top: auto;
+    bottom: 10px;
+  }
+
 
   .open span {
     overflow: hidden;
