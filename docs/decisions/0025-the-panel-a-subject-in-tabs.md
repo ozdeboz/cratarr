@@ -27,7 +27,7 @@ The player is different: it is always about one track, in one view. The owner se
 - **One menu, one panel, for one playlist or several.** The playlist menu (a long-press, the panel's ⋮, the corner ⋮)
   takes one or more: Play, Shuffle, Play next, Add to queue (several: one playlist after another, in the order ticked,
   each track once), Open, favourite, Pin, Export…, Sync to…, Delete (one Undo for all); Spoken as… and Rename only
-  for one. The panel's bar (✕, heart, ⋮) and its Play row are the same for several; only one playlist has the pencil
+  for one. The panel's bar (✕, heart, ⋮) and its Play row (on every tab, under the header) are the same for several; only one playlist has the pencil
   (its edit mode). 0023's "Add what's playing" goes: the chips' circle adds the playing track.
 - **Tracks:** one playlist as 0023 (its edit mode only here); several as **a section per playlist**, in the order
   ticked: a header (name, count) that folds, its tracks below, read-only; a tap plays that playlist from the track.

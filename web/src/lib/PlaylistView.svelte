@@ -445,7 +445,7 @@
         </div>
         {/if}
       </div>
-      {#if !editing && !making && tab === 'tracks'}
+      {#if !editing && !making}
       <div class="actions" role="group" aria-label="Play">
         {#each ACTIONS as a (a.mode)}
           <button onclick={() => act(a.mode)} disabled={multi ? !chosenCount : !playable.length}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
