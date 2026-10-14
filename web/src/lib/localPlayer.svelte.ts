@@ -47,7 +47,17 @@ const BEHIND = 30;
 /** Previous restarts the track after this many seconds (Finamp: 5). */
 const RESTART_AFTER = 5;
 
-const audio = typeof Audio === 'undefined' ? null : new Audio();
+// The stream this browser offers: MediaSource, or on iPhone and iPad (Safari 17.1 on) only ManagedMediaSource, which
+// works the same but lets the browser say when to fetch (startstreaming, endstreaming) and drop buffered audio itself
+// (bufferedchange). Neither: the local player is not offered.
+const Managed = typeof window === 'undefined' ? undefined : (window as unknown as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource;
+const Source = Managed ?? (typeof MediaSource === 'undefined' ? undefined : MediaSource);
+/** Whether this browser can play here at all (FLAC or MP3 in its stream). */
+export const canPlayHere = !!Source && (Source.isTypeSupported(MP4) || Source.isTypeSupported(MPEG));
+
+const audio = typeof Audio === 'undefined' || !canPlayHere ? null : new Audio();
+// Safari opens a managed stream only for an element that cannot be sent to AirPlay (the stream cannot go there).
+if (audio && Managed) audio.disableRemotePlayback = true;
 let ms: MediaSource | null = null;
 let sb: SourceBuffer | null = null;
 let mime: string | null = null;
@@ -165,6 +175,7 @@ async function appendTrack(index: number, from: number, gen: number) {
     }
     const type = res.headers.get('content-type') ?? '';
     const kind = type.startsWith('audio/mp4') ? MP4 : MPEG;
+    if (!Source?.isTypeSupported(kind)) throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : 'MP3'} here.`);
     const reader = res.body!.getReader();
     // The track's sample 0 goes to `start` in the stream (before the stream's 0 when starting mid-track).
     const start = streamEnd - from;
@@ -175,6 +186,7 @@ async function appendTrack(index: number, from: number, gen: number) {
     const place = async (rate: number, skip: number, samples: number | null) => {
       if (!sb) {
         sb = ms!.addSourceBuffer(kind);
+        if (Managed) sb.addEventListener('bufferedchange', purged);
         mime = kind;
       } else if (mime !== kind) {
         await waitUpdate();
@@ -280,7 +292,7 @@ async function fresh(index: number, from = 0, play = true) {
   local.index = index;
   local.position = from;
   local.error = null;
-  ms = new MediaSource();
+  ms = new Source!();
   const url = URL.createObjectURL(ms);
   audio.src = url;
   if (play) audio.play().catch(() => {});
@@ -289,6 +301,27 @@ async function fresh(index: number, from = 0, play = true) {
   URL.revokeObjectURL(url);
   if (gen !== generation) return;
   await appendTrack(index, from, gen);
+}
+
+/** Whether the browser wants audio fetched now: always, except a managed stream between its endstreaming and
+ *  startstreaming (the tick then waits; what is being fetched finishes). */
+function streaming() {
+  return !Managed || (ms as unknown as { streaming?: boolean } | null)?.streaming !== false;
+}
+
+/** A managed stream's browser dropped buffered audio (bufferedchange). Behind the playing position that is what the
+ *  player does itself; ahead of it the track it was in is fetched again: the one playing from where it is (a fresh
+ *  stream), a later one by cutting the stream there, after which the tick appends it again. */
+function purged() {
+  if (!audio || !sb) return;
+  const t = audio.currentTime;
+  let end = t; // where the audio that plays now runs out
+  for (let i = 0; i < sb.buffered.length; i++) if (sb.buffered.start(i) <= t + 0.1) end = Math.max(end, sb.buffered.end(i));
+  if (end >= streamEnd - 0.5) return; // all appended audio ahead is still there
+  const seg = segments.find((s) => s.start + (s.length ?? 0) > end + 0.5);
+  if (!seg) return;
+  if (seg.index <= local.index) fresh(local.index, local.position, !audio.paused);
+  else cutFrom(seg.index);
 }
 
 /** Which segment the stream is in now, and how far into its track. */
@@ -319,7 +352,7 @@ function tick() {
     showOnLockScreen();
   }
   const gen = generation;
-  if (!appending && lastAppended >= local.index && lastAppended < local.queue.length - 1 && streamEnd - audio.currentTime < AHEAD) {
+  if (!appending && lastAppended >= local.index && lastAppended < local.queue.length - 1 && streamEnd - audio.currentTime < AHEAD && streaming()) {
     appendTrack(lastAppended + 1, 0, gen);
   }
   if (!appending) evict();

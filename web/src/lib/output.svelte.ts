@@ -20,11 +20,12 @@ import {
   type TrackState,
 } from './api';
 import { live, refresh, untilNewTrack } from './live.svelte';
-import { local, playQueue, enqueue, seek, stop, type LocalTrack } from './localPlayer.svelte';
+import { canPlayHere, local, playQueue, enqueue, seek, stop, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
-export const isLocal = () => prefs.output === 'local';
+// A browser that cannot play here (no stream for audio) plays on the server's player, whatever was chosen elsewhere.
+export const isLocal = () => prefs.output === 'local' && canPlayHere;
 
 // Leaving the page stops what plays in this browser, so a reload or closing the tab asks first (the browser's own
 // "Leave site?"), but only while this browser is playing.
