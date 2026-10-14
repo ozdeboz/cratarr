@@ -154,7 +154,9 @@
             {#if p.links.some((l) => l.target !== 'shared')}<span class="own" title={p.links.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
             <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}</span>
             <span class="sep" aria-hidden="true"></span>
-            <span class="state" aria-hidden="true"><Icon name={p.member ? 'circleCheck' : 'circlePlus'} size={26} /></span>
+            <span class="state" aria-hidden="true"
+              ><Icon name={p.member ? 'circleCheck' : np && !np.addable ? 'circleDashedPlus' : 'circlePlus'} size={26} /></span
+            >
           </button>
         </li>
       {/each}
@@ -323,10 +325,10 @@
     }
   }
 
-  /* Track outside Music: adding is refused, so the add chips look blocked (tapping explains why). */
+  /* Track outside Music: adding is refused, so the add chips are quieter and their plus circle dashed (Finamp's mark
+     for a playlist it cannot add to); tapping explains why. */
   .chip.blocked {
-    opacity: 0.5;
-    outline: 1.5px dashed var(--border);
+    opacity: 0.6;
   }
 
   .sep {

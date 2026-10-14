@@ -50,7 +50,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **Playlist chips** (the Playlists page) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
-  divider and Finamp's plus circle or filled check circle. A tap adds or removes the playing track.
+  divider and Finamp's plus circle or filled check circle. A tap adds or removes the playing track. When the playing
+  track is outside Music (it cannot go in playlists), the chips it is not in are quieter and their plus circle is
+  dashed (Finamp's mark for a playlist it cannot add to); a tap says why.
 - **Pinned playlists** (the playlist menu: Pin to top / Unpin) come first on the Playlists page, in the order they
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
