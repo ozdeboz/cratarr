@@ -41,7 +41,7 @@ pub struct ByName {
 /// What crates are worked out on (see `PlaylistService::crate_library`).
 struct CrateLibrary {
     source: String,
-    files: Vec<crates::Facts>,
+    files: Arc<Vec<crates::Facts>>,
     membership: HashMap<String, Vec<String>>,
     favourites: Option<HashSet<String>>,
 }

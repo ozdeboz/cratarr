@@ -49,7 +49,6 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE TABLE IF NOT EXISTS tags (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, n INTEGER NOT NULL, raw TEXT NOT NULL, name TEXT, value TEXT NOT NULL,
   PRIMARY KEY (folder, rel, n)) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS tags_by_name ON tags (name, value);
 CREATE TABLE IF NOT EXISTS source_ids (
   source TEXT NOT NULL, track_id TEXT NOT NULL, library TEXT NOT NULL, folder INTEGER NOT NULL, rel TEXT NOT NULL,
   seen INTEGER NOT NULL, PRIMARY KEY (source, track_id)) WITHOUT ROWID;
@@ -192,6 +191,8 @@ pub struct Catalogue {
     progress: Mutex<Progress>,
     /// Asks the background loop for a pass now (settings changed, a playlist was edited…).
     poke: tokio::sync::Notify,
+    /// The crates' facts of a folder, as of the database's change count (see `crate_facts`).
+    facts: Mutex<Option<(i64, u64, Arc<Vec<crate::crates::Facts>>)>>,
 }
 
 fn now() -> i64 {
@@ -217,7 +218,21 @@ impl Catalogue {
             }
         }
         conn.execute_batch("CREATE INDEX IF NOT EXISTS files_by_track ON files (track);")?;
-        let cat = Self { db: Mutex::new(conn), folders: RwLock::new(Vec::new()), progress: Mutex::default(), poke: Default::default() };
+        // Once: the tags no query reads go, the unnamed ones (lyrics, pictures' text: 63,000 rows of 455,000 here) and the
+        // index by name and value (73 MB of a 200 MB catalogue), so what is read fits in a small container's memory.
+        // Their pages are reused by what is written next.
+        conn.execute_batch("DROP INDEX IF EXISTS tags_by_name;")?;
+        let slim: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = 'tags'", [], |r| r.get(0)).optional()?;
+        if slim.as_deref() != Some("named") {
+            conn.execute_batch("DELETE FROM tags WHERE name IS NULL; INSERT OR REPLACE INTO meta (key, value) VALUES ('tags', 'named');")?;
+        }
+        let cat = Self {
+            db: Mutex::new(conn),
+            folders: RwLock::new(Vec::new()),
+            progress: Mutex::default(),
+            poke: Default::default(),
+            facts: Mutex::default(),
+        };
         // A better reader may read what an older one could not.
         if cat.meta("reader").as_deref() != Some(&tags::READER_VERSION.to_string()) {
             cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, FAILED])?;
@@ -400,7 +415,8 @@ impl Catalogue {
                         ],
                     )?;
                     let mut ins = tx.prepare_cached("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
-                    for (i, (raw, name, value)) in t.items.iter().enumerate() {
+                    // Only the tags Cratarr knows by name: no query reads the others.
+                    for (i, (raw, name, value)) in t.items.iter().enumerate().filter(|(_, (_, name, _))| name.is_some()) {
                         ins.execute(params![folder, rel, i as i64, raw, name, value])?;
                     }
                 }
@@ -468,8 +484,22 @@ impl Catalogue {
     }
 
     /// The files present in a folder, newest first, with what the crates' axes test (decision 0024): genres, year,
-    /// BPM. Blocking.
-    pub fn crate_facts(&self, folder: i64) -> Result<Vec<crate::crates::Facts>> {
+    /// BPM. Kept until the catalogue changes: reading them means reading every file's tags. Blocking.
+    pub fn crate_facts(&self, folder: i64) -> Result<Arc<Vec<crate::crates::Facts>>> {
+        let changes = self.db().total_changes();
+        let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((f, c, facts)) = kept.as_ref()
+            && *f == folder
+            && *c == changes
+        {
+            return Ok(facts.clone());
+        }
+        let facts = Arc::new(self.read_crate_facts(folder)?);
+        *kept = Some((folder, changes, facts.clone()));
+        Ok(facts)
+    }
+
+    fn read_crate_facts(&self, folder: i64) -> Result<Vec<crate::crates::Facts>> {
         let rels = self.files_newest_first(folder)?;
         let db = self.db();
         let mut st = db.prepare("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ('genre', 'date', 'originaldate', 'bpm') ORDER BY rel, n")?;
@@ -1327,6 +1357,19 @@ mod tests {
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert_eq!(cat.status().unwrap().files, 2, "an unmounted folder must not look emptied");
         std::fs::remove_dir_all(d.with_extension("gone")).ok();
+    }
+
+    #[test]
+    fn crate_facts_are_kept_until_the_catalogue_changes() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        let first = cat.crate_facts(0).unwrap();
+        assert!(!first.is_empty());
+        assert!(Arc::ptr_eq(&first, &cat.crate_facts(0).unwrap()), "nothing changed: the same facts");
+        cat.record_links("jellyfin", "lib", &[("t1".into(), 0, first[0].rel.clone())], 100).unwrap();
+        assert!(!Arc::ptr_eq(&first, &cat.crate_facts(0).unwrap()), "a change: read again");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
