@@ -35,6 +35,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/covers", get(playlist_covers))
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/rows", get(playlist_rows))
+        .route("/api/export/preview", post(export_preview))
+        .route("/api/export", get(export_download))
         .route("/api/playlists/favorites", get(playlist_favorites))
         .route("/api/crates", get(crates).post(crate_create))
         .route("/api/crates/axes", get(crate_axes))
@@ -201,6 +203,113 @@ async fn favorites(
 async fn playlist_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Response, ApiError> {
     let (source, rows) = app.playlists.rows(&id, f.source.as_deref()).await?;
     Ok(Json(json!({ "source": source, "rows": rows })).into_response())
+}
+
+/// What to export (decision 0007): playlists by name, with their tracks or not, in one folder or the library's, as they
+/// are or combined into one of this name.
+#[derive(Deserialize, Default)]
+struct ExportRequest {
+    playlists: Vec<String>,
+    #[serde(default)]
+    tracks: bool,
+    #[serde(default)]
+    flat: bool,
+    #[serde(default)]
+    combine: Option<String>,
+}
+
+impl ExportRequest {
+    /// From the download's address: `playlist` repeated, `tracks=1`, `flat=1`, `combine=…`.
+    fn from_query(q: &str) -> Self {
+        let mut r = ExportRequest::default();
+        for pair in q.split('&').filter(|p| !p.is_empty()) {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            let v = form_decode(v);
+            match k {
+                "playlist" => r.playlists.push(v),
+                "tracks" => r.tracks = v == "1",
+                "flat" => r.flat = v == "1",
+                "combine" => r.combine = Some(v),
+                _ => {}
+            }
+        }
+        r
+    }
+
+    fn options(&self) -> Result<crate::export::Options, ApiError> {
+        if self.playlists.is_empty() {
+            return Err(ToggleError::Refused("Choose at least one playlist.".into()).into());
+        }
+        let combine = match self.combine.as_deref().map(str::trim) {
+            Some("") => return Err(ToggleError::BadName.into()),
+            c => c.map(str::to_string),
+        };
+        Ok(crate::export::Options { tracks: self.tracks, flat: self.tracks && self.flat, combine })
+    }
+}
+
+/// `application/x-www-form-urlencoded` value: `+` is a space, `%XX` a byte (UTF-8 as a whole).
+fn form_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' if i + 2 < b.len() => {
+                match u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("zz"), 16) {
+                    Ok(x) => {
+                        out.push(x);
+                        i += 2;
+                    }
+                    Err(_) => out.push(b'%'),
+                }
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// An export's size before starting: its tracks, the missing ones left out, and with tracks its bytes.
+async fn export_preview(State(app): State<Arc<App>>, Json(r): Json<ExportRequest>) -> Result<Json<crate::export::Preview>, ApiError> {
+    let o = r.options()?;
+    let plan = app.playlists.export_plan(&r.playlists).await?;
+    Ok(Json(crate::export::preview(&plan, &o)))
+}
+
+/// The export itself, as a download: one playlist without tracks as its `.m3u`, anything else as one streamed `.zip`.
+async fn export_download(State(app): State<Arc<App>>, axum::extract::RawQuery(q): axum::extract::RawQuery) -> Result<Response, ApiError> {
+    let r = ExportRequest::from_query(q.as_deref().unwrap_or(""));
+    let o = r.options()?;
+    let plan = app.playlists.export_plan(&r.playlists).await?;
+    let name = crate::export::download_name(&plan, &o);
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = HeaderValue::from_str(&attachment(&name)) {
+        headers.insert(header::CONTENT_DISPOSITION, v);
+    }
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    if !crate::export::is_zip(&plan, &o) {
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/x-mpegurl"));
+        return Ok((headers, crate::export::single_m3u(&plan, &o)).into_response());
+    }
+    let layout = crate::export::layout(&plan, &o);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let (len, rx) = crate::export::stream(plan, layout, now);
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    Ok((headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response())
+}
+
+/// `Content-Disposition` for a download: an ASCII name for old clients and the UTF-8 one (RFC 6266).
+fn attachment(name: &str) -> String {
+    let ascii: String = name.chars().map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' }).collect();
+    let utf8: String = name
+        .bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect();
+    format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{utf8}")
 }
 
 /// The permanent crates and their sizes (decision 0024).
@@ -493,20 +602,24 @@ async fn repairs(State(app): State<Arc<App>>) -> Result<Json<Repairs>, ApiError>
     Ok(Json(app.playlists.repairs().await.map_err(ToggleError::from)?))
 }
 
-/// `{"kind":"safe"}` applies every safe repair; `{"kind":"one", playlist, from, to}` applies a single offered one.
+/// `{"kind":"safe"}` applies every safe repair (`"playlists": [...]`: only theirs, the panel's Repair tab, decision
+/// 0025); `{"kind":"one", playlist, from, to}` applies a single offered one.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum ApplyRequest {
-    Safe,
+    Safe {
+        #[serde(default)]
+        playlists: Option<Vec<String>>,
+    },
     One { playlist: String, from: String, to: String },
 }
 
 async fn apply_repairs(State(app): State<Arc<App>>, Json(req): Json<ApplyRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let only = match req {
-        ApplyRequest::Safe => None,
-        ApplyRequest::One { playlist, from, to } => Some(Repair { playlist, from, to }),
+    let (only, within) = match req {
+        ApplyRequest::Safe { playlists } => (None, playlists),
+        ApplyRequest::One { playlist, from, to } => (Some(Repair { playlist, from, to }), None),
     };
-    let changed = app.playlists.apply_repairs(only).await?;
+    let changed = app.playlists.apply_repairs(only, within.as_deref()).await?;
     Ok(Json(json!({ "playlists": changed })))
 }
 
@@ -833,5 +946,28 @@ impl IntoResponse for ApiError {
             tracing::error!("{:#}", self.0);
         }
         (status, Json(json!({ "error": self.0.to_string() }))).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExportRequest, attachment, form_decode};
+
+    #[test]
+    fn the_export_address_names_playlists_and_options() {
+        let r = ExportRequest::from_query("playlist=Chill&playlist=Caf%C3%A9+Jazz&tracks=1&flat=1&combine=Chill+%2B+Jazz");
+        assert_eq!(r.playlists, ["Chill", "Café Jazz"]);
+        assert!(r.tracks && r.flat);
+        assert_eq!(r.combine.as_deref(), Some("Chill + Jazz"));
+        assert_eq!(form_decode("100%"), "100%", "a lone % stays");
+        let o = ExportRequest::from_query("playlist=A&flat=1").options().ok().unwrap();
+        assert!(!o.flat, "one folder only applies with tracks");
+        assert!(ExportRequest::from_query("tracks=1").options().is_err(), "no playlist");
+        assert!(ExportRequest::from_query("playlist=A&combine=+").options().is_err(), "a blank combined name");
+    }
+
+    #[test]
+    fn a_download_name_is_given_twice_ascii_and_utf8() {
+        assert_eq!(attachment("Café \"x\".zip"), "attachment; filename=\"Caf_ _x_.zip\"; filename*=UTF-8''Caf%C3%A9%20%22x%22.zip");
     }
 }

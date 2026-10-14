@@ -116,9 +116,27 @@ fn is_rearrangement(expected: &[String], entries: &[String]) -> bool {
     })
 }
 
+/// The safe repairs of the playlists `within` (all of them without), matched as the store names playlists: ignoring case.
+fn safe_within(safe: Vec<Repair>, within: Option<&[String]>) -> Vec<Repair> {
+    match within {
+        None => safe,
+        Some(w) => safe.into_iter().filter(|r| w.iter().any(|p| p.eq_ignore_ascii_case(&r.playlist))).collect(),
+    }
+}
+
 #[cfg(test)]
 mod edit_tests {
-    use super::is_rearrangement;
+    use super::{Repair, is_rearrangement, safe_within};
+
+    #[test]
+    fn fixing_all_in_the_repair_tab_touches_only_the_selected_playlists() {
+        let r = |p: &str| Repair { playlist: p.into(), from: format!("{p}.mp3"), to: format!("{p}.flac") };
+        let all = vec![r("Chill"), r("Jazz"), r("chill")];
+        assert_eq!(safe_within(all.clone(), None).len(), 3, "no selection: every safe repair");
+        let only = safe_within(all, Some(&["CHILL".into()]));
+        assert_eq!(only.iter().map(|x| x.playlist.as_str()).collect::<Vec<_>>(), ["Chill", "chill"]);
+        assert!(safe_within(vec![r("Jazz")], Some(&[])).is_empty(), "an empty selection fixes nothing");
+    }
 
     fn v(s: &[&str]) -> Vec<String> {
         s.iter().map(|x| x.to_string()).collect()
@@ -304,6 +322,26 @@ impl PlaylistService {
         Ok(rows)
     }
 
+    /// An export's plan (decision 0007): the playlists' lines as files in the Music folder, each file once, with its
+    /// size and the tags its name in one folder needs. Read from the disk and the catalogue; no request to the server.
+    pub async fn export_plan(&self, names: &[String]) -> Result<crate::export::Plan, ToggleError> {
+        let music = self.lib.music().ok_or(ToggleError::NoMusicFolder)?;
+        let store = self.lib.store()?;
+        let mut lists = Vec::new();
+        for n in names {
+            lists.push((n.clone(), store.entries(n).await?));
+        }
+        let c = self.lib.catalogue();
+        let plan = tokio::task::spawn_blocking(move || {
+            crate::export::plan(std::path::Path::new(&music), lists, |rels| {
+                Ok(c.file_rows("", 0, rels)?.into_iter().map(|f| (f.artist, f.title)).collect())
+            })
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
+        Ok(plan)
+    }
+
     /// The server (`want`, else the first connected) and its id.
     fn source_of(&self, want: Option<&str>) -> Result<(String, Arc<dyn source::Source>), ToggleError> {
         let sources = self.lib.connected();
@@ -479,12 +517,12 @@ impl PlaylistService {
         self.lib.store()?.repairs().await
     }
 
-    /// Apply the repairs the client chose (`None` = every safe one). The store only accepts pairs it currently
-    /// offers. The sources are then told about each changed playlist.
-    pub async fn apply_repairs(&self, only: Option<Repair>) -> Result<Vec<String>, ToggleError> {
+    /// Apply the repairs the client chose (`None` = every safe one, or only those of the playlists `within`). The store
+    /// only accepts pairs it currently offers. The sources are then told about each changed playlist.
+    pub async fn apply_repairs(&self, only: Option<Repair>, within: Option<&[String]>) -> Result<Vec<String>, ToggleError> {
         let wanted = match only {
             Some(one) => vec![one],
-            None => self.lib.store()?.repairs().await?.safe,
+            None => safe_within(self.lib.store()?.repairs().await?.safe, within),
         };
         let changed = self.lib.store()?.apply_repairs(&wanted).await?;
         self.tell_sources(changed.iter().map(|n| (n.clone(), PlaylistChange::Edited)).collect());

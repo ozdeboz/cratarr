@@ -6,6 +6,7 @@ mod config;
 mod convert;
 mod covers;
 mod crates;
+mod export;
 mod incoming;
 mod insights;
 mod journal;

@@ -25,6 +25,10 @@ tokio-stream = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+[dev-dependencies]
+# Reads back the exports' ZIPs in tests (decision 0007); stored entries only, so no compression features.
+zip = { version = "2", default-features = false }
+
 [profile.release]
 opt-level = "s"
 lto = true
