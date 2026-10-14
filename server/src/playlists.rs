@@ -140,7 +140,7 @@ impl Cached {
 }
 
 /// True when `entry` (library-relative) names an existing file under `dir`. Absolute paths and `..` never resolve.
-fn entry_exists(dir: &Path, entry: &str) -> bool {
+pub(crate) fn entry_exists(dir: &Path, entry: &str) -> bool {
     let p = Path::new(entry);
     let safe = !p.is_absolute() && p.components().all(|c| matches!(c, std::path::Component::Normal(_)));
     safe && dir.join(p).is_file()

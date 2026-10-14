@@ -34,6 +34,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/queue/playlist", post(queue_playlist))
         .route("/api/playlists/{id}/covers", get(playlist_covers))
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
+        .route("/api/playlists/{id}/rows", get(playlist_rows))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
         .route("/api/playlists/{id}/play", post(play_playlist))
@@ -185,6 +186,12 @@ async fn favorites(
     Json(b): Json<Ids>,
 ) -> Result<Json<std::collections::BTreeMap<String, bool>>, ApiError> {
     Ok(Json(app.playing.favorites(&source, &b.ids).await?))
+}
+
+/// A playlist's rows for its view (decision 0023): the server the ids are for, and each line with what is known of it.
+async fn playlist_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Response, ApiError> {
+    let (source, rows) = app.playlists.rows(&id, f.source.as_deref()).await?;
+    Ok(Json(json!({ "source": source, "rows": rows })).into_response())
 }
 
 /// A playlist's tracks for the local player: the server they are on and their ids in file order (decision 0022).

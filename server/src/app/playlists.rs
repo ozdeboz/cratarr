@@ -34,6 +34,22 @@ pub struct ByName {
     pub tracks: Vec<String>,
 }
 
+/// One line of a playlist as its view shows it (decision 0023). `entry` is the line as the `.m3u` has it (library-
+/// relative), `file` its file name; the rest is what the catalogue knows, `None` where it does not.
+#[derive(Debug, Serialize, PartialEq)]
+pub struct PlaylistRow {
+    pub entry: String,
+    pub file: String,
+    /// The server's track id, when the file is matched to one.
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub duration_secs: Option<f64>,
+    /// No such file in the Music folder.
+    pub missing: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PlayResult {
     /// "Finamp on Lenovo Tab".
@@ -177,6 +193,41 @@ impl PlaylistService {
     pub async fn track_ids(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<String>, usize), ToggleError> {
         let (active, _, ids, unknown) = self.server_ids(id, want).await?;
         Ok((active.cfg.id.clone(), ids, unknown))
+    }
+
+    /// A playlist's rows for the playlist view (decision 0023), in file order: each entry with what the catalogue knows
+    /// of its file (the tags, the length, the server's id when matched) and whether the file is there. One read of the
+    /// catalogue, no request to the server. Returns the server the ids are for.
+    pub async fn rows(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<PlaylistRow>), ToggleError> {
+        let entries = self.lib.store()?.entries(id).await?;
+        let sources = self.lib.connected();
+        let source = want
+            .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
+            .or_else(|| sources.first())
+            .map(|(a, _)| a.cfg.id.clone())
+            .unwrap_or_default();
+        let (c, sid, music) = (self.lib.catalogue(), source.clone(), self.lib.music());
+        let rows = tokio::task::spawn_blocking(move || -> Result<Vec<PlaylistRow>> {
+            let facts = c.file_rows(&sid, 0, &entries)?;
+            let dir = music.map(std::path::PathBuf::from);
+            Ok(entries
+                .into_iter()
+                .zip(facts)
+                .map(|(entry, f)| PlaylistRow {
+                    missing: !dir.as_deref().is_some_and(|d| crate::playlists::entry_exists(d, &entry)),
+                    file: entry.rsplit('/').next().unwrap_or(&entry).to_string(),
+                    entry,
+                    id: f.track_id,
+                    name: f.title,
+                    artist: f.artist,
+                    album: f.album,
+                    duration_secs: f.duration_ms.map(|ms| ms as f64 / 1000.0),
+                })
+                .collect())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
+        Ok((source, rows))
     }
 
     /// A playlist's tracks as a server's ids, in file order (`want` = the server to use, default the first connected

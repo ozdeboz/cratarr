@@ -121,6 +121,17 @@ pub struct Status {
     pub progress: Progress,
 }
 
+/// One file as a playlist row shows it (see `Catalogue::file_rows`): `None` where the catalogue does not know.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FileRow {
+    /// The server's id of the track, when matched.
+    pub track_id: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub duration_ms: Option<i64>,
+}
+
 /// One album directory as the catalogue knows it (see `Catalogue::album_facts`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AlbumFact {
@@ -441,6 +452,35 @@ impl Catalogue {
         let mut st = db.prepare_cached("SELECT track_id FROM source_ids WHERE source = ?1 AND folder = ?2 AND rel = ?3 LIMIT 1")?;
         rels.iter()
             .map(|rel| Ok(st.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?))
+            .collect()
+    }
+
+    /// What the catalogue knows of each of these files of a folder, in order: a playlist's rows (decision 0023). Files
+    /// it has not read leave the facts empty. Blocking.
+    pub fn file_rows(&self, source: &str, folder: i64, rels: &[String]) -> Result<Vec<FileRow>> {
+        let db = self.db();
+        let mut file = db.prepare_cached(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"))?;
+        let mut tags = db.prepare_cached(
+            "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IN ('title', 'artist', 'album') ORDER BY n",
+        )?;
+        let mut ids = db.prepare_cached("SELECT track_id FROM source_ids WHERE source = ?1 AND folder = ?2 AND rel = ?3 LIMIT 1")?;
+        rels.iter()
+            .map(|rel| {
+                let mut row = FileRow { duration_ms: file.query_row(params![folder, rel], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten(), ..FileRow::default() };
+                let found = tags.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                for t in found {
+                    let (name, value) = t?;
+                    let slot = match name.as_str() {
+                        "title" => &mut row.title,
+                        "artist" => &mut row.artist,
+                        _ => &mut row.album,
+                    };
+                    // The first value of each (a tag can hold several).
+                    slot.get_or_insert(value);
+                }
+                row.track_id = ids.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?;
+                Ok(row)
+            })
             .collect()
     }
 
@@ -1218,6 +1258,37 @@ mod tests {
         assert_eq!(ids, vec![Some("t1".to_string()), None]);
         assert_eq!(cat.forget_unseen("jellyfin", "lib", 101).unwrap(), 1);
         assert_eq!(cat.track_ids("jellyfin", 0, &[a.1]).unwrap(), vec![None]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_playlists_rows_come_from_the_catalogue_in_order() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        let (one, two) = ("A - B (2020)/01 One.mp3".to_string(), "A - B (2020)/02 Two.flac".to_string());
+        let db = cat.db();
+        for (n, name, value) in [(0, "title", "One"), (1, "artist", "A"), (2, "artist", "Feat"), (3, "album", "B")] {
+            db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, ?2, ?3, ?3, ?4)", params![one, n, name, value]).unwrap();
+        }
+        db.execute("UPDATE files SET duration_ms = 61500 WHERE rel = ?1", params![one]).unwrap();
+        drop(db);
+        cat.record_links("jellyfin", "lib", &[("t1".into(), 0, one.clone())], 100).unwrap();
+        let rows = cat.file_rows("jellyfin", 0, &[two.clone(), one.clone(), "gone.mp3".into()]).unwrap();
+        assert_eq!(rows.len(), 3, "one row per line, in the playlist's order");
+        assert_eq!(rows[0], FileRow::default(), "a file without tags or a link has no facts");
+        assert_eq!(
+            rows[1],
+            FileRow {
+                track_id: Some("t1".into()),
+                title: Some("One".into()),
+                artist: Some("A".into()),
+                album: Some("B".into()),
+                duration_ms: Some(61500)
+            },
+            "the first value of a tag that has several"
+        );
+        assert_eq!(rows[2], FileRow::default());
         std::fs::remove_dir_all(&d).ok();
     }
 
