@@ -447,9 +447,9 @@ async fn playlist_tracks(State(app): State<Arc<App>>, Path(id): Path<String>, Qu
 
 #[derive(Deserialize)]
 struct StreamFrom {
-    /// Start at the frame holding this sample (FLAC only), for seeking.
+    /// Start at the frame holding this moment (milliseconds; FLAC only), for seeking.
     #[serde(default)]
-    from: u64,
+    from_ms: u64,
 }
 
 /// A track's audio for the local player (decision 0022): FLAC as fragmented MP4, MP3 as it is, read from Cratarr's own
@@ -469,7 +469,7 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     match kind {
         Kind::Flac => {
-            let from = q.from;
+            let from = q.from_ms;
             let opened = tokio::task::spawn_blocking(move || FlacToMp4::open(&path, from)).await;
             let mut flac = match opened {
                 Ok(Ok(f)) => f,

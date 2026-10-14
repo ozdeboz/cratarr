@@ -72,6 +72,8 @@ let appending = false;
 let appendingIndex = -1;
 /** The last queue index appended to the stream. */
 let lastAppended = -1;
+/** The queue index `local.error` is about: it goes once a later track plays. */
+let errorIndex = -1;
 
 // --- MP3: the LAME/Xing header (the measured rule: only the encoder delay precedes the first real sample) ---
 
@@ -161,7 +163,7 @@ async function appendTrack(index: number, from: number, gen: number) {
   /** This track's segment, once placed in the stream. */
   let placedSegment = null as Segment | null; // set inside place(), which TypeScript does not follow
   try {
-    const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${from > 0 ? `?from=${Math.floor(from * 44100)}` : ''}`, {
+    const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${from > 0 ? `?from_ms=${Math.floor(from * 1000)}` : ''}`, {
       signal: ctl.signal,
     });
     if (!res.ok) {
@@ -265,6 +267,7 @@ async function appendTrack(index: number, from: number, gen: number) {
   } catch (e) {
     if ((e as DOMException).name === 'AbortError' || gen !== generation) return;
     local.error = e instanceof Error ? e.message : String(e);
+    errorIndex = index;
     // Skip what cannot play, as a player does, unless it was the only thing.
     if (index < local.queue.length - 1) {
       lastAppended = index;
@@ -347,6 +350,7 @@ function tick() {
     local.position = Math.max(0, w.offset);
     local.duration = w.seg.length;
   }
+  if (local.error && local.index > errorIndex && !audio.paused) local.error = null;
   if (local.index !== lastShown) {
     lastShown = local.index;
     showOnLockScreen();

@@ -43,13 +43,14 @@ pub struct FlacToMp4 {
 }
 
 impl FlacToMp4 {
-    /// Opens a FLAC file; `from` (samples) starts the output at the frame that holds that sample, for seeking.
-    pub fn open(path: &Path, from: u64) -> Result<Self> {
+    /// Opens a FLAC file; `from_ms` (milliseconds) starts the output at the frame that holds that moment, for seeking.
+    /// Milliseconds, not samples: the page does not know the file's sample rate.
+    pub fn open(path: &Path, from_ms: u64) -> Result<Self> {
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-        Self::from_source(Box::new(file), from)
+        Self::from_source(Box::new(file), from_ms)
     }
 
-    fn from_source(source: Box<dyn symphonia::core::io::MediaSource>, from: u64) -> Result<Self> {
+    fn from_source(source: Box<dyn symphonia::core::io::MediaSource>, from_ms: u64) -> Result<Self> {
         let mss = MediaSourceStream::new(source, Default::default());
         let mut hint = Hint::new();
         hint.with_extension("flac");
@@ -73,6 +74,7 @@ impl FlacToMp4 {
             total_samples,
         };
         let track = track.id;
+        let from = from_ms * u64::from(info.sample_rate) / 1000;
         if from > 0 {
             // The reader stops at the frame holding `from`; each fragment starts at its first frame's own time.
             reader
@@ -277,6 +279,11 @@ mod tests {
 
     /// A FLAC file in memory: `n` samples of a deterministic, non-repeating signal in stereo, 16 bit, 44.1 kHz.
     fn flac(n: usize) -> (Vec<u8>, Vec<i32>) {
+        flac_at(n, 44100)
+    }
+
+    /// As `flac`, at sample rate `rate`.
+    fn flac_at(n: usize, rate: usize) -> (Vec<u8>, Vec<i32>) {
         let mut x: u32 = 2463534242;
         let mut interleaved = Vec::with_capacity(n * 2);
         for _ in 0..n {
@@ -288,7 +295,7 @@ mod tests {
             interleaved.push(-v);
         }
         let config = flacenc::config::Encoder::default().into_verified().unwrap();
-        let source = flacenc::source::MemSource::from_samples(&interleaved, 2, 16, 44100);
+        let source = flacenc::source::MemSource::from_samples(&interleaved, 2, 16, rate);
         let stream = flacenc::encode_with_fixed_block_size(&config, source, 4096).unwrap();
         let mut sink = flacenc::bitsink::ByteSink::new();
         stream.write(&mut sink).unwrap();
@@ -324,8 +331,8 @@ mod tests {
         out
     }
 
-    fn remux(bytes: &[u8], from: u64) -> (Vec<u8>, FlacInfo, usize) {
-        let mut r = FlacToMp4::from_source(Box::new(Cursor::new(bytes.to_vec())), from).unwrap();
+    fn remux(bytes: &[u8], from_ms: u64) -> (Vec<u8>, FlacInfo, usize) {
+        let mut r = FlacToMp4::from_source(Box::new(Cursor::new(bytes.to_vec())), from_ms).unwrap();
         let mut out = r.init();
         let mut fragments = 0;
         while let Some(f) = r.next_fragment().unwrap() {
@@ -379,11 +386,20 @@ mod tests {
     }
 
     #[test]
-    fn starting_later_begins_at_the_frame_holding_that_sample() {
+    fn starting_later_begins_at_the_frame_holding_that_moment() {
         let (file, original) = flac(100_000);
-        let (mp4, _, _) = remux(&file, 50_000);
+        let (mp4, _, _) = remux(&file, 1_134);
         let decoded = decode_mp4(mp4);
-        // Fixed 4096-sample frames: sample 50,000 is in the frame starting at 49,152.
+        // 1.134 s is sample 50,009; fixed 4096-sample frames: it is in the frame starting at 49,152.
         assert_eq!(decoded, original[49_152 * 2..], "from the start of that frame to the end");
+    }
+
+    #[test]
+    fn a_moment_is_found_at_the_files_own_sample_rate() {
+        // At 22.05 kHz, 2 s is sample 44,100 (the frame from 40,960), not sample 88,200 as at 44.1 kHz.
+        let (file, original) = flac_at(100_000, 22050);
+        let (mp4, info, _) = remux(&file, 2_000);
+        assert_eq!(info.sample_rate, 22050);
+        assert_eq!(decode_mp4(mp4), original[40_960 * 2..]);
     }
 }
