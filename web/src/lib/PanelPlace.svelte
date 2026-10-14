@@ -1,19 +1,27 @@
 <script lang="ts">
-  // Back beside the page (decision 0018): the full-screen player's button in its top right corner, in every panel's top
-  // right corner too, so whatever the panel shows (a playlist, a crate, the builder) it can go back beside the page
-  // without the player. Only while the panel is over the page on a window with room for it beside the page.
+  // Where the panel shows (decision 0018): beside the page or over it. The player's top-right button, in every panel's
+  // top-right corner too (a playlist, a crate, the builder), so the place can change whatever the panel shows: beside
+  // the page "Over the page", over it "Beside the page". Only on a window with room for the panel beside the page. Only
+  // the place changes: the player stays as it is (folded to the mini-player when it was).
   import Icon from './Icon.svelte';
   import { player } from './live.svelte';
   import { prefs } from './prefs.svelte';
 
+  function overThePage() {
+    prefs.sidebar = false;
+  }
   function besideThePage() {
     prefs.sidebar = true;
     player.full = false;
   }
 </script>
 
-{#if player.roomy && !prefs.sidebar}
-  <button class="place" aria-label="Beside the page" title="Beside the page" onclick={besideThePage}><Icon name="sidebar" size={22} /></button>
+{#if player.roomy}
+  {#if prefs.sidebar}
+    <button class="place" aria-label="Over the page" title="Over the page" onclick={overThePage}><Icon name="expand" size={20} /></button>
+  {:else}
+    <button class="place" aria-label="Beside the page" title="Beside the page" onclick={besideThePage}><Icon name="sidebar" size={22} /></button>
+  {/if}
 {/if}
 
 <style>

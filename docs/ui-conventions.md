@@ -97,9 +97,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   filter section, Select as an icon (two stacked squares, the front one ticked; highlighted while on, a tap again ends it); Open N while selecting; Size; + or ⋮ in the corner; the + gets its label, "New playlist", once the page is wide enough), and the filter section
   (the filter, A–Z / ✓ first, Favourites only: a heart, filled when on), which folds away, remembered by the browser. Folded away while a filter applies, its button is
   in the accent.
-- **Over the page or beside it** (decision 0018): the full-screen player's top-right button, "Beside the page", is in
-  every full-screen panel's top-right corner too (a playlist, a crate, the builder; `lib/PanelPlace.svelte`), on a
-  window with room beside the page. It only changes the place: the player stays folded to the mini-player.
+- **Over the page or beside it** (decision 0018): the player's top-right button is in every panel's top-right corner
+  too (a playlist, a crate, the builder; `lib/PanelPlace.svelte`), on a window with room beside the page: beside the
+  page "Over the page" (⤢), over it "Beside the page" (sidebar), always in that corner. It only changes the place:
+  the player stays folded to the mini-player. While editing a playlist on a panel under 320 px it steps aside.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. Where music plays is chosen at the player (its output button), not in Settings.
 - **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser

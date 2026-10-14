@@ -385,7 +385,7 @@
 </script>
 
 <section class="view" aria-label={id}>
-  <div class="bar">
+  <div class="bar" class:editing={!!editing}>
     {#if editing}
       <button class="barbtn" onclick={() => (editing = null)} disabled={editing.saving}>Cancel</button>
       <span class="end">
@@ -650,6 +650,13 @@
   .end {
     display: flex;
     align-items: center;
+  }
+
+  /* Editing on a very narrow panel (under 320 px): Cancel, Names and Save keep the room; the place button waits. */
+  @container (max-width: 319px) {
+    .bar.editing :global(.place) {
+      display: none;
+    }
   }
 
   /* Finamp's playlist heart: filled when it is a favourite. */
