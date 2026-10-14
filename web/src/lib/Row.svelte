@@ -50,7 +50,7 @@
     /** The tap target's accessible name, when the title alone does not say what a tap does. */
     label?: string;
     tooltip?: string;
-    /** Open in the panel, or ticked: a border. */
+    /** Viewed in the panel, or ticked: a border. */
     active?: boolean;
     /** Holding what matters now (the playing track is in this playlist): a stronger tint. */
     strong?: boolean;
@@ -254,7 +254,7 @@
     transform: scale(0.97);
   }
 
-  /* Open in the panel, or ticked: a border only, so it reads apart from the tint. */
+  /* Viewed in the panel, or ticked: a border only, so it reads apart from the tint. */
   .active {
     box-shadow: inset 0 0 0 2px var(--accent);
   }

@@ -53,9 +53,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`,
   `lib/remote.svelte.ts`).
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
-- **An opened playlist** (decision 0023, `lib/PlaylistView.svelte`): in the panel beside the page, or on a phone a
+- **A viewed playlist** (decision 0023, `lib/PlaylistView.svelte`): in the panel beside the page, or on a phone a
   full-height layer with the mini-player floating over its end. Under its header, **tabs** (decision 0025): Tracks,
-  Info (what Insights knows of it: how focused, its closest playlists), Export, Repair, Sync, for the selection (one playlist, or several ticked with Select); the panel opens on Tracks, a
+  Info (what Insights knows of it: how focused, its closest playlists), Export, Repair, Sync, for the selection (one playlist, or several ticked with Select); the panel shows Tracks first, a
   tab with nothing to do says so, and switching adds a Back step only while the panel is full-screen. Several
   playlists: their covers and count in the header, ✕ alone in the bar, and on Tracks a folding section per playlist
   (read-only). ✕ (and Esc, Back) closes the panel: the player folds to the mini-player rather than showing in its
@@ -69,10 +69,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   right corner (`lib/NewButton.svelte`: its label beside it on a wide page, by container query); a new crate then opens
   in the builder with that name, saved with its Save.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as chips
-  with their live counts, styled as the playlist chips (the open one bordered). A crate opens in the panel as a
+  with their live counts, styled as the playlist chips (the viewed one bordered). A crate is viewed in the panel as a
   playlist does, without the statistics and editing, with Play, Shuffle and its favourites toggle (No favourites,
   Only favourites, All tracks; decision 0024, amended) as its actions; its rows come in pages, newest first; the arrow-into-a-box icon
-  (where a playlist has the pencil) makes a playlist of it, which then opens. "New crate" (and the pencil on one's own
+  (where a playlist has the pencil) makes a playlist of it, which is then viewed. "New crate" (and the pencil on one's own
   crate) opens the **crate builder** in the panel: a name, then conditions as cards (the axis, an is/NOT toggle, its
   values as chips, a range as two numbers, a yes/no axis as just its name; negated cards tinted red), "Add condition"
   offering the server's axes, and below a live preview (the count and the first tracks). Cancel and Save in the bar;
@@ -81,13 +81,13 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Playlist chips** (the Playlists page, medium rows: see Rows) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
-  tap on the label opens the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
-  label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone "Open N playlists");
+  tap on the label views the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
+  label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone "View N playlists");
   the circle keeps adding or removing the playing track; with playlists ticked, a ⋮ in the page's top right corner (where
   + New playlist is otherwise) is the playlist menu for them (the same menu as a long-press; for several without
-  Spoken as… and Rename). A ticked playlist has the border of the one open in the
+  Spoken as… and Rename). A ticked playlist has the border of the one viewed in the
   panel: one state, one look. A favourite playlist has a small red heart (Finamp's list mark)
-  above the problems' dot, in the dot's place, so the chip gets no wider. The playlist open in the panel has a border
+  above the problems' dot, in the dot's place, so the chip gets no wider. The playlist viewed in the panel has a border
   in the accent and no extra fill: fill means "holds the playing track", the border "is shown in the panel". When the playing
   track is outside Music (it cannot go in playlists), the chips it is not in are quieter and their plus circle is
   dashed (Finamp's mark for a playlist it cannot add to); a tap says why.
@@ -95,7 +95,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
 - **The Playlists page's controls** are two sections: the actions it always needs (the button that shows or hides the
-  filter section, Select as an icon (two stacked squares, the front one ticked; highlighted while on, a tap again ends it); Open N while selecting; Size; + or ⋮ in the corner; the + gets its label, "New playlist", once the page is wide enough), and the filter section
+  filter section, Select as an icon (two stacked squares, the front one ticked; highlighted while on, a tap again ends it); View N while selecting; Size; + or ⋮ in the corner; the + gets its label, "New playlist", once the page is wide enough), and the filter section
   (the filter, A–Z / ✓ first, Favourites only: a heart, filled when on), which folds away, remembered by the browser. Folded away while a filter applies, its button is
   in the accent.
 - **Over the page or beside it** (decision 0018): the player's top-right button is in every panel's top-right corner
@@ -106,8 +106,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   not in Settings. Where music plays is chosen at the player (its output button), not in Settings.
 - **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser
   (Insights: Statistics, Related). On Related, its filters (shared tracks, genre, artists) are a filter section under the toolbar, shown or hidden by the filter button beside the views, as on Playlists.
-- **Insights → Related and the panel** (decision 0023): selecting a point shows "Open <playlist>" at the graph's top
-  right, which opens it in the shell's panel (`?open=`); while a playlist is open the graph's selection and the panel
+- **Insights → Related and the panel** (decision 0023): selecting a point shows "View <playlist>" at the graph's top
+  right, which views it in the shell's panel (`?view=`); while a playlist is viewed the graph's selection and the panel
   follow each other. The **Legend** button is always in the graph's bottom-right corner; it opens the legend as a sheet
   (lines, points, and the colour groups named by their most common genres).
 - **Settings** has four sections, in this order: Connections (servers: address, key, status; Lidarr the same way, shown
@@ -127,7 +127,7 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   Finamp's add-to-playlist tile (tinted in the accent, a divider before the action); **large** in the panel's Tracks,
   Info, Repair and Sync tabs, the crate builder's preview and Health's files is Finamp's list tile (plain, 64 px, a
   60 px cover or a control in front). A track is a large row with its cover (`lib/TrackCover.svelte`).
-- **States are the row's:** open in the panel or ticked: a border in the accent; holding what plays: a stronger tint;
+- **States are the row's:** viewed in the panel or ticked: a border in the accent; holding what plays: a stronger tint;
   not usable now (a missing file): its contents dimmed (the row stays opaque).
 - **What is listed has its own row on top of it,** the same wherever it shows: `lib/PlaylistItem.svelte` (the name, the
   pin and own-account marks, the count, a favourite's heart over the problems' dot), `lib/FileItem.svelte` (the file,
@@ -142,18 +142,19 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 ## Gestures
 
 - **Tap does the page's main action** on an item: on Playlists add or remove the playing track (the circle; the
-  name opens the playlist, in Select ticks it); on Incoming play
-  the album; on Insights' graph highlight the playlist and its closest playlists.
+  name views the playlist, in Select ticks it); on Incoming play
+  the album (View in its menu shows it in the panel); on Insights' graph highlight the playlist and its closest playlists.
 - **Long-press (right-click with a mouse) opens the item's menu** when the item has more than one other action. Every
   menu is a **bottom sheet like Finamp's track menu** (decision 0021, `lib/MenuSheet.svelte` + `lib/MenuEntry.svelte`),
   the same component on every page: at most 500 px wide, rising from the bottom, a drag handle; the item on a card at
   its top (its image: a cover, or a playlist's mosaic of its first four albums; its title; small chips; for a track
   the heart); its playback actions as a row of large icons with small labels; then the other entries as rows with an
   icon in the accent colour. The sheet takes its look from the item's image (blurred behind it, its accent).
-  For a playlist: Play, Shuffle, Play next, Add to queue; Export… and Sync to… (they open the panel on that tab),
+  For a playlist: Play, Shuffle, Play next, Add to queue; View, Export… and Sync to… (they show the panel on that tab),
   Spoken as…, Rename, Delete. For the playing track
   (the player's menu button, or a right-click on its cover): Play next, Add to queue; Add to playlist, the favourite,
-  New playlist from the queue. A tap on the backdrop, Esc, Back or dragging the sheet down closes it. With a single
+  View album, New playlist from the queue. **View** (the square with an arrow out of its corner) is every menu's entry
+  that shows the item in the panel: a playlist, an Incoming album, a track's album (View album). A tap on the backdrop, Esc, Back or dragging the sheet down closes it. With a single
   other action, the long-press does that action directly.
 - Inside the sheet: destructive entries last and in red. Spoken as…, Rename, the playlists for a track and
   the delete confirmation are steps inside the same sheet (it grows or shrinks to fit, a back arrow returns), not a
@@ -179,7 +180,7 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 - **What an action did, or why it failed, is a toast** (`lib/toast.svelte.ts`): one at a time, floating above the
   mini-player, or the bottom edge without it (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
   warnings, red for errors. Done and warnings go after a few seconds; errors stay until dismissed, replaced, or the
-  page changes (not when the panel opens or closes). Errors say what failed in plain words, never a bare status code.
+  page changes (not when the panel's view comes or goes). Errors say what failed in plain words, never a bare status code.
 - **Undo is in the toast right after the action, and only there** (decision 0026, `lib/undo.svelte.ts`): every change
   to playlists, crates or Incoming says what it did with Undo (`withUndo`); Undo says "Undone." with Redo; Redo says
   the action's words again, with Undo. A refused undo says why ("It changed since; nothing was undone."). What one tap

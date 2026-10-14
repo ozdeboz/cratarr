@@ -18,7 +18,7 @@
   const share = $derived(dur ? Math.min(1, pos / dur) : 0);
 
   /** The full player: beside the page when the window has room and that is the chosen place, else over it. */
-  // Tapping it brings the player: into the panel beside the page (over an opened playlist there), or over everything.
+  // Tapping it brings the player: into the panel beside the page (over a viewed playlist there), or over everything.
   function openPlayer() {
     if (player.roomy && prefs.sidebar) {
       player.min = false;

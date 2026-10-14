@@ -19,7 +19,7 @@
   import MenuEntry from './lib/MenuEntry.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
   import { longpress } from './lib/longpress';
-  import { albumGone, albumSubject, openPlaylist, panel } from './lib/panel.svelte';
+  import { albumGone, albumSubject, viewPlaylist, panel } from './lib/panel.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { live, untilNewTrack } from './lib/live.svelte';
   import { toast } from './lib/toast.svelte';
@@ -275,7 +275,7 @@
         <p class="count">{s.albums.length} {s.albums.length === 1 ? 'album' : 'albums'}, newest first. Tap one to play it.</p>
         <ul>
           {#each s.albums.filter(matches) as a (a.id)}
-            <li class:playing={playing?.album_id === a.id} class:viewed={panel.open === albumSubject(s.id, a.id)}>
+            <li class:playing={playing?.album_id === a.id} class:viewed={panel.viewed === albumSubject(s.id, a.id)}>
               <button
                 class="row"
                 disabled={starting !== null}
@@ -364,11 +364,11 @@
     {#if !m.ask}
       <div role="menu">
         <MenuEntry
-          icon="listOpen"
+          icon="squareArrowOutUpRight"
           label="View"
           onclick={() => {
             menu = null;
-            openPlaylist(albumSubject(m.source, m.a.id));
+            viewPlaylist(albumSubject(m.source, m.a.id));
           }}
         />
         {#if m.job !== null}

@@ -11,7 +11,7 @@ export const undos = $state({ n: 0 });
 type Options = {
   /** What Undo's toast says; "Undone." when left out. */
   undone?: string;
-  /** After an undo (`true`) or a redo (`false`): the page follows (a deleted playlist's pin, an open panel…). */
+  /** After an undo (`true`) or a redo (`false`): the page follows (a deleted playlist's pin, a viewed playlist…). */
   after?: (undone: boolean) => unknown;
 };
 

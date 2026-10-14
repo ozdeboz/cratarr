@@ -15,7 +15,7 @@
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
-  import { keepOpen, panel } from './panel.svelte';
+  import { keepViewed, panel } from './panel.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
@@ -105,8 +105,8 @@
   // mini-player until that is tapped (not remembered). Maximise puts it over the page, the sidebar button back beside
   // it; both are remembered (prefs.sidebar).
   function close() {
-    // Beside the page over an opened playlist: folding shows the playlist again (decision 0023).
-    if (place === 'side' && panel.open !== null) panel.playerTop = false;
+    // Beside the page over a viewed playlist: folding shows the playlist again (decision 0023).
+    if (place === 'side' && panel.viewed !== null) panel.playerTop = false;
     else if (place === 'side') player.min = true;
     else player.full = false;
   }
@@ -114,7 +114,7 @@
     prefs.sidebar = false;
     player.full = true;
   }
-  // Beside the page again: the player moves into the panel, unless a playlist or crate is open there: that keeps the
+  // Beside the page again: the player moves into the panel, unless a playlist or crate is viewed there: that keeps the
   // panel, and the mini-player's tap brings the player over it.
   function toSidebar() {
     prefs.sidebar = true;
@@ -136,7 +136,7 @@
   /** Swipe up: the playlists that hold the track, on the Playlists page (over the page it closes first). */
   function toPlaylists() {
     if (place === 'overlay') player.full = false;
-    if (location.hash.split('?')[0] !== '#/' && location.hash !== '') location.hash = keepOpen('#/');
+    if (location.hash.split('?')[0] !== '#/' && location.hash !== '') location.hash = keepViewed('#/');
   }
 
   // Gestures. Anywhere: swipe down closes, swipe up shows the playlists. On the cover: swipe left or right skips, a

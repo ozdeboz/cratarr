@@ -18,7 +18,7 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { closePlaylist, keepOpen, panel } from './lib/panel.svelte';
+  import { closePlaylist, keepViewed, panel } from './lib/panel.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
   import CrateBuilder from './lib/CrateBuilder.svelte';
   import { builderOf } from './lib/crates.svelte';
@@ -44,8 +44,8 @@
   const BAR_SLOTS = 5;
 
   // Playlists are created, renamed, deleted and repaired on the Playlists page and its panel now; old Manage and
-  // Repairs links land there (decision 0025). The page is the address before `?` (what is opened rides along as
-  // `?open=`, decision 0023).
+  // Repairs links land there (decision 0025). The page is the address before `?` (what is viewed rides along as
+  // `?view=`, decision 0023).
   const fromHash = () => {
     const h = location.hash.split('?')[0];
     return h === HEALTH.href
@@ -76,8 +76,8 @@
   const overlay = $derived(player.full && !sidebar);
   // The mini-player stands in for the player wherever the panel does not show it (decision 0023).
   const mini = $derived(!!playing() && !(sidebar && panelShowsPlayer()));
-  // An opened playlist without room beside the page: a layer of its own, under the mini-player and the player.
-  const playlistLayer = $derived(!sidebar && panel.open !== null);
+  // A viewed playlist without room beside the page: a layer of its own, under the mini-player and the player.
+  const playlistLayer = $derived(!sidebar && panel.viewed !== null);
   $effect(() => {
     if (sidebar) untrack(collapse);
   });
@@ -232,7 +232,7 @@
       <span class="name">Cratarr</span>
     </div>
     {#if connection}
-      <a class="conn" class:down={!connection.ok} href={keepOpen("#/settings")}><i aria-hidden="true"></i>{connection.text}</a>
+      <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i>{connection.text}</a>
     {/if}
     {#if !phone}
       <div class="side-picker" class:shown={known.list.length > 1}><SourcePicker /></div>
@@ -240,13 +240,13 @@
 
     <nav aria-label="Pages">
       {#each MAIN as p (p.id)}
-        <a href={keepOpen(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </nav>
 
     <div class="foot">
       {#each APART as p (p.id)}
-        <a href={keepOpen(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}</a>
+        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}</a>
       {/each}
       {#if status}<div class="version">Cratarr {status.version}</div>{/if}
     </div>
@@ -289,14 +289,14 @@
       ></div>
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
       <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={mini ? `${MINI_SPACE}px` : '0px'}>
-        {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if builderOf(panel.open)}<CrateBuilder id={builderOf(panel.open)!.id} />{:else}<PlaylistView />{/if}
+        {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if builderOf(panel.viewed)}<CrateBuilder id={builderOf(panel.viewed)!.id} />{:else}<PlaylistView />{/if}
       </aside>
     {/if}
   </div>
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={mini ? `${MINI_SPACE}px` : '0px'} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      {#if builderOf(panel.open)}<CrateBuilder id={builderOf(panel.open)!.id} />{:else}<PlaylistView />{/if}
+      {#if builderOf(panel.viewed)}<CrateBuilder id={builderOf(panel.viewed)!.id} />{:else}<PlaylistView />{/if}
     </div>
   {/if}
   {#if mini}
@@ -314,7 +314,7 @@
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
     <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages" onclickcapture={collapse}>
       {#each overflow as p (p.id)}
-        <a href={keepOpen(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </div>
   {/if}
@@ -324,7 +324,7 @@
 
   <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
     {#each bar as p (p.id)}
-      <a href={keepOpen(p.href)} aria-current={page === p.id ? 'page' : undefined}
+      <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}
         ><span class="icon"><Icon name={p.icon} />{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
       >
     {/each}
@@ -355,7 +355,7 @@
     padding-top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
   }
 
-  /* Layers, bottom to top (decision 0023): the page, its navigation (20), an opened playlist (21), the mini-player
+  /* Layers, bottom to top (decision 0023): the page, its navigation (20), a viewed playlist (21), the mini-player
      (22), the player over everything (30). */
   .mini-dock {
     position: fixed;
@@ -363,7 +363,7 @@
     z-index: 22;
   }
 
-  /* An opened playlist without room beside the page (decision 0023): full height over the page and its navigation, the
+  /* A viewed playlist without room beside the page (decision 0023): full height over the page and its navigation, the
      mini-player floating over its end (its list leaves room for it, --mini-h), the player over everything. */
   .playlist-layer {
     position: fixed;

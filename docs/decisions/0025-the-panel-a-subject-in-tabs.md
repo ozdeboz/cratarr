@@ -58,8 +58,15 @@ The player is different: it is always about one track, in one view. The owner se
 
 ## Amendment (2026-10-14): an album is a subject
 
-An album (`?open=album:<server>/<id>`) shows in the panel as a crate does, without tabs: its cover, name, artist and
+An album (`?view=album:<server>/<id>`) shows in the panel as a crate does, without tabs: its cover, name, artist and
 year, its tracks in play order as a playlist's rows, and all four actions (Play, Shuffle, Play next, Add to queue). It
 comes from the server (`GET /api/albums/{server}/{id}`), so any album can show: an Incoming album's menu has View (a tap
 still plays it), and a track's menu has View album. An Incoming album that is kept, replaced or deleted closes; one
 Lidarr adds to is read again. The local player takes its tracks from the same answer, with their names.
+
+## Amendment (2026-10-14): View, not Open
+
+Showing something in the panel is called **View** everywhere: the menus' entry (View, View album; the square with an
+arrow out of its corner), the rows' labels, Select's "View N playlists", Insights' "View <playlist>", and the address
+(`?view=…`, in place of `?open=…` above and in 0023 and 0024). Old links (`?open=…`, Insights' `?playlist=…`) are no longer
+translated: there were none.

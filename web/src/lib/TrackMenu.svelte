@@ -25,7 +25,7 @@
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
   import { followCreate, followDelete } from './follow.svelte';
-  import { albumSubject, openPlaylist } from './panel.svelte';
+  import { albumSubject, viewPlaylist } from './panel.svelte';
 
   let {
     onclose,
@@ -60,7 +60,7 @@
     if (!t || !albumId) return;
     const subject = albumSubject(t.source, albumId);
     onclose();
-    openPlaylist(subject);
+    viewPlaylist(subject);
   }
   const heartOn = $derived(forPlaying ? favorite() : !!other?.favorite);
   const heartKnown = $derived(forPlaying ? np?.favorite !== null : other !== null && other.favorite !== null);
@@ -206,7 +206,7 @@
           <MenuEntry icon="heart" label={heartOn ? 'Remove from favourites' : 'Add to favourites'} disabled={busy} onclick={heart} />
         {/if}
         {#if albumId}
-          <MenuEntry icon="albums" label="View album" onclick={viewAlbum} />
+          <MenuEntry icon="squareArrowOutUpRight" label="View album" onclick={viewAlbum} />
         {/if}
         {#if forPlaying}
           <MenuEntry

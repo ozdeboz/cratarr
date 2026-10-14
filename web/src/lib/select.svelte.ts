@@ -1,12 +1,12 @@
 // Select on the Playlists page (decision 0025): a tap on a chip's name ticks the playlist into the selection instead of
-// opening it alone; the chip's circle keeps adding or removing the playing track. Beside the page the panel shows the
-// selection as it is ticked; on a phone (the panel covers the page) it is ticked first and opened with "Open N".
+// viewing it alone; the chip's circle keeps adding or removing the playing track. Beside the page the panel shows the
+// selection as it is ticked; on a phone (the panel covers the page) it is ticked first and viewed with "View N".
 import { sidePanel } from './live.svelte';
-import { closePlaylist, openSelection, panel } from './panel.svelte';
+import { closePlaylist, viewSelection, panel } from './panel.svelte';
 
 export const select = $state({ on: false, picked: [] as string[] });
 
-/** Starts Select with what is selected already (the playlist open in the panel, or the selection). */
+/** Starts Select with what is selected already (the playlist viewed in the panel, or the selection). */
 export function startSelect() {
   select.on = true;
   select.picked = [...panel.selection];
@@ -18,7 +18,7 @@ export function endSelect() {
   select.on = false;
   select.picked = [];
   const last = panel.selection.at(-1);
-  if (last && panel.selection.length > 1) openSelection([last], panel.tab);
+  if (last && panel.selection.length > 1) viewSelection([last], panel.tab);
 }
 
 /** The panel shows exactly what is ticked. */
@@ -27,19 +27,19 @@ export const showsPicked = () => select.picked.length > 0 && select.picked.join(
 /** Ticks or unticks a playlist; beside the page the panel follows (on the tab it shows). */
 export function tick(id: string) {
   select.picked = select.picked.includes(id) ? select.picked.filter((x) => x !== id) : [...select.picked, id];
-  if (sidePanel()) openPicked();
+  if (sidePanel()) viewPicked();
 }
 
-/** Opens what is ticked in the panel (a phone's "Open N playlists"). */
-export function openPicked() {
+/** Views what is ticked in the panel (a phone's "View N playlists"). */
+export function viewPicked() {
   if (!select.picked.length) return void (panel.selection.length && closePlaylist());
-  openSelection(select.picked, panel.selection.length ? panel.tab : 'tracks');
+  viewSelection(select.picked, panel.selection.length ? panel.tab : 'tracks');
 }
 
 /** Leaves one playlist out of the selection (its ✕ in the Export tab): the panel and the ticks follow. */
 export function leaveOut(id: string) {
   select.picked = select.picked.filter((x) => x !== id);
-  openSelection(
+  viewSelection(
     panel.selection.filter((x) => x !== id),
     panel.tab,
   );

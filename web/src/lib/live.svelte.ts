@@ -76,12 +76,12 @@ export const live = $state<{
  *  mini-player shows, and `full` opens the player over everything. */
 export const player = $state({ full: false, min: false, roomy: false });
 
-// Closing what was opened (✕, Esc, Back) closes the panel (decision 0025, amending 0023's stack): the player does not
+// Closing what is viewed (✕, Esc, Back) closes the panel (decision 0025, amending 0023's stack): the player does not
 // show in its place but folds to the mini-player, whose tap brings it back.
 $effect.root(() => {
-  let was = panel.open;
+  let was = panel.viewed;
   $effect(() => {
-    const now = panel.open;
+    const now = panel.viewed;
     if (was !== null && now === null) player.min = true;
     was = now;
   });
@@ -90,16 +90,16 @@ $effect.root(() => {
 /** Something plays, where the output is. */
 const somethingPlays = () => (prefs.output === 'local' ? local.index >= 0 : !!live.view?.now_playing);
 
-/** The panel shows beside the page (decisions 0018, 0023): with room for it, an opened playlist, or the player while
+/** The panel shows beside the page (decisions 0018, 0023): with room for it, a viewed playlist, or the player while
  *  something plays and it was not folded. */
-export const inSidebar = () => player.roomy && prefs.sidebar && (panel.open !== null || (!player.min && somethingPlays()));
+export const inSidebar = () => player.roomy && prefs.sidebar && (panel.viewed !== null || (!player.min && somethingPlays()));
 
 /** The panel can show beside the page (room, and not the page-covering player): Select then shows the selection there
  *  as it is ticked (decision 0025). */
 export const sidePanel = () => player.roomy && prefs.sidebar;
 
-/** The panel shows the player (not an opened playlist): nothing is opened, or the player was brought over it. */
-export const panelShowsPlayer = () => panel.open === null || panel.playerTop;
+/** The panel shows the player (not a viewed playlist): nothing is viewed, or the player was brought over it. */
+export const panelShowsPlayer = () => panel.viewed === null || panel.playerTop;
 
 /** Show `np` now as the result of a player command, until the server settles it (or `ms` passes). */
 export function expect(np: NowPlaying, settled: (server: NowPlaying | null) => Settled, { ms = 8000, quiet = false } = {}) {

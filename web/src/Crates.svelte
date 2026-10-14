@@ -1,6 +1,6 @@
 <script lang="ts">
   // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the permanent
-  // Unlisted, and one's own), each a medium row (lib/Row.svelte) with its live count, as the playlists; a tap opens it in the panel
+  // Unlisted, and one's own), each a medium row (lib/Row.svelte) with its live count, as the playlists; a tap views it in the panel
   // (decision 0023), where it plays and is sorted like a playlist, and can be saved as one. Where a favourite playlist's
   // chip has its small heart, a crate's shows its favourites setting (the panel's toggle sets it).
   import { crates, CRATE, EDIT_CRATE, FAVOURITES, favouritesOf, loadCrates, startCrate } from './lib/crates.svelte';
@@ -9,7 +9,7 @@
   import NameSheet from './lib/NameSheet.svelte';
   import NewButton from './lib/NewButton.svelte';
   import { shownPlaylists } from './lib/output.svelte';
-  import { openPlaylist, panel } from './lib/panel.svelte';
+  import { viewPlaylist, panel } from './lib/panel.svelte';
   import Notice from './lib/Notice.svelte';
 
   // Asked for when the page shows, and again when the playlists change (sorting a track shrinks Unlisted).
@@ -40,9 +40,9 @@
             size="medium"
             title={c.name}
             count={n === null ? '–' : n.toLocaleString()}
-            active={panel.open === CRATE + c.id || panel.open === EDIT_CRATE + c.id}
-            label={`Open ${c.name}`}
-            onclick={() => openPlaylist(CRATE + c.id)}
+            active={panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id}
+            label={`View ${c.name}`}
+            onclick={() => viewPlaylist(CRATE + c.id)}
           >
             {#snippet meta()}
               <span class="flags"><span class="heart" class:filled={fav.filled} title={fav.label} aria-label={fav.label}><Icon name={fav.icon} size={10} /></span></span>
