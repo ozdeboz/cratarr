@@ -25,11 +25,16 @@ builds its own undo toast. The owner wants one undo, robust, the same everywhere
   what one tap undoes by tapping again (a track into or out of a playlist, a favourite, a pin, the crate favourites
   toggle), sync links (linking again restores the copy), playback, Settings.
 - **One way to undo:** `POST /api/undo {token}`; the server knows what each kind of event means. It answers with what
-  it did and a **redo token**: undoing is recorded as an event of its own, whose undo is the redo. A redo is a fresh
-  action with its own event (a new Keep with its own handlers, never the undone event run again).
+  it did and a **redo token**: the undo is an event of its own, and undoing that event performs the action afresh, as
+  a new event with its own handlers and its own token (never the undone event run again). A redo of Keep or Replace
+  starts from the album's folder (the catalogue folder and directory in the event) and looks up the album there now,
+  since the server may have given it a new id once its files were back in Incoming; if it is not there, "It changed
+  since".
 - **An event holds what undoing it needs and the state it left:**
   - a playlist's change: the version it replaced (the backup the store already keeps, 20 per playlist) and the content
-    it left (a hash). Undo puts that version back, not "the newest backup";
+    it left (a hash). Undo puts that version back, not "the newest backup", through the store's normal commit: the
+    servers are told of it as of any change, and the store keeps the version it replaced, which the undo's own event
+    records for the redo;
   - a created playlist: its name and content (undo sets it aside as a deleted playlist, so redo can restore it);
   - a deleted playlist: its name (the store keeps it aside; undo restores it);
   - a rename: both names; Spoken as: the names before and after;
@@ -42,8 +47,10 @@ builds its own undo toast. The owner wants one undo, robust, the same everywhere
   undo that stopped halfway (a crash) is safe to repeat.
 - **How long:** undo is offered only in the toast right after an action (and Redo right after an Undo); there is no
   history of changes to undo from later. A token works while its event is in the journal and what it needs still
-  exists (the playlist version not yet rotated out, the trash not yet emptied); the journal forgets events when the
-  Incoming trash is emptied, as now, so it is never longer than the trash keeps files.
+  exists (the playlist version not yet rotated out, the trash not yet emptied). Incoming's events are forgotten when
+  its trash is emptied, as now, so never later than the trash keeps their files; playlist and crate events, which
+  only the toast offers, are forgotten after 24 hours (the trash empties only when Incoming is used, so it cannot be
+  their bound).
 - **The page:** one helper shows an action's toast with Undo and, after an Undo, "Undone." with Redo; every action
   goes through it. The per-feature undo code goes.
 
