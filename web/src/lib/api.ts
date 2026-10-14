@@ -149,8 +149,9 @@ export const playPlaylist = (playlistId: string, mode: PlayMode, source?: string
 export const queueTrack = (id: string, mode: 'next' | 'last', source?: string) =>
   post<{ player: string }>(`/api/queue/add${follow(source)}`, { id, mode });
 export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
-export const playlistFromQueue = (name: string, source?: string) =>
-  post<{ playlist: string; added: number; left_out: number }>(`/api/queue/playlist${follow(source)}`, { name });
+/** `ids`: the queue to make it from (the local player's); without, the server's player's queue. */
+export const playlistFromQueue = (name: string, source?: string, ids?: string[]) =>
+  post<{ playlist: string; added: number; left_out: number }>(`/api/queue/playlist${follow(source)}`, ids ? { name, ids } : { name });
 
 /** Mark the playing track a favourite or not. Says the state wanted, so a retried request changes nothing more. */
 export const setFavorite = (on: boolean, source?: string) => {
@@ -466,10 +467,23 @@ export type Transport = 'previous' | 'play-pause' | 'next' | 'stop';
 // player (from a track and a position).
 export const playlistTrackIds = (id: string, source?: string) =>
   request<{ source: string; ids: string[]; unknown: number }>(`/api/playlists/${encodeURIComponent(id)}/tracks${follow(source)}`);
+const trackPath = (source: string, id: string) => `/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}`;
+
 export const trackDetails = (source: string, id: string) =>
-  quietly<{ id: string; name: string; artist: string | null; album: string | null; album_id: string | null }>(
-    `/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}`,
-  );
+  quietly<{ id: string; name: string; artist: string | null; album: string | null; album_id: string | null }>(trackPath(source, id));
+
+/** A given track's playlists and favourite: for the local player's track (decision 0022), what `State` is for the
+ *  server's player's. `favorite` null: not known. */
+export type TrackState = { addable: boolean; favorite: boolean | null; playlists: Playlist[] };
+
+export const trackState = (source: string, id: string) => quietly<TrackState>(`${trackPath(source, id)}/playlists`);
+
+/** Put the track in the playlist or take it out (the state wanted, as `setMember`). */
+export const setTrackMember = (source: string, id: string, playlistId: string, member: boolean) =>
+  quietly<TrackState>(`${trackPath(source, id)}/playlists/${encodeURIComponent(playlistId)}?member=${member}`, { method: 'POST' });
+
+export const setTrackFavorite = (source: string, id: string, on: boolean) =>
+  quietly<TrackState>(`${trackPath(source, id)}/favorite?on=${on}`, { method: 'POST' });
 export const incomingTrackIds = (source: string, album: string) =>
   request<{ source: string; ids: string[] }>(`/api/incoming/tracks/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
 export const handover = (ids: string[], index: number, positionSecs: number, source?: string) =>

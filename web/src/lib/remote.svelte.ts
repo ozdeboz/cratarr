@@ -1,14 +1,17 @@
 // The remote for what plays, shared by the mini-player and the full player (decision 0018): the commands (shown at
 // once, see live.svelte.ts `expect`), the running clock, the favourite, the cover and the colour taken from it.
 import { untrack } from 'svelte';
-import { ApiError, coverUrl, incomingCoverUrl, setFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
+import { ApiError, coverUrl, incomingCoverUrl, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
 import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek } from './localPlayer.svelte';
-import { isLocal, localNowPlaying } from './output.svelte';
+import { isLocal, localNowPlaying, tookLocal } from './output.svelte';
 import { toast } from './toast.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
 export const playing = () => (isLocal() ? localNowPlaying() : (live.view?.now_playing ?? null));
+
+/** A server's player command is shown before it was confirmed: actions on what plays wait (never for the local one). */
+export const pending = () => !isLocal() && live.pending;
 
 // Cover: the library's cover file for a library track; otherwise (or when there is none) the album's image from the
 // server, which also covers music outside the library, such as Incoming. Candidates that fail are skipped.
@@ -160,11 +163,12 @@ export function favorite(): boolean {
 }
 export async function toggleFavorite() {
   const np = playing();
-  if (!np || np.favorite === null || live.pending) return;
+  if (!np || np.favorite === null || pending()) return;
   const want = { id: np.id, on: !favorite() };
   fav.wanted = want;
   try {
-    live.view = await setFavorite(want.on, np.source);
+    if (isLocal()) tookLocal(np.source, np.id, await setTrackFavorite(np.source, np.id, want.on));
+    else live.view = await setFavorite(want.on, np.source);
   } catch (e) {
     toast.fail(e, "The favourite didn't change");
   } finally {

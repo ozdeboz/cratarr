@@ -3,14 +3,13 @@
   // sheet as Finamp's track menu: the track on the card (with the heart), Play next and Add to queue as the large
   // actions, then: Add to playlist (the playlists as toggle cards, a tap adds or removes), the favourite, and a new
   // playlist made of what plays and what comes next.
-  import { playlistFromQueue, queueTrack, setMember } from './api';
-  import { live, refresh } from './live.svelte';
+  import { playlistFromQueue, queueTrack } from './api';
+  import { refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { prefs } from './prefs.svelte';
-  import { coverSrc, favorite, playing, toggleFavorite } from './remote.svelte';
-  import { enqueue } from './localPlayer.svelte';
-  import { isLocal } from './output.svelte';
+  import { coverSrc, favorite, pending, playing, toggleFavorite } from './remote.svelte';
+  import { enqueue, local } from './localPlayer.svelte';
+  import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
   import { toast } from './toast.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
@@ -19,7 +18,7 @@
   const src = $derived(coverSrc());
   // Playlists holding the track first, then the rest by name.
   const playlists = $derived(
-    [...(live.view?.playlists ?? [])].sort((a, b) => Number(b.member) - Number(a.member) || a.name.localeCompare(b.name)),
+    [...shownPlaylists()].sort((a, b) => Number(b.member) - Number(a.member) || a.name.localeCompare(b.name)),
   );
 
   let step = $state<'menu' | 'lists' | 'new'>('menu');
@@ -43,9 +42,9 @@
   }
 
   async function toggle(id: string, member: boolean) {
-    if (!np || live.pending) return;
+    if (!np || pending()) return;
     try {
-      live.view = await setMember(id, !member, prefs.source || undefined);
+      await setPlayingMember(id, !member);
     } catch (e) {
       toast.fail(e, member ? "It couldn't be taken out" : "It couldn't be added");
     }
@@ -56,7 +55,8 @@
     if (!name || working) return;
     working = true;
     try {
-      const made = await playlistFromQueue(name, np?.source);
+      const ids = isLocal() ? local.queue.slice(Math.max(0, local.index)).map((t) => t.id) : undefined;
+      const made = await playlistFromQueue(name, np?.source, ids);
       const left = made.left_out ? `, ${made.left_out} not in the library left out` : '';
       toast.show({ text: `Made ${made.playlist}: ${made.added} ${made.added === 1 ? 'track' : 'tracks'}${left}.`, tone: 'done' });
       onclose();
@@ -76,7 +76,7 @@
     images={src ? [src] : []}
     title={np.name}
     chips={[np.artist, np.album].filter((c): c is string => !!c)}
-    heart={np.favorite === null ? null : { on: favorite(), disabled: live.pending, toggle: toggleFavorite }}
+    heart={np.favorite === null ? null : { on: favorite(), disabled: pending(), toggle: toggleFavorite }}
     actions={step === 'menu'
       ? [
           { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },
@@ -92,7 +92,7 @@
           <MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />
         {/if}
         {#if np.favorite !== null}
-          <MenuEntry icon="heart" label={favorite() ? 'Remove from favourites' : 'Add to favourites'} disabled={live.pending} onclick={toggleFavorite} />
+          <MenuEntry icon="heart" label={favorite() ? 'Remove from favourites' : 'Add to favourites'} disabled={pending()} onclick={toggleFavorite} />
         {/if}
         <MenuEntry
           icon="plus"
@@ -107,7 +107,7 @@
       <div class="heading">Add to / remove from playlists</div>
       <div role="group" aria-label="Playlists">
         {#each playlists as p (p.id)}
-          <MenuEntry label={p.name} checked={p.member} disabled={live.pending} onclick={() => toggle(p.id, p.member)} />
+          <MenuEntry label={p.name} checked={p.member} disabled={pending()} onclick={() => toggle(p.id, p.member)} />
         {/each}
       </div>
     {:else}

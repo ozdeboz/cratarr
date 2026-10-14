@@ -317,6 +317,11 @@ pub trait Source: Send + Sync {
 
     /// Optional: mark a track a favourite (or not) for the account of the player playing it. Returns the state now.
     /// Safe to repeat.
+    /// Whether the track is a favourite of the account the source plays for; `None` when it cannot tell.
+    fn favorite<'a>(&'a self, _track: &'a str) -> Fut<'a, Option<bool>> {
+        Box::pin(async { Ok(None) })
+    }
+
     fn set_favorite<'a>(&'a self, _track: &'a str, _on: bool) -> Fut<'a, bool> {
         Box::pin(async { anyhow::bail!("this server has no favourites") })
     }

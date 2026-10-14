@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createPlaylist, setMember, type Playlist } from './lib/api';
+  import { createPlaylist, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap, refresh } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
@@ -7,6 +7,8 @@
   import MenuSheet from './lib/MenuSheet.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import Icon from './lib/Icon.svelte';
+  import { isLocal, setPlayingMember, shownPlaylists } from './lib/output.svelte';
+  import { pending, playing } from './lib/remote.svelte';
   import { longpress } from './lib/longpress';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
@@ -26,10 +28,10 @@
   let nameField = $state('');
   let working = $state(false);
 
-  const np = $derived(view?.now_playing ?? null);
+  const np = $derived(playing());
   const items = $derived.by(() => {
     const q = filter.trim().toLowerCase();
-    let list = (view?.playlists ?? []).map((p) => {
+    let list = shownPlaylists().map((p) => {
       const member = optimistic[p.id] ?? p.member;
       return { ...p, member, count: p.count + (member === p.member ? 0 : member ? 1 : -1) };
     });
@@ -38,7 +40,7 @@
     return list;
   });
 
-  const memberCount = $derived((view?.playlists ?? []).filter((p) => optimistic[p.id] ?? p.member).length);
+  const memberCount = $derived(shownPlaylists().filter((p) => optimistic[p.id] ?? p.member).length);
   const NOT_MUSIC = "Not in your Music, so it can't go in playlists.";
 
   async function tap(p: Playlist) {
@@ -52,14 +54,14 @@
       return;
     }
     // The player is moving to another track: the tap waits for it (live.svelte.ts).
-    if (live.pending) {
+    if (pending()) {
       queueTap(p.id);
       return;
     }
     busy[p.id] = true;
     optimistic[p.id] = !p.member;
     try {
-      live.view = await setMember(p.id, !p.member, prefs.source || undefined);
+      await setPlayingMember(p.id, !p.member);
     } catch (e) {
       toast.fail(e, 'Something went wrong');
     } finally {
@@ -122,7 +124,7 @@
   {#if !view && !error}
     <p class="empty">Loading…</p>
   {:else}
-    <ul class="grid" class:pending={live.pending} style:--min="{WIDTHS[prefs.zoom]}px">
+    <ul class="grid" class:pending={pending()} style:--min="{WIDTHS[prefs.zoom]}px">
       {#each items as p (p.id)}
         <li>
           <button

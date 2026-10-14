@@ -599,6 +599,16 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn favorite<'a>(&'a self, track: &'a str) -> Fut<'a, Option<bool>> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await?;
+            match whose(&sessions, &self.player, track) {
+                Some(user) => Ok(Some(self.jf.is_favorite(&user, track).await?)),
+                None => Ok(None),
+            }
+        })
+    }
+
     fn set_favorite<'a>(&'a self, track: &'a str, on: bool) -> Fut<'a, bool> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;

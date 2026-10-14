@@ -2,7 +2,20 @@
 // this browser (local, lib/localPlayer.svelte.ts). The player shows either the same way: the local queue is presented
 // as a now-playing view like the server's. Switching moves the music: the queue and the position go to the other side,
 // which plays from there, and the side that played stops.
-import { handover, incomingTrackIds, playlistTrackIds, trackDetails, transport, type NowPlaying, type PlayMode } from './api';
+import {
+  handover,
+  incomingTrackIds,
+  playlistTrackIds,
+  setMember,
+  setTrackMember,
+  trackDetails,
+  trackState,
+  transport,
+  type NowPlaying,
+  type PlayMode,
+  type Playlist,
+  type TrackState,
+} from './api';
 import { live, refresh } from './live.svelte';
 import { local, playQueue, enqueue, seek, stop, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
@@ -21,10 +34,10 @@ export function localNowPlaying(): NowPlaying | null {
     artist: t.artist,
     album: t.album,
     album_id: t.album_id,
-    addable: t.addable ?? true,
+    addable: localState.view?.addable ?? t.addable ?? true,
     progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, estimated: false },
     player: 'This device',
-    favorite: null,
+    favorite: localState.view?.favorite ?? null,
     upcoming: local.queue.slice(local.index + 1).map((u) => ({
       id: u.id,
       name: u.name || '…',
@@ -35,6 +48,62 @@ export function localNowPlaying(): NowPlaying | null {
       duration_secs: null,
     })),
   };
+}
+
+// The local track's playlists and favourite: the server's state covers only its own player's track, so they are
+// asked for this one (on each new track, and when the playlists change).
+export const localState = $state<{ key: string | null; view: TrackState | null }>({ key: null, view: null });
+const keyOf = (t: LocalTrack) => `${t.source}/${t.id}`;
+async function loadState(t: LocalTrack) {
+  try {
+    const view = await trackState(t.source, t.id);
+    if (localState.key === keyOf(t)) localState.view = view;
+  } catch {
+    /* shown as in no playlist until it answers */
+  }
+}
+$effect.root(() => {
+  $effect(() => {
+    const t = local.queue[local.index];
+    const key = t ? keyOf(t) : null;
+    if (key === localState.key) return;
+    localState.key = key;
+    localState.view = null;
+    if (t) loadState(t);
+  });
+  // Playlists made, renamed or changed elsewhere: the server's state says so (by their counts and names).
+  let seen = '';
+  $effect(() => {
+    const sig = (live.view?.playlists ?? []).map((p) => `${p.id}:${p.count}`).join('|');
+    const t = local.queue[local.index];
+    if (sig === seen) return;
+    const first = !seen;
+    seen = sig;
+    if (!first && t && isLocal()) loadState(t);
+  });
+});
+
+/** The playlists as shown with what plays: membership of the server's player's track, or of the local one. */
+export function shownPlaylists(): Playlist[] {
+  if (!isLocal()) return live.view?.playlists ?? [];
+  return localState.view?.playlists ?? (live.view?.playlists ?? []).map((p) => ({ ...p, member: false }));
+}
+
+/** Puts what plays in the playlist or takes it out, where the output is. */
+export async function setPlayingMember(playlistId: string, member: boolean) {
+  if (!isLocal()) {
+    live.view = await setMember(playlistId, member, prefs.source || undefined);
+    return;
+  }
+  const t = local.queue[local.index];
+  if (!t) throw new Error('Nothing is playing.');
+  const view = await setTrackMember(t.source, t.id, playlistId, member);
+  if (localState.key === keyOf(t)) localState.view = view;
+}
+
+/** The local favourite changed: the answer, if it is still about the playing track. */
+export function tookLocal(source: string, id: string, view: TrackState) {
+  if (localState.key === `${source}/${id}`) localState.view = view;
 }
 
 // Track details (title, artist, album) arrive lazily: a playlist starts with ids only; the playing track and the next

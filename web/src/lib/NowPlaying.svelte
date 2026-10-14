@@ -8,18 +8,19 @@
   import { DECELERATE_CSS, decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { incomingCoverUrl } from './api';
   import Icon from './Icon.svelte';
-  import { live, player, refresh } from './live.svelte';
+  import { player, refresh } from './live.svelte';
   import TrackMenu from './TrackMenu.svelte';
   import OutputSheet from './OutputSheet.svelte';
   import { toast } from './toast.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
+  import { shownPlaylists } from './output.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
   const np = $derived(playing());
-  const memberCount = $derived((live.view?.playlists ?? []).filter((p) => p.member).length);
+  const memberCount = $derived(shownPlaylists().filter((p) => p.member).length);
   const src = $derived(coverSrc());
   // The backdrop list: the current blurred cover, and while it fades in, the one before it.
   let backdrops = $state<{ key: number; src: string }[]>([]);
@@ -311,13 +312,13 @@
         <div class="side">
           <button class="act" aria-label="Track menu" aria-haspopup="menu" onclick={openMenu}><Icon name="menu" size={24} /></button>
           {#if np.favorite !== null}
-            <button class="fav" class:on={favorite()} disabled={live.pending} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
+            <button class="fav" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
               ><Icon name="heart" size={26} /></button
             >
           {/if}
-          <div class="count" class:pending={live.pending} aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
+          <div class="count" class:pending={pending()} aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
             <span>in</span>
-            <strong>{live.pending ? '–' : memberCount}</strong>
+            <strong>{pending() ? '–' : memberCount}</strong>
             <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
           </div>
           <button class="act" aria-label="Play on" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={24} /></button>

@@ -6,9 +6,9 @@
   // back. Swipe down does nothing (Finamp stops and clears the queue; not on a remote across the room). The title does
   // not scroll (Finamp's default).
   import Icon from './Icon.svelte';
-  import { live, player } from './live.svelte';
+  import { player } from './live.svelte';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, playing, position, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, pending, playing, position, send, toggleFavorite } from './remote.svelte';
 
   const np = $derived(playing());
   const src = $derived(coverSrc());
@@ -102,7 +102,7 @@
         </div>
       </div>
       {#if np.favorite !== null}
-        <button class="own fav" class:on={favorite()} disabled={live.pending} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
+        <button class="own fav" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
           ><Icon name="heart" size={28} /></button
         >
       {/if}

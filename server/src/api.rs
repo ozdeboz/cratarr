@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::app::{App, SettingsView, SourceView, StateView, StatusView, ToggleError};
+use crate::app::{App, SettingsView, SourceView, StateView, StatusView, ToggleError, TrackStateView};
 use crate::settings::SourceConfig;
 use crate::playlists::{Repair, Repairs};
 
@@ -24,6 +24,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/stream/{source}/{id}", get(stream))
         .route("/api/track/{source}/{id}", get(track_info))
+        .route("/api/track/{source}/{id}/playlists", get(track_state))
+        .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
+        .route("/api/track/{source}/{id}/favorite", post(track_favorite))
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
@@ -141,6 +144,27 @@ async fn track_info(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
             .into_response(),
         Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": format!("{e:#}") }))).into_response(),
     }
+}
+
+/// A track's playlists and favourite, for the local player's track (decision 0022).
+async fn track_state(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Result<Json<TrackStateView>, ApiError> {
+    Ok(Json(app.playing.track_state(&source, &id).await?))
+}
+
+async fn track_toggle(
+    State(app): State<Arc<App>>,
+    Path((source, id, playlist)): Path<(String, String, String)>,
+    Query(f): Query<Membership>,
+) -> Result<Json<TrackStateView>, ApiError> {
+    Ok(Json(app.playing.track_toggle(&source, &id, &playlist, f.member).await?))
+}
+
+async fn track_favorite(
+    State(app): State<Arc<App>>,
+    Path((source, id)): Path<(String, String)>,
+    Query(f): Query<Favorite>,
+) -> Result<Json<TrackStateView>, ApiError> {
+    Ok(Json(app.playing.track_favorite(&source, &id, f.on).await?))
 }
 
 /// A playlist's tracks for the local player: the server they are on and their ids in file order (decision 0022).

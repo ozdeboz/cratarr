@@ -54,6 +54,16 @@ pub struct StateView {
     pub sources: Vec<SourceTab>,
 }
 
+/// A track the page plays itself (decision 0022) as the player shows it: its playlists, and whether it can be added
+/// to them or is a favourite. The same as for what the server's player plays, but for the track asked about.
+#[derive(Debug, Serialize)]
+pub struct TrackStateView {
+    pub addable: bool,
+    /// `None` when the source cannot tell (no account to ask for).
+    pub favorite: Option<bool>,
+    pub playlists: Vec<PlaylistView>,
+}
+
 pub struct PlayingService {
     lib: Arc<Library>,
     playlists: Arc<PlaylistService>,
@@ -179,6 +189,42 @@ impl PlayingService {
         let entry = active.entry(self.lib.music().as_deref(), &playing.track).ok_or(ToggleError::NotInLibrary)?;
         self.playlists.set_entry(playlist_id, &entry, member).await?;
         Ok(self.state(want).await?)
+    }
+
+    /// The connected source with that id and its track with that id.
+    async fn find(&self, source_id: &str, id: &str) -> Result<(Arc<Active>, Arc<dyn source::Source>, source::Track), ToggleError> {
+        let gone = || ToggleError::Refused("That track is not on a connected server.".into());
+        if !crate::covers::valid_item_id(id) {
+            return Err(gone());
+        }
+        let (a, s) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id).ok_or_else(gone)?;
+        let track = s.track(id).await.map_err(|_| gone())?;
+        Ok((a, s, track))
+    }
+
+    /// A given track's playlists and favourite (the local player's, decision 0022).
+    pub async fn track_state(&self, source_id: &str, id: &str) -> Result<TrackStateView, ToggleError> {
+        let (a, s, track) = self.find(source_id, id).await?;
+        let entry = a.entry(self.lib.music().as_deref(), &track);
+        let favorite = s.favorite(id).await.unwrap_or(None);
+        let playlists = self.playlists.view(entry.as_deref()).await?;
+        Ok(TrackStateView { addable: entry.is_some(), favorite, playlists })
+    }
+
+    /// Puts a given track in the playlist or takes it out, as `toggle` does for what the server's player plays.
+    pub async fn track_toggle(&self, source_id: &str, id: &str, playlist_id: &str, member: Option<bool>) -> Result<TrackStateView, ToggleError> {
+        let (a, _, track) = self.find(source_id, id).await?;
+        self.lib.store()?;
+        let entry = a.entry(self.lib.music().as_deref(), &track).ok_or(ToggleError::NotInLibrary)?;
+        self.playlists.set_entry(playlist_id, &entry, member).await?;
+        self.track_state(source_id, id).await
+    }
+
+    /// Marks a given track a favourite, or not.
+    pub async fn track_favorite(&self, source_id: &str, id: &str, on: bool) -> Result<TrackStateView, ToggleError> {
+        let (_, s, _) = self.find(source_id, id).await?;
+        s.set_favorite(id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
+        self.track_state(source_id, id).await
     }
 
     /// The cover of the album that holds the given track. `NotFound` when the source or track is unknown, the track
