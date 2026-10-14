@@ -7,7 +7,7 @@
   import { refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { coverSrc, favorite, pending, playing, toggleFavorite } from './remote.svelte';
+  import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
   import { enqueue, local } from './localPlayer.svelte';
   import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
   import { toast } from './toast.svelte';
@@ -15,7 +15,7 @@
   let { onclose }: { onclose: () => void } = $props();
 
   const np = $derived(playing());
-  const src = $derived(coverSrc());
+  const src = $derived(shownCover());
   // Playlists holding the track first, then the rest by name.
   const playlists = $derived(
     [...shownPlaylists()].sort((a, b) => Number(b.member) - Number(a.member) || a.name.localeCompare(b.name)),

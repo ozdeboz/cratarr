@@ -4,14 +4,17 @@ import { untrack } from 'svelte';
 import { ApiError, coverUrl, incomingCoverUrl, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
 import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek } from './localPlayer.svelte';
-import { isLocal, localNowPlaying, tookLocal } from './output.svelte';
+import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
 import { toast } from './toast.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
 export const playing = () => (isLocal() ? localNowPlaying() : (live.view?.now_playing ?? null));
 
-/** A server's player command is shown before it was confirmed: actions on what plays wait (never for the local one). */
-export const pending = () => !isLocal() && live.pending;
+/** Actions on what plays wait: a server's player command is shown before it was confirmed, or the local track's
+ *  playlists and favourite are still being asked for. */
+export const pending = () => (isLocal() ? localState.loading : live.pending);
+/** A command to the server's player is not confirmed yet: what plays may still turn out otherwise. */
+export const moving = () => !isLocal() && live.pending;
 
 // Cover: the library's cover file for a library track; otherwise (or when there is none) the album's image from the
 // server, which also covers music outside the library, such as Incoming. Candidates that fail are skipped.
@@ -25,6 +28,30 @@ export function coverSrc(): string | null {
   return candidates.find((u) => !failed[u]) ?? null;
 }
 export const coverFailed = (src: string) => (failed[src] = true);
+
+// The cover shown: a new one takes the old one's place only once it is loaded and decoded, so a track change never
+// shows a frame without a cover, and the same picture at another track's address shows no change at all. A cover
+// that fails is skipped (`coverSrc` offers the next candidate).
+const shown = $state<{ src: string | null }>({ src: null });
+$effect.root(() => {
+  $effect(() => {
+    const want = coverSrc();
+    if (!want) {
+      shown.src = null;
+      return;
+    }
+    if (want === untrack(() => shown.src)) return;
+    let current = true;
+    const img = new Image();
+    img.src = want;
+    img.decode().then(
+      () => current && (shown.src = want),
+      () => current && coverFailed(want),
+    );
+    return () => (current = false);
+  });
+});
+export const shownCover = () => shown.src;
 
 // The clock: between polls the position runs locally. It is re-anchored to the server only when the server disagrees
 // with it (track, pause state, or more than 1.5 s off: a seek or drift), so it moves smoothly.
@@ -90,7 +117,8 @@ function starting(next: { id: string; name: string; artist: string | null; album
     ...at,
     ...next,
     progress: { position_secs: 0, duration_secs: duration, paused: at.progress?.paused ?? false, estimated: false },
-    favorite: at.favorite === null ? null : false,
+    // The heart stays as it was until the server tells (it waits, disabled, meanwhile): no blink between tracks.
+    favorite: at.favorite,
     upcoming,
   };
 }
@@ -185,7 +213,7 @@ let artFor: string | null = null;
 
 $effect.root(() => {
   $effect(() => {
-    const src = coverSrc();
+    const src = shownCover();
     if (src === artFor) return;
     artFor = src;
     if (!src) {

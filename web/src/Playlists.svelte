@@ -53,9 +53,10 @@
       toast.show({ text: NOT_MUSIC, tone: 'warn' });
       return;
     }
-    // The player is moving to another track: the tap waits for it (live.svelte.ts).
+    // The server's player is moving to another track: the tap waits for it (live.svelte.ts). The local track's
+    // playlists are a moment away: the tap is not taken.
     if (pending()) {
-      queueTap(p.id);
+      if (!isLocal()) queueTap(p.id);
       return;
     }
     busy[p.id] = true;

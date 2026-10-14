@@ -8,10 +8,10 @@
   import Icon from './Icon.svelte';
   import { player } from './live.svelte';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, pending, playing, position, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, send, toggleFavorite } from './remote.svelte';
 
   const np = $derived(playing());
-  const src = $derived(coverSrc());
+  const src = $derived(shownCover());
   const pos = $derived(position());
   const dur = $derived(duration());
   const share = $derived(dur ? Math.min(1, pos / dur) : 0);

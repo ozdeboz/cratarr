@@ -5,13 +5,13 @@
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { isLocal, toLocal, toRemote } from './output.svelte';
-  import { coverSrc } from './remote.svelte';
+  import { shownCover } from './remote.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
   // The server's player as the page last saw it ("Finamp on Lenovo Tab"); a plain name when nothing plays there.
   const remoteName = $derived(live.view?.now_playing?.player ?? 'The server’s player');
-  const src = $derived(coverSrc());
+  const src = $derived(shownCover());
 
   async function choose(local: boolean) {
     onclose();

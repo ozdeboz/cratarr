@@ -14,14 +14,14 @@
   import { toast } from './toast.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, coverSrc, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
   import { shownPlaylists } from './output.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
   const np = $derived(playing());
   const memberCount = $derived(shownPlaylists().filter((p) => p.member).length);
-  const src = $derived(coverSrc());
+  const src = $derived(shownCover());
   // The backdrop list: the current blurred cover, and while it fades in, the one before it.
   let backdrops = $state<{ key: number; src: string }[]>([]);
   let backdropKey = 0;
@@ -32,19 +32,8 @@
       else if (backdrops.at(-1)?.src !== s) backdrops = [{ key: ++backdropKey, src: s }];
     });
   });
-  // Finamp's cover: a hard cut when the image is there at once; otherwise it fades in (ease-in) for as long as it took
-  // to load, at most 700 ms.
-  let coverAsked = 0;
-  $effect(() => {
-    void src;
-    coverAsked = performance.now();
-  });
-  function coverLoaded(e: Event) {
-    const img = e.currentTarget as HTMLImageElement;
-    const took = performance.now() - coverAsked;
-    if (reducedMotion() || took < 50) return;
-    img.animate([{ opacity: 0 }, { opacity: 1 }], { duration: Math.min(700, took), easing: 'ease-in' });
-  }
+  // Finamp's cover: a hard cut when the image is there at once, which it always is here (remote.svelte.ts shows a
+  // cover once it has loaded), so it never fades in.
   const pos = $derived(position());
   const dur = $derived(duration());
 
@@ -245,7 +234,7 @@
             onclick={coverTap}
             oncontextmenu={(e) => (e.preventDefault(), openMenu(e))}
           >
-            <img class="cover" {src} alt="" decoding="async" draggable="false" onload={coverLoaded} onerror={() => coverFailed(src)} />
+            <img class="cover" {src} alt="" draggable="false" onerror={() => coverFailed(src)} />
           </button>
         {/key}
       {/if}
@@ -316,9 +305,9 @@
               ><Icon name="heart" size={26} /></button
             >
           {/if}
-          <div class="count" class:pending={pending()} aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
+          <div class="count" class:pending={moving()} aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
             <span>in</span>
-            <strong>{pending() ? '–' : memberCount}</strong>
+            <strong>{moving() ? '–' : memberCount}</strong>
             <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
           </div>
           <button class="act" aria-label="Play on" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={24} /></button>

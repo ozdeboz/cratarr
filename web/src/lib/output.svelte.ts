@@ -52,14 +52,24 @@ export function localNowPlaying(): NowPlaying | null {
 
 // The local track's playlists and favourite: the server's state covers only its own player's track, so they are
 // asked for this one (on each new track, and when the playlists change).
-export const localState = $state<{ key: string | null; view: TrackState | null }>({ key: null, view: null });
+// `loading`: the playing track's are asked for. Meanwhile the track before's stay shown (the heart, the playlists),
+// disabled: the same answer, as between tracks of one album, then shows no change at all.
+export const localState = $state<{ key: string | null; view: TrackState | null; loading: boolean }>({
+  key: null,
+  view: null,
+  loading: false,
+});
 const keyOf = (t: LocalTrack) => `${t.source}/${t.id}`;
 async function loadState(t: LocalTrack) {
   try {
     const view = await trackState(t.source, t.id);
-    if (localState.key === keyOf(t)) localState.view = view;
+    if (localState.key !== keyOf(t)) return;
+    localState.view = view;
   } catch {
-    /* shown as in no playlist until it answers */
+    /* shown as in no playlist, without a heart */
+    if (localState.key === keyOf(t)) localState.view = null;
+  } finally {
+    if (localState.key === keyOf(t)) localState.loading = false;
   }
 }
 $effect.root(() => {
@@ -68,7 +78,8 @@ $effect.root(() => {
     const key = t ? keyOf(t) : null;
     if (key === localState.key) return;
     localState.key = key;
-    localState.view = null;
+    if (!t) localState.view = null;
+    localState.loading = !!t;
     if (t) loadState(t);
   });
   // Playlists made, renamed or changed elsewhere: the server's state says so (by their counts and names).
