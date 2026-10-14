@@ -352,15 +352,18 @@ impl IncomingService {
                 continue;
             }
             let key = format!("{}\n{}", a.cfg.id, libraries.join("\n"));
-            let kept = self.cache.lock().await.get(&key).cloned();
-            let view = match kept {
+            // One read at a time: requests that find no list wait for the one reading it instead of all asking the
+            // server (after a start, a page asking often would otherwise fan out to it).
+            let mut cache = self.cache.lock().await;
+            let view = match cache.get(&key).cloned() {
                 Some(v) => v,
                 None => {
                     let v = self.read_incoming(&a, &*s, &libraries).await;
-                    self.cache.lock().await.insert(key, v.clone());
+                    cache.insert(key, v.clone());
                     v
                 }
             };
+            drop(cache);
             sources.push(view);
         }
         let hidden = self.hidden.lock().await.clone();
