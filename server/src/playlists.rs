@@ -10,6 +10,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::journal::fingerprint;
 use crate::m3u;
 
 pub const BACKUP_DIR: &str = ".cratarr-backups";
@@ -236,6 +237,14 @@ fn unprefixed(line: &str, prefix: &str) -> String {
     line.strip_prefix(prefix).unwrap_or(line).to_string()
 }
 
+/// A playlist's file before and after a change: what undoing it needs (decision 0026).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Edited {
+    pub id: String,
+    pub before: String,
+    pub after: String,
+}
+
 pub struct Store {
     /// Where the `.m3u` files are.
     dir: PathBuf,
@@ -457,16 +466,48 @@ impl Store {
     /// As `set_entries`, but only when the playlist still holds `expected` (else nothing is written and false is
     /// returned): the sync must not overwrite an edit made while it was merging.
     pub async fn set_entries_if(&self, id: &str, expected: &[String], entries: &[String]) -> Result<bool, StoreError> {
+        Ok(self.replace_entries_if(id, expected, entries).await?.is_some())
+    }
+
+    /// As `set_entries_if`, saying what the file was and became (`None`: it no longer held `expected`).
+    pub async fn replace_entries_if(&self, id: &str, expected: &[String], entries: &[String]) -> Result<Option<Edited>, StoreError> {
         let _one_writer = self.write.lock().await;
         let (path, perms, text) = self.load_for_edit(id).await?;
         if m3u::entries(&text).map(|l| unprefixed(&l, &self.prefix)).collect::<Vec<_>>() != expected {
-            return Ok(false);
+            return Ok(None);
         }
         let lines: Vec<String> = entries.iter().map(|e| self.line(e)).collect();
         let new_text = m3u::with_entries(&text, &lines);
         if new_text != text {
             self.commit(id, &path, perms, &new_text).await?;
         }
+        Ok(Some(Edited { id: id.to_string(), before: text, after: new_text }))
+    }
+
+    /// Put a playlist's file back to `text` (an undo, decision 0026), only while it is still what the change left
+    /// (`left`, its fingerprint); `None` when it changed since. Committed like every edit.
+    pub async fn put_back_if(&self, id: &str, left: u64, text: &str) -> Result<Option<Edited>, StoreError> {
+        let _one_writer = self.write.lock().await;
+        let (path, perms, now) = self.load_for_edit(id).await?;
+        if fingerprint(&now) != left {
+            return Ok(None);
+        }
+        if now != text {
+            self.commit(id, &path, perms, text).await?;
+        }
+        Ok(Some(Edited { id: id.to_string(), before: now, after: text.to_string() }))
+    }
+
+    /// Delete a playlist (as `delete`) only while it is still what a change left (`left`); false when it changed since.
+    pub async fn delete_if(&self, id: &str, left: u64) -> Result<bool, StoreError> {
+        let _one_writer = self.write.lock().await;
+        let (path, _, now) = self.load_for_edit(id).await?;
+        if fingerprint(&now) != left {
+            return Ok(false);
+        }
+        self.backup(id, &path).await?;
+        tokio::fs::remove_file(&path).await.with_context(|| format!("deleting {id}.m3u"))?;
+        self.cache.write().await.remove(id);
         Ok(true)
     }
 
@@ -532,8 +573,8 @@ impl Store {
     }
 
     /// Apply repairs. Every requested pair must be one that is currently offered (the client is never trusted
-    /// with paths). One backup and one write per playlist. Returns the playlists that changed.
-    pub async fn apply_repairs(&self, wanted: &[Repair]) -> Result<Vec<String>, StoreError> {
+    /// with paths). One backup and one write per playlist. Returns the playlists that changed, each as it was and is.
+    pub async fn apply_repairs(&self, wanted: &[Repair]) -> Result<Vec<Edited>, StoreError> {
         let offered = self.repairs().await?;
         let is_offered = |w: &Repair| offered.safe.iter().chain(&offered.review).any(|o| o == w);
         if wanted.iter().any(|w| !is_offered(w)) {
@@ -549,7 +590,8 @@ impl Store {
         let _one_writer = self.write.lock().await;
         let mut changed = Vec::new();
         for (id, repairs) in by_playlist {
-            let (path, perms, mut text) = self.load_for_edit(&id).await?;
+            let (path, perms, before) = self.load_for_edit(&id).await?;
+            let mut text = before.clone();
             let mut total = 0;
             for r in repairs {
                 let (t, n) = m3u::with_replaced(&text, &self.line(&r.from), &self.line(&r.to));
@@ -558,7 +600,7 @@ impl Store {
             }
             if total > 0 {
                 self.commit(&id, &path, perms, &text).await?;
-                changed.push(id);
+                changed.push(Edited { id, before, after: text });
             }
         }
         Ok(changed)
@@ -588,20 +630,6 @@ impl Store {
             }
         }
         Ok(changed)
-    }
-
-    /// Put the playlist back as it was before its last change (the newest backup). The current file is backed up
-    /// first, so an undo can itself be undone.
-    pub async fn undo(&self, id: &str) -> Result<(), StoreError> {
-        let _one_writer = self.write.lock().await;
-        let (path, perms, _) = self.load_for_edit(id).await?;
-        let Some(backup) = self.newest_backup(id).await else {
-            return Err(StoreError::NothingToUndo);
-        };
-        let bytes = tokio::fs::read(&backup).await.with_context(|| format!("reading the backup of {id}"))?;
-        let text = String::from_utf8(bytes).map_err(|_| anyhow!("the backup of {id} is not valid UTF-8"))?;
-        self.commit(id, &path, perms, &text).await?;
-        Ok(())
     }
 
     /// Playlists that list the same entry more than once.
@@ -655,15 +683,16 @@ impl Store {
         Ok(out)
     }
 
-    /// Remove repeated entries from a playlist, keeping the first copy of each. Returns how many lines went.
-    pub async fn dedupe(&self, id: &str) -> Result<usize, StoreError> {
+    /// Remove repeated entries from a playlist, keeping the first copy of each. Returns how many lines went, and the
+    /// file as it was and is.
+    pub async fn dedupe(&self, id: &str) -> Result<(usize, Edited), StoreError> {
         let _one_writer = self.write.lock().await;
         let (path, perms, text) = self.load_for_edit(id).await?;
         let (new_text, removed) = m3u::with_deduped(&text);
         if removed > 0 {
             self.commit(id, &path, perms, &new_text).await?;
         }
-        Ok(removed)
+        Ok((removed, Edited { id: id.to_string(), before: text, after: new_text }))
     }
 
     /// Create an empty playlist. Never overwrites an existing file.
@@ -714,8 +743,9 @@ impl Store {
         Ok(())
     }
 
-    /// Bring back a deleted playlist from its newest backup (refuses if a playlist of that name exists again).
-    pub async fn restore_deleted(&self, id: &str) -> Result<(), StoreError> {
+    /// Bring back a deleted playlist from its newest backup (refuses if a playlist of that name exists again). Returns
+    /// the file it came back with.
+    pub async fn restore_deleted(&self, id: &str) -> Result<String, StoreError> {
         if !valid_id(id) {
             return Err(StoreError::Unknown);
         }
@@ -726,13 +756,13 @@ impl Store {
         }
         let Some(backup) = self.newest_backup(id).await else { return Err(StoreError::NothingToUndo) };
         let bytes = tokio::fs::read(&backup).await.with_context(|| format!("reading the backup of {id}"))?;
-        tokio::fs::write(&path, bytes).await.with_context(|| format!("restoring {id}.m3u"))?;
+        tokio::fs::write(&path, &bytes).await.with_context(|| format!("restoring {id}.m3u"))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).await;
         }
-        Ok(())
+        Ok(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
     }
 
     /// The newest backup file of `id`, if any.
@@ -1180,7 +1210,8 @@ B/2.mp3
         let s = d.store();
         let r = s.repairs().await.unwrap();
         let changed = s.apply_repairs(&r.safe).await.unwrap();
-        assert_eq!(changed, vec!["p"]);
+        assert_eq!(changed.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), vec!["p"]);
+        assert_eq!(changed[0].before, "#c\nAlb (2020)/01 A - One.mp3\r\nAlb (2020)/02 A - Two.mp3\r\n", "what undo puts back");
         assert_eq!(d.read("p.m3u"), "#c\nAlb (2020)/01 A - One.flac\r\nAlb (2020)/02 A - Two.mp3\r\n");
         let v = s.view(None).await.unwrap();
         assert_eq!((v[0].count, v[0].dead), (2, 0));
@@ -1199,28 +1230,21 @@ B/2.mp3
     }
 
     #[tokio::test]
-    async fn undo_restores_the_previous_version_and_can_itself_be_undone() {
-        let d = Dir::new();
-        d.touch("Alb (2020)/01 A - One.flac");
-        d.write("p.m3u", "Alb (2020)/01 A - One.mp3\n");
-        let s = d.store();
-        let r = s.repairs().await.unwrap();
-        s.apply_repairs(&r.safe).await.unwrap();
-        assert_eq!(d.read("p.m3u"), "Alb (2020)/01 A - One.flac\n");
-        s.undo("p").await.unwrap();
-        assert_eq!(d.read("p.m3u"), "Alb (2020)/01 A - One.mp3\n");
-        s.undo("p").await.unwrap();
-        assert_eq!(d.read("p.m3u"), "Alb (2020)/01 A - One.flac\n", "undoing the undo");
-    }
-
-    #[tokio::test]
-    async fn undo_without_a_backup_or_for_an_unknown_playlist_is_an_error() {
+    async fn a_file_is_put_back_only_while_it_is_what_the_change_left() {
         let d = Dir::new();
         d.write("p.m3u", "A/1.mp3\n");
         let s = d.store();
-        assert!(s.undo("p").await.is_err());
-        assert!(matches!(s.undo("nope").await, Err(StoreError::Unknown)));
-        assert!(matches!(s.undo("../p").await, Err(StoreError::Unknown)));
+        let e = s.replace_entries_if("p", &["A/1.mp3".into()], &[]).await.unwrap().unwrap();
+        assert_eq!((e.before.as_str(), e.after.as_str()), ("A/1.mp3\n", ""));
+        let back = s.put_back_if("p", fingerprint(&e.after), &e.before).await.unwrap().unwrap();
+        assert_eq!(d.read("p.m3u"), "A/1.mp3\n");
+        assert_eq!(back.before, "", "what the redo puts back");
+        assert_eq!(s.put_back_if("p", fingerprint(""), "").await.unwrap(), None, "it changed since: nothing is written");
+        assert_eq!(d.read("p.m3u"), "A/1.mp3\n");
+        assert!(matches!(s.put_back_if("nope", 0, "").await, Err(StoreError::Unknown)));
+        assert!(!s.delete_if("p", fingerprint("")).await.unwrap(), "changed since");
+        assert!(s.delete_if("p", fingerprint("A/1.mp3\n")).await.unwrap());
+        assert_eq!(s.restore_deleted("p").await.unwrap(), "A/1.mp3\n", "kept aside, as a delete");
     }
 
     #[tokio::test]
@@ -1233,10 +1257,10 @@ B/2.mp3
         assert_eq!(dups.len(), 1);
         assert_eq!((dups[0].playlist.as_str(), dups[0].extra), ("a", 2));
         assert_eq!(dups[0].entries, vec![DupEntry { entry: "A/1.mp3".into(), copies: 3 }]);
-        assert_eq!(s.dedupe("a").await.unwrap(), 2);
+        assert_eq!(s.dedupe("a").await.unwrap().0, 2);
         assert_eq!(d.read("a.m3u"), "A/1.mp3\nB/2.mp3\n");
         assert!(s.duplicates().await.unwrap().is_empty());
-        assert_eq!(s.dedupe("clean").await.unwrap(), 0);
+        assert_eq!(s.dedupe("clean").await.unwrap().0, 0);
         assert_eq!(std::fs::read_dir(d.0.join(BACKUP_DIR)).unwrap().count(), 1, "only the changed playlist is backed up");
     }
 

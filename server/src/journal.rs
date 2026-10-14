@@ -3,6 +3,10 @@
 //! whether it was undone. That makes each handler safe to run twice, lets handling resume after a restart, keeps
 //! Undo working across restarts, and answers "what happened here". One small SQLite file in the data folder (in
 //! memory without one).
+//!
+//! It is the app's one undo journal (decision 0026): besides the album events, the changes people make to playlists
+//! and crates are kept here (`Change`, in a table of their own, so the album handlers never see them), each holding
+//! what undoing it needs and a fingerprint of what it left.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -100,6 +104,40 @@ pub struct Converted {
     pub converted: String,
 }
 
+/// A change to playlists or crates (decision 0026): what undoing it needs, and what it left (so an undo can tell
+/// whether anything changed since). Undoing one is recorded as a change of its own, whose undo is the redo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Change {
+    /// Playlists' lines changed (an edit, repairs, repeats removed): each one's file before, and what it left.
+    Texts { changes: Vec<TextChange> },
+    /// New playlists, each with the fingerprint of the file it left.
+    Created { playlists: Vec<(String, u64)> },
+    /// Deleted playlists (the store keeps each aside).
+    Deleted { playlists: Vec<String> },
+    Renamed { from: String, to: String },
+    /// The names a playlist is also spoken as (decision 0015).
+    Spoken { playlist: String, before: Vec<String>, after: Vec<String> },
+    /// One of one's own crates (decision 0024): its definition before and after (`None`: it did not exist).
+    Crate { before: Option<crate::crates::CrateDef>, after: Option<crate::crates::CrateDef> },
+}
+
+/// One playlist's file before a change, and the fingerprint of the file the change left.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextChange {
+    pub playlist: String,
+    pub before: String,
+    pub left: u64,
+}
+
+/// Changes are offered for undo only in the toast after them: forgotten after a day.
+pub const CHANGE_SECS: i64 = 24 * 3600;
+
+/// A file's fingerprint (FNV-1a, 64 bits): the same text always gives the same number, across restarts and versions.
+pub fn fingerprint(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub id: EventId,
@@ -120,6 +158,8 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS handled (
   event INTEGER NOT NULL, handler TEXT NOT NULL, at INTEGER NOT NULL, result TEXT NOT NULL,
   PRIMARY KEY (event, handler)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, change TEXT NOT NULL, undone_at INTEGER);
 ";
 
 /// Columns added after the first schema; added to an existing journal when missing.
@@ -288,11 +328,61 @@ impl Journal {
         .collect()
     }
 
+    /// Keep a change to playlists or crates (decision 0026); changes older than a day are forgotten on the way.
+    pub fn record_change(&self, at: i64, change: &Change) -> Result<EventId> {
+        let db = self.db();
+        db.execute("DELETE FROM changes WHERE at < ?1", [at - CHANGE_SECS])?;
+        db.execute("INSERT INTO changes (at, change) VALUES (?1, ?2)", params![at, serde_json::to_string(change)?])?;
+        Ok(db.last_insert_rowid())
+    }
+
+    /// A change and whether it was undone; `None` when it is not (or no longer) kept.
+    pub fn change(&self, id: EventId) -> Result<Option<(Change, bool)>> {
+        let row = self
+            .db()
+            .query_row("SELECT change, undone_at FROM changes WHERE id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?)))
+            .optional()?;
+        row.map(|(c, undone)| Ok((serde_json::from_str(&c)?, undone.is_some()))).transpose()
+    }
+
+    /// Take a change for undoing: true for the one caller that may undo it (it was not undone yet).
+    pub fn claim_change(&self, id: EventId, at: i64) -> Result<bool> {
+        Ok(self.db().execute("UPDATE changes SET undone_at = ?2 WHERE id = ?1 AND undone_at IS NULL", params![id, at])? == 1)
+    }
+
+    /// Hand a claimed change back (its undo was refused or failed): it can be undone again.
+    pub fn release_change(&self, id: EventId) -> Result<()> {
+        self.db().execute("UPDATE changes SET undone_at = NULL WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     /// Forget events older than `before` (epoch seconds): nothing can undo or handle them any more.
     pub fn prune(&self, before: i64) -> Result<usize> {
         let db = self.db();
         db.execute("DELETE FROM handled WHERE event IN (SELECT id FROM events WHERE at < ?1)", [before])?;
         Ok(db.execute("DELETE FROM events WHERE at < ?1", [before])?)
+    }
+}
+
+#[cfg(test)]
+mod change_tests {
+    use super::*;
+
+    #[test]
+    fn a_change_is_kept_for_a_day_and_claimed_once() {
+        let j = Journal::open(None).unwrap();
+        let c = Change::Renamed { from: "a".into(), to: "b".into() };
+        let id = j.record_change(1_000_000, &c).unwrap();
+        assert_eq!(j.change(id).unwrap(), Some((c.clone(), false)));
+        assert!(j.claim_change(id, 1_000_010).unwrap(), "the first undo takes it");
+        assert!(!j.claim_change(id, 1_000_011).unwrap(), "a second, at the same time, does not");
+        j.release_change(id).unwrap();
+        assert_eq!(j.change(id).unwrap(), Some((c.clone(), false)), "handed back after a refusal");
+        j.record_change(1_000_000 + CHANGE_SECS + 1, &c).unwrap();
+        assert_eq!(j.change(id).unwrap(), None, "forgotten after a day");
+        assert_eq!(fingerprint("x"), fingerprint("x"));
+        assert_ne!(fingerprint("x"), fingerprint("y"));
+        assert_eq!(fingerprint(""), 0xcbf2_9ce4_8422_2325, "FNV-1a's offset basis: stable");
     }
 }
 

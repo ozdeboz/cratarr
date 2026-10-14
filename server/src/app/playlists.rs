@@ -12,7 +12,8 @@ use super::library::{Library, label_of};
 use std::collections::{HashMap, HashSet};
 
 use crate::crates::{self, CrateDef};
-use crate::playlists::{DupGroup, PlaylistView, Repair, Repairs};
+use crate::journal::{Change, EventId, Journal, TextChange, fingerprint};
+use crate::playlists::{DupGroup, Edited, PlaylistView, Repair, Repairs};
 use crate::source::{self, PlaylistChange, PlaylistEvent};
 use crate::sync_state::{Conflict, Direction, Kind};
 
@@ -125,6 +126,109 @@ fn safe_within(safe: Vec<Repair>, within: Option<&[String]>) -> Vec<Repair> {
 }
 
 #[cfg(test)]
+mod undo_tests {
+    use super::*;
+
+    /// The service over an empty Music folder of its own, no servers, the journal and the crates in memory.
+    async fn service() -> (PathBuf, PlaylistService) {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("cratarr-undo-{}-{n}", std::process::id()));
+        // Its playlist folder from the start (decision 0014), so the store never moves meanwhile.
+        std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
+        let lib = Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None).await.unwrap();
+        let journal = Arc::new(Journal::open(None).unwrap());
+        let state = crate::sync_state::SyncState::open(None).unwrap();
+        let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
+        (d.join(crate::playlists::PLAYLIST_DIR), PlaylistService::new(lib, sync, journal))
+    }
+
+    fn refused(r: Result<Option<String>, ToggleError>) -> String {
+        match r {
+            Err(ToggleError::Refused(m)) => m,
+            other => panic!("not refused: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_undo_is_undone_by_its_redo_and_happens_only_once() {
+        let (d, s) = service().await;
+        let lines = |v: &[&str]| v.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+        let read = |n: &str| std::fs::read_to_string(d.join(format!("{n}.m3u"))).ok();
+        let made = s.create_with("Chill", &lines(&["A/1.mp3", "A/2.mp3"])).await.unwrap().unwrap();
+        let edited = s.edit("Chill", &lines(&["A/1.mp3", "A/2.mp3"]), &lines(&["A/2.mp3"])).await.unwrap().unwrap();
+        assert_eq!(read("Chill").as_deref(), Some("../A/2.mp3\n"));
+
+        let redo = s.undo(&edited).await.unwrap().unwrap();
+        assert_eq!(read("Chill").as_deref(), Some("../A/1.mp3\n../A/2.mp3\n"), "the edit undone");
+        assert_eq!(refused(s.undo(&edited).await), "That was undone already.");
+        let again = s.undo(&redo).await.unwrap().unwrap();
+        assert_eq!(read("Chill").as_deref(), Some("../A/2.mp3\n"), "redone, as a change of its own");
+        s.undo(&again).await.unwrap();
+        assert_eq!(read("Chill").as_deref(), Some("../A/1.mp3\n../A/2.mp3\n"), "and the redo undone");
+
+        let unmade = s.undo(&made).await.unwrap().unwrap();
+        assert_eq!(read("Chill"), None, "the new playlist set aside");
+        s.undo(&unmade).await.unwrap();
+        assert_eq!(read("Chill").as_deref(), Some("../A/1.mp3\n../A/2.mp3\n"), "and back");
+        assert_eq!(refused(s.undo("c999").await), "That can no longer be undone.");
+        assert_eq!(refused(s.undo("nonsense").await), "That can no longer be undone.");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn nothing_is_undone_when_it_changed_since() {
+        let (d, s) = service().await;
+        let one = vec!["A/1.mp3".to_string()];
+        let made = s.create_with("Chill", &one).await.unwrap().unwrap();
+        let cleared = s.edit("Chill", &one, &[]).await.unwrap().unwrap();
+        // Another device (or a sync) changes it meanwhile.
+        std::fs::write(d.join("Chill.m3u"), "../B/9.mp3\n").unwrap();
+        assert_eq!(refused(s.undo(&cleared).await), "It changed since; nothing was undone.");
+        assert_eq!(refused(s.undo(&made).await), "It changed since; nothing was undone.");
+        assert_eq!(std::fs::read_to_string(d.join("Chill.m3u")).unwrap(), "../B/9.mp3\n", "left alone");
+        std::fs::write(d.join("Chill.m3u"), "").unwrap();
+        s.undo(&cleared).await.unwrap();
+        assert_eq!(std::fs::read_to_string(d.join("Chill.m3u")).unwrap(), "../A/1.mp3\n", "a refused undo can be tried again");
+
+        let renamed = s.rename("Chill", "Calm").await.unwrap().unwrap();
+        s.create("Chill").await.unwrap();
+        assert_eq!(refused(s.undo(&renamed).await), "It changed since; nothing was undone.", "the old name is taken");
+        std::fs::remove_file(d.join("Chill.m3u")).unwrap();
+        s.undo(&renamed).await.unwrap();
+        assert!(d.join("Chill.m3u").exists() && !d.join("Calm.m3u").exists());
+
+        let deleted = s.delete("Chill").await.unwrap().unwrap();
+        s.create("Chill").await.unwrap();
+        assert_eq!(refused(s.undo(&deleted).await), "It changed since; nothing was undone.", "a new one has the name");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn crates_and_spoken_names_are_put_back() {
+        let (d, s) = service().await;
+        let cond = |v: &str| crates::Condition { axis: "genre".into(), not: false, value: crates::Value::AnyOf { values: vec![v.into()] } };
+        let (id, made) = s.crate_save(None, "Jazz", vec![cond("Jazz")]).await.unwrap();
+        let (_, changed) = s.crate_save(Some(&id), "Jazzy", vec![cond("Bebop")]).await.unwrap();
+        s.undo(&changed.unwrap()).await.unwrap();
+        assert_eq!(s.crate_def(&id).await.unwrap().name, "Jazz");
+        let gone = s.crate_delete(&id).await.unwrap().unwrap();
+        assert!(s.crate_def(&id).await.is_err());
+        s.undo(&gone).await.unwrap();
+        assert_eq!(s.crate_def(&id).await.unwrap().conditions, vec![cond("Jazz")], "back with its own id");
+        s.crate_save(Some(&id), "Jazz", vec![cond("Swing")]).await.unwrap();
+        assert_eq!(refused(s.undo(&made.unwrap()).await), "It changed since; nothing was undone.");
+
+        s.create("Chill").await.unwrap();
+        let said = s.set_spoken("Chill", &["calm".into()]).await.unwrap().unwrap();
+        assert_eq!(s.set_spoken("Chill", &["calm".into()]).await.unwrap(), None, "no change, no token");
+        s.undo(&said).await.unwrap();
+        assert!(s.sync.spoken().remove("Chill").unwrap_or_default().is_empty());
+        std::fs::remove_dir_all(&d).ok();
+    }
+}
+
+#[cfg(test)]
 mod edit_tests {
     use super::{Repair, is_rearrangement, safe_within};
 
@@ -159,15 +263,141 @@ pub struct PlaylistService {
     sync: Arc<super::sync::SyncService>,
     /// One's own crates (decision 0024).
     crate_store: crates::CrateStore,
+    /// Where every change is kept for its undo (decision 0026).
+    journal: Arc<Journal>,
     /// The favourite tracks' lines for the crates: when, for which server, at which change count (see
     /// `favourite_lines`).
     favourites_kept: tokio::sync::Mutex<Option<(std::time::Instant, String, u64, HashSet<String>)>>,
 }
 
 impl PlaylistService {
-    pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>) -> Self {
+    pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>) -> Self {
         let crate_store = crates::CrateStore::new(lib.data_dir());
-        Self { lib, sync, crate_store, favourites_kept: tokio::sync::Mutex::new(None) }
+        Self { lib, sync, crate_store, journal, favourites_kept: tokio::sync::Mutex::new(None) }
+    }
+
+    /// Keep a change in the journal; its undo token (decision 0026). A journal that cannot be written costs only the
+    /// undo: the change itself is done.
+    fn keep(&self, change: Change) -> Option<String> {
+        match self.journal.record_change(super::library::epoch_now(), &change) {
+            Ok(id) => Some(format!("c{id}")),
+            Err(e) => {
+                tracing::warn!("journal: cannot keep a change for its undo: {e:#}");
+                None
+            }
+        }
+    }
+
+    /// Keep the playlists' files that changed (`None` when none did).
+    fn keep_texts(&self, edits: Vec<Edited>) -> Option<String> {
+        let changes: Vec<TextChange> = edits
+            .into_iter()
+            .filter(|e| e.before != e.after)
+            .map(|e| TextChange { left: fingerprint(&e.after), playlist: e.id, before: e.before })
+            .collect();
+        (!changes.is_empty()).then(|| self.keep(Change::Texts { changes })).flatten()
+    }
+
+    /// Undo a change by its token (decision 0026): only while what it left is still there (else "It changed since",
+    /// and nothing is undone), and only once. Returns the redo's token: the undo is a change of its own.
+    pub async fn undo(&self, token: &str) -> Result<Option<String>, ToggleError> {
+        let gone = || ToggleError::Refused("That can no longer be undone.".into());
+        let id: EventId = token.strip_prefix('c').and_then(|n| n.parse().ok()).ok_or_else(gone)?;
+        let (change, undone) = self.journal.change(id)?.ok_or_else(gone)?;
+        if undone || !self.journal.claim_change(id, super::library::epoch_now())? {
+            return Err(ToggleError::Refused("That was undone already.".into()));
+        }
+        match self.reverse(change).await {
+            Ok(redo) => Ok(self.keep(redo)),
+            Err(e) => {
+                if let Err(j) = self.journal.release_change(id) {
+                    tracing::warn!("journal: {j:#}");
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Put back what a change replaced, after checking that everything it left is still there. Returns the change
+    /// that undoes this undo.
+    async fn reverse(&self, change: Change) -> Result<Change, ToggleError> {
+        let changed = || ToggleError::Refused("It changed since; nothing was undone.".into());
+        let store = self.lib.store()?;
+        let left = |text: Option<String>| text.map(|t| fingerprint(&t));
+        match change {
+            Change::Texts { changes } => {
+                for c in &changes {
+                    if left(store.text(&c.playlist).await) != Some(c.left) {
+                        return Err(changed());
+                    }
+                }
+                let mut redo = Vec::new();
+                for c in changes {
+                    match store.put_back_if(&c.playlist, c.left, &c.before).await? {
+                        Some(e) => redo.push(TextChange { left: fingerprint(&e.after), playlist: e.id, before: e.before }),
+                        None => tracing::warn!("undo: {} changed while it was being put back", c.playlist),
+                    }
+                }
+                self.tell_sources(redo.iter().map(|c| (c.playlist.clone(), PlaylistChange::Edited)).collect());
+                Ok(Change::Texts { changes: redo })
+            }
+            Change::Created { playlists } => {
+                for (name, l) in &playlists {
+                    if left(store.text(name).await) != Some(*l) {
+                        return Err(changed());
+                    }
+                }
+                let mut gone = Vec::new();
+                for (name, l) in playlists {
+                    if store.delete_if(&name, l).await? {
+                        gone.push(name);
+                    }
+                }
+                self.tell_sources(gone.iter().map(|n| (n.clone(), PlaylistChange::Deleted)).collect());
+                Ok(Change::Deleted { playlists: gone })
+            }
+            Change::Deleted { playlists } => {
+                for name in &playlists {
+                    if store.text(name).await.is_some() {
+                        return Err(changed());
+                    }
+                }
+                let mut back = Vec::new();
+                for name in playlists {
+                    let text = store.restore_deleted(&name).await?;
+                    self.sync.restore_links(&name).await?;
+                    back.push((name, fingerprint(&text)));
+                }
+                Ok(Change::Created { playlists: back })
+            }
+            Change::Renamed { from, to } => {
+                if store.text(&to).await.is_none() || store.text(&from).await.is_some() {
+                    return Err(changed());
+                }
+                self.rename_unkept(&to, &from).await?;
+                Ok(Change::Renamed { from: to, to: from })
+            }
+            Change::Spoken { playlist, before, after } => {
+                if self.sync.spoken().remove(&playlist).unwrap_or_default() != after || store.text(&playlist).await.is_none() {
+                    return Err(changed());
+                }
+                self.sync.set_spoken(&playlist, &before)?;
+                Ok(Change::Spoken { playlist, before: after, after: before })
+            }
+            Change::Crate { before, after } => {
+                let Some(id) = after.as_ref().or(before.as_ref()).map(|c| c.id.clone()) else { return Err(changed()) };
+                if self.crate_store.list().await?.into_iter().find(|c| c.id == id) != after {
+                    return Err(changed());
+                }
+                match &before {
+                    Some(b) => self.crate_store.put(b.clone()).await.map_err(ToggleError::Refused)?,
+                    None => {
+                        self.crate_store.delete(&id).await?;
+                    }
+                }
+                Ok(Change::Crate { before: after, after: before })
+            }
+        }
     }
 
     /// Every playlist, marked where it holds `entry` (the playing track's line), with its links.
@@ -198,13 +428,16 @@ impl PlaylistService {
         Ok(ByName { playlist: Some(id), tracks })
     }
 
-    /// Set the other names a playlist is spoken as. Blank ones are dropped.
-    pub async fn set_spoken(&self, id: &str, names: &[String]) -> Result<(), ToggleError> {
+    /// Set the other names a playlist is spoken as. Blank ones are dropped. Returns the undo token (none when nothing
+    /// changed).
+    pub async fn set_spoken(&self, id: &str, names: &[String]) -> Result<Option<String>, ToggleError> {
         if self.lib.store()?.entries(id).await.is_err() {
             return Err(ToggleError::UnknownPlaylist);
         }
         let names: Vec<String> = names.iter().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
-        self.sync.set_spoken(id, &names)
+        let before = self.sync.spoken().remove(id).unwrap_or_default();
+        self.sync.set_spoken(id, &names)?;
+        Ok((before != names).then(|| self.keep(Change::Spoken { playlist: id.to_string(), before, after: names })).flatten())
     }
 
     /// What a playlist can be linked to.
@@ -414,32 +647,53 @@ impl PlaylistService {
     }
 
     /// Make playlist: the crate's tracks now, as a new, ordinary playlist (a snapshot; decision 0024).
-    pub async fn crate_to_playlist(&self, id: &str, want: Option<&str>, name: &str, fav: crates::Favourites) -> Result<usize, ToggleError> {
+    /// Returns how many tracks it got, and the undo token.
+    pub async fn crate_to_playlist(
+        &self,
+        id: &str,
+        want: Option<&str>,
+        name: &str,
+        fav: crates::Favourites,
+    ) -> Result<(usize, Option<String>), ToggleError> {
         let def = self.crate_def(id).await?;
         let (_, lines) = self.crate_lines_of(&fav.with(&def.conditions), want).await?;
         if lines.is_empty() {
             return Err(ToggleError::Refused("That crate is empty.".into()));
         }
-        self.create_with(name, &lines).await?;
-        Ok(lines.len())
+        let undo = self.create_with(name, &lines).await?;
+        Ok((lines.len(), undo))
     }
 
-    /// Saves one's own crate (a new one without `id`); returns its id.
-    pub async fn crate_save(&self, id: Option<&str>, name: &str, conditions: Vec<crates::Condition>) -> Result<String, ToggleError> {
+    /// One's own crate, if there is one with that id.
+    async fn own_crate(&self, id: &str) -> Result<Option<CrateDef>> {
+        Ok(self.crate_store.list().await?.into_iter().find(|c| c.id == id))
+    }
+
+    /// Saves one's own crate (a new one without `id`); returns its id and the undo token.
+    pub async fn crate_save(&self, id: Option<&str>, name: &str, conditions: Vec<crates::Condition>) -> Result<(String, Option<String>), ToggleError> {
         if id.is_some_and(crates::is_permanent) {
             return Err(ToggleError::Refused("A permanent crate cannot be changed.".into()));
         }
-        self.crate_store.save(id, name, conditions).await.map_err(ToggleError::Refused)
+        let before = match id {
+            Some(id) => self.own_crate(id).await?,
+            None => None,
+        };
+        let id = self.crate_store.save(id, name, conditions).await.map_err(ToggleError::Refused)?;
+        let after = self.own_crate(&id).await?;
+        let undo = (before != after).then(|| self.keep(Change::Crate { before, after })).flatten();
+        Ok((id, undo))
     }
 
-    pub async fn crate_delete(&self, id: &str) -> Result<(), ToggleError> {
+    /// Returns the undo token.
+    pub async fn crate_delete(&self, id: &str) -> Result<Option<String>, ToggleError> {
         if crates::is_permanent(id) {
             return Err(ToggleError::Refused("A permanent crate cannot be deleted.".into()));
         }
+        let before = self.own_crate(id).await?;
         if !self.crate_store.delete(id).await? {
             return Err(ToggleError::UnknownPlaylist);
         }
-        Ok(())
+        Ok(self.keep(Change::Crate { before, after: None }))
     }
 
     /// The axes and their domains in this library, for the builder (decision 0024, issue 4).
@@ -526,27 +780,17 @@ impl PlaylistService {
     }
 
     /// Apply the repairs the client chose (`None` = every safe one, or only those of the playlists `within`). The store
-    /// only accepts pairs it currently offers. The sources are then told about each changed playlist.
-    pub async fn apply_repairs(&self, only: Option<Repair>, within: Option<&[String]>) -> Result<Vec<String>, ToggleError> {
+    /// only accepts pairs it currently offers. The sources are then told about each changed playlist. Returns the
+    /// changed playlists and the undo token (one for all of them).
+    pub async fn apply_repairs(&self, only: Option<Repair>, within: Option<&[String]>) -> Result<(Vec<String>, Option<String>), ToggleError> {
         let wanted = match only {
             Some(one) => vec![one],
             None => safe_within(self.lib.store()?.repairs().await?.safe, within),
         };
-        let changed = self.lib.store()?.apply_repairs(&wanted).await?;
+        let edits = self.lib.store()?.apply_repairs(&wanted).await?;
+        let changed: Vec<String> = edits.iter().map(|e| e.id.clone()).collect();
         self.tell_sources(changed.iter().map(|n| (n.clone(), PlaylistChange::Edited)).collect());
-        Ok(changed)
-    }
-
-    /// Put each playlist back as it was before its last change.
-    pub async fn undo(&self, playlists: Vec<String>) -> Result<usize, ToggleError> {
-        let mut done = Vec::new();
-        for id in playlists {
-            self.lib.store()?.undo(&id).await?;
-            done.push(id);
-        }
-        let n = done.len();
-        self.tell_sources(done.into_iter().map(|n| (n, PlaylistChange::Edited)).collect());
-        Ok(n)
+        Ok((changed, self.keep_texts(edits)))
     }
 
     /// Album folders that look like the same release twice, each group compared. Read-only. Track details come
@@ -596,32 +840,35 @@ impl PlaylistService {
         self.lib.store()?.duplicates().await
     }
 
-    /// Remove repeated entries from one playlist (the first copy of each stays).
-    pub async fn dedupe(&self, id: &str) -> Result<usize, ToggleError> {
-        let removed = self.lib.store()?.dedupe(id).await?;
+    /// Remove repeated entries from one playlist (the first copy of each stays). Returns how many went, and the undo
+    /// token.
+    pub async fn dedupe(&self, id: &str) -> Result<(usize, Option<String>), ToggleError> {
+        let (removed, edit) = self.lib.store()?.dedupe(id).await?;
         if removed > 0 {
             self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
         }
-        Ok(removed)
+        Ok((removed, self.keep_texts(vec![edit])))
     }
 
-    /// A new playlist is Shared, as playlists were before sync links (decision 0014).
-    pub async fn create(&self, name: &str) -> Result<(), ToggleError> {
+    /// A new playlist is Shared, as playlists were before sync links (decision 0014). Returns the undo token.
+    pub async fn create(&self, name: &str) -> Result<Option<String>, ToggleError> {
         self.lib.store()?.create(name).await?;
-        self.sync.new_playlist(name).await
+        self.sync.new_playlist(name).await?;
+        Ok(self.keep(Change::Created { playlists: vec![(name.to_string(), fingerprint(""))] }))
     }
 
     /// A playlist edited in its view (decision 0023): its lines put in a new order or left out, as one write. Only the
     /// lines it has (`expected`, as the view showed them) can be kept; it is refused when the playlist changed since.
-    pub async fn edit(&self, id: &str, expected: &[String], entries: &[String]) -> Result<(), ToggleError> {
+    /// Returns the undo token (none when nothing changed).
+    pub async fn edit(&self, id: &str, expected: &[String], entries: &[String]) -> Result<Option<String>, ToggleError> {
         if !is_rearrangement(expected, entries) {
             return Err(ToggleError::Refused("An edit can only reorder or remove the playlist's own lines.".into()));
         }
-        if !self.lib.store()?.set_entries_if(id, expected, entries).await? {
+        let Some(edit) = self.lib.store()?.replace_entries_if(id, expected, entries).await? else {
             return Err(ToggleError::Refused("The playlist changed meanwhile: look at it again.".into()));
-        }
+        };
         self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
-        Ok(())
+        Ok(self.keep_texts(vec![edit]))
     }
 
     /// The server (`want`, else the first connected) a playlist favourite is kept on.
@@ -645,18 +892,26 @@ impl PlaylistService {
         s.set_playlist_favorite(id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
-    /// A new playlist holding these entries, in order (a playlist made from the queue, decision 0019).
-    pub async fn create_with(&self, name: &str, entries: &[String]) -> Result<(), ToggleError> {
+    /// A new playlist holding these entries, in order (a playlist made from the queue, decision 0019). Returns the
+    /// undo token.
+    pub async fn create_with(&self, name: &str, entries: &[String]) -> Result<Option<String>, ToggleError> {
         let store = self.lib.store()?;
         store.create(name).await?;
         // Filled only while still empty: never over an edit made since it was created.
-        if !store.set_entries_if(name, &[], entries).await? {
+        let Some(filled) = store.replace_entries_if(name, &[], entries).await? else {
             return Err(ToggleError::Refused("The new playlist changed while it was being filled.".into()));
-        }
-        self.sync.new_playlist(name).await
+        };
+        self.sync.new_playlist(name).await?;
+        Ok(self.keep(Change::Created { playlists: vec![(name.to_string(), fingerprint(&filled.after))] }))
     }
 
-    pub async fn rename(&self, from: &str, to: &str) -> Result<(), ToggleError> {
+    /// Returns the undo token.
+    pub async fn rename(&self, from: &str, to: &str) -> Result<Option<String>, ToggleError> {
+        self.rename_unkept(from, to).await?;
+        Ok(self.keep(Change::Renamed { from: from.to_string(), to: to.to_string() }))
+    }
+
+    async fn rename_unkept(&self, from: &str, to: &str) -> Result<(), ToggleError> {
         let store = self.lib.store()?;
         // Through the sync, so the server copies keep following the playlist (decision 0012).
         self.sync.rename(from, to, store.rename(from, to)).await?;
@@ -664,16 +919,11 @@ impl PlaylistService {
         Ok(())
     }
 
-    pub async fn delete(&self, id: &str) -> Result<(), ToggleError> {
+    /// The store keeps it aside; its undo brings it back with the links it had. Returns the undo token.
+    pub async fn delete(&self, id: &str) -> Result<Option<String>, ToggleError> {
         self.lib.store()?.delete(id).await?;
         self.tell_sources(vec![(id.to_string(), PlaylistChange::Deleted)]);
-        Ok(())
-    }
-
-    /// It comes back with the links it had.
-    pub async fn restore(&self, id: &str) -> Result<(), ToggleError> {
-        self.lib.store()?.restore_deleted(id).await?;
-        self.sync.restore_links(id).await
+        Ok(self.keep(Change::Deleted { playlists: vec![id.to_string()] }))
     }
 
     /// Re-check which playlist entries point at missing files (the library changes without the playlists).

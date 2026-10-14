@@ -54,7 +54,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists", post(create_playlist))
         .route("/api/playlists/{id}", delete(delete_playlist))
         .route("/api/playlists/{id}/rename", post(rename_playlist))
-        .route("/api/playlists/{id}/restore", post(restore_playlist))
         .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
         .route("/api/sync/targets", get(sync_targets))
         .route("/api/playlists/by-name", get(playlist_by_name))
@@ -69,7 +68,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/incoming", get(incoming))
         .route("/api/incoming/cover/{source}/{album}", get(incoming_cover))
         .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
-        .route("/api/incoming/undo", post(undo_incoming))
         .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
         .route("/api/incoming/replace/{source}/{album}", get(replace_preview).post(replace_incoming))
         .route("/api/incoming/jobs", get(incoming_jobs))
@@ -343,13 +341,13 @@ struct CrateBody {
 }
 
 async fn crate_create(State(app): State<Arc<App>>, Json(b): Json<CrateBody>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let id = app.playlists.crate_save(None, &b.name, b.conditions).await?;
-    Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
+    let (id, undo) = app.playlists.crate_save(None, &b.name, b.conditions).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "id": id, "undo": undo }))))
 }
 
 async fn crate_update(State(app): State<Arc<App>>, Path(id): Path<String>, Json(b): Json<CrateBody>) -> Result<Json<serde_json::Value>, ApiError> {
-    let id = app.playlists.crate_save(Some(&id), &b.name, b.conditions).await?;
-    Ok(Json(json!({ "id": id })))
+    let (id, undo) = app.playlists.crate_save(Some(&id), &b.name, b.conditions).await?;
+    Ok(Json(json!({ "id": id, "undo": undo })))
 }
 
 async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<crate::crates::CrateDef>, ApiError> {
@@ -357,8 +355,8 @@ async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Resul
 }
 
 async fn crate_delete(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.crate_delete(&id).await?;
-    Ok(Json(json!({ "deleted": id })))
+    let undo = app.playlists.crate_delete(&id).await?;
+    Ok(Json(json!({ "deleted": id, "undo": undo })))
 }
 
 /// The axes the builder draws its controls from, with their domains in this library.
@@ -392,8 +390,8 @@ async fn crate_playlist(
     Query(f): Query<Follow>,
     Json(req): Json<CratePlaylistRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let added = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name, req.favourites).await?;
-    Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "added": added }))))
+    let (added, undo) = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name, req.favourites).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "added": added, "undo": undo }))))
 }
 
 /// Which playlists are favourites (by name), as Finamp's playlist hearts (decision 0023).
@@ -419,8 +417,8 @@ struct Edit {
 }
 
 async fn edit_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(e): Json<Edit>) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.edit(&id, &e.expected, &e.entries).await?;
-    Ok(Json(json!({ "playlist": id, "entries": e.entries.len() })))
+    let undo = app.playlists.edit(&id, &e.expected, &e.entries).await?;
+    Ok(Json(json!({ "playlist": id, "entries": e.entries.len(), "undo": undo })))
 }
 
 /// A playlist's tracks for the local player: the server they are on and their ids in file order (decision 0022).
@@ -539,15 +537,6 @@ async fn delete_incoming(
     Ok(Json(app.incoming.delete(&source, &album).await?))
 }
 
-#[derive(Deserialize)]
-struct UndoBody {
-    undo: String,
-}
-
-/// Undo an Incoming action (Delete, Keep, Replace) by the key it returned.
-async fn undo_incoming(State(app): State<Arc<App>>, Json(b): Json<UndoBody>) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "restored": app.incoming.undo(&b.undo).await? })))
-}
 
 #[derive(Deserialize, Default)]
 struct KeepYear {
@@ -630,8 +619,8 @@ async fn apply_repairs(State(app): State<Arc<App>>, Json(req): Json<ApplyRequest
         ApplyRequest::Safe { playlists } => (None, playlists),
         ApplyRequest::One { playlist, from, to } => (Some(Repair { playlist, from, to }), None),
     };
-    let changed = app.playlists.apply_repairs(only, within.as_deref()).await?;
-    Ok(Json(json!({ "playlists": changed })))
+    let (changed, undo) = app.playlists.apply_repairs(only, within.as_deref()).await?;
+    Ok(Json(json!({ "playlists": changed, "undo": undo })))
 }
 
 #[derive(Deserialize)]
@@ -650,18 +639,18 @@ struct PlaylistRequest {
 }
 
 async fn create_playlist(State(app): State<Arc<App>>, Json(req): Json<NameRequest>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    app.playlists.create(&req.name).await?;
-    Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name }))))
+    let undo = app.playlists.create(&req.name).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "undo": undo }))))
 }
 
 async fn rename_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<RenameRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.rename(&id, &req.to).await?;
-    Ok(Json(json!({ "playlist": req.to })))
+    let undo = app.playlists.rename(&id, &req.to).await?;
+    Ok(Json(json!({ "playlist": req.to, "undo": undo })))
 }
 
 async fn delete_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.delete(&id).await?;
-    Ok(Json(json!({ "deleted": id })))
+    let undo = app.playlists.delete(&id).await?;
+    Ok(Json(json!({ "deleted": id, "undo": undo })))
 }
 
 #[derive(Deserialize)]
@@ -686,8 +675,8 @@ struct Spoken {
 }
 
 /// The other names a playlist is spoken as, exactly these.
-async fn set_spoken(State(app): State<Arc<App>>, Path(id): Path<String>, Json(b): Json<Spoken>) -> Result<Json<()>, ApiError> {
-    Ok(Json(app.playlists.set_spoken(&id, &b.names).await?))
+async fn set_spoken(State(app): State<Arc<App>>, Path(id): Path<String>, Json(b): Json<Spoken>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "undo": app.playlists.set_spoken(&id, &b.names).await? })))
 }
 
 /// What a playlist can be linked to (decision 0014).
@@ -714,10 +703,6 @@ async fn unlink_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Qu
     Ok(Json(app.playlists.unlink(&id, &q.target).await?))
 }
 
-async fn restore_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.restore(&id).await?;
-    Ok(Json(json!({ "restored": id })))
-}
 
 async fn album_duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "groups": app.playlists.album_duplicates().await.map_err(ToggleError::from)? })))
@@ -728,18 +713,29 @@ async fn duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Valu
 }
 
 async fn dedupe(State(app): State<Arc<App>>, Json(req): Json<PlaylistRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let removed = app.playlists.dedupe(&req.playlist).await?;
-    Ok(Json(json!({ "removed": removed })))
+    let (removed, undo) = app.playlists.dedupe(&req.playlist).await?;
+    Ok(Json(json!({ "removed": removed, "undo": undo })))
 }
 
+/// One action's undo tokens (decision 0026): one, or one per playlist of an action on several.
 #[derive(Deserialize)]
 struct UndoRequest {
-    playlists: Vec<String>,
+    tokens: Vec<String>,
 }
 
+/// The one undo (decision 0026): every token an action returned, undone newest first. Playlist and crate changes
+/// answer with their redo tokens; Incoming's (its event ids) with the albums' titles.
 async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let restored = app.playlists.undo(req.playlists).await?;
-    Ok(Json(json!({ "restored": restored })))
+    let (mut redo, mut restored) = (Vec::new(), Vec::new());
+    for token in req.tokens.iter().rev() {
+        if token.starts_with('c') {
+            redo.extend(app.playlists.undo(token).await?);
+        } else {
+            restored.push(app.incoming.undo(token).await?);
+        }
+    }
+    redo.reverse();
+    Ok(Json(json!({ "redo": redo, "restored": restored })))
 }
 
 pub struct ApiError(ToggleError);

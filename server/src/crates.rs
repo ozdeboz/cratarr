@@ -302,6 +302,20 @@ impl CrateStore {
         Ok(id)
     }
 
+    /// Puts a crate back as it was (an undo, decision 0026): replaced by its id, or added again. Refused when another
+    /// crate has its name now.
+    pub async fn put(&self, def: CrateDef) -> Result<(), String> {
+        let mut crates = self.list().await.map_err(|e| format!("{e:#}"))?;
+        if crates.iter().any(|c| c.id != def.id && c.name.eq_ignore_ascii_case(&def.name)) {
+            return Err("Another crate has that name now; nothing was undone.".into());
+        }
+        match crates.iter_mut().find(|c| c.id == def.id) {
+            Some(c) => *c = def,
+            None => crates.push(def),
+        }
+        self.write(crates).await.map_err(|e| format!("{e:#}"))
+    }
+
     pub async fn delete(&self, id: &str) -> Result<bool> {
         let mut crates = self.list().await?;
         let before = crates.len();

@@ -73,6 +73,8 @@ pub struct FromQueue {
     pub playlist: String,
     pub added: usize,
     pub left_out: usize,
+    /// Its undo token (decision 0026).
+    pub undo: Option<String>,
 }
 
 /// An album whose cover the page can show (`/api/incoming/cover/{source}/{album_id}`).
@@ -174,8 +176,8 @@ impl PlayingService {
         if entries.is_empty() {
             return Err(ToggleError::Refused("None of those tracks are in your Music.".into()));
         }
-        self.playlists.create_with(name, &entries).await?;
-        Ok(FromQueue { playlist: name.to_string(), added: entries.len(), left_out })
+        let undo = self.playlists.create_with(name, &entries).await?;
+        Ok(FromQueue { playlist: name.to_string(), added: entries.len(), left_out, undo })
     }
 
     /// Up to four albums of a playlist, in its order, for the mosaic on its menu (decision 0021).

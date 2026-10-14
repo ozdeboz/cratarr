@@ -84,7 +84,7 @@ impl App {
         let sync_state = crate::sync_state::SyncState::open(sync_file.as_deref())?;
         let sync = Arc::new(sync::SyncService::new(library.clone(), sync_state, journal.clone()));
         sync.listen();
-        let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone()));
+        let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone(), journal.clone()));
         let files = crate::ports::disk();
         let incoming =
             Arc::new(IncomingService::new(library.clone(), files.clone(), journal.clone(), saved.lidarr, saved.trash_days, cfg.data_dir.as_deref()));
