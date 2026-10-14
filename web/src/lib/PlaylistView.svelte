@@ -23,8 +23,6 @@
     playlistRows,
     queueTrack,
     queueTracks,
-    setSpoken,
-    spokenNames,
     type PlaylistRow,
   } from './api';
   import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, favouritesOf, loadCrates } from './crates.svelte';
@@ -309,23 +307,22 @@
   }
 
   // Edit mode: a working copy of the rows (each with its place in the file, so a restored one goes back there), and of
-  // the playlist's name and the names it is also spoken as (decision 0015). "Names" in the bar shows those two in
-  // place of the info beside the cover (Finamp's edit screen has its name field there).
+  // the playlist's name: its title is editable where it is, looking the same (a tap puts the caret in it; Enter or a
+  // tap elsewhere ends it), and Save renames it with the rest.
   type Item = { r: PlaylistRow; at: number };
-  let editing = $state<{ rows: Item[]; removed: Item[]; name: string; spoken: string; names: boolean; saving: boolean } | null>(null);
+  let editing = $state<{ rows: Item[]; removed: Item[]; name: string; saving: boolean } | null>(null);
   const editingFor = $derived(editing ? id : null);
   $effect(() => {
     // Another playlist opened (or this one closed): the edit is dropped.
     if (editingFor !== null && editingFor !== id) editing = null;
   });
   const tracksChanged = $derived(!!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)));
-  const spokenChanged = $derived(!!editing && spokenNames(editing.spoken).join('\n') !== (p?.spoken ?? []).join('\n'));
   const newName = $derived(editing ? editing.name.trim() : '');
   const nameChanged = $derived(!!editing && newName !== '' && newName !== id);
   function startEdit() {
     if (!rows) return;
     navigator.vibrate?.(8);
-    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], name: id, spoken: (p?.spoken ?? []).join(', '), names: false, saving: false };
+    editing = { rows: rows.map((r, at) => ({ r, at })), removed: [], name: id, saving: false };
   }
   const reorder = new Reorder(
     () => scroller,
@@ -355,7 +352,7 @@
   };
   async function save() {
     if (!editing || !rows) return;
-    if (!tracksChanged && !spokenChanged && !nameChanged) return void (editing = null);
+    if (!tracksChanged && !nameChanged) return void (editing = null);
     editing.saving = true;
     try {
       if (tracksChanged)
@@ -364,7 +361,6 @@
           rows.map((r) => r.entry),
           editing.rows.map((x) => x.r.entry),
         );
-      if (spokenChanged) await setSpoken(id, spokenNames(editing.spoken));
       // Last: the writes above still name it as it was. The open panel follows the new name.
       if (nameChanged) await renameEverywhere(id, newName);
       editing = null;
@@ -387,14 +383,13 @@
 <section class="view" aria-label={id}>
   <div class="bar" class:editing={!!editing}>
     {#if editing}
-      <button class="barbtn" onclick={() => (editing = null)} disabled={editing.saving}>Cancel</button>
+      <button class="barbtn iconic" aria-label="Cancel" onclick={() => (editing = null)} disabled={editing.saving}><Icon name="close" size={18} /><span>Cancel</span></button>
       <span class="end">
-        <button class="barbtn" aria-pressed={editing.names} onclick={() => editing && (editing.names = !editing.names)} disabled={editing.saving}>Names</button>
-        <button class="barbtn save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}>Save</button>
+        <button class="barbtn save iconic" aria-label="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={18} /><span>Save</span></button>
         <PanelPlace />
       </span>
     {:else if making}
-      <button class="barbtn" onclick={() => (making = null)} disabled={making.saving}>Cancel</button>
+      <button class="barbtn iconic" aria-label="Cancel" onclick={() => (making = null)} disabled={making.saving}><Icon name="close" size={18} /><span>Cancel</span></button>
       <span class="end">
         <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
         <PanelPlace />
@@ -433,20 +428,31 @@
               <input type="text" maxlength="100" autofocus bind:value={making.name} disabled={making.saving} onkeydown={(e) => e.key === 'Enter' && makePlaylist()} />
             </label>
           </div>
-        {:else if editing?.names}
-          <div class="info fields">
-            <label class="field">
-              <span>Name</span>
-              <input type="text" maxlength="100" bind:value={editing.name} disabled={editing.saving} />
-            </label>
-            <label class="field">
-              <span>Spoken as</span>
-              <input type="text" placeholder="Other names, comma-separated" bind:value={editing.spoken} disabled={editing.saving} />
-            </label>
-          </div>
         {:else}
         <div class="info">
-          <h2>{title}</h2>
+          {#if editing}
+            <!-- The name, editable where it is and looking the same. -->
+            <h2
+              class="editable"
+              contenteditable="plaintext-only"
+              class:saving={editing.saving}
+              aria-label="Name"
+              spellcheck="false"
+              bind:textContent={editing.name}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                }
+              }}
+              oninput={(e) => {
+                const el = e.currentTarget;
+                if ((el.textContent ?? '').length > 100) el.textContent = (el.textContent ?? '').slice(0, 100);
+              }}
+            ></h2>
+          {:else}
+            <h2>{title}</h2>
+          {/if}
           {#if crate}
             <p class="line"><Icon name="music" size={20} /><span>{rows ? plural(total, 'track') : 'Loading…'}</span></p>
           {:else if multi}
@@ -652,13 +658,6 @@
     align-items: center;
   }
 
-  /* Editing on a very narrow panel (under 320 px): Cancel, Names and Save keep the room; the place button waits. */
-  @container (max-width: 319px) {
-    .bar.editing :global(.place) {
-      display: none;
-    }
-  }
-
   /* Finamp's playlist heart: filled when it is a favourite. */
   .icon.fav :global(svg) {
     fill: currentColor;
@@ -677,14 +676,33 @@
     cursor: pointer;
   }
 
+  /* Cancel and Save carry an icon beside their label (✕, an arrow down to a line). */
+  .barbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* A narrow panel: Cancel and Save show their icons only (the labels stay for screen readers). */
+  @container (max-width: 339px) {
+    .barbtn.iconic span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .barbtn.iconic {
+      padding: 0 10px;
+    }
+  }
+
   .barbtn.save {
     background: var(--accent);
     color: var(--accent-text);
     font-weight: 600;
-  }
-
-  .barbtn[aria-pressed='true'] {
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
   }
 
   .barbtn:disabled {
@@ -718,7 +736,24 @@
     transition: none;
   }
 
-  /* Edit mode's Name and Spoken as, in place of the info beside the cover. */
+  /* The name in edit mode: the title as it is, with a caret once tapped (no field around it); all of it shows while
+     it is being written. */
+  h2.editable {
+    cursor: text;
+    outline: none;
+  }
+
+  /* While it saves the name is not written in. */
+  h2.editable.saving {
+    pointer-events: none;
+  }
+
+  h2.editable:focus {
+    display: block;
+    overflow: visible;
+  }
+
+  /* Make playlist's name field, in place of the info beside the cover. */
   .info.fields {
     justify-content: center;
     gap: 8px;

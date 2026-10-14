@@ -163,9 +163,9 @@
 
 <section class="view" aria-label={id ? 'Change the crate' : 'New crate'}>
   <div class="bar">
-    <button class="barbtn" onclick={cancel} disabled={saving}>Cancel</button>
+    <button class="barbtn iconic" aria-label="Cancel" onclick={cancel} disabled={saving}><Icon name="close" size={18} /><span>Cancel</span></button>
     <span class="end">
-      <button class="barbtn save" onclick={save} disabled={saving || !draft?.name.trim()} aria-busy={saving}>Save</button>
+      <button class="barbtn save iconic" aria-label="Save" onclick={save} disabled={saving || !draft?.name.trim()} aria-busy={saving}><Icon name="arrowDownToLine" size={18} /><span>Save</span></button>
       <PanelPlace />
     </span>
   </div>
@@ -279,6 +279,29 @@
     color: inherit;
     font: inherit;
     cursor: pointer;
+  }
+
+  /* Cancel and Save carry an icon beside their label (✕, an arrow down to a line). */
+  .barbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* A narrow panel: Cancel and Save show their icons only (the labels stay for screen readers). */
+  @container (max-width: 339px) {
+    .barbtn.iconic span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .barbtn.iconic {
+      padding: 0 10px;
+    }
   }
 
   .barbtn.save {

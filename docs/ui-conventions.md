@@ -61,8 +61,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   (read-only). ✕ (and Esc, Back) closes the panel: the player folds to the mini-player rather than showing in its
   place (decision 0025). Its bar has ✕, the heart (Finamp's playlist
   favourite), the pencil (edit mode, on Tracks) and the menu; in
-  edit mode Cancel, Names and Save. Rows as the queue's; edit mode as Finamp's playlist edit screen: Names swaps the
-  info beside the cover for Name and Spoken as (where Finamp has its name field); rows with handle and ✕, swipe to
+  edit mode Cancel (✕) and Save (an arrow down to a line; on a panel under 340 px their icons only). Rows as the
+  queue's; edit mode as Finamp's playlist edit screen: the title is editable where it is, looking the same (Spoken
+  as… is in the playlist's menu); rows with handle and ✕, swipe to
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
 - **New playlist, New crate** ask for the name in the same sheet (`lib/NameSheet.svelte`), from the + in the page's top
   right corner (`lib/NewButton.svelte`: its label beside it on a wide page, by container query); a new crate then opens
@@ -100,7 +101,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Over the page or beside it** (decision 0018): the player's top-right button is in every panel's top-right corner
   too (a playlist, a crate, the builder; `lib/PanelPlace.svelte`), on a window with room beside the page: beside the
   page "Over the page" (⤢), over it "Beside the page" (sidebar), always in that corner. It only changes the place:
-  the player stays folded to the mini-player. While editing a playlist on a panel under 320 px it steps aside.
+  the player stays folded to the mini-player.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. Where music plays is chosen at the player (its output button), not in Settings.
 - **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser
