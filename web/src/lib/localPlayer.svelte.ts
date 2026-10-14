@@ -2,7 +2,8 @@
 // track comes from the server (/api/stream: FLAC repackaged as fragmented MP4, MP3 as it is) and is appended to the
 // same stream right after the one before: MP3 trimmed by its LAME header's encoder delay at the start and to its exact
 // length at the end (measured to the sample with tools/gapless-lab), FLAC placed at its own sample positions. The next
-// track is appended while the current one plays; what has been played is dropped from the buffer again.
+// track is appended while the current one plays; what has been played is dropped from the buffer again. A track is
+// read only as far as the playback needs (LEAD), so the browser's small audio buffer never has to hold one whole.
 //
 // The stream's time is mapped back to "which track, how far in" through the segments: one per appended track, from
 // where its sample 0 sits in the stream. Skipping to an appended track moves within the stream (no gap, no reload);
@@ -42,6 +43,10 @@ const MP4 = 'audio/mp4; codecs="flac"';
 const MPEG = 'audio/mpeg';
 /** Keep this much ahead in the stream before fetching the next track (s). */
 const AHEAD = 30;
+/** Within a track, read no further than this ahead of the playing position (s): the rest of the fetch waits for the
+ *  playback, so a long track never has to fit the browser's buffer whole (Chrome takes 12 MiB of audio, about two
+ *  minutes of FLAC). */
+const LEAD = 60;
 /** Drop played audio older than this behind the playing position (s). */
 const BEHIND = 30;
 /** Previous restarts the track after this many seconds (Finamp: 5). */
@@ -119,24 +124,67 @@ async function waitUpdate() {
   if (sb?.updating) await new Promise((r) => sb!.addEventListener('updateend', r, { once: true }));
 }
 
-/** Appends bytes, making room by dropping played audio when the browser's buffer is full. */
-async function appendBytes(bytes: Uint8Array<ArrayBuffer>, gen: number, signal?: AbortSignal) {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    if (gen !== generation || !sb || signal?.aborted) return;
+/** Seconds of audio buffered from the playing position on. */
+function ahead() {
+  if (!audio || !sb) return 0;
+  const t = audio.currentTime;
+  const b = sb.buffered;
+  for (let i = 0; i < b.length; i++) if (b.start(i) <= t + 0.1 && b.end(i) > t) return b.end(i) - t;
+  return 0;
+}
+
+/** Seconds of audio buffered in all. */
+function held() {
+  if (!sb) return 0;
+  let s = 0;
+  for (let i = 0; i < sb.buffered.length; i++) s += sb.buffered.end(i) - sb.buffered.start(i);
+  return s;
+}
+
+/** Resolves once the playback moves on (the element's next timeupdate), or at once when `signal` aborts (a new
+ *  stream, a cut, a stop). A paused player keeps it waiting: nothing more is needed until it plays. */
+function playbackMoves(signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted || !audio) return resolve();
+    const done = new AbortController();
+    const go = () => {
+      done.abort();
+      resolve();
+    };
+    audio.addEventListener('timeupdate', go, { signal: AbortSignal.any([signal, done.signal]) });
+    signal.addEventListener('abort', go, { signal: done.signal });
+  });
+}
+
+/** Appends bytes when there is reason and room for them, as developer.chrome.com/blog/quotaexceedederror advises:
+ *  no further than LEAD ahead of the playing position, and when the browser's buffer is full (QuotaExceededError)
+ *  once played audio is dropped or, with none left to drop, once the playback has used up some of what is ahead.
+ *  Holding back holds the fetch back too (its reader is not read), and the server's stream waits with it. */
+async function appendBytes(bytes: Uint8Array<ArrayBuffer>, gen: number, signal: AbortSignal) {
+  // Cut meanwhile (the queue changed after this track): nothing more of it goes in.
+  const gone = () => gen !== generation || !sb || signal.aborted;
+  for (;;) {
+    while (!gone() && ahead() > LEAD) {
+      await evict();
+      await playbackMoves(signal);
+    }
+    if (gone()) return;
     await waitUpdate();
-    // Cut meanwhile (the queue changed after this track): nothing more of it goes in.
-    if (gen !== generation || !sb || signal?.aborted) return;
+    if (gone()) return;
     try {
-      sb.appendBuffer(bytes);
+      sb!.appendBuffer(bytes);
       await waitUpdate();
       return;
     } catch (e) {
       if ((e as DOMException).name !== 'QuotaExceededError') throw e;
-      await evict(5);
-      await new Promise((r) => setTimeout(r, 500));
     }
+    const before = held();
+    await evict(5);
+    if (held() < before) continue;
+    // Nothing behind to drop and next to nothing ahead: the browser takes less than these bytes, waiting won't help.
+    if (ahead() < 1) throw new Error('The browser has no room for more audio.');
+    await playbackMoves(signal);
   }
-  throw new Error('The browser has no room for more audio.');
 }
 
 /** Drops played audio more than `keep` seconds behind the playing position. */
