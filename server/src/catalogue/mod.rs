@@ -1022,7 +1022,11 @@ async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -
     let started = now();
     let last_full: i64 = cat.meta(&format!("full:{id}")).and_then(|v| v.parse().ok()).unwrap_or(0);
     let last_pass: i64 = cat.meta(&format!("pass:{id}")).and_then(|v| v.parse().ok()).unwrap_or(0);
-    let full = started - last_full >= FULL_EVERY_SECS;
+    // Also when the folders changed since the last full listing: a folder added later (Lidarr's, 2026-10-14) got
+    // only the tracks the server changed since, and its older ones stayed unplayable until the next day's listing.
+    let folders = cat.folders().iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join("
+");
+    let full = started - last_full >= FULL_EVERY_SECS || cat.meta(&format!("full-folders:{id}")).as_deref() != Some(&folders);
     let since = (!full).then_some(last_pass);
     let mut roots = Roots::default();
     for lib in &libraries {
@@ -1056,6 +1060,7 @@ async fn link_source(cat: &Arc<Catalogue>, id: &str, source: &Arc<dyn Source>) -
     }
     if full {
         cat.set_meta(&format!("full:{id}"), &started.to_string());
+        cat.set_meta(&format!("full-folders:{id}"), &folders);
     }
     cat.set_meta(&format!("pass:{id}"), &started.to_string());
     Ok(())
