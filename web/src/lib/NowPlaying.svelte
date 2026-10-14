@@ -802,9 +802,13 @@
     fill: currentColor;
   }
 
+  /* A fixed width (room for "playlists" and two digits): the row's buttons never move as the count changes. */
   .count {
+    flex: none;
+    width: 4rem;
     text-align: center;
     line-height: 1.1;
+    font-variant-numeric: tabular-nums;
   }
 
   .count strong {
