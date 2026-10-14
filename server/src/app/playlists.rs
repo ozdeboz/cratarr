@@ -301,6 +301,17 @@ impl PlaylistService {
         self.sync.new_playlist(name).await
     }
 
+    /// A new playlist holding these entries, in order (a playlist made from the queue, decision 0019).
+    pub async fn create_with(&self, name: &str, entries: &[String]) -> Result<(), ToggleError> {
+        let store = self.lib.store()?;
+        store.create(name).await?;
+        // Filled only while still empty: never over an edit made since it was created.
+        if !store.set_entries_if(name, &[], entries).await? {
+            return Err(ToggleError::Refused("The new playlist changed while it was being filled.".into()));
+        }
+        self.sync.new_playlist(name).await
+    }
+
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), ToggleError> {
         let store = self.lib.store()?;
         // Through the sync, so the server copies keep following the playlist (decision 0012).

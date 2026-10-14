@@ -9,6 +9,7 @@ import {
   setMember,
   setTrackMember,
   trackDetails,
+  trackPlayed,
   trackState,
   transport,
   type NowPlaying,
@@ -38,6 +39,8 @@ export function localNowPlaying(): NowPlaying | null {
     progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, estimated: false },
     player: 'This device',
     favorite: localState.view?.favorite ?? null,
+    // As the heart, the chips stay until the new track's arrive (no row coming and going between tracks).
+    info: localState.view?.info ?? null,
     upcoming: local.queue.slice(local.index + 1).map((u) => ({
       id: u.id,
       name: u.name || '…',
@@ -116,6 +119,26 @@ export async function setPlayingMember(playlistId: string, member: boolean) {
 export function tookLocal(source: string, id: string, view: TrackState) {
   if (localState.key === `${source}/${id}`) localState.view = view;
 }
+
+// Plays count (decision 0022): once a track has played 90% through (Jellyfin's own "played" mark), once per time it
+// is reached in the queue; the server counts it for the account it plays as.
+const PLAYED_AT = 0.9;
+/** The queue place (index and track) counted; forgotten once the queue moves elsewhere, so coming back counts again. */
+let counted: string | null = null;
+$effect.root(() => {
+  $effect(() => {
+    const t = local.queue[local.index];
+    const at = `${local.index}/${t ? keyOf(t) : ''}`;
+    if (!t) return;
+    if (counted !== at) counted = null;
+    const d = local.duration;
+    if (counted === at || !d || local.position < d * PLAYED_AT) return;
+    counted = at;
+    trackPlayed(t.source, t.id).catch(() => {
+      /* not counted; playing goes on */
+    });
+  });
+});
 
 // Track details (title, artist, album) arrive lazily: a playlist starts with ids only; the playing track and the next
 // few are filled in as the queue moves.

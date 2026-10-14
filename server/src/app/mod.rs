@@ -29,7 +29,7 @@ pub use error::ToggleError;
 pub use incoming::{DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
-pub use playing::{PlayingService, StateView, TrackStateView};
+pub use playing::{AlbumRef, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, PlayMode, PlayResult, PlaylistService};
 pub use sync::TargetChoice;
 pub use events::connect as events;

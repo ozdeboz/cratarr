@@ -310,6 +310,26 @@ impl JellyfinSource {
     }
 }
 
+/// The info chips from Jellyfin's description of the file: its audio stream, and the play count for the account.
+fn track_info(d: &crate::jellyfin::MediaDetails) -> super::TrackInfo {
+    let audio = d.media_streams.iter().find(|s| s.kind.as_deref() == Some("Audio"));
+    super::TrackInfo {
+        play_count: d.user_data.as_ref().and_then(|u| u.play_count),
+        codec: audio.and_then(|a| a.codec.clone()),
+        bitrate_kbps: audio.and_then(|a| a.bit_rate).map(|b| ((b + 500) / 1000) as u32),
+        bit_depth: audio.and_then(|a| a.bit_depth),
+        sample_rate_hz: audio.and_then(|a| a.sample_rate),
+        // Jellyfin keeps no explicit flag for music.
+        explicit: None,
+    }
+}
+
+/// A jump in the queue: the rest of it from that track, as one play command (at most 240 ids fit, decision 0006).
+fn from_track(queue: &[String], track: &str) -> Vec<String> {
+    let from = queue.iter().position(|i| i == track).unwrap_or(0);
+    queue[from..].iter().take(240).cloned().collect()
+}
+
 fn to_track((i, library_id): (PlayingItem, Option<String>)) -> Track {
     Track { id: i.id, title: i.name, artist: i.album_artist, album: i.album, album_id: i.album_id, path: i.path, library_id }
 }
@@ -599,6 +619,38 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn track_info<'a>(&'a self, track: &'a str) -> Fut<'a, Option<super::TrackInfo>> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await.unwrap_or_default();
+            let user = whose(&sessions, &self.player, track);
+            let d = self.jf.media_details(track, user.as_deref()).await?;
+            Ok(Some(track_info(&d)))
+        })
+    }
+
+    fn jump_to<'a>(&'a self, track: &'a str) -> Fut<'a, String> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await?;
+            // What comes next as the player reports it (see now_playing), from the session playing for the page.
+            let mut reporting: Vec<&Session> = sessions.iter().filter(|s| s.now_playing_item.is_some()).collect();
+            reporting.sort_by_key(|s| !self.prefers()(s));
+            let queue: Vec<String> = reporting
+                .iter()
+                .map(|s| s.now_playing_queue_full_items.iter().map(|i| i.id.clone()).collect::<Vec<_>>())
+                .find(|q| q.iter().any(|i| i == track))
+                .context("that track is no longer in the player's queue")?;
+            self.cast(&from_track(&queue, track), super::PlayHow::Now, None).await
+        })
+    }
+
+    fn count_play<'a>(&'a self, track: &'a str) -> Fut<'a, ()> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await?;
+            let user = whose(&sessions, &self.player, track).context("no player is signed in to count it for")?;
+            self.jf.count_play(track, &user).await
+        })
+    }
+
     fn favorite<'a>(&'a self, track: &'a str) -> Fut<'a, Option<bool>> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;
@@ -875,6 +927,35 @@ mod tests {
 
     fn chosen(playing: &[Started], sessions: &[Session], p: &str) -> Option<String> {
         choose(playing, sessions, &Player::parse(p), NOW).map(|s| s.item_id)
+    }
+
+    #[test]
+    fn a_jump_plays_the_rest_of_the_queue_from_that_track() {
+        let q: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+        assert_eq!(from_track(&q, "c"), ["c", "d"]);
+        assert_eq!(from_track(&q, "a"), q);
+        let long: Vec<String> = (0..300).map(|i| i.to_string()).collect();
+        let sent = from_track(&long, "10");
+        assert_eq!((sent.len(), sent[0].as_str()), (240, "10"), "one play command holds at most 240 ids");
+    }
+
+    #[test]
+    fn info_chips_come_from_the_audio_stream_and_the_accounts_plays() {
+        let d: crate::jellyfin::MediaDetails = serde_json::from_value(serde_json::json!({
+            "MediaStreams": [
+                { "Type": "EmbeddedImage", "Codec": "mjpeg", "BitDepth": 8 },
+                { "Type": "Audio", "Codec": "flac", "BitRate": 753657, "BitDepth": 16, "SampleRate": 44100 }
+            ],
+            "UserData": { "PlayCount": 16, "Played": true }
+        }))
+        .unwrap();
+        let i = track_info(&d);
+        assert_eq!(
+            (i.codec.as_deref(), i.bitrate_kbps, i.bit_depth, i.sample_rate_hz, i.play_count, i.explicit),
+            (Some("flac"), Some(754), Some(16), Some(44100), Some(16), None)
+        );
+        let bare: crate::jellyfin::MediaDetails = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(track_info(&bare), super::super::TrackInfo::default());
     }
 
     #[test]

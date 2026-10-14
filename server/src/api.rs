@@ -27,6 +27,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/playlists", get(track_state))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
         .route("/api/track/{source}/{id}/favorite", post(track_favorite))
+        .route("/api/track/{source}/{id}/played", post(track_played))
+        .route("/api/queue/add", post(queue_add))
+        .route("/api/queue/jump", post(queue_jump))
+        .route("/api/queue/playlist", post(queue_playlist))
+        .route("/api/playlists/{id}/covers", get(playlist_covers))
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
@@ -554,6 +559,67 @@ async fn transport(
     let command: crate::source::Transport = serde_json::from_value(json!(command))
         .map_err(|_| ToggleError::CannotPlay("unknown player command (previous, play-pause, next)".into()))?;
     Ok(Json(json!({ "player": app.playing.transport(f.source.as_deref(), command).await? })))
+}
+
+/// A track for the queue of the player that plays (the track menu, decision 0019).
+#[derive(Deserialize)]
+struct QueueAdd {
+    id: String,
+    mode: QueueMode,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum QueueMode {
+    Next,
+    Last,
+}
+
+async fn queue_add(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(q): Json<QueueAdd>) -> Result<Json<serde_json::Value>, ApiError> {
+    let how = match q.mode {
+        QueueMode::Next => crate::source::PlayHow::Next,
+        QueueMode::Last => crate::source::PlayHow::Last,
+    };
+    Ok(Json(json!({ "player": app.playing.queue_add(f.source.as_deref(), &q.id, how).await? })))
+}
+
+#[derive(Deserialize)]
+struct QueueJump {
+    id: String,
+}
+
+async fn queue_jump(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(q): Json<QueueJump>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "player": app.playing.queue_jump(f.source.as_deref(), &q.id).await? })))
+}
+
+/// `ids`: the tracks (the local player's queue, on `source`); without, what the server's player plays and what comes next.
+#[derive(Deserialize)]
+struct QueuePlaylist {
+    name: String,
+    ids: Option<Vec<String>>,
+}
+
+async fn queue_playlist(
+    State(app): State<Arc<App>>,
+    Query(f): Query<Follow>,
+    Json(q): Json<QueuePlaylist>,
+) -> Result<(StatusCode, Json<crate::app::FromQueue>), ApiError> {
+    let made = app.playing.playlist_from_queue(f.source.as_deref(), &q.name, q.ids).await?;
+    Ok((StatusCode::CREATED, Json(made)))
+}
+
+async fn playlist_covers(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    Query(f): Query<Follow>,
+) -> Result<Json<Vec<crate::app::AlbumRef>>, ApiError> {
+    Ok(Json(app.playing.playlist_covers(&id, f.source.as_deref()).await?))
+}
+
+/// The local player played most of the track: one play counts (decision 0022).
+async fn track_played(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    app.playing.count_play(&source, &id).await?;
+    Ok(Json(json!({ "counted": true })))
 }
 
 /// The local player hands its queue to the server's player (decision 0019 / 0022): these tracks, from `index`, starting

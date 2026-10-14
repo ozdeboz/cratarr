@@ -84,6 +84,18 @@ pub struct Track {
     pub library_id: Option<String>,
 }
 
+/// What a media server knows about a track's file and plays: the player's info chips (decision 0019). Each `None` when
+/// it does not know.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct TrackInfo {
+    pub play_count: Option<u32>,
+    pub codec: Option<String>,
+    pub bitrate_kbps: Option<u32>,
+    pub bit_depth: Option<u32>,
+    pub sample_rate_hz: Option<u32>,
+    pub explicit: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Playing {
     pub track: Track,
@@ -317,6 +329,22 @@ pub trait Source: Send + Sync {
 
     /// Optional: mark a track a favourite (or not) for the account of the player playing it. Returns the state now.
     /// Safe to repeat.
+    /// Optional: what the server knows about the track's file and plays (the info chips); `None` when nothing.
+    fn track_info<'a>(&'a self, _track: &'a str) -> Fut<'a, Option<TrackInfo>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Optional: the player the page follows plays from this track of its queue on (what came between is skipped).
+    /// Returns the player's label.
+    fn jump_to<'a>(&'a self, _track: &'a str) -> Fut<'a, String> {
+        Box::pin(async { anyhow::bail!("this server's player cannot jump in its queue") })
+    }
+
+    /// Optional: count one play of the track (Cratarr played it itself, decision 0022).
+    fn count_play<'a>(&'a self, _track: &'a str) -> Fut<'a, ()> {
+        Box::pin(async { anyhow::bail!("this server cannot count plays") })
+    }
+
     /// Whether the track is a favourite of the account the source plays for; `None` when it cannot tell.
     fn favorite<'a>(&'a self, _track: &'a str) -> Fut<'a, Option<bool>> {
         Box::pin(async { Ok(None) })

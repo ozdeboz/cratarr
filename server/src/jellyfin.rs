@@ -167,6 +167,33 @@ pub struct PlayingItem {
     pub run_time_ticks: Option<i64>,
 }
 
+/// A track's file as Jellyfin describes it, and the asking user's data on it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct MediaDetails {
+    #[serde(default)]
+    pub media_streams: Vec<MediaStream>,
+    pub user_data: Option<UserData>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct MediaStream {
+    #[serde(rename = "Type")]
+    pub kind: Option<String>,
+    pub codec: Option<String>,
+    /// Bits per second.
+    pub bit_rate: Option<u64>,
+    pub bit_depth: Option<u32>,
+    pub sample_rate: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct UserData {
+    pub play_count: Option<u32>,
+}
+
 /// One row of Jellyfin's activity log; only audio playback start/stop entries matter to us.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -679,6 +706,23 @@ impl Jellyfin {
         // The single-item call needs a user; the list call by id does not and returns the same fields.
         let page: ItemsPage<PlayingItem> = self.get(&format!("/Items?Ids={id}&Fields=Path")).await?;
         page.items.into_iter().next().with_context(|| format!("Jellyfin has no item {id}"))
+    }
+
+    /// What Jellyfin knows about a track's file, and its play count for `user` (none without a user).
+    pub async fn media_details(&self, id: &str, user: Option<&str>) -> Result<MediaDetails> {
+        anyhow::ensure!(crate::covers::valid_item_id(id), "not an item id");
+        let user = user.filter(|u| crate::covers::valid_item_id(u)).map(|u| format!("&userId={u}")).unwrap_or_default();
+        let page: ItemsPage<MediaDetails> = self.get(&format!("/Items?Ids={id}&Fields=MediaStreams{user}")).await?;
+        page.items.into_iter().next().with_context(|| format!("Jellyfin has no item {id}"))
+    }
+
+    /// Count one play of the item for `user`: the play count up by one, last played now, played (decision 0022). Jellyfin's
+    /// own "mark played" only makes the count at least one, so the count is read and written back.
+    pub async fn count_play(&self, item: &str, user: &str) -> Result<()> {
+        let data = self.user_item_data(item, user).await?;
+        let count = data.get("PlayCount").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        self.set_user_item_data(item, user, &json!({ "PlayCount": count + 1, "LastPlayedDate": iso(now), "Played": true })).await
     }
 
     /// A user's data on an item: plays, last played, favourite, rating, resume position (Jellyfin 10.9+).

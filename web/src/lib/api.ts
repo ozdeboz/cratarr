@@ -474,7 +474,7 @@ export const trackDetails = (source: string, id: string) =>
 
 /** A given track's playlists and favourite: for the local player's track (decision 0022), what `State` is for the
  *  server's player's. `favorite` null: not known. */
-export type TrackState = { addable: boolean; favorite: boolean | null; playlists: Playlist[] };
+export type TrackState = { addable: boolean; favorite: boolean | null; playlists: Playlist[]; info: TrackInfo | null };
 
 export const trackState = (source: string, id: string) => quietly<TrackState>(`${trackPath(source, id)}/playlists`);
 
@@ -484,6 +484,9 @@ export const setTrackMember = (source: string, id: string, playlistId: string, m
 
 export const setTrackFavorite = (source: string, id: string, on: boolean) =>
   quietly<TrackState>(`${trackPath(source, id)}/favorite?on=${on}`, { method: 'POST' });
+
+/** The local player played most of the track: one play counts in the media server (decision 0022). */
+export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });
 export const incomingTrackIds = (source: string, album: string) =>
   request<{ source: string; ids: string[] }>(`/api/incoming/tracks/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
 export const handover = (ids: string[], index: number, positionSecs: number, source?: string) =>

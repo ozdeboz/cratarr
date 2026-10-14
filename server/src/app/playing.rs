@@ -1,7 +1,7 @@
 //! What plays (decision 0011): asks the servers, picks one, and the actions on what plays (the controls, adding it
 //! to a playlist, its cover).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -11,7 +11,7 @@ use super::library::{Active, Library, SourceTab, label_of};
 use super::playlists::PlaylistService;
 use crate::nowplaying::Progress;
 use crate::playlists::PlaylistView;
-use crate::source::{self, Playing};
+use crate::source::{self, Playing, TrackInfo};
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct NowPlayingView {
@@ -33,6 +33,8 @@ pub struct NowPlayingView {
     pub favorite: Option<bool>,
     /// What plays next, in order, as far as the player reports (the page moves on at once when Next is pressed).
     pub upcoming: Vec<UpcomingView>,
+    /// What the server knows about the file and its plays (the info chips, decision 0019).
+    pub info: Option<TrackInfo>,
 }
 
 /// A track the player plays after the current one.
@@ -62,16 +64,145 @@ pub struct TrackStateView {
     /// `None` when the source cannot tell (no account to ask for).
     pub favorite: Option<bool>,
     pub playlists: Vec<PlaylistView>,
+    pub info: Option<TrackInfo>,
+}
+
+/// A playlist made from the queue: how many tracks it got, and how many were left out (not in the library).
+#[derive(Debug, Serialize)]
+pub struct FromQueue {
+    pub playlist: String,
+    pub added: usize,
+    pub left_out: usize,
+}
+
+/// An album whose cover the page can show (`/api/incoming/cover/{source}/{album_id}`).
+#[derive(Debug, Serialize, PartialEq)]
+pub struct AlbumRef {
+    pub source: String,
+    pub album_id: String,
 }
 
 pub struct PlayingService {
     lib: Arc<Library>,
     playlists: Arc<PlaylistService>,
+    /// The info chips of the last track asked about: the page asks for the state every few seconds, the file does not
+    /// change meanwhile (the play count is read again for the next track).
+    info: Mutex<Option<(String, Option<TrackInfo>)>>,
 }
 
 impl PlayingService {
     pub(super) fn new(lib: Arc<Library>, playlists: Arc<PlaylistService>) -> Self {
-        Self { lib, playlists }
+        Self { lib, playlists, info: Mutex::new(None) }
+    }
+
+    /// A track's info chips, from the cache when it is the last one asked about. `None` when the source cannot tell.
+    async fn info(&self, s: &Arc<dyn source::Source>, source_id: &str, id: &str) -> Option<TrackInfo> {
+        let key = format!("{source_id}/{id}");
+        if let Some((k, v)) = self.info.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
+            && *k == key
+        {
+            return v.clone();
+        }
+        let got = s.track_info(id).await.unwrap_or_else(|e| {
+            tracing::warn!("info for {key}: {e:#}");
+            None
+        });
+        *self.info.lock().unwrap_or_else(|p| p.into_inner()) = Some((key, got.clone()));
+        got
+    }
+
+    /// The connected source with that id.
+    fn source(&self, source_id: &str) -> Result<(Arc<Active>, Arc<dyn source::Source>), ToggleError> {
+        self.lib
+            .connected()
+            .into_iter()
+            .find(|(a, _)| a.cfg.id == source_id)
+            .ok_or_else(|| ToggleError::Refused("That server is not connected.".into()))
+    }
+
+    /// The source to send a queue command to: the asked one, else the one whose player plays.
+    async fn queue_source(&self, want: Option<&str>) -> Result<(Arc<Active>, Arc<dyn source::Source>, Playing), ToggleError> {
+        let (np, _) = self.playing(want).await?;
+        let (active, playing) = np.ok_or(ToggleError::NothingPlaying)?;
+        let (_, s) = self.source(&active.cfg.id)?;
+        Ok((active, s, playing))
+    }
+
+    /// Play a track next, or at the end of the queue, on the player that plays (the track menu, decision 0019).
+    pub async fn queue_add(&self, want: Option<&str>, id: &str, how: source::PlayHow) -> Result<String, ToggleError> {
+        let (_, s, _) = self.queue_source(want).await?;
+        s.play_tracks(&[id.to_string()], how).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
+    /// The player plays from this track of its queue on (the queue view's tap, decision 0019).
+    pub async fn queue_jump(&self, want: Option<&str>, id: &str) -> Result<String, ToggleError> {
+        let (_, s, _) = self.queue_source(want).await?;
+        s.jump_to(id).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
+    /// A new playlist of these tracks (`ids` on `want`, the local player's queue), or else of what the server's player
+    /// plays and what comes next; tracks outside the library are left out (decision 0019).
+    pub async fn playlist_from_queue(&self, want: Option<&str>, name: &str, ids: Option<Vec<String>>) -> Result<FromQueue, ToggleError> {
+        let (active, s, ids) = match ids {
+            Some(ids) => {
+                let (a, s) = self.source(want.ok_or_else(|| ToggleError::Refused("Which server are the tracks on?".into()))?)?;
+                (a, s, ids)
+            }
+            None => {
+                let (a, s, p) = self.queue_source(want).await?;
+                let ids = std::iter::once(p.track.id).chain(p.upcoming.into_iter().map(|u| u.track.id)).collect();
+                (a, s, ids)
+            }
+        };
+        self.lib.store()?;
+        let music = self.lib.music();
+        let mut entries = Vec::new();
+        let mut left_out = 0;
+        for id in &ids {
+            let entry = match s.track(id).await {
+                Ok(t) => active.entry(music.as_deref(), &t),
+                Err(_) => None,
+            };
+            match entry {
+                // A track twice in the queue is once in the playlist.
+                Some(e) if !entries.contains(&e) => entries.push(e),
+                Some(_) => {}
+                None => left_out += 1,
+            }
+        }
+        if entries.is_empty() {
+            return Err(ToggleError::Refused("None of those tracks are in your Music.".into()));
+        }
+        self.playlists.create_with(name, &entries).await?;
+        Ok(FromQueue { playlist: name.to_string(), added: entries.len(), left_out })
+    }
+
+    /// Up to four albums of a playlist, in its order, for the mosaic on its menu (decision 0021).
+    pub async fn playlist_covers(&self, playlist_id: &str, want: Option<&str>) -> Result<Vec<AlbumRef>, ToggleError> {
+        let (source_id, ids, _) = self.playlists.track_ids(playlist_id, want).await?;
+        let (_, s) = self.source(&source_id)?;
+        let mut albums: Vec<AlbumRef> = Vec::new();
+        // A few tracks per album are usual: looking at the first 40 finds four albums in most playlists.
+        for id in ids.iter().take(40) {
+            let Ok(t) = s.track(id).await else { continue };
+            let Some(album_id) = t.album_id else { continue };
+            if !albums.iter().any(|a| a.album_id == album_id) {
+                albums.push(AlbumRef { source: source_id.clone(), album_id });
+                if albums.len() == 4 {
+                    break;
+                }
+            }
+        }
+        Ok(albums)
+    }
+
+    /// Count a play of a track the page played itself (decision 0022).
+    pub async fn count_play(&self, source_id: &str, id: &str) -> Result<(), ToggleError> {
+        let (_, s, _) = self.find(source_id, id).await?;
+        s.count_play(id).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
+        // The play count changed: the next state asks again.
+        *self.info.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        Ok(())
     }
 
     /// Ask every connected source what it plays, all at once, and pick: the requested source, or (`None` / unknown)
@@ -152,7 +283,15 @@ impl PlayingService {
         let music = self.lib.music();
         let entry = np.as_ref().and_then(|(a, p)| a.entry(music.as_deref(), &p.track));
         let playlists = self.playlists.view(entry.as_deref()).await?;
+        let info = match &np {
+            Some((a, p)) => match self.source(&a.cfg.id) {
+                Ok((_, s)) => self.info(&s, &a.cfg.id, &p.track.id).await,
+                Err(_) => None,
+            },
+            None => None,
+        };
         let now_playing = np.map(|(a, p)| NowPlayingView {
+            info,
             upcoming: p
                 .upcoming
                 .into_iter()
@@ -202,13 +341,13 @@ impl PlayingService {
         Ok((a, s, track))
     }
 
-    /// A given track's playlists and favourite (the local player's, decision 0022).
+    /// A given track's playlists, favourite and info chips (the local player's, decision 0022).
     pub async fn track_state(&self, source_id: &str, id: &str) -> Result<TrackStateView, ToggleError> {
         let (a, s, track) = self.find(source_id, id).await?;
         let entry = a.entry(self.lib.music().as_deref(), &track);
-        let favorite = s.favorite(id).await.unwrap_or(None);
+        let (favorite, info) = tokio::join!(s.favorite(id), self.info(&s, source_id, id));
         let playlists = self.playlists.view(entry.as_deref()).await?;
-        Ok(TrackStateView { addable: entry.is_some(), favorite, playlists })
+        Ok(TrackStateView { addable: entry.is_some(), favorite: favorite.unwrap_or(None), playlists, info })
     }
 
     /// Puts a given track in the playlist or takes it out, as `toggle` does for what the server's player plays.
