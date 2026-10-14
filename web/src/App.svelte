@@ -29,8 +29,8 @@
   import { jobs } from './lib/jobs.svelte';
 
   type Page = { id: string; href: string; label: string; icon: IconName };
-  // Main pages in order; Health and Settings sit apart at the bottom of the sidebar (decision 0025: Health beside
-  // Settings on every screen size).
+  // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
+  // 0025: Health beside Settings, Insights beside Health).
   const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
   // Shown only when some source has an incoming library (see the status call below).
   const INCOMING: Page = { id: 'incoming', href: '#/incoming', label: 'Incoming', icon: 'incoming' };
@@ -208,9 +208,11 @@
             : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, CRATES, PLAYLISTS, INSIGHTS] : [CRATES, PLAYLISTS, INSIGHTS]);
-  const ALL = $derived([...MAIN, HEALTH, SETTINGS]);
-  const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, BAR_SLOTS - 1));
+  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, CRATES, PLAYLISTS] : [CRATES, PLAYLISTS]);
+  // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
+  const APART: Page[] = [INSIGHTS, HEALTH, SETTINGS];
+  const ALL = $derived([...MAIN, ...APART]);
+  const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : ALL.slice(0, BAR_SLOTS - 1));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
   const overflowActive = $derived(overflow.some((p) => p.id === page));
 </script>
@@ -235,8 +237,9 @@
     </nav>
 
     <div class="foot">
-      <a href={keepOpen(HEALTH.href)} aria-current={page === HEALTH.id ? 'page' : undefined}><Icon name={HEALTH.icon} />{HEALTH.label}</a>
-      <a href={keepOpen(SETTINGS.href)} aria-current={page === SETTINGS.id ? 'page' : undefined}><Icon name={SETTINGS.icon} />{SETTINGS.label}</a>
+      {#each APART as p (p.id)}
+        <a href={keepOpen(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}</a>
+      {/each}
       {#if status}<div class="version">Cratarr {status.version}</div>{/if}
     </div>
   </aside>

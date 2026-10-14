@@ -5,8 +5,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 ## Structure
 
-- **Pages:** Incoming (only when an Incoming library is set), Crates, Playlists, Insights; Health and Settings apart
-  (at the bottom of the sidebar, together on a phone). One thing lives in one place: no setting, list or action
+- **Pages:** Incoming (only when an Incoming library is set), Crates, Playlists; Insights, Health and Settings apart
+  (at the bottom of the sidebar, in that order; on a phone they follow the others in the same order). One thing lives in one place: no setting, list or action
   appears on two pages. Health lists the library's files that cannot be read properly; playlists are repaired in the
   panel's Repair tab (decision 0025).
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
