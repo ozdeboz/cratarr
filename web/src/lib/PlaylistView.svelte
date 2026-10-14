@@ -1063,10 +1063,13 @@
     white-space: nowrap;
   }
 
-  .genres {
+  /* They wrap rather than go past the panel's edge. */
+  .line > .genres {
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
-    overflow: hidden;
+    overflow: visible;
+    white-space: normal;
   }
 
   .genres span {
