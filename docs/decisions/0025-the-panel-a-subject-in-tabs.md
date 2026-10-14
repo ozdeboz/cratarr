@@ -22,7 +22,7 @@ The player is different: it is always about one track, in one view. The owner se
 - **Select** (the Playlists page's toolbar) lets the selection grow: a tap on a chip's name ticks or unticks it. A
   ticked chip has the border of the playlist open in the panel (one state, one look); **the circle keeps adding or
   removing the playing track**, in Select too. On a roomy window the panel shows the selection as it is ticked; on a
-  phone, where the panel covers the page, one ticks first and opens it with "Open 3 playlists". Select stays highlighted while on; a tap on it again ends it, and the panel keeps what it shows.
+  phone, where the panel covers the page, one ticks first and opens it with "Open 3 playlists". Select stays highlighted while on; a tap on it again ends it; an open panel then keeps the playlist ticked last.
   A ⋮ in the page's top right corner opens the playlist menu for the ticked playlists.
 - **One menu, one panel, for one playlist or several.** The playlist menu (a long-press, the panel's ⋮, the corner ⋮)
   takes one or more: Play, Shuffle, Play next, Add to queue (several: one playlist after another, in the order ticked,

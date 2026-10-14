@@ -12,10 +12,13 @@ export function startSelect() {
   select.picked = [...panel.selection];
 }
 
-/** Select ends (a tap on it again); the panel keeps what it shows. */
+/** Select ends (a tap on it again): a panel showing the selection keeps only the playlist ticked last; a closed panel
+ *  stays closed. */
 export function endSelect() {
   select.on = false;
   select.picked = [];
+  const last = panel.selection.at(-1);
+  if (last && panel.selection.length > 1) openSelection([last], panel.tab);
 }
 
 /** The panel shows exactly what is ticked. */
