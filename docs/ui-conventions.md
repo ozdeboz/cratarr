@@ -78,7 +78,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   offering the server's axes, and below a live preview (the count and the first tracks). Cancel and Save in the bar;
   Delete at the end for one's own crate (a second tap confirms). The draft is kept in the browser until Save or
   Cancel.
-- **Playlist chips** (the Playlists page) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
+- **Playlist chips** (the Playlists page, medium rows: see Rows) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
   tap on the label opens the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
@@ -115,6 +115,29 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its files in, or a warning when
   it can't; then the catalogue status and tag splitting), Display (theme, progress bar), About (version, port, file
   locations). Technical details go to About or nowhere. A use is set only there (decision 0009).
+
+## Rows
+
+Every list of things is built from one row (decision 0027, `lib/Row.svelte`), so a playlist, a crate, a file, a track
+or a sync target looks and behaves as one kind of thing wherever it is listed.
+
+- **One layout, three sizes.** Left to right: an optional lead (a track's cover, a checkbox), the title (two lines at
+  most) with its marks after it and an optional muted line under it, its count and flags at the end of the text, and
+  the action on the right. **Medium** on the pages (Playlists, Crates) and **small** in the panel's Export tab are
+  Finamp's add-to-playlist tile (tinted in the accent, a divider before the action); **large** in the panel's Tracks,
+  Info, Repair and Sync tabs, the crate builder's preview and Health's files is Finamp's list tile (plain, 64 px, a
+  60 px cover or a control in front). A track is a large row with its cover (`lib/TrackCover.svelte`).
+- **States are the row's:** open in the panel or ticked: a border in the accent; holding what plays: a stronger tint;
+  not usable now (a missing file): its contents dimmed (the row stays opaque).
+- **What is listed has its own row on top of it,** the same wherever it shows: `lib/PlaylistItem.svelte` (the name, the
+  pin and own-account marks, the count, a favourite's heart over the problems' dot), `lib/FileItem.svelte` (the file,
+  and under it its album folder and what is wrong, or "→ the file a repair points it at"). Where it is decides only
+  the size, the second line and the action.
+- **A large row's controls may go under its text** when the panel is narrow (Sync's settings, Repair's buttons): a
+  row never scrolls sideways.
+- **A list's sections** (`lib/Section.svelte`): a heading with its count that folds the list, and while open one line
+  on what the list is. A selection's Tracks (a section per playlist), the Repair tab's kinds of repair, the Info tab
+  for several playlists, Health's kinds of problem (folded at first).
 
 ## Gestures
 
