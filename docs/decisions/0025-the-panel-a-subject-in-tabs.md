@@ -15,8 +15,8 @@ The player is different: it is always about one track, in one view. The owner se
 ## Decision
 
 - **The panel shows a subject.** In player mode the subject is the playing track, in one view (as 0018–0023). In
-  playlist mode the subject is a **selection of one or more playlists**, shown in **tabs: Tracks, Export, Repair,
-  Sync.** Every tab is always there (a tab with nothing to do says so); the panel opens on Tracks. A crate (0024) is a
+  playlist mode the subject is a **selection of one or more playlists**, shown in **tabs: Tracks, Info, Export,
+  Repair, Sync.** Every tab is always there (a tab with nothing to do says so); the panel opens on Tracks. A crate (0024) is a
   subject of one, with Tracks only: crates never join a selection, since export and repair need fixed playlists.
 - **Opening a playlist is selecting one.** A tap on a chip's name opens it: the selection becomes that playlist.
 - **Select** (the Playlists page's toolbar) lets the selection grow: a tap on a chip's name ticks or unticks it. A
@@ -49,5 +49,6 @@ The player is different: it is always about one track, in one view. The owner se
 
 - The tab row is the panel's one way to more about a playlist; new views about playlists become tabs, and one-tap
   actions stay in menus.
-- Statistics and Related stay under the header of one playlist's Tracks for now (0023).
+- **Info** holds what Insights knows of a playlist (how focused it is, its closest playlists; 0023's Related section,
+  which leaves Tracks); several playlists get a section each. The genres stay in the header.
 - Old `#/repairs` links open the Playlists page.

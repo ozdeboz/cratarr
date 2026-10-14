@@ -3,14 +3,14 @@
   // An opened playlist (decision 0023), in the panel beside the page or in its own layer, styled as Finamp's playlist
   // screen (lib/components/AlbumScreen) in less room: a bar with ✕ and the menu; the covers beside the name, "N tracks
   // (length)" and the genres; Play, Shuffle, Play next and Add to queue as icons over labels; what Insights knows of it
-  // (Related, a section until it gets a tab); then the tracks in file order. A tap on a track plays the playlist from
+  // (Related: the Info tab); then the tracks in file order. A tap on a track plays the playlist from
   // there on the chosen output, a swipe left plays it next, a long-press is its menu; the heart adds it to playlists
   // (long-press: favourite). Lines the server does not know, or files that are missing, show by file name, dimmed.
   // Edit mode (the pencil; Finamp's playlist edit screen): rows get the reorder handle and ✕ (a swipe left removes too),
   // removed tracks wait in their own section to be restored, and Save writes the playlist once (Cancel drops it).
   // A crate (decision 0024, `?open=crate:…`) shows the same way, without the statistics (genres, length, Related) and
   // without editing; its rows come in pages (newest first), and the save icon makes a playlist of it (a snapshot).
-  // Playlists show in tabs (decision 0025): Tracks, Export, Repair, Sync, under the header, for the selection: one
+  // Playlists show in tabs (decision 0025): Tracks, Info, Export, Repair, Sync, under the header, for the selection: one
   // playlist as above, or several (the Playlists page's Select): their covers and count in the header, and on Tracks a
   // section per playlist, in the order ticked, each folding, read-only. A crate has no tabs.
   import {
@@ -178,7 +178,6 @@
   $effect(() => insights.load());
   const at = $derived(insights.indexOf(id));
   const point = $derived(at >= 0 ? insights.shown!.playlists[at] : null);
-  const closest = $derived(insights.closest(at));
 
   $effect(() => void loadPlaylistFavorites());
 
@@ -463,7 +462,35 @@
       </div>
     {/if}
 
-    {#if tab === 'export'}
+    {#if tab === 'info'}
+      <div class="info-tab">
+        {#each ids as pid (pid)}
+          {@const i = insights.indexOf(pid)}
+          {@const pt = i >= 0 ? insights.shown!.playlists[i] : null}
+          {@const near = insights.closest(i)}
+          <section class="related" aria-label={`About ${pid}`}>
+            {#if multi}<h3 class="about">{pid}</h3>{/if}
+            {#if !pt}
+              <p class="note">{insights.shown ? 'Nothing is known about it yet.' : 'Loading…'}</p>
+            {:else}
+              {#if pt.focus !== null && insights.focus[i] !== undefined}
+                <p class="note">More focused than {Math.round(100 * insights.focus[i])}% of your playlists</p>
+              {/if}
+              {#if near.length}
+                <h3>Closest playlists</h3>
+                <ul>
+                  {#each near as c (c.index)}
+                    <li><button class="link" onclick={() => openPlaylist(c.name)}>{c.name}</button><span class="note">{c.shares}</span></li>
+                  {/each}
+                </ul>
+              {:else if pt.focus === null}
+                <p class="note">Nothing is known about it yet.</p>
+              {/if}
+            {/if}
+          </section>
+        {/each}
+      </div>
+    {:else if tab === 'export'}
       <ExportTab {ids} />
     {:else if tab === 'repair'}
       <RepairTab {ids} />
@@ -526,20 +553,6 @@
           {/each}
         </ol>
       {/if}
-    {:else if point && (closest.length || point.focus !== null)}
-      <section class="related" aria-label="Related">
-        {#if point.focus !== null && insights.focus[at] !== undefined}
-          <p class="note">More focused than {Math.round(100 * insights.focus[at])}% of your playlists</p>
-        {/if}
-        {#if closest.length}
-          <h3>Closest playlists</h3>
-          <ul>
-            {#each closest as c (c.index)}
-              <li><button class="link" onclick={() => openPlaylist(c.name)}>{c.name}</button><span class="note">{c.shares}</span></li>
-            {/each}
-          </ul>
-        {/if}
-      </section>
     {/if}
 
     {#if tab !== 'tracks' || multi || editing}
@@ -863,6 +876,16 @@
   .actions button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .info-tab {
+    display: grid;
+    gap: 8px;
+  }
+
+  .related .about {
+    margin-top: 0;
+    font-size: 15px;
   }
 
   .related {

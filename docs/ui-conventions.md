@@ -55,7 +55,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **An opened playlist** (decision 0023, `lib/PlaylistView.svelte`): in the panel beside the page, or on a phone a
   full-height layer with the mini-player floating over its end. Under its header, **tabs** (decision 0025): Tracks,
-  Export, Repair, Sync, for the selection (one playlist, or several ticked with Select); the panel opens on Tracks, a
+  Info (what Insights knows of it: how focused, its closest playlists), Export, Repair, Sync, for the selection (one playlist, or several ticked with Select); the panel opens on Tracks, a
   tab with nothing to do says so, and switching adds a Back step only while the panel is full-screen. Several
   playlists: their covers and count in the header, ✕ alone in the bar, and on Tracks a folding section per playlist
   (read-only). Its bar has ✕, the heart (Finamp's playlist
