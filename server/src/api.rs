@@ -646,10 +646,12 @@ async fn transport(
     Ok(Json(json!({ "player": app.playing.transport(f.source.as_deref(), command).await? })))
 }
 
-/// A track for the queue of the player that plays (the track menu, decision 0019).
+/// A track (`id`) or several (`ids`, a crate's: decision 0024) for the queue of the player that plays (decision 0019).
 #[derive(Deserialize)]
 struct QueueAdd {
-    id: String,
+    id: Option<String>,
+    #[serde(default)]
+    ids: Vec<String>,
     mode: QueueMode,
 }
 
@@ -665,7 +667,11 @@ async fn queue_add(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(q)
         QueueMode::Next => crate::source::PlayHow::Next,
         QueueMode::Last => crate::source::PlayHow::Last,
     };
-    Ok(Json(json!({ "player": app.playing.queue_add(f.source.as_deref(), &q.id, how).await? })))
+    let ids: Vec<String> = q.id.into_iter().chain(q.ids).collect();
+    if ids.is_empty() {
+        return Err(ApiError(ToggleError::Refused("No track to add.".into())));
+    }
+    Ok(Json(json!({ "player": app.playing.queue_add(f.source.as_deref(), &ids, how).await? })))
 }
 
 #[derive(Deserialize)]

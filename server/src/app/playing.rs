@@ -128,10 +128,11 @@ impl PlayingService {
         Ok((active, s, playing))
     }
 
-    /// Play a track next, or at the end of the queue, on the player that plays (the track menu, decision 0019).
-    pub async fn queue_add(&self, want: Option<&str>, id: &str, how: source::PlayHow) -> Result<String, ToggleError> {
+    /// Play tracks next, or at the end of the queue, in order, on the player that plays (the track menu, decision 0019; a
+    /// crate's tracks, decision 0024).
+    pub async fn queue_add(&self, want: Option<&str>, ids: &[String], how: source::PlayHow) -> Result<String, ToggleError> {
         let (_, s, _) = self.queue_source(want).await?;
-        s.play_tracks(&[id.to_string()], how).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+        s.play_tracks(ids, how).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
     /// The player plays from this track of its queue on (the queue view's tap, decision 0019).
