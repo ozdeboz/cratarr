@@ -286,12 +286,12 @@
               ><Icon name="heart" size={26} /></button
             >
           {/if}
-          <button class="act" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}><Icon name="playlists" size={24} /></button>
           <div class="count" class:pending={live.pending} aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
             <span>in</span>
             <strong>{live.pending ? '–' : memberCount}</strong>
             <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
           </div>
+          <button class="act" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}><Icon name="playlists" size={24} /></button>
         </div>
       {/if}
       <i class="sp d"></i>
