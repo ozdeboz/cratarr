@@ -653,12 +653,26 @@ impl Jellyfin {
     /// Albums in a library, newest first, without their tracks (one cheap request, under a second for a hundred
     /// albums), each with the stamp that changes when Jellyfin saves it again.
     pub async fn album_heads(&self, library_id: &str, limit: usize) -> Result<Vec<(crate::source::Album, Option<String>)>> {
-        let page: ItemsPage<ListedAlbumItem> = self
-            .get(&format!(
-                "/Items?ParentId={library_id}&IncludeItemTypes=MusicAlbum&Recursive=true&SortBy=DateCreated&SortOrder=Descending&Limit={limit}&Fields=Path,Tags,DateCreated,DateLastSaved"
-            ))
-            .await?;
-        Ok(page.items.into_iter().map(album_head).collect())
+        // In pages, one after the other: a whole Music library at once (2,231 albums) took Jellyfin 25 s on 2026-10-15,
+        // past the 20 s a request may take, while a page of 250 comes back in about 3 s. Newest first, then by name, so
+        // the pages neither overlap nor skip an album added the same moment.
+        const PAGE: usize = 250;
+        let mut heads = Vec::new();
+        while heads.len() < limit {
+            let want = PAGE.min(limit - heads.len());
+            let page: ItemsPage<ListedAlbumItem> = self
+                .get(&format!(
+                    "/Items?ParentId={library_id}&IncludeItemTypes=MusicAlbum&Recursive=true&SortBy=DateCreated,SortName&SortOrder=Descending&EnableImages=false&EnableUserData=false&Fields=Path,Tags,DateCreated,DateLastSaved&StartIndex={}&Limit={want}",
+                    heads.len()
+                ))
+                .await?;
+            let n = page.items.len();
+            heads.extend(page.items.into_iter().map(album_head));
+            if n < want {
+                break;
+            }
+        }
+        Ok(heads)
     }
 
     /// Track count, format and lowest bitrate of one album (one request, about a tenth of a second). Reading these

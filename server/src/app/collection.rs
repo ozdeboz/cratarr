@@ -39,11 +39,14 @@ pub struct CollectionService {
     cache: Mutex<HashMap<String, CollectionSourceView>>,
     /// A server's list changed (albums came, went or changed), for pages that follow it (`/api/events`).
     changed: tokio::sync::broadcast::Sender<()>,
+    /// Held while the lists are read: reading a library takes the server half a minute, so a page asking meanwhile
+    /// waits for that read instead of starting its own.
+    reading: Mutex<()>,
 }
 
 impl CollectionService {
     pub(super) fn new(lib: Arc<Library>, shelves: Arc<Shelves>) -> Self {
-        Self { lib, shelves, cache: Mutex::new(HashMap::new()), changed: tokio::sync::broadcast::channel(16).0 }
+        Self { lib, shelves, cache: Mutex::new(HashMap::new()), changed: tokio::sync::broadcast::channel(16).0, reading: Mutex::new(()) }
     }
 
     /// Told when a refresh finds a server's list changed.
@@ -52,7 +55,7 @@ impl CollectionService {
     }
 
     /// Every server with a Music library (or only `want`), its albums newest first. The kept lists, read from the
-    /// server only when there is none yet; one read at a time, so pages asking at once do not all ask the server.
+    /// server only when there is none yet (after a start, the first background pass is usually reading it already).
     pub async fn list(&self, want: Option<&str>) -> CollectionView {
         let mut sources = Vec::new();
         for (a, s, libraries) in self.music_sources() {
@@ -60,16 +63,22 @@ impl CollectionService {
                 continue;
             }
             let key = key(&a, &libraries);
-            let mut cache = self.cache.lock().await;
-            let view = match cache.get(&key).cloned() {
+            let kept = self.cache.lock().await.get(&key).cloned();
+            let view = match kept {
                 Some(v) => v,
                 None => {
-                    let v = self.read(&a, &*s, &libraries).await;
-                    cache.insert(key, v.clone());
-                    v
+                    let _reading = self.reading.lock().await;
+                    let kept = self.cache.lock().await.get(&key).cloned();
+                    match kept {
+                        Some(v) => v,
+                        None => {
+                            let v = self.read(&a, &*s, &libraries).await;
+                            self.cache.lock().await.insert(key, v.clone());
+                            v
+                        }
+                    }
                 }
             };
-            drop(cache);
             sources.push(view);
         }
         CollectionView { sources }
@@ -77,6 +86,7 @@ impl CollectionService {
 
     /// Reads the lists again, keeping a list whose read failed. Tells the pages when one changed.
     pub async fn refresh(&self) {
+        let _reading = self.reading.lock().await;
         let mut keep = HashSet::new();
         let mut changed = false;
         for (a, s, libraries) in self.music_sources() {

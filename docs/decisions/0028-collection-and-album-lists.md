@@ -15,7 +15,8 @@ album.
 ## Decision
 
 - **Collection** (`#/collection`, after Incoming): each connected server's Music library albums, read by the server
-  as Incoming's are and kept, refreshed every five minutes; the page orders them by Artist (a leading "The" aside),
+  as Incoming's are, in pages of 250 (the whole library at once took Jellyfin 25 s), and kept, refreshed every quarter
+  of an hour in the background (a page never waits for a refresh); the page orders them by Artist (a leading "The" aside),
   Title, Year or Added, the viewer's choice.
 - **One album list** (`lib/AlbumShelf.svelte`) for Incoming and Collection: the filter, the order where the page has
   one, Rows or Covers, and Size, in columns (`lib/zoom.ts`, shared with the playlist chips). A tap views the album, a

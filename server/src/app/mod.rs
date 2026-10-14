@@ -71,7 +71,7 @@ pub struct App {
     pub playing: PlayingService,
     pub playlists: Arc<PlaylistService>,
     pub incoming: Arc<IncomingService>,
-    pub collection: CollectionService,
+    pub collection: Arc<CollectionService>,
     pub insights: InsightsService,
     pub settings: SettingsService,
     /// What happened to albums (decision 0011); the live channel tells the pages.
@@ -93,7 +93,7 @@ impl App {
         let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone(), journal.clone()));
         let files = crate::ports::disk();
         let shelves = Arc::new(shelf::Shelves::new(library.clone(), cfg.data_dir.as_deref()));
-        let collection = CollectionService::new(library.clone(), shelves.clone());
+        let collection = Arc::new(CollectionService::new(library.clone(), shelves.clone()));
         let incoming = Arc::new(IncomingService::new(
             library.clone(),
             files.clone(),
@@ -148,7 +148,8 @@ impl App {
     /// The one background pass that keeps Cratarr in step with its sources and the library, run every
     /// `SYNC_SECS`. Sources offer no reliable change notifications (webhooks are optional plugins), so it looks:
     /// incoming lists every pass; dead playlist entries and sources still missing their libraries every other pass;
-    /// the Music library's albums every five minutes; the Incoming trash every hour.
+    /// the Music library's albums every quarter of an hour (reading them takes the server half a minute); the Incoming
+    /// trash every hour.
     pub async fn sync(&self, pass: u64) {
         self.incoming.refresh().await;
         self.sync.pass().await;
@@ -159,8 +160,10 @@ impl App {
             self.settings.infer_naming().await;
             self.library.watch_servers().await;
         }
-        if pass % 10 == 0 {
-            self.collection.refresh().await;
+        if pass % 30 == 0 {
+            // On its own: half a minute of reading must not hold up the pass.
+            let collection = self.collection.clone();
+            tokio::spawn(async move { collection.refresh().await });
         }
         if pass % 120 == 0 {
             self.incoming.purge_trash().await;
