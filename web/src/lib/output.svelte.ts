@@ -26,6 +26,14 @@ import { toast } from './toast.svelte';
 
 export const isLocal = () => prefs.output === 'local';
 
+// Leaving the page stops what plays in this browser, so a reload or closing the tab asks first (the browser's own
+// "Leave site?"), but only while this browser is playing.
+addEventListener('beforeunload', (e) => {
+  if (!isLocal() || local.index < 0 || local.paused) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
+
 /** The local queue's playing track as a now-playing view (the shape the player shows). */
 export function localNowPlaying(): NowPlaying | null {
   const t = local.queue[local.index];
