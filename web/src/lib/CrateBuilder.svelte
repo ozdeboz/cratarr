@@ -22,6 +22,8 @@
   import { closePlaylist, openPlaylist, panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
+  import Row from './Row.svelte';
+  import TrackCover from './TrackCover.svelte';
   import { withUndo } from './undo.svelte';
 
   let { id }: { id: string | null } = $props();
@@ -245,9 +247,11 @@
         {#if preview}
           <ol>
             {#each preview.rows as r, i (i)}
+              {@const src = preview.source}
               <li>
-                {#if r.id && !r.missing}<img src={coverUrl({ source: preview.source, id: r.id })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
-                <span class="t"><strong>{r.name ?? r.file}</strong><span>{r.artist ?? ''}</span></span>
+                <Row size="large" title={r.name ?? r.file} sub={r.artist ?? ''} off={!r.id || !!r.missing}>
+                  {#snippet lead()}<TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} />{/snippet}
+                </Row>
               </li>
             {/each}
           </ol>
@@ -496,41 +500,6 @@
     list-style: none;
   }
 
-  .preview li {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 52px;
-  }
-
-  .preview img,
-  .noimg {
-    flex: none;
-    width: 44px;
-    height: 44px;
-    border-radius: 6px;
-    object-fit: cover;
-    background: var(--bg);
-  }
-
-  .t {
-    min-width: 0;
-  }
-
-  .t strong,
-  .t span {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .t strong {
-    font-size: 14px;
-    font-weight: 500;
-  }
-
-  .t span,
   .muted,
   .note {
     color: var(--muted);

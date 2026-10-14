@@ -41,6 +41,7 @@
   import ExportTab from './ExportTab.svelte';
   import PlaylistItem from './PlaylistItem.svelte';
   import Row from './Row.svelte';
+  import TrackCover from './TrackCover.svelte';
   import Section from './Section.svelte';
   import { fromAction } from 'svelte/attachments';
   import RepairTab from './RepairTab.svelte';
@@ -707,12 +708,8 @@
   </li>
 {/snippet}
 
-<!-- A track's cover in front of its row (with Finamp's mini visualiser while it plays). -->
 {#snippet cover(r: PlaylistRow, src: string, here = false)}
-  <span class="cover">
-    {#if r.id && !r.missing}<img src={coverUrl({ source: src, id: r.id })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
-    {#if here}<span class="eq" class:still={paused()} aria-hidden="true"><i></i><i></i><i></i></span>{/if}
-  </span>
+  <TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
 {/snippet}
 
 {#if menuOpen && selected.length}
@@ -1197,72 +1194,6 @@
     color: var(--art-accent, var(--accent));
     font-weight: 500;
     font-size: 14px;
-  }
-
-  .cover {
-    position: relative;
-    flex: none;
-    width: 60px;
-    height: 60px;
-  }
-
-  .cover img,
-  .noimg {
-    display: block;
-    width: 100%;
-    height: 100%;
-    border-radius: 8px;
-    object-fit: cover;
-    background: var(--bg);
-  }
-
-  /* Finamp's mini visualiser on the playing track's cover, over a dark veil. */
-  .eq {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    border-radius: 8px;
-    background: rgb(0 0 0 / 0.4);
-  }
-
-  .eq i {
-    width: 4px;
-    height: 15px;
-    border-radius: 2px;
-    background: white;
-    transform-origin: bottom;
-    animation: eq 900ms ease-in-out infinite alternate;
-  }
-
-  .eq i:nth-child(2) {
-    animation-delay: -300ms;
-  }
-
-  .eq i:nth-child(3) {
-    animation-delay: -600ms;
-  }
-
-  .eq.still i {
-    animation: none;
-    transform: scaleY(0.4);
-  }
-
-  @keyframes eq {
-    from {
-      transform: scaleY(0.25);
-    }
-    to {
-      transform: scaleY(1);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .eq i {
-      animation: none;
-    }
   }
 
   .artist {
