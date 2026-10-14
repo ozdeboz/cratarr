@@ -43,6 +43,7 @@
   import RepairTab from './RepairTab.svelte';
   import SyncTab from './SyncTab.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
+  import PanelPlace from './PanelPlace.svelte';
   import { prefs } from './prefs.svelte';
   import { clockText, paused, playing } from './remote.svelte';
   import RowHeart from './RowHeart.svelte';
@@ -390,15 +391,20 @@
       <span class="end">
         <button class="barbtn" aria-pressed={editing.names} onclick={() => editing && (editing.names = !editing.names)} disabled={editing.saving}>Names</button>
         <button class="barbtn save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}>Save</button>
+        <PanelPlace />
       </span>
     {:else if making}
       <button class="barbtn" onclick={() => (making = null)} disabled={making.saving}>Cancel</button>
-      <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
+      <span class="end">
+        <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
+        <PanelPlace />
+      </span>
     {:else if crate}
       <button class="icon" aria-label="Close the crate" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
         {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => openPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
         <button class="icon" aria-label="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
+        <PanelPlace />
       </span>
     {:else}
       <button class="icon" aria-label={multi ? 'Close the playlists' : 'Close the playlist'} onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
@@ -408,6 +414,7 @@
         >
         {#if rows && p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
         <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
+        <PanelPlace />
       </span>
     {/if}
   </div>
@@ -642,6 +649,7 @@
 
   .end {
     display: flex;
+    align-items: center;
   }
 
   /* Finamp's playlist heart: filled when it is a favourite. */

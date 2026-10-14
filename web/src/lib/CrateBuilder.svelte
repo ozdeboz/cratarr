@@ -18,6 +18,7 @@
   } from './api';
   import { CRATE, crates, loadCrates } from './crates.svelte';
   import Icon from './Icon.svelte';
+  import PanelPlace from './PanelPlace.svelte';
   import { closePlaylist, openPlaylist, panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
@@ -163,7 +164,10 @@
 <section class="view" aria-label={id ? 'Change the crate' : 'New crate'}>
   <div class="bar">
     <button class="barbtn" onclick={cancel} disabled={saving}>Cancel</button>
-    <button class="barbtn save" onclick={save} disabled={saving || !draft?.name.trim()} aria-busy={saving}>Save</button>
+    <span class="end">
+      <button class="barbtn save" onclick={save} disabled={saving || !draft?.name.trim()} aria-busy={saving}>Save</button>
+      <PanelPlace />
+    </span>
   </div>
 
   <div class="scroll">
@@ -258,6 +262,11 @@
     display: flex;
     justify-content: space-between;
     padding: 4px 4px 0;
+  }
+
+  .end {
+    display: flex;
+    align-items: center;
   }
 
   .barbtn {

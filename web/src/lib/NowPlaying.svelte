@@ -114,9 +114,11 @@
     prefs.sidebar = false;
     player.full = true;
   }
+  // Beside the page again: only the place changes; the player folds to the mini-player rather than opening in the
+  // panel (a playlist or crate that was open shows there), and the mini-player's tap brings it back.
   function toSidebar() {
     prefs.sidebar = true;
-    player.min = false;
+    player.min = true;
     player.full = false;
   }
   $effect(() => {
