@@ -1,7 +1,8 @@
 <script lang="ts">
-  // The one row (docs/ui-conventions.md → Rows): every list of things is built from it, in three sizes with one layout,
+  // The one row (docs/ui-conventions.md → Rows): every list of things is built from it, in four sizes with one layout,
   // the title on the left and the action on the right. Large in the panel's Tracks, Info, Repair and Sync tabs (and a
-  // track is a large row with its cover); medium on the pages (Playlists, Crates); small in the panel's Export tab.
+  // track is a large row with its cover); medium on the pages (Playlists, Crates); small in the panel's Export tab;
+  // extra large on Incoming (an album: a larger cover, and lines of what it is under its title).
   // Small and medium are Finamp's add-to-playlist tiles (tinted in the accent, a divider before the action); large is
   // Finamp's list tile (plain, a cover or control in front).
   //
@@ -34,9 +35,9 @@
     attach,
     attachMain,
   }: {
-    size: 'small' | 'medium' | 'large';
+    size: 'small' | 'medium' | 'large' | 'xl';
     title: string;
-    /** A second line: muted (large), or under the title on small and medium. */
+    /** A second line: muted (large), or under the title on small and medium; on extra large, lines of its own. */
     sub?: string | Snippet;
     lead?: Snippet;
     badges?: Snippet;
@@ -67,11 +68,13 @@
   } = $props();
 
   const tag = $derived(as ?? (onclick ? 'button' : 'div'));
-  const tinted = $derived(size !== 'large');
+  const plain = $derived(size === 'large' || size === 'xl');
+  const tinted = $derived(!plain);
 </script>
 
 <div
   class="row {size} {extra}"
+  class:large={plain}
   class:tinted
   class:active
   class:strong
@@ -374,5 +377,25 @@
   .large .act :global(button.icon) {
     width: 44px;
     height: 44px;
+  }
+
+  /* Extra large: a large row with more to say, an album's: its lines wrap and keep their own colours. */
+  .xl {
+    min-height: 84px;
+  }
+
+  .xl .main {
+    gap: 12px;
+  }
+
+  .xl .title {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .xl .sub {
+    white-space: normal;
+    color: inherit;
+    font-size: inherit;
   }
 </style>

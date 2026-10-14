@@ -744,7 +744,8 @@
 {/snippet}
 
 {#snippet cover(r: PlaylistRow, src: string, here = false)}
-  <TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
+  <!-- An Incoming album's tracks are outside Music, where the track covers come from: the album's own. -->
+  <TrackCover src={album ? incomingCoverUrl(album.source, album.id) : r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
 {/snippet}
 
 {#if menuOpen && selected.length}

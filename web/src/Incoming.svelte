@@ -19,6 +19,9 @@
   import MenuEntry from './lib/MenuEntry.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
   import { longpress } from './lib/longpress';
+  import { fromAction } from 'svelte/attachments';
+  import Row from './lib/Row.svelte';
+  import Icon from './lib/Icon.svelte';
   import { albumGone, albumSubject, viewPlaylist, panel } from './lib/panel.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { live, untilNewTrack } from './lib/live.svelte';
@@ -272,16 +275,17 @@
       {:else if s.albums.length === 0}
         <p class="empty">Nothing incoming.</p>
       {:else}
-        <p class="count">{s.albums.length} {s.albums.length === 1 ? 'album' : 'albums'}, newest first. Tap one to play it.</p>
+        <p class="count">{s.albums.length} {s.albums.length === 1 ? 'album' : 'albums'}, newest first.</p>
         <ul>
           {#each s.albums.filter(matches) as a (a.id)}
-            <li class:playing={playing?.album_id === a.id} class:viewed={panel.viewed === albumSubject(s.id, a.id)}>
-              <button
-                class="row"
-                disabled={starting !== null}
-                aria-busy={starting === a.id}
-                onclick={() => play(s.id, a)}
-                use:longpress={(anchor) =>
+            <li class:playing={playing?.album_id === a.id}>
+              <Row
+                size="xl"
+                title={a.title}
+                label="View {a.title}"
+                active={panel.viewed === albumSubject(s.id, a.id)}
+                onclick={() => viewPlaylist(albumSubject(s.id, a.id))}
+                attach={fromAction(longpress, () => (anchor: DOMRect) =>
                   (menu = {
                     source: s.id,
                     a,
@@ -291,44 +295,57 @@
                     keepable: s.deletable.includes(a.id) && !s.verdicts?.[a.id],
                     replaceable: s.deletable.includes(a.id) && s.verdicts?.[a.id]?.kind === 'upgrade',
                     job: jobs.of(s.id, a.id)?.id ?? null,
-                  })}
+                  }))}
               >
-              {#if noCover[a.id]}
-                <div class="cover none" aria-hidden="true"></div>
-              {:else}
-                <img
-                  class="cover"
-                  src={incomingCoverUrl(s.id, a.id)}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  onerror={() => (noCover[a.id] = true)}
-                />
-              {/if}
-              <div class="text">
-                <div class="title">{a.title}{#if a.year}<span class="year">{` (${a.year})`}</span>{/if}</div>
-                <div class="artist">{a.artist ?? 'Unknown artist'}{#if playing?.album_id === a.id}<span class="now"> · playing</span>{/if}</div>
-                <div class="meta">
-                  <span>{a.tracks} {a.tracks === 1 ? 'track' : 'tracks'}</span>
-                  <span class:weak={!lossless(a) && a.bitrate_kbps !== null && a.bitrate_kbps < 320}>{quality(a)}</span>
-                  {#if a.added}<span>added {added(a.added)}</span>{/if}
-                  {#each a.tags as t (t)}<span class="tag">{t}</span>{/each}
-                </div>
-                {#if jobs.of(s.id, a.id)}
-                  {@const job = jobs.of(s.id, a.id)!}
-                  <div class="job">
-                    {job.state === 'waiting' ? 'Waiting to convert' : `Converting ${job.done} of ${job.total}`}
-                    <div class="track" aria-hidden="true"><div style:width="{(100 * job.done) / Math.max(job.total, 1)}%"></div></div>
-                  </div>
-                {:else if s.verdicts?.[a.id]}
-                  {@const v = s.verdicts[a.id]}
-                  <div class="verdict" class:upgrade={v.kind === 'upgrade'} title={v.library}>
-                    <span class="badge">{v.kind === 'upgrade' ? 'Upgrade' : 'In Music'}</span>
-                    {v.why}
-                  </div>
-                {/if}
-              </div>
-              </button>
+                {#snippet lead()}
+                  {#if noCover[a.id]}
+                    <span class="cover none" aria-hidden="true"></span>
+                  {:else}
+                    <img
+                      class="cover"
+                      src={incomingCoverUrl(s.id, a.id)}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      onerror={() => (noCover[a.id] = true)}
+                    />
+                  {/if}
+                {/snippet}
+                {#snippet badges()}
+                  {#if a.year}<span class="released">{a.year}</span>{/if}
+                {/snippet}
+                {#snippet sub()}
+                  <span class="artist">{a.artist ?? 'Unknown artist'}{#if playing?.album_id === a.id}<span class="now"> · playing</span>{/if}</span>
+                  <span class="facts">
+                    <span>{a.tracks} {a.tracks === 1 ? 'track' : 'tracks'}</span>
+                    <span class:weak={!lossless(a) && a.bitrate_kbps !== null && a.bitrate_kbps < 320}>{quality(a)}</span>
+                    {#if a.added}<span>added {added(a.added)}</span>{/if}
+                    {#each a.tags as t (t)}<span class="tag">{t}</span>{/each}
+                  </span>
+                  {#if jobs.of(s.id, a.id)}
+                    {@const job = jobs.of(s.id, a.id)!}
+                    <span class="job">
+                      {job.state === 'waiting' ? 'Waiting to convert' : `Converting ${job.done} of ${job.total}`}
+                      <span class="track" aria-hidden="true"><span style:width="{(100 * job.done) / Math.max(job.total, 1)}%"></span></span>
+                    </span>
+                  {:else if s.verdicts?.[a.id]}
+                    {@const v = s.verdicts[a.id]}
+                    <span class="verdict" class:upgrade={v.kind === 'upgrade'} title={v.library}>
+                      <span class="badge">{v.kind === 'upgrade' ? 'Upgrade' : 'In Music'}</span>
+                      {v.why}
+                    </span>
+                  {/if}
+                {/snippet}
+                {#snippet action()}
+                  <button
+                    class="icon"
+                    aria-label="Play {a.title}"
+                    disabled={starting !== null}
+                    aria-busy={starting === a.id}
+                    onclick={() => play(s.id, a)}><Icon name="play" size={26} /></button
+                  >
+                {/snippet}
+              </Row>
             </li>
           {/each}
         </ul>
@@ -493,65 +510,38 @@
     border-bottom: 1px solid var(--border);
   }
 
-  .row {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    width: 100%;
-    padding: 10px 0;
-    background: none;
-    border: 0;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .row:hover .title {
-    text-decoration: underline;
-  }
-
-  .row:disabled {
-    cursor: progress;
-  }
-
-  .row[aria-busy='true'] {
-    opacity: 0.6;
-  }
-
   .cover {
     flex: none;
-    width: 56px;
-    height: 56px;
+    display: block;
+    width: 72px;
+    height: 72px;
     border-radius: 8px;
     object-fit: cover;
     background: var(--surface);
   }
 
   .cover.none {
+    box-sizing: border-box;
     border: 1px solid var(--border);
   }
 
-  .text {
-    min-width: 0;
-  }
-
-  .title {
-    font-weight: 600;
-    overflow-wrap: anywhere;
-  }
-
-  .year,
+  .released,
   .artist {
     color: var(--muted);
     font-weight: 400;
   }
 
   .artist {
+    display: block;
     font-size: 0.9rem;
   }
 
-  .meta {
+  /* The play button's busy state while its album starts. */
+  li :global(button[aria-busy='true']) {
+    opacity: 0.6;
+  }
+
+  .facts {
     display: flex;
     flex-wrap: wrap;
     gap: 4px 12px;
@@ -561,20 +551,9 @@
     font-variant-numeric: tabular-nums;
   }
 
-  li.playing,
-  li.viewed {
-    margin: 0 -8px;
-    padding-inline: 8px;
-    border-radius: 10px;
-  }
-
   li.playing {
+    border-radius: 10px;
     background: color-mix(in srgb, var(--accent) 12%, transparent);
-  }
-
-  /* In the panel: a border only, as a viewed playlist's (Row). */
-  li.viewed {
-    box-shadow: inset 0 0 0 2px var(--accent);
   }
 
   .now {
@@ -593,6 +572,7 @@
   }
 
   .verdict {
+    display: block;
     margin-top: 3px;
     color: var(--muted);
     font-size: 0.8rem;
@@ -600,12 +580,14 @@
 
   /* In the conversion queue: what it is at, and a thin bar of the files done. */
   .job {
+    display: block;
     margin-top: 3px;
     color: var(--accent);
     font-size: 0.8rem;
   }
 
   .job .track {
+    display: block;
     max-width: 240px;
     height: 3px;
     margin-top: 4px;
@@ -614,7 +596,8 @@
     overflow: hidden;
   }
 
-  .job .track div {
+  .job .track span {
+    display: block;
     height: 100%;
     background: var(--accent);
     transition: width 0.4s;
