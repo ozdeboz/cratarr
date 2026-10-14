@@ -116,7 +116,12 @@
 
 </script>
 
-<main>
+<main class:selecting={select.on}>
+  {#if select.on}
+    <button class="new more" aria-label="Menu of the ticked playlists" disabled={!select.picked.length} onclick={() => (menu = { kind: 'selection' })}
+      ><Icon name="moreVert" size={22} /></button
+    >
+  {/if}
 
   <div class="tools">
     <input type="search" placeholder="Filter playlists" aria-label="Filter playlists" bind:value={filter} />
@@ -132,11 +137,9 @@
       <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
     </div>
     {#if select.on}
-      <!-- Select (decision 0025): a chip's name ticks it; the ticked ones' menu; on a phone, open them in the panel. -->
+      <!-- Select (decision 0025): a chip's name ticks it; on a phone, open them in the panel. Their menu is the ⋮ in
+           the page's top right corner. -->
       <button class="new" onclick={endSelect}>Cancel</button>
-      <button class="new more" aria-label="Menu of the ticked playlists" disabled={!select.picked.length} onclick={() => (menu = { kind: 'selection' })}
-        ><Icon name="moreVert" size={22} /></button
-      >
       {#if select.picked.length && !showsPicked()}
         <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
       {/if}
@@ -223,7 +226,13 @@
 
 <style>
   main {
+    position: relative;
     padding: 0 clamp(12px, 2vw, 32px) 48px;
+  }
+
+  /* Select's ⋮: in the page's top right corner, the toolbar keeping clear of it. */
+  main.selecting .tools {
+    padding-right: 56px;
   }
 
   .tools {
@@ -293,9 +302,13 @@
   }
 
   button.new.more {
+    position: absolute;
+    top: 14px;
+    right: clamp(12px, 2vw, 32px);
     display: grid;
     place-items: center;
-    padding: 0 10px;
+    width: 44px;
+    padding: 0;
     color: inherit;
   }
 

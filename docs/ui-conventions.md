@@ -77,7 +77,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
   tap on the label opens the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
   label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone "Open N playlists");
-  the circle keeps adding or removing the playing track; a ⋮ beside Cancel is the ticked playlists' menu (Play,
+  the circle keeps adding or removing the playing track; a ⋮ in the page's top right corner is the ticked playlists' menu (Play,
   Shuffle, Play next, Add to queue; favourite, pin, Delete). A ticked playlist has the border of the one open in the
   panel: one state, one look. A favourite playlist has a small red heart (Finamp's list mark)
   above the problems' dot, in the dot's place, so the chip gets no wider. The playlist open in the panel has a border

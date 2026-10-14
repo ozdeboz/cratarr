@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The ticked playlists' menu (decision 0025, the ⋮ beside Select's Cancel): a sheet as every menu (decision 0021),
+  // The ticked playlists' menu (decision 0025, the ⋮ in the Playlists page's top right corner while selecting): a sheet as every menu (decision 0021),
   // Play, Shuffle, Play next and Add to queue as the large actions (their tracks one playlist after another, in the
   // order ticked, each once), then favourite, pin, and Delete (a step to confirm; one Undo brings all back).
   import { deletePlaylist, restorePlaylist, type PlayMode } from './api';

@@ -23,7 +23,7 @@ The player is different: it is always about one track, in one view. The owner se
   ticked chip has the border of the playlist open in the panel (one state, one look); **the circle keeps adding or
   removing the playing track**, in Select too. On a roomy window the panel shows the selection as it is ticked; on a
   phone, where the panel covers the page, one ticks first and opens it with "Open 3 playlists". Cancel ends Select.
-  A ⋮ beside Cancel opens a sheet for the ticked playlists: Play, Shuffle, Play next, Add to queue (their tracks one
+  A ⋮ in the page's top right corner opens a sheet for the ticked playlists: Play, Shuffle, Play next, Add to queue (their tracks one
   playlist after another, in the order ticked, each once), favourite, pin, Delete (one Undo for all).
 - **Tracks:** one playlist as 0023 (its edit mode only here); several as **a section per playlist**, in the order
   ticked: a header (name, count) that folds, its tracks below, read-only; a tap plays that playlist from the track.
