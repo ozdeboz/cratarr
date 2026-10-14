@@ -78,8 +78,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   tap on the label opens the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
   label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone "Open N playlists");
   the circle keeps adding or removing the playing track; with playlists ticked, a ⋮ in the page's top right corner (where
-  + New playlist is otherwise) is their menu (Play,
-  Shuffle, Play next, Add to queue; favourite, pin, Delete). A ticked playlist has the border of the one open in the
+  + New playlist is otherwise) is the playlist menu for them (the same menu as a long-press; for several without
+  Spoken as… and Rename). A ticked playlist has the border of the one open in the
   panel: one state, one look. A favourite playlist has a small red heart (Finamp's list mark)
   above the problems' dot, in the dot's place, so the chip gets no wider. The playlist open in the panel has a border
   in the accent and no extra fill: fill means "holds the playing track", the border "is shown in the panel". When the playing

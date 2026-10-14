@@ -186,7 +186,7 @@
 
 {#if menu}
   <PlaylistMenu
-    playlist={menuPlaylist(menu.name)}
+    playlists={[menuPlaylist(menu.name)]}
     onclose={() => (menu = null)}
     ondeleted={() => (selected = null)}
   />

@@ -1,30 +1,34 @@
 <script lang="ts">
-  // A playlist's menu (docs/ui-conventions.md, decision 0021), the same wherever a playlist is long-pressed: a sheet as
-  // Finamp's track menu, the playlist on its card (a mosaic of its first albums' covers), Play, Shuffle, Play next and
-  // Add to queue as the large actions, then Export… and Sync to… (they open the panel on that tab, decision 0025),
-  // Spoken as…, Rename and Delete, each done inside the sheet.
+  // The playlists' menu (docs/ui-conventions.md, decisions 0021, 0025), the same wherever it opens: a long-press on a
+  // playlist, the panel's ⋮, or the ⋮ for the ticked ones (one or several). A sheet as Finamp's track menu: the
+  // playlist on its card (a mosaic of its first albums' covers; for several, their covers and "3 playlists"), Play,
+  // Shuffle, Play next and Add to queue as the large actions (several: one playlist after another, each track once),
+  // then Open, the favourite, Pin, Export… and Sync to… (they open the panel on that tab), Spoken as… and Rename (one
+  // playlist only), and Delete (one Undo for all), each done inside the sheet.
   // Success shows where it happens (the header, the list); only Delete says something, to offer Undo.
   import { deletePlaylist, restorePlaylist, setSpoken, spokenNames, type Link, type PlayMode, incomingCoverUrl, playlistCovers } from './api';
   import MenuEntry from './MenuEntry.svelte';
-  import { startPlaylist } from './output.svelte';
-  import { openPlaylist, openSelection, panel, playlistDeleted, type Tab } from './panel.svelte';
+  import { startPlaylists } from './output.svelte';
+  import { openSelection, panel, playlistDeleted, type Tab } from './panel.svelte';
   import { selectDeleted } from './select.svelte';
   import { renameEverywhere } from './rename.svelte';
   import { insights } from './insights.svelte';
-  import { isPlaylistFavorite, loadPlaylistFavorites, togglePlaylistFavorite } from './favourites.svelte';
+  import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './favourites.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { prefs, togglePin } from './prefs.svelte';
+  import { prefs } from './prefs.svelte';
   import { refresh } from './live.svelte';
   import { toast } from './toast.svelte';
 
+  type Item = { id: string; name: string; count: number; dead: number; links?: Link[]; spoken?: string[] };
   let {
-    playlist,
+    playlists,
     onclose,
     onrenamed,
     ondeleted,
     onrestored,
   }: {
-    playlist: { id: string; name: string; count: number; dead: number; links?: Link[]; spoken?: string[] };
+    /** One or more (in the order ticked). */
+    playlists: Item[];
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
@@ -35,28 +39,46 @@
   let mode = $state<'menu' | 'rename' | 'delete' | 'spoken'>('menu');
   $effect(() => void loadPlaylistFavorites());
 
-  // The card's image: the covers of the playlist's first four albums (one cover when it has fewer).
+  /** The one playlist, when the menu is for one. */
+  const one = $derived(playlists.length === 1 ? playlists[0] : null);
+  const ids = $derived(playlists.map((x) => x.id));
+  const n = $derived(playlists.length);
+  const title = $derived(one ? one.name : `${n} playlists`);
+  const tracks = (k: number) => `${k} ${k === 1 ? 'track' : 'tracks'}`;
+  const missing = (k: number) => `${k} missing ${k === 1 ? 'track' : 'tracks'}`;
+
+  // The card's image: one playlist's first four albums (one cover when it has fewer); several: the first cover of each
+  // of the first four.
   let covers = $state<string[]>([]);
   $effect(() => {
-    const id = playlist.id;
+    const want = ids;
     let gone = false;
-    playlistCovers(id)
-      .then((list) => {
-        if (gone) return;
-        const urls = list.map((c) => incomingCoverUrl(c.source, c.album_id));
-        covers = urls.length >= 4 ? urls.slice(0, 4) : urls.slice(0, 1);
+    const asked =
+      want.length === 1
+        ? playlistCovers(want[0]).then((list) => list.map((c) => incomingCoverUrl(c.source, c.album_id)))
+        : Promise.all(want.slice(0, 4).map((x) => playlistCovers(x).catch(() => []))).then((lists) =>
+            lists.flatMap((l) => (l[0] ? [incomingCoverUrl(l[0].source, l[0].album_id)] : [])),
+          );
+    asked
+      .then((urls) => {
+        if (!gone) covers = urls.length >= 4 ? urls.slice(0, 4) : urls.slice(0, 1);
       })
       .catch(() => {});
     return () => (gone = true);
   });
 
+  const allFav = $derived(ids.every((id) => isPlaylistFavorite(id)));
+  const allPinned = $derived(ids.every((id) => prefs.pinned.includes(id)));
+  /** The panel shows exactly these already. */
+  const shown = $derived(panel.selection.join('\n') === ids.join('\n'));
+
   // Spoken as… (decision 0015): other names a voice assistant may hear for it, comma-separated.
   let spokenField = $state('');
   async function saveSpoken() {
-    if (working) return;
+    if (working || !one) return;
     working = true;
     try {
-      await setSpoken(p.id, spokenNames(spokenField));
+      await setSpoken(one.id, spokenNames(spokenField));
       onclose();
     } catch (e) {
       fail(e, 'Could not save the names');
@@ -66,24 +88,23 @@
     }
   }
 
-  /** Export… and Sync to…: the panel opens on that tab for this playlist (decision 0025). */
+  /** Open, Export… and Sync to…: the panel shows these playlists, on that tab (decision 0025). */
   function openTab(tab: Tab) {
-    openSelection([p.id], tab);
+    openSelection([...ids], tab);
     onclose();
   }
   let nameField = $state('');
   let working = $state(false);
-  const p = $derived(playlist);
-  const missing = (n: number) => `${n} missing ${n === 1 ? 'track' : 'tracks'}`;
   const fail = (e: unknown, what: string) => toast.fail(e, what);
 
   async function play(how: PlayMode) {
     if (working) return;
     working = true;
+    const list = [...ids];
     onclose();
     try {
       // Here when the output is this browser (decision 0022), else on the server's player.
-      await startPlaylist(p.id, how);
+      await startPlaylists(list, how);
     } catch (e) {
       fail(e, 'Could not start playing');
     } finally {
@@ -91,13 +112,18 @@
     }
   }
 
+  function pin() {
+    prefs.pinned = allPinned ? prefs.pinned.filter((x) => !ids.includes(x)) : [...prefs.pinned, ...ids.filter((x) => !prefs.pinned.includes(x))];
+    onclose();
+  }
+
   async function rename() {
     const to = nameField.trim();
-    if (!to || to === p.id || working) return;
+    if (!one || !to || to === one.id || working) return;
     working = true;
     try {
-      await renameEverywhere(p.id, to);
-      onrenamed?.(p.id, to);
+      await renameEverywhere(one.id, to);
+      onrenamed?.(one.id, to);
       onclose();
     } catch (e) {
       fail(e, 'Something went wrong');
@@ -110,27 +136,17 @@
   async function remove() {
     if (working) return;
     working = true;
-    const { id, name } = p;
+    const list = playlists.map((x) => ({ id: x.id, name: x.name }));
+    const gone: string[] = [];
     try {
-      await deletePlaylist(id);
-      playlistDeleted(id);
-      selectDeleted(id);
-      insights.deleted(id);
-      ondeleted?.(id);
-      toast.show({
-        text: `Deleted ${name}.`,
-        undo: async () => {
-          try {
-            await restorePlaylist(id);
-            insights.restored(id);
-            onrestored?.(id);
-          } catch (e) {
-            fail(e, 'Could not restore the playlist');
-          } finally {
-            refresh();
-          }
-        },
-      });
+      for (const { id } of list) {
+        await deletePlaylist(id);
+        gone.push(id);
+        playlistDeleted(id);
+        selectDeleted(id);
+        insights.deleted(id);
+        ondeleted?.(id);
+      }
       onclose();
     } catch (e) {
       fail(e, 'Something went wrong');
@@ -138,19 +154,34 @@
       working = false;
       refresh();
     }
+    if (!gone.length) return;
+    toast.show({
+      text: gone.length === 1 ? `Deleted ${list.find((x) => x.id === gone[0])?.name ?? gone[0]}.` : `Deleted ${gone.length} playlists.`,
+      undo: async () => {
+        try {
+          for (const id of gone) {
+            await restorePlaylist(id);
+            insights.restored(id);
+            onrestored?.(id);
+          }
+        } catch (e) {
+          fail(e, gone.length === 1 ? 'Could not restore the playlist' : 'Could not restore the playlists');
+        } finally {
+          refresh();
+        }
+      },
+    });
   }
 </script>
 
 <MenuSheet
-  label={p.name}
+  label={title}
   {onclose}
   images={covers}
-  title={p.name}
-  chips={[
-    `${p.count} ${p.count === 1 ? 'track' : 'tracks'}`,
-    ...(p.dead > 0 ? [missing(p.dead)] : []),
-    ...(p.links ?? []).map((l) => l.label),
-  ]}
+  {title}
+  chips={one
+    ? [tracks(one.count), ...(one.dead > 0 ? [missing(one.dead)] : []), ...(one.links ?? []).map((l) => l.label)]
+    : [tracks(playlists.reduce((k, x) => k + x.count, 0)), ...playlists.slice(0, 3).map((x) => x.name), ...(n > 3 ? [`and ${n - 3} more`] : [])]}
   actions={mode === 'menu'
     ? [
         { icon: 'play', label: 'Play', onclick: () => play('play'), disabled: working },
@@ -164,53 +195,41 @@
 >
   {#if mode === 'menu'}
     <div role="menu">
-      {#if !(panel.selection.length === 1 && panel.selection[0] === p.id)}
-        <MenuEntry
-          icon="listOpen"
-          label="Open"
-          onclick={() => {
-            openPlaylist(p.id);
-            onclose();
-          }}
-        />
+      {#if !shown}
+        <MenuEntry icon="listOpen" label="Open" onclick={() => openTab('tracks')} />
       {/if}
       <MenuEntry
         icon="heart"
-        label={isPlaylistFavorite(p.id) ? 'Remove from favourites' : 'Add to favourites'}
+        label={allFav ? 'Remove from favourites' : 'Add to favourites'}
         onclick={() => {
-          togglePlaylistFavorite(p.id);
+          setPlaylistFavorites([...ids], !allFav);
           onclose();
         }}
       />
-      <MenuEntry
-        icon="pin"
-        label={prefs.pinned.includes(p.id) ? 'Unpin' : 'Pin to top'}
-        onclick={() => {
-          togglePin(p.id);
-          onclose();
-        }}
-      />
+      <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
       <MenuEntry icon="download" label="Export…" onclick={() => openTab('export')} />
       <MenuEntry icon="link" label="Sync to…" onclick={() => openTab('sync')} />
-      <MenuEntry
-        icon="mic"
-        label="Spoken as…"
-        onclick={() => {
-          spokenField = (p.spoken ?? []).join(', ');
-          mode = 'spoken';
-        }}
-      />
-      <MenuEntry
-        icon="pencil"
-        label="Rename"
-        onclick={() => {
-          nameField = p.id;
-          mode = 'rename';
-        }}
-      />
+      {#if one}
+        <MenuEntry
+          icon="mic"
+          label="Spoken as…"
+          onclick={() => {
+            spokenField = (one.spoken ?? []).join(', ');
+            mode = 'spoken';
+          }}
+        />
+        <MenuEntry
+          icon="pencil"
+          label="Rename"
+          onclick={() => {
+            nameField = one.id;
+            mode = 'rename';
+          }}
+        />
+      {/if}
       <MenuEntry icon="trash" label="Delete" danger onclick={() => (mode = 'delete')} />
     </div>
-  {:else if mode === 'rename'}
+  {:else if mode === 'rename' && one}
     <form
       class="form"
       onsubmit={(e) => {
@@ -220,7 +239,7 @@
     >
       <div class="heading">Rename</div>
       <input type="text" aria-label="New name" maxlength="100" bind:value={nameField} />
-      <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === p.id} aria-busy={working}>Rename</button>
+      <button type="submit" class="primary" disabled={working || !nameField.trim() || nameField.trim() === one.id} aria-busy={working}>Rename</button>
     </form>
   {:else if mode === 'spoken'}
     <form
@@ -236,8 +255,8 @@
     </form>
   {:else}
     <div class="form">
-      <p class="ask">Delete {p.name}? You can undo this right after.</p>
-      <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>Delete playlist</button>
+      <p class="ask">Delete {title}? You can undo this right after.</p>
+      <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>{one ? 'Delete playlist' : `Delete ${n} playlists`}</button>
     </div>
   {/if}
 </MenuSheet>

@@ -30,13 +30,13 @@
   import { crateName, crateOf, crates, EDIT_CRATE, loadCrates } from './crates.svelte';
   import { Reorder } from './reorder.svelte';
   import { renameEverywhere } from './rename.svelte';
-  import { isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, togglePlaylistFavorite } from './favourites.svelte';
+  import { isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, type LocalTrack } from './localPlayer.svelte';
   import { longpress } from './longpress';
-  import { isLocal, playPlaylistFrom, setPlayingMember, shownPlaylists, startPlaylist } from './output.svelte';
+  import { isLocal, playPlaylistFrom, setPlayingMember, shownPlaylists, startPlaylists } from './output.svelte';
   import { closePlaylist, openPlaylist, panel, setTab, TABS } from './panel.svelte';
   import { inSidebar } from './live.svelte';
   import ExportTab from './ExportTab.svelte';
@@ -61,7 +61,12 @@
   const title = $derived(crate ? crateName(crate) : multi ? `${ids.length} playlists` : id);
   const isPermanentCrate = $derived(!!crate && (crates.list?.find((c) => c.id === crate)?.permanent ?? true));
   const p = $derived(crate || multi ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
-  const chosen = $derived(multi ? shownPlaylists().filter((x) => ids.includes(x.id)) : []);
+  /** The selected playlists, in the order ticked (for the menu, the counts). */
+  const selected = $derived(ids.flatMap((x) => shownPlaylists().filter((y) => y.id === x)));
+  const chosen = $derived(multi ? selected : []);
+  const chosenDead = $derived(chosen.reduce((n, x) => n + x.dead, 0));
+  // The heart: on when every selected playlist is a favourite; a tap sets all of them.
+  const allFav = $derived(ids.length > 0 && ids.every((x) => isPlaylistFavorite(x)));
   const chosenCount = $derived(chosen.reduce((n, x) => n + x.count, 0));
   const np = $derived(playing());
   /** A crate's size (its rows come in pages). */
@@ -225,7 +230,7 @@
     navigator.vibrate?.(8);
     try {
       if (crate) await actOnCrate(mode);
-      else await startPlaylist(id, mode);
+      else await startPlaylists([...ids], mode);
       if (mode === 'next' || mode === 'last') toast.show({ text: mode === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
     } catch (e) {
       toast.fail(e, 'Could not start playing');
@@ -394,16 +399,14 @@
         {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => openPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
         <button class="icon" aria-label="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="save" size={22} /></button>
       </span>
-    {:else if multi}
-      <button class="icon" aria-label="Close the playlists" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
     {:else}
-      <button class="icon" aria-label="Close the playlist" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
+      <button class="icon" aria-label={multi ? 'Close the playlists' : 'Close the playlist'} onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
-        <button class="icon" class:fav={isPlaylistFavorite(id)} aria-pressed={isPlaylistFavorite(id)} aria-label="Favourite" onclick={() => togglePlaylistFavorite(id)}
+        <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
           ><Icon name="heart" size={24} /></button
         >
         {#if rows && p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
-        <button class="icon" aria-label={`Menu of ${id}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
+        <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
       </span>
     {/if}
   </div>
@@ -447,14 +450,14 @@
           {#if point && !multi}
             <p class="line"><Icon name="swatch" size={20} />{#if point.genres.length}<span class="genres">{#each point.genres as g (g)}<span>{g}</span>{/each}</span>{:else}<span>No genres</span>{/if}</p>
           {/if}
-          {#if p?.dead}<p class="line dead"><span>{p.dead} missing</span></p>{/if}
+          {#if p?.dead || chosenDead}<p class="line dead"><span>{p?.dead || chosenDead} missing</span></p>{/if}
         </div>
         {/if}
       </div>
-      {#if !editing && !making && !multi && tab === 'tracks'}
+      {#if !editing && !making && tab === 'tracks'}
       <div class="actions" role="group" aria-label="Play">
         {#each ACTIONS as a (a.mode)}
-          <button onclick={() => act(a.mode)} disabled={!playable.length}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
+          <button onclick={() => act(a.mode)} disabled={multi ? !chosenCount : !playable.length}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
         {/each}
       </div>
       {#if np && np.addable && p && !p.member}
@@ -595,8 +598,8 @@
   </li>
 {/snippet}
 
-{#if menuOpen && p}
-  <PlaylistMenu playlist={p} onclose={() => (menuOpen = false)} />
+{#if menuOpen && selected.length}
+  <PlaylistMenu playlists={selected} onclose={() => (menuOpen = false)} />
 {/if}
 {#if trackMenu}
   <TrackMenu track={trackMenu.track} start={trackMenu.start} onclose={() => (trackMenu = null)} />

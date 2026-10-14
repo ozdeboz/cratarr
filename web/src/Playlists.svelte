@@ -14,7 +14,6 @@
   import { openPlaylist, panel } from './lib/panel.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites } from './lib/favourites.svelte';
   import { endSelect, openPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
-  import SelectionMenu from './lib/SelectionMenu.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
   const view = $derived(live.view);
@@ -280,9 +279,10 @@
     </form>
   </MenuSheet>
 {:else if menu?.kind === 'playlist'}
-  <PlaylistMenu playlist={menu.p} onclose={() => (menu = null)} />
+  <PlaylistMenu playlists={[menu.p]} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'selection'}
-  <SelectionMenu ids={select.picked} onclose={() => (menu = null)} />
+  <!-- The same menu as a long-press, for what is ticked. -->
+  <PlaylistMenu playlists={select.picked.flatMap((id) => shownPlaylists().filter((x) => x.id === id))} onclose={() => (menu = null)} />
 {/if}
 
 <style>
