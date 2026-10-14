@@ -761,9 +761,24 @@ impl Jellyfin {
     /// The audio items `user` has as favourites (their ids).
     pub async fn favorite_audio(&self, user: &str) -> Result<Vec<String>> {
         anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
-        let page: ItemsPage<IdOnly> =
-            self.get(&format!("/Items?IncludeItemTypes=Audio&Recursive=true&Filters=IsFavorite&UserId={user}")).await?;
-        Ok(page.items.into_iter().map(|i| i.id).collect())
+        // In pages, the ids only (no images, user data or fields): a few thousand favourites in one request, with
+        // Jellyfin's default fields, did not answer within 90 s on 2026-10-14 (4,786 of them, Jellyfin slow per item),
+        // while a page of 500 like this took 15 s; 250 keeps a page well inside the 20 s a request may take.
+        const PAGE: usize = 250;
+        let mut ids = Vec::new();
+        loop {
+            let page: ItemsPage<IdOnly> = self
+                .get(&format!(
+                    "/Items?IncludeItemTypes=Audio&Recursive=true&Filters=IsFavorite&UserId={user}&SortBy=SortName&EnableImages=false&EnableUserData=false&Fields=&StartIndex={}&Limit={PAGE}",
+                    ids.len()
+                ))
+                .await?;
+            let n = page.items.len();
+            ids.extend(page.items.into_iter().map(|i| i.id));
+            if n < PAGE {
+                return Ok(ids);
+            }
+        }
     }
 
     /// Count one play of the item for `user`: the play count up by one, last played now, played (decision 0022). Jellyfin's
