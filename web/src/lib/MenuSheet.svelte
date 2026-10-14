@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+  import { portal } from './portal';
   // Every menu (decision 0021), as Finamp's track menu: a bottom sheet with the item on a card at its top (its image,
   // title, chips; for a track the heart), a row of large actions, then the entries (lib/MenuEntry.svelte) or a step
   // (a form, a list) given as children. It rises from the bottom; a tap on the backdrop, Esc or dragging it down closes
@@ -98,8 +99,9 @@
   });
 </script>
 
-<!-- Global transitions: a sheet slides in and out however it is opened (inside another block, such as TrackMenu's
+<!-- At the end of the page (lib/portal.ts): over every layer it was opened from. Global transitions: a sheet slides in and out however it is opened (inside another block, such as TrackMenu's
      {#if}, a local one would not play). -->
+<div class="root" use:portal>
 <div class="backdrop" role="presentation" onclick={onclose} transition:fade|global={{ duration: SHEET_OUT }}></div>
 <div
   class="sheet"
@@ -158,8 +160,14 @@
     </div>
   </div>
 </div>
+</div>
 
 <style>
+  /* Only a carrier: the backdrop and the sheet place themselves. */
+  .root {
+    display: contents;
+  }
+
   .backdrop {
     position: fixed;
     inset: 0;
