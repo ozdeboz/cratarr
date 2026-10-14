@@ -90,7 +90,7 @@ pub struct FromQueue {
     pub undo: Option<String>,
 }
 
-/// An album whose cover the page can show (`/api/incoming/cover/{source}/{album_id}`).
+/// An album whose cover the page can show (`/api/albums/{source}/{album_id}/cover`).
 #[derive(Debug, Serialize, PartialEq)]
 pub struct AlbumRef {
     pub source: String,
@@ -439,6 +439,31 @@ impl PlayingService {
             })
             .collect();
         Ok(AlbumView { source: source_id.to_string(), title, artist, year, rows })
+    }
+
+    /// Plays an album of a connected server on that server's player. Returns the player's label.
+    pub async fn play_album(&self, source_id: &str, album_id: &str) -> Result<String, ToggleError> {
+        if !crate::covers::valid_item_id(album_id) {
+            return Err(ToggleError::Refused("That is not an album.".into()));
+        }
+        let (_, s) = self.source(source_id)?;
+        s.play_album(album_id).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
+    /// An album's image from a connected server (the album lists, the panel, the now-playing header for music
+    /// outside the library). Only images come back, and the id is only ever passed on to that server.
+    pub async fn album_cover(&self, source_id: &str, album_id: &str) -> Option<(String, Vec<u8>)> {
+        if !crate::covers::valid_item_id(album_id) {
+            return None;
+        }
+        let (_, s) = self.source(source_id).ok()?;
+        match s.album_cover(album_id).await {
+            Ok(found) => found,
+            Err(e) => {
+                tracing::warn!("cover of {album_id} on {source_id}: {e:#}");
+                None
+            }
+        }
     }
 
     /// Marks a given track a favourite, or not.

@@ -3,8 +3,7 @@
     ApiError,
     deleteIncoming,
     getIncoming,
-    incomingCoverUrl,
-    playIncoming,
+    albumCoverUrl,
     keepIncoming,
     keepPreview,
     replaceIncoming,
@@ -13,22 +12,18 @@
     type AlbumMoved,
     type KeepPreview,
     type ReplacePreview,
-    type IncomingAlbum,
+    type ListedAlbum,
     type IncomingSource,
+    type ShelfSource,
   } from './lib/api';
+  import AlbumShelf from './lib/AlbumShelf.svelte';
   import MenuEntry from './lib/MenuEntry.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
-  import { longpress } from './lib/longpress';
-  import { fromAction } from 'svelte/attachments';
-  import Row from './lib/Row.svelte';
-  import Icon from './lib/Icon.svelte';
-  import { albumGone, albumSubject, viewPlaylist, panel } from './lib/panel.svelte';
+  import { albumGone, albumSubject, viewPlaylist } from './lib/panel.svelte';
   import { prefs } from './lib/prefs.svelte';
-  import { live, untilNewTrack } from './lib/live.svelte';
   import { toast } from './lib/toast.svelte';
   import { withUndo } from './lib/undo.svelte';
-  import { playIncomingHere } from './lib/output.svelte';
-  import { playing as nowPlaying } from './lib/remote.svelte';
+  import { playListedAlbum } from './lib/albums.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { on, stream } from './lib/events.svelte';
 
@@ -37,18 +32,13 @@
   // Said in the Keep and Replace questions when no Lidarr is set to be told to stop fetching the album.
   const NO_LIDARR = "Lidarr isn't set up in Settings, so it may fetch this album again.";
   let error = $state<string | null>(null);
-  let noCover = $state<Record<string, boolean>>({});
-  let filter = $state('');
-  // What is playing (the shell polls it), so the album being listened to stands out.
-  const playing = $derived(nowPlaying());
-  let starting = $state<string | null>(null);
 
   // The open menu of one album (Play, Keep or Replace in Music, Delete album), anchored to it; `ask` = the in-place
   // question. Keep is offered for an album that is not in Music yet (no verdict), Replace for an upgrade, both only
   // when Cratarr can write the album's folder.
   let menu = $state<{
     source: string;
-    a: IncomingAlbum;
+    a: ListedAlbum;
     anchor: DOMRect;
     ask: false | 'delete' | 'keep' | 'replace';
     deletable: boolean;
@@ -74,7 +64,7 @@
     }
   }
 
-  async function replaceIt(source: string, a: IncomingAlbum) {
+  async function replaceIt(source: string, a: ListedAlbum) {
     if (working) return;
     working = true;
     try {
@@ -112,7 +102,7 @@
     }
   }
 
-  async function keepIt(source: string, a: IncomingAlbum) {
+  async function keepIt(source: string, a: ListedAlbum) {
     if (working) return;
     working = true;
     try {
@@ -129,7 +119,7 @@
 
   // Done: the album leaves the list. Queued (hi-res files to convert first): its row shows the progress instead, and
   // the queue says when it is done.
-  function moved(source: string, a: IncomingAlbum, r: AlbumMoved, verb: string) {
+  function moved(source: string, a: ListedAlbum, r: AlbumMoved, verb: string) {
     if (r.queued) {
       jobs.poke();
       return;
@@ -185,7 +175,7 @@
     }
   }
 
-  async function remove(source: string, a: IncomingAlbum) {
+  async function remove(source: string, a: ListedAlbum) {
     if (working) return;
     working = true;
     try {
@@ -198,22 +188,6 @@
     } finally {
       working = false;
       menu = null;
-    }
-  }
-
-  async function play(source: string, a: IncomingAlbum) {
-    if (starting) return;
-    starting = a.id;
-    try {
-      // Here when the output is this browser (decision 0022), else on the server's player.
-      if (await playIncomingHere(source, a.id, a.title)) return;
-      await playIncoming(source, a.id);
-      // Show the album's track once it plays, not the states on the way.
-      await untilNewTrack();
-    } catch (e) {
-      toast.fail(e, 'Could not start playing');
-    } finally {
-      starting = null;
     }
   }
 
@@ -246,15 +220,22 @@
     };
   });
 
-  const lossless = (a: IncomingAlbum) => a.format === 'FLAC';
-  const quality = (a: IncomingAlbum) =>
-    [a.format ?? 'Mixed formats', lossless(a) || a.bitrate_kbps === null ? null : `${a.bitrate_kbps} kbps`].filter(Boolean).join(' ');
-  const added = (t: number | null) =>
-    t === null ? '' : new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-  const matches = (a: IncomingAlbum) => {
-    const q = filter.trim().toLowerCase();
-    return !q || `${a.artist ?? ''} ${a.title}`.toLowerCase().includes(q);
-  };
+  // The long-pressed album's menu: what Incoming offers for it depends on its server's list.
+  function openMenu(shelf: ShelfSource, a: ListedAlbum, anchor: DOMRect) {
+    const s = (sources ?? []).find((x) => x.id === shelf.id);
+    if (!s) return;
+    menu = {
+      source: s.id,
+      a,
+      anchor,
+      ask: false,
+      deletable: s.deletable.includes(a.id),
+      keepable: s.deletable.includes(a.id) && !s.verdicts?.[a.id],
+      replaceable: s.deletable.includes(a.id) && s.verdicts?.[a.id]?.kind === 'upgrade',
+      job: jobs.of(s.id, a.id)?.id ?? null,
+    };
+  }
+  const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => (sources ?? []).find((x) => x.id === shelf.id)?.verdicts?.[a.id];
 </script>
 
 <main>
@@ -265,92 +246,23 @@
   {:else if sources.length === 0}
     <p class="empty">No server with an Incoming library is connected.</p>
   {:else}
-    <input class="filter" type="search" placeholder="Filter albums" bind:value={filter} aria-label="Filter albums" />
-    {#each sources as s (s.id)}
-      {#if sources.length > 1}<h2>{s.label}</h2>{/if}
-      {#if !s.supported}
-        <p class="empty">{s.label} can't list albums.</p>
-      {:else if s.error && s.albums.length === 0}
-        <p class="error" role="alert">{s.error}</p>
-      {:else if s.albums.length === 0}
-        <p class="empty">Nothing incoming.</p>
-      {:else}
-        <p class="count">{s.albums.length} {s.albums.length === 1 ? 'album' : 'albums'}, newest first.</p>
-        <ul>
-          {#each s.albums.filter(matches) as a (a.id)}
-            <li class:playing={playing?.album_id === a.id}>
-              <Row
-                size="xl"
-                title={a.title}
-                label="View {a.title}"
-                active={panel.viewed === albumSubject(s.id, a.id)}
-                onclick={() => viewPlaylist(albumSubject(s.id, a.id))}
-                attach={fromAction(longpress, () => (anchor: DOMRect) =>
-                  (menu = {
-                    source: s.id,
-                    a,
-                    anchor,
-                    ask: false,
-                    deletable: s.deletable.includes(a.id),
-                    keepable: s.deletable.includes(a.id) && !s.verdicts?.[a.id],
-                    replaceable: s.deletable.includes(a.id) && s.verdicts?.[a.id]?.kind === 'upgrade',
-                    job: jobs.of(s.id, a.id)?.id ?? null,
-                  }))}
-              >
-                {#snippet lead()}
-                  {#if noCover[a.id]}
-                    <span class="cover none" aria-hidden="true"></span>
-                  {:else}
-                    <img
-                      class="cover"
-                      src={incomingCoverUrl(s.id, a.id)}
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                      onerror={() => (noCover[a.id] = true)}
-                    />
-                  {/if}
-                {/snippet}
-                {#snippet badges()}
-                  {#if a.year}<span class="released">{a.year}</span>{/if}
-                {/snippet}
-                {#snippet sub()}
-                  <span class="artist">{a.artist ?? 'Unknown artist'}{#if playing?.album_id === a.id}<span class="now"> · playing</span>{/if}</span>
-                  <span class="facts">
-                    <span>{a.tracks} {a.tracks === 1 ? 'track' : 'tracks'}</span>
-                    <span class:weak={!lossless(a) && a.bitrate_kbps !== null && a.bitrate_kbps < 320}>{quality(a)}</span>
-                    {#if a.added}<span>added {added(a.added)}</span>{/if}
-                    {#each a.tags as t (t)}<span class="tag">{t}</span>{/each}
-                  </span>
-                  {#if jobs.of(s.id, a.id)}
-                    {@const job = jobs.of(s.id, a.id)!}
-                    <span class="job">
-                      {job.state === 'waiting' ? 'Waiting to convert' : `Converting ${job.done} of ${job.total}`}
-                      <span class="track" aria-hidden="true"><span style:width="{(100 * job.done) / Math.max(job.total, 1)}%"></span></span>
-                    </span>
-                  {:else if s.verdicts?.[a.id]}
-                    {@const v = s.verdicts[a.id]}
-                    <span class="verdict" class:upgrade={v.kind === 'upgrade'} title={v.library}>
-                      <span class="badge">{v.kind === 'upgrade' ? 'Upgrade' : 'In Music'}</span>
-                      {v.why}
-                    </span>
-                  {/if}
-                {/snippet}
-                {#snippet action()}
-                  <button
-                    class="icon"
-                    aria-label="Play {a.title}"
-                    disabled={starting !== null}
-                    aria-busy={starting === a.id}
-                    onclick={() => play(s.id, a)}><Icon name="play" size={26} /></button
-                  >
-                {/snippet}
-              </Row>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    {/each}
+    <AlbumShelf {sources} empty="Nothing incoming." onmenu={openMenu}>
+      {#snippet extra(s: ShelfSource, a: ListedAlbum)}
+        {#if jobs.of(s.id, a.id)}
+          {@const job = jobs.of(s.id, a.id)!}
+          <span class="job">
+            {job.state === 'waiting' ? 'Waiting to convert' : `Converting ${job.done} of ${job.total}`}
+            <span class="track" aria-hidden="true"><span style:width="{(100 * job.done) / Math.max(job.total, 1)}%"></span></span>
+          </span>
+        {:else if verdictOf(s, a)}
+          {@const v = verdictOf(s, a)!}
+          <span class="verdict" class:upgrade={v.kind === 'upgrade'} title={v.library}>
+            <span class="badge">{v.kind === 'upgrade' ? 'Upgrade' : 'In Music'}</span>
+            {v.why}
+          </span>
+        {/if}
+      {/snippet}
+    </AlbumShelf>
   {/if}
 </main>
 
@@ -360,7 +272,7 @@
   <MenuSheet
     label={m.a.title}
     onclose={() => (menu = null)}
-    images={[incomingCoverUrl(m.source, m.a.id)]}
+    images={[albumCoverUrl(m.source, m.a.id)]}
     title={m.a.title}
     chips={[m.a.artist ?? 'Unknown artist']}
     actions={m.ask
@@ -372,7 +284,7 @@
             onclick: () => {
               const { source, a } = m;
               menu = null;
-              play(source, a);
+              playListedAlbum(source, a);
             },
           },
         ]}
@@ -468,107 +380,18 @@
 {/if}
 
 <style>
+  /* As wide as the page, as Playlists: the albums take as many columns as fit. */
   main {
-    max-width: 900px;
-    padding: 0 clamp(12px, 2vw, 32px) 48px;
+    padding: 6px clamp(12px, 2vw, 32px) 48px;
   }
 
-  h2 {
-    margin: 24px 0 6px;
-    font-size: 1rem;
-  }
-
-  .empty,
-  .count {
+  .empty {
     color: var(--muted);
     font-size: 0.9rem;
   }
 
   .error {
     color: var(--danger);
-  }
-
-  .filter {
-    width: 100%;
-    max-width: 360px;
-    min-height: 40px;
-    margin: 8px 0 4px;
-    padding: 0 12px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    color: var(--text);
-  }
-
-  ul {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  li {
-    border-bottom: 1px solid var(--border);
-  }
-
-  .cover {
-    flex: none;
-    display: block;
-    width: 72px;
-    height: 72px;
-    border-radius: 8px;
-    object-fit: cover;
-    background: var(--surface);
-  }
-
-  .cover.none {
-    box-sizing: border-box;
-    border: 1px solid var(--border);
-  }
-
-  .released,
-  .artist {
-    color: var(--muted);
-    font-weight: 400;
-  }
-
-  .artist {
-    display: block;
-    font-size: 0.9rem;
-  }
-
-  /* The play button's busy state while its album starts. */
-  li :global(button[aria-busy='true']) {
-    opacity: 0.6;
-  }
-
-  .facts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 12px;
-    margin-top: 2px;
-    color: var(--muted);
-    font-size: 0.8rem;
-    font-variant-numeric: tabular-nums;
-  }
-
-  li.playing {
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-  }
-
-  .now {
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  .weak {
-    color: var(--danger);
-  }
-
-  .tag {
-    padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
   }
 
   .verdict {

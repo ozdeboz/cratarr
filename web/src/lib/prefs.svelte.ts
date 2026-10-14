@@ -28,7 +28,15 @@ export type Prefs = {
   filterOpen: boolean;
   /** Insights → Related: its filter section (what brings playlists together) is shown. */
   relatedFilterOpen: boolean;
+  /** The album lists (Incoming, Collection): rows or a grid of covers, and the size (an index into their widths). */
+  albumLayout: AlbumLayout;
+  albumZoom: number;
+  /** Collection's order. */
+  collectionOrder: CollectionOrder;
 };
+
+export type AlbumLayout = 'rows' | 'grid';
+export type CollectionOrder = 'artist' | 'title' | 'year' | 'added';
 
 const KEY = 'cratarr-prefs';
 export const ZOOM_STEPS = 6;
@@ -46,6 +54,9 @@ export const DEFAULTS: Prefs = {
   pinned: [],
   filterOpen: true,
   relatedFilterOpen: true,
+  albumLayout: 'rows',
+  albumZoom: 2,
+  collectionOrder: 'artist',
 };
 
 function read(): Prefs {
@@ -58,6 +69,9 @@ function read(): Prefs {
       if (typeof saved.membersFirst === 'boolean') p.membersFirst = saved.membersFirst;
       if (typeof saved.filterOpen === 'boolean') p.filterOpen = saved.filterOpen;
       if (typeof saved.relatedFilterOpen === 'boolean') p.relatedFilterOpen = saved.relatedFilterOpen;
+      if (saved.albumLayout === 'rows' || saved.albumLayout === 'grid') p.albumLayout = saved.albumLayout;
+      if (Number.isInteger(saved.albumZoom) && saved.albumZoom >= 0 && saved.albumZoom < ZOOM_STEPS) p.albumZoom = saved.albumZoom;
+      if (['artist', 'title', 'year', 'added'].includes(saved.collectionOrder)) p.collectionOrder = saved.collectionOrder;
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;

@@ -60,6 +60,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/by-name", get(playlist_by_name))
         .route("/api/playlists/{id}/spoken", put(set_spoken))
         .route("/api/albums/{source}/{album}", get(album_view))
+        .route("/api/albums/{source}/{album}/cover", get(album_cover))
+        .route("/api/albums/{source}/{album}/play", post(play_album))
+        .route("/api/collection", get(collection))
         .route("/api/albums/duplicates", get(album_duplicates))
         .route("/api/duplicates", get(duplicates))
         .route("/api/duplicates/dedupe", post(dedupe))
@@ -68,13 +71,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/undo", post(undo))
         .route("/api/status", get(status))
         .route("/api/incoming", get(incoming))
-        .route("/api/incoming/cover/{source}/{album}", get(incoming_cover))
         .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
         .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
         .route("/api/incoming/replace/{source}/{album}", get(replace_preview).post(replace_incoming))
         .route("/api/incoming/jobs", get(incoming_jobs))
         .route("/api/incoming/jobs/{id}/cancel", post(cancel_job))
-        .route("/api/incoming/play/{source}/{album}", post(play_incoming))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
         .route("/api/insights", get(insights))
@@ -530,11 +531,13 @@ async fn incoming(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<
     Json(app.incoming.list(f.source.as_deref()).await)
 }
 
-async fn play_incoming(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
-    match app.incoming.play(&source, &album).await {
-        Ok(player) => Json(json!({ "player": player })).into_response(),
-        Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": format!("{e:#}") }))).into_response(),
-    }
+async fn collection(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::CollectionView> {
+    Json(app.collection.list(f.source.as_deref()).await)
+}
+
+/// Play an album of a connected server on its player; answers with the player's label.
+async fn play_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "player": app.playing.play_album(&source, &album).await? })))
 }
 
 async fn delete_incoming(
@@ -595,8 +598,8 @@ async fn cancel_job(State(app): State<Arc<App>>, Path(id): Path<u64>) -> Result<
     Ok(Json(app.incoming.cancel(id).await?))
 }
 
-async fn incoming_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
-    match app.incoming.cover(&source, &album).await {
+async fn album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
+    match app.playing.album_cover(&source, &album).await {
         Some((content_type, bytes)) => {
             let ct = HeaderValue::from_str(&content_type).unwrap_or(HeaderValue::from_static("application/octet-stream"));
             ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"))], bytes).into_response()

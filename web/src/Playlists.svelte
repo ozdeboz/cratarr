@@ -11,6 +11,8 @@
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import NameSheet from './lib/NameSheet.svelte';
   import Icon from './lib/Icon.svelte';
+  import Seg from './lib/Seg.svelte';
+  import SizeControl from './lib/SizeControl.svelte';
   import { isLocal, setPlayingMember, shownPlaylists } from './lib/output.svelte';
   import { pending, playing } from './lib/remote.svelte';
   import { longpress } from './lib/longpress';
@@ -39,18 +41,7 @@
   let favouritesOnly = $state(false);
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
   const WIDTHS = [110, 140, 170, 210, 260, 340];
-  // The grid stretches its chips to fill a row, so two sizes can give the same columns at this width: a zoom step goes
-  // to the next size that changes them (and a button is off when none would).
   let gridWidth = $state(0);
-  const columnsAt = (i: number) => Math.max(1, Math.floor((gridWidth + 10) / (WIDTHS[i] + 10)));
-  const nextZoom = (dir: -1 | 1) => {
-    for (let i = prefs.zoom + dir; i >= 0 && i < WIDTHS.length; i += dir) if (columnsAt(i) !== columnsAt(prefs.zoom)) return i;
-    return null;
-  };
-  const zoom = (dir: -1 | 1) => {
-    const i = nextZoom(dir);
-    if (i !== null) prefs.zoom = i;
-  };
   // Taps flip the chip at once; the server's answer replaces this guess.
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
@@ -168,10 +159,7 @@
       title="Select"
       onclick={() => (select.on ? endSelect() : startSelect())}><Icon name="copyCheck" size={22} /></button
     >
-    <div class="seg size" role="group" aria-label="Size">
-      <button aria-label="Smaller" disabled={nextZoom(-1) === null} onclick={() => zoom(-1)}><Icon name="zoomOut" size={22} /></button>
-      <button aria-label="Larger" disabled={nextZoom(1) === null} onclick={() => zoom(1)}><Icon name="zoomIn" size={22} /></button>
-    </div>
+    <SizeControl widths={WIDTHS} width={gridWidth} bind:value={prefs.zoom} />
     {#if select.on && select.picked.length && !showsPicked()}
       <!-- View N: at the right end of the row (beside the corner); on a small page its icon only. -->
       {@const viewLabel = select.picked.length === 1 ? 'View 1 playlist' : `View ${select.picked.length} playlists`}
@@ -205,12 +193,14 @@
             }}><Icon name="close" size={20} /></button
           >
         </div>
-        <div class="seg" role="group" aria-label="Order">
-          <button aria-pressed={!prefs.membersFirst} onclick={() => (prefs.membersFirst = false)}>A–Z</button>
-          <button aria-pressed={prefs.membersFirst} onclick={() => (prefs.membersFirst = true)} title="Playlists with the playing track first"
-            >✓ first</button
-          >
-        </div>
+        <Seg
+          label="Order"
+          options={[
+            { value: false, label: 'A–Z' },
+            { value: true, label: '✓ first', title: 'Playlists with the playing track first' },
+          ]}
+          bind:value={prefs.membersFirst}
+        />
         <button
           class="new toggle fav"
           aria-pressed={favouritesOnly}
@@ -417,46 +407,6 @@
       color: inherit;
       cursor: pointer;
     }
-  }
-
-  .seg {
-    display: flex;
-    align-items: center;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-    background: var(--surface);
-  }
-
-  /* Size: zoom out and in (magnifiers, apart from New playlist's +), with a line between them. */
-  .seg.size button {
-    display: grid;
-    place-items: center;
-    padding: 0 12px;
-    color: var(--text);
-  }
-
-  .seg.size button + button {
-    border-left: 1px solid var(--border);
-  }
-
-  .seg button {
-    min-height: 44px;
-    padding: 0 16px;
-    background: var(--surface);
-    border: 0;
-    cursor: pointer;
-  }
-
-  .seg button:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .seg button[aria-pressed='true'] {
-    background: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
   }
 
   button.new {

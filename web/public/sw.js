@@ -1,6 +1,6 @@
 // Cratarr service worker: makes the app installable and lets the shell open without the server. Everything under
-// /api/ is live data and always goes to the network, except the incoming list: it changes slowly and is large, so
-// the last copy is shown at once while a fresh one is fetched (stale-while-revalidate). The shell is network-first (a new build shows up at once);
+// /api/ is live data and always goes to the network, except the album lists (Incoming, Collection): they change
+// slowly and are large, so the last copy is shown at once while a fresh one is fetched (stale-while-revalidate). The shell is network-first (a new build shows up at once);
 // Vite's fingerprinted assets and the icons never change, so they are cache-first.
 const CACHE = 'cratarr-v2';
 
@@ -31,7 +31,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  if (url.pathname === '/api/incoming') {
+  if (url.pathname === '/api/incoming' || url.pathname === '/api/collection') {
     const fresh = fetch(req).then((r) => put(req, r));
     // The page asks with cache: 'no-cache' when it wants the latest, right after showing the kept copy.
     if (req.cache === 'no-cache') {

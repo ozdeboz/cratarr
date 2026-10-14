@@ -1,7 +1,7 @@
 // The remote for what plays, shared by the mini-player and the full player (decision 0018): the commands (shown at
 // once, see live.svelte.ts `expect`), the running clock, the favourite, the cover and the colour taken from it.
 import { untrack } from 'svelte';
-import { ApiError, coverUrl, incomingCoverUrl, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
+import { ApiError, coverUrl, albumCoverUrl, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
 import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek } from './localPlayer.svelte';
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
@@ -23,7 +23,7 @@ export function coverSrc(): string | null {
   const np = playing();
   if (!np) return null;
   const library = coverUrl(np);
-  const album = np.album_id ? incomingCoverUrl(np.source, np.album_id) : null;
+  const album = np.album_id ? albumCoverUrl(np.source, np.album_id) : null;
   const candidates = (np.addable ? [library, album] : [album, library]).filter((u): u is string => !!u);
   return candidates.find((u) => !failed[u]) ?? null;
 }

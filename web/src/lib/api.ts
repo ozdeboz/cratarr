@@ -542,8 +542,8 @@ export type AlbumGroup = {
 
 export const getAlbumDuplicates = () => request<{ groups: AlbumGroup[] }>('/api/albums/duplicates');
 
-/** An album in a source's incoming library. */
-export type IncomingAlbum = {
+/** An album in a server's library list (Incoming, Collection). */
+export type ListedAlbum = {
   id: string;
   title: string;
   artist: string | null;
@@ -560,15 +560,19 @@ export type IncomingAlbum = {
   tags: string[];
 };
 
-export type IncomingSource = {
+/** One server's album list. */
+export type ShelfSource = {
   id: string;
   label: string;
   /** False when this kind of source cannot list albums at all. */
   supported: boolean;
-  albums: IncomingAlbum[];
+  albums: ListedAlbum[];
   error: string | null;
   /** When the server read this list from the source, epoch seconds. */
   as_of: number;
+};
+
+export type IncomingSource = ShelfSource & {
   /** Per album id, when it is already in Music: an upgrade of it, or a duplicate. New albums are absent. */
   verdicts: Record<string, { kind: 'upgrade' | 'duplicate'; library: string; why: string }>;
   /** The albums Cratarr can delete (it sees their folder and can write there). */
@@ -578,11 +582,14 @@ export type IncomingSource = {
 /** `fresh` asks past the service worker's copy (which answers at once, see sw.js) for the server's latest. */
 export const getIncoming = (source?: string, fresh = false) =>
   quietly<{ sources: IncomingSource[]; trash_days: number }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
-/** Play an incoming album on the followed player; answers with the player's label. */
-export const playIncoming = (source: string, album: string) =>
-  request<{ player: string }>(`/api/incoming/play/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, { method: 'POST' });
-export const incomingCoverUrl = (source: string, album: string) =>
-  `/api/incoming/cover/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
+/** The albums of each server's Music library, newest first. */
+export const getCollection = (source?: string, fresh = false) =>
+  quietly<{ sources: ShelfSource[] }>(`/api/collection${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
+/** Play an album of a connected server on the followed player; answers with the player's label. */
+export const playAlbum = (source: string, album: string) =>
+  request<{ player: string }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/play`, { method: 'POST' });
+export const albumCoverUrl = (source: string, album: string) =>
+  `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
 
 export type Transport = 'previous' | 'play-pause' | 'next' | 'stop';
 

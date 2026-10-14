@@ -5,7 +5,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 ## Structure
 
-- **Pages:** Incoming (only when an Incoming library is set), Crates, Playlists; Insights, Health and Settings apart
+- **Pages:** Incoming (only when an Incoming library is set), Collection, Crates, Playlists; Insights, Health and Settings apart
   (at the bottom of the sidebar, in that order; on a phone they follow the others in the same order). One thing lives in one place: no setting, list or action
   appears on two pages. Health lists the library's files that cannot be read properly; playlists are repaired in the
   panel's Repair tab (decision 0025).
@@ -14,7 +14,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   up to five, the rest under More).
 - **The player is part of the app shell** (decision 0018, after Finamp), on every page: since Cratarr plays music
   itself (decision 0022) it is a player, not only a remote for adding what plays. The server picker stays on the pages
-  that act on what a server plays: Playlists and Incoming.
+  that act on what a server plays: Playlists, Incoming and Collection.
   - **Mini-player** (`lib/MiniPlayer.svelte`): a bar floating along the bottom, 64 px high, 12 px from the edges,
     corners 12 px: the cover with play/pause on it, the title (scrolling when it does not fit), artist and time, and
     the heart (the player's account's Jellyfin favourite). The bar fills from the left as the track plays, in the
@@ -135,6 +135,14 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   the size, the second line and the action.
 - **A large row's controls may go under its text** when the panel is narrow (Sync's settings, Repair's buttons): a
   row never scrolls sideways.
+- **Album lists** (Incoming, Collection; decision 0028, `lib/AlbumShelf.svelte`): the filter, the order (Collection:
+  Artist, Title, Year, Added), Rows or Covers, and Size, over each server's albums in columns as the playlist chips
+  are. Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was
+  added, and the page's own lines: Incoming's conversion and how it relates to Music); Covers are tiles. Layout and
+  size are one choice for every album list, remembered by the browser.
+- **Tiles** (`lib/Tile.svelte`): Row's sibling for things shown by their picture: the square picture on top, as wide
+  as the column the page's Size makes, the title and muted lines under it, the action (Play) over the picture's
+  corner. Its states are the row's: a border when viewed, a tint when it holds what plays.
 - **A list's sections** (`lib/Section.svelte`): a heading with its count that folds the list, and while open one line
   on what the list is. A selection's Tracks (a section per playlist), the Repair tab's kinds of repair, the Info tab
   for several playlists, Health's kinds of problem (folded at first).
@@ -142,8 +150,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 ## Gestures
 
 - **Tap does the page's main action** on an item: on Playlists add or remove the playing track (the circle; the
-  name views the playlist, in Select ticks it); on Incoming play
-  the album (View in its menu shows it in the panel); on Insights' graph highlight the playlist and its closest playlists.
+  name views the playlist, in Select ticks it); on an album list (Incoming, Collection) view the album in the panel
+  (Play is the row's or tile's button); on Insights' graph highlight the playlist and its closest playlists.
 - **Long-press (right-click with a mouse) opens the item's menu** when the item has more than one other action. Every
   menu is a **bottom sheet like Finamp's track menu** (decision 0021, `lib/MenuSheet.svelte` + `lib/MenuEntry.svelte`),
   the same component on every page: at most 500 px wide, rising from the bottom, a drag handle; the item on a card at
@@ -154,7 +162,7 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   Spoken as…, Rename, Delete. For the playing track
   (the player's menu button, or a right-click on its cover): Play next, Add to queue; Add to playlist, the favourite,
   View album, New playlist from the queue. **View** (the square with an arrow out of its corner) is every menu's entry
-  that shows the item in the panel: a playlist, an Incoming album, a track's album (View album). A tap on the backdrop, Esc, Back or dragging the sheet down closes it. With a single
+  that shows the item in the panel: a playlist, an album, a track's album (View album). A tap on the backdrop, Esc, Back or dragging the sheet down closes it. With a single
   other action, the long-press does that action directly.
 - Inside the sheet: destructive entries last and in red. Spoken as…, Rename, the playlists for a track and
   the delete confirmation are steps inside the same sheet (it grows or shrinks to fit, a back arrow returns), not a

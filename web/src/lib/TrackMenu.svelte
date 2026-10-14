@@ -13,7 +13,7 @@
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
-  import { coverUrl, incomingCoverUrl, playlistFromQueue, queueTrack, setTrackFavorite, setTrackMember, trackState, type TrackState } from './api';
+  import { coverUrl, albumCoverUrl, playlistFromQueue, queueTrack, setTrackFavorite, setTrackMember, trackState, type TrackState } from './api';
   import { refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -51,7 +51,7 @@
   });
 
   const src = $derived(
-    forPlaying ? shownCover() : track ? (track.album_id ? incomingCoverUrl(track.source, track.album_id) : coverUrl(track)) : null,
+    forPlaying ? shownCover() : track ? (track.album_id ? albumCoverUrl(track.source, track.album_id) : coverUrl(track)) : null,
   );
   const addable = $derived(forPlaying ? !!np?.addable : !!other?.addable);
   /** The track's album, for View album: as the track came, else as the server says. */

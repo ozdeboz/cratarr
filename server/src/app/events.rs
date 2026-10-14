@@ -78,6 +78,7 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut undone = app.journal.subscribe_undone();
     let mut jobs = app.incoming.subscribe_jobs();
     let mut arrived = app.incoming.subscribe_incoming();
+    let mut collected = app.collection.subscribe();
     let app = app.clone();
     tokio::spawn(async move {
         let mut sent = String::new();
@@ -104,8 +105,9 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
         if !send_state(&mut sent).await {
             return;
         }
-        // Whether the journal's two channels and the Incoming one still send (a closed one is left alone).
-        let mut open = [true; 3];
+        // Whether the journal's two channels, the Incoming one and the Collection one still send (a closed one is left
+        // alone).
+        let mut open = [true; 4];
         let mut resend = tokio::time::interval(RESEND);
         resend.reset();
         loop {
@@ -129,6 +131,7 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 r = applied.recv(), if open[0] => changed(&out, r, &mut open[0], &["incoming", "playlists"]).await,
                 r = undone.recv(), if open[1] => changed(&out, r, &mut open[1], &["incoming", "playlists"]).await,
                 r = arrived.recv(), if open[2] => changed(&out, r, &mut open[2], &["incoming"]).await,
+                r = collected.recv(), if open[3] => changed(&out, r, &mut open[3], &["collection"]).await,
                 () = out.closed() => false,
             };
             if !alive {

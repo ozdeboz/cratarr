@@ -5,10 +5,13 @@
 //! - `playing`: what plays, the controls, adding it to a playlist;
 //! - `playlists`: playlist files, edits, repairs, Play;
 //! - `incoming`: new music, verdicts, Delete and Undo, Lidarr;
+//! - `collection`: the albums of the Music library;
+//! - `shelf`: reading album lists, shared by Incoming and Collection;
 //! - `insights`: figures about the library and the playlists;
 //! - `sync`: the user's own server playlists, kept in step with the files;
 //! - `settings`: the Settings page.
 
+mod collection;
 mod error;
 mod events;
 mod follow;
@@ -18,6 +21,7 @@ mod library;
 mod playing;
 mod playlists;
 mod settings;
+mod shelf;
 mod sync;
 
 use std::sync::Arc;
@@ -25,6 +29,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde::Serialize;
 
+pub use collection::{CollectionService, CollectionView};
 pub use error::ToggleError;
 pub use incoming::{DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
 pub use insights::InsightsService;
@@ -66,6 +71,7 @@ pub struct App {
     pub playing: PlayingService,
     pub playlists: Arc<PlaylistService>,
     pub incoming: Arc<IncomingService>,
+    pub collection: CollectionService,
     pub insights: InsightsService,
     pub settings: SettingsService,
     /// What happened to albums (decision 0011); the live channel tells the pages.
@@ -86,8 +92,17 @@ impl App {
         sync.listen();
         let playlists = Arc::new(PlaylistService::new(library.clone(), sync.clone(), journal.clone()));
         let files = crate::ports::disk();
-        let incoming =
-            Arc::new(IncomingService::new(library.clone(), files.clone(), journal.clone(), saved.lidarr, saved.trash_days, cfg.data_dir.as_deref()));
+        let shelves = Arc::new(shelf::Shelves::new(library.clone(), cfg.data_dir.as_deref()));
+        let collection = CollectionService::new(library.clone(), shelves.clone());
+        let incoming = Arc::new(IncomingService::new(
+            library.clone(),
+            files.clone(),
+            journal.clone(),
+            saved.lidarr,
+            saved.trash_days,
+            cfg.data_dir.as_deref(),
+            shelves,
+        ));
         incoming.listen();
         incoming.work();
         let playing = PlayingService::new(library.clone(), playlists.clone());
@@ -101,7 +116,7 @@ impl App {
             origin,
         );
         let insights = InsightsService::new(library.clone());
-        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, insights, settings, journal, events: Default::default() }))
+        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default() }))
     }
 
     /// For the navigation header.
@@ -133,7 +148,7 @@ impl App {
     /// The one background pass that keeps Cratarr in step with its sources and the library, run every
     /// `SYNC_SECS`. Sources offer no reliable change notifications (webhooks are optional plugins), so it looks:
     /// incoming lists every pass; dead playlist entries and sources still missing their libraries every other pass;
-    /// the Incoming trash every hour.
+    /// the Music library's albums every five minutes; the Incoming trash every hour.
     pub async fn sync(&self, pass: u64) {
         self.incoming.refresh().await;
         self.sync.pass().await;
@@ -143,6 +158,9 @@ impl App {
             self.library.retry_placement().await;
             self.settings.infer_naming().await;
             self.library.watch_servers().await;
+        }
+        if pass % 10 == 0 {
+            self.collection.refresh().await;
         }
         if pass % 120 == 0 {
             self.incoming.purge_trash().await;

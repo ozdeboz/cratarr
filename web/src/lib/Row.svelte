@@ -2,7 +2,8 @@
   // The one row (docs/ui-conventions.md → Rows): every list of things is built from it, in four sizes with one layout,
   // the title on the left and the action on the right. Large in the panel's Tracks, Info, Repair and Sync tabs (and a
   // track is a large row with its cover); medium on the pages (Playlists, Crates); small in the panel's Export tab;
-  // extra large on Incoming (an album: a larger cover, and lines of what it is under its title).
+  // extra large on the album lists (an album: a larger cover, and lines of what it is under its title; lib/AlbumShelf).
+  // Its sibling for things shown by their picture is the square tile (lib/Tile.svelte).
   // Small and medium are Finamp's add-to-playlist tiles (tinted in the accent, a divider before the action); large is
   // Finamp's list tile (plain, a cover or control in front).
   //

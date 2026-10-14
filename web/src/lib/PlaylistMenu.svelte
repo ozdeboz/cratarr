@@ -7,7 +7,7 @@
   // playlist only), and Delete (one Undo for all), each done inside the sheet.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
-  import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, incomingCoverUrl, playlistCovers } from './api';
+  import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers } from './api';
   import MenuEntry from './MenuEntry.svelte';
   import { startPlaylists } from './output.svelte';
   import { viewSelection, panel, type Tab } from './panel.svelte';
@@ -52,9 +52,9 @@
     let gone = false;
     const asked =
       want.length === 1
-        ? playlistCovers(want[0]).then((list) => list.map((c) => incomingCoverUrl(c.source, c.album_id)))
+        ? playlistCovers(want[0]).then((list) => list.map((c) => albumCoverUrl(c.source, c.album_id)))
         : Promise.all(want.slice(0, 4).map((x) => playlistCovers(x).catch(() => []))).then((lists) =>
-            lists.flatMap((l) => (l[0] ? [incomingCoverUrl(l[0].source, l[0].album_id)] : [])),
+            lists.flatMap((l) => (l[0] ? [albumCoverUrl(l[0].source, l[0].album_id)] : [])),
           );
     asked
       .then((urls) => {

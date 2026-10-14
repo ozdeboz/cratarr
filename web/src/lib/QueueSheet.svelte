@@ -9,7 +9,7 @@
   // Finamp's: light on a tap or a drag starting, heavy on a drop, a removal and opening.
   import { linear } from 'svelte/easing';
   import { fade, fly } from 'svelte/transition';
-  import { incomingCoverUrl } from './api';
+  import { albumCoverUrl } from './api';
   import { loadFavorites } from './favourites.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
@@ -158,7 +158,7 @@
             {#each previous as t, j (t.id + ':' + j)}
               <li>
                 <button class="row" onclick={() => (tick(), localJump(j))} use:longpress={() => rowMenu(asTrack(t, t.source), { list: 'previous', at: j })}>
-                  {#if t.album_id}<img src={incomingCoverUrl(t.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
+                  {#if t.album_id}<img src={albumCoverUrl(t.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
                   <div><strong>{t.name || '…'}</strong><span>{t.artist ?? ''}</span></div>
                 </button>
                 {@render rowHeart(asTrack(t, t.source))}
@@ -207,7 +207,7 @@
                 use:longpress={() => rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i })}
                 use:swipe={{ enabled: here && !drag, onswipe: () => removeSwiped(i) }}
               >
-                {#if t.album_id}<img src={incomingCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
+                {#if t.album_id}<img src={albumCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
                 <div><strong>{t.name}</strong><span>{t.artist ?? ''}</span></div>
                 {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
               </button>

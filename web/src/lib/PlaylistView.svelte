@@ -21,7 +21,7 @@
     crateRows,
     crateToPlaylist,
     editPlaylist,
-    incomingCoverUrl,
+    albumCoverUrl,
     playlistCovers,
     playlistRows,
     queueTrack,
@@ -160,7 +160,7 @@
     if (!want || crateOf(want)) return;
     const a = albumOf(want);
     if (a) {
-      covers = [incomingCoverUrl(a.source, a.id)];
+      covers = [albumCoverUrl(a.source, a.id)];
       return;
     }
     if (multi) {
@@ -168,7 +168,7 @@
       const first = ids.slice(0, 4);
       Promise.all(first.map((x) => playlistCovers(x).catch(() => []))).then((lists) => {
         if (want !== id) return;
-        const urls = lists.flatMap((l) => (l[0] ? [incomingCoverUrl(l[0].source, l[0].album_id)] : []));
+        const urls = lists.flatMap((l) => (l[0] ? [albumCoverUrl(l[0].source, l[0].album_id)] : []));
         covers = urls.length >= 4 ? urls.slice(0, 4) : urls.slice(0, 1);
       });
       return;
@@ -176,7 +176,7 @@
     playlistCovers(want).then(
       (list) => {
         if (want !== id) return;
-        const urls = list.map((c) => incomingCoverUrl(c.source, c.album_id));
+        const urls = list.map((c) => albumCoverUrl(c.source, c.album_id));
         covers = urls.length >= 4 ? urls.slice(0, 4) : urls.slice(0, 1);
       },
       () => {},
@@ -745,7 +745,7 @@
 
 {#snippet cover(r: PlaylistRow, src: string, here = false)}
   <!-- An Incoming album's tracks are outside Music, where the track covers come from: the album's own. -->
-  <TrackCover src={album ? incomingCoverUrl(album.source, album.id) : r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
+  <TrackCover src={album ? albumCoverUrl(album.source, album.id) : r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
 {/snippet}
 
 {#if menuOpen && selected.length}

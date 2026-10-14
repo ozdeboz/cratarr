@@ -3,6 +3,7 @@
   import Health from './Health.svelte';
   import Settings from './Settings.svelte';
   import Incoming from './Incoming.svelte';
+  import Collection from './Collection.svelte';
   import Insights from './Insights.svelte';
   import Crates from './Crates.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
@@ -34,6 +35,7 @@
   const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
   // Shown only when some source has an incoming library (see the status call below).
   const INCOMING: Page = { id: 'incoming', href: '#/incoming', label: 'Incoming', icon: 'incoming' };
+  const COLLECTION: Page = { id: 'collection', href: '#/collection', label: 'Collection', icon: 'library' };
   const INSIGHTS: Page = { id: 'insights', href: '#/insights', label: 'Insights', icon: 'insights' };
   // The second step after Incoming (decision 0024).
   const CRATES: Page = { id: 'crates', href: '#/crates', label: 'Crates', icon: 'crates' };
@@ -48,22 +50,13 @@
   // `?view=`, decision 0023).
   const fromHash = () => {
     const h = location.hash.split('?')[0];
-    return h === HEALTH.href
-      ? 'health'
-      : h === SETTINGS.href
-        ? 'settings'
-        : h === INCOMING.href
-          ? 'incoming'
-          : h === INSIGHTS.href
-            ? 'insights'
-            : h === CRATES.href
-              ? 'crates'
-              : 'playlists';
+    return [HEALTH, SETTINGS, INCOMING, COLLECTION, INSIGHTS, CRATES].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
-  // The server picker belongs to the pages that act on what a server plays: Playlists (add it) and Incoming (play an
-  // album). The player itself is part of the shell on every page (decision 0018, amended: Cratarr plays music itself).
-  const withPicker = $derived(page === 'playlists' || page === 'incoming');
+  // The server picker belongs to the pages that act on what a server plays: Playlists (add it), Incoming and Collection
+  // (play an album). The player itself is part of the shell on every page (decision 0018, amended: Cratarr plays music
+  // itself).
+  const withPicker = $derived(page === 'playlists' || page === 'incoming' || page === 'collection');
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
   // otherwise the mini-player along the bottom (`mini`), which opens it over everything (`overlay`). The player over
   // everything closes when the page changes or the navigation is used, and the page behind it does not scroll.
@@ -216,7 +209,7 @@
             : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, CRATES, PLAYLISTS] : [CRATES, PLAYLISTS]);
+  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, COLLECTION, CRATES, PLAYLISTS] : [COLLECTION, CRATES, PLAYLISTS]);
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
   const APART: Page[] = [INSIGHTS, HEALTH, SETTINGS];
   const ALL = $derived([...MAIN, ...APART]);
@@ -265,6 +258,8 @@
       <Incoming />
     {:else if status && !status.music}
       <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
+    {:else if page === 'collection'}
+      <Collection />
     {:else if page === 'insights'}
       <Insights />
     {:else if page === 'crates'}

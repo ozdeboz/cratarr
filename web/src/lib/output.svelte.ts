@@ -255,13 +255,14 @@ export async function playPlaylistFrom(name: string, source: string, tracks: Loc
   setTimeout(refresh, 700);
 }
 
-/** Plays an Incoming album here when the output is this browser (its tracks are not in Music: never addable). */
-export async function playIncomingHere(source: string, album: string, title?: string): Promise<boolean> {
+/** Plays an album here when the output is this browser. Whether its tracks can go in a playlist (in Music, not
+ *  Incoming) the server says with each track's state. */
+export async function playAlbumHere(source: string, album: string, title?: string): Promise<boolean> {
   if (!isLocal()) return false;
   const r = await albumView(source, album);
   if (!r.rows.length) throw new Error('That album has no tracks.');
   playQueue(
-    r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, addable: false })),
+    r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album })),
     0,
     title ?? r.title,
   );
