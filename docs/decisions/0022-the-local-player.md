@@ -54,6 +54,10 @@ fragmented MP4), for MP3, and for FLAC, MP3 and FLAC mixed in one stream (switch
 - MP3 has no timestamps of its own, so the stream runs in **sequence mode**; `timestampOffset` places each track.
 - A page in the background on Android is paused: the player keeps playing from the lock screen through Media Session,
   but the lab needs its page in front.
+- **The engine itself** (lib/localPlayer.svelte.ts, measured with web/engine-lab.html through the server's own FLAC
+  repackaging): no jump at any boundary on the tablet and on Windows for FLAC, MP3 and FLAC/MP3/FLAC played as a
+  playlist, with no stalls. FLAC runs in segments mode (its fragments carry their sample times, which also places a
+  seek exactly), MP3 in sequence mode.
 
 ## Consequences
 
