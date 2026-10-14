@@ -45,8 +45,10 @@ const MPEG = 'audio/mpeg';
 const AHEAD = 30;
 /** Within a track, read no further than this ahead of the playing position (s): the rest of the fetch waits for the
  *  playback, so a long track never has to fit the browser's buffer whole (Chrome takes 12 MiB of audio, about two
- *  minutes of FLAC). */
+ *  minutes of FLAC; on a phone 5, 2 or even 1 MiB). */
 const LEAD = 60;
+/** Bytes appended at a time (a phone's whole audio buffer can be 1 MiB). */
+const SLICE = 256 * 1024;
 /** Drop played audio older than this behind the playing position (s). */
 const BEHIND = 30;
 /** Previous restarts the track after this many seconds (Finamp: 5). */
@@ -82,7 +84,8 @@ let errorIndex = -1;
 
 // --- MP3: the LAME/Xing header (the measured rule: only the encoder delay precedes the first real sample) ---
 
-type Mp3Head = { rate: number; delay: number; samples: number | null };
+/** `at`: where the first frame starts, after the ID3 tag (the tag, covers and all, never goes into the stream). */
+type Mp3Head = { rate: number; delay: number; samples: number | null; at: number };
 
 /** Parses the first frame of an MP3 for its sample rate and LAME gapless information; null when more bytes are needed. */
 function mp3Head(b: Uint8Array): Mp3Head | null | 'invalid' {
@@ -99,7 +102,7 @@ function mp3Head(b: Uint8Array): Mp3Head | null | 'invalid' {
   const side = version === 3 ? (mono ? 17 : 32) : mono ? 9 : 17;
   const x = i + 4 + side;
   const tag = String.fromCharCode(b[x], b[x + 1], b[x + 2], b[x + 3]);
-  if (tag !== 'Xing' && tag !== 'Info') return { rate, delay: 0, samples: null };
+  if (tag !== 'Xing' && tag !== 'Info') return { rate, delay: 0, samples: null, at: i };
   const flags = (b[x + 4] << 24) | (b[x + 5] << 16) | (b[x + 6] << 8) | b[x + 7];
   let p = x + 8;
   let frames: number | null = null;
@@ -115,7 +118,7 @@ function mp3Head(b: Uint8Array): Mp3Head | null | 'invalid' {
   const delay = isLame ? (b[d] << 4) | (b[d + 1] >> 4) : 0;
   const padding = isLame ? ((b[d + 1] & 0x0f) << 8) | b[d + 2] : 0;
   const perFrame = version === 3 ? 1152 : 576;
-  return { rate, delay, samples: frames === null ? null : frames * perFrame - delay - padding };
+  return { rate, delay, samples: frames === null ? null : frames * perFrame - delay - padding, at: i };
 }
 
 // --- the stream ---
@@ -161,6 +164,12 @@ function playbackMoves(signal: AbortSignal) {
  *  once played audio is dropped or, with none left to drop, once the playback has used up some of what is ahead.
  *  Holding back holds the fetch back too (its reader is not read), and the server's stream waits with it. */
 async function appendBytes(bytes: Uint8Array<ArrayBuffer>, gen: number, signal: AbortSignal) {
+  // In slices: the browser wants room for a whole append before it takes any of it.
+  for (let at = 0; at < bytes.length; at += SLICE) if (!(await appendSlice(bytes.subarray(at, at + SLICE), gen, signal))) return;
+}
+
+/** One slice of `appendBytes`; false when the stream moved on meanwhile. */
+async function appendSlice(bytes: Uint8Array<ArrayBuffer>, gen: number, signal: AbortSignal) {
   // Cut meanwhile (the queue changed after this track): nothing more of it goes in.
   const gone = () => gen !== generation || !sb || signal.aborted;
   for (;;) {
@@ -168,13 +177,13 @@ async function appendBytes(bytes: Uint8Array<ArrayBuffer>, gen: number, signal: 
       await evict();
       await playbackMoves(signal);
     }
-    if (gone()) return;
+    if (gone()) return false;
     await waitUpdate();
-    if (gone()) return;
+    if (gone()) return false;
     try {
       sb!.appendBuffer(bytes);
       await waitUpdate();
-      return;
+      return true;
     } catch (e) {
       if ((e as DOMException).name !== 'QuotaExceededError') throw e;
     }
@@ -291,7 +300,7 @@ async function appendTrack(index: number, from: number, gen: number) {
         }
         if (h === 'invalid') throw new Error(`${t.name} is not a playable MP3.`);
         await place(h.rate, h.delay, h.samples);
-        chunk = joined;
+        chunk = joined.subarray(h.at);
       }
       await appendBytes(chunk, gen, ctl.signal);
     }
@@ -299,7 +308,7 @@ async function appendTrack(index: number, from: number, gen: number) {
       const h = mp3Head(head);
       if (h && h !== 'invalid') {
         await place(h.rate, h.delay, h.samples);
-        await appendBytes(head, gen, ctl.signal);
+        await appendBytes(head.subarray(h.at), gen, ctl.signal);
       }
     }
     // A new stream, or the queue changed after this track (cutFrom): it no longer counts as appended.
