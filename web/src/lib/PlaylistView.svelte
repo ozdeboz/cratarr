@@ -756,8 +756,11 @@
     padding-bottom: calc(32px + var(--mini-h, 0px) + env(safe-area-inset-bottom));
   }
 
+  /* Never wider than the panel (as the tabs and their content below): its one column is the panel's width at most,
+     not what its widest part would like. */
   .head {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     padding: 0 8px 8px;
   }
@@ -866,6 +869,7 @@
 
   .actions button {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -892,6 +896,18 @@
   /* The crate's favourites toggle: Only favourites fills its heart. */
   .actions .favs.filled :global(svg) {
     fill: currentColor;
+  }
+
+  /* A narrow panel: the actions show their icons only (their names stay as their labels for screen readers). */
+  @container (max-width: 339px) {
+    .actions button span {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
   }
 
   .actions button:disabled {

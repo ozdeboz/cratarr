@@ -361,6 +361,7 @@
     position: fixed;
     inset: 0;
     z-index: 21;
+    container-type: inline-size;
     display: flex;
     flex-direction: column;
     background: var(--surface);
@@ -419,7 +420,8 @@
     opacity: 1;
   }
 
-  /* The panel scrolls on its own: a scroll in it never moves the page beside it (nor where it has nothing to scroll). */
+  /* The panel scrolls on its own: a scroll in it never moves the page beside it (nor where it has nothing to scroll).
+     Its content answers to the panel's width (a container), which can be dragged narrow. */
   .player-side {
     box-sizing: border-box;
     display: flex;
@@ -427,6 +429,7 @@
     min-width: 0;
     overflow: hidden;
     overscroll-behavior: contain;
+    container-type: inline-size;
     background: var(--bg);
   }
 
