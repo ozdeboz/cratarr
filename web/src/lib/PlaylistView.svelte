@@ -36,7 +36,7 @@
   import { refresh } from './live.svelte';
   import { enqueue, type LocalTrack } from './localPlayer.svelte';
   import { longpress } from './longpress';
-  import { isLocal, playPlaylistFrom, setPlayingMember, shownPlaylists, startPlaylists } from './output.svelte';
+  import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { closePlaylist, openPlaylist, panel, setTab, TABS } from './panel.svelte';
   import { inSidebar } from './live.svelte';
   import ExportTab from './ExportTab.svelte';
@@ -298,14 +298,6 @@
     return 'back' as const;
   }
 
-  async function addPlaying() {
-    try {
-      await setPlayingMember(id, true);
-    } catch (e) {
-      toast.fail(e, "It couldn't be added");
-    }
-  }
-
   // Edit mode: a working copy of the rows (each with its place in the file, so a restored one goes back there), and of
   // the playlist's name and the names it is also spoken as (decision 0015). "Names" in the bar shows those two in
   // place of the info beside the cover (Finamp's edit screen has its name field there).
@@ -460,9 +452,6 @@
           <button onclick={() => act(a.mode)} disabled={multi ? !chosenCount : !playable.length}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
         {/each}
       </div>
-      {#if np && np.addable && p && !p.member}
-        <button class="add-playing" onclick={addPlaying}><Icon name="plus" size={18} /><span>Add what's playing</span></button>
-      {/if}
       {/if}
     </header>
 
@@ -874,22 +863,6 @@
   .actions button:disabled {
     opacity: 0.5;
     cursor: default;
-  }
-
-  .add-playing {
-    justify-self: start;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-left: 6px;
-    padding: 6px 12px;
-    border: 1px dashed var(--border);
-    border-radius: 999px;
-    background: none;
-    color: inherit;
-    font: inherit;
-    font-size: 0.9rem;
-    cursor: pointer;
   }
 
   .related {
