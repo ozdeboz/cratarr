@@ -32,8 +32,28 @@ The owner decided (2026-10-14):
   track menu; no edit mode (a crate changes by sorting its tracks into playlists). Long crates come in pages.
 - **Make playlist:** a crate's tracks at that moment saved as a new, ordinary playlist (a snapshot, named when made),
   which then opens in the panel; the crate stays.
-- **Later, not in the first version:** crates of one's own, composed from the axes (conditions combined, each one
-  negatable), starting with membership, favourite, genre and year; BPM needs a source first (a file's tag, or analysis).
+- **Crates of one's own** (owner, 2026-10-14, issue by issue):
+  1. **Built in a third panel mode,** the crate builder, beside the player and the playlist/crate view: "New crate" (on
+     the Crates page) opens it empty, a crate's edit button opens it on that crate; saving shows the crate.
+  2. **Kept on the server, in one file** (`crates.json` in Cratarr's data folder, the previous version kept beside it
+     for undo), so every device has the same crates.
+  3. **Rules:** a crate is a list of conditions, all of which must hold, each one negatable. OR within an axis: a
+     condition takes several values (genre is any of rock, jazz) or a range (year 1990–1999). Groups (OR across axes)
+     later; the stored format carries a version for that. The permanent crates are definitions in the same model
+     (Favourites: favourite is yes; Unlisted: NOT in any playlist; Unlisted favourites: both).
+  4. **A generic axis registry:** each axis (on the server) declares its kind (yes/no, range, values, membership), its
+     domain (the genres there are, the years' span) and how it is evaluated; the server lists them and the builder draws
+     its controls from the list, so a new axis needs no builder work. First axes: favourite, playlist membership, genre,
+     year, BPM.
+  5. **Freshness:** library axes (the catalogue, the playlists) are always current; axes from the media server
+     (favourites; later plays) are kept about a minute and dropped when Cratarr itself changes them.
+  6. **Live preview:** while building, each change (after ~300 ms) shows the unsaved crate's count and first tracks.
+  7. **BPM from the files' BPM tag;** an outside analysis job (not in Cratarr's 64 MB container) can later fill the gaps
+     through the same axis.
+  8. **Identity:** a crate has an id that never changes (the panel's address, links); its name is unique among crates
+     and is not a permanent crate's name (it may equal a playlist's).
+  9. **The draft** has its own address (`?open=crate-new`, `?open=crate-edit:<id>`) and is kept in the browser while
+     open: it survives the player over it, a page change, turning the tablet and a reload; Save or Cancel ends it.
 
 ## Consequences
 
