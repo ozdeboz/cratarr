@@ -151,7 +151,7 @@ async function appendTrack(index: number, from: number, gen: number) {
       } catch {
         /* no words */
       }
-      throw new Error(text || `${t.name} could not be loaded.`);
+      throw new Error(`${t.name || 'A track'}: ${text || 'it could not be loaded.'}`);
     }
     const type = res.headers.get('content-type') ?? '';
     const kind = type.startsWith('audio/mp4') ? MP4 : MPEG;

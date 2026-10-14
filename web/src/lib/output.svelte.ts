@@ -120,6 +120,14 @@ export function tookLocal(source: string, id: string, view: TrackState) {
   if (localState.key === `${source}/${id}`) localState.view = view;
 }
 
+// A track the engine could not play is skipped (as a player does); it says which and why, once.
+$effect.root(() => {
+  $effect(() => {
+    const e = local.error;
+    if (e) toast.show({ text: e, tone: 'error' });
+  });
+});
+
 // Plays count (decision 0022): once a track has played 90% through (Jellyfin's own "played" mark), once per time it
 // is reached in the queue; the server counts it for the account it plays as.
 const PLAYED_AT = 0.9;
