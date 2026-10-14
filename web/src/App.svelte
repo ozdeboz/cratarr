@@ -4,6 +4,7 @@
   import Settings from './Settings.svelte';
   import Incoming from './Incoming.svelte';
   import Insights from './Insights.svelte';
+  import Crates from './Crates.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
@@ -31,6 +32,8 @@
   // Shown only when some source has an incoming library (see the status call below).
   const INCOMING: Page = { id: 'incoming', href: '#/incoming', label: 'Incoming', icon: 'incoming' };
   const INSIGHTS: Page = { id: 'insights', href: '#/insights', label: 'Insights', icon: 'insights' };
+  // The second step after Incoming (decision 0024).
+  const CRATES: Page = { id: 'crates', href: '#/crates', label: 'Crates', icon: 'crates' };
   const REPAIRS: Page = { id: 'repairs', href: '#/repairs', label: 'Repairs', icon: 'repairs' };
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
 
@@ -49,7 +52,9 @@
           ? 'incoming'
           : h === INSIGHTS.href
             ? 'insights'
-            : 'playlists';
+            : h === CRATES.href
+              ? 'crates'
+              : 'playlists';
   };
   let page = $state(fromHash());
   // The server picker belongs to the pages that act on what a server plays: Playlists (add it) and Incoming (play an
@@ -199,7 +204,7 @@
             : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, PLAYLISTS, INSIGHTS, REPAIRS] : [PLAYLISTS, INSIGHTS, REPAIRS]);
+  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, CRATES, PLAYLISTS, INSIGHTS, REPAIRS] : [CRATES, PLAYLISTS, INSIGHTS, REPAIRS]);
   const ALL = $derived([...MAIN, SETTINGS]);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, BAR_SLOTS - 1));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
@@ -246,6 +251,8 @@
       <Repairs />
     {:else if page === 'insights'}
       <Insights />
+    {:else if page === 'crates'}
+      <Crates />
     {:else}
       <Playlists />
     {/if}

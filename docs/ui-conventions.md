@@ -54,6 +54,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   edit mode Cancel, Names and Save. Rows as the queue's; edit mode as Finamp's playlist edit screen: Names swaps the
   info beside the cover for Name and Spoken as (where Finamp has its name field); rows with handle and ✕, swipe to
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
+- **Crates** (decision 0024, between Incoming and Playlists): the permanent crates (Favourites, Unlisted, Unlisted
+  favourites) as chips with their live counts, styled as the playlist chips (the open one bordered). A crate opens in
+  the panel as a playlist does, without the statistics and editing; its rows come in pages, newest first; the save icon
+  (where a playlist has the pencil) makes a playlist of it, which then opens.
 - **Playlist chips** (the Playlists page) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a

@@ -148,6 +148,22 @@ export const playPlaylist = (playlistId: string, mode: PlayMode, source?: string
 // new playlist made of what plays and what comes next (tracks in the library only).
 export const queueTrack = (id: string, mode: 'next' | 'last', source?: string) =>
   post<{ player: string }>(`/api/queue/add${follow(source)}`, { id, mode });
+/** Several tracks, in order (a crate's Play next / Add to queue, decision 0024). */
+export const queueTracks = (ids: string[], mode: 'next' | 'last', source?: string) =>
+  post<{ player: string }>(`/api/queue/add${follow(source)}`, { ids, mode });
+
+/** A permanent crate (decision 0024); `count` null when not known (the server's favourites could not be read). */
+export type Crate = { id: string; name: string; count: number | null };
+export const getCrates = (source?: string) => quietly<Crate[]>(`/api/crates${follow(source)}`);
+/** A page of a crate's rows (newest first) and the crate's size. */
+export const crateRows = (id: string, offset: number, limit: number, source?: string) => {
+  const q = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  if (source) q.set('source', source);
+  return quietly<{ source: string; total: number; rows: PlaylistRow[] }>(`/api/crates/${encodeURIComponent(id)}/rows?${q}`);
+};
+/** Make playlist: the crate's tracks now, as a new ordinary playlist (a snapshot). */
+export const crateToPlaylist = (id: string, name: string, source?: string) =>
+  post<{ playlist: string; added: number }>(`/api/crates/${encodeURIComponent(id)}/playlist${follow(source)}`, { name });
 export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
 /** `ids`: the queue to make it from (the local player's); without, the server's player's queue. */
 export const playlistFromQueue = (name: string, source?: string, ids?: string[]) =>

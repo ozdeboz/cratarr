@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   // An opened playlist (decision 0023), in the panel beside the page or in its own layer, styled as Finamp's playlist
   // screen (lib/components/AlbumScreen) in less room: a bar with ✕ and the menu; the covers beside the name, "N tracks
   // (length)" and the genres; Play, Shuffle, Play next and Add to queue as icons over labels; what Insights knows of it
@@ -7,7 +8,23 @@
   // (long-press: favourite). Lines the server does not know, or files that are missing, show by file name, dimmed.
   // Edit mode (the pencil; Finamp's playlist edit screen): rows get the reorder handle and ✕ (a swipe left removes too),
   // removed tracks wait in their own section to be restored, and Save writes the playlist once (Cancel drops it).
-  import { coverUrl, editPlaylist, incomingCoverUrl, playlistCovers, playlistRows, queueTrack, setSpoken, spokenNames, type PlaylistRow } from './api';
+  // A crate (decision 0024, `?open=crate:…`) shows the same way, without the statistics (genres, length, Related) and
+  // without editing; its rows come in pages (newest first), and the save icon makes a playlist of it (a snapshot).
+  import {
+    coverUrl,
+    crateRows,
+    crateToPlaylist,
+    editPlaylist,
+    incomingCoverUrl,
+    playlistCovers,
+    playlistRows,
+    queueTrack,
+    queueTracks,
+    setSpoken,
+    spokenNames,
+    type PlaylistRow,
+  } from './api';
+  import { crateName, crateOf, loadCrates } from './crates.svelte';
   import { Reorder } from './reorder.svelte';
   import { renameEverywhere } from './rename.svelte';
   import { isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, togglePlaylistFavorite } from './favourites.svelte';
@@ -28,8 +45,16 @@
   import type { PlayMode } from './api';
 
   const id = $derived(panel.open ?? '');
-  const p = $derived(shownPlaylists().find((x) => x.id === id) ?? null);
+  /** The open crate's id, when a crate is open (not a playlist). */
+  const crate = $derived(crateOf(panel.open));
+  const title = $derived(crate ? crateName(crate) : id);
+  const p = $derived(crate ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
   const np = $derived(playing());
+  /** A crate's size (its rows come in pages). */
+  let total = $state(0);
+  const PAGE = 200;
+  // A crate changes as tracks are sorted into playlists (Unlisted) or hearted: asked for again when the playlists change.
+  const listsKey = $derived(crate ? shownPlaylists().map((x) => x.count).join(',') : '');
 
   // The rows: asked for when the playlist opens and again when it changes (its counts, from the shell's state).
   let rows = $state<PlaylistRow[] | null>(null);
@@ -43,17 +68,24 @@
     void p?.count;
     void p?.dead;
     void saved;
+    void listsKey;
     if (!want) return;
     if (want !== shownFor) {
       rows = null;
       error = null;
     }
-    playlistRows(want, prefs.source || undefined).then(
+    const c = crateOf(want);
+    // A crate keeps the pages it has (at least the first) when it is asked for again.
+    const asked = c
+      ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined)
+      : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length }));
+    asked.then(
       (r) => {
         if (want !== id) return;
         shownFor = want;
         rows = r.rows;
         source = r.source;
+        total = r.total;
         loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
       },
       (e) => {
@@ -67,7 +99,7 @@
   $effect(() => {
     const want = id;
     covers = [];
-    if (!want) return;
+    if (!want || crateOf(want)) return;
     playlistCovers(want).then(
       (list) => {
         if (want !== id) return;
@@ -109,13 +141,74 @@
     { mode: 'next', icon: 'playNext', label: 'Play next' },
     { mode: 'last', icon: 'playlists', label: 'Add to queue' },
   ];
+  // A crate's next page, when the end of the list comes into view.
+  let more = $state<HTMLElement>();
+  let loadingMore = false;
+  $effect(() => {
+    const el = more;
+    const c = crate;
+    if (!el || !c) return;
+    const seen = new IntersectionObserver(async ([e]) => {
+      if (!e.isIntersecting || loadingMore || !rows || rows.length >= total) return;
+      loadingMore = true;
+      try {
+        const r = await crateRows(c, rows.length, PAGE, prefs.source || undefined);
+        if (crate === c && rows) {
+          rows = [...rows, ...r.rows];
+          loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
+        }
+      } catch (err) {
+        toast.fail(err, 'More tracks could not be loaded');
+      } finally {
+        loadingMore = false;
+      }
+    });
+    seen.observe(el);
+    return () => seen.disconnect();
+  });
+
   async function act(mode: PlayMode) {
     navigator.vibrate?.(8);
     try {
-      await startPlaylist(id, mode);
+      if (crate) await actOnCrate(mode);
+      else await startPlaylist(id, mode);
       if (mode === 'next' || mode === 'last') toast.show({ text: mode === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
     } catch (e) {
       toast.fail(e, 'Could not start playing');
+    }
+  }
+
+  /** A crate's actions work on the tracks it has shown so far (its pages, newest first). */
+  async function actOnCrate(mode: PlayMode) {
+    const tracks = tracksOf(playable);
+    if (mode === 'play' || mode === 'shuffle') {
+      const order = mode === 'shuffle' ? [...tracks].sort(() => Math.random() - 0.5) : tracks;
+      return playPlaylistFrom(title, source, order, 0);
+    }
+    if (isLocal()) return enqueue(tracks, mode);
+    await queueTracks(
+      tracks.map((t) => t.id),
+      mode,
+      source,
+    );
+    setTimeout(refresh, 700);
+  }
+
+  // Make playlist (the save icon): the crate's tracks now as a new playlist, which then opens here.
+  let making = $state<{ name: string; saving: boolean } | null>(null);
+  async function makePlaylist() {
+    if (!making || !crate || !making.name.trim()) return;
+    making.saving = true;
+    const name = making.name.trim();
+    try {
+      await crateToPlaylist(crate, name, prefs.source || undefined);
+      making = null;
+      refresh();
+      loadCrates();
+      openPlaylist(name);
+    } catch (e) {
+      toast.fail(e, "The playlist wasn't made");
+      if (making) making.saving = false;
     }
   }
 
@@ -222,7 +315,7 @@
 
   // Esc closes it (when no sheet of its own is open; in edit mode Cancel is the way out).
   $effect(() => {
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !menuOpen && !trackMenu && !editing && closePlaylist();
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !menuOpen && !trackMenu && !editing && !making && closePlaylist();
     addEventListener('keydown', esc);
     return () => removeEventListener('keydown', esc);
   });
@@ -236,6 +329,12 @@
         <button class="barbtn" aria-pressed={editing.names} onclick={() => editing && (editing.names = !editing.names)} disabled={editing.saving}>Names</button>
         <button class="barbtn save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}>Save</button>
       </span>
+    {:else if making}
+      <button class="barbtn" onclick={() => (making = null)} disabled={making.saving}>Cancel</button>
+      <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
+    {:else if crate}
+      <button class="icon" aria-label="Close the crate" onclick={closePlaylist}><Icon name="close" size={24} /></button>
+      <button class="icon" aria-label="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="save" size={22} /></button>
     {:else}
       <button class="icon" aria-label="Close the playlist" onclick={closePlaylist}><Icon name="close" size={24} /></button>
       <span class="end">
@@ -252,9 +351,17 @@
     <header class="head">
       <div class="top">
         <div class="art" class:mosaic={covers.length === 4}>
-          {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name="albums" size={48} /></span>{/each}
+          {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? 'crates' : 'albums'} size={48} /></span>{/each}
         </div>
-        {#if editing?.names}
+        {#if making}
+          <div class="info fields">
+            <label class="field">
+              <span>Name of the new playlist</span>
+              <!-- svelte-ignore a11y_autofocus -->
+              <input type="text" maxlength="100" autofocus bind:value={making.name} disabled={making.saving} onkeydown={(e) => e.key === 'Enter' && makePlaylist()} />
+            </label>
+          </div>
+        {:else if editing?.names}
           <div class="info fields">
             <label class="field">
               <span>Name</span>
@@ -267,8 +374,12 @@
           </div>
         {:else}
         <div class="info">
-          <h2>{id}</h2>
-          <p class="line"><Icon name="music" size={20} /><span>{p ? plural(p.count, 'track') : rows ? plural(rows.length, 'track') : 'Loading…'}{#if length}&nbsp;({clockText(length)}){/if}</span></p>
+          <h2>{title}</h2>
+          {#if crate}
+            <p class="line"><Icon name="music" size={20} /><span>{rows ? plural(total, 'track') : 'Loading…'}</span></p>
+          {:else}
+            <p class="line"><Icon name="music" size={20} /><span>{p ? plural(p.count, 'track') : rows ? plural(rows.length, 'track') : 'Loading…'}{#if length}&nbsp;({clockText(length)}){/if}</span></p>
+          {/if}
           {#if point}
             <p class="line"><Icon name="swatch" size={20} />{#if point.genres.length}<span class="genres">{#each point.genres as g (g)}<span>{g}</span>{/each}</span>{:else}<span>No genres</span>{/if}</p>
           {/if}
@@ -276,7 +387,7 @@
         </div>
         {/if}
       </div>
-      {#if !editing}
+      {#if !editing && !making}
       <div class="actions" role="group" aria-label="Play">
         {#each ACTIONS as a (a.mode)}
           <button onclick={() => act(a.mode)} disabled={!playable.length}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
@@ -372,6 +483,7 @@
           </li>
         {/each}
       </ol>
+      {#if crate && rows.length < total}<p class="empty" bind:this={more}>Loading…</p>{/if}
     {:else}
       <p class="empty">Loading…</p>
     {/if}
