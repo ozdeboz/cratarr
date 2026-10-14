@@ -4,6 +4,7 @@
   import { live } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
+  import { canPlayHere } from './localPlayer.svelte';
   import { isLocal, toLocal, toRemote } from './output.svelte';
   import { shownCover } from './remote.svelte';
 
@@ -23,7 +24,9 @@
 
 <MenuSheet label="Play on" title="Play on" images={src ? [src] : []} chips={[isLocal() ? 'This device' : remoteName]} {onclose}>
   <div role="menu">
-    <MenuEntry label="This device" checked={isLocal()} onclick={() => choose(true)} />
+    {#if canPlayHere}
+      <MenuEntry label="This device" checked={isLocal()} onclick={() => choose(true)} />
+    {/if}
     <MenuEntry label={remoteName} checked={!isLocal()} onclick={() => choose(false)} />
   </div>
 </MenuSheet>

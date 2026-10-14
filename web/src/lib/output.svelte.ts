@@ -19,12 +19,14 @@ import {
   type Playlist,
   type TrackState,
 } from './api';
+import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
-import { local, playQueue, enqueue, seek, stop, type LocalTrack } from './localPlayer.svelte';
+import { canPlayHere, local, playQueue, enqueue, seek, stop, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
-export const isLocal = () => prefs.output === 'local';
+// A browser that cannot play here (no stream for audio) plays on the server's player, whatever was chosen elsewhere.
+export const isLocal = () => prefs.output === 'local' && canPlayHere;
 
 // Leaving the page stops what plays in this browser, so a reload or closing the tab asks first (the browser's own
 // "Leave site?"), but only while this browser is playing.
@@ -130,11 +132,21 @@ export function tookLocal(source: string, id: string, view: TrackState) {
   if (localState.key === `${source}/${id}`) localState.view = view;
 }
 
-// A track the engine could not play is skipped (as a player does); it says which and why, once.
+// A track the engine could not play is skipped (as a player does); it says which and why, once. The line goes once a
+// later track plays (the engine clears the error), unless another toast replaced it meanwhile.
+let errorToast: number | null = null;
 $effect.root(() => {
   $effect(() => {
     const e = local.error;
-    if (e) toast.show({ text: e, tone: 'error' });
+    untrack(() => {
+      if (e) {
+        toast.show({ text: e, tone: 'error' });
+        errorToast = toast.current?.id ?? null;
+      } else if (errorToast !== null) {
+        if (toast.current?.id === errorToast) toast.dismiss();
+        errorToast = null;
+      }
+    });
   });
 });
 
