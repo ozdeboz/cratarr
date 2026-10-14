@@ -44,7 +44,9 @@ true gapless about 3,000 lines and at least two listening evenings):
 ## Consequences
 
 - The server gains a streaming module (files, ranges, FLAC to fragmented MP4) and routes for track lists (a playlist,
-  an album, the queue) and for marking a play.
+  an album, the queue) and for marking a play. **It must stream with small, bounded buffers** (a few FLAC frames at a
+  time, never a whole file): production runs with a 64 MB memory limit and already uses 48-55 MB with the catalogue
+  loaded (measured 2026-10-13); a larger limit is the owner's call on the NAS side.
 - The interface gains a playback engine beside the remote (lib/remote.svelte.ts), and the player shows whichever
   output is active.
 - Testing at the track boundaries is by ear and falls to the owner: skip, seek, pause, screen lock, and FLAC and MP3
