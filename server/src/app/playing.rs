@@ -359,6 +359,12 @@ impl PlayingService {
         self.track_state(source_id, id).await
     }
 
+    /// Which of these tracks are favourites, in one go (the hearts on a list's rows, decision 0023).
+    pub async fn favorites(&self, source_id: &str, ids: &[String]) -> Result<std::collections::BTreeMap<String, bool>, ToggleError> {
+        let (_, s) = self.source(source_id)?;
+        s.favorites(ids).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
     /// Marks a given track a favourite, or not.
     pub async fn track_favorite(&self, source_id: &str, id: &str, on: bool) -> Result<TrackStateView, ToggleError> {
         let (_, s, _) = self.find(source_id, id).await?;

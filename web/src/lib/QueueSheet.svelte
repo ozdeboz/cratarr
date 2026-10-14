@@ -3,13 +3,16 @@
   // over the player on the blurred cover, a grab handle and "Queue"; then the previous tracks (folded, this device
   // only: the server's player reports only what comes next), the playing track as a card that fills as it plays
   // (pinned at the top), the "Playing from" header (pinned under it) and what comes next.
-  // Gestures as Finamp's: drag the handle area down to close; a tap on a row plays it; on this device a row's handle
-  // reorders and a swipe left removes it (the server's player takes neither command). Haptics as Finamp's: light on a
-  // tap or a drag starting, heavy on a drop, a removal and opening.
+  // Gestures as Finamp's: drag the handle area down to close; a tap on a row plays it, a long-press (or right-click) is
+  // its menu; a row's heart adds it to a playlist, a long-press on the heart makes it a favourite or not; on this device
+  // a row's handle reorders and a swipe left removes it (the server's player takes neither command). Haptics as
+  // Finamp's: light on a tap or a drag starting, heavy on a drop, a removal and opening.
   import { linear } from 'svelte/easing';
   import { fade, fly } from 'svelte/transition';
-  import { incomingCoverUrl } from './api';
+  import { getFavorites, incomingCoverUrl, setTrackFavorite } from './api';
   import Icon from './Icon.svelte';
+  import { longpress } from './longpress';
+  import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import { local, jump as localJump, moveUpcoming, removeUpcoming } from './localPlayer.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { isLocal } from './output.svelte';
@@ -43,6 +46,46 @@
   });
 
   let list = $state<HTMLElement>();
+
+  // The rows' hearts: which of the listed tracks are favourites, asked for in one go when the list changes.
+  let favs = $state<Record<string, boolean>>({});
+  const listed = $derived(np ? [...previous.map((t) => t.id), ...np.upcoming.map((u) => u.id)] : []);
+  const listedKey = $derived(listed.join(','));
+  $effect(() => {
+    void listedKey;
+    const source = np?.source;
+    if (!source || !listed.length) return;
+    getFavorites(source, listed).then(
+      (f) => (favs = { ...favs, ...f }),
+      () => {
+        /* the hearts stay as they were */
+      },
+    );
+  });
+  async function flipFavorite(t: MenuTrack) {
+    heavy();
+    try {
+      const s = await setTrackFavorite(t.source, t.id, !favs[t.id]);
+      if (s.favorite !== null) favs[t.id] = s.favorite;
+    } catch (e) {
+      toast.fail(e, "The favourite didn't change");
+    }
+  }
+
+  // A row's menu: the whole menu (long-press on the row) or straight to its playlists (the row's heart).
+  let menuFor = $state<{ track: MenuTrack; start: 'menu' | 'lists' } | null>(null);
+  const asTrack = (t: { id: string; name: string; artist: string | null; album: string | null; album_id: string | null }, source: string): MenuTrack => ({
+    source,
+    id: t.id,
+    name: t.name,
+    artist: t.artist,
+    album: t.album,
+    album_id: t.album_id,
+  });
+  function rowMenu(track: MenuTrack) {
+    tick();
+    menuFor = { track, start: 'menu' };
+  }
 
   async function play(i: number) {
     tick();
@@ -169,6 +212,17 @@
   const rowX = (i: number) => (swipe?.i === i ? swipe.dx : 0);
 </script>
 
+<!-- Finamp's row heart: a tap opens its playlists, a long-press (right-click) makes it a favourite or not. -->
+{#snippet rowHeart(t: MenuTrack)}
+  <button
+    class="rheart"
+    class:on={favs[t.id]}
+    aria-label={`Add ${t.name} to a playlist`}
+    onclick={() => (tick(), (menuFor = { track: t, start: 'lists' }))}
+    use:longpress={() => flipFavorite(t)}><Icon name="heart" size={24} /></button
+  >
+{/snippet}
+
 {#if np}
   <div class="qback" role="presentation" onclick={onclose} transition:fade={{ duration: SHEET_OUT }}></div>
   <div
@@ -198,10 +252,11 @@
           <ol class="rows" transition:fade={{ duration: 150, easing: linear }}>
             {#each previous as t, j (t.id + ':' + j)}
               <li>
-                <button class="row" onclick={() => (tick(), localJump(j))}>
+                <button class="row" onclick={() => (tick(), localJump(j))} use:longpress={() => rowMenu(asTrack(t, t.source))}>
                   {#if t.album_id}<img src={incomingCoverUrl(t.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
                   <div><strong>{t.name || '…'}</strong><span>{t.artist ?? ''}</span></div>
                 </button>
+                {@render rowHeart(asTrack(t, t.source))}
               </li>
             {/each}
           </ol>
@@ -254,11 +309,13 @@
                 onpointerup={rowUp}
                 onpointercancel={rowUp}
                 onclick={() => rowClick(i)}
+                use:longpress={() => rowMenu(asTrack(t, np.source))}
               >
                 {#if t.album_id}<img src={incomingCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
                 <div><strong>{t.name}</strong><span>{t.artist ?? ''}</span></div>
                 {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
               </button>
+              {@render rowHeart(asTrack(t, np.source))}
               {#if here}
                 <button
                   class="grip"
@@ -277,6 +334,15 @@
       {/if}
     </div>
   </div>
+{/if}
+
+{#if menuFor}
+  <TrackMenu
+    track={menuFor.track}
+    start={menuFor.start}
+    onclose={() => (menuFor = null)}
+    onfavorite={(id, on) => (favs[id] = on)}
+  />
 {/if}
 
 <style>
@@ -624,6 +690,23 @@
     opacity: 0.85;
     font-size: 13px;
     font-variant-numeric: tabular-nums;
+  }
+
+  .rheart {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--art-accent);
+    cursor: pointer;
+  }
+
+  .rheart.on :global(svg) {
+    fill: currentColor;
   }
 
   .grip {

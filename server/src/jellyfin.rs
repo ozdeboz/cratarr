@@ -716,6 +716,28 @@ impl Jellyfin {
         page.items.into_iter().next().with_context(|| format!("Jellyfin has no item {id}"))
     }
 
+    /// Which of these items `user` has as favourites, in one request (ids Jellyfin does not know are left out).
+    pub async fn favorites(&self, ids: &[String], user: &str) -> Result<Vec<(String, bool)>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Item {
+            id: String,
+            user_data: Option<Fav>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Fav {
+            is_favorite: Option<bool>,
+        }
+        anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
+        let ids: Vec<&str> = ids.iter().map(String::as_str).filter(|i| crate::covers::valid_item_id(i)).collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let page: ItemsPage<Item> = self.get(&format!("/Items?Ids={}&userId={user}&EnableUserData=true", ids.join(","))).await?;
+        Ok(page.items.into_iter().map(|i| (i.id, i.user_data.and_then(|u| u.is_favorite).unwrap_or(false))).collect())
+    }
+
     /// Count one play of the item for `user`: the play count up by one, last played now, played (decision 0022). Jellyfin's
     /// own "mark played" only makes the count at least one, so the count is read and written back.
     pub async fn count_play(&self, item: &str, user: &str) -> Result<()> {

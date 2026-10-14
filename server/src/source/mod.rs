@@ -345,6 +345,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this server cannot count plays") })
     }
 
+    /// Optional: which of these tracks are favourites of the account the source plays for, in one go (the hearts on
+    /// a list's rows). Tracks it cannot tell about are left out.
+    fn favorites<'a>(&'a self, _tracks: &'a [String]) -> Fut<'a, BTreeMap<String, bool>> {
+        Box::pin(async { Ok(BTreeMap::new()) })
+    }
+
     /// Whether the track is a favourite of the account the source plays for; `None` when it cannot tell.
     fn favorite<'a>(&'a self, _track: &'a str) -> Fut<'a, Option<bool>> {
         Box::pin(async { Ok(None) })

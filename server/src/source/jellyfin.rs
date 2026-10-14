@@ -651,6 +651,20 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn favorites<'a>(&'a self, tracks: &'a [String]) -> Fut<'a, BTreeMap<String, bool>> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await?;
+            // The account of the player the page follows (no track of these need be playing).
+            let Some(user) = tracks.first().and_then(|t| whose(&sessions, &self.player, t)) else { return Ok(BTreeMap::new()) };
+            let mut out = BTreeMap::new();
+            // Long lists in pieces: the ids go in the address.
+            for chunk in tracks.chunks(100) {
+                out.extend(self.jf.favorites(chunk, &user).await?);
+            }
+            Ok(out)
+        })
+    }
+
     fn favorite<'a>(&'a self, track: &'a str) -> Fut<'a, Option<bool>> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;

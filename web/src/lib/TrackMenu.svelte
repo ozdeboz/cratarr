@@ -1,9 +1,14 @@
+<script lang="ts" module>
+  /** A track the menu is for, when it is not the playing one (a queue row, a playlist row; decision 0023). */
+  export type MenuTrack = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null };
+</script>
+
 <script lang="ts">
-  // The playing track's menu (decisions 0019, 0021): the menu button in the player, or a right-click on its cover. A
-  // sheet as Finamp's track menu: the track on the card (with the heart), Play next and Add to queue as the large
-  // actions, then: Add to playlist (the playlists as toggle cards, a tap adds or removes), the favourite, and a new
-  // playlist made of what plays and what comes next.
-  import { playlistFromQueue, queueTrack } from './api';
+  // A track's menu (decisions 0019, 0021, 0023): the playing track's (the menu button in the player, a right-click on
+  // its cover) or any other's (a long-press on a row). A sheet as Finamp's track menu: the track on the card (with the
+  // heart), Play next and Add to queue as the large actions, then: Add to playlist (the playlists as toggle cards, a tap
+  // adds or removes), the favourite, and for the playing track a new playlist made of what plays and what comes next.
+  import { coverUrl, incomingCoverUrl, playlistFromQueue, queueTrack, setTrackFavorite, setTrackMember, trackState, type TrackState } from './api';
   import { refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -12,26 +17,74 @@
   import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
   import { toast } from './toast.svelte';
 
-  let { onclose }: { onclose: () => void } = $props();
+  let {
+    onclose,
+    track = null,
+    start = 'menu',
+    onfavorite,
+  }: {
+    onclose: () => void;
+    track?: MenuTrack | null;
+    start?: 'menu' | 'lists';
+    /** Told when another track's favourite changed (a list's heart shows it). */
+    onfavorite?: (id: string, on: boolean) => void;
+  } = $props();
 
   const np = $derived(playing());
-  const src = $derived(shownCover());
+  /** The menu is for what plays (no track given, or the given one plays). */
+  const forPlaying = $derived(!track || (!!np && np.source === track.source && np.id === track.id));
+  const t = $derived<MenuTrack | null>(forPlaying ? np : track);
+
+  // Another track's playlists and heart, asked for when its menu opens.
+  let other = $state<TrackState | null>(null);
+  $effect(() => {
+    if (forPlaying || !track) return;
+    const { source, id } = track;
+    trackState(source, id).then(
+      (v) => (other = v),
+      (e) => toast.fail(e, "This track's playlists couldn't be loaded"),
+    );
+  });
+
+  const src = $derived(
+    forPlaying ? shownCover() : track ? (track.album_id ? incomingCoverUrl(track.source, track.album_id) : coverUrl(track)) : null,
+  );
+  const addable = $derived(forPlaying ? !!np?.addable : !!other?.addable);
+  const heartOn = $derived(forPlaying ? favorite() : !!other?.favorite);
+  const heartKnown = $derived(forPlaying ? np?.favorite !== null : other !== null && other.favorite !== null);
+  const busy = $derived(forPlaying ? pending() : !other);
   // Playlists holding the track first, then the rest by name.
   const playlists = $derived(
-    [...shownPlaylists()].sort((a, b) => Number(b.member) - Number(a.member) || a.name.localeCompare(b.name)),
+    [...(forPlaying ? shownPlaylists() : (other?.playlists ?? []))].sort(
+      (a, b) => Number(b.member) - Number(a.member) || a.name.localeCompare(b.name),
+    ),
   );
 
-  let step = $state<'menu' | 'lists' | 'new'>('menu');
+  // The step it opens on; later steps are the sheet's own.
+  // svelte-ignore state_referenced_locally
+  let step = $state<'menu' | 'lists' | 'new'>(start);
   let working = $state(false);
   let nameField = $state('');
 
+  async function heart() {
+    if (forPlaying) return toggleFavorite();
+    if (!track || !other || other.favorite === null) return;
+    try {
+      other = await setTrackFavorite(track.source, track.id, !other.favorite);
+      if (other.favorite !== null) onfavorite?.(track.id, other.favorite);
+      refresh();
+    } catch (e) {
+      toast.fail(e, "The favourite didn't change");
+    }
+  }
+
   async function queue(how: 'next' | 'last') {
-    if (!np) return;
+    if (!t) return;
     working = true;
     onclose();
     try {
-      if (isLocal()) enqueue([{ source: np.source, id: np.id, name: np.name, artist: np.artist, album: np.album, album_id: np.album_id }], how);
-      else await queueTrack(np.id, how, np.source);
+      if (isLocal()) enqueue([{ source: t.source, id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id }], how);
+      else await queueTrack(t.id, how, t.source);
       toast.show({ text: how === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
       setTimeout(refresh, 700);
     } catch (e) {
@@ -42,9 +95,13 @@
   }
 
   async function toggle(id: string, member: boolean) {
-    if (!np || pending()) return;
+    if (!t || busy) return;
     try {
-      await setPlayingMember(id, !member);
+      if (forPlaying) await setPlayingMember(id, !member);
+      else if (track) {
+        other = await setTrackMember(track.source, track.id, id, !member);
+        refresh();
+      }
     } catch (e) {
       toast.fail(e, member ? "It couldn't be taken out" : "It couldn't be added");
     }
@@ -56,7 +113,7 @@
     working = true;
     try {
       const ids = isLocal() ? local.queue.slice(Math.max(0, local.index)).map((t) => t.id) : undefined;
-      const made = await playlistFromQueue(name, np?.source, ids);
+      const made = await playlistFromQueue(name, t?.source, ids);
       const left = made.left_out ? `, ${made.left_out} not in the library left out` : '';
       toast.show({ text: `Made ${made.playlist}: ${made.added} ${made.added === 1 ? 'track' : 'tracks'}${left}.`, tone: 'done' });
       onclose();
@@ -69,14 +126,14 @@
   }
 </script>
 
-{#if np}
+{#if t}
   <MenuSheet
-    label={np.name}
+    label={t.name}
     {onclose}
     images={src ? [src] : []}
-    title={np.name}
-    chips={[np.artist, np.album].filter((c): c is string => !!c)}
-    heart={np.favorite === null ? null : { on: favorite(), disabled: pending(), toggle: toggleFavorite }}
+    title={t.name}
+    chips={[t.artist, t.album].filter((c): c is string => !!c)}
+    heart={heartKnown ? { on: heartOn, disabled: busy, toggle: heart } : null}
     actions={step === 'menu'
       ? [
           { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },
@@ -88,26 +145,28 @@
   >
     {#if step === 'menu'}
       <div role="menu">
-        {#if np.addable}
+        {#if addable}
           <MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />
         {/if}
-        {#if np.favorite !== null}
-          <MenuEntry icon="heart" label={favorite() ? 'Remove from favourites' : 'Add to favourites'} disabled={pending()} onclick={toggleFavorite} />
+        {#if heartKnown}
+          <MenuEntry icon="heart" label={heartOn ? 'Remove from favourites' : 'Add to favourites'} disabled={busy} onclick={heart} />
         {/if}
-        <MenuEntry
-          icon="plus"
-          label="New playlist from the queue"
-          onclick={() => {
-            nameField = '';
-            step = 'new';
-          }}
-        />
+        {#if forPlaying}
+          <MenuEntry
+            icon="plus"
+            label="New playlist from the queue"
+            onclick={() => {
+              nameField = '';
+              step = 'new';
+            }}
+          />
+        {/if}
       </div>
     {:else if step === 'lists'}
       <div class="heading">Add to / remove from playlists</div>
       <div role="group" aria-label="Playlists">
         {#each playlists as p (p.id)}
-          <MenuEntry label={p.name} checked={p.member} disabled={pending()} onclick={() => toggle(p.id, p.member)} />
+          <MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />
         {/each}
       </div>
     {:else}

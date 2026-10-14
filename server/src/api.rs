@@ -28,6 +28,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
         .route("/api/track/{source}/{id}/favorite", post(track_favorite))
         .route("/api/track/{source}/{id}/played", post(track_played))
+        .route("/api/favorites/{source}", post(favorites))
         .route("/api/queue/add", post(queue_add))
         .route("/api/queue/jump", post(queue_jump))
         .route("/api/queue/playlist", post(queue_playlist))
@@ -170,6 +171,20 @@ async fn track_favorite(
     Query(f): Query<Favorite>,
 ) -> Result<Json<TrackStateView>, ApiError> {
     Ok(Json(app.playing.track_favorite(&source, &id, f.on).await?))
+}
+
+/// Which of these tracks (ids on that server) are favourites: the hearts on a list's rows (decision 0023).
+#[derive(Deserialize)]
+struct Ids {
+    ids: Vec<String>,
+}
+
+async fn favorites(
+    State(app): State<Arc<App>>,
+    Path(source): Path<String>,
+    Json(b): Json<Ids>,
+) -> Result<Json<std::collections::BTreeMap<String, bool>>, ApiError> {
+    Ok(Json(app.playing.favorites(&source, &b.ids).await?))
 }
 
 /// A playlist's tracks for the local player: the server they are on and their ids in file order (decision 0022).

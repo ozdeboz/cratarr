@@ -134,7 +134,7 @@ const follow = (source?: string) => (source ? `?source=${encodeURIComponent(sour
 
 export const getState = (source?: string) => quietly<State>(`/api/state${follow(source)}`);
 
-export const coverUrl = (np: NowPlaying) => `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
+export const coverUrl = (np: { source: string; id: string }) => `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
 
 /** play: in file order · shuffle: random order · next: after the current track · last: at the end of the queue. */
 export type PlayMode = 'play' | 'shuffle' | 'next' | 'last';
@@ -484,6 +484,15 @@ export const setTrackMember = (source: string, id: string, playlistId: string, m
 
 export const setTrackFavorite = (source: string, id: string, on: boolean) =>
   quietly<TrackState>(`${trackPath(source, id)}/favorite?on=${on}`, { method: 'POST' });
+
+/** Which of these tracks (ids on `source`) are favourites, in one request: the hearts on a list's rows (decision 0023).
+ *  Tracks the server cannot tell about are left out. */
+export const getFavorites = (source: string, ids: string[]) =>
+  quietly<Record<string, boolean>>(`/api/favorites/${encodeURIComponent(source)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
 
 /** The local player played most of the track: one play counts in the media server (decision 0022). */
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });
