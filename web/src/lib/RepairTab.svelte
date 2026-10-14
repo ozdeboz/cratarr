@@ -14,7 +14,10 @@
     type PlaylistRow,
     type Repair,
   } from './api';
+  import FileItem from './FileItem.svelte';
   import { refresh } from './live.svelte';
+  import PlaylistItem from './PlaylistItem.svelte';
+  import Section from './Section.svelte';
   import { shownPlaylists } from './output.svelte';
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
@@ -69,7 +72,6 @@
   const nothing = $derived(loaded && !error && !safe.length && !review.length && !dups.length && !notFound.length);
 
   const fileOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
-  const albumOf = (path: string) => path.slice(0, path.lastIndexOf('/'));
   const tracks = (n: number) => `${n} ${n === 1 ? 'track' : 'tracks'}`;
   const inPlaylists = (n: number) => `${n} ${n === 1 ? 'playlist' : 'playlists'}`;
   const several = $derived(ids.length > 1);
@@ -126,125 +128,111 @@
     <p class="empty">Nothing to repair.</p>
   {:else}
     {#if safe.length > 0}
-      <section>
-        <h3>Found in another format <span class="n">{tracks(safe.length)}</span></h3>
-        <p class="hint">The same track is in your Music in another format, for example a FLAC that replaced an MP3.</p>
-        {#if confirming}
-          <p class="ask">Point {tracks(safe.length)} at the new files?</p>
-          <div class="row">
-            <button class="primary" onclick={() => run(() => applySafe([...ids]), `Fixed ${tracks(safe.length)}`)} disabled={busy} aria-busy={busy}>
-              Fix {tracks(safe.length)}
-            </button>
-            <button onclick={() => (confirming = false)}>Cancel</button>
-          </div>
-        {:else}
-          <button class="primary" onclick={() => (confirming = true)} disabled={busy}>Fix {safe.length} missing {safe.length === 1 ? 'track' : 'tracks'}</button>
-        {/if}
+      <Section title="Found in another format" count={tracks(safe.length)} hint="The same track is in your Music in another format, for example a FLAC that replaced an MP3.">
+        <div class="do">
+          {#if confirming}
+            <p class="ask">Point {tracks(safe.length)} at the new files?</p>
+            <div class="row">
+              <button class="primary" onclick={() => run(() => applySafe([...ids]), `Fixed ${tracks(safe.length)}`)} disabled={busy} aria-busy={busy}>
+                Fix {tracks(safe.length)}
+              </button>
+              <button onclick={() => (confirming = false)}>Cancel</button>
+            </div>
+          {:else}
+            <button class="primary" onclick={() => (confirming = true)} disabled={busy}>Fix {safe.length} missing {safe.length === 1 ? 'track' : 'tracks'}</button>
+          {/if}
+        </div>
         <ul class="rows">
           {#each safe as r (r.playlist + r.from)}
-            <li title={albumOf(r.from)}>
-              {#if several}<strong>{r.playlist}</strong>{/if}
-              <div class="pair">{fileOf(r.from)} <span class="arrow">→</span> {fileOf(r.to)}</div>
-            </li>
+            <li><FileItem path={r.from} to={r.to} playlist={several ? r.playlist : undefined} /></li>
           {/each}
         </ul>
-      </section>
+      </Section>
     {/if}
 
     {#if review.length > 0}
-      <section>
-        <h3>Likely match <span class="n">{tracks(review.length)}</span></h3>
-        <p class="hint">A missing track with a file of the same number and a similar title. Check before using it.</p>
+      <Section title="Likely match" count={tracks(review.length)} hint="A missing track with a file of the same number and a similar title. Check before using it.">
         <ul class="rows">
           {#each review as r (r.playlist + r.from)}
-            <li class="item">
-              <div>
-                {#if several}<strong>{r.playlist}</strong>{/if}
-                <div class="pair" title={albumOf(r.from)}>{fileOf(r.from)} <span class="arrow">→</span> {fileOf(r.to)}</div>
-              </div>
-              <button onclick={() => run(() => applyOne(r), 'Used the matching file')} disabled={busy}>Use this file</button>
+            <li>
+              <FileItem path={r.from} to={r.to} playlist={several ? r.playlist : undefined}>
+                {#snippet action()}<button class="text" onclick={() => run(() => applyOne(r), 'Used the matching file')} disabled={busy}>Use this file</button>{/snippet}
+              </FileItem>
             </li>
           {/each}
         </ul>
-      </section>
+      </Section>
     {/if}
 
     {#if notFound.length > 0}
-      <section>
-        <h3>Not found <span class="n">{tracks(notFound.length)}</span></h3>
-        <p class="hint">Missing tracks with no file anywhere in your Music.</p>
-        <button class="primary" onclick={() => removeLines(notFound)} disabled={busy}>Remove {tracks(notFound.length)}</button>
+      <Section title="Not found" count={tracks(notFound.length)} hint="Missing tracks with no file anywhere in your Music.">
+        <div class="do"><button class="primary" onclick={() => removeLines(notFound)} disabled={busy}>Remove {tracks(notFound.length)}</button></div>
         <ul class="rows">
           {#each notFound as x, i (x.playlist + '\n' + x.row.entry + '\n' + i)}
-            <li class="item">
-              <div>
-                {#if several}<strong>{x.playlist}</strong>{/if}
-                <div class="pair" title={albumOf(x.row.entry)}>{x.row.name ?? fileOf(x.row.entry)}{#if x.row.artist}&nbsp;· {x.row.artist}{/if}</div>
-              </div>
-              <button onclick={() => removeLines([x])} disabled={busy}>Remove</button>
+            <li>
+              <FileItem path={x.row.entry} name={x.row.name ?? undefined} detail={x.row.artist ?? undefined} playlist={several ? x.playlist : undefined}>
+                {#snippet action()}<button class="text" onclick={() => removeLines([x])} disabled={busy}>Remove</button>{/snippet}
+              </FileItem>
             </li>
           {/each}
         </ul>
-      </section>
+      </Section>
     {/if}
 
     {#if dups.length > 0}
-      <section>
-        <h3>Repeated tracks <span class="n">{tracks(dups.reduce((n, g) => n + g.extra, 0))}</span></h3>
-        <p class="hint">The same track more than once in a playlist. Removing keeps the first.</p>
+      <Section title="Repeated tracks" count={tracks(dups.reduce((n, g) => n + g.extra, 0))} hint="The same track more than once in a playlist. Removing keeps the first.">
         <ul class="rows">
           {#each dups as g (g.playlist)}
-            <li class="item">
-              <div>
-                <strong>{g.playlist}</strong> <span class="n">{g.extra} repeated</span>
-                <div class="pair">{g.entries.slice(0, 3).map((e) => fileOf(e.entry)).join(' · ')}{g.entries.length > 3 ? ' …' : ''}</div>
-              </div>
-              <button
-                onclick={() =>
-                  run(
-                    async () => ({ playlists: [g.playlist], undo: (await dedupe(g.playlist)).undo }),
-                    `Removed ${g.extra} repeated ${g.extra === 1 ? 'track' : 'tracks'}`,
-                  )}
-                disabled={busy}>Remove {g.extra === 1 ? 'repeat' : 'repeats'}</button
+            <li>
+              <PlaylistItem
+                p={shownPlaylists().find((x) => x.id === g.playlist) ?? { id: g.playlist, name: g.playlist }}
+                size="large"
+                wrap
+                sub={`${g.extra} repeated · ${g.entries.slice(0, 3).map((e) => fileOf(e.entry)).join(' · ')}${g.entries.length > 3 ? ' …' : ''}`}
               >
+                {#snippet action()}
+                  <button
+                    class="text"
+                    onclick={() =>
+                      run(
+                        async () => ({ playlists: [g.playlist], undo: (await dedupe(g.playlist)).undo }),
+                        `Removed ${g.extra} repeated ${g.extra === 1 ? 'track' : 'tracks'}`,
+                      )}
+                    disabled={busy}>Remove {g.extra === 1 ? 'repeat' : 'repeats'}</button
+                  >
+                {/snippet}
+              </PlaylistItem>
             </li>
           {/each}
         </ul>
-      </section>
+      </Section>
     {/if}
   {/if}
 </div>
 
 <style>
+  /* Sections of large rows (lib/Section.svelte, lib/Row.svelte); what is the tab's own is its fixes' buttons. */
   .tab {
-    padding: 0 16px;
+    padding: 0 8px;
   }
 
-  section + section {
-    margin-top: 8px;
-  }
-
-  h3 {
-    margin: 14px 0 4px;
-    font-size: 15px;
-    font-weight: 600;
-  }
-
-  .hint,
-  .empty {
-    margin: 0 0 8px;
+  .empty,
+  .error {
+    margin: 12px;
     color: var(--muted);
     font-size: 0.9rem;
   }
 
-  .n {
-    margin-left: 6px;
-    color: var(--muted);
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
+  .error {
+    color: var(--danger, #c33);
   }
 
-  button {
+  .do {
+    margin: 0 12px 4px;
+  }
+
+  .do button,
+  .row button {
     min-height: 40px;
     padding: 0 14px;
     background: var(--surface);
@@ -255,20 +243,20 @@
     cursor: pointer;
   }
 
-  button.primary {
+  .do button.primary {
     background: var(--accent);
     border-color: var(--accent);
     color: var(--accent-text);
     font-weight: 600;
   }
 
-  button:disabled {
+  .do button:disabled {
     opacity: 0.5;
     cursor: default;
   }
 
   .ask {
-    margin: 8px 0;
+    margin: 0 0 8px;
     font-size: 0.92rem;
   }
 
@@ -279,36 +267,8 @@
   }
 
   .rows {
-    margin: 10px 0 0;
+    margin: 0;
     padding: 0;
     list-style: none;
-  }
-
-  .rows > li {
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 0.9rem;
-  }
-
-  .item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .arrow {
-    color: var(--accent);
-  }
-
-  .pair {
-    margin-top: 2px;
-    color: var(--muted);
-    font-size: 0.85rem;
-    overflow-wrap: anywhere;
-  }
-
-  .error {
-    color: var(--danger, #c33);
   }
 </style>

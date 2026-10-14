@@ -6,6 +6,7 @@
   import { getTargets, linkPlaylist, unlinkPlaylist, type Conflict, type Direction, type Link, type TargetChoice } from './api';
   import { refresh } from './live.svelte';
   import { shownPlaylists } from './output.svelte';
+  import Row from './Row.svelte';
   import { toast } from './toast.svelte';
 
   let { ids }: { ids: string[] } = $props();
@@ -79,84 +80,56 @@
         const e = linkOf(id, t.target)?.status?.error;
         return e ? [ids.length > 1 ? `${id}: ${e}` : e] : [];
       })}
-      <div class="target">
-        <label class="on"
-          ><input
-            type="checkbox"
-            checked={all}
-            indeterminate={some}
-            disabled={working}
-            onchange={(e) => set(t, e.currentTarget.checked)}
-          />{t.label}{#if some}<span class="n">{links.length} of {ids.length}</span>{/if}</label
-        >
-        {#if links.length && !t.push_only}
-          <select aria-label="Direction" value={direction ?? ''} disabled={working} onchange={(e) => set(t, true, e.currentTarget.value as Direction)}>
-            {#if direction === null}<option value="" disabled>Mixed</option>{/if}
-            <option value="push">Push</option>
-            <option value="two_way">Two-way</option>
-          </select>
-          {#if direction === 'two_way'}
-            <select
-              aria-label="When both changed"
-              value={conflict ?? ''}
-              disabled={working}
-              onchange={(e) => set(t, true, 'two_way', e.currentTarget.value as Conflict)}
-            >
-              {#if conflict === null}<option value="" disabled>Mixed</option>{/if}
-              <option value="newest">Newest wins</option>
-              <option value="playlist">Cratarr wins</option>
-              <option value="target">{t.label} wins</option>
+      <!-- A large row: ticking its box links it; once linked, how it is kept is its action (under it when narrow). -->
+      <Row size="large" as="label" title={t.label} count={some ? `${links.length} of ${ids.length}` : undefined} wrap>
+        {#snippet lead()}
+          <input type="checkbox" checked={all} indeterminate={some} disabled={working} onchange={(e) => set(t, e.currentTarget.checked)} />
+        {/snippet}
+        {#snippet sub()}{#if errors.length}<span class="error">{errors.join(' · ')}</span>{/if}{/snippet}
+        {#snippet action()}
+          {#if links.length && !t.push_only}
+            <select aria-label="Direction" value={direction ?? ''} disabled={working} onchange={(e) => set(t, true, e.currentTarget.value as Direction)}>
+              {#if direction === null}<option value="" disabled>Mixed</option>{/if}
+              <option value="push">Push</option>
+              <option value="two_way">Two-way</option>
             </select>
+            {#if direction === 'two_way'}
+              <select
+                aria-label="When both changed"
+                value={conflict ?? ''}
+                disabled={working}
+                onchange={(e) => set(t, true, 'two_way', e.currentTarget.value as Conflict)}
+              >
+                {#if conflict === null}<option value="" disabled>Mixed</option>{/if}
+                <option value="newest">Newest wins</option>
+                <option value="playlist">Cratarr wins</option>
+                <option value="target">{t.label} wins</option>
+              </select>
+            {/if}
           {/if}
-        {/if}
-        {#each errors as e (e)}<p class="error">{e}</p>{/each}
-      </div>
+        {/snippet}
+      </Row>
     {/each}
   {/if}
 </div>
 
 <style>
+  /* Large rows (lib/Row.svelte); what is the tab's own is the controls. */
   .tab {
-    padding: 4px 16px 0;
+    padding: 0 8px;
   }
 
   .empty {
+    margin: 12px;
     color: var(--muted);
-  }
-
-  /* One line per target, its settings beside it once linked. */
-  .target {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 10px;
-    min-height: 44px;
-    padding: 4px 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .on {
-    display: flex;
-    flex: 1 1 160px;
-    align-items: center;
-    gap: 10px;
-    overflow-wrap: anywhere;
-    cursor: pointer;
   }
 
   input[type='checkbox'] {
     flex: none;
     width: 18px;
     height: 18px;
-    margin: 0;
+    margin: 0 4px 0 12px;
     accent-color: var(--accent);
-  }
-
-  .n {
-    margin-left: auto;
-    color: var(--muted);
-    font-size: 0.8rem;
-    font-variant-numeric: tabular-nums;
   }
 
   select {
@@ -171,9 +144,7 @@
   }
 
   .error {
-    flex-basis: 100%;
-    margin: 0;
     color: var(--danger);
-    font-size: 0.8rem;
+    white-space: normal;
   }
 </style>

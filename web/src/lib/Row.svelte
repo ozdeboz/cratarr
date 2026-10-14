@@ -107,6 +107,8 @@
 
 <style>
   .row {
+    /* Over anything behind it (a track's swipe shows what it does there). */
+    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -231,7 +233,8 @@
     background: color-mix(in srgb, var(--text) 35%, transparent);
   }
 
-  .row.off {
+  /* Its contents only: the row stays opaque over what is behind it. */
+  .row.off > * {
     opacity: 0.5;
   }
 
@@ -307,11 +310,24 @@
     padding: 6px 4px 6px 12px;
     border-radius: 8px;
     background: var(--row-bg, transparent);
+    gap: 4px;
+  }
+
+  .large .main {
     gap: 10px;
   }
 
   .large.led {
-    padding: 2px 4px 2px 2px;
+    padding: 2px 4px 2px 0;
+  }
+
+  /* The action's buttons are as tall as the row (a track's heart). */
+  .large .act {
+    align-self: stretch;
+  }
+
+  .large.wrap .act {
+    align-self: center;
   }
 
   .large.wrap {
@@ -319,9 +335,19 @@
     row-gap: 4px;
   }
 
+  /* Its controls give way to the width: they go under the text, then under each other, never wider than the row. */
   .large.wrap .act {
+    flex: 0 1 auto;
     flex-wrap: wrap;
+    justify-content: flex-end;
+    max-width: 100%;
+    min-width: 0;
     margin-left: auto;
+  }
+
+  .large.wrap .act > :global(*) {
+    max-width: 100%;
+    min-width: 0;
   }
 
   .large button.main:hover:not(:disabled),
@@ -332,7 +358,7 @@
   .large .title {
     font-size: 15.5px;
     font-weight: 500;
-    line-height: 1.15;
+    line-height: 1.1;
   }
 
   .large .sub {

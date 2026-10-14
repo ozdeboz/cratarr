@@ -1,10 +1,11 @@
 <script lang="ts">
   // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the permanent
-  // Unlisted, and one's own), each a chip with its live count, styled as the playlist chips; a tap opens it in the panel
+  // Unlisted, and one's own), each a medium row (lib/Row.svelte) with its live count, as the playlists; a tap opens it in the panel
   // (decision 0023), where it plays and is sorted like a playlist, and can be saved as one. Where a favourite playlist's
   // chip has its small heart, a crate's shows its favourites setting (the panel's toggle sets it).
   import { crates, CRATE, EDIT_CRATE, FAVOURITES, favouritesOf, loadCrates, startCrate } from './lib/crates.svelte';
   import Icon from './lib/Icon.svelte';
+  import Row from './lib/Row.svelte';
   import NameSheet from './lib/NameSheet.svelte';
   import NewButton from './lib/NewButton.svelte';
   import { shownPlaylists } from './lib/output.svelte';
@@ -35,11 +36,18 @@
         {@const fav = FAVOURITES[favouritesOf(c.id)]}
         {@const n = c.counts[favouritesOf(c.id)]}
         <li>
-          <button class="chip" class:own={!c.permanent} class:open={panel.open === CRATE + c.id || panel.open === EDIT_CRATE + c.id} aria-label={`Open ${c.name}`} onclick={() => openPlaylist(CRATE + c.id)}>
-            <span class="name">{c.name}</span>
-            <span class="n">{n === null ? '–' : n.toLocaleString()}</span>
-            <span class="flags"><span class="heart" class:filled={fav.filled} title={fav.label} aria-label={fav.label}><Icon name={fav.icon} size={10} /></span></span>
-          </button>
+          <Row
+            size="medium"
+            title={c.name}
+            count={n === null ? '–' : n.toLocaleString()}
+            active={panel.open === CRATE + c.id || panel.open === EDIT_CRATE + c.id}
+            label={`Open ${c.name}`}
+            onclick={() => openPlaylist(CRATE + c.id)}
+          >
+            {#snippet meta()}
+              <span class="flags"><span class="heart" class:filled={fav.filled} title={fav.label} aria-label={fav.label}><Icon name={fav.icon} size={10} /></span></span>
+            {/snippet}
+          </Row>
         </li>
       {/each}
     </ul>
@@ -80,41 +88,6 @@
     margin: 0;
     padding: 0;
     list-style: none;
-  }
-
-  /* As the playlist chips: tinted in the accent; the crate open in the panel has a border. */
-  .chip {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-height: 48px;
-    padding: 6px 14px 6px 12px;
-    border: 0;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-    color: var(--text);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .chip.open {
-    box-shadow: inset 0 0 0 2px var(--accent);
-  }
-
-  .name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .n {
-    flex: none;
-    font-size: 0.8rem;
-    font-variant-numeric: tabular-nums;
-    opacity: 0.65;
   }
 
   /* In a favourite playlist's small heart's place after its count (Playlists), in the chip's accent: filled for Only

@@ -39,6 +39,10 @@
   import { closePlaylist, openPlaylist, panel, setTab, TABS } from './panel.svelte';
   import { inSidebar } from './live.svelte';
   import ExportTab from './ExportTab.svelte';
+  import PlaylistItem from './PlaylistItem.svelte';
+  import Row from './Row.svelte';
+  import Section from './Section.svelte';
+  import { fromAction } from 'svelte/attachments';
   import RepairTab from './RepairTab.svelte';
   import SyncTab from './SyncTab.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
@@ -550,29 +554,11 @@
     {#if tab === 'info'}
       <div class="info-tab">
         {#each ids as pid (pid)}
-          {@const i = insights.indexOf(pid)}
-          {@const pt = i >= 0 ? insights.shown!.playlists[i] : null}
-          {@const near = insights.closest(i)}
-          <section class="related" aria-label={`About ${pid}`}>
-            {#if multi}<h3 class="about">{pid}</h3>{/if}
-            {#if !pt}
-              <p class="note">{insights.shown ? 'Nothing is known about it yet.' : 'Loading…'}</p>
-            {:else}
-              {#if pt.focus !== null && insights.focus[i] !== undefined}
-                <p class="note">More focused than {Math.round(100 * insights.focus[i])}% of your playlists</p>
-              {/if}
-              {#if near.length}
-                <h3>Closest playlists</h3>
-                <ul>
-                  {#each near as c (c.index)}
-                    <li><button class="link" onclick={() => openPlaylist(c.name)}>{c.name}</button><span class="note">{c.shares}</span></li>
-                  {/each}
-                </ul>
-              {:else if pt.focus === null}
-                <p class="note">Nothing is known about it yet.</p>
-              {/if}
-            {/if}
-          </section>
+          {#if multi}
+            <Section title={pid}>{@render about(pid)}</Section>
+          {:else}
+            {@render about(pid)}
+          {/if}
         {/each}
       </div>
     {:else if tab === 'export'}
@@ -585,40 +571,45 @@
       {#each ids as sid (sid)}
         {@const s = sections[sid]}
         {@const count = shownPlaylists().find((x) => x.id === sid)?.count ?? 0}
-        <section class="sect" use:seen={sid}>
-          <button class="sect-head" class:folded={folded[sid]} aria-expanded={!folded[sid]} onclick={() => (folded[sid] = !folded[sid])}
-            ><span class="sname">{sid}</span><span class="scount">{plural(count, 'track')}</span><Icon name="chevronUp" size={20} /></button
-          >
-          {#if !folded[sid]}
-            {#if s && 'error' in s}
-              <p class="error" role="alert">{s.error}</p>
-            {:else if !s}
-              <p class="empty">Loading…</p>
-            {:else if !s.rows.length}
-              <p class="empty">No tracks yet.</p>
-            {:else}
-              <ol class="rows">
-                {#each s.rows as r, i (i)}{@render trackRow(r, s.source, sid, s.rows)}{/each}
-              </ol>
-            {/if}
+        <Section title={sid} count={plural(count, 'track')} bind:open={() => !folded[sid], (v) => (folded[sid] = !v)} attach={fromAction(seen, () => sid)}>
+          {#if s && 'error' in s}
+            <p class="error" role="alert">{s.error}</p>
+          {:else if !s}
+            <p class="empty">Loading…</p>
+          {:else if !s.rows.length}
+            <p class="empty">No tracks yet.</p>
+          {:else}
+            <ol class="rows">
+              {#each s.rows as r, i (i)}{@render trackRow(r, s.source, sid, s.rows)}{/each}
+            </ol>
           {/if}
-        </section>
+        </Section>
       {/each}
     {:else if editing}
       <ol class="rows edit" class:dragging={!!reorder.drag}>
         {#each editing.rows as x, i (x.at)}
           {@const r = x.r}
-          <li class:off={!r.id || r.missing} class:lifted={reorder.drag?.from === i} style:transform={reorder.drag ? `translateY(${reorder.offset(i)}px)` : null}>
-            <div class="slide" use:swipe={{ enabled: !reorder.drag && !editing.saving, onswipe: () => removeSwiped(i) }}>
-              <span class="row">
-                <span class="cover">{#if r.id && !r.missing}<img src={coverUrl({ source, id: r.id })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}</span>
-                <span class="text"><strong>{r.name ?? r.file}</strong><span class="sub">{r.missing ? 'Missing file' : !r.id ? 'Not matched yet' : (r.artist ?? '')}</span></span>
-              </span>
-              <button class="tool" aria-label={`Remove ${r.name ?? r.file}`} onclick={() => removeAt(i)}><Icon name="close" size={22} /></button>
-              <button class="tool grip" aria-label="Drag to reorder" onpointerdown={(e) => reorder.down(e, i)} onpointermove={reorder.move} onpointerup={reorder.end} onpointercancel={reorder.end}
-                ><Icon name="order" size={24} /></button
-              >
-            </div>
+          <li class:lifted={reorder.drag?.from === i} style:transform={reorder.drag ? `translateY(${reorder.offset(i)}px)` : null}>
+            <Row
+              size="large"
+              title={r.name ?? r.file}
+              sub={r.missing ? 'Missing file' : !r.id ? 'Not matched yet' : (r.artist ?? '')}
+              off={!r.id || r.missing}
+              attach={fromAction(swipe, () => ({ enabled: !reorder.drag && !editing!.saving, onswipe: () => removeSwiped(i) }))}
+            >
+              {#snippet lead()}{@render cover(r, source)}{/snippet}
+              {#snippet action()}
+                <button class="tool" aria-label={`Remove ${r.name ?? r.file}`} onclick={() => removeAt(i)}><Icon name="close" size={22} /></button>
+                <button
+                  class="tool grip"
+                  aria-label="Drag to reorder"
+                  onpointerdown={(e) => reorder.down(e, i)}
+                  onpointermove={reorder.move}
+                  onpointerup={reorder.end}
+                  onpointercancel={reorder.end}><Icon name="order" size={24} /></button
+                >
+              {/snippet}
+            </Row>
           </li>
         {/each}
       </ol>
@@ -626,14 +617,11 @@
         <h3 class="removed-head">Removed tracks</h3>
         <ol class="rows">
           {#each editing.removed as x (x.at)}
-            <li class="off">
-              <div class="slide">
-                <span class="row">
-                  <span class="cover">{#if x.r.id && !x.r.missing}<img src={coverUrl({ source, id: x.r.id })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}</span>
-                  <span class="text"><strong>{x.r.name ?? x.r.file}</strong><span class="sub">{x.r.artist ?? ''}</span></span>
-                </span>
-                <button class="tool" aria-label={`Restore ${x.r.name ?? x.r.file}`} onclick={() => restore(x)}><Icon name="back" size={22} /></button>
-              </div>
+            <li>
+              <Row size="large" title={x.r.name ?? x.r.file} sub={x.r.artist ?? ''} off>
+                {#snippet lead()}{@render cover(x.r, source)}{/snippet}
+                {#snippet action()}<button class="tool" aria-label={`Restore ${x.r.name ?? x.r.file}`} onclick={() => restore(x)}><Icon name="back" size={22} /></button>{/snippet}
+              </Row>
             </li>
           {/each}
         </ol>
@@ -657,32 +645,74 @@
   </div>
 </section>
 
+<!-- The Info tab's part for one playlist: how focused it is, and its closest playlists as large rows (a tap opens one). -->
+{#snippet about(pid: string)}
+  {@const i = insights.indexOf(pid)}
+  {@const pt = i >= 0 ? insights.shown!.playlists[i] : null}
+  {@const near = insights.closest(i)}
+  <div class="about" aria-label={`About ${pid}`}>
+    {#if !pt}
+      <p class="note">{insights.shown ? 'Nothing is known about it yet.' : 'Loading…'}</p>
+    {:else}
+      {#if pt.focus !== null && insights.focus[i] !== undefined}
+        <p class="note">More focused than {Math.round(100 * insights.focus[i])}% of your playlists</p>
+      {/if}
+      {#if near.length}
+        <h3 class="list-head">Closest playlists</h3>
+        <ul class="plain">
+          {#each near as c (c.index)}
+            <li>
+              <PlaylistItem
+                p={shownPlaylists().find((x) => x.id === c.name) ?? { id: c.name, name: c.name }}
+                size="large"
+                sub={c.shares}
+                label={`Open ${c.name}`}
+                onclick={() => openPlaylist(c.name)}
+              />
+            </li>
+          {/each}
+        </ul>
+      {:else if pt.focus === null}
+        <p class="note">Nothing is known about it yet.</p>
+      {/if}
+    {/if}
+  </div>
+{/snippet}
+
 <!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe left plays it next, a long-press is its
      menu, the heart adds it to playlists. -->
 {#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[])}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
-  <li class:off={!ok} class:now={here}>
+  <li class:now={here}>
     <span class="behind" aria-hidden="true"><Icon name="playNext" size={40} /><span>Play next</span></span>
-    <div class="slide" use:swipe={{ enabled: ok, onswipe: () => playNext(r, src) }}>
-      <button class="row" disabled={!ok} onclick={() => playFrom(name, src, list, r)} use:longpress={() => ok && (trackMenu = { track: asTrack(r, src), start: 'menu' })}>
-        <span class="cover">
-          {#if ok}<img src={coverUrl({ source: src, id: r.id! })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
-          {#if here}<span class="eq" class:still={paused()} aria-hidden="true"><i></i><i></i><i></i></span>{/if}
-        </span>
-        <span class="text">
-          <strong>{r.name ?? r.file}</strong>
-          <span class="sub">
-            {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album}<span class="album">{r.album}</span>{/if}{/if}
-          </span>
-        </span>
-        {#if r.duration_secs}<span class="d">{clockText(r.duration_secs)}</span>{/if}
-      </button>
-      {#if ok}
-        <RowHeart source={src} id={r.id!} name={r.name ?? r.file} onopen={() => (trackMenu = { track: asTrack(r, src), start: 'lists' })} />
-      {/if}
-    </div>
+    <Row
+      size="large"
+      title={r.name ?? r.file}
+      count={r.duration_secs ? clockText(r.duration_secs) : undefined}
+      off={!ok}
+      disabled={!ok}
+      onclick={() => playFrom(name, src, list, r)}
+      attach={fromAction(swipe, () => ({ enabled: ok, onswipe: () => playNext(r, src) }))}
+      attachMain={fromAction(longpress, () => () => ok && (trackMenu = { track: asTrack(r, src), start: 'menu' }))}
+    >
+      {#snippet lead()}{@render cover(r, src, here)}{/snippet}
+      {#snippet sub()}
+        {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album}<span class="album">{r.album}</span>{/if}{/if}
+      {/snippet}
+      {#snippet action()}
+        {#if ok}<RowHeart source={src} id={r.id!} name={r.name ?? r.file} onopen={() => (trackMenu = { track: asTrack(r, src), start: 'lists' })} />{/if}
+      {/snippet}
+    </Row>
   </li>
+{/snippet}
+
+<!-- A track's cover in front of its row (with Finamp's mini visualiser while it plays). -->
+{#snippet cover(r: PlaylistRow, src: string, here = false)}
+  <span class="cover">
+    {#if r.id && !r.missing}<img src={coverUrl({ source: src, id: r.id })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
+    {#if here}<span class="eq" class:still={paused()} aria-hidden="true"><i></i><i></i><i></i></span>{/if}
+  </span>
 {/snippet}
 
 {#if menuOpen && selected.length}
@@ -1067,56 +1097,31 @@
   }
 
   .info-tab {
-    display: grid;
-    gap: 8px;
+    padding: 0 8px;
   }
 
-  .related .about {
-    margin-top: 0;
-    font-size: 15px;
-  }
-
-  .related {
-    margin: 0 8px 8px;
-    padding: 10px 12px;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--text) 5%, transparent);
-    font-size: 14px;
+  .about {
+    padding: 4px 0 8px;
   }
 
   .note {
-    margin: 0;
+    margin: 4px 8px;
     color: var(--muted);
     font-size: 13px;
   }
 
-  .related h3 {
-    margin: 8px 0 4px;
-    font-size: 14px;
+  /* A list's heading inside a tab (Closest playlists): small, over its large rows. */
+  .list-head {
+    margin: 12px 8px 4px;
+    color: var(--muted);
+    font-size: 13px;
     font-weight: 500;
   }
 
-  .related ul {
+  ul.plain {
     margin: 0;
     padding: 0;
     list-style: none;
-  }
-
-  .related li {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 0 8px;
-    padding: 2px 0;
-  }
-
-  .link {
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--accent);
-    font: inherit;
-    cursor: pointer;
   }
 
   /* The tabs (decision 0025): under the header, staying at the top while the content scrolls. */
@@ -1152,50 +1157,6 @@
   }
 
   /* Several playlists on Tracks: a section each, its header folding it. */
-  .sect-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-height: 44px;
-    padding: 0 12px 0 16px;
-    border: 0;
-    background: color-mix(in srgb, var(--text) 5%, transparent);
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .sect + .sect {
-    margin-top: 6px;
-  }
-
-  .sname {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 500;
-  }
-
-  .scount {
-    flex: none;
-    color: var(--muted);
-    font-size: 13px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .sect-head :global(svg) {
-    flex: none;
-    transition: transform 150ms;
-  }
-
-  .sect-head.folded :global(svg) {
-    transform: rotate(180deg);
-  }
-
   /* Finamp's track rows: 70 px (a 60 px tile and a gap), a 60 px cover with corners 8, two lines of title. */
   .rows {
     margin: 0;
@@ -1211,10 +1172,18 @@
     /* Only rows on screen are drawn (a 500-track playlist opens fast). */
     content-visibility: auto;
     contain-intrinsic-size: auto 70px;
+    /* The row is opaque over what its swipe shows. */
+    --row-bg: var(--surface);
   }
 
-  .rows li.off {
-    opacity: 0.5;
+  /* The playing track: tinted in the cover's colour (Finamp: primary at 30–35 %). */
+  .rows li.now {
+    --row-bg: color-mix(in srgb, var(--art-accent, var(--accent)) 32%, var(--surface));
+  }
+
+  /* Finamp's track line under the title: the artist, then the album lighter. */
+  .rows :global(.row .sub) {
+    color: inherit;
   }
 
   /* Behind the row while it is swiped: what the swipe does. */
@@ -1228,46 +1197,6 @@
     color: var(--art-accent, var(--accent));
     font-weight: 500;
     font-size: 14px;
-  }
-
-  .slide {
-    position: relative;
-    display: flex;
-    align-items: center;
-    height: 100%;
-    border-radius: 8px;
-    background: var(--surface);
-  }
-
-  /* The playing track: tinted in the cover's colour (Finamp: primary at 30–35 %). */
-  .rows li.now .slide {
-    background: color-mix(in srgb, var(--art-accent, var(--accent)) 32%, var(--surface));
-    transition: background 500ms;
-  }
-
-  .row {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 100%;
-    padding: 0 4px 0 0;
-    border: 0;
-    border-radius: 8px;
-    background: none;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .row:disabled {
-    cursor: default;
-  }
-
-  .row:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--text) 7%, transparent);
   }
 
   .cover {
@@ -1336,30 +1265,6 @@
     }
   }
 
-  .text {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .text strong {
-    display: -webkit-box;
-    overflow: hidden;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    font-size: 15.5px;
-    font-weight: 500;
-    line-height: 1.1;
-  }
-
-  .sub {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 13px;
-  }
-
   .artist {
     opacity: 0.75;
   }
@@ -1368,14 +1273,6 @@
     margin-left: 10px;
     font-weight: 300;
     opacity: 0.6;
-  }
-
-  .d {
-    flex: none;
-    color: var(--muted);
-    opacity: 0.85;
-    font-size: 13px;
-    font-variant-numeric: tabular-nums;
   }
 
   .empty,

@@ -46,7 +46,7 @@
     gap: 8px;
     width: 100%;
     min-height: 44px;
-    padding: 0 12px 0 16px;
+    padding: 0 12px;
     border: 0;
     border-radius: 10px;
     background: color-mix(in srgb, var(--text) 5%, transparent);
@@ -81,8 +81,9 @@
     transform: rotate(180deg);
   }
 
+  /* In line with the rows' titles. */
   .hint {
-    margin: 8px 16px;
+    margin: 8px 12px;
     color: var(--muted);
     font-size: 0.9rem;
   }

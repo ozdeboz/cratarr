@@ -1,8 +1,11 @@
 <script lang="ts">
   // Health (decision 0025): the library's files the catalogue could not read properly, by kind, worst first. What is
-  // about playlists (missing and repeated tracks) is repaired in the panel's Repair tab.
+  // about playlists (missing and repeated tracks) is repaired in the panel's Repair tab. Each kind is a folded section of
+  // file rows (lib/Section.svelte, lib/FileItem.svelte), as the Repair tab's.
   import { getFileProblems, type FileProblem } from './lib/api';
+  import FileItem from './lib/FileItem.svelte';
   import Notice from './lib/Notice.svelte';
+  import Section from './lib/Section.svelte';
 
   let problems = $state<FileProblem[] | null>(null);
   let error = $state<string | null>(null);
@@ -24,8 +27,6 @@
     { kind: 'no_length', title: 'Files without a length', hint: "The audio's length could not be read." },
   ];
   const ofKind = (k: FileProblem['kind']) => (problems ?? []).filter((p) => p.kind === k);
-  const fileOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
-  const albumOf = (path: string) => path.slice(0, path.lastIndexOf('/'));
 </script>
 
 <main>
@@ -39,18 +40,13 @@
     {#each KINDS as k (k.kind)}
       {@const list = ofKind(k.kind)}
       {#if list.length > 0}
-        <details class="files">
-          <summary>{k.title} <span class="n">{list.length}</span></summary>
-          <p class="hint">{k.hint}</p>
+        <Section title={k.title} count={`${list.length} ${list.length === 1 ? 'file' : 'files'}`} hint={k.hint} open={false}>
           <ul class="rows">
             {#each list as p (p.folder + p.rel)}
-              <li title={p.folder}>
-                <strong>{fileOf(p.rel)}</strong>
-                <div class="pair">{albumOf(p.rel)}{#if p.detail}&nbsp;· {p.detail}{/if}</div>
-              </li>
+              <li><FileItem path={p.rel} detail={p.detail ?? undefined} /></li>
             {/each}
           </ul>
-        </details>
+        </Section>
       {/if}
     {/each}
   {/if}
@@ -62,47 +58,15 @@
     padding: 16px clamp(12px, 2vw, 32px) 48px;
   }
 
-  .hint,
   .empty {
+    margin-top: 32px;
     color: var(--muted);
     font-size: 0.9rem;
   }
 
-  .empty {
-    margin-top: 32px;
-  }
-
-  .n {
-    margin-left: 6px;
-    color: var(--muted);
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
-  }
-
-  details.files {
-    margin: 10px 0;
-  }
-
-  details.files summary {
-    cursor: pointer;
-    font-weight: 600;
-  }
-
   .rows {
-    margin: 12px 0 0;
+    margin: 0;
     padding: 0;
     list-style: none;
-  }
-
-  .rows > li {
-    padding: 10px 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .pair {
-    margin-top: 2px;
-    color: var(--muted);
-    font-size: 0.85rem;
-    overflow-wrap: anywhere;
   }
 </style>

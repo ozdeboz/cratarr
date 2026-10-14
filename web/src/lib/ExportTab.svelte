@@ -7,6 +7,7 @@
   import Icon from './Icon.svelte';
   import { inSidebar } from './live.svelte';
   import { shownPlaylists } from './output.svelte';
+  import PlaylistItem from './PlaylistItem.svelte';
   import { addMore, leaveOut } from './select.svelte';
 
   let { ids }: { ids: string[] } = $props();
@@ -71,8 +72,9 @@
   <ul class="lists" aria-label="Playlists to export">
     {#each picked as p (p.id)}
       <li>
-        <span class="name">{p.name}</span><span class="n">{p.count}</span>
-        <button class="out" aria-label={`Leave out ${p.name}`} onclick={() => leaveOut(p.id)}><Icon name="close" size={18} /></button>
+        <PlaylistItem {p} size="small">
+          {#snippet action()}<button class="icon" aria-label={`Leave out ${p.name}`} onclick={() => leaveOut(p.id)}><Icon name="close" size={18} /></button>{/snippet}
+        </PlaylistItem>
       </li>
     {/each}
   </ul>
@@ -134,46 +136,9 @@
     list-style: none;
   }
 
-  .lists li {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 44px;
-    padding-left: 12px;
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-  }
-
+  /* Small rows (lib/Row.svelte). */
   .lists li + li {
     margin-top: 6px;
-  }
-
-  .name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .n {
-    flex: none;
-    font-size: 0.8rem;
-    font-variant-numeric: tabular-nums;
-    opacity: 0.65;
-  }
-
-  .out {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    border: 0;
-    background: none;
-    color: inherit;
-    opacity: 0.7;
-    cursor: pointer;
   }
 
   .more {

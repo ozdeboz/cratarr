@@ -20,6 +20,7 @@
     label,
     active = false,
     strong = false,
+    wrap = false,
     class: extra = '',
     attach,
   }: {
@@ -32,6 +33,8 @@
     label?: string;
     active?: boolean;
     strong?: boolean;
+    /** Its action may go under it when narrow (a large row's text button). */
+    wrap?: boolean;
     class?: string;
     attach?: Attachment<HTMLElement>;
   } = $props();
@@ -51,6 +54,7 @@
   {label}
   {active}
   {strong}
+  {wrap}
   class={extra}
   {attach}
   tooltip={dead > 0 ? missing(dead) : undefined}
