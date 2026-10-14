@@ -5,8 +5,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 ## Structure
 
-- **Pages:** Incoming (only when an Incoming library is set), Playlists, Insights, Repairs, Settings. One thing lives in one
-  place: no setting, list or action appears on two pages.
+- **Pages:** Incoming (only when an Incoming library is set), Crates, Playlists, Insights; Health and Settings apart
+  (at the bottom of the sidebar, together on a phone). One thing lives in one place: no setting, list or action
+  appears on two pages. Health lists the library's files that cannot be read properly; playlists are repaired in the
+  panel's Repair tab (decision 0025).
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
 - **Navigation:** from 1024 px a sidebar on the left; below it a bar of pages fixed along the **top** (icon and label,
   up to five, the rest under More).
@@ -52,8 +54,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   `lib/remote.svelte.ts`).
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **An opened playlist** (decision 0023, `lib/PlaylistView.svelte`): in the panel beside the page, or on a phone a
-  full-height layer with the mini-player floating over its end. Its bar has ✕, the heart (Finamp's playlist
-  favourite), the pencil (edit mode) and the menu; in
+  full-height layer with the mini-player floating over its end. Under its header, **tabs** (decision 0025): Tracks,
+  Export, Repair, Sync, for the selection (one playlist, or several ticked with Select); the panel opens on Tracks, a
+  tab with nothing to do says so, and switching adds a Back step only while the panel is full-screen. Several
+  playlists: their covers and count in the header, ✕ alone in the bar, and on Tracks a folding section per playlist
+  (read-only). Its bar has ✕, the heart (Finamp's playlist
+  favourite), the pencil (edit mode, on Tracks) and the menu; in
   edit mode Cancel, Names and Save. Rows as the queue's; edit mode as Finamp's playlist edit screen: Names swaps the
   info beside the cover for Name and Spoken as (where Finamp has its name field); rows with handle and ✕, swipe to
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
@@ -69,7 +75,11 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Playlist chips** (the Playlists page) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
-  tap on the label opens the playlist (decision 0023). A favourite playlist has a small red heart (Finamp's list mark)
+  tap on the label opens the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
+  label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone "Open N playlists");
+  the circle keeps adding or removing the playing track; a ⋮ beside Cancel is the ticked playlists' menu (Play,
+  Shuffle, Play next, Add to queue; favourite, pin, Delete). A ticked playlist has the border of the one open in the
+  panel: one state, one look. A favourite playlist has a small red heart (Finamp's list mark)
   above the problems' dot, in the dot's place, so the chip gets no wider. The playlist open in the panel has a border
   in the accent and no extra fill: fill means "holds the playing track", the border "is shown in the panel". When the playing
   track is outside Music (it cannot go in playlists), the chips it is not in are quieter and their plus circle is
@@ -93,7 +103,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 ## Gestures
 
-- **Tap does the page's main action** on an item: on Playlists add or remove the playing track; on Incoming play
+- **Tap does the page's main action** on an item: on Playlists add or remove the playing track (the circle; the
+  name opens the playlist, in Select ticks it); on Incoming play
   the album; on Insights' graph highlight the playlist and its closest playlists.
 - **Long-press (right-click with a mouse) opens the item's menu** when the item has more than one other action. Every
   menu is a **bottom sheet like Finamp's track menu** (decision 0021, `lib/MenuSheet.svelte` + `lib/MenuEntry.svelte`),
@@ -101,11 +112,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   its top (its image: a cover, or a playlist's mosaic of its first four albums; its title; small chips; for a track
   the heart); its playback actions as a row of large icons with small labels; then the other entries as rows with an
   icon in the accent colour. The sheet takes its look from the item's image (blurred behind it, its accent).
-  For a playlist: Play, Shuffle, Play next, Add to queue; Sync to…, Spoken as…, Rename, Delete. For the playing track
+  For a playlist: Play, Shuffle, Play next, Add to queue; Export… and Sync to… (they open the panel on that tab),
+  Spoken as…, Rename, Delete. For the playing track
   (the player's menu button, or a right-click on its cover): Play next, Add to queue; Add to playlist, the favourite,
   New playlist from the queue. A tap on the backdrop, Esc, Back or dragging the sheet down closes it. With a single
   other action, the long-press does that action directly.
-- Inside the sheet: destructive entries last and in red. Sync to…, Spoken as…, Rename, the playlists for a track and
+- Inside the sheet: destructive entries last and in red. Spoken as…, Rename, the playlists for a track and
   the delete confirmation are steps inside the same sheet (it grows or shrinks to fit, a back arrow returns), not a
   separate dialog.
 - A long-press never also triggers the tap, and suppresses the browser's own menu and text selection.

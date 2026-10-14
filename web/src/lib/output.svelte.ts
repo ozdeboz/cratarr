@@ -7,6 +7,7 @@ import {
   incomingTrackIds,
   playPlaylist,
   playlistTrackIds,
+  queueTracks,
   setMember,
   setTrackMember,
   trackDetails,
@@ -194,6 +195,31 @@ export async function startPlaylist(id: string, mode: PlayMode) {
   await playPlaylist(id, mode, prefs.source || undefined);
   if (mode === 'play' || mode === 'shuffle') await untilNewTrack();
   else refresh();
+}
+
+/** Several playlists (the selection's ⋮, decision 0025): their tracks one playlist after another, in the order given,
+ *  each once, here or on the server's player. */
+export async function startPlaylists(ids: string[], mode: PlayMode) {
+  if (ids.length === 1) return startPlaylist(ids[0], mode);
+  let source = '';
+  const seen = new Set<string>();
+  const all: string[] = [];
+  for (const id of ids) {
+    const r = await playlistTrackIds(id, prefs.source || undefined);
+    source = r.source;
+    for (const t of r.ids) if (!seen.has(t)) seen.add(t) && all.push(t);
+  }
+  if (!all.length) throw new Error('None of their tracks can be found.');
+  const order = mode === 'shuffle' ? [...all].sort(() => Math.random() - 0.5) : all;
+  if (isLocal()) {
+    const tracks: LocalTrack[] = order.map((id) => ({ source, id, name: '', artist: null, album: null, album_id: null }));
+    if (mode === 'next' || mode === 'last') enqueue(tracks, mode);
+    else playQueue(tracks, 0, null);
+    return;
+  }
+  if (mode === 'next' || mode === 'last') await queueTracks(order, mode, source);
+  else await handover(order, 0, 0, source);
+  setTimeout(refresh, 700);
 }
 
 /** Plays a playlist from one of its tracks (a tap on a row of its view, decision 0023): these tracks from `index`, here

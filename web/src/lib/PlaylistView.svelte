@@ -10,6 +10,9 @@
   // removed tracks wait in their own section to be restored, and Save writes the playlist once (Cancel drops it).
   // A crate (decision 0024, `?open=crate:…`) shows the same way, without the statistics (genres, length, Related) and
   // without editing; its rows come in pages (newest first), and the save icon makes a playlist of it (a snapshot).
+  // Playlists show in tabs (decision 0025): Tracks, Export, Repair, Sync, under the header, for the selection: one
+  // playlist as above, or several (the Playlists page's Select): their covers and count in the header, and on Tracks a
+  // section per playlist, in the order ticked, each folding, read-only. A crate has no tabs.
   import {
     coverUrl,
     crateRows,
@@ -34,7 +37,11 @@
   import { enqueue, type LocalTrack } from './localPlayer.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, setPlayingMember, shownPlaylists, startPlaylist } from './output.svelte';
-  import { closePlaylist, openPlaylist, panel } from './panel.svelte';
+  import { closePlaylist, openPlaylist, panel, setTab, TABS } from './panel.svelte';
+  import { inSidebar } from './live.svelte';
+  import ExportTab from './ExportTab.svelte';
+  import RepairTab from './RepairTab.svelte';
+  import SyncTab from './SyncTab.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
   import { prefs } from './prefs.svelte';
   import { clockText, paused, playing } from './remote.svelte';
@@ -47,9 +54,15 @@
   const id = $derived(panel.open ?? '');
   /** The open crate's id, when a crate is open (not a playlist). */
   const crate = $derived(crateOf(panel.open));
-  const title = $derived(crate ? crateName(crate) : id);
+  /** The selected playlists; several: Tracks shows a section per playlist (decision 0025). */
+  const ids = $derived(panel.selection);
+  const multi = $derived(ids.length > 1);
+  const tab = $derived(crate ? 'tracks' : panel.tab);
+  const title = $derived(crate ? crateName(crate) : multi ? `${ids.length} playlists` : id);
   const isPermanentCrate = $derived(!!crate && (crates.list?.find((c) => c.id === crate)?.permanent ?? true));
-  const p = $derived(crate ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
+  const p = $derived(crate || multi ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
+  const chosen = $derived(multi ? shownPlaylists().filter((x) => ids.includes(x.id)) : []);
+  const chosenCount = $derived(chosen.reduce((n, x) => n + x.count, 0));
   const np = $derived(playing());
   /** A crate's size (its rows come in pages). */
   let total = $state(0);
@@ -70,7 +83,7 @@
     void p?.dead;
     void saved;
     void listsKey;
-    if (!want) return;
+    if (!want || multi) return;
     if (want !== shownFor) {
       rows = null;
       error = null;
@@ -101,6 +114,16 @@
     const want = id;
     covers = [];
     if (!want || crateOf(want)) return;
+    if (multi) {
+      // Several: the first cover of each of the first four, as a mosaic.
+      const first = ids.slice(0, 4);
+      Promise.all(first.map((x) => playlistCovers(x).catch(() => []))).then((lists) => {
+        if (want !== id) return;
+        const urls = lists.flatMap((l) => (l[0] ? [incomingCoverUrl(l[0].source, l[0].album_id)] : []));
+        covers = urls.length >= 4 ? urls.slice(0, 4) : urls.slice(0, 1);
+      });
+      return;
+    }
     playlistCovers(want).then(
       (list) => {
         if (want !== id) return;
@@ -113,8 +136,38 @@
 
   const length = $derived(rows ? rows.reduce((a, r) => a + (r.duration_secs ?? 0), 0) : 0);
   const playable = $derived(rows ? rows.filter((r) => r.id && !r.missing) : []);
-  const tracksOf = (list: PlaylistRow[]): LocalTrack[] =>
-    list.map((x) => ({ source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: null }));
+  const tracksOf = (list: PlaylistRow[], src = source): LocalTrack[] =>
+    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: null }));
+
+  // Several playlists: each section's rows, asked for when it comes into view; a section folds.
+  let sections = $state<Record<string, { rows: PlaylistRow[]; source: string } | { error: string }>>({});
+  let folded = $state<Record<string, boolean>>({});
+  // A playlist left out of the selection drops its section; the others keep theirs.
+  const sectionsAsked = new Set<string>();
+  $effect(() => {
+    const keep = new Set(ids);
+    untrack(() => {
+      for (const k of Object.keys(sections)) if (!keep.has(k)) delete sections[k];
+      for (const k of [...sectionsAsked]) if (!keep.has(k)) sectionsAsked.delete(k);
+    });
+  });
+  function loadSection(sid: string) {
+    if (sectionsAsked.has(sid)) return;
+    sectionsAsked.add(sid);
+    playlistRows(sid, prefs.source || undefined).then(
+      (r) => {
+        sections[sid] = { rows: r.rows, source: r.source };
+        loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
+      },
+      (e) => (sections[sid] = { error: e instanceof Error ? e.message : 'Unexpected error' }),
+    );
+  }
+  /** Asks for a section's rows once it is near the screen. */
+  function seen(el: HTMLElement, sid: string) {
+    const o = new IntersectionObserver(([e]) => e.isIntersecting && loadSection(sid), { rootMargin: '400px' });
+    o.observe(el);
+    return { destroy: () => o.disconnect() };
+  }
 
   // Related: what Insights knows of it; its genres go in the header, as Finamp's genre line.
   $effect(() => insights.load());
@@ -133,7 +186,7 @@
 
   let menuOpen = $state(false);
   let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists' } | null>(null);
-  const asTrack = (r: PlaylistRow): MenuTrack => ({ source, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: null });
+  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: null });
 
   // Finamp's playback actions: a new queue (Play, Shuffle), or the whole playlist next or at the end of the queue.
   const ACTIONS: { mode: PlayMode; icon: IconName; label: string }[] = [
@@ -213,22 +266,24 @@
     }
   }
 
-  async function playFrom(r: PlaylistRow) {
+  /** A tap on a row: its playlist (`name`, these rows) plays from it. */
+  async function playFrom(name: string, src: string, list: PlaylistRow[], r: PlaylistRow) {
     if (!r.id || r.missing) return;
     navigator.vibrate?.(8);
+    const ok = list.filter((x) => x.id && !x.missing);
     try {
-      await playPlaylistFrom(id, source, tracksOf(playable), playable.indexOf(r));
+      await playPlaylistFrom(name, src, tracksOf(ok, src), ok.indexOf(r));
     } catch (e) {
       toast.fail(e, 'Could not start playing');
     }
   }
 
   // A swipe left plays the track next (Finamp's default swipe on a playlist's rows); the row springs back.
-  function playNext(r: PlaylistRow) {
+  function playNext(r: PlaylistRow, src = source) {
     (async () => {
       try {
-        if (isLocal()) enqueue(tracksOf([r]), 'next');
-        else await queueTrack(r.id!, 'next', source);
+        if (isLocal()) enqueue(tracksOf([r], src), 'next');
+        else await queueTrack(r.id!, 'next', src);
         toast.show({ text: 'Plays next.', tone: 'done' });
         setTimeout(refresh, 700);
       } catch (e) {
@@ -334,18 +389,20 @@
       <button class="barbtn" onclick={() => (making = null)} disabled={making.saving}>Cancel</button>
       <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
     {:else if crate}
-      <button class="icon" aria-label="Close the crate" onclick={closePlaylist}><Icon name="close" size={24} /></button>
+      <button class="icon" aria-label="Close the crate" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
         {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => openPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
         <button class="icon" aria-label="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="save" size={22} /></button>
       </span>
+    {:else if multi}
+      <button class="icon" aria-label="Close the playlists" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
     {:else}
-      <button class="icon" aria-label="Close the playlist" onclick={closePlaylist}><Icon name="close" size={24} /></button>
+      <button class="icon" aria-label="Close the playlist" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
         <button class="icon" class:fav={isPlaylistFavorite(id)} aria-pressed={isPlaylistFavorite(id)} aria-label="Favourite" onclick={() => togglePlaylistFavorite(id)}
           ><Icon name="heart" size={24} /></button
         >
-        {#if rows && p}<button class="icon" aria-label={`Edit ${id}`} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
+        {#if rows && p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
         <button class="icon" aria-label={`Menu of ${id}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
       </span>
     {/if}
@@ -381,17 +438,20 @@
           <h2>{title}</h2>
           {#if crate}
             <p class="line"><Icon name="music" size={20} /><span>{rows ? plural(total, 'track') : 'Loading…'}</span></p>
+          {:else if multi}
+            <p class="line"><Icon name="music" size={20} /><span>{plural(chosenCount, 'track')}</span></p>
+            <p class="line"><Icon name="playlists" size={20} /><span>{ids.join(', ')}</span></p>
           {:else}
             <p class="line"><Icon name="music" size={20} /><span>{p ? plural(p.count, 'track') : rows ? plural(rows.length, 'track') : 'Loading…'}{#if length}&nbsp;({clockText(length)}){/if}</span></p>
           {/if}
-          {#if point}
+          {#if point && !multi}
             <p class="line"><Icon name="swatch" size={20} />{#if point.genres.length}<span class="genres">{#each point.genres as g (g)}<span>{g}</span>{/each}</span>{:else}<span>No genres</span>{/if}</p>
           {/if}
           {#if p?.dead}<p class="line dead"><span>{p.dead} missing</span></p>{/if}
         </div>
         {/if}
       </div>
-      {#if !editing && !making}
+      {#if !editing && !making && !multi && tab === 'tracks'}
       <div class="actions" role="group" aria-label="Play">
         {#each ACTIONS as a (a.mode)}
           <button onclick={() => act(a.mode)} disabled={!playable.length}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
@@ -403,7 +463,44 @@
       {/if}
     </header>
 
-    {#if editing}
+    {#if !crate && !editing}
+      <div class="tabs" role="tablist" aria-label="About the playlist">
+        {#each TABS as t (t.tab)}
+          <button role="tab" aria-selected={tab === t.tab} onclick={() => setTab(t.tab, !inSidebar())}>{t.label}</button>
+        {/each}
+      </div>
+    {/if}
+
+    {#if tab === 'export'}
+      <ExportTab {ids} />
+    {:else if tab === 'repair'}
+      <RepairTab {ids} />
+    {:else if tab === 'sync'}
+      <SyncTab {ids} />
+    {:else if multi}
+      {#each ids as sid (sid)}
+        {@const s = sections[sid]}
+        {@const count = shownPlaylists().find((x) => x.id === sid)?.count ?? 0}
+        <section class="sect" use:seen={sid}>
+          <button class="sect-head" class:folded={folded[sid]} aria-expanded={!folded[sid]} onclick={() => (folded[sid] = !folded[sid])}
+            ><span class="sname">{sid}</span><span class="scount">{plural(count, 'track')}</span><Icon name="chevronUp" size={20} /></button
+          >
+          {#if !folded[sid]}
+            {#if s && 'error' in s}
+              <p class="error" role="alert">{s.error}</p>
+            {:else if !s}
+              <p class="empty">Loading…</p>
+            {:else if !s.rows.length}
+              <p class="empty">No tracks yet.</p>
+            {:else}
+              <ol class="rows">
+                {#each s.rows as r, i (i)}{@render trackRow(r, s.source, sid, s.rows)}{/each}
+              </ol>
+            {/if}
+          {/if}
+        </section>
+      {/each}
+    {:else if editing}
       <ol class="rows edit" class:dragging={!!reorder.drag}>
         {#each editing.rows as x, i (x.at)}
           {@const r = x.r}
@@ -453,39 +550,15 @@
       </section>
     {/if}
 
-    {#if editing}
-      <!-- the edit list is above -->
+    {#if tab !== 'tracks' || multi || editing}
+      <!-- another tab, the sections, or the edit list: above -->
     {:else if error}
       <p class="error" role="alert">{error}</p>
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
     {:else if rows}
       <ol class="rows">
-        {#each rows as r, i (i)}
-          {@const ok = !!r.id && !r.missing}
-          {@const here = ok && !!np && np.id === r.id}
-          <li class:off={!ok} class:now={here}>
-            <span class="behind" aria-hidden="true"><Icon name="playNext" size={40} /><span>Play next</span></span>
-            <div class="slide" use:swipe={{ enabled: ok, onswipe: () => playNext(r) }}>
-              <button class="row" disabled={!ok} onclick={() => playFrom(r)} use:longpress={() => ok && (trackMenu = { track: asTrack(r), start: 'menu' })}>
-                <span class="cover">
-                  {#if ok}<img src={coverUrl({ source, id: r.id! })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
-                  {#if here}<span class="eq" class:still={paused()} aria-hidden="true"><i></i><i></i><i></i></span>{/if}
-                </span>
-                <span class="text">
-                  <strong>{r.name ?? r.file}</strong>
-                  <span class="sub">
-                    {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album}<span class="album">{r.album}</span>{/if}{/if}
-                  </span>
-                </span>
-                {#if r.duration_secs}<span class="d">{clockText(r.duration_secs)}</span>{/if}
-              </button>
-              {#if ok}
-                <RowHeart {source} id={r.id!} name={r.name ?? r.file} onopen={() => (trackMenu = { track: asTrack(r), start: 'lists' })} />
-              {/if}
-            </div>
-          </li>
-        {/each}
+        {#each rows as r, i (i)}{@render trackRow(r, source, id, rows)}{/each}
       </ol>
       {#if crate && rows.length < total}<p class="empty" bind:this={more}>Loading…</p>{/if}
     {:else}
@@ -493,6 +566,34 @@
     {/if}
   </div>
 </section>
+
+<!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe left plays it next, a long-press is its
+     menu, the heart adds it to playlists. -->
+{#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[])}
+  {@const ok = !!r.id && !r.missing}
+  {@const here = ok && !!np && np.id === r.id}
+  <li class:off={!ok} class:now={here}>
+    <span class="behind" aria-hidden="true"><Icon name="playNext" size={40} /><span>Play next</span></span>
+    <div class="slide" use:swipe={{ enabled: ok, onswipe: () => playNext(r, src) }}>
+      <button class="row" disabled={!ok} onclick={() => playFrom(name, src, list, r)} use:longpress={() => ok && (trackMenu = { track: asTrack(r, src), start: 'menu' })}>
+        <span class="cover">
+          {#if ok}<img src={coverUrl({ source: src, id: r.id! })} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
+          {#if here}<span class="eq" class:still={paused()} aria-hidden="true"><i></i><i></i><i></i></span>{/if}
+        </span>
+        <span class="text">
+          <strong>{r.name ?? r.file}</strong>
+          <span class="sub">
+            {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album}<span class="album">{r.album}</span>{/if}{/if}
+          </span>
+        </span>
+        {#if r.duration_secs}<span class="d">{clockText(r.duration_secs)}</span>{/if}
+      </button>
+      {#if ok}
+        <RowHeart source={src} id={r.id!} name={r.name ?? r.file} onopen={() => (trackMenu = { track: asTrack(r, src), start: 'lists' })} />
+      {/if}
+    </div>
+  </li>
+{/snippet}
 
 {#if menuOpen && p}
   <PlaylistMenu playlist={p} onclose={() => (menuOpen = false)} />
@@ -829,6 +930,83 @@
     color: var(--accent);
     font: inherit;
     cursor: pointer;
+  }
+
+  /* The tabs (decision 0025): under the header, staying at the top while the content scrolls. */
+  .tabs {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+    padding: 4px 8px 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .tabs button {
+    flex: 1;
+    min-height: 40px;
+    padding: 0 8px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .tabs button[aria-selected='true'] {
+    border-bottom-color: var(--accent);
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* Several playlists on Tracks: a section each, its header folding it. */
+  .sect-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px 0 16px;
+    border: 0;
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .sect + .sect {
+    margin-top: 6px;
+  }
+
+  .sname {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+
+  .scount {
+    flex: none;
+    color: var(--muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sect-head :global(svg) {
+    flex: none;
+    transition: transform 150ms;
+  }
+
+  .sect-head.folded :global(svg) {
+    transform: rotate(180deg);
   }
 
   /* Finamp's track rows: 70 px (a 60 px tile and a gap), a 60 px cover with corners 8, two lines of title. */

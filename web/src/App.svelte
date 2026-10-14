@@ -1,6 +1,6 @@
 <script lang="ts">
   import Playlists from './Playlists.svelte';
-  import Repairs from './Repairs.svelte';
+  import Health from './Health.svelte';
   import Settings from './Settings.svelte';
   import Incoming from './Incoming.svelte';
   import Insights from './Insights.svelte';
@@ -29,25 +29,27 @@
   import { jobs } from './lib/jobs.svelte';
 
   type Page = { id: string; href: string; label: string; icon: IconName };
-  // Main pages in order; Settings sits apart at the bottom of the sidebar.
+  // Main pages in order; Health and Settings sit apart at the bottom of the sidebar (decision 0025: Health beside
+  // Settings on every screen size).
   const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
   // Shown only when some source has an incoming library (see the status call below).
   const INCOMING: Page = { id: 'incoming', href: '#/incoming', label: 'Incoming', icon: 'incoming' };
   const INSIGHTS: Page = { id: 'insights', href: '#/insights', label: 'Insights', icon: 'insights' };
   // The second step after Incoming (decision 0024).
   const CRATES: Page = { id: 'crates', href: '#/crates', label: 'Crates', icon: 'crates' };
-  const REPAIRS: Page = { id: 'repairs', href: '#/repairs', label: 'Repairs', icon: 'repairs' };
+  const HEALTH: Page = { id: 'health', href: '#/health', label: 'Health', icon: 'health' };
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
 
   // Phones get a bottom bar. Up to five fit; beyond that the first four stay and the rest go under "More".
   const BAR_SLOTS = 5;
 
-  // Playlists are created, renamed and deleted on the Playlists page now; old Manage links land where they went.
-  // The page is the address before `?` (an opened playlist rides along as `?open=`, decision 0023).
+  // Playlists are created, renamed, deleted and repaired on the Playlists page and its panel now; old Manage and
+  // Repairs links land there (decision 0025). The page is the address before `?` (what is opened rides along as
+  // `?open=`, decision 0023).
   const fromHash = () => {
     const h = location.hash.split('?')[0];
-    return h === '#/repairs' || h === '#/manage/repairs'
-      ? 'repairs'
+    return h === HEALTH.href
+      ? 'health'
       : h === SETTINGS.href
         ? 'settings'
         : h === INCOMING.href
@@ -206,8 +208,8 @@
             : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, CRATES, PLAYLISTS, INSIGHTS, REPAIRS] : [CRATES, PLAYLISTS, INSIGHTS, REPAIRS]);
-  const ALL = $derived([...MAIN, SETTINGS]);
+  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, CRATES, PLAYLISTS, INSIGHTS] : [CRATES, PLAYLISTS, INSIGHTS]);
+  const ALL = $derived([...MAIN, HEALTH, SETTINGS]);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, BAR_SLOTS - 1));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
   const overflowActive = $derived(overflow.some((p) => p.id === page));
@@ -233,6 +235,7 @@
     </nav>
 
     <div class="foot">
+      <a href={keepOpen(HEALTH.href)} aria-current={page === HEALTH.id ? 'page' : undefined}><Icon name={HEALTH.icon} />{HEALTH.label}</a>
       <a href={keepOpen(SETTINGS.href)} aria-current={page === SETTINGS.id ? 'page' : undefined}><Icon name={SETTINGS.icon} />{SETTINGS.label}</a>
       {#if status}<div class="version">Cratarr {status.version}</div>{/if}
     </div>
@@ -245,12 +248,12 @@
     {/if}
     {#if page === 'settings'}
       <Settings />
+    {:else if page === 'health'}
+      <Health />
     {:else if page === 'incoming' && status?.incoming}
       <Incoming />
     {:else if status && !status.music}
       <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
-    {:else if page === 'repairs'}
-      <Repairs />
     {:else if page === 'insights'}
       <Insights />
     {:else if page === 'crates'}

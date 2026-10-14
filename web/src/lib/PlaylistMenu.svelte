@@ -1,27 +1,14 @@
 <script lang="ts">
   // A playlist's menu (docs/ui-conventions.md, decision 0021), the same wherever a playlist is long-pressed: a sheet as
   // Finamp's track menu, the playlist on its card (a mosaic of its first albums' covers), Play, Shuffle, Play next and
-  // Add to queue as the large actions, then Sync to…, Spoken as…, Rename and Delete, each done inside the sheet.
+  // Add to queue as the large actions, then Export… and Sync to… (they open the panel on that tab, decision 0025),
+  // Spoken as…, Rename and Delete, each done inside the sheet.
   // Success shows where it happens (the header, the list); only Delete says something, to offer Undo.
-  import {
-    deletePlaylist,
-    getTargets,
-    linkPlaylist,
-    restorePlaylist,
-    setSpoken,
-    spokenNames,
-    unlinkPlaylist,
-    type Conflict,
-    type Direction,
-    type Link,
-    type PlayMode,
-    type TargetChoice,
-    incomingCoverUrl,
-    playlistCovers,
-  } from './api';
+  import { deletePlaylist, restorePlaylist, setSpoken, spokenNames, type Link, type PlayMode, incomingCoverUrl, playlistCovers } from './api';
   import MenuEntry from './MenuEntry.svelte';
   import { startPlaylist } from './output.svelte';
-  import { openPlaylist, panel, playlistDeleted } from './panel.svelte';
+  import { openPlaylist, openSelection, panel, playlistDeleted, type Tab } from './panel.svelte';
+  import { selectDeleted } from './select.svelte';
   import { renameEverywhere } from './rename.svelte';
   import { insights } from './insights.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites, togglePlaylistFavorite } from './favourites.svelte';
@@ -45,7 +32,7 @@
     onrestored?: (id: string) => void;
   } = $props();
 
-  let mode = $state<'menu' | 'rename' | 'delete' | 'sync' | 'spoken'>('menu');
+  let mode = $state<'menu' | 'rename' | 'delete' | 'spoken'>('menu');
   $effect(() => void loadPlaylistFavorites());
 
   // The card's image: the covers of the playlist's first four albums (one cover when it has fewer).
@@ -79,37 +66,10 @@
     }
   }
 
-  // Sync to… (decision 0014): every target, on or off, and how it is kept. Each change is made at once.
-  let targets = $state<TargetChoice[] | null>(null);
-  let links = $state<Link[]>([]);
-  async function openSync() {
-    mode = 'sync';
-    links = [...(playlist.links ?? [])];
-    try {
-      targets = await getTargets();
-    } catch (e) {
-      fail(e, 'Could not list the targets');
-      mode = 'menu';
-    }
-  }
-  const linkOf = (target: string) => links.find((l) => l.target === target);
-  async function setLink(t: TargetChoice, on: boolean, direction: Direction = 'push', conflict: Conflict = 'newest') {
-    if (working) return;
-    working = true;
-    const before = links;
-    links = on
-      ? [...links.filter((l) => l.target !== t.target), { target: t.target, label: t.label, direction, conflict, status: null }]
-      : links.filter((l) => l.target !== t.target);
-    try {
-      if (on) await linkPlaylist(p.id, t.target, direction, conflict);
-      else await unlinkPlaylist(p.id, t.target);
-    } catch (e) {
-      links = before;
-      fail(e, 'Could not change the link');
-    } finally {
-      working = false;
-      refresh();
-    }
+  /** Export… and Sync to…: the panel opens on that tab for this playlist (decision 0025). */
+  function openTab(tab: Tab) {
+    openSelection([p.id], tab);
+    onclose();
   }
   let nameField = $state('');
   let working = $state(false);
@@ -154,6 +114,7 @@
     try {
       await deletePlaylist(id);
       playlistDeleted(id);
+      selectDeleted(id);
       insights.deleted(id);
       ondeleted?.(id);
       toast.show({
@@ -203,7 +164,7 @@
 >
   {#if mode === 'menu'}
     <div role="menu">
-      {#if panel.open !== p.id}
+      {#if !(panel.selection.length === 1 && panel.selection[0] === p.id)}
         <MenuEntry
           icon="listOpen"
           label="Open"
@@ -229,7 +190,8 @@
           onclose();
         }}
       />
-      <MenuEntry icon="link" label="Sync to…" onclick={openSync} />
+      <MenuEntry icon="download" label="Export…" onclick={() => openTab('export')} />
+      <MenuEntry icon="link" label="Sync to…" onclick={() => openTab('sync')} />
       <MenuEntry
         icon="mic"
         label="Spoken as…"
@@ -272,45 +234,6 @@
       <input type="text" aria-label="Other names, comma-separated" placeholder="japanese, kokoro" bind:value={spokenField} />
       <button type="submit" class="primary" disabled={working} aria-busy={working}>Save</button>
     </form>
-  {:else if mode === 'sync'}
-    <div class="form">
-      <div class="heading">Sync to</div>
-      {#if !targets}
-        <p class="ask">…</p>
-      {:else}
-        {#each targets as t (t.target)}
-          {@const l = linkOf(t.target)}
-          <div class="target">
-            <label class="on"><input type="checkbox" checked={!!l} disabled={working} onchange={(e) => setLink(t, e.currentTarget.checked)} />{t.label}</label>
-            {#if l && !t.push_only}
-              <select
-                aria-label="Direction"
-                value={l.direction}
-                disabled={working}
-                onchange={(e) => setLink(t, true, e.currentTarget.value as Direction, l.conflict)}
-              >
-                <option value="push">Push</option>
-                <option value="two_way">Two-way</option>
-              </select>
-              {#if l.direction === 'two_way'}
-                <select
-                  aria-label="When both changed"
-                  value={l.conflict}
-                  disabled={working}
-                  onchange={(e) => setLink(t, true, l.direction, e.currentTarget.value as Conflict)}
-                >
-                  <option value="newest">Newest wins</option>
-                  <option value="playlist">Cratarr wins</option>
-                  <option value="target">{t.label} wins</option>
-                </select>
-              {/if}
-            {/if}
-            {#if l?.status?.error}<p class="error">{l.status.error}</p>{/if}
-          </div>
-        {/each}
-      {/if}
-      <button class="plain" onclick={onclose}>Done</button>
-    </div>
   {:else}
     <div class="form">
       <p class="ask">Delete {p.name}? You can undo this right after.</p>
@@ -347,41 +270,6 @@
     text-align: center;
   }
 
-  /* Sync to…: one line per target, its settings beside it once linked. */
-  .target {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 10px;
-    min-height: 40px;
-  }
-
-  .target .on {
-    display: flex;
-    flex: 1 1 140px;
-    align-items: center;
-    gap: 8px;
-    overflow-wrap: anywhere;
-  }
-
-  .target select {
-    min-height: 34px;
-    padding: 0 8px;
-    background: color-mix(in srgb, var(--bg) 70%, transparent);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    font: inherit;
-    font-size: 0.85rem;
-    color: inherit;
-  }
-
-  .target .error {
-    flex-basis: 100%;
-    margin: 0;
-    color: var(--danger);
-    font-size: 0.8rem;
-  }
-
   .form button {
     min-height: 44px;
     border: 0;
@@ -394,11 +282,6 @@
     background: var(--art-accent, var(--accent));
     color: var(--accent-text);
     font-weight: 600;
-  }
-
-  .form button.plain {
-    background: color-mix(in srgb, var(--text) 10%, transparent);
-    color: inherit;
   }
 
   .form button.danger.solid {

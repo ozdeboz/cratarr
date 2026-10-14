@@ -54,6 +54,19 @@ export async function togglePlaylistFavorite(name: string) {
   }
 }
 
+/** Several playlists at once (the selection's ⋮): all favourites, or none. */
+export async function setPlaylistFavorites(names: string[], on: boolean) {
+  const was = names.map((n) => [n, isPlaylistFavorite(n)] as const);
+  for (const n of names) playlistFavs[n] = on;
+  navigator.vibrate?.(8);
+  try {
+    for (const [n, before] of was) if (before !== on) await setPlaylistFavorite(n, on, prefs.source || undefined);
+  } catch (e) {
+    for (const [n, before] of was) playlistFavs[n] = before;
+    toast.fail(e, "The favourites didn't change");
+  }
+}
+
 /** A renamed playlist keeps its heart (the server's copies follow the new name). */
 export function playlistFavoriteRenamed(from: string, to: string) {
   if (!(from in playlistFavs)) return;

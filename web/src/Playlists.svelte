@@ -12,6 +12,8 @@
   import { longpress } from './lib/longpress';
   import { openPlaylist, panel } from './lib/panel.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites } from './lib/favourites.svelte';
+  import { endSelect, openPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
+  import SelectionMenu from './lib/SelectionMenu.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
   const view = $derived(live.view);
@@ -26,8 +28,9 @@
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
 
-  // The open menu (a sheet, decision 0021): a playlist's (lib/PlaylistMenu) or the "New playlist" one.
-  type Menu = { kind: 'playlist'; p: Playlist; anchor: DOMRect } | { kind: 'new'; anchor: DOMRect };
+  // The open menu (a sheet, decision 0021): a playlist's (lib/PlaylistMenu), the "New playlist" one, or the ticked
+  // playlists' (Select's ⋮, decision 0025).
+  type Menu = { kind: 'playlist'; p: Playlist; anchor: DOMRect } | { kind: 'new'; anchor: DOMRect } | { kind: 'selection' };
   let menu = $state<Menu | null>(null);
   let nameField = $state('');
   let working = $state(false);
@@ -128,7 +131,19 @@
       <button aria-label="Smaller" disabled={prefs.zoom === 0} onclick={() => setZoom(prefs.zoom - 1)}>−</button>
       <button aria-label="Larger" disabled={prefs.zoom === WIDTHS.length - 1} onclick={() => setZoom(prefs.zoom + 1)}>+</button>
     </div>
-    <button class="new" onclick={openNew}>New playlist</button>
+    {#if select.on}
+      <!-- Select (decision 0025): a chip's name ticks it; the ticked ones' menu; on a phone, open them in the panel. -->
+      <button class="new" onclick={endSelect}>Cancel</button>
+      <button class="new more" aria-label="Menu of the ticked playlists" disabled={!select.picked.length} onclick={() => (menu = { kind: 'selection' })}
+        ><Icon name="moreVert" size={22} /></button
+      >
+      {#if select.picked.length && !showsPicked()}
+        <button class="new primary" onclick={openPicked}>{select.picked.length === 1 ? 'Open 1 playlist' : `Open ${select.picked.length} playlists`}</button>
+      {/if}
+    {:else}
+      <button class="new" onclick={openNew}>New playlist</button>
+      <button class="new" onclick={startSelect}>Select</button>
+    {/if}
   </div>
 
   {#if error}
@@ -141,7 +156,8 @@
     <ul class="grid" class:pending={pending()} style:--min="{WIDTHS[prefs.zoom]}px">
       {#each items as p (p.id)}
         <li>
-          <!-- The label opens the playlist (decision 0023); the circle adds or removes the playing track. -->
+          <!-- The label opens the playlist (decision 0023), in Select ticks it (decision 0025); the circle adds or removes
+               the playing track. The border: in the panel's selection (or ticked). -->
           <div
             class="chip"
             class:member={p.member}
@@ -149,11 +165,15 @@
             class:queued={live.queued.includes(p.id)}
             class:idle={!np}
             class:blocked={!!np && !np.addable && !p.member}
-            class:open={panel.open === p.id}
+            class:open={select.on ? select.picked.includes(p.id) : panel.selection.includes(p.id)}
             title={p.dead > 0 ? missing(p.dead) : undefined}
             use:longpress={(anchor) => (menu = { kind: 'playlist', p, anchor })}
           >
-            <button class="label" aria-label={`Open ${p.name}`} onclick={() => openPlaylist(p.id)}>
+            <button
+              class="label"
+              aria-label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `Open ${p.name}`}
+              onclick={() => (select.on ? tick(p.id) : openPlaylist(p.id))}
+            >
               <span class="name">{p.name}</span>
               {#if prefs.pinned.includes(p.id)}<span class="pinned" title="Pinned"><Icon name="pin" size={13} /></span>{/if}
               {#if p.links.some((l) => l.target !== 'shared')}<span class="own" title={p.links.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
@@ -197,6 +217,8 @@
   </MenuSheet>
 {:else if menu?.kind === 'playlist'}
   <PlaylistMenu playlist={menu.p} onclose={() => (menu = null)} />
+{:else if menu?.kind === 'selection'}
+  <SelectionMenu ids={select.picked} onclose={() => (menu = null)} />
 {/if}
 
 <style>
@@ -268,6 +290,25 @@
     border: 1px solid var(--border);
     border-radius: 10px;
     cursor: pointer;
+  }
+
+  button.new.more {
+    display: grid;
+    place-items: center;
+    padding: 0 10px;
+    color: inherit;
+  }
+
+  button.new.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+
+  button.new:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .grid {

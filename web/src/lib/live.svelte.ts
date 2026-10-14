@@ -82,6 +82,10 @@ const somethingPlays = () => (prefs.output === 'local' ? local.index >= 0 : !!li
  *  something plays and it was not folded. */
 export const inSidebar = () => player.roomy && prefs.sidebar && (panel.open !== null || (!player.min && somethingPlays()));
 
+/** The panel can show beside the page (room, and not the page-covering player): Select then shows the selection there
+ *  as it is ticked (decision 0025). */
+export const sidePanel = () => player.roomy && prefs.sidebar;
+
 /** The panel shows the player (not an opened playlist): nothing is opened, or the player was brought over it. */
 export const panelShowsPlayer = () => panel.open === null || panel.playerTop;
 

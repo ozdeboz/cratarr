@@ -227,8 +227,8 @@ export const getRepairs = () => request<Repairs>('/api/repairs');
 const post = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-/** Apply every safe repair. */
-export const applySafe = () => post<{ playlists: string[] }>('/api/repairs/apply', { kind: 'safe' });
+/** Apply every safe repair, or only those of these playlists (the panel's Repair tab, decision 0025). */
+export const applySafe = (playlists?: string[]) => post<{ playlists: string[] }>('/api/repairs/apply', playlists ? { kind: 'safe', playlists } : { kind: 'safe' });
 
 /** Apply one offered repair (used for the ones that need a look). */
 export const applyOne = (r: Repair) => post<{ playlists: string[] }>('/api/repairs/apply', { kind: 'one', ...r });
@@ -242,6 +242,23 @@ export const getDuplicates = () => request<DupGroup[]>('/api/duplicates');
 export const dedupe = (playlist: string) => post<{ removed: number }>('/api/duplicates/dedupe', { playlist });
 
 export const createPlaylist = (name: string) => post<{ playlist: string }>('/api/playlists', { name });
+
+/** What to export (decision 0007): playlists by name, with their tracks or not, the tracks in one folder or the
+ *  library's, and the playlists as they are or combined into one of this name. */
+export type ExportChoice = { playlists: string[]; tracks: boolean; flat: boolean; combine: string | null };
+/** What an export will hold, before starting: `bytes` only with tracks; missing tracks are left out. */
+export type ExportPreview = { tracks: number; missing: number; bytes: number | null };
+export const exportPreview = (c: ExportChoice) =>
+  quietly<ExportPreview>('/api/export/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) });
+/** The download itself: a link, so the browser shows its progress and can cancel it. */
+export function exportUrl(c: ExportChoice): string {
+  const q = new URLSearchParams();
+  for (const p of c.playlists) q.append('playlist', p);
+  if (c.tracks) q.set('tracks', '1');
+  if (c.tracks && c.flat) q.set('flat', '1');
+  if (c.combine !== null) q.set('combine', c.combine);
+  return `/api/export?${q}`;
+}
 
 /** A playlist's first albums (up to four, in playlist order), for the mosaic in its menu (decision 0021). */
 /** One line of a playlist for its view (decision 0023): what the catalogue knows of its file; `id` null when not matched
