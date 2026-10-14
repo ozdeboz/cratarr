@@ -26,6 +26,8 @@ export type Prefs = {
   pinned: string[];
   /** The Playlists page's filter section (the filter and the order) is shown. */
   filterOpen: boolean;
+  /** Insights → Related: its filter section (what brings playlists together) is shown. */
+  relatedFilterOpen: boolean;
 };
 
 const KEY = 'cratarr-prefs';
@@ -43,6 +45,7 @@ export const DEFAULTS: Prefs = {
   output: 'remote',
   pinned: [],
   filterOpen: true,
+  relatedFilterOpen: true,
 };
 
 function read(): Prefs {
@@ -54,6 +57,7 @@ function read(): Prefs {
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
       if (typeof saved.membersFirst === 'boolean') p.membersFirst = saved.membersFirst;
       if (typeof saved.filterOpen === 'boolean') p.filterOpen = saved.filterOpen;
+      if (typeof saved.relatedFilterOpen === 'boolean') p.relatedFilterOpen = saved.relatedFilterOpen;
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;

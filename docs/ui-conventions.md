@@ -99,7 +99,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
   not in Settings. Where music plays is chosen at the player (its output button), not in Settings.
 - **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser
-  (Insights: Statistics, Related). Its switches (Related: shared tracks, genre, artists) sit in the same toolbar.
+  (Insights: Statistics, Related). On Related, its filters (shared tracks, genre, artists) are a filter section under the toolbar, shown or hidden by the filter button beside the views, as on Playlists.
 - **Insights → Related and the panel** (decision 0023): selecting a point shows "Open <playlist>" at the graph's top
   right, which opens it in the shell's panel (`?open=`); while a playlist is open the graph's selection and the panel
   follow each other. The **Legend** button is always in the graph's bottom-right corner; it opens the legend as a sheet

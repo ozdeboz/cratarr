@@ -67,6 +67,8 @@
     { id: 'artists', label: 'Artists' },
   ];
   const anyOn = $derived(SIGNALS.some((s) => prefs.signals[s.id]));
+  /** A signal is off: the filter applies (the folded filter button says so). */
+  const filtering = $derived(SIGNALS.some((s) => !prefs.signals[s.id]));
 
   const num = (n: number) => n.toLocaleString();
   const hours = (ms: number) => plural(Math.round(ms / 3_600_000), 'hour');
@@ -77,14 +79,28 @@
 </script>
 
 <main class:wide={prefs.insightsTab === 'related'}>
+  <!-- As the Playlists page: the views always, and on Related its filter section (what brings playlists together),
+       which the filter button shows or hides; remembered by the browser. -->
   <div class="toolbar">
-    <div class="seg" role="group" aria-label="View">
-      {#each TABS as t (t.id)}
-        <button aria-pressed={prefs.insightsTab === t.id} onclick={() => (prefs.insightsTab = t.id)}>{t.label}</button>
-      {/each}
+    <div class="row">
+      <div class="seg" role="group" aria-label="View">
+        {#each TABS as t (t.id)}
+          <button aria-pressed={prefs.insightsTab === t.id} onclick={() => (prefs.insightsTab = t.id)}>{t.label}</button>
+        {/each}
+      </div>
+      {#if prefs.insightsTab === 'related'}
+        <button
+          class="toggle"
+          class:active={!prefs.relatedFilterOpen && filtering}
+          aria-expanded={prefs.relatedFilterOpen}
+          aria-controls="related-filter"
+          aria-label={prefs.relatedFilterOpen ? 'Hide the filter' : 'Show the filter'}
+          onclick={() => (prefs.relatedFilterOpen = !prefs.relatedFilterOpen)}><Icon name="filter" size={22} /></button
+        >
+      {/if}
     </div>
-    {#if prefs.insightsTab === 'related'}
-      <div class="switches" role="group" aria-label="What brings playlists together">
+    {#if prefs.insightsTab === 'related' && prefs.relatedFilterOpen}
+      <div class="row switches" id="related-filter" role="group" aria-label="What brings playlists together">
         {#each SIGNALS as s (s.id)}
           <button class="chip" aria-pressed={prefs.signals[s.id]} onclick={() => (prefs.signals[s.id] = !prefs.signals[s.id])}>
             {s.label}
@@ -327,11 +343,33 @@
   }
 
   .toolbar {
+    display: grid;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .toolbar .row {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
     align-items: center;
-    margin-bottom: 8px;
+  }
+
+  /* The filter button: as the Playlists page's. */
+  .toggle {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  /* Folded away while a filter applies: the button says so. */
+  .toggle.active {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .seg {
@@ -357,9 +395,7 @@
     font-weight: 600;
   }
 
-  .switches {
-    display: flex;
-    flex-wrap: wrap;
+  .toolbar .row.switches {
     gap: 6px;
   }
 
