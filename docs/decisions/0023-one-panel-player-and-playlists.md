@@ -45,7 +45,12 @@ The owner decided (2026-10-14):
   - Its header: the mosaic, the name, "N tracks · length", the sync chips, the playlist menu, Play and Shuffle (on the
     chosen output), and "Add what's playing" when the playing track is not in it.
   - Two tabs, a segmented control: **Tracks** and **Related**. Opened from Insights it starts on Related, elsewhere
-    on Tracks.
+    on Tracks. **Deferred** (owner, 2026-10-14): until the tabs come, Related is a compact section between the header
+    and the tracks (focus and the closest playlists; the genres sit in the header, as Finamp's genre line).
+  - Styled as Finamp's playlist screen in less room: a bar with ✕ and the menu (no title); the covers (125 px) beside
+    the name, "♪ N tracks (length)" and the genres; Play, Shuffle, Play next and Add to queue as icons over labels;
+    rows as the queue's with the album after the artist; the playing track tinted in the cover's colour with a small
+    visualiser on its cover. A swipe left on a row plays it next (Finamp's default swipe there) and springs back.
   - Tracks lists the playlist in file order (the `.m3u` is the truth). Its rows are as the queue's (decision 0019);
     the playing track is marked. A tap plays the playlist from that track on the chosen output and the view stays
     (the mini-player shows it); a long-press is that track's menu.

@@ -192,6 +192,24 @@ export const dedupe = (playlist: string) => post<{ removed: number }>('/api/dupl
 export const createPlaylist = (name: string) => post<{ playlist: string }>('/api/playlists', { name });
 
 /** A playlist's first albums (up to four, in playlist order), for the mosaic in its menu (decision 0021). */
+/** One line of a playlist for its view (decision 0023): what the catalogue knows of its file; `id` null when not matched
+ *  to the server, `missing` when the file is not in the Music folder. */
+export type PlaylistRow = {
+  entry: string;
+  file: string;
+  id: string | null;
+  name: string | null;
+  artist: string | null;
+  album: string | null;
+  duration_secs: number | null;
+  missing: boolean;
+};
+
+export const playlistRows = (id: string, source?: string) =>
+  quietly<{ source: string; rows: PlaylistRow[] }>(
+    `/api/playlists/${encodeURIComponent(id)}/rows${source ? `?source=${encodeURIComponent(source)}` : ''}`,
+  );
+
 export const playlistCovers = (id: string) =>
   quietly<{ source: string; album_id: string }[]>(`/api/playlists/${encodeURIComponent(id)}/covers`);
 export const renamePlaylist = (id: string, to: string) =>

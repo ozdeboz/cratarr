@@ -5,6 +5,7 @@
 import {
   handover,
   incomingTrackIds,
+  playPlaylist,
   playlistTrackIds,
   setMember,
   setTrackMember,
@@ -17,7 +18,7 @@ import {
   type Playlist,
   type TrackState,
 } from './api';
-import { live, refresh } from './live.svelte';
+import { live, refresh, untilNewTrack } from './live.svelte';
 import { local, playQueue, enqueue, seek, stop, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -184,6 +185,28 @@ export async function playPlaylistHere(id: string, mode: PlayMode): Promise<bool
   if (mode === 'next' || mode === 'last') enqueue(tracks, mode);
   else playQueue(tracks, 0, id);
   return true;
+}
+
+/** Plays a playlist where the output is (its menu's Play, Shuffle, Play next and Add to queue; its view's buttons):
+ *  here, or on the server's player, showing the new track once it is there for Play and Shuffle. */
+export async function startPlaylist(id: string, mode: PlayMode) {
+  if (await playPlaylistHere(id, mode)) return;
+  await playPlaylist(id, mode, prefs.source || undefined);
+  if (mode === 'play' || mode === 'shuffle') await untilNewTrack();
+  else refresh();
+}
+
+/** Plays a playlist from one of its tracks (a tap on a row of its view, decision 0023): these tracks from `index`, here
+ *  or on the server's player. */
+export async function playPlaylistFrom(name: string, source: string, tracks: LocalTrack[], index: number) {
+  if (isLocal()) return playQueue(tracks, index, name);
+  await handover(
+    tracks.map((t) => t.id),
+    index,
+    0,
+    source,
+  );
+  setTimeout(refresh, 700);
 }
 
 /** Plays an Incoming album here when the output is this browser (its tracks are not in Music: never addable). */

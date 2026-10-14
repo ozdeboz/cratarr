@@ -15,20 +15,14 @@
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
   import { enqueue, local } from './localPlayer.svelte';
   import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
+  import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
 
   let {
     onclose,
     track = null,
     start = 'menu',
-    onfavorite,
-  }: {
-    onclose: () => void;
-    track?: MenuTrack | null;
-    start?: 'menu' | 'lists';
-    /** Told when another track's favourite changed (a list's heart shows it). */
-    onfavorite?: (id: string, on: boolean) => void;
-  } = $props();
+  }: { onclose: () => void; track?: MenuTrack | null; start?: 'menu' | 'lists' } = $props();
 
   const np = $derived(playing());
   /** The menu is for what plays (no track given, or the given one plays). */
@@ -71,7 +65,8 @@
     if (!track || !other || other.favorite === null) return;
     try {
       other = await setTrackFavorite(track.source, track.id, !other.favorite);
-      if (other.favorite !== null) onfavorite?.(track.id, other.favorite);
+      // The rows' hearts show it too.
+      if (other.favorite !== null) setFavorite(track.source, track.id, other.favorite);
       refresh();
     } catch (e) {
       toast.fail(e, "The favourite didn't change");

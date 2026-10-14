@@ -7,6 +7,7 @@
   // not scroll (Finamp's default).
   import Icon from './Icon.svelte';
   import { player } from './live.svelte';
+  import { panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, send, toggleFavorite } from './remote.svelte';
 
@@ -17,9 +18,12 @@
   const share = $derived(dur ? Math.min(1, pos / dur) : 0);
 
   /** The full player: beside the page when the window has room and that is the chosen place, else over it. */
+  // Tapping it brings the player: into the panel beside the page (over an opened playlist there), or over everything.
   function openPlayer() {
-    if (player.roomy && prefs.sidebar) player.min = false;
-    else player.full = true;
+    if (player.roomy && prefs.sidebar) {
+      player.min = false;
+      panel.playerTop = true;
+    } else player.full = true;
   }
 
   // Swipes, as Finamp's Dismissible: horizontal ones move the bar with the finger and skip past 40 % of its width or on

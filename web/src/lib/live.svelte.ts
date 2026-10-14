@@ -8,6 +8,7 @@
 import { ApiError, getState, setMember, type NowPlaying, type State } from './api';
 import { prefs } from './prefs.svelte';
 import { local } from './localPlayer.svelte';
+import { panel } from './panel.svelte';
 import { remember } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { on, open, close, stream } from './events.svelte';
@@ -74,9 +75,15 @@ export const live = $state<{
  *  mini-player shows, and `full` opens the player over everything. */
 export const player = $state({ full: false, min: false, roomy: false });
 
-/** The player shows beside the page. */
-export const inSidebar = () =>
-  player.roomy && prefs.sidebar && !player.min && (prefs.output === 'local' ? local.index >= 0 : !!live.view?.now_playing);
+/** Something plays, where the output is. */
+const somethingPlays = () => (prefs.output === 'local' ? local.index >= 0 : !!live.view?.now_playing);
+
+/** The panel shows beside the page (decisions 0018, 0023): with room for it, an opened playlist, or the player while
+ *  something plays and it was not folded. */
+export const inSidebar = () => player.roomy && prefs.sidebar && (panel.open !== null || (!player.min && somethingPlays()));
+
+/** The panel shows the player (not an opened playlist): nothing is opened, or the player was brought over it. */
+export const panelShowsPlayer = () => panel.open === null || panel.playerTop;
 
 /** Show `np` now as the result of a player command, until the server settles it (or `ms` passes). */
 export function expect(np: NowPlaying, settled: (server: NowPlaying | null) => Settled, { ms = 8000, quiet = false } = {}) {

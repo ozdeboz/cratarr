@@ -9,9 +9,12 @@
   // Finamp's: light on a tap or a drag starting, heavy on a drop, a removal and opening.
   import { linear } from 'svelte/easing';
   import { fade, fly } from 'svelte/transition';
-  import { getFavorites, incomingCoverUrl, setTrackFavorite } from './api';
+  import { incomingCoverUrl } from './api';
+  import { loadFavorites } from './favourites.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
+  import RowHeart from './RowHeart.svelte';
+  import { swipe } from './swipe';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import { local, jump as localJump, moveUpcoming, removeUpcoming } from './localPlayer.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
@@ -48,29 +51,12 @@
   let list = $state<HTMLElement>();
 
   // The rows' hearts: which of the listed tracks are favourites, asked for in one go when the list changes.
-  let favs = $state<Record<string, boolean>>({});
   const listed = $derived(np ? [...previous.map((t) => t.id), ...np.upcoming.map((u) => u.id)] : []);
   const listedKey = $derived(listed.join(','));
   $effect(() => {
     void listedKey;
-    const source = np?.source;
-    if (!source || !listed.length) return;
-    getFavorites(source, listed).then(
-      (f) => (favs = { ...favs, ...f }),
-      () => {
-        /* the hearts stay as they were */
-      },
-    );
+    if (np?.source) loadFavorites(np.source, listed);
   });
-  async function flipFavorite(t: MenuTrack) {
-    heavy();
-    try {
-      const s = await setTrackFavorite(t.source, t.id, !favs[t.id]);
-      if (s.favorite !== null) favs[t.id] = s.favorite;
-    } catch (e) {
-      toast.fail(e, "The favourite didn't change");
-    }
-  }
 
   // A row's menu: the whole menu (long-press on the row) or straight to its playlists (the row's heart).
   let menuFor = $state<{ track: MenuTrack; start: 'menu' | 'lists' } | null>(null);
@@ -167,60 +153,16 @@
     return 0;
   }
 
-  // Swipe left removes (this device): the row follows the finger; past 65 % of its width it goes, else it springs
-  // back. Vertical moves stay the list's scrolling; a swipe never also counts as a tap.
-  let swipe = $state<{ i: number; dx: number; out: boolean } | null>(null);
-  let swipeFrom = $state<{ i: number; x: number; y: number; w: number; on: boolean } | null>(null);
-  let swiped = false;
-  function rowDown(e: PointerEvent, i: number) {
-    if (!here || drag) return;
-    swipeFrom = { i, x: e.clientX, y: e.clientY, w: (e.currentTarget as HTMLElement).offsetWidth, on: false };
-  }
-  function rowMove(e: PointerEvent) {
-    const s = swipeFrom;
-    if (!s) return;
-    const [dx, dy] = [e.clientX - s.x, e.clientY - s.y];
-    if (!s.on) {
-      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) return void (swipeFrom = null);
-      if (dx > -10 || Math.abs(dx) < Math.abs(dy)) return;
-      s.on = true;
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    }
-    swipe = { i: s.i, dx: Math.min(0, dx), out: false };
-  }
-  function rowUp() {
-    const s = swipeFrom;
-    swipeFrom = null;
-    if (!s?.on || !swipe) return;
-    swiped = true;
-    if (-swipe.dx > s.w * 0.65) {
-      heavy();
-      swipe = { i: s.i, dx: -s.w, out: true };
-      setTimeout(() => {
-        removeUpcoming(s.i);
-        swipe = null;
-      }, reducedMotion() ? 0 : 200);
-    } else {
-      swipe = { i: s.i, dx: 0, out: false };
-      setTimeout(() => (swipe = null), 200);
-    }
-  }
-  function rowClick(i: number) {
-    if (swiped) return void (swiped = false);
-    play(i);
-  }
-  const rowX = (i: number) => (swipe?.i === i ? swipe.dx : 0);
+  // Swipe left removes (this device; lib/swipe.ts): the row slides out, then the track leaves the queue.
+  const removeSwiped = (i: number) => {
+    setTimeout(() => removeUpcoming(i), reducedMotion() ? 0 : 200);
+    return 'away' as const;
+  };
 </script>
 
-<!-- Finamp's row heart: a tap opens its playlists, a long-press (right-click) makes it a favourite or not. -->
+<!-- Finamp's row heart (lib/RowHeart.svelte): a tap opens its playlists, a long-press makes it a favourite or not. -->
 {#snippet rowHeart(t: MenuTrack)}
-  <button
-    class="rheart"
-    class:on={favs[t.id]}
-    aria-label={`Add ${t.name} to a playlist`}
-    onclick={() => (tick(), (menuFor = { track: t, start: 'lists' }))}
-    use:longpress={() => flipFavorite(t)}><Icon name="heart" size={24} /></button
-  >
+  <RowHeart source={t.source} id={t.id} name={t.name} onopen={() => (menuFor = { track: t, start: 'lists' })} />
 {/snippet}
 
 {#if np}
@@ -295,21 +237,12 @@
       {#if np.upcoming.length}
         <ol class="rows" class:dragging={!!drag}>
           {#each np.upcoming as t, i (t.id + ':' + i)}
-            <li
-              class:lifted={drag?.from === i}
-              class:gone={swipe?.i === i && swipe.out}
-              style:transform={drag ? `translateY(${offset(i)}px)` : null}
-            >
+            <li class:lifted={drag?.from === i} style:transform={drag ? `translateY(${offset(i)}px)` : null}>
               <button
                 class="row"
-                class:moving={swipe?.i === i && swipeFrom !== null}
-                style:transform={rowX(i) ? `translateX(${rowX(i)}px)` : null}
-                onpointerdown={(e) => rowDown(e, i)}
-                onpointermove={rowMove}
-                onpointerup={rowUp}
-                onpointercancel={rowUp}
-                onclick={() => rowClick(i)}
+                onclick={() => play(i)}
                 use:longpress={() => rowMenu(asTrack(t, np.source))}
+                use:swipe={{ enabled: here && !drag, onswipe: () => removeSwiped(i) }}
               >
                 {#if t.album_id}<img src={incomingCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
                 <div><strong>{t.name}</strong><span>{t.artist ?? ''}</span></div>
@@ -341,7 +274,6 @@
     track={menuFor.track}
     start={menuFor.start}
     onclose={() => (menuFor = null)}
-    onfavorite={(id, on) => (favs[id] = on)}
   />
 {/if}
 
@@ -630,22 +562,11 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
-    touch-action: pan-y;
-    transition: transform 200ms linear;
-  }
-
-  .row.moving {
-    transition: none;
   }
 
   .row:hover,
   .row:focus-visible {
     background: color-mix(in srgb, var(--text) 7%, transparent);
-  }
-
-  li.gone {
-    opacity: 0;
-    transition: opacity 200ms linear;
   }
 
   .row img,
@@ -690,23 +611,6 @@
     opacity: 0.85;
     font-size: 13px;
     font-variant-numeric: tabular-nums;
-  }
-
-  .rheart {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 36px;
-    height: 100%;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--art-accent);
-    cursor: pointer;
-  }
-
-  .rheart.on :global(svg) {
-    fill: currentColor;
   }
 
   .grip {

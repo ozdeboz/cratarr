@@ -16,7 +16,9 @@
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
-  import { inSidebar, live, player } from './lib/live.svelte';
+  import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
+  import { closePlaylist, keepOpen, panel } from './lib/panel.svelte';
+  import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
   import { known } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
@@ -36,16 +38,19 @@
   const BAR_SLOTS = 5;
 
   // Playlists are created, renamed and deleted on the Playlists page now; old Manage links land where they went.
-  const fromHash = () =>
-    location.hash === '#/repairs' || location.hash === '#/manage/repairs'
+  // The page is the address before `?` (an opened playlist rides along as `?open=`, decision 0023).
+  const fromHash = () => {
+    const h = location.hash.split('?')[0];
+    return h === '#/repairs' || h === '#/manage/repairs'
       ? 'repairs'
-      : location.hash === SETTINGS.href
+      : h === SETTINGS.href
         ? 'settings'
-        : location.hash === INCOMING.href
+        : h === INCOMING.href
           ? 'incoming'
-          : location.hash.split('?')[0] === INSIGHTS.href
+          : h === INSIGHTS.href
             ? 'insights'
             : 'playlists';
+  };
   let page = $state(fromHash());
   // The server picker belongs to the pages that act on what a server plays: Playlists (add it) and Incoming (play an
   // album). The player itself is part of the shell on every page (decision 0018, amended: Cratarr plays music itself).
@@ -60,12 +65,15 @@
   });
   const sidebar = $derived(inSidebar());
   const overlay = $derived(player.full && !sidebar);
-  const mini = $derived(!sidebar && !!playing());
+  // The mini-player stands in for the player wherever the panel does not show it (decision 0023).
+  const mini = $derived(!!playing() && !(sidebar && panelShowsPlayer()));
+  // An opened playlist without room beside the page: a layer of its own, under the mini-player and the player.
+  const playlistLayer = $derived(!sidebar && panel.open !== null);
   $effect(() => {
     if (sidebar) untrack(collapse);
   });
   $effect(() => {
-    document.documentElement.style.overflow = overlay ? 'hidden' : '';
+    document.documentElement.style.overflow = overlay || playlistLayer ? 'hidden' : '';
   });
   // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bar of pages along the top.
   const wide = window.matchMedia('(min-width: 1024px)');
@@ -205,7 +213,7 @@
       <span class="name">Cratarr</span>
     </div>
     {#if connection}
-      <a class="conn" class:down={!connection.ok} href="#/settings"><i aria-hidden="true"></i>{connection.text}</a>
+      <a class="conn" class:down={!connection.ok} href={keepOpen("#/settings")}><i aria-hidden="true"></i>{connection.text}</a>
     {/if}
     {#if !phone}
       <div class="side-picker" class:shown={known.list.length > 1}><SourcePicker /></div>
@@ -213,12 +221,12 @@
 
     <nav aria-label="Pages">
       {#each MAIN as p (p.id)}
-        <a href={p.href} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={keepOpen(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </nav>
 
     <div class="foot">
-      <a href={SETTINGS.href} aria-current={page === SETTINGS.id ? 'page' : undefined}><Icon name={SETTINGS.icon} />{SETTINGS.label}</a>
+      <a href={keepOpen(SETTINGS.href)} aria-current={page === SETTINGS.id ? 'page' : undefined}><Icon name={SETTINGS.icon} />{SETTINGS.label}</a>
       {#if status}<div class="version">Cratarr {status.version}</div>{/if}
     </div>
   </aside>
@@ -256,10 +264,17 @@
         onpointerdown={grip}
         onkeydown={gripKey}
       ></div>
-      <aside class="player-side" aria-label="Player"><NowPlaying place="side" /></aside>
+      <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'}>
+        {#if panelShowsPlayer()}<NowPlaying place="side" />{:else}<PlaylistView />{/if}
+      </aside>
     {/if}
   </div>
 
+  {#if playlistLayer}
+    <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={mini ? `${MINI_SPACE}px` : '0px'} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
+      <PlaylistView />
+    </div>
+  {/if}
   {#if mini}
     <div class="mini-dock"><MiniPlayer /></div>
   {/if}
@@ -275,7 +290,7 @@
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
     <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages" onclickcapture={collapse}>
       {#each overflow as p (p.id)}
-        <a href={p.href} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={keepOpen(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </div>
   {/if}
@@ -285,7 +300,7 @@
 
   <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
     {#each bar as p (p.id)}
-      <a href={p.href} aria-current={page === p.id ? 'page' : undefined}
+      <a href={keepOpen(p.href)} aria-current={page === p.id ? 'page' : undefined}
         ><span class="icon"><Icon name={p.icon} />{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
       >
     {/each}
@@ -315,10 +330,23 @@
     padding-bottom: calc(var(--bottom-h, 0px) + env(safe-area-inset-bottom));
   }
 
+  /* Layers, bottom to top (decision 0023): the page, its navigation (20), an opened playlist (21), the mini-player
+     (22), the player over everything (30). */
   .mini-dock {
     position: fixed;
     inset: auto 12px calc(12px + env(safe-area-inset-bottom));
-    z-index: 18;
+    z-index: 22;
+  }
+
+  /* An opened playlist without room beside the page (decision 0023): full height, ending above the mini-player; over
+     the page and its navigation, under the mini-player and the player. */
+  .playlist-layer {
+    position: fixed;
+    inset: 0 0 calc(var(--mini-h) + env(safe-area-inset-bottom));
+    z-index: 21;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
   }
 
   .overlay {

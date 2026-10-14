@@ -7,7 +7,6 @@
     deletePlaylist,
     getTargets,
     linkPlaylist,
-    playPlaylist,
     renamePlaylist,
     restorePlaylist,
     setSpoken,
@@ -21,10 +20,12 @@
     playlistCovers,
   } from './api';
   import MenuEntry from './MenuEntry.svelte';
-  import { isLocal, playPlaylistHere } from './output.svelte';
+  import { startPlaylist } from './output.svelte';
+  import { openPlaylist, panel, playlistDeleted, playlistRenamed } from './panel.svelte';
+  import { insights } from './insights.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { prefs, togglePin } from './prefs.svelte';
-  import { refresh, untilNewTrack } from './live.svelte';
+  import { refresh } from './live.svelte';
   import { toast } from './toast.svelte';
 
   let {
@@ -119,11 +120,7 @@
     onclose();
     try {
       // Here when the output is this browser (decision 0022), else on the server's player.
-      if (!(await playPlaylistHere(p.id, how))) await playPlaylist(p.id, how, prefs.source || undefined);
-      // Play and Shuffle change what plays: show the new track once it is there, not the states on the way.
-      if (isLocal()) return;
-      if (how === 'play' || how === 'shuffle') await untilNewTrack();
-      else refresh();
+      await startPlaylist(p.id, how);
     } catch (e) {
       fail(e, 'Could not start playing');
     } finally {
@@ -137,8 +134,10 @@
     working = true;
     try {
       await renamePlaylist(p.id, to);
-      // A pinned playlist stays pinned, in its place.
+      // A pinned playlist stays pinned, in its place; an open one stays open; Insights follows.
       prefs.pinned = prefs.pinned.map((x) => (x === p.id ? to : x));
+      playlistRenamed(p.id, to);
+      insights.renamed(p.id, to);
       onrenamed?.(p.id, to);
       onclose();
     } catch (e) {
@@ -155,12 +154,15 @@
     const { id, name } = p;
     try {
       await deletePlaylist(id);
+      playlistDeleted(id);
+      insights.deleted(id);
       ondeleted?.(id);
       toast.show({
         text: `Deleted ${name}.`,
         undo: async () => {
           try {
             await restorePlaylist(id);
+            insights.restored(id);
             onrestored?.(id);
           } catch (e) {
             fail(e, 'Could not restore the playlist');
@@ -202,6 +204,16 @@
 >
   {#if mode === 'menu'}
     <div role="menu">
+      {#if panel.open !== p.id}
+        <MenuEntry
+          icon="listOpen"
+          label="Open"
+          onclick={() => {
+            openPlaylist(p.id);
+            onclose();
+          }}
+        />
+      {/if}
       <MenuEntry
         icon="pin"
         label={prefs.pinned.includes(p.id) ? 'Unpin' : 'Pin to top'}
