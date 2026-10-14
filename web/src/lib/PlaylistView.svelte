@@ -42,6 +42,7 @@
   import SyncTab from './SyncTab.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
   import PanelPlace from './PanelPlace.svelte';
+  import { work } from './panelWork.svelte';
   import { prefs } from './prefs.svelte';
   import { clockText, paused, playing } from './remote.svelte';
   import RowHeart from './RowHeart.svelte';
@@ -261,8 +262,14 @@
     setTimeout(refresh, 700);
   }
 
-  // Make playlist (the save icon): the crate's tracks now as a new playlist, which then opens here.
-  let making = $state<{ name: string; saving: boolean } | null>(null);
+  // Make playlist (the save icon): the crate's tracks now as a new playlist, which then opens here. Its name in progress
+  // outlives this view (panelWork: going over the page or back beside it builds the view again).
+  type Making = { name: string; saving: boolean };
+  let making = $state<Making | null>(work.making && work.making.for === untrack(() => panel.open) ? (work.making.state as Making) : null);
+  $effect(() => {
+    const m = making;
+    work.making = m ? { for: untrack(() => panel.open) ?? '', state: m } : null;
+  });
   async function makePlaylist() {
     if (!making || !crate || !making.name.trim()) return;
     making.saving = true;
@@ -309,8 +316,14 @@
   // Edit mode: a working copy of the rows (each with its place in the file, so a restored one goes back there), and of
   // the playlist's name: its title is editable where it is, looking the same (a tap puts the caret in it; Enter or a
   // tap elsewhere ends it), and Save renames it with the rest.
+  // The edit under way outlives this view (panelWork), as Make playlist's name does.
   type Item = { r: PlaylistRow; at: number };
-  let editing = $state<{ rows: Item[]; removed: Item[]; name: string; saving: boolean } | null>(null);
+  type Editing = { rows: Item[]; removed: Item[]; name: string; saving: boolean };
+  let editing = $state<Editing | null>(work.editing && work.editing.for === untrack(() => panel.open) ? (work.editing.state as Editing) : null);
+  $effect(() => {
+    const e = editing;
+    work.editing = e ? { for: untrack(() => panel.open) ?? '', state: e } : null;
+  });
   const editingFor = $derived(editing ? id : null);
   $effect(() => {
     // Another playlist opened (or this one closed): the edit is dropped.
@@ -383,14 +396,18 @@
 <section class="view" aria-label={id}>
   <div class="bar" class:editing={!!editing}>
     {#if editing}
-      <button class="barbtn iconic" aria-label="Cancel" onclick={() => (editing = null)} disabled={editing.saving}><Icon name="close" size={18} /><span>Cancel</span></button>
+      <!-- ✕ stays in its corner while editing (closing drops the edit), as the place button in the other; Cancel sits
+           against Save. -->
+      <button class="icon" aria-label="Close the playlist" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
+        <button class="barbtn iconic" aria-label="Cancel" onclick={() => (editing = null)} disabled={editing.saving}><Icon name="reset" size={18} /><span>Cancel</span></button>
         <button class="barbtn save iconic" aria-label="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={18} /><span>Save</span></button>
         <PanelPlace />
       </span>
     {:else if making}
-      <button class="barbtn iconic" aria-label="Cancel" onclick={() => (making = null)} disabled={making.saving}><Icon name="close" size={18} /><span>Cancel</span></button>
+      <button class="icon" aria-label="Close the crate" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
+        <button class="barbtn iconic" aria-label="Cancel" onclick={() => (making = null)} disabled={making.saving}><Icon name="reset" size={18} /><span>Cancel</span></button>
         <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
         <PanelPlace />
       </span>
@@ -407,7 +424,7 @@
         <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
           ><Icon name="heart" size={24} /></button
         >
-        {#if rows && p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
+        {#if p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
         <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
         <PanelPlace />
       </span>
@@ -676,7 +693,7 @@
     cursor: pointer;
   }
 
-  /* Cancel and Save carry an icon beside their label (✕, an arrow down to a line). */
+  /* Cancel and Save carry an icon beside their label (a reset arrow, an arrow down to a line). */
   .barbtn {
     display: inline-flex;
     align-items: center;
@@ -795,6 +812,12 @@
     background: none;
     color: inherit;
     cursor: pointer;
+  }
+
+  /* The pencil while the tracks load: in its place, not yet usable. */
+  .icon:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .scroll {

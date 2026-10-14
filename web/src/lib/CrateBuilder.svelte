@@ -163,8 +163,10 @@
 
 <section class="view" aria-label={id ? 'Change the crate' : 'New crate'}>
   <div class="bar">
-    <button class="barbtn iconic" aria-label="Cancel" onclick={cancel} disabled={saving}><Icon name="close" size={18} /><span>Cancel</span></button>
+    <!-- ✕ closes the panel (the draft stays, as when the builder is left); Cancel, against Save, drops the draft. -->
+    <button class="icon" aria-label="Close the builder" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
     <span class="end">
+      <button class="barbtn iconic" aria-label="Cancel" onclick={cancel} disabled={saving}><Icon name="reset" size={18} /><span>Cancel</span></button>
       <button class="barbtn save iconic" aria-label="Save" onclick={save} disabled={saving || !draft?.name.trim()} aria-busy={saving}><Icon name="arrowDownToLine" size={18} /><span>Save</span></button>
       <PanelPlace />
     </span>
@@ -267,6 +269,19 @@
   .end {
     display: flex;
     align-items: center;
+  }
+
+  .icon {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: inherit;
+    cursor: pointer;
   }
 
   .barbtn {

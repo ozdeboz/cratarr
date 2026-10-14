@@ -61,7 +61,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   (read-only). ✕ (and Esc, Back) closes the panel: the player folds to the mini-player rather than showing in its
   place (decision 0025). Its bar has ✕, the heart (Finamp's playlist
   favourite), the pencil (edit mode, on Tracks) and the menu; in
-  edit mode Cancel (✕) and Save (an arrow down to a line; on a panel under 340 px their icons only). Rows as the
+  edit mode ✕ (it stays), Cancel (a reset arrow) and Save (an arrow down to a line; on a panel under 340 px their icons only). Rows as the
   queue's; edit mode as Finamp's playlist edit screen: the title is editable where it is, looking the same (Spoken
   as… is in the playlist's menu); rows with handle and ✕, swipe to
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
