@@ -5,6 +5,8 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -302,10 +304,22 @@ fn iso(t: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", secs / 3600, secs % 3600 / 60, secs % 60)
 }
 
+/// At most this many requests to Jellyfin at a time; the rest wait their turn. Jellyfin slows down from many heavy
+/// queries at once, and on 2026-10-14 a page asking in a loop went straight through to it (hours at 200-300 % CPU).
+const MAX_IN_FLIGHT: usize = 4;
+/// How long a request waits for its turn before it gives up.
+const TURN_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// One GET's answer (the body, or the error as text), shared by everyone who asked for it meanwhile.
+type Answer = Arc<tokio::sync::OnceCell<std::result::Result<Arc<[u8]>, String>>>;
+
 #[derive(Clone)]
 pub struct Jellyfin {
     http: reqwest::Client,
     base: String,
+    turns: Arc<tokio::sync::Semaphore>,
+    /// GETs being answered now, by path: a second asker of the same path waits for that answer instead of asking again.
+    asking: Arc<Mutex<HashMap<String, Answer>>>,
 }
 
 impl Jellyfin {
@@ -320,17 +334,58 @@ impl Jellyfin {
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(20))
             .build()?;
-        Ok(Self { http, base: base.trim_end_matches('/').to_string() })
+        Ok(Self {
+            http,
+            base: base.trim_end_matches('/').to_string(),
+            turns: Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT)),
+            asking: Arc::default(),
+        })
+    }
+
+    /// Send a request when it is its turn (`MAX_IN_FLIGHT`). The turn ends when the answer's headers are in. After a
+    /// change (anything but a GET) a GET asks again rather than share an answer that may predate the change.
+    async fn send(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let req = req.build()?;
+        let _turn = tokio::time::timeout(TURN_WAIT, self.turns.acquire())
+            .await
+            .map_err(|_| anyhow::anyhow!("Jellyfin is busy (no turn within {} s)", TURN_WAIT.as_secs()))?
+            .expect("the semaphore is never closed");
+        let changes = req.method() != reqwest::Method::GET;
+        let resp = self.http.execute(req).await;
+        if changes {
+            self.asking.lock().unwrap().clear();
+        }
+        Ok(resp?)
     }
 
     async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
-        let url = format!("{}{}", self.base, path);
-        let resp = self.http.get(&url).send().await.with_context(|| format!("GET {path}"))?;
-        let status = resp.status();
-        if !status.is_success() {
-            bail!("GET {path} returned {status}");
+        let body = self.get_shared(path).await.map_err(anyhow::Error::msg)?;
+        serde_json::from_slice(&body).with_context(|| format!("GET {path}: response did not have the expected shape"))
+    }
+
+    /// The body of `GET path`, asked once however many ask for it at the same time.
+    async fn get_shared(&self, path: &str) -> std::result::Result<Arc<[u8]>, String> {
+        let answer = self.asking.lock().unwrap().entry(path.to_string()).or_default().clone();
+        let body = answer
+            .get_or_init(|| async {
+                let body: Result<Arc<[u8]>> = async {
+                    let resp = self.send(self.http.get(format!("{}{path}", self.base))).await.with_context(|| format!("GET {path}"))?;
+                    let status = resp.status();
+                    if !status.is_success() {
+                        bail!("GET {path} returned {status}");
+                    }
+                    Ok(resp.bytes().await.with_context(|| format!("GET {path}"))?.to_vec().into())
+                }
+                .await;
+                body.map_err(|e| format!("{e:#}"))
+            })
+            .await
+            .clone();
+        let mut asking = self.asking.lock().unwrap();
+        if asking.get(path).is_some_and(|a| Arc::ptr_eq(a, &answer)) {
+            asking.remove(path);
         }
-        resp.json::<T>().await.with_context(|| format!("GET {path}: response did not have the expected shape"))
+        body
     }
 
     /// Unauthenticated; also proves the server is reachable.
@@ -364,7 +419,7 @@ impl Jellyfin {
             "/Items/{library_id}/Refresh?Recursive=true&MetadataRefreshMode=Default&ImageRefreshMode=Default&ReplaceAllMetadata=false&ReplaceAllImages=false"
         );
         let url = format!("{}{path}", self.base);
-        let status = self.http.post(&url).send().await.with_context(|| format!("POST {path}"))?.status();
+        let status = self.send(self.http.post(&url)).await.with_context(|| format!("POST {path}"))?.status();
         if !status.is_success() {
             bail!("POST {path} returned {status}");
         }
@@ -495,7 +550,7 @@ impl Jellyfin {
 
     async fn send_query(&self, method: reqwest::Method, path: &str, query: &[(&str, String)]) -> Result<()> {
         let status =
-            self.http.request(method.clone(), format!("{}{path}", self.base)).query(query).send().await.with_context(|| format!("{method} {path}"))?.status();
+            self.send(self.http.request(method.clone(), format!("{}{path}", self.base)).query(query)).await.with_context(|| format!("{method} {path}"))?.status();
         if !status.is_success() {
             bail!("{method} {path} returned {status}");
         }
@@ -505,7 +560,7 @@ impl Jellyfin {
     /// Delete an item (a playlist). Already gone counts as done, so a repeated delete is harmless.
     pub async fn delete_item(&self, id: &str) -> Result<()> {
         let path = format!("/Items/{id}");
-        let status = self.http.delete(format!("{}{path}", self.base)).send().await.with_context(|| format!("DELETE {path}"))?.status();
+        let status = self.send(self.http.delete(format!("{}{path}", self.base))).await.with_context(|| format!("DELETE {path}"))?.status();
         if !status.is_success() && status != reqwest::StatusCode::NOT_FOUND {
             bail!("DELETE {path} returned {status}");
         }
@@ -513,7 +568,7 @@ impl Jellyfin {
     }
 
     async fn send_json(&self, method: reqwest::Method, path: &str, body: &serde_json::Value) -> Result<reqwest::Response> {
-        let resp = self.http.request(method.clone(), format!("{}{path}", self.base)).json(body).send().await.with_context(|| format!("{method} {path}"))?;
+        let resp = self.send(self.http.request(method.clone(), format!("{}{path}", self.base)).json(body)).await.with_context(|| format!("{method} {path}"))?;
         let status = resp.status();
         if !status.is_success() {
             bail!("{method} {path} returned {status}");
@@ -633,7 +688,7 @@ impl Jellyfin {
     /// A playback control for one session: `PlayPause`, `NextTrack` or `PreviousTrack` (Jellyfin's names).
     pub async fn playstate(&self, session_id: &str, command: &str) -> Result<()> {
         let url = format!("{}/Sessions/{session_id}/Playing/{command}", self.base);
-        let status = self.http.post(&url).send().await.context("POST /Sessions/{id}/Playing/{command}")?.status();
+        let status = self.send(self.http.post(&url)).await.context("POST /Sessions/{id}/Playing/{command}")?.status();
         if !status.is_success() {
             bail!("the player refused the command ({status})");
         }
@@ -650,10 +705,7 @@ impl Jellyfin {
             query.push(("startPositionTicks", t.to_string()));
         }
         let status = self
-            .http
-            .post(&url)
-            .query(&query)
-            .send()
+            .send(self.http.post(&url).query(&query))
             .await
             .context("POST /Sessions/{id}/Playing")?
             .status();
@@ -666,7 +718,7 @@ impl Jellyfin {
     /// An item's primary image (content type, bytes); `None` when it has none. Refused above `max_bytes`.
     pub async fn primary_image(&self, item_id: &str, max_bytes: u64) -> Result<Option<(String, Vec<u8>)>> {
         let url = format!("{}/Items/{item_id}/Images/Primary", self.base);
-        let resp = self.http.get(&url).send().await.context("GET primary image")?;
+        let resp = self.send(self.http.get(&url)).await.context("GET primary image")?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -700,10 +752,7 @@ impl Jellyfin {
     pub async fn album_tracks(&self, search: &str, folder: &str) -> Result<std::collections::BTreeMap<String, crate::albums::Known>> {
         let url = format!("{}/Items", self.base);
         let found: ItemsPage<ListedAlbum> = self
-            .http
-            .get(&url)
-            .query(&[("IncludeItemTypes", "MusicAlbum"), ("Recursive", "true"), ("Fields", "Path"), ("Limit", "200"), ("SearchTerm", search)])
-            .send()
+            .send(self.http.get(&url).query(&[("IncludeItemTypes", "MusicAlbum"), ("Recursive", "true"), ("Fields", "Path"), ("Limit", "200"), ("SearchTerm", search)]))
             .await
             .context("searching albums")?
             .error_for_status()?
@@ -714,10 +763,7 @@ impl Jellyfin {
             return Ok(Default::default());
         };
         let tracks: ItemsPage<ListedTrack> = self
-            .http
-            .get(&url)
-            .query(&[("ParentId", album.id.as_str()), ("IncludeItemTypes", "Audio"), ("Recursive", "true"), ("Fields", "Path,MediaSources"), ("Limit", "500")])
-            .send()
+            .send(self.http.get(&url).query(&[("ParentId", album.id.as_str()), ("IncludeItemTypes", "Audio"), ("Recursive", "true"), ("Fields", "Path,MediaSources"), ("Limit", "500")]))
             .await
             .context("listing album tracks")?
             .error_for_status()?
@@ -818,7 +864,7 @@ impl Jellyfin {
     pub async fn set_user_item_data(&self, item: &str, user: &str, data: &serde_json::Value) -> Result<()> {
         anyhow::ensure!(crate::covers::valid_item_id(item) && crate::covers::valid_item_id(user), "not an item or user id");
         let path = format!("/UserItems/{item}/UserData?userId={user}");
-        let status = self.http.post(format!("{}{path}", self.base)).json(data).send().await.with_context(|| format!("POST {path}"))?.status();
+        let status = self.send(self.http.post(format!("{}{path}", self.base)).json(data)).await.with_context(|| format!("POST {path}"))?.status();
         if !status.is_success() {
             bail!("POST {path} returned {status}");
         }
@@ -831,7 +877,7 @@ impl Jellyfin {
     pub async fn library_changed(&self, changes: &[(String, &str)]) -> Result<()> {
         let updates: Vec<_> = changes.iter().map(|(p, k)| json!({ "Path": p, "UpdateType": k })).collect();
         let url = format!("{}/Library/Media/Updated", self.base);
-        let status = self.http.post(&url).json(&json!({ "Updates": updates })).send().await.context("POST /Library/Media/Updated")?.status();
+        let status = self.send(self.http.post(&url).json(&json!({ "Updates": updates }))).await.context("POST /Library/Media/Updated")?.status();
         if !status.is_success() {
             bail!("POST /Library/Media/Updated returned {status}");
         }
@@ -856,7 +902,7 @@ impl Jellyfin {
             "{}/Items/{id}/Refresh?Recursive=false&ImageRefreshMode=None&MetadataRefreshMode=FullRefresh&ReplaceAllMetadata=true",
             self.base
         );
-        let status = self.http.post(&url).send().await.context("POST /Items/{id}/Refresh")?.status();
+        let status = self.send(self.http.post(&url)).await.context("POST /Items/{id}/Refresh")?.status();
         if !status.is_success() {
             bail!("refreshing playlist {name:?} returned {status}");
         }
@@ -1089,5 +1135,78 @@ mod tests {
     fn a_playing_item_without_an_id_fails_loudly() {
         let bad = r#"[{"Client":"Finamp","NowPlayingItem":{"Name":"No id here"}}]"#;
         assert!(serde_json::from_str::<Vec<Session>>(bad).is_err());
+    }
+
+    /// A stand-in Jellyfin that answers every request with `[]` after 50 ms: (requests per path, most at once).
+    async fn slow_server() -> (String, Arc<Mutex<(HashMap<String, usize>, usize, usize)>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen: Arc<Mutex<(HashMap<String, usize>, usize, usize)>> = Arc::default();
+        let s = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut conn, _) = listener.accept().await.unwrap();
+                let s = s.clone();
+                tokio::spawn(async move {
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        let n = conn.read(&mut buf).await.unwrap();
+                        if n == 0 {
+                            return;
+                        }
+                        head.extend_from_slice(&buf[..n]);
+                    }
+                    let path = String::from_utf8_lossy(&head).split(' ').nth(1).unwrap_or("").to_string();
+                    {
+                        let mut s = s.lock().unwrap();
+                        *s.0.entry(path).or_default() += 1;
+                        s.1 += 1;
+                        s.2 = s.2.max(s.1);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    s.lock().unwrap().1 -= 1;
+                    let _ = conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]").await;
+                });
+            }
+        });
+        (base, seen)
+    }
+
+    #[tokio::test]
+    async fn at_most_a_few_requests_are_in_flight() {
+        let (base, seen) = slow_server().await;
+        let jf = Jellyfin::new(&base, "key").unwrap();
+        let mut asks = tokio::task::JoinSet::new();
+        for i in 0..12 {
+            let jf = jf.clone();
+            asks.spawn(async move { jf.get::<Vec<serde_json::Value>>(&format!("/Items/{i}")).await });
+        }
+        while let Some(r) = asks.join_next().await {
+            assert!(r.unwrap().unwrap().is_empty());
+        }
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.0.len(), 12);
+        assert!(seen.2 <= MAX_IN_FLIGHT, "{} at once", seen.2);
+    }
+
+    #[tokio::test]
+    async fn the_same_get_at_the_same_time_is_asked_once() {
+        let (base, seen) = slow_server().await;
+        let jf = Jellyfin::new(&base, "key").unwrap();
+        let mut asks = tokio::task::JoinSet::new();
+        for _ in 0..5 {
+            let jf = jf.clone();
+            asks.spawn(async move { jf.get::<Vec<serde_json::Value>>("/Sessions").await });
+        }
+        while let Some(r) = asks.join_next().await {
+            assert!(r.unwrap().unwrap().is_empty());
+        }
+        assert_eq!(seen.lock().unwrap().0["/Sessions"], 1);
+        // Once answered, the next ask goes to Jellyfin again.
+        jf.get::<Vec<serde_json::Value>>("/Sessions").await.unwrap();
+        assert_eq!(seen.lock().unwrap().0["/Sessions"], 2);
+        assert!(jf.asking.lock().unwrap().is_empty());
     }
 }
