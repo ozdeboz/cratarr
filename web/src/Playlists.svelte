@@ -14,6 +14,8 @@
   import { isLocal, setPlayingMember, shownPlaylists } from './lib/output.svelte';
   import { pending, playing } from './lib/remote.svelte';
   import { longpress } from './lib/longpress';
+  import { fromAction } from 'svelte/attachments';
+  import PlaylistItem from './lib/PlaylistItem.svelte';
   import { openPlaylist, panel } from './lib/panel.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites } from './lib/favourites.svelte';
   import { endSelect, openPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
@@ -232,43 +234,28 @@
         <li>
           <!-- The label opens the playlist (decision 0023), in Select ticks it (decision 0025); the circle adds or removes
                the playing track. The border: in the panel's selection (or ticked). -->
-          <div
-            class="chip"
-            class:member={p.member}
-            class:busy={busy[p.id]}
-            class:queued={live.queued.includes(p.id)}
-            class:idle={!np}
-            class:blocked={!!np && !np.addable && !p.member}
-            class:open={select.on ? select.picked.includes(p.id) : panel.selection.includes(p.id)}
-            title={p.dead > 0 ? missing(p.dead) : undefined}
-            use:longpress={(anchor) => (menu = { kind: 'playlist', p, anchor })}
+          <PlaylistItem
+            {p}
+            size="medium"
+            class={['chip', busy[p.id] && 'busy', live.queued.includes(p.id) && 'queued', !np && 'idle', !!np && !np.addable && !p.member && 'blocked']
+              .filter(Boolean)
+              .join(' ')}
+            strong={p.member}
+            active={select.on ? select.picked.includes(p.id) : panel.selection.includes(p.id)}
+            label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `Open ${p.name}`}
+            onclick={() => (select.on ? tick(p.id) : openPlaylist(p.id))}
+            attach={fromAction(longpress, () => (anchor: DOMRect) => (menu = { kind: 'playlist', p, anchor }))}
           >
-            <button
-              class="label"
-              aria-label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `Open ${p.name}`}
-              onclick={() => (select.on ? tick(p.id) : openPlaylist(p.id))}
-            >
-              <span class="name">{p.name}</span>
-              {#if prefs.pinned.includes(p.id)}<span class="pinned" title="Pinned"><Icon name="pin" size={13} /></span>{/if}
-              {#if p.links.some((l) => l.target !== 'shared')}<span class="own" title={p.links.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
-              <span class="n">{p.count}</span>
-            <!-- A favourite's small heart above the problems' dot, in the dot's place: the chip gets no wider. -->
-            {#if isPlaylistFavorite(p.id) || p.dead > 0}
-              <span class="flags">
-                {#if isPlaylistFavorite(p.id)}<span class="heart" aria-label="Favourite"><Icon name="heart" size={10} /></span>{/if}
-                {#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}
-              </span>
-            {/if}
-            </button>
-            <span class="sep" aria-hidden="true"></span>
-            <button
-              class="state"
-              aria-pressed={p.member}
-              aria-label={p.member ? `Take the playing track out of ${p.name}` : `Add the playing track to ${p.name}`}
-              onclick={() => tap(p)}
-              ><Icon name={p.member ? 'circleCheck' : np && !np.addable ? 'circleDashedPlus' : 'circlePlus'} size={26} /></button
-            >
-          </div>
+            {#snippet action()}
+              <button
+                class="icon"
+                aria-pressed={p.member}
+                aria-label={p.member ? `Take the playing track out of ${p.name}` : `Add the playing track to ${p.name}`}
+                onclick={() => tap(p)}
+                ><Icon name={p.member ? 'circleCheck' : np && !np.addable ? 'circleDashedPlus' : 'circlePlus'} size={26} /></button
+              >
+            {/snippet}
+          </PlaylistItem>
         </li>
       {/each}
     </ul>
@@ -535,55 +522,23 @@
     list-style: none;
   }
 
-  /* Finamp's add-to-playlist entries (its toggleable list tile): tinted in the accent, 10 % when the playing track is not
-     in the playlist and 30 % when it is; the name, the count, a divider and the check or plus circle. */
-  .chip {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-height: 48px;
-    padding: 6px 8px 6px 12px;
-    text-align: left;
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-    border: 0;
-    border-radius: 12px;
-    color: var(--text);
-    cursor: pointer;
-    transition:
-      background 120ms,
-      transform 80ms;
-  }
-
-  .chip:active {
-    transform: scale(0.97);
-  }
-
-  .chip.member {
-    background: color-mix(in srgb, var(--accent) 30%, transparent);
-  }
-
-  /* The playlist open in the panel (decision 0023): a border only, so it reads apart from the fill of membership. */
-  .chip.open {
-    box-shadow: inset 0 0 0 2px var(--accent);
-  }
-
-  /* Nothing playing: the chips only open their menu, so they look quieter. */
-  .chip.idle {
+  /* The chips are medium rows (lib/Row.svelte, Finamp's add-to-playlist tile); what is the page's own is how adding
+     the playing track stands. Nothing playing: the chips only open, so they look quieter. */
+  .grid :global(.chip.idle) {
     opacity: 0.6;
   }
 
-  .chip.busy {
+  .grid :global(.chip.busy) {
     opacity: 0.7;
   }
 
   /* The player is moving to another track: its playlists are not known yet, so the chips are dimmed, and a tapped one
      pulses until the tap goes through (live.svelte.ts). */
-  .grid.pending .chip:not(.queued) {
+  .grid.pending :global(.chip:not(.queued)) {
     opacity: 0.45;
   }
 
-  .chip.queued {
+  .grid :global(.chip.queued) {
     outline: 1.5px solid var(--accent);
     animation: waiting 1s ease-in-out infinite alternate;
   }
@@ -598,102 +553,15 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .chip.queued {
+    .grid :global(.chip.queued) {
       animation: none;
     }
   }
 
   /* Track outside Music: adding is refused, so the add chips are quieter and their plus circle dashed (Finamp's mark
      for a playlist it cannot add to); tapping explains why. */
-  .chip.blocked {
+  .grid :global(.chip.blocked) {
     opacity: 0.6;
-  }
-
-  .sep {
-    flex: none;
-    width: 1.5px;
-    height: 24px;
-    background: color-mix(in srgb, var(--text) 35%, transparent);
-  }
-
-  .label {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    align-self: stretch;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .state {
-    flex: none;
-    display: flex;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--accent);
-    cursor: pointer;
-  }
-
-  .name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-
-  /* Kept in an account's own playlists too (decision 0014). */
-  .own,
-  .pinned {
-    display: flex;
-    flex: none;
-    opacity: 0.65;
-  }
-
-  .n {
-    flex: none;
-    margin-left: auto;
-    font-size: 0.8rem;
-    font-variant-numeric: tabular-nums;
-    opacity: 0.65;
-  }
-
-  .flags {
-    flex: none;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 2px;
-    width: 10px;
-    margin-left: -4px;
-  }
-
-  .heart {
-    display: flex;
-    color: #e5484d;
-  }
-
-  .heart :global(svg) {
-    fill: currentColor;
-  }
-
-  .dead {
-    display: block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--warn);
   }
 
   .empty {
