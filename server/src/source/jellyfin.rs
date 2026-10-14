@@ -36,6 +36,17 @@ fn fields() -> Vec<Field> {
             help: Some("When several players play music at once, the page follows this one."),
             bound_to: &[],
         },
+        Field {
+            key: "account",
+            label: "Plays as",
+            kind: FieldKind::Choice,
+            required: false,
+            help: Some(
+                "Whose favourites and play counts Cratarr uses when no player says, as when it plays in the browser. \
+                 Empty: the followed player's account, else the server's only account or its administrator.",
+            ),
+            bound_to: &[],
+        },
     ]
 }
 
@@ -49,7 +60,9 @@ fn connect(values: &Values, partial: bool) -> Result<Box<dyn Source>> {
     Ok(Box::new(JellyfinSource {
         jf: Jellyfin::new(url, key)?,
         admin: tokio::sync::OnceCell::new(),
+        fallback: tokio::sync::OnceCell::new(),
         player: Player::parse(text(values, "player").unwrap_or("")),
+        account: text(values, "account").map(str::to_string).filter(|a| !a.is_empty()),
         items: Mutex::new(HashMap::new()),
     }))
 }
@@ -96,13 +109,14 @@ fn loose(app: &str) -> String {
         .collect()
 }
 
-/// Whose favourite a track is: the account of the session playing it, else of the player the page follows.
-fn whose(sessions: &[Session], player: &Player, track: &str) -> Option<String> {
-    sessions
-        .iter()
-        .find(|s| s.now_playing_item.as_ref().is_some_and(|i| i.id == track) && s.user_id.is_some())
-        .or_else(|| control_targets(sessions, player).into_iter().find(|s| s.user_id.is_some()))
+/// Whose favourite or play a track is: the account of the session playing it, else the account Cratarr plays as (its
+/// setting; decision 0022: a track the browser plays has no session), else the account of the player the page follows.
+fn whose(sessions: &[Session], player: &Player, account: Option<&str>, track: &str) -> Option<String> {
+    let playing = sessions.iter().find(|s| s.now_playing_item.as_ref().is_some_and(|i| i.id == track) && s.user_id.is_some());
+    playing
         .and_then(|s| s.user_id.clone())
+        .or_else(|| account.map(str::to_string))
+        .or_else(|| control_targets(sessions, player).into_iter().find(|s| s.user_id.is_some()).and_then(|s| s.user_id.clone()))
 }
 
 /// How to turn a playlist's tracks into the wanted list with the operations an API key has.
@@ -277,6 +291,10 @@ struct JellyfinSource {
     player: Player,
     /// See `Jellyfin::admin_user`.
     admin: tokio::sync::OnceCell<String>,
+    /// The account used when nothing else tells (see `account_for`), asked for once.
+    fallback: tokio::sync::OnceCell<String>,
+    /// The account Cratarr plays as (its setting).
+    account: Option<String>,
     /// Recently seen tracks with their library, so polling the playing track stays cheap.
     items: Mutex<HashMap<String, (PlayingItem, Option<String>)>>,
 }
@@ -303,6 +321,25 @@ impl JellyfinSource {
         }
         cache.insert(id.to_string(), got.clone());
         Ok(got)
+    }
+
+    /// The account a track's favourite and plays belong to (see `whose`); when nothing tells, the server's only account,
+    /// or its administrator.
+    async fn account_for(&self, sessions: &[Session], track: &str) -> Result<String> {
+        if let Some(user) = whose(sessions, &self.player, self.account.as_deref(), track) {
+            return Ok(user);
+        }
+        Ok(self
+            .fallback
+            .get_or_try_init(|| async {
+                let users = self.jf.users().await?;
+                match users.as_slice() {
+                    [(only, _)] => Ok::<_, anyhow::Error>(only.clone()),
+                    _ => self.jf.admin_user().await,
+                }
+            })
+            .await?
+            .clone())
     }
 
     fn prefers(&self) -> impl Fn(&Session) -> bool + '_ {
@@ -399,6 +436,10 @@ impl Source for JellyfinSource {
             let devices = devices.context("Jellyfin refused the API key")?;
             let mut out = BTreeMap::new();
             out.insert("player".into(), player_choices(&sessions.unwrap_or_default(), &devices));
+            let users = self.jf.users().await.unwrap_or_default();
+            // Empty: decided per track (see `account_for`).
+            let automatic = Choice { value: String::new(), label: "Automatic".into() };
+            out.insert("account".into(), std::iter::once(automatic).chain(users.into_iter().map(|(value, label)| Choice { value, label })).collect());
             Ok(out)
         })
     }
@@ -578,9 +619,9 @@ impl Source for JellyfinSource {
             let found = self.item(&id).await?;
             let progress = progress(&found.0.id, found.0.run_time_ticks, &sessions, self.prefers(), started_at, now);
             let player = control_targets(&sessions, &self.player).first().map(|s| session_label(s));
-            let favorite = match whose(&sessions, &self.player, &id) {
-                Some(user) => self.jf.is_favorite(&user, &id).await.ok(),
-                None => None,
+            let favorite = match self.account_for(&sessions, &id).await {
+                Ok(user) => self.jf.is_favorite(&user, &id).await.ok(),
+                Err(_) => None,
             };
             // The player's queue, from the session that plays this track (the preferred player's first).
             let mut playing_it: Vec<&Session> =
@@ -622,7 +663,7 @@ impl Source for JellyfinSource {
     fn track_info<'a>(&'a self, track: &'a str) -> Fut<'a, Option<super::TrackInfo>> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await.unwrap_or_default();
-            let user = whose(&sessions, &self.player, track);
+            let user = self.account_for(&sessions, track).await.ok();
             let d = self.jf.media_details(track, user.as_deref()).await?;
             Ok(Some(track_info(&d)))
         })
@@ -646,7 +687,7 @@ impl Source for JellyfinSource {
     fn count_play<'a>(&'a self, track: &'a str) -> Fut<'a, ()> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;
-            let user = whose(&sessions, &self.player, track).context("no player is signed in to count it for")?;
+            let user = self.account_for(&sessions, track).await?;
             self.jf.count_play(track, &user).await
         })
     }
@@ -655,7 +696,8 @@ impl Source for JellyfinSource {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;
             // The account of the player the page follows (no track of these need be playing).
-            let Some(user) = tracks.first().and_then(|t| whose(&sessions, &self.player, t)) else { return Ok(BTreeMap::new()) };
+            let Some(first) = tracks.first() else { return Ok(BTreeMap::new()) };
+            let user = self.account_for(&sessions, first).await?;
             let mut out = BTreeMap::new();
             // Long lists in pieces: the ids go in the address.
             for chunk in tracks.chunks(100) {
@@ -668,9 +710,9 @@ impl Source for JellyfinSource {
     fn favorite<'a>(&'a self, track: &'a str) -> Fut<'a, Option<bool>> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;
-            match whose(&sessions, &self.player, track) {
-                Some(user) => Ok(Some(self.jf.is_favorite(&user, track).await?)),
-                None => Ok(None),
+            match self.account_for(&sessions, track).await {
+                Ok(user) => Ok(Some(self.jf.is_favorite(&user, track).await?)),
+                Err(_) => Ok(None),
             }
         })
     }
@@ -678,7 +720,7 @@ impl Source for JellyfinSource {
     fn set_favorite<'a>(&'a self, track: &'a str, on: bool) -> Fut<'a, bool> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;
-            let user = whose(&sessions, &self.player, track).context("no player is signed in to mark it for")?;
+            let user = self.account_for(&sessions, track).await?;
             self.jf.set_favorite(&user, track, on).await?;
             Ok(on)
         })
@@ -979,9 +1021,15 @@ mod tests {
         let mut other = remote("Finamp", "motorola", "phone", true, Some("t2"), "2026-10-12T16:50:00Z");
         other.user_id = Some("guest".into());
         let sessions = vec![playing, other];
-        assert_eq!(whose(&sessions, &Player::default(), "t2").as_deref(), Some("guest"), "the session playing that track");
-        assert_eq!(whose(&sessions, &Player::parse("Finamp::Lenovo Tab"), "t9").as_deref(), Some("me"), "else the followed player");
-        assert_eq!(whose(&[], &Player::default(), "t1"), None);
+        assert_eq!(whose(&sessions, &Player::default(), None, "t2").as_deref(), Some("guest"), "the session playing that track");
+        assert_eq!(whose(&sessions, &Player::default(), Some("set"), "t2").as_deref(), Some("guest"), "before the setting");
+        assert_eq!(
+            whose(&sessions, &Player::parse("Finamp::Lenovo Tab"), Some("set"), "t9").as_deref(),
+            Some("set"),
+            "a track no session plays (the browser's): the account Cratarr plays as"
+        );
+        assert_eq!(whose(&sessions, &Player::parse("Finamp::Lenovo Tab"), None, "t9").as_deref(), Some("me"), "else the followed player");
+        assert_eq!(whose(&[], &Player::default(), None, "t1"), None);
     }
 
     #[test]

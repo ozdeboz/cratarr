@@ -32,7 +32,9 @@ true gapless about 3,000 lines and at least two listening evenings):
   (frames copied as they are); MP3 goes to the stream as it is. The padding information in MP3 (LAME/Xing header) and
   AAC (iTunSMPB) files tells how many samples to cut at each end; the stream's append window cuts them.
 - **Plays count**: when a track has played (the media server's rule: most of it), Cratarr marks it played for the
-  account it plays as (play count, last played). Nothing else is reported in this stage: the media server and Home
+  account it plays as (play count, last played). That account (also for favourites) is the Jellyfin connection's
+  "Plays as" setting; left on Automatic it is the followed player's account, else the server's only account or its
+  administrator (2026-10-14: before, nothing was counted and the hearts went when no Finamp session was open). Nothing else is reported in this stage: the media server and Home
   Assistant do not see the local player (decision 0019, stage 1).
 - **Output switch** as decided in 0019: the player's output button, "This device" and the media server's players;
   switching moves the queue and the position and stops the other side.
