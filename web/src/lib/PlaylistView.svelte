@@ -375,7 +375,8 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
-    background: var(--bg);
+    /* As the navigation beside the page. */
+    background: var(--surface);
   }
 
   /* Finamp's app bar: no title (the name is in the header), back on the left, the menu on the right. */
@@ -459,7 +460,7 @@
     padding: 0 12px;
     border: 1px solid var(--border);
     border-radius: 10px;
-    background: var(--surface);
+    background: var(--bg);
     color: var(--text);
     font: inherit;
     font-size: 15px;
@@ -510,7 +511,7 @@
     height: 125px;
     overflow: hidden;
     border-radius: 4px;
-    background: var(--surface);
+    background: var(--bg);
   }
 
   .art.mosaic {
@@ -729,12 +730,12 @@
     align-items: center;
     height: 100%;
     border-radius: 8px;
-    background: var(--bg);
+    background: var(--surface);
   }
 
   /* The playing track: tinted in the cover's colour (Finamp: primary at 30–35 %). */
   .rows li.now .slide {
-    background: color-mix(in srgb, var(--art-accent, var(--accent)) 32%, var(--bg));
+    background: color-mix(in srgb, var(--art-accent, var(--accent)) 32%, var(--surface));
     transition: background 500ms;
   }
 
@@ -777,7 +778,7 @@
     height: 100%;
     border-radius: 8px;
     object-fit: cover;
-    background: var(--surface);
+    background: var(--bg);
   }
 
   /* Finamp's mini visualiser on the playing track's cover, over a dark veil. */
