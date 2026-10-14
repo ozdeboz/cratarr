@@ -393,6 +393,24 @@ pub fn year_of(tags: &BTreeMap<&str, &str>) -> Option<f64> {
     tags.get("originaldate").and_then(|d| year(d)).or_else(|| tags.get("date").and_then(|d| year(d)))
 }
 
+/// The genres most of these tracks have (each track's own list), most first, at most `n`: what the panel shows on top
+/// of an album or a crate. Spelled as first seen; "rock" and "Rock" are one.
+pub fn top_genres<'a>(tracks: impl IntoIterator<Item = &'a [String]>, n: usize) -> Vec<String> {
+    let mut count: HashMap<String, (usize, String)> = HashMap::new();
+    for genres in tracks {
+        let mut seen = HashSet::new();
+        for g in genres {
+            let key = g.trim().to_lowercase();
+            if !key.is_empty() && seen.insert(key.clone()) {
+                count.entry(key).or_insert_with(|| (0, g.trim().to_string())).0 += 1;
+            }
+        }
+    }
+    let mut out: Vec<(usize, String)> = count.into_values().collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+    out.into_iter().take(n).map(|(_, g)| g).collect()
+}
+
 pub fn bpm_of(raw: &str) -> Option<f64> {
     raw.trim().replace(',', ".").parse::<f64>().ok().filter(|b| *b > 0.0 && *b < 1000.0)
 }
@@ -491,6 +509,14 @@ mod tests {
         assert!(again.delete(&id).await.unwrap());
         assert!(again.list().await.unwrap().is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_top_genres_are_the_most_shared_counted_once_per_track() {
+        let t = |g: &[&str]| g.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let tracks = [t(&["Jazz", "jazz", "Soul"]), t(&["jazz"]), t(&["Funk", "Soul"]), t(&[])];
+        assert_eq!(top_genres(tracks.iter().map(|v| v.as_slice()), 5), vec!["Jazz", "Soul", "Funk"]);
+        assert_eq!(top_genres(tracks.iter().map(|v| v.as_slice()), 1), vec!["Jazz"]);
     }
 
     #[test]

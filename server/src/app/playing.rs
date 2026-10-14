@@ -56,6 +56,9 @@ pub struct StateView {
     pub sources: Vec<SourceTab>,
 }
 
+/// The most genres the panel shows on top of an album or a crate.
+pub const GENRES_SHOWN: usize = 5;
+
 /// An album as its view in the panel shows it (decision 0023): what its tracks say of it, and its tracks in play order
 /// as a playlist's rows. A row's `entry` is the server's path of the file.
 #[derive(Debug, Serialize)]
@@ -64,6 +67,8 @@ pub struct AlbumView {
     pub title: String,
     pub artist: Option<String>,
     pub year: Option<u32>,
+    /// Its tracks' genres, most shared first.
+    pub genres: Vec<String>,
     pub rows: Vec<super::playlists::PlaylistRow>,
 }
 
@@ -422,6 +427,9 @@ impl PlayingService {
         let first = tracks.first();
         let (title, artist, year) =
             (first.and_then(|t| t.album.clone()).unwrap_or_default(), first.and_then(|t| t.album_artist.clone()), first.and_then(|t| t.year));
+        let (c, sid, ids) = (self.lib.catalogue(), source_id.to_string(), tracks.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+        let per_track = tokio::task::spawn_blocking(move || c.genres_of_ids(&sid, &ids)).await.unwrap_or_default();
+        let genres = crate::crates::top_genres(per_track.iter().map(|g| g.as_slice()), GENRES_SHOWN);
         let rows = tracks
             .into_iter()
             .map(|t| {
@@ -438,7 +446,7 @@ impl PlayingService {
                 }
             })
             .collect();
-        Ok(AlbumView { source: source_id.to_string(), title, artist, year, rows })
+        Ok(AlbumView { source: source_id.to_string(), title, artist, year, genres, rows })
     }
 
     /// Plays an album of a connected server on that server's player. Returns the player's label.

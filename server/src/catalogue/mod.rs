@@ -954,6 +954,21 @@ impl Catalogue {
 
     /// Where a track is now: its folder id and relative path; `None` when it is gone, trashed or retired. Blocking.
     #[allow(dead_code)] // used by the playlist module, decision 0011
+    /// Each of these server tracks' genres (its genre tags as read), in order; none for a track not linked to a file.
+    /// Blocking.
+    pub fn genres_of_ids(&self, source: &str, ids: &[String]) -> Vec<Vec<String>> {
+        ids.iter()
+            .map(|id| {
+                let Some((folder, rel)) = self.track_of_source(source, id).and_then(|t| self.file_of(t)) else { return Vec::new() };
+                let db = self.db();
+                let Ok(mut st) = db.prepare_cached("SELECT value FROM tags WHERE folder = ?1 AND rel = ?2 AND name = 'genre' ORDER BY n") else {
+                    return Vec::new();
+                };
+                st.query_map(params![folder, rel], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+            })
+            .collect()
+    }
+
     pub fn file_of(&self, track: i64) -> Option<(i64, String)> {
         self.db()
             .query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))

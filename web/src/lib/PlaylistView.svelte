@@ -70,6 +70,8 @@
   const plain = $derived(!!crate || !!album);
   /** What the album's tracks say of it: its name, artist and year. */
   let albumHead = $state<{ title: string; artist: string | null; year: number | null } | null>(null);
+  /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
+  let listGenres = $state<string[] | null>(null);
   /** The selected playlists; several: Tracks shows a section per playlist (decision 0025). */
   const ids = $derived(panel.selection);
   const multi = $derived(ids.length > 1);
@@ -126,6 +128,7 @@
       rows = null;
       error = null;
       albumHead = null;
+      listGenres = null;
     }
     // A crate keeps the pages it has (at least the first) when it is asked for again.
     const asked = c
@@ -135,7 +138,7 @@
             if (want === id) albumHead = { title: r.title, artist: r.artist, year: r.year };
             return { ...r, total: r.rows.length };
           })
-        : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length }));
+        : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length, genres: null }));
     asked.then(
       (r) => {
         if (want !== id || shownFav() !== fav) return;
@@ -144,6 +147,7 @@
         rows = r.rows;
         source = r.source;
         total = r.total;
+        listGenres = r.genres;
         loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
       },
       (e) => {
@@ -560,6 +564,8 @@
           {/if}
           {#if point && !multi}
             <p class="line"><Icon name="swatch" size={20} />{#if point.genres.length}<span class="genres">{#each point.genres as g (g)}<span>{g}</span>{/each}</span>{:else}<span>No genres</span>{/if}</p>
+          {:else if (album || crate) && listGenres?.length}
+            <p class="line"><Icon name="swatch" size={20} /><span class="genres">{#each listGenres as g (g)}<span>{g}</span>{/each}</span></p>
           {/if}
           {#if p?.dead || chosenDead}<p class="line dead"><span>{p?.dead || chosenDead} missing</span></p>{/if}
         </div>

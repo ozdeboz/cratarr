@@ -39,6 +39,15 @@ pub struct ByName {
 }
 
 /// What crates are worked out on (see `PlaylistService::crate_library`).
+/// A page of a crate's rows: the crate's size, and (on the first page) its genres, most shared first.
+#[derive(Serialize)]
+pub struct CratePage {
+    pub source: String,
+    pub total: usize,
+    pub rows: Vec<PlaylistRow>,
+    pub genres: Vec<String>,
+}
+
 struct CrateLibrary {
     source: String,
     files: Arc<Vec<crates::Facts>>,
@@ -772,11 +781,18 @@ impl PlaylistService {
 
     /// The lines these conditions select, newest first, and the server they are for.
     async fn crate_lines_of(&self, conditions: &[crates::Condition], want: Option<&str>) -> Result<(String, Vec<String>), ToggleError> {
+        let (lib, lines) = self.crate_selection(conditions, want).await?;
+        Ok((lib.source, lines))
+    }
+
+    /// The library a crate is worked out from, and its lines.
+    async fn crate_selection(&self, conditions: &[crates::Condition], want: Option<&str>) -> Result<(CrateLibrary, Vec<String>), ToggleError> {
         let lib = self.crate_library(want, crates::needs_favourites(conditions)).await?;
         if crates::needs_favourites(conditions) && lib.favourites.is_none() {
             return Err(ToggleError::CannotPlay("The server's favourites could not be read.".into()));
         }
-        Ok((lib.source.clone(), lib.select(conditions)))
+        let lines = lib.select(conditions);
+        Ok((lib, lines))
     }
 
     /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size.
@@ -789,7 +805,7 @@ impl PlaylistService {
         offset: usize,
         limit: usize,
         fav: Option<crates::Favourites>,
-    ) -> Result<(String, usize, Vec<PlaylistRow>), ToggleError> {
+    ) -> Result<CratePage, ToggleError> {
         let def = self.crate_def(id).await?;
         let fav = match fav {
             Some(f) => f,
@@ -806,18 +822,20 @@ impl PlaylistService {
     }
 
     /// The builder's live preview: an unsaved crate's size and first rows (decision 0024, issue 6).
-    pub async fn crate_page(
-        &self,
-        conditions: &[crates::Condition],
-        want: Option<&str>,
-        offset: usize,
-        limit: usize,
-    ) -> Result<(String, usize, Vec<PlaylistRow>), ToggleError> {
-        let (source, lines) = self.crate_lines_of(conditions, want).await?;
+    pub async fn crate_page(&self, conditions: &[crates::Condition], want: Option<&str>, offset: usize, limit: usize) -> Result<CratePage, ToggleError> {
+        let (lib, lines) = self.crate_selection(conditions, want).await?;
+        // On the first page only: the panel shows them on top.
+        let genres = if offset == 0 {
+            let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
+            crates::top_genres(lib.files.iter().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.genres.as_slice()), super::playing::GENRES_SHOWN)
+        } else {
+            Vec::new()
+        };
+        let source = lib.source;
         let total = lines.len();
         let page: Vec<String> = lines.into_iter().skip(offset).take(limit).collect();
         let rows = self.rows_of(page, &source).await?;
-        Ok((source, total, rows))
+        Ok(CratePage { source, total, rows, genres })
     }
 
     /// Make playlist: the crate's tracks now, as a new, ordinary playlist (a snapshot; decision 0024).

@@ -208,7 +208,7 @@ export const crateRows = (id: string, offset: number, limit: number, source?: st
   const q = new URLSearchParams({ offset: String(offset), limit: String(limit) });
   if (favourites) q.set('favourites', favourites);
   if (source) q.set('source', source);
-  return quietly<{ source: string; total: number; rows: PlaylistRow[] }>(`/api/crates/${encodeURIComponent(id)}/rows?${q}`);
+  return quietly<{ source: string; total: number; rows: PlaylistRow[]; genres: string[] }>(`/api/crates/${encodeURIComponent(id)}/rows?${q}`);
 };
 /** Make playlist: the crate's tracks now, as its favourites toggle is set, as a new ordinary playlist (a snapshot). */
 export const crateToPlaylist = (id: string, name: string, source?: string) =>
@@ -636,7 +636,7 @@ export const setPlaylistFavorite = (id: string, on: boolean, source?: string) =>
 /** The local player played most of the track: one play counts in the media server (decision 0022). */
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });
 /** An album as its view in the panel shows it: its tracks in play order, as a playlist's rows (decision 0023). */
-export type AlbumView = { source: string; title: string; artist: string | null; year: number | null; rows: PlaylistRow[] };
+export type AlbumView = { source: string; title: string; artist: string | null; year: number | null; genres: string[]; rows: PlaylistRow[] };
 export const albumView = (source: string, album: string) =>
   quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
 export const handover = (ids: string[], index: number, positionSecs: number, source?: string) =>

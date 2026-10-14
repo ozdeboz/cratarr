@@ -335,8 +335,7 @@ struct Page {
 
 async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(200).clamp(1, 500);
-    let (source, total, rows) = app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, q.favourites).await?;
-    Ok(Json(json!({ "source": source, "total": total, "rows": rows })).into_response())
+    Ok(Json(app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, q.favourites).await?).into_response())
 }
 
 /// One's own crate as the builder sends it (decision 0024).
@@ -378,8 +377,7 @@ struct Preview {
 
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let (source, total, rows) = app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit).await?;
-    Ok(Json(json!({ "source": source, "total": total, "rows": rows })).into_response())
+    Ok(Json(app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit).await?).into_response())
 }
 
 /// Make playlist: the crate's tracks now, as the panel shows them (its favourites toggle).
