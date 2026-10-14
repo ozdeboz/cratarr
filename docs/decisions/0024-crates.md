@@ -96,3 +96,6 @@ background once they are a minute old (one asking at a time; a server that does 
 asked again a minute later). Cratarr's own heart changes are applied to what was heard at once, instead of having it
 asked for again. Only the very first asking waits, and that one starts when Cratarr starts. A request waiting for it
 holds nothing large meanwhile: those waiting with the library's facts in hand were the likely cause of a 64 MB restart.
+
+What was heard is also kept in `favourites.json` in the data folder (2026-10-15), so after a restart the crates answer
+at once from it while the server is asked again in the background; the file is only a head start, never the truth.

@@ -280,11 +280,24 @@ pub struct PlaylistService {
     favourites: Arc<FavouritesKept>,
 }
 
+/// How long the favourites heard are answered before they are asked for again (in the background).
+const FAVOURITES_KEEP: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// The media server's favourites as the crates last heard them, and the one asking for them now.
 #[derive(Default)]
 struct FavouritesKept {
     last: std::sync::Mutex<Option<Kept>>,
     asking: Arc<tokio::sync::Mutex<()>>,
+    /// Where what was heard is kept between runs (`favourites.json` in the data folder), so the first Crates after a
+    /// start answers at once instead of waiting for the server (a minute or more for thousands of favourites).
+    file: Option<std::path::PathBuf>,
+}
+
+/// `favourites.json`: the last answer, by server.
+#[derive(Serialize, serde::Deserialize)]
+struct KeptFile {
+    source: String,
+    lines: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -298,6 +311,30 @@ struct Kept {
 }
 
 impl FavouritesKept {
+    /// What the last run heard, if kept: due to be asked again at once (in the background).
+    fn load(file: Option<std::path::PathBuf>) -> Self {
+        let last = file.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<KeptFile>(&b).ok()).map(|k| {
+            let now = std::time::Instant::now();
+            Kept { at: now.checked_sub(FAVOURITES_KEEP).unwrap_or(now), source: k.source, upto: 0, lines: Some(Arc::new(k.lines.into_iter().collect())) }
+        });
+        Self { last: std::sync::Mutex::new(last), asking: Arc::default(), file }
+    }
+
+    /// Keep an answer for the next run. A failure costs only the wait after the next start.
+    async fn save(&self, source: &str, lines: &Arc<HashSet<String>>) {
+        let Some(file) = self.file.clone() else { return };
+        let body = KeptFile { source: source.to_string(), lines: lines.iter().cloned().collect() };
+        let written = tokio::task::spawn_blocking(move || -> Result<()> {
+            let tmp = file.with_extension("json.tmp");
+            std::fs::write(&tmp, serde_json::to_vec(&body)?)?;
+            std::fs::rename(&tmp, &file)?;
+            Ok(())
+        });
+        if let Ok(Err(e)) = written.await {
+            tracing::warn!("keeping the favourites for the next start: {e:#}");
+        }
+    }
+
     fn kept(&self, source: &str) -> Option<Kept> {
         self.last.lock().unwrap_or_else(|e| e.into_inner()).clone().filter(|k| k.source == source)
     }
@@ -326,6 +363,9 @@ impl FavouritesKept {
                 None
             }
         };
+        if let Some(l) = &lines {
+            self.save(source, l).await;
+        }
         let now = std::time::Instant::now();
         let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
         let kept = match (lines, last.clone().filter(|k| k.source == source && k.lines.is_some())) {
@@ -367,7 +407,8 @@ impl FavouritesKept {
 impl PlaylistService {
     pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>) -> Self {
         let crate_store = crates::CrateStore::new(lib.data_dir());
-        Self { lib, sync, crate_store, journal, favourites: Arc::default() }
+        let favourites = Arc::new(FavouritesKept::load(lib.data_dir().map(|d| std::path::PathBuf::from(d).join("favourites.json"))));
+        Self { lib, sync, crate_store, journal, favourites }
     }
 
     /// Ask the media server for the favourites once, at start, when a crate shows by them: the first visit to Crates
@@ -854,11 +895,10 @@ impl PlaylistService {
     /// (2026-10-14), and asking again while it works makes it slower. A server that does not answer is asked again a
     /// minute later.
     async fn favourite_lines(&self, sid: &str, source: &Arc<dyn source::Source>) -> Option<HashSet<String>> {
-        const KEEP: std::time::Duration = std::time::Duration::from_secs(60);
         let f = &self.favourites;
         let kept = match f.kept(sid) {
             Some(k) => {
-                if k.at.elapsed() >= KEEP
+                if k.at.elapsed() >= FAVOURITES_KEEP
                     && let Ok(turn) = f.asking.clone().try_lock_owned()
                 {
                     let (f, c, s, from) = (f.clone(), self.lib.catalogue(), sid.to_string(), source.clone());
@@ -1085,5 +1125,27 @@ pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>
                 tracing::warn!("source {}: could not pass on playlist changes: {e:#}", a.cfg.id);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod favourites_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn the_favourites_heard_are_kept_for_the_next_start_and_asked_again_at_once() {
+        let dir = std::env::temp_dir().join(format!("cratarr-fav-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("favourites.json");
+        let first = FavouritesKept::load(Some(file.clone()));
+        assert!(first.kept("jellyfin").is_none(), "nothing kept yet");
+        first.save("jellyfin", &Arc::new(["A/1.flac".to_string(), "B/2.mp3".to_string()].into_iter().collect())).await;
+
+        let next = FavouritesKept::load(Some(file));
+        let k = next.kept("jellyfin").expect("kept from the last run");
+        assert_eq!(k.lines.as_deref().map(|l| l.len()), Some(2));
+        assert!(k.at.elapsed() >= FAVOURITES_KEEP, "due to be asked again");
+        assert!(next.kept("other").is_none(), "only for the server it came from");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
