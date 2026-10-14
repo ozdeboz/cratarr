@@ -105,6 +105,14 @@
     root.setProperty('--top-h', phone ? `${TOP_BAR}px` : '0px');
     root.setProperty('--bottom-h', mini ? `${MINI_SPACE}px` : '0px');
   });
+  // The window's height as it is shown (--app-h), for the columns that are as tall as the window: an installed app on
+  // Android counts more than the visible window in 100dvh (the sidebar's end went under the screen's edge, 2026-10-14).
+  $effect(() => {
+    const on = () => document.documentElement.style.setProperty('--app-h', `${innerHeight}px`);
+    on();
+    addEventListener('resize', on);
+    return () => removeEventListener('resize', on);
+  });
   let area = $state({ w: 0, h: 0 });
   $effect(() => {
     const on = () => (area = { w: innerWidth - (phone ? 0 : NAV_WIDTH), h: innerHeight - (phone ? TOP_BAR : 0) });
@@ -393,7 +401,7 @@
   .player-side {
     position: sticky;
     top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
-    height: calc(100dvh - var(--top-h, 0px) - env(safe-area-inset-top));
+    height: calc(var(--app-h, 100dvh) - var(--top-h, 0px) - env(safe-area-inset-top));
   }
 
   /* The edge between page and player: a line, with a handle in the middle that shows it can be dragged. */
@@ -568,11 +576,13 @@
     .sidebar {
       position: sticky;
       top: 0;
-      height: 100vh;
-      height: 100dvh;
+      height: var(--app-h, 100dvh);
       display: flex;
       flex-direction: column;
-      padding: 20px 14px 14px;
+      padding: 20px 14px calc(14px + env(safe-area-inset-bottom));
+      box-sizing: border-box;
+      /* Never cut off: on a window too low for all of it, it scrolls. */
+      overflow-y: auto;
       background: var(--surface);
       border-right: 1px solid var(--border);
     }
@@ -580,7 +590,7 @@
     .grip,
     .player-side {
       top: 0;
-      height: 100dvh;
+      height: var(--app-h, 100dvh);
     }
 
     .mini-dock {
