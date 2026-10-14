@@ -3,8 +3,8 @@
 // as a now-playing view like the server's. Switching moves the music: the queue and the position go to the other side,
 // which plays from there, and the side that played stops.
 import {
+  albumView,
   handover,
-  incomingTrackIds,
   playPlaylist,
   playlistTrackIds,
   queueTracks,
@@ -246,9 +246,13 @@ export async function playPlaylistFrom(name: string, source: string, tracks: Loc
 /** Plays an Incoming album here when the output is this browser (its tracks are not in Music: never addable). */
 export async function playIncomingHere(source: string, album: string, title?: string): Promise<boolean> {
   if (!isLocal()) return false;
-  const r = await incomingTrackIds(source, album);
-  if (!r.ids.length) throw new Error('That album has no tracks.');
-  playQueue(r.ids.map((id) => ({ source: r.source, id, name: '', artist: null, album: null, album_id: album, addable: false })), 0, title ?? null);
+  const r = await albumView(source, album);
+  if (!r.rows.length) throw new Error('That album has no tracks.');
+  playQueue(
+    r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, addable: false })),
+    0,
+    title ?? r.title,
+  );
   return true;
 }
 

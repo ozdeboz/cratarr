@@ -167,6 +167,22 @@ pub struct PlayingItem {
     pub run_time_ticks: Option<i64>,
 }
 
+/// One of an album's tracks, as its view lists them.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AlbumTrackItem {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub artists: Vec<String>,
+    pub album_artist: Option<String>,
+    pub album: Option<String>,
+    pub production_year: Option<u32>,
+    pub path: Option<String>,
+    /// Track length; 10 000 000 ticks per second.
+    pub run_time_ticks: Option<i64>,
+}
+
 /// A track's file as Jellyfin describes it, and the asking user's data on it.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -599,11 +615,13 @@ impl Jellyfin {
     }
 
     /// The tracks of an album, in disc and track order.
-    pub async fn album_track_ids(&self, album_id: &str) -> Result<Vec<String>> {
-        let page: ItemsPage<IdOnly> = self
-            .get(&format!("/Items?ParentId={album_id}&IncludeItemTypes=Audio&Recursive=true&SortBy=ParentIndexNumber,IndexNumber,SortName"))
+    pub async fn tracks_of_album(&self, album_id: &str) -> Result<Vec<AlbumTrackItem>> {
+        let page: ItemsPage<AlbumTrackItem> = self
+            .get(&format!(
+                "/Items?ParentId={album_id}&IncludeItemTypes=Audio&Recursive=true&SortBy=ParentIndexNumber,IndexNumber,SortName&Fields=Path&EnableImages=false"
+            ))
             .await?;
-        Ok(page.items.into_iter().map(|i| i.id).collect())
+        Ok(page.items)
     }
 
     /// Ask a session to play these items now, replacing what it plays. Finamp honours this (it ignores some other

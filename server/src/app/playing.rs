@@ -56,11 +56,24 @@ pub struct StateView {
     pub sources: Vec<SourceTab>,
 }
 
+/// An album as its view in the panel shows it (decision 0023): what its tracks say of it, and its tracks in play order
+/// as a playlist's rows. A row's `entry` is the server's path of the file.
+#[derive(Debug, Serialize)]
+pub struct AlbumView {
+    pub source: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub year: Option<u32>,
+    pub rows: Vec<super::playlists::PlaylistRow>,
+}
+
 /// A track the page plays itself (decision 0022) as the player shows it: its playlists, and whether it can be added
 /// to them or is a favourite. The same as for what the server's player plays, but for the track asked about.
 #[derive(Debug, Serialize)]
 pub struct TrackStateView {
     pub addable: bool,
+    /// The server's id of the track's album: View album.
+    pub album_id: Option<String>,
     /// `None` when the source cannot tell (no account to ask for).
     pub favorite: Option<bool>,
     pub playlists: Vec<PlaylistView>,
@@ -381,7 +394,7 @@ impl PlayingService {
         let entry = a.entry(self.lib.music().as_deref(), &track);
         let (favorite, info) = tokio::join!(s.favorite(id), self.info(&s, source_id, id));
         let playlists = self.playlists.view(entry.as_deref()).await?;
-        Ok(TrackStateView { addable: entry.is_some(), favorite: favorite.unwrap_or(None), playlists, info })
+        Ok(TrackStateView { addable: entry.is_some(), album_id: track.album_id.clone(), favorite: favorite.unwrap_or(None), playlists, info })
     }
 
     /// Puts a given track in the playlist or takes it out, as `toggle` does for what the server's player plays.
@@ -397,6 +410,35 @@ impl PlayingService {
     pub async fn favorites(&self, source_id: &str, ids: &[String]) -> Result<std::collections::BTreeMap<String, bool>, ToggleError> {
         let (_, s) = self.source(source_id)?;
         s.favorites(ids).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
+    /// An album of a connected server, for its view in the panel.
+    pub async fn album_view(&self, source_id: &str, album_id: &str) -> Result<AlbumView, ToggleError> {
+        if !crate::covers::valid_item_id(album_id) {
+            return Err(ToggleError::Refused("That is not an album.".into()));
+        }
+        let (_, s) = self.source(source_id)?;
+        let tracks = s.tracks_of_album(album_id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        let first = tracks.first();
+        let (title, artist, year) =
+            (first.and_then(|t| t.album.clone()).unwrap_or_default(), first.and_then(|t| t.album_artist.clone()), first.and_then(|t| t.year));
+        let rows = tracks
+            .into_iter()
+            .map(|t| {
+                let entry = t.path.unwrap_or_else(|| t.id.clone());
+                super::playlists::PlaylistRow {
+                    file: entry.rsplit('/').next().unwrap_or(&entry).to_string(),
+                    entry,
+                    id: Some(t.id),
+                    name: Some(t.title),
+                    artist: t.artist,
+                    album: t.album,
+                    duration_secs: t.duration_secs,
+                    missing: false,
+                }
+            })
+            .collect();
+        Ok(AlbumView { source: source_id.to_string(), title, artist, year, rows })
     }
 
     /// Marks a given track a favourite, or not.

@@ -19,6 +19,7 @@
   import MenuEntry from './lib/MenuEntry.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
   import { longpress } from './lib/longpress';
+  import { albumGone, albumSubject, openPlaylist, panel } from './lib/panel.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { live, untilNewTrack } from './lib/live.svelte';
   import { toast } from './lib/toast.svelte';
@@ -131,6 +132,7 @@
       return;
     }
     sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
+    albumGone(source, a.id);
     withUndo(`${verb} ${r.title} in Music.`, [r.undo], { undone: `${r.title} is back in Incoming.`, after: reload });
   }
 
@@ -186,6 +188,7 @@
     try {
       const { undo, title } = await deleteIncoming(source, a.id);
       sources = (sources ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== a.id) } : s));
+      albumGone(source, a.id);
       withUndo(`Deleted ${title}.`, [undo], { undone: `${title} is back in Incoming.`, after: reload });
     } catch (e) {
       toast.fail(e, 'Could not delete the album');
@@ -272,7 +275,7 @@
         <p class="count">{s.albums.length} {s.albums.length === 1 ? 'album' : 'albums'}, newest first. Tap one to play it.</p>
         <ul>
           {#each s.albums.filter(matches) as a (a.id)}
-            <li class:playing={playing?.album_id === a.id}>
+            <li class:playing={playing?.album_id === a.id} class:viewed={panel.open === albumSubject(s.id, a.id)}>
               <button
                 class="row"
                 disabled={starting !== null}
@@ -360,6 +363,14 @@
   >
     {#if !m.ask}
       <div role="menu">
+        <MenuEntry
+          icon="listOpen"
+          label="View"
+          onclick={() => {
+            menu = null;
+            openPlaylist(albumSubject(m.source, m.a.id));
+          }}
+        />
         {#if m.job !== null}
           {@const id = m.job}
           <MenuEntry icon="close" label="Cancel conversion" danger onclick={() => cancel(id)} />
@@ -547,11 +558,20 @@
     font-variant-numeric: tabular-nums;
   }
 
-  li.playing {
+  li.playing,
+  li.viewed {
     margin: 0 -8px;
     padding-inline: 8px;
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
     border-radius: 10px;
+  }
+
+  li.playing {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+
+  /* In the panel: a border only, as a viewed playlist's (Row). */
+  li.viewed {
+    box-shadow: inset 0 0 0 2px var(--accent);
   }
 
   .now {

@@ -55,3 +55,11 @@ The player is different: it is always about one track, in one view. The owner se
 - **Info** holds what Insights knows of a playlist (how focused it is, its closest playlists; 0023's Related section,
   which leaves Tracks); several playlists get a section each. The genres stay in the header.
 - Old `#/repairs` links open the Playlists page.
+
+## Amendment (2026-10-14): an album is a subject
+
+An album (`?open=album:<server>/<id>`) shows in the panel as a crate does, without tabs: its cover, name, artist and
+year, its tracks in play order as a playlist's rows, and all four actions (Play, Shuffle, Play next, Add to queue). It
+comes from the server (`GET /api/albums/{server}/{id}`), so any album can show: an Incoming album's menu has View (a tap
+still plays it), and a track's menu has View album. An Incoming album that is kept, replaced or deleted closes; one
+Lidarr adds to is read again. The local player takes its tracks from the same answer, with their names.

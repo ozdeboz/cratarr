@@ -1,5 +1,6 @@
 // The panel's subject (decisions 0023, 0025): the player, or what was opened lying under it: a selection of one or more
-// playlists in tabs (Tracks, Info, Export, Repair, Sync), or a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`).
+// playlists in tabs (Tracks, Info, Export, Repair, Sync), a crate (`crate:…`, its builder `crate-new`, `crate-edit:…`),
+// or an Incoming album (`album:<server>/<id>`).
 // It is in the address as `?open=…` (repeated for each playlist) and `&tab=…` on whichever page shows (Back closes
 // it, a reload brings it back), and it stays open across pages: the navigation keeps it in its links (`keepOpen`).
 
@@ -13,8 +14,19 @@ export const TABS: { tab: Tab; label: string }[] = [
 ];
 const isTab = (t: string | null): t is Tab => TABS.some((x) => x.tab === t);
 
-/** A crate, or its builder: a subject of one, without tabs (decision 0025). */
-export const isCrateSubject = (open: string | null) => !!open && (open.startsWith('crate:') || open === 'crate-new' || open.startsWith('crate-edit:'));
+/** An Incoming album in the address, and back. */
+const ALBUM = 'album:';
+export const albumSubject = (source: string, id: string) => `${ALBUM}${source}/${id}`;
+export function albumOf(open: string | null): { source: string; id: string } | null {
+  if (!open?.startsWith(ALBUM)) return null;
+  const rest = open.slice(ALBUM.length);
+  const at = rest.lastIndexOf('/');
+  return at > 0 && at < rest.length - 1 ? { source: rest.slice(0, at), id: rest.slice(at + 1) } : null;
+}
+
+/** A crate, its builder or an album: a subject of one, without tabs (decision 0025). */
+export const isSingleSubject = (open: string | null) =>
+  !!open && (open.startsWith('crate:') || open === 'crate-new' || open.startsWith('crate-edit:') || open.startsWith(ALBUM));
 
 export const panel = $state({
   /** What was opened: the (first) playlist's id, or a crate's key; null when the panel shows the player only. */
@@ -53,7 +65,7 @@ function read() {
   const first = open[0] ?? null;
   if (first !== panel.open || open.join('\n') !== panel.selection.join('\n')) panel.playerTop = false;
   panel.open = first;
-  panel.selection = first && !isCrateSubject(first) ? open : [];
+  panel.selection = first && !isSingleSubject(first) ? open : [];
   const tab = q.get('tab');
   panel.tab = panel.selection.length && isTab(tab) ? tab : 'tracks';
 }
@@ -68,11 +80,11 @@ read();
 addEventListener('hashchange', read);
 addEventListener('popstate', read);
 
-/** Opens playlists (one, or a selection) or a crate in the panel, on `tab`. What is already open is replaced, without
+/** Opens playlists (one, or a selection), a crate or an album in the panel, on `tab`. What is already open is replaced, without
  *  a step in the history (no stack: ✕ and Back then close it rather than going to the one before). */
 export function openSelection(names: string[], tab: Tab = 'tracks') {
   if (!names.length) return closePlaylist();
-  const t = isCrateSubject(names[0]) ? 'tracks' : tab;
+  const t = isSingleSubject(names[0]) ? 'tracks' : tab;
   panel.playerTop = false;
   if (names.join('\n') === (panel.selection.length ? panel.selection : [panel.open]).join('\n') && t === panel.tab) {
     panel.again++;
@@ -83,7 +95,7 @@ export function openSelection(names: string[], tab: Tab = 'tracks') {
   read();
 }
 
-/** Opens one playlist (or a crate) on its Tracks. */
+/** Opens one playlist (or a crate, or an album) on its Tracks. */
 export const openPlaylist = (name: string) => openSelection([name]);
 
 /** Another tab for the selection: a step in the history only when the panel is full-screen (Back returns to it). */
@@ -122,6 +134,11 @@ export function playlistDeleted(id: string) {
   if (!rest.length) return closePlaylist();
   replace(address(rest, panel.tab));
   read();
+}
+
+/** An album that left Incoming (kept, replaced or deleted) closes. */
+export function albumGone(source: string, id: string) {
+  if (panel.open === albumSubject(source, id)) closePlaylist();
 }
 
 /** A page's link that keeps what is open open. */

@@ -25,6 +25,7 @@
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
   import { followCreate, followDelete } from './follow.svelte';
+  import { albumSubject, openPlaylist } from './panel.svelte';
 
   let {
     onclose,
@@ -53,6 +54,14 @@
     forPlaying ? shownCover() : track ? (track.album_id ? incomingCoverUrl(track.source, track.album_id) : coverUrl(track)) : null,
   );
   const addable = $derived(forPlaying ? !!np?.addable : !!other?.addable);
+  /** The track's album, for View album: as the track came, else as the server says. */
+  const albumId = $derived(t?.album_id ?? (forPlaying ? null : (other?.album_id ?? null)));
+  function viewAlbum() {
+    if (!t || !albumId) return;
+    const subject = albumSubject(t.source, albumId);
+    onclose();
+    openPlaylist(subject);
+  }
   const heartOn = $derived(forPlaying ? favorite() : !!other?.favorite);
   const heartKnown = $derived(forPlaying ? np?.favorite !== null : other !== null && other.favorite !== null);
   const busy = $derived(forPlaying ? pending() : !other);
@@ -195,6 +204,9 @@
         {/if}
         {#if heartKnown}
           <MenuEntry icon="heart" label={heartOn ? 'Remove from favourites' : 'Add to favourites'} disabled={busy} onclick={heart} />
+        {/if}
+        {#if albumId}
+          <MenuEntry icon="albums" label="View album" onclick={viewAlbum} />
         {/if}
         {#if forPlaying}
           <MenuEntry

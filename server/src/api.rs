@@ -59,6 +59,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/sync/targets", get(sync_targets))
         .route("/api/playlists/by-name", get(playlist_by_name))
         .route("/api/playlists/{id}/spoken", put(set_spoken))
+        .route("/api/albums/{source}/{album}", get(album_view))
         .route("/api/albums/duplicates", get(album_duplicates))
         .route("/api/duplicates", get(duplicates))
         .route("/api/duplicates/dedupe", post(dedupe))
@@ -74,7 +75,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/incoming/jobs", get(incoming_jobs))
         .route("/api/incoming/jobs/{id}/cancel", post(cancel_job))
         .route("/api/incoming/play/{source}/{album}", post(play_incoming))
-        .route("/api/incoming/tracks/{source}/{album}", get(incoming_tracks))
         .route("/api/settings", get(get_settings).put(save_settings))
         .route("/api/settings/preview", post(preview))
         .route("/api/insights", get(insights))
@@ -161,6 +161,11 @@ async fn track_info(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
             .into_response(),
         Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": format!("{e:#}") }))).into_response(),
     }
+}
+
+/// An album's view in the panel (decision 0023), and its tracks for the local player (decision 0022).
+async fn album_view(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::AlbumView>, ApiError> {
+    Ok(Json(app.playing.album_view(&source, &album).await?))
 }
 
 /// A track's playlists and favourite, for the local player's track (decision 0022).
@@ -523,17 +528,6 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
 
 async fn incoming(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::IncomingView> {
     Json(app.incoming.list(f.source.as_deref()).await)
-}
-
-/// An Incoming album's track ids in play order, for the local player (decision 0022).
-async fn incoming_tracks(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
-    let Some((_, src)) = app.library.connected_sources().into_iter().find(|(s, _)| *s == source) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "That server is not connected." }))).into_response();
-    };
-    match src.album_track_ids(&album).await {
-        Ok(ids) => Json(json!({ "source": source, "ids": ids })).into_response(),
-        Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": format!("{e:#}") }))).into_response(),
-    }
 }
 
 async fn play_incoming(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
