@@ -31,11 +31,17 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     folds it to the mini-player until that is tapped. Otherwise the mini-player shows, and opens the full player
     **over everything**, navigation included (slides up, fades out); its chevron, Esc or a swipe down close it, and
     so does changing page. Maximise (beside the page) and back-beside-the-page (over it) are remembered.
+  - **Output** (`lib/OutputSheet.svelte`, decisions 0019 and 0022): the speaker button in the actions row (menu,
+    heart, count, output, queue) opens a "Play on" sheet: This device, and the server's player by its name, the
+    current one checked. Choosing the other one moves the music there (the queue and the position) and stops the side
+    that played; nothing asks first, the player simply carries on there. The choice is remembered by the browser.
+    Whichever side plays, the player looks and works the same; playlists, the heart and the info chips act on the
+    track that plays there. A track this device cannot play is skipped with one error line naming it.
   Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`,
   `lib/remote.svelte.ts`).
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **Controls sit next to what they change.** Sort order and size of the playlist grid are in the Playlists toolbar,
-  not in Settings. The player choice ("Playing on Finamp · Lenovo Tab ▾") sits with the player, not in Settings.
+  not in Settings. Where music plays is chosen at the player (its output button), not in Settings.
 - **Views of one page are tabs**: a segmented control at the start of its toolbar, remembered by the browser
   (Insights: Statistics, Related). Its switches (Related: shared tracks, genre, artists) sit in the same toolbar.
 - **The playlist panel (Insights → Related only):** selecting a point shows a button at the graph's top right that
