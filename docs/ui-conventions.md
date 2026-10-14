@@ -32,6 +32,13 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     folds it to the mini-player until that is tapped. Otherwise the mini-player shows, and opens the full player
     **over everything**, navigation included (slides up, fades out); its chevron, Esc or a swipe down close it, and
     so does changing page. Maximise (beside the page) and back-beside-the-page (over it) are remembered.
+  - **Queue** (`lib/QueueSheet.svelte`, as Finamp's queue sheet): a sheet over the player on the blurred cover, a grab
+    handle and "Queue" (drag it down to close); the previous tracks folded under "Previous Tracks" (this device only);
+    the playing track as a card pinned at the top that fills in the cover's colour as it plays, with play/pause on its
+    cover, the heart and the track menu; "Playing from …" (or "Playing on …" for the server's player) and "i / n
+    (time left)" pinned under it; then what comes next, 70 px rows (60 px cover, title up to two lines, artist,
+    length). A tap plays a row. Playing on this device a row's handle reorders and a swipe left past 65 % removes it,
+    with no undo, as Finamp; the server's player takes neither command.
   - **Output** (`lib/OutputSheet.svelte`, decisions 0019 and 0022): the speaker button in the actions row (menu,
     heart, count, output, queue) opens a "Play on" sheet: This device, and the server's player by its name, the
     current one checked. Choosing the other one moves the music there (the queue and the position) and stops the side

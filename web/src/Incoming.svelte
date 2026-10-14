@@ -209,7 +209,7 @@
     starting = a.id;
     try {
       // Here when the output is this browser (decision 0022), else on the server's player.
-      if (await playIncomingHere(source, a.id)) return;
+      if (await playIncomingHere(source, a.id, a.title)) return;
       await playIncoming(source, a.id);
       // Show the album's track once it plays, not the states on the way.
       await untilNewTrack();

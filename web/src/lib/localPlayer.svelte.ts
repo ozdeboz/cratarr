@@ -34,6 +34,8 @@ export const local = $state({
   duration: null as number | null,
   /** The last thing that failed, in plain words. */
   error: null as string | null,
+  /** What the queue was started from ("Chill", an album), for the queue sheet's "Playing from"; null when unknown. */
+  from: null as string | null,
 });
 
 const MP4 = 'audio/mp4; codecs="flac"';
@@ -339,8 +341,9 @@ export const engineAudio = () => audio;
 // --- what the player and the lock screen ask of it ---
 
 /** Plays `tracks` from `index`. */
-export function playQueue(tracks: LocalTrack[], index = 0) {
+export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null) {
   local.queue = tracks;
+  local.from = from;
   fresh(index, 0);
 }
 
@@ -362,6 +365,16 @@ export function move(from: number, to: number) {
   local.queue = q;
   cutFrom(Math.min(from, to));
 }
+
+/** Takes upcoming track `index` (a queue index after the playing track) out of the queue: the queue sheet's swipe. */
+export function remove(index: number) {
+  if (index <= local.index || index >= local.queue.length) return;
+  local.queue = local.queue.filter((_, i) => i !== index);
+  cutFrom(index);
+}
+
+/** As `remove`, counted in what comes next. */
+export const removeUpcoming = (i: number) => remove(local.index + 1 + i);
 
 /** As `move`, counted in what comes next (0 = the track after the playing one), as the queue sheet lists it. */
 export const moveUpcoming = (from: number, to: number) => move(local.index + 1 + from, local.index + 1 + to);

@@ -182,16 +182,16 @@ export async function playPlaylistHere(id: string, mode: PlayMode): Promise<bool
   const order = mode === 'shuffle' ? [...ids].sort(() => Math.random() - 0.5) : ids;
   const tracks: LocalTrack[] = order.map((tid) => ({ source, id: tid, name: '', artist: null, album: null, album_id: null }));
   if (mode === 'next' || mode === 'last') enqueue(tracks, mode);
-  else playQueue(tracks, 0);
+  else playQueue(tracks, 0, id);
   return true;
 }
 
 /** Plays an Incoming album here when the output is this browser (its tracks are not in Music: never addable). */
-export async function playIncomingHere(source: string, album: string): Promise<boolean> {
+export async function playIncomingHere(source: string, album: string, title?: string): Promise<boolean> {
   if (!isLocal()) return false;
   const r = await incomingTrackIds(source, album);
   if (!r.ids.length) throw new Error('That album has no tracks.');
-  playQueue(r.ids.map((id) => ({ source: r.source, id, name: '', artist: null, album: null, album_id: album, addable: false })), 0);
+  playQueue(r.ids.map((id) => ({ source: r.source, id, name: '', artist: null, album: null, album_id: album, addable: false })), 0, title ?? null);
   return true;
 }
 

@@ -4,19 +4,17 @@
   // how many playlists hold the track, laid out by lib/playerLayout.ts, on the blurred cover in its colours.
   import { untrack } from 'svelte';
   import { linear } from 'svelte/easing';
-  import { fade, fly } from 'svelte/transition';
-  import { DECELERATE_CSS, decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
-  import { incomingCoverUrl } from './api';
+  import { fade } from 'svelte/transition';
+  import { reducedMotion } from './motion';
   import Icon from './Icon.svelte';
   import { player, refresh } from './live.svelte';
   import TrackMenu from './TrackMenu.svelte';
+  import QueueSheet from './QueueSheet.svelte';
   import OutputSheet from './OutputSheet.svelte';
-  import { toast } from './toast.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playUpcoming, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
-  import { moveUpcoming } from './localPlayer.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
@@ -102,67 +100,6 @@
   let queueOpen = $state(false);
   let outputOpen = $state(false);
   const openMenu = (e: Event) => (menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect());
-  // Reordering the queue (Finamp's handle at the end of a row): only this device's queue can be changed, the server's
-  // player takes no reorder command. The row follows the finger, the rows it passes make room; the queue changes on
-  // release.
-  let drag = $state<{ from: number; to: number; dy: number } | null>(null);
-  let qlist = $state<HTMLElement>();
-  let dragStart = { y: 0, scroll: 0, rowH: 56 };
-  let scrollTimer: ReturnType<typeof setInterval> | undefined;
-  function dragDown(e: PointerEvent, i: number) {
-    if (!isLocal() || !qlist) return;
-    const el = e.currentTarget as HTMLElement;
-    el.setPointerCapture(e.pointerId);
-    dragStart = { y: e.clientY, scroll: qlist.scrollTop, rowH: el.closest('li')!.getBoundingClientRect().height };
-    drag = { from: i, to: i, dy: 0 };
-    navigator.vibrate?.(10);
-  }
-  function dragTo(y: number) {
-    if (!drag || !qlist || !np) return;
-    const dy = y - dragStart.y + (qlist.scrollTop - dragStart.scroll);
-    const to = Math.min(np.upcoming.length - 1, Math.max(0, drag.from + Math.round(dy / dragStart.rowH)));
-    drag = { ...drag, dy, to };
-  }
-  let lastY = 0;
-  function dragMove(e: PointerEvent) {
-    if (!drag || !qlist) return;
-    lastY = e.clientY;
-    dragTo(lastY);
-    // Near the list's top or bottom edge it scrolls, and the row goes along.
-    const r = qlist.getBoundingClientRect();
-    const speed = lastY < r.top + 48 ? -8 : lastY > r.bottom - 48 ? 8 : 0;
-    clearInterval(scrollTimer);
-    if (speed)
-      scrollTimer = setInterval(() => {
-        qlist!.scrollTop += speed;
-        dragTo(lastY);
-      }, 16);
-  }
-  function dragEnd() {
-    clearInterval(scrollTimer);
-    if (!drag) return;
-    const { from, to } = drag;
-    drag = null;
-    if (from !== to) moveUpcoming(from, to);
-  }
-  /** Where a row is drawn during a drag: the dragged one under the finger, the ones it passed one row over. */
-  function offset(j: number): number {
-    if (!drag) return 0;
-    const { from, to, dy } = drag;
-    if (j === from) return dy;
-    if (from < to && j > from && j <= to) return -dragStart.rowH;
-    if (to < from && j >= to && j < from) return dragStart.rowH;
-    return 0;
-  }
-
-  async function jump(i: number) {
-    try {
-      await playUpcoming(i);
-    } catch (e) {
-      toast.fail(e, "The player didn't go to that track");
-    }
-  }
-
   // Closing: over the page the chevron, Esc and a swipe down close it; beside the page they fold it to the
   // mini-player until that is tapped (not remembered). Maximise puts it over the page, the sidebar button back beside
   // it; both are remembered (prefs.sidebar).
@@ -430,50 +367,7 @@
   </header>
 
   {#if queueOpen && np}
-    <!-- The queue (decision 0019): the playing track, then what comes next as the player reports it; a tap plays it.
-         A bottom sheet as Finamp's (in 250 ms decelerating, out 200 ms, over a dark backdrop). -->
-    <div class="qback" role="presentation" onclick={() => (queueOpen = false)} transition:fade={{ duration: SHEET_OUT }}></div>
-    <div
-      class="queue"
-      role="dialog"
-      aria-label="Queue"
-      in:fly={{ y: 600, duration: SHEET_IN, easing: decelerate }}
-      out:fly={{ y: 600, duration: SHEET_OUT, easing: decelerate }}
-    >
-      <div class="qhead">
-        <button class="corner left" aria-label="Close the queue" onclick={() => (queueOpen = false)}><Icon name="collapse" size={26} /></button>
-        <span>Queue</span>
-      </div>
-      <div class="qnow">
-        {#if src}<img {src} alt="" />{/if}
-        <div><strong>{np.name}</strong><span>{np.artist ?? ''}</span></div>
-      </div>
-      {#if np.upcoming.length}
-        <ol bind:this={qlist} class:dragging={!!drag}>
-          {#each np.upcoming as t, i (t.id + ':' + i)}
-            <li class:lifted={drag?.from === i} style:transform={drag ? `translateY(${offset(i)}px)` : null}>
-              <button class="row" onclick={() => jump(i)}>
-                {#if t.album_id}<img src={incomingCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
-                <div><strong>{t.name}</strong><span>{t.artist ?? ''}</span></div>
-                {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
-              </button>
-              {#if isLocal()}
-                <button
-                  class="grip"
-                  aria-label="Drag to reorder"
-                  onpointerdown={(e) => dragDown(e, i)}
-                  onpointermove={dragMove}
-                  onpointerup={dragEnd}
-                  onpointercancel={dragEnd}><Icon name="order" size={22} /></button
-                >
-              {/if}
-            </li>
-          {/each}
-        </ol>
-      {:else}
-        <p class="empty">Nothing comes next.</p>
-      {/if}
-    </div>
+    <QueueSheet src={src} onclose={() => (queueOpen = false)} onmenu={openMenu} />
   {/if}
 </div>
 
@@ -823,157 +717,6 @@
     font-size: 0.75rem;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
-  }
-
-  .qback {
-    position: absolute;
-    inset: 0;
-    z-index: 2;
-    background: rgb(0 0 0 / 0.54);
-  }
-
-  /* The queue: a sheet over the player (Finamp's opens at 92 %), the playing track pinned at its top. */
-  .queue {
-    position: absolute;
-    inset: 8% 0 0;
-    z-index: 2;
-    display: flex;
-    flex-direction: column;
-    border-radius: 16px 16px 0 0;
-    background: var(--surface);
-    box-shadow: 0 -8px 30px rgb(0 0 0 / 0.4);
-  }
-
-  .qhead {
-    position: relative;
-    padding: 18px 16px 10px;
-    font-weight: 650;
-    text-align: center;
-  }
-
-  .qhead .corner {
-    top: 6px;
-  }
-
-  .qnow,
-  .queue li {
-    display: flex;
-    align-items: center;
-    background: var(--surface);
-  }
-
-  /* While a row is dragged the others slide aside; the dragged one follows the finger, lifted. */
-  .queue ol.dragging li {
-    transition: transform 200ms ease;
-  }
-
-  .queue ol.dragging li.lifted {
-    position: relative;
-    z-index: 1;
-    transition: none;
-    box-shadow: 0 6px 20px rgb(0 0 0 / 0.3);
-  }
-
-  .queue li .grip {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 56px;
-    margin-right: 6px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--text);
-    cursor: grab;
-    touch-action: none;
-  }
-
-  .queue ol.dragging .grip {
-    cursor: grabbing;
-  }
-
-  .queue li .row {
-    flex: 1;
-    min-width: 0;
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-    padding: 8px 16px;
-    text-align: left;
-  }
-
-  .qnow {
-    border-bottom: 1px solid var(--border);
-    background: color-mix(in srgb, var(--art-accent) 14%, transparent);
-  }
-
-  .qnow img,
-  .queue img,
-  .noimg {
-    flex: none;
-    width: 44px;
-    height: 44px;
-    border-radius: 6px;
-    object-fit: cover;
-    background: var(--bg);
-  }
-
-  .qnow div,
-  .queue li div {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .qnow strong,
-  .qnow span,
-  .queue li strong,
-  .queue li div span {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .qnow span,
-  .queue li div span,
-  .queue .d {
-    color: var(--muted);
-    font-size: 0.85rem;
-  }
-
-  .queue ol {
-    flex: 1;
-    margin: 0;
-    padding: 4px 0 calc(12px + env(safe-area-inset-bottom));
-    overflow-y: auto;
-    list-style: none;
-  }
-
-  .queue li .row {
-    min-height: 56px;
-    background: none;
-    border: 0;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .queue li .row:hover,
-  .queue li .row:focus-visible {
-    background: color-mix(in srgb, var(--text) 7%, transparent);
-  }
-
-  .queue .d {
-    flex: none;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .empty {
-    margin: 16px;
-    color: var(--muted);
   }
 
   .fav {
