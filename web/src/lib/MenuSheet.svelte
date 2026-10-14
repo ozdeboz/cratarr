@@ -98,7 +98,9 @@
   });
 </script>
 
-<div class="backdrop" role="presentation" onclick={onclose} transition:fade={{ duration: SHEET_OUT }}></div>
+<!-- Global transitions: a sheet slides in and out however it is opened (inside another block, such as TrackMenu's
+     {#if}, a local one would not play). -->
+<div class="backdrop" role="presentation" onclick={onclose} transition:fade|global={{ duration: SHEET_OUT }}></div>
 <div
   class="sheet"
   role="dialog"
@@ -113,8 +115,8 @@
   onpointermove={move}
   onpointerup={up}
   onpointercancel={up}
-  in:fly={{ y: 400, duration: SHEET_IN, easing: decelerate }}
-  out:fly={{ y: 400, duration: SHEET_OUT, easing: decelerate }}
+  in:fly|global={{ y: 400, duration: SHEET_IN, easing: decelerate }}
+  out:fly|global={{ y: 400, duration: SHEET_OUT, easing: decelerate }}
 >
   {#if images[0]}<img class="blur" src={images[0]} alt="" aria-hidden="true" />{/if}
   <div class="veil"></div>
