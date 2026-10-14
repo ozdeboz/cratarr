@@ -35,6 +35,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/covers", get(playlist_covers))
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/rows", get(playlist_rows))
+        .route("/api/playlists/favorites", get(playlist_favorites))
+        .route("/api/playlists/{id}/favorite", post(playlist_favorite))
         .route("/api/playlists/{id}/entries", put(edit_playlist))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
@@ -193,6 +195,20 @@ async fn favorites(
 async fn playlist_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Response, ApiError> {
     let (source, rows) = app.playlists.rows(&id, f.source.as_deref()).await?;
     Ok(Json(json!({ "source": source, "rows": rows })).into_response())
+}
+
+/// Which playlists are favourites (by name), as Finamp's playlist hearts (decision 0023).
+async fn playlist_favorites(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<std::collections::BTreeMap<String, bool>>, ApiError> {
+    Ok(Json(app.playlists.favorites(f.source.as_deref()).await?))
+}
+
+async fn playlist_favorite(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    Query(f): Query<Favorite>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    app.playlists.set_favorite(&id, f.source.as_deref(), f.on).await?;
+    Ok(Json(json!({ "playlist": id, "favorite": f.on })))
 }
 
 /// A playlist edited in its view (decision 0023): `entries` (its lines, reordered or some left out) replaces `expected`

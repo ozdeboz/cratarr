@@ -528,6 +528,15 @@ export const getFavorites = (source: string, ids: string[]) =>
     body: JSON.stringify({ ids }),
   });
 
+/** Which playlists (by name) are favourites, as Finamp's playlist hearts (decision 0023). */
+export const getPlaylistFavorites = (source?: string) => quietly<Record<string, boolean>>(`/api/playlists/favorites${follow(source)}`);
+
+export const setPlaylistFavorite = (id: string, on: boolean, source?: string) => {
+  const q = new URLSearchParams({ on: String(on) });
+  if (source) q.set('source', source);
+  return quietly<{ playlist: string; favorite: boolean }>(`/api/playlists/${encodeURIComponent(id)}/favorite?${q}`, { method: 'POST' });
+};
+
 /** The local player played most of the track: one play counts in the media server (decision 0022). */
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });
 export const incomingTrackIds = (source: string, album: string) =>

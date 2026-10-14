@@ -9,7 +9,7 @@
   // removed tracks wait in their own section to be restored, and Save writes the playlist once (Cancel drops it).
   import { coverUrl, editPlaylist, incomingCoverUrl, playlistCovers, playlistRows, queueTrack, setSpoken, spokenNames, type PlaylistRow } from './api';
   import { Reorder } from './reorder.svelte';
-  import { loadFavorites } from './favourites.svelte';
+  import { isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, togglePlaylistFavorite } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
@@ -87,6 +87,8 @@
   const at = $derived(insights.indexOf(id));
   const point = $derived(at >= 0 ? insights.shown!.playlists[at] : null);
   const closest = $derived(insights.closest(at));
+
+  $effect(() => void loadPlaylistFavorites());
 
   // Opening it again scrolls it to the top.
   let scroller = $state<HTMLElement>();
@@ -228,6 +230,9 @@
     {:else}
       <button class="icon" aria-label="Close the playlist" onclick={closePlaylist}><Icon name="close" size={24} /></button>
       <span class="end">
+        <button class="icon" class:fav={isPlaylistFavorite(id)} aria-pressed={isPlaylistFavorite(id)} aria-label="Favourite" onclick={() => togglePlaylistFavorite(id)}
+          ><Icon name="heart" size={24} /></button
+        >
         {#if rows && p}<button class="icon" aria-label={`Edit ${id}`} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
         <button class="icon" aria-label={`Menu of ${id}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
       </span>
@@ -383,6 +388,11 @@
 
   .end {
     display: flex;
+  }
+
+  /* Finamp's playlist heart: filled when it is a favourite. */
+  .icon.fav :global(svg) {
+    fill: currentColor;
   }
 
   /* Edit mode's Cancel and Save, where ✕ and the menu are otherwise. */

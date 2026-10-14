@@ -692,6 +692,32 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn playlist_favorites(&self) -> Fut<'_, BTreeMap<String, bool>> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await.unwrap_or_default();
+            // No track: the account Cratarr plays as, else the followed player's (see `whose`).
+            let user = self.account_for(&sessions, "").await?;
+            let mut out: BTreeMap<String, bool> = BTreeMap::new();
+            for (_, name, on) in self.jf.playlist_favorites(&user).await? {
+                *out.entry(name).or_default() |= on;
+            }
+            Ok(out)
+        })
+    }
+
+    fn set_playlist_favorite<'a>(&'a self, name: &'a str, on: bool) -> Fut<'a, ()> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await.unwrap_or_default();
+            let user = self.account_for(&sessions, "").await?;
+            let copies: Vec<String> = self.jf.playlist_favorites(&user).await?.into_iter().filter(|(_, n, _)| n == name).map(|(id, _, _)| id).collect();
+            anyhow::ensure!(!copies.is_empty(), "Jellyfin has no playlist called {name} yet");
+            for id in &copies {
+                self.jf.set_favorite(&user, id, on).await?;
+            }
+            Ok(())
+        })
+    }
+
     fn favorites<'a>(&'a self, tracks: &'a [String]) -> Fut<'a, BTreeMap<String, bool>> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await?;

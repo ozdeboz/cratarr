@@ -399,6 +399,27 @@ impl PlaylistService {
         Ok(())
     }
 
+    /// The server (`want`, else the first connected) a playlist favourite is kept on.
+    fn favourites_source(&self, want: Option<&str>) -> Result<Arc<dyn source::Source>, ToggleError> {
+        let sources = self.lib.connected();
+        want.and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
+            .or_else(|| sources.first())
+            .map(|(_, s)| s.clone())
+            .ok_or_else(|| ToggleError::Refused("No server is connected.".into()))
+    }
+
+    /// Which playlists (by name) are favourites, as Finamp's playlist hearts (decision 0023).
+    pub async fn favorites(&self, want: Option<&str>) -> Result<std::collections::BTreeMap<String, bool>, ToggleError> {
+        let s = self.favourites_source(want)?;
+        s.playlist_favorites().await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
+    /// Makes a playlist a favourite or not (every copy on the server).
+    pub async fn set_favorite(&self, id: &str, want: Option<&str>, on: bool) -> Result<(), ToggleError> {
+        let s = self.favourites_source(want)?;
+        s.set_playlist_favorite(id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
     /// A new playlist holding these entries, in order (a playlist made from the queue, decision 0019).
     pub async fn create_with(&self, name: &str, entries: &[String]) -> Result<(), ToggleError> {
         let store = self.lib.store()?;

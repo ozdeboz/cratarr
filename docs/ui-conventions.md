@@ -49,14 +49,16 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   `lib/remote.svelte.ts`).
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **An opened playlist** (decision 0023, `lib/PlaylistView.svelte`): in the panel beside the page, or on a phone a
-  full-height layer with the mini-player floating over its end. Its bar has ✕, the pencil (edit mode) and the menu; in
+  full-height layer with the mini-player floating over its end. Its bar has ✕, the heart (Finamp's playlist
+  favourite), the pencil (edit mode) and the menu; in
   edit mode Cancel and Save. Rows as the queue's; edit mode as Finamp's playlist edit screen ("Spoken as" at the top,
   where Finamp has the name; rows with handle and ✕, swipe to remove, "Removed tracks" to restore), written once on
   Save.
 - **Playlist chips** (the Playlists page) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
-  tap on the label opens the playlist (decision 0023). When the playing
+  tap on the label opens the playlist (decision 0023). A favourite playlist has a small red heart (Finamp's list mark)
+  above the problems' dot, in the dot's place, so the chip gets no wider. When the playing
   track is outside Music (it cannot go in playlists), the chips it is not in are quieter and their plus circle is
   dashed (Finamp's mark for a playlist it cannot add to); a tap says why.
 - **Pinned playlists** (the playlist menu: Pin to top / Unpin) come first on the Playlists page, in the order they

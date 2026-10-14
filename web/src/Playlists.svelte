@@ -11,9 +11,12 @@
   import { pending, playing } from './lib/remote.svelte';
   import { longpress } from './lib/longpress';
   import { openPlaylist } from './lib/panel.svelte';
+  import { isPlaylistFavorite, loadPlaylistFavorites } from './lib/favourites.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
   const view = $derived(live.view);
+  // The favourites' hearts on the chips (decision 0023).
+  $effect(() => void loadPlaylistFavorites());
   const error = $derived(live.error);
   let filter = $state('');
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
@@ -153,7 +156,14 @@
               <span class="name">{p.name}</span>
               {#if prefs.pinned.includes(p.id)}<span class="pinned" title="Pinned"><Icon name="pin" size={13} /></span>{/if}
               {#if p.links.some((l) => l.target !== 'shared')}<span class="own" title={p.links.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
-              <span class="n">{p.count}{#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}</span>
+              <span class="n">{p.count}</span>
+            <!-- A favourite's small heart above the problems' dot, in the dot's place: the chip gets no wider. -->
+            {#if isPlaylistFavorite(p.id) || p.dead > 0}
+              <span class="flags">
+                {#if isPlaylistFavorite(p.id)}<span class="heart" aria-label="Favourite"><Icon name="heart" size={10} /></span>{/if}
+                {#if p.dead > 0}<i class="dead" aria-label={missing(p.dead)}></i>{/if}
+              </span>
+            {/if}
             </button>
             <span class="sep" aria-hidden="true"></span>
             <button
@@ -396,14 +406,32 @@
     opacity: 0.65;
   }
 
+  .flags {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: 10px;
+    margin-left: -4px;
+  }
+
+  .heart {
+    display: flex;
+    color: #e5484d;
+  }
+
+  .heart :global(svg) {
+    fill: currentColor;
+  }
+
   .dead {
-    display: inline-block;
+    display: block;
     width: 6px;
     height: 6px;
-    margin-left: 5px;
     border-radius: 50%;
     background: var(--warn);
-    vertical-align: middle;
   }
 
   .empty {

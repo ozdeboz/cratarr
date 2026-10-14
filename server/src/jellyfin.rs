@@ -409,6 +409,26 @@ impl Jellyfin {
         Ok(page.items)
     }
 
+    /// Every playlist `user` sees (imported `.m3u` ones and their own) with whether it is their favourite: (id, name, on).
+    pub async fn playlist_favorites(&self, user: &str) -> Result<Vec<(String, String, bool)>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Item {
+            id: String,
+            name: String,
+            user_data: Option<Fav>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Fav {
+            is_favorite: Option<bool>,
+        }
+        anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
+        let page: ItemsPage<Item> =
+            self.get(&format!("/Items?IncludeItemTypes=Playlist&Recursive=true&UserId={user}&EnableUserData=true")).await?;
+        Ok(page.items.into_iter().map(|i| (i.id, i.name, i.user_data.and_then(|u| u.is_favorite).unwrap_or(false))).collect())
+    }
+
     /// A playlist's track ids in order. Jellyfin answers this only with a user (observed on 10.11: 400 without).
     pub async fn playlist_entries(&self, user: &str, playlist: &str) -> Result<Vec<String>> {
         let page: ItemsPage<IdOnly> = self.get(&format!("/Playlists/{playlist}/Items?UserId={user}")).await?;

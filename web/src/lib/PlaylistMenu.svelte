@@ -24,6 +24,7 @@
   import { startPlaylist } from './output.svelte';
   import { openPlaylist, panel, playlistDeleted, playlistRenamed } from './panel.svelte';
   import { insights } from './insights.svelte';
+  import { isPlaylistFavorite, loadPlaylistFavorites, playlistFavoriteRenamed, togglePlaylistFavorite } from './favourites.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { prefs, togglePin } from './prefs.svelte';
   import { refresh } from './live.svelte';
@@ -45,6 +46,7 @@
   } = $props();
 
   let mode = $state<'menu' | 'rename' | 'delete' | 'sync' | 'spoken'>('menu');
+  $effect(() => void loadPlaylistFavorites());
 
   // The card's image: the covers of the playlist's first four albums (one cover when it has fewer).
   let covers = $state<string[]>([]);
@@ -138,6 +140,7 @@
       // A pinned playlist stays pinned, in its place; an open one stays open; Insights follows.
       prefs.pinned = prefs.pinned.map((x) => (x === p.id ? to : x));
       playlistRenamed(p.id, to);
+      playlistFavoriteRenamed(p.id, to);
       insights.renamed(p.id, to);
       onrenamed?.(p.id, to);
       onclose();
@@ -215,6 +218,14 @@
           }}
         />
       {/if}
+      <MenuEntry
+        icon="heart"
+        label={isPlaylistFavorite(p.id) ? 'Remove from favourites' : 'Add to favourites'}
+        onclick={() => {
+          togglePlaylistFavorite(p.id);
+          onclose();
+        }}
+      />
       <MenuEntry
         icon="pin"
         label={prefs.pinned.includes(p.id) ? 'Unpin' : 'Pin to top'}

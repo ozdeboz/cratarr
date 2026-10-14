@@ -351,6 +351,18 @@ pub trait Source: Send + Sync {
         Box::pin(async { Ok(BTreeMap::new()) })
     }
 
+    /// Optional: which playlists (by name) are favourites of the account the source plays for (decision 0023, as
+    /// Finamp's playlist hearts). A Cratarr playlist can be there more than once (imported, and an account's own copy):
+    /// it is a favourite when any of them is.
+    fn playlist_favorites(&self) -> Fut<'_, BTreeMap<String, bool>> {
+        Box::pin(async { Ok(BTreeMap::new()) })
+    }
+
+    /// Optional: makes the playlists with this name (every copy) a favourite or not.
+    fn set_playlist_favorite<'a>(&'a self, _name: &'a str, _on: bool) -> Fut<'a, ()> {
+        Box::pin(async { anyhow::bail!("this server keeps no favourite playlists") })
+    }
+
     /// Whether the track is a favourite of the account the source plays for; `None` when it cannot tell.
     fn favorite<'a>(&'a self, _track: &'a str) -> Fut<'a, Option<bool>> {
         Box::pin(async { Ok(None) })

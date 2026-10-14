@@ -63,6 +63,10 @@ The owner decided (2026-10-14):
   - Events: a rename is followed, a delete closes the view, changes (sync, a chip tap) show in place. Stopping
     playback or switching output leaves it as it is.
   - The rows come in one batch request with their details; only rows on screen are drawn.
+- **Playlist favourites** (owner, 2026-10-14, as Finamp's): the heart in the view's bar, "Add to / Remove from
+  favourites" in the playlist menu, and a small red heart on a favourite's chip above its problems' dot (no wider
+  chip). A Cratarr playlist can be in Jellyfin more than once (imported from the `.m3u`, an account's own synced copy):
+  the heart marks every copy, for the account Cratarr plays as, and shows when any copy is a favourite.
 - **Insights consolidates into the panel.** Its playlist panel (tracks and genres, focus, closest playlists and what
   they share, its menu) becomes the view's Related tab, available wherever a playlist is opened. On Insights the
   graph's selection and the opened playlist are one state while the panel shows a playlist: opening one highlights

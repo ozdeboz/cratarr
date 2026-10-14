@@ -1,6 +1,7 @@
 // The hearts on lists' rows (Finamp's, decision 0023): which tracks are favourites, as last asked in one request per
 // list, and the long-press that flips one. Shared by the queue sheet and the playlist view.
-import { getFavorites, setTrackFavorite } from './api';
+import { getFavorites, getPlaylistFavorites, setPlaylistFavorite, setTrackFavorite } from './api';
+import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
 /** `source/id` → favourite. */
@@ -22,6 +23,42 @@ export async function loadFavorites(source: string, ids: string[]) {
   } catch {
     /* as they were */
   }
+}
+
+// Playlists' hearts (Finamp's, decision 0023): which playlists are favourites, asked for once; a change shows at once.
+const playlistFavs = $state<Record<string, boolean>>({});
+let playlistFavsAsked = false;
+
+export const isPlaylistFavorite = (name: string) => playlistFavs[name] ?? false;
+
+export async function loadPlaylistFavorites() {
+  if (playlistFavsAsked) return;
+  playlistFavsAsked = true;
+  try {
+    Object.assign(playlistFavs, await getPlaylistFavorites(prefs.source || undefined));
+  } catch {
+    playlistFavsAsked = false;
+  }
+}
+
+/** Makes a playlist a favourite or not (every copy the server has of it). */
+export async function togglePlaylistFavorite(name: string) {
+  const on = !isPlaylistFavorite(name);
+  playlistFavs[name] = on;
+  navigator.vibrate?.(8);
+  try {
+    await setPlaylistFavorite(name, on, prefs.source || undefined);
+  } catch (e) {
+    playlistFavs[name] = !on;
+    toast.fail(e, "The favourite didn't change");
+  }
+}
+
+/** A renamed playlist keeps its heart (the server's copies follow the new name). */
+export function playlistFavoriteRenamed(from: string, to: string) {
+  if (!(from in playlistFavs)) return;
+  playlistFavs[to] = playlistFavs[from];
+  delete playlistFavs[from];
 }
 
 /** The long-press on a row's heart: a favourite or not (a heavy tick, as Finamp's). */
