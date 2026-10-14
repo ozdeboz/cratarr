@@ -294,7 +294,7 @@
     padding-right: 56px;
   }
 
-  @container (min-width: 560px) {
+  @container (min-width: 400px) {
     .tools > .row:first-child {
       padding-right: 170px;
     }

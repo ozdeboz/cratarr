@@ -32,7 +32,7 @@
     display: none;
   }
 
-  @container (min-width: 560px) {
+  @container (min-width: 400px) {
     .corner {
       padding: 0 14px 0 10px;
     }

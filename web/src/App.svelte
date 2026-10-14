@@ -339,11 +339,12 @@
   }
 
   /* Below 1024 px the bar of pages is fixed along the top; the mini-player floats along the bottom (decision 0018).
-     The page keeps clear of both (--top-h, --bottom-h, set by the script). */
+     The page keeps clear of both (--top-h, --bottom-h, set by the script). The room under it belongs to the page
+     column only: under the content as a whole it would add to the full-height panel beside the page and make the
+     window scroll. */
   .content {
     min-width: 0;
     padding-top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
-    padding-bottom: calc(var(--bottom-h, 0px) + env(safe-area-inset-bottom));
   }
 
   /* Layers, bottom to top (decision 0023): the page, its navigation (20), an opened playlist (21), the mini-player
@@ -384,6 +385,7 @@
 
   .page {
     min-width: 0;
+    padding-bottom: calc(var(--bottom-h, 0px) + env(safe-area-inset-bottom));
   }
 
   .grip,
