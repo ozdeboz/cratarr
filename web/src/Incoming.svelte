@@ -353,8 +353,9 @@
             icon: 'play',
             label: 'Play',
             onclick: () => {
+              const { source, a } = m;
               menu = null;
-              play(m.source, m.a);
+              play(source, a);
             },
           },
         ]}
@@ -367,8 +368,10 @@
           icon="squareArrowOutUpRight"
           label="View"
           onclick={() => {
+            // Read before closing: `m` follows `menu`.
+            const subject = albumSubject(m.source, m.a.id);
             menu = null;
-            viewPlaylist(albumSubject(m.source, m.a.id));
+            viewPlaylist(subject);
           }}
         />
         {#if m.job !== null}
