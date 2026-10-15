@@ -519,15 +519,16 @@ if (typeof window !== 'undefined') {
 
 // --- what the player and the lock screen ask of it ---
 
-/** Plays `tracks` from `index`. */
-export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null) {
+/** Plays `tracks` from `index`, `position` seconds into it. */
+export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null, position = 0) {
   local.queue = tracks;
   local.from = from;
   if (handed()) {
-    Object.assign(local, { index, position: 0, paused: false, error: null });
-    return hand('queue', { tracks, index, positionMs: 0, play: true });
+    Object.assign(local, { index, position, paused: false, error: null });
+    reported = { positionMs: position * 1000, at: performance.now() };
+    return hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true });
   }
-  fresh(index, 0);
+  fresh(index, position);
 }
 
 /** Adds tracks after the playing one (`next`) or at the end (`last`). */

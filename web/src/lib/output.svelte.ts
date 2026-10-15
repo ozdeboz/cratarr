@@ -23,7 +23,7 @@ import {
 } from './api';
 import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
-import { canPlayHere, local, playQueue, enqueue, seek, stop, type LocalTrack } from './localPlayer.svelte';
+import { canPlayHere, local, playQueue, enqueue, stop, type LocalTrack } from './localPlayer.svelte';
 import { drivenName, follow } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -318,8 +318,7 @@ export async function moveTo(output: typeof prefs.output) {
     setTimeout(refresh, 700);
     return;
   }
-  playQueue(was.tracks, was.index);
-  if (was.position > 1) setTimeout(() => seek(was.position), 300);
+  playQueue(was.tracks, was.index, null, was.position > 1 ? was.position : 0);
 }
 
 /** Moves the music here. */
