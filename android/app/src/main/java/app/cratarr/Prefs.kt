@@ -30,10 +30,28 @@ class Prefs(context: Context) {
             p.edit().putBoolean(STAY_READY, value).apply()
         }
 
+    /** Downloads as the files are ([QUALITY_ORIGINAL]) or as Cratarr's smaller copies ([QUALITY_SMALLER]). */
+    var downloadQuality: String
+        get() = p.getString(DOWNLOAD_QUALITY, QUALITY_ORIGINAL) ?: QUALITY_ORIGINAL
+        set(value) {
+            p.edit().putString(DOWNLOAD_QUALITY, if (value == QUALITY_SMALLER) QUALITY_SMALLER else QUALITY_ORIGINAL).apply()
+        }
+
+    /** Downloads over mobile data too, not only over Wi-Fi. */
+    var downloadOverMobile: Boolean
+        get() = p.getBoolean(DOWNLOAD_MOBILE, false)
+        set(value) {
+            p.edit().putBoolean(DOWNLOAD_MOBILE, value).apply()
+        }
+
     companion object {
         const val SERVER_URL = "server_url"
         const val PLAYER_NAME = "player_name"
         const val STAY_READY = "stay_ready"
+        const val DOWNLOAD_QUALITY = "download_quality"
+        const val DOWNLOAD_MOBILE = "download_mobile"
+        const val QUALITY_ORIGINAL = "original"
+        const val QUALITY_SMALLER = "smaller"
 
         /** The settings file (the one Android's preference screens used, so settings made before carry over). */
         fun shared(context: Context): SharedPreferences =

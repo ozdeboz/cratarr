@@ -3,7 +3,8 @@
  * showed the page's playback on the lock screen. Here the app plays itself (decision 0031, amended): Media3's player in
  * a media session service, which brings the lock screen, the notification, headphone buttons, audio focus, pausing
  * when the audio would become noisy, and the wake and Wi-Fi locks while it plays. It also holds this player's Play On
- * connection to Cratarr (PlayOnLink), and with Stay ready stays in the foreground with nothing queued too.
+ * connection to Cratarr (PlayOnLink), and with Stay ready stays in the foreground with nothing queued too. Tracks are
+ * read through the device's store (Downloads): a downloaded one, or one of the next few, plays without a connection.
  */
 package app.cratarr
 
@@ -16,20 +17,29 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 
+@OptIn(UnstableApi::class)
 class PlayerService : MediaSessionService() {
     private var session: MediaSession? = null
+    private val main = Handler(Looper.getMainLooper())
     private var link: PlayOnLink? = null
     private lateinit var prefs: Prefs
     private lateinit var notifications: NotificationManager
@@ -51,7 +61,10 @@ class PlayerService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_NETWORK)
             // Previous restarts the track after this long in, as the page's player does (Finamp: 5 s).
             .setMaxSeekToPreviousPositionMs(RESTART_AFTER_MS)
+            // Through the device's store first: downloads and the next tracks play from there.
+            .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playback(this)))
             .build()
+        player.addListener(Keeper(player))
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -127,7 +140,33 @@ class PlayerService : MediaSessionService() {
         if (!prefs.stayReady && (player == null || !player.playWhenReady || player.mediaItemCount == 0)) stopSelf()
     }
 
+    /** Keeps the next tracks on the device as the queue moves on, and skips a track that cannot be played. */
+    private inner class Keeper(private val player: ExoPlayer) : Player.Listener {
+        private val keep = Runnable {
+            val items = (0 until player.mediaItemCount).map(player::getMediaItemAt)
+            Downloads.keepAhead(this@PlayerService, items, player.currentMediaItemIndex)
+        }
+
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION)) {
+                // Changes close together (a queue being built) as one.
+                main.removeCallbacks(keep)
+                main.postDelayed(keep, 1_000)
+            }
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            // As a player does: what cannot play (gone, or out of reach offline) is skipped, unless it was the last.
+            if (player.hasNextMediaItem()) {
+                player.seekToNextMediaItem()
+                player.prepare()
+                player.play()
+            }
+        }
+    }
+
     override fun onDestroy() {
+        main.removeCallbacksAndMessages(null)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)
         link?.stop()
         link = null
@@ -148,11 +187,12 @@ class PlayerService : MediaSessionService() {
         ): ListenableFuture<MutableList<MediaItem>> = Futures.immediateFuture(mediaItems.map(::located).toMutableList())
     }
 
-    /** A track's item with its file (`/api/file/{source}/{id}`) and cover from the server. */
+    /** A track's item with its file (a download's, else `/api/file/{source}/{id}`) and its cover from the server. */
     fun located(item: MediaItem): MediaItem {
-        val server = prefs.serverUrl?.trimEnd('/') ?: return item
-        return item.buildUpon()
-            .setUri("$server/api/file/${item.mediaId}")
+        val server = prefs.serverUrl?.trimEnd('/')
+        val found = Downloads.locate(this, item, server)
+        server ?: return found
+        return found.buildUpon()
             .setMediaMetadata(item.mediaMetadata.buildUpon().setArtworkUri(Uri.parse("$server/api/cover/${item.mediaId}")).build())
             .build()
     }

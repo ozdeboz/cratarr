@@ -85,16 +85,6 @@ class PagePlayer(private val controller: MediaController, private val send: (Str
         }
     }
 
-    override fun onPlayerError(error: PlaybackException) {
-        // Skip what cannot play, as a player does, unless it was the last thing.
-        val c = controller
-        if (c.hasNextMediaItem()) {
-            c.seekToNextMediaItem()
-            c.prepare()
-            c.play()
-        }
-    }
-
     private fun describe(e: PlaybackException): String {
         val name = controller.currentMediaItem?.mediaMetadata?.title ?: "A track"
         return "$name: it could not be played (${e.errorCodeName})."

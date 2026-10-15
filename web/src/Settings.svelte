@@ -29,13 +29,19 @@
     type NamingView,
   } from './lib/api';
   import { prefs, type Theme } from './lib/prefs.svelte';
-  import { allowBackground, appInfo, askDevice, changeAddress, inApp, setDevice } from './lib/app.svelte';
+  import { allowBackground, appInfo, askDevice, askDownloads, changeAddress, downloads, inApp, setDevice } from './lib/app.svelte';
 
   // Inside the Android app: its settings as they are now (Android's background permission may have changed meanwhile).
-  if (inApp) askDevice();
+  if (inApp) {
+    askDevice();
+    askDownloads();
+  }
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
   import { toast } from './lib/toast.svelte';
+
+  // The downloads' size, as This device shows it.
+  const downloadedSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
 
   // A server (a source, in the code) as the page edits it. Secrets typed here are kept apart: the server never sends saved ones.
   type Draft = SourceConfig & { secrets: Record<string, string>; view: SourceView | null; busy: boolean };
@@ -433,6 +439,17 @@
         <span class="l">Server <small>{appInfo.server ?? ''}</small></span>
         <button onclick={changeAddress}>Change</button>
       </div>
+      <label class="pref">
+        <span class="l">Downloads <small>{downloads.tracks.length} tracks · {downloadedSize(downloads.bytes)}</small></span>
+        <select value={appInfo.downloadQuality} onchange={(e) => setDevice({ downloadQuality: e.currentTarget.value })}>
+          <option value="original">Originals</option>
+          <option value="smaller">Smaller copies</option>
+        </select>
+      </label>
+      <label class="pref check">
+        <span class="l">Download over mobile data</span>
+        <input type="checkbox" checked={appInfo.downloadOverMobile} onchange={(e) => setDevice({ downloadOverMobile: e.currentTarget.checked })} />
+      </label>
     </section>
   {/if}
 

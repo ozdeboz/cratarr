@@ -2,7 +2,7 @@
 // /api/ is live data and always goes to the network, except the album lists (Incoming, Collection): they change
 // slowly and are large, so the last copy is shown at once while a fresh one is fetched (stale-while-revalidate). The shell is network-first (a new build shows up at once);
 // Vite's fingerprinted assets and the icons never change, so they are cache-first.
-const CACHE = 'cratarr-v2';
+const CACHE = 'cratarr-v3';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/', '/manifest.webmanifest'])));
@@ -45,8 +45,14 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/')) return;
 
   if (req.mode === 'navigate') {
-    // Hash routes all load "/", so one cached shell serves every page.
-    event.respondWith(fetch(req).then((r) => put('/', r)).catch(() => caches.match('/')));
+    // Hash routes all load "/", so one cached shell serves every page. Away from home the server's address may answer
+    // with an error page (the proxy's 403 outside the LAN) rather than not at all: the shell then too, so the app's
+    // downloads still play (decision 0033, step 4).
+    event.respondWith(
+      fetch(req)
+        .then((r) => (r.ok ? put('/', r) : caches.match('/').then((hit) => hit || r)))
+        .catch(() => caches.match('/')),
+    );
     return;
   }
   if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/icons/')) {

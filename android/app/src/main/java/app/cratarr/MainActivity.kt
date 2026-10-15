@@ -35,17 +35,24 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.offline.Download
+import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 
+@androidx.annotation.OptIn(UnstableApi::class)
 class MainActivity : AppCompatActivity() {
     private lateinit var prefs: Prefs
     private lateinit var frame: FrameLayout
@@ -71,6 +78,14 @@ class MainActivity : AppCompatActivity() {
 
     /** Open on Cratarr's Settings page (the launcher's Settings shortcut). */
     private var openSettings = false
+
+    /** The downloads' progress goes to the page as it changes, a second apart at most. */
+    private val downloadsChanged = object : DownloadManager.Listener {
+        override fun onDownloadChanged(manager: DownloadManager, download: Download, finalException: Exception?) = tellDownloads()
+        override fun onDownloadRemoved(manager: DownloadManager, download: Download) = tellDownloads()
+    }
+    private var downloadsTold = 0L
+    private var downloadsPending = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -117,6 +132,7 @@ class MainActivity : AppCompatActivity() {
         }
         addSettingsShortcut()
         askForNotifications()
+        Downloads.manager(this).addListener(downloadsChanged)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -139,6 +155,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        Downloads.manager(this).removeListener(downloadsChanged)
         webView?.let {
             frame.removeView(it)
             it.destroy()
@@ -216,7 +233,27 @@ class MainActivity : AppCompatActivity() {
                     prefs.stayReady = message.optBoolean("stayReady")
                     PlayerService.ready(this)
                 }
+                message.optString("downloadQuality").takeIf { it.isNotEmpty() }?.let { prefs.downloadQuality = it }
+                if (message.has("downloadOverMobile")) {
+                    prefs.downloadOverMobile = message.optBoolean("downloadOverMobile")
+                    Downloads.manager(this).requirements = Downloads.requirements(prefs)
+                }
                 reply.postMessage(appMessage())
+            }
+            // The owner's downloads (decision 0033, step 4): tracks as the page describes them.
+            "download" -> {
+                Downloads.add(this, message.optJSONArray("tracks") ?: JSONArray())
+                tellDownloads()
+            }
+            "downloads" -> tellDownloads(now = true)
+            "download-remove" -> {
+                if (message.optBoolean("all")) {
+                    Downloads.removeAll(this)
+                } else {
+                    val ids = message.optJSONArray("ids") ?: JSONArray()
+                    Downloads.remove(this, (0 until ids.length()).map(ids::optString))
+                }
+                tellDownloads()
             }
             "battery" -> askToRunInBackground()
             "address" -> askForAddress()
@@ -232,7 +269,23 @@ class MainActivity : AppCompatActivity() {
         .put("stayReady", prefs.stayReady)
         .put("server", prefs.serverUrl ?: "")
         .put("batteryAllowed", getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
+        .put("downloadQuality", prefs.downloadQuality)
+        .put("downloadOverMobile", prefs.downloadOverMobile)
         .toString()
+
+    /** The downloads, read off the main thread, to the page; changes close together go as one. */
+    private fun tellDownloads(now: Boolean = false) {
+        if (page == null || downloadsPending) return
+        val wait = if (now) 0L else (1_000L - (System.currentTimeMillis() - downloadsTold)).coerceAtLeast(0L)
+        downloadsPending = true
+        lifecycleScope.launch {
+            delay(wait)
+            val list = withContext(Dispatchers.IO) { Downloads.list(this@MainActivity).toString() }
+            downloadsPending = false
+            downloadsTold = System.currentTimeMillis()
+            page?.postMessage(list)
+        }
+    }
 
     /** Android's own dialog: let the app run in the background (left out of battery optimisation). */
     private fun askToRunInBackground() {

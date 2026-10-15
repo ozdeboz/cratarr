@@ -5,6 +5,8 @@
   import Incoming from './Incoming.svelte';
   import Collection from './Collection.svelte';
   import Insights from './Insights.svelte';
+  import Downloads from './Downloads.svelte';
+  import { inApp } from './lib/app.svelte';
   import Crates from './Crates.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import SourcePicker from './lib/SourcePicker.svelte';
@@ -41,6 +43,8 @@
   const CRATES: Page = { id: 'crates', href: '#/crates', label: 'Crates', icon: 'crates' };
   const HEALTH: Page = { id: 'health', href: '#/health', label: 'Health', icon: 'health' };
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
+  // In the app only: what is kept on this device (decision 0033, step 4), playable without a connection.
+  const DOWNLOADS: Page = { id: 'downloads', href: '#/downloads', label: 'Downloads', icon: 'download' };
 
   // Phones get a bottom bar. Up to five fit; beyond that the first four stay and the rest go under "More".
   const BAR_SLOTS = 5;
@@ -50,7 +54,7 @@
   // `?view=`, decision 0023).
   const fromHash = () => {
     const h = location.hash.split('?')[0];
-    return [HEALTH, SETTINGS, INCOMING, COLLECTION, INSIGHTS, CRATES].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
+    return [HEALTH, SETTINGS, INCOMING, COLLECTION, INSIGHTS, CRATES, DOWNLOADS].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
   // The server picker belongs to the pages that act on what a server plays: Playlists (add it), Incoming and Collection
@@ -215,7 +219,7 @@
   );
   const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, COLLECTION, CRATES, PLAYLISTS] : [COLLECTION, CRATES, PLAYLISTS]);
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
-  const APART: Page[] = [INSIGHTS, HEALTH, SETTINGS];
+  const APART: Page[] = inApp ? [DOWNLOADS, INSIGHTS, HEALTH, SETTINGS] : [INSIGHTS, HEALTH, SETTINGS];
   const ALL = $derived([...MAIN, ...APART]);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : ALL.slice(0, BAR_SLOTS - 1));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
@@ -258,6 +262,8 @@
       <Settings />
     {:else if page === 'health'}
       <Health />
+    {:else if page === 'downloads' && inApp}
+      <Downloads />
     {:else if page === 'incoming' && status?.incoming}
       <Incoming />
     {:else if status && !status.music}
