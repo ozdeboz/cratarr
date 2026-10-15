@@ -10,7 +10,7 @@
   import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers } from './api';
   import MenuEntry from './MenuEntry.svelte';
   import { startPlaylists } from './output.svelte';
-  import { viewSelection, panel, type Tab } from './panel.svelte';
+  import { openTab, viewSelection, panel, type Tab } from './panel.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { withUndo } from './undo.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './favourites.svelte';
@@ -91,7 +91,8 @@
 
   /** View, Export… and Sync…: the panel shows these playlists, on that tab (decision 0025). */
   function viewTab(tab: Tab) {
-    viewSelection([...ids], tab);
+    if (tab === 'tracks') viewSelection([...ids]);
+    else openTab([...ids], tab);
     onclose();
   }
   let nameField = $state('');
@@ -206,7 +207,10 @@
           }}
         />
       {/if}
+      <!-- The panel's other views of them (back returns to their tracks). -->
+      <MenuEntry icon="info" label="Info" onclick={() => viewTab('info')} />
       <MenuEntry icon="download" label="Export…" onclick={() => viewTab('export')} />
+      <MenuEntry icon="repairs" label="Repair…" onclick={() => viewTab('repair')} />
       <MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync')} />
       {#if one}
         <MenuEntry

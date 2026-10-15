@@ -2,7 +2,7 @@
   // Which source this browser follows. Shows only when more than one source is connected.
   import { getStatus } from './api';
   import { prefs } from './prefs.svelte';
-  import { known, remember } from './sources.svelte';
+  import { known, noChoice, remember } from './sources.svelte';
 
   $effect(() => {
     getStatus()
@@ -14,15 +14,16 @@
 
   // Two sources of the same kind are told apart by their id.
   const name = (id: string, label: string) => (known.list.filter((s) => s.label === label).length > 1 ? `${label} (${id})` : label);
-  // A saved choice whose source is gone falls back to automatic (the server does the same).
-  const value = $derived(known.list.some((s) => s.id === prefs.source) ? prefs.source : '');
+  // A saved choice whose source is gone falls back to no choice: Cratarr's own, or else automatic (the server follows
+  // whichever started playing most recently).
+  const value = $derived(known.list.some((s) => s.id === prefs.source) ? prefs.source : noChoice());
 </script>
 
 {#if known.list.length > 1}
   <label class="picker">
     <span>Server</span>
     <select value={value} onchange={(e) => (prefs.source = e.currentTarget.value)}>
-      <option value="">Automatic</option>
+      {#if !noChoice()}<option value="">Automatic</option>{/if}
       {#each known.list as s (s.id)}
         <option value={s.id}>{name(s.id, s.label)}{s.playing ? ' ▶' : ''}</option>
       {/each}

@@ -50,7 +50,7 @@ function address(names: string[], tab: Tab) {
 }
 
 // The history entries the panel added in this visit carry how many there are: closing goes Back over all of them, so
-// the history stays tidy (viewing adds one; a tab switch in the full-screen panel adds one more).
+// the history stays tidy (viewing adds one; another view from the menu adds one more).
 const depth = (): number => (history.state && typeof history.state.panel === 'number' ? history.state.panel : 0);
 /** How many of the panel's own views (and tab steps) this visit went through to here: back goes to the one before. */
 export const panelDepth = depth;
@@ -94,12 +94,19 @@ export function viewSelection(names: string[], tab: Tab = 'tracks') {
 /** Views one playlist (or a crate, or an album) on its Tracks. */
 export const viewPlaylist = (name: string) => viewSelection([name]);
 
-/** Another tab for the selection: a step in the history only when the panel is full-screen (Back returns to it). */
-export function setTab(tab: Tab, fullScreen: boolean) {
-  if (tab === panel.tab || !panel.selection.length) return;
-  const url = address(panel.selection, tab);
-  if (fullScreen) push(url);
-  else replace(url);
+/** One of the playlists' other views (Info, Export, Repair, Sync: from their menu, decided 2026-10-16). Over their
+ *  tracks it is a step of its own, which back returns from (backToTracks); playlists not viewed yet open on it. */
+export function openTab(names: string[], tab: Tab) {
+  if (names.join('\n') !== panel.selection.join('\n')) return viewSelection(names, tab);
+  if (tab === panel.tab) return;
+  history.pushState({ panel: depth() + 1, tab: true }, '', address(panel.selection, tab));
+  read();
+}
+
+/** Back from another view to the tracks: the step it was opened as, or else the tracks in its place. */
+export function backToTracks() {
+  if (history.state?.tab) return history.back();
+  replace(address(panel.selection, 'tracks'));
   read();
 }
 

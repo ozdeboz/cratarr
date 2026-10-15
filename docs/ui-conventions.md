@@ -54,9 +54,11 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   `lib/remote.svelte.ts`).
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **A viewed playlist** (decision 0023, `lib/PlaylistView.svelte`): in the panel beside the page, or on a phone a
-  full-height layer with the mini-player floating over its end. Under its header, **tabs** (decision 0025): Tracks,
-  Info (what Insights knows of it: how focused, its closest playlists), Export, Repair, Sync, for the selection (one playlist, or several ticked with Select); the panel shows Tracks first, a
-  tab with nothing to do says so, and switching adds a Back step only while the panel is full-screen. Several
+  full-height layer with the mini-player floating over its end. It shows the tracks; the selection's (one playlist, or
+  several ticked with Select) **other views** (decision 0025) are entries of its ⋮ menu since 2026-10-16, no tabs row:
+  Info (what Insights knows of it: how focused, its closest playlists), Export…, Repair…, Sync…. Each opens as a step
+  of its own (back returns to the tracks, as does Esc) under a plain bar: back, the view's name over the playlist's,
+  the panel's place; a view with nothing to do says so. Several
   playlists: their covers and count in the header, ✕ alone in the bar, and on Tracks a folding section per playlist
   (read-only). ✕ (and Esc, Back) closes the panel: the player folds to the mini-player rather than showing in its
   place (decision 0025). Its header is Symfonium's album screen (2026-10-15): the cover edge to edge (a playlist's
@@ -72,7 +74,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   round), how many, and **select mode** (a long-press on a track, or the icon: circles to tick, and a bar floating over
   the list's end plays, puts next, queues or favours the ticked tracks, and in the app downloads them). An album's rows have no cover: the number,
   the playing one's dots instead; every track's row ends in ⋮ (its menu). In
-  edit mode the bar is ✕ (it stays), Cancel (a reset arrow) and Save (an arrow down to a line), icons. Rows as the
+  edit mode the cover and the name stay where they are; the action bar's place holds Cancel (a reset arrow, red once
+  something changed) against Save (an arrow down to a line on a filled accent round), and the pills keep ✕. Rows as the
   queue's; edit mode as Finamp's playlist edit screen: the title is editable where it is, looking the same (Spoken
   as… is in the playlist's menu); rows with handle and ✕, swipe to
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
@@ -181,7 +184,7 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   its top (its image: a cover, or a playlist's mosaic of its first four albums; its title; small chips; for a track
   the heart); its playback actions as a row of large icons with small labels; then the other entries as rows with an
   icon in the accent colour. The sheet takes its look from the item's image (blurred behind it, its accent).
-  For a playlist: Play, Shuffle, Play next, Add to queue; View, Export… and Sync to… (they show the panel on that tab),
+  For a playlist: Play, Shuffle, Play next, Add to queue; View, Info, Export…, Repair… and Sync… (the panel's views),
   Spoken as…, Rename, Delete. For the playing track
   (the player's menu button, or a right-click on its cover): Play next, Add to queue; Add to playlist, the favourite,
   View album, New playlist from the queue. In the app (not a browser) a track's, an album's and a viewed playlist's

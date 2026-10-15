@@ -1,16 +1,15 @@
 <script lang="ts">
   // The filter, after Symfonium's source filter (opened from the funnel in the panel's floating pill, lib/TopPill):
   // what the album and playlist views leave out, then a card per server this browser can follow, with its kind and
-  // its libraries. A tap on a server's card follows it; a tap on the followed one goes back to following whichever
-  // started playing most recently (Automatic), the choice the server dropdown it replaces also offered. The
-  // libraries are only shown, with their use: Cratarr has no per-library visibility, and a use is set only in Settings
-  // (decision 0009).
+  // its libraries. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
+  // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
+  // has no per-library visibility, and a use is set only in Settings (decision 0009).
   import { pageView } from './pageView.svelte';
   import { getSettings, getStatus, type LibraryUse, type Settings } from './api';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { prefs } from './prefs.svelte';
-  import { known, remember } from './sources.svelte';
+  import { known, noChoice, remember } from './sources.svelte';
   import { toast } from './toast.svelte';
 
   // `page`: the page it was opened on, whose own filters it shows too (Playlists: favourites only).
@@ -59,7 +58,7 @@
   );
 
   function follow(id: string) {
-    prefs.source = prefs.source === id ? '' : id;
+    prefs.source = prefs.source === id ? noChoice() : id;
   }
 </script>
 

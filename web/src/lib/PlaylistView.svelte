@@ -50,8 +50,7 @@
   import { download, inApp } from './app.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
-  import { albumMoved, albumOf, closePlaylist, panelDepth, viewPlaylist, panel, setTab, TABS } from './panel.svelte';
-  import { inSidebar } from './live.svelte';
+  import { albumMoved, albumOf, backToTracks, closePlaylist, panelDepth, viewPlaylist, panel, TABS } from './panel.svelte';
   import ExportTab from './ExportTab.svelte';
   import PlaylistItem from './PlaylistItem.svelte';
   import Row from './Row.svelte';
@@ -87,6 +86,8 @@
   const ids = $derived(panel.selection);
   const multi = $derived(ids.length > 1);
   const tab = $derived(plain ? 'tracks' : panel.tab);
+  // One of the playlists' other views (from their menu): a plain bar with back to the tracks, no cover.
+  const other = $derived(tab !== 'tracks');
   const title = $derived(crate ? crateName(crate) : album ? (albumHead?.title ?? '') : multi ? `${ids.length} playlists` : id);
   const isPermanentCrate = $derived(!!crate && (crates.list?.find((c) => c.id === crate)?.permanent ?? true));
   const p = $derived(plain || multi ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
@@ -703,6 +704,7 @@
     const esc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || menuOpen || trackMenu || editing || making || sortOpen || albumMenuOpen) return;
       if (selecting) selecting = null;
+      else if (other) backToTracks();
       else closePlaylist();
     };
     addEventListener('keydown', esc);
@@ -711,47 +713,46 @@
 </script>
 
 <section class="view" aria-label={title}>
-  {#if editing || making}
-    <div class="bar" class:editing={!!editing}>
-    {#if editing}
-      <!-- ✕ stays in its corner while editing (closing drops the edit), as the place button in the other; Cancel sits
-           against Save. -->
-      <button class="icon" aria-label="Close the playlist" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
-      <span class="end">
-        <button class="barbtn iconic" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" title="Cancel" onclick={() => (editing = null)} disabled={editing.saving}><Icon name="reset" size={20} /></button>
-        <button class="barbtn save iconic" aria-label="Save" title="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={20} /></button>
-        <PanelPlace />
-      </span>
-    {:else if making}
+  {#if making}
+    <div class="bar">
       <button class="icon" aria-label="Close the crate" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
         <button class="barbtn iconic" aria-label="Cancel" title="Cancel" onclick={() => (making = null)} disabled={making.saving}><Icon name="reset" size={20} /></button>
         <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
         <PanelPlace />
       </span>
-    {/if}
+    </div>
+  {:else if other}
+    <!-- Another of the playlists' views (Info, Export, Repair, Sync; from their menu): back to the tracks, its name over
+         theirs, the panel's place. -->
+    <div class="bar sub">
+      <span class="navpill"><button aria-label="Back to the tracks" title="Back" onclick={backToTracks}><Icon name="back" size={22} /></button></span>
+      <div class="subtitle">
+        <h2>{TABS.find((t) => t.tab === tab)?.label}</h2>
+        <p>{multi ? ids.join(', ') : title}</p>
+      </div>
+      <span class="end"><PanelPlace /></span>
     </div>
   {:else}
     <!-- Symfonium's floating pills over the cover: back (when there is a view before this one) and ✕ on the left; the
-         filter and where it plays, and the panel's place, on the right. Once the action bar has the top they float just
-         under it. -->
+         filter, View and where it plays, and the panel's place, on the right (in edit mode the place only). Once the
+         action bar has the top they float just under it. -->
     <div class="pills" class:below={stuck}>
       <span class="navpill">
         {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
         <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
       </span>
-      <span class="end"><TopPill view order={listOrder} /><PanelPlace /></span>
+      <span class="end">{#if !editing}<TopPill view order={listOrder} />{/if}<PanelPlace /></span>
     </div>
   {/if}
 
   <div class="scroll" bind:this={scroller} onscroll={onScroll}>
-    {#if editing || making}
+    {#if making}
       <header class="head">
         <div class="top">
         <div class="art" class:mosaic={covers.length === 4}>
           {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? 'crates' : 'albums'} size={48} /></span>{/each}
         </div>
-        {#if making}
           <div class="info fields">
             <label class="field">
               <span>Name of the new playlist</span>
@@ -759,61 +760,22 @@
               <input type="text" maxlength="100" autofocus bind:value={making.name} disabled={making.saving} onkeydown={(e) => e.key === 'Enter' && makePlaylist()} />
             </label>
           </div>
-        {:else}
-        <div class="info">
-          {#if editing}
-            <!-- The name, editable where it is and looking the same; the pencil beside it says so (and puts the caret
-                 in it too). -->
-            <div class="name-row">
-            <h2
-              bind:this={nameEl}
-              class="editable"
-              contenteditable="plaintext-only"
-              class:saving={editing.saving}
-              aria-label="Name"
-              spellcheck="false"
-              bind:textContent={editing.name}
-              onkeydown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  e.currentTarget.blur();
-                }
-              }}
-              oninput={(e) => {
-                const el = e.currentTarget;
-                if ((el.textContent ?? '').length > 100) el.textContent = (el.textContent ?? '').slice(0, 100);
-              }}
-            ></h2>
-            <button class="name-pen" aria-label="Rename" title="Rename" disabled={editing.saving} onclick={editName}><Icon name="pencil" size={16} /></button>
-            </div>
-          {:else}
-            <h2>{title}</h2>
-          {/if}
-          {#if crate}
-            <p class="line"><Icon name="music" size={20} /><span>{rows ? plural(total, 'track') : 'Loading…'}</span></p>
-          {:else if multi}
-            <p class="line"><Icon name="music" size={20} /><span>{plural(chosenCount, 'track')}</span></p>
-            <p class="line"><Icon name="playlists" size={20} /><span>{ids.join(', ')}</span></p>
-          {:else}
-            {#if album && albumHead?.artist}
-              <p class="line"><Icon name="user" size={20} /><span>{albumHead.artist}{#if albumHead.year}&nbsp;({albumHead.year}){/if}</span></p>
-            {/if}
-            <p class="line"><Icon name="music" size={20} /><span>{p ? plural(p.count, 'track') : rows ? plural(rows.length, 'track') : 'Loading…'}{#if length}&nbsp;({clockText(length)}){/if}</span></p>
-          {/if}
-          {#if point && !multi}
-            <p class="line"><Icon name="swatch" size={20} />{#if point.genres.length}<span class="genres">{#each point.genres as g (g)}<span>{g}</span>{/each}</span>{:else}<span>No genres</span>{/if}</p>
-          {:else if (album || crate) && listGenres?.length}
-            <p class="line"><Icon name="swatch" size={20} /><span class="genres">{#each listGenres as g (g)}<span>{g}</span>{/each}</span></p>
-          {/if}
-          {#if p?.dead || chosenDead}<p class="line dead"><span>{p?.dead || chosenDead} missing</span></p>{/if}
-        </div>
-        {/if}
       </div>
       </header>
-    {:else}
+    {:else if !other}
       <div class="hero" class:mosaic={covers.length === 4} class:bare={!covers.length}>
         {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? 'crates' : 'albums'} size={56} /></span>{/each}
       </div>
+      {#if editing}
+      <!-- Edit mode's bar in the action bar's place: Cancel (in red once something changed) against Save. -->
+      <div class="actbar" class:stuck bind:this={actbar} role="toolbar" aria-label="Edit">
+        <button class="icon" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" title="Cancel" onclick={() => (editing = null)} disabled={editing.saving}
+          ><Icon name="reset" size={24} /></button
+        >
+        <span class="grow"></span>
+        <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={24} /></button>
+      </div>
+      {:else}
       <!-- The action bar, at the cover's foot; at the top it stays. -->
       <div class="actbar" class:stuck bind:this={actbar} role="toolbar" aria-label="Play">
         {#each barActions as a (a.key)}
@@ -832,15 +794,43 @@
           <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (albumMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {:else}
-          {#if p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
+          {#if p}<button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
           <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
             ><Icon name="heart" size={24} /></button
           >
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {/if}
       </div>
+      {/if}
       <header class="meta">
-        <h2>{title}</h2>
+        {#if editing}
+        <!-- The name, editable where it is and looking the same; the pencil beside it says so (and puts the caret
+             in it too). -->
+        <div class="name-row">
+        <h2
+          bind:this={nameEl}
+          class="editable"
+          contenteditable="plaintext-only"
+          class:saving={editing.saving}
+          aria-label="Name"
+          spellcheck="false"
+          bind:textContent={editing.name}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+          }}
+          oninput={(e) => {
+            const el = e.currentTarget;
+            if ((el.textContent ?? '').length > 100) el.textContent = (el.textContent ?? '').slice(0, 100);
+          }}
+        ></h2>
+        <button class="name-pen" aria-label="Rename" title="Rename" disabled={editing.saving} onclick={editName}><Icon name="pencil" size={16} /></button>
+        </div>
+        {:else}
+          <h2>{title}</h2>
+        {/if}
         {#if details}<p class="details">{details}</p>{/if}
         {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
         {#if album && albumHead?.artist}
@@ -849,14 +839,6 @@
         {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<span>{g}</span>{/each}</p>{/if}
         {#if p?.dead || chosenDead}<p class="details dead">{p?.dead || chosenDead} missing</p>{/if}
       </header>
-    {/if}
-
-    {#if !plain && !editing}
-      <div class="tabs" role="tablist" aria-label="About the playlist">
-        {#each TABS as t (t.tab)}
-          <button role="tab" aria-selected={tab === t.tab} onclick={() => setTab(t.tab, !inSidebar())}>{t.label}</button>
-        {/each}
-      </div>
     {/if}
 
     {#if tab === 'info'}
@@ -948,7 +930,7 @@
         bind:value={sortKey}
         bind:down={sortDown}
         bind:open={sortOpen}
-        count={plural(crate ? total : rows.length, 'track')}
+        count={plural(crate ? total : shownPlayable.length, 'track')}
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
       />
@@ -1158,6 +1140,45 @@
     align-items: center;
   }
 
+  /* Another view's bar: back, its name over the playlists', the place. */
+  .bar.sub {
+    align-items: center;
+    gap: 12px;
+    padding: 8px 8px 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .subtitle {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .subtitle h2 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
+  }
+
+  .subtitle p {
+    margin: 2px 0 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Edit mode's Save: the accent, as a filled round. Cancel in red once there is something to lose. */
+  .actbar .icon.save {
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  .actbar .icon.destructive {
+    color: var(--danger, #c33);
+  }
+
   /* Finamp's playlist heart: filled when it is a favourite; the pin filled when pinned. */
   .icon.fav :global(svg) {
     fill: currentColor;
@@ -1194,11 +1215,6 @@
   /* Cancel and Save are icons (their labels on a long-press, lib/labels). */
   .barbtn.iconic {
     padding: 0 10px;
-  }
-
-  /* Cancel with changes made: it throws them away, so it reads as destructive. */
-  .barbtn.destructive {
-    color: var(--danger, #c33);
   }
 
   .barbtn.save {
@@ -1406,36 +1422,6 @@
     line-height: 1.25;
   }
 
-  .line {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    margin: 0;
-    padding: 2px 6px;
-    font-size: 14px;
-    min-width: 0;
-  }
-
-  .line > :global(svg) {
-    flex: none;
-    opacity: 0.5;
-  }
-
-  .line > span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* They wrap rather than go past the panel's edge. */
-  .line > .genres {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    overflow: visible;
-    white-space: normal;
-  }
-
   .genres span {
     flex: none;
     padding: 1px 8px;
@@ -1474,38 +1460,6 @@
     margin: 0;
     padding: 0;
     list-style: none;
-  }
-
-  /* The tabs (decision 0025): under the header, staying at the top while the content scrolls. */
-  .tabs {
-    position: sticky;
-    top: 52px;
-    z-index: 2;
-    display: flex;
-    gap: 4px;
-    margin-bottom: 8px;
-    padding: 4px 8px 0;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
-  }
-
-  .tabs button {
-    flex: 1;
-    min-height: 40px;
-    padding: 0 8px;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    background: none;
-    color: var(--muted);
-    font: inherit;
-    font-size: 14px;
-    cursor: pointer;
-  }
-
-  .tabs button[aria-selected='true'] {
-    border-bottom-color: var(--accent);
-    color: var(--text);
-    font-weight: 600;
   }
 
   /* Several playlists on Tracks: a section each, its header folding it. */
