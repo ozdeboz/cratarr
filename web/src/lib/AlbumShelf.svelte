@@ -1,5 +1,5 @@
 <script lang="ts">
-  // An album list (Incoming, Collection): the filter, then each server's albums in columns as the playlist chips are,
+  // An album list (Incoming, Collection), filtered by the pill's search: each server's albums in columns as the playlist chips are,
   // in the order, layout and size chosen in the pill's View (lib/ViewSheet, decided 2026-10-15). Rows are extra large rows (Row),
   // the grid is tiles (Tile). A tap views the album in the panel, Play plays it, a long-press opens its menu: the
   // page's own (`onmenu`), else View and Play.
@@ -39,7 +39,6 @@
     onmenu?: (source: ShelfSource, a: ListedAlbum, anchor: DOMRect) => void;
   } = $props();
 
-  let filter = $state('');
   let width = $state(0);
   // View's size steps depend on the width the lists have.
   $effect(() => {
@@ -51,7 +50,7 @@
   let menu = $state<{ source: ShelfSource; a: ListedAlbum; anchor: DOMRect } | null>(null);
 
   const matches = (a: ListedAlbum) => {
-    const q = filter.trim().toLowerCase();
+    const q = pageView.query.trim().toLowerCase();
     return !q || `${a.artist ?? ''} ${a.title}`.toLowerCase().includes(q);
   };
   // Artists without a leading "The", numbers in number order, accents and case aside.
@@ -77,10 +76,6 @@
   const longPress = (s: ShelfSource, a: ListedAlbum) =>
     fromAction(longpress, () => (anchor: DOMRect) => (onmenu ? onmenu(s, a, anchor) : (menu = { source: s, a, anchor })));
 </script>
-
-<div class="tools">
-  <input class="filter" type="search" placeholder="Filter albums" aria-label="Filter albums" bind:value={filter} />
-</div>
 
 <div class="lists" bind:clientWidth={width}>
   {#each shown as { s, albums } (s.id)}
@@ -186,26 +181,6 @@
 {/if}
 
 <style>
-  .tools {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin: 8px 0 4px;
-  }
-
-  .filter {
-    flex: 1 1 220px;
-    min-width: 0;
-    max-width: 360px;
-    min-height: 44px;
-    padding: 0 14px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font: inherit;
-    color: var(--text);
-  }
-
   h2 {
     margin: 24px 0 6px;
     font-size: 1rem;

@@ -14,7 +14,7 @@
   import MiniPlayer from './lib/MiniPlayer.svelte';
   import TopPill from './lib/TopPill.svelte';
   import Mark from './lib/Mark.svelte';
-  import { hasView } from './lib/pageView.svelte';
+  import { hasView, pageView } from './lib/pageView.svelte';
   import { playing } from './lib/remote.svelte';
   import { fade, fly } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
@@ -108,6 +108,11 @@
   // page). The page starts under the row, so at rest nothing lies under it.
   const PLAYABLE = ['playlists', 'crates', 'collection', 'incoming'];
   const pagePill = $derived(PLAYABLE.includes(page));
+  // Each page starts with its search empty (the pill's field).
+  $effect(() => {
+    void page;
+    pageView.query = '';
+  });
   const pillDevice = $derived(!playing() && !(sidebar && panelShowsPlayer()));
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
   // the one the app opened with.
@@ -343,7 +348,7 @@
       {:else if phone}
         <!-- Nowhere to go back to yet: the mark, which goes home (Incoming, until there is a dashboard). Beside the page
              the sidebar shows the mark already. -->
-        <a class="home" href={keepViewed(INCOMING.href)} aria-label="Home" title="Home"><Mark size={44} /></a>
+        <a class="home" href={keepViewed(INCOMING.href)} aria-label="Home" title="Home"><Mark size={48} /></a>
       {:else}
         <span></span>
       {/if}
@@ -449,10 +454,10 @@
     padding-top: 60px;
   }
 
-  /* The mark in back's place: its own rounded square, as tall as the pill. */
+  /* The mark in back's place: the record, round as back is, as tall as the pill. */
   .home {
     display: grid;
-    border-radius: 10px;
+    border-radius: 50%;
     box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
@@ -469,7 +474,7 @@
   .navpill button {
     display: grid;
     place-items: center;
-    width: 48px;
+    width: 44px;
     height: 44px;
     padding: 0;
     border: 0;
@@ -716,7 +721,7 @@
     padding: 0 8px;
   }
 
-  /* The mark (lib/Mark), its own rounded square. */
+  /* The mark (lib/Mark): the record. */
   .logo {
     display: grid;
     width: 34px;

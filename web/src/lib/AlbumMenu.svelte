@@ -25,6 +25,7 @@
     tracks,
     incoming = null,
     forgetResume = null,
+    ondownload = null,
     start = 'menu',
     onclose,
   }: {
@@ -40,6 +41,8 @@
     incoming?: AlbumIncoming | null;
     /** Where it was left goes (Symfonium's Remove resume point); given only when there is one. */
     forgetResume?: (() => void) | null;
+    /** Its tracks onto the phone (the app's Downloads); given only in the app. */
+    ondownload?: (() => void) | null;
     /** The step it opens on: the entries, or straight at the playlists. */
     start?: 'menu' | 'lists';
     onclose: () => void;
@@ -166,9 +169,19 @@
           />
         {/if}
       </div>
-      {#if addable}
+      {#if addable || ondownload}
         <div class="group" role="group">
-          <MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />
+          {#if addable}<MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+          {#if ondownload}
+            <MenuEntry
+            icon="arrowDownToLine"
+            label="Download"
+            onclick={() => {
+              onclose();
+              ondownload();
+            }}
+          />
+          {/if}
         </div>
       {/if}
       {#if incoming && (incoming.keep || incoming.replace || incoming.delete)}

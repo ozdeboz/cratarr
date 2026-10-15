@@ -61,7 +61,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   (read-only). ✕ (and Esc, Back) closes the panel: the player folds to the mini-player rather than showing in its
   place (decision 0025). Its header is Symfonium's album screen (2026-10-15): the cover edge to edge (a playlist's
   mosaic; a crate's band with its icon), under **two floating pills** (back, when the panel has a view before this
-  one, and ✕; the filter and where it plays, and the panel's place), and at the cover's foot the **action bar**, icons only: Play, Resume (an album of Cratarr's own
+  one, and ✕; the filter, View (the tracks' order and direction, as their header's), where it plays, and the panel's
+  place; back and ✕ are rounds as tall as the pill), and at the cover's foot the **action bar**, icons only: Play, Resume (an album of Cratarr's own
   library: where it was left), Shuffle, Play next, Add to queue, then the subject's own (the heart; a playlist's pencil
   on Tracks and menu; an album's menu with Incoming's Keep, Replace and Delete; a crate's favourites toggle, pencil
   and Make playlist). Scrolled up to the top the action bar stays there, and the pills float just under it, over the
@@ -69,7 +70,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   year, format, bitrate; otherwise how many tracks and the length), an album's artist as a chip, the genres. Over the
   tracks **their order** (the subject's own, or by title, artist, album, length; a tap chooses, the arrow turns it
   round), how many, and **select mode** (a long-press on a track, or the icon: circles to tick, and a bar floating over
-  the list's end plays, puts next, queues or favours the ticked tracks). An album's rows have no cover: the number,
+  the list's end plays, puts next, queues or favours the ticked tracks, and in the app downloads them). An album's rows have no cover: the number,
   the playing one's dots instead; every track's row ends in ⋮ (its menu). In
   edit mode the bar is ✕ (it stays), Cancel (a reset arrow) and Save (an arrow down to a line; on a panel under 340 px their icons only). Rows as the
   queue's; edit mode as Finamp's playlist edit screen: the title is editable where it is, looking the same (Spoken
@@ -104,10 +105,14 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Pinned playlists** (the playlist menu: Pin to top / Unpin) come first on the Playlists page, in the order they
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
-- **The Playlists page's controls** are two sections: the actions it always needs (the button that shows or hides the
-  filter section, Select as an icon (two stacked squares, the front one ticked; highlighted while on, a tap again ends it); View N while selecting; Size; + or ⋮ in the corner; the + gets its label, "New playlist", once the page is wide enough), and the filter section
-  (the filter, A–Z / ✓ first, Favourites only: a heart, filled when on), which folds away, remembered by the browser. Folded away while a filter applies, its button is
-  in the accent.
+- **A page's floating row** (2026-10-15, `App.svelte`, `lib/TopPill.svelte`): back on the left (a round as tall as the
+  pill; Cratarr's mark, the same size, going home to Incoming when there is no back), and on a page with something to
+  play the pill on the right: **search** (a magnifier that opens into a field over the row, the whole row on a phone, at
+  most 520 px on a wide page; ✕ empties and folds it, Esc folds it, the magnifier stays in the accent while a search
+  applies; each page starts with it empty), the **filter** sheet, **View** (the list's order and direction, as its
+  header's; a playlist's size; albums' rows or covers and size), and where it plays when nothing else leads there.
+  The page's own controls are only what is not in the pill: Playlists' + or ⋮ in the corner (the + with its label,
+  "New playlist", once the page is wide enough) and View N while selecting.
 - **Over the page or beside it** (decision 0018): the player's top-right button is in every panel's top-right corner
   too (a playlist, a crate, the builder; `lib/PanelPlace.svelte`), on a window with room beside the page: beside the
   page "Over the page" (⤢), over it "Beside the page" (sidebar), always in that corner. It only changes the place:
@@ -171,7 +176,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   For a playlist: Play, Shuffle, Play next, Add to queue; View, Export… and Sync to… (they show the panel on that tab),
   Spoken as…, Rename, Delete. For the playing track
   (the player's menu button, or a right-click on its cover): Play next, Add to queue; Add to playlist, the favourite,
-  View album, New playlist from the queue. **View** (the square with an arrow out of its corner) is every menu's entry
+  View album, New playlist from the queue. In the app (not a browser) a track's, an album's and a viewed playlist's
+  menus also have **Download** (an arrow down to a line): its tracks onto the phone, shown on Downloads. **View** (the square with an arrow out of its corner) is every menu's entry
   that shows the item in the panel: a playlist, an album, a track's album (View album). A tap on the backdrop, Esc, Back or dragging the sheet down closes it. With a single
   other action, the long-press does that action directly.
 - Inside the sheet: destructive entries last and in red. Spoken as…, Rename, the playlists for a track and

@@ -1,7 +1,6 @@
 <script lang="ts">
   import ListHead from './lib/ListHead.svelte';
   import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView } from './lib/pageView.svelte';
-  import { tick as settled } from 'svelte';
   import { createPlaylist, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap, refresh } from './lib/live.svelte';
@@ -29,16 +28,6 @@
   // The favourites' hearts on the chips (decision 0023).
   $effect(() => void loadPlaylistFavorites());
   const error = $derived(live.error);
-  let filter = $state('');
-  // On a narrow page the filter field starts as a magnifier; open, it lies over the rest of its row (Esc, ✕, or
-  // leaving it empty folds it again).
-  let searching = $state(false);
-  let searchField = $state<HTMLInputElement>();
-  async function openSearch() {
-    searching = true;
-    await settled();
-    searchField?.focus();
-  }
   /** The filter section's Favourites toggle: only favourite playlists. */
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
   let gridWidth = $state(0);
@@ -58,7 +47,7 @@
 
   const np = $derived(playing());
   const items = $derived.by(() => {
-    const q = filter.trim().toLowerCase();
+    const q = pageView.query.trim().toLowerCase();
     let list = shownPlaylists().map((p) => {
       const member = optimistic[p.id] ?? p.member;
       return { ...p, member, count: p.count + (member === p.member ? 0 : member ? 1 : -1) };
@@ -149,33 +138,10 @@
     <NewButton label="New playlist" onclick={openNew} />
   {/if}
 
-  <!-- The page's controls: the search, and View N while ticking. Its order is the list's header; its size and
-       favourites-only are in the pill's View and Filter (lib/TopPill, decided 2026-10-15). -->
+  <!-- View N while ticking. The search, size and favourites-only are the pill's (lib/TopPill), the order the list's
+       header (decided 2026-10-15). -->
   <div class="tools">
     <div class="row">
-    <button class="new toggle magnifier" class:active={filter.trim() !== ''} aria-label="Filter playlists" aria-expanded={searching} onclick={openSearch}
-      ><Icon name="search" size={22} /></button
-    >
-    <div class="search" class:open={searching}>
-      <input
-        type="search"
-        placeholder="Filter playlists"
-        aria-label="Filter playlists"
-        bind:value={filter}
-        bind:this={searchField}
-        onkeydown={(e) => e.key === 'Escape' && (searching = false)}
-        onblur={() => filter.trim() === '' && (searching = false)}
-      />
-      <button
-        class="clear"
-        aria-label="Clear the filter"
-        onmousedown={(e) => e.preventDefault()}
-        onclick={() => {
-          filter = '';
-          searching = false;
-        }}><Icon name="close" size={20} /></button
-      >
-    </div>
     {#if select.on && select.picked.length && !showsPicked()}
       <!-- View N: at the right end of the row (beside the corner); on a small page its icon only. -->
       {@const viewLabel = select.picked.length === 1 ? 'View 1 playlist' : `View ${select.picked.length} playlists`}
@@ -276,109 +242,12 @@
     margin: 0 0 14px;
   }
 
+  /* As tall as the corner's button, which stands in it (empty but while ticking). */
   .tools .row {
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
-  }
-
-  button.new.toggle {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    padding: 0;
-    color: inherit;
-  }
-
-
-  /* Folded away while a filter applies: the button says so, since chips are missing. */
-  button.new.toggle.active {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  input[type='search'] {
     min-height: 44px;
-    padding: 0 14px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font: inherit;
-    color: inherit;
-  }
-
-  input[type='search'] {
-    flex: 1 1 220px;
-    min-width: 0;
-    background: var(--surface);
-  }
-
-  /* The filter field: in the row while the page is wide enough; narrower, a magnifier, and once opened lying over the
-     row. The row never wraps: the field takes what Select and View N leave (an input's own minimum width would push
-     them to a line of their own), and below the container query's width it folds to the magnifier. */
-  .tools .row {
-    position: relative;
-    flex-wrap: nowrap;
-  }
-
-  .search {
-    display: flex;
-    flex: 1 1 0;
-    min-width: 0;
-  }
-
-  .search input {
-    flex: 1 1 0;
-    width: 100%;
-    min-width: 0;
-  }
-
-  button.new.magnifier,
-  .search .clear {
-    display: none;
-  }
-
-  @container (max-width: 439px) {
-    button.new.magnifier {
-      display: grid;
-    }
-
-    .search {
-      display: none;
-    }
-
-    .search.open {
-      position: absolute;
-      inset: 0;
-      z-index: 1;
-      display: flex;
-      align-items: center;
-      background: var(--bg);
-    }
-
-    .search.open input {
-      align-self: stretch;
-      padding-right: 48px;
-    }
-
-    /* One ✕: ours (it also folds the field), not the browser's. */
-    .search.open input::-webkit-search-cancel-button {
-      display: none;
-    }
-
-    .search.open .clear {
-      position: absolute;
-      right: 0;
-      display: grid;
-      place-items: center;
-      width: 44px;
-      height: 44px;
-      padding: 0;
-      border: 0;
-      background: none;
-      color: inherit;
-      cursor: pointer;
-    }
   }
 
   button.new {

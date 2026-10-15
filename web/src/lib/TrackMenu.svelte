@@ -26,6 +26,7 @@
   import { withUndo } from './undo.svelte';
   import { followCreate, followDelete } from './follow.svelte';
   import { albumSubject, viewPlaylist } from './panel.svelte';
+  import { download, inApp } from './app.svelte';
 
   let {
     onclose,
@@ -209,6 +210,17 @@
         {/if}
         {#if albumId}
           <MenuEntry icon="squareArrowOutUpRight" label="View album" onclick={viewAlbum} />
+        {/if}
+        {#if inApp && t}
+          {@const one = t}
+          <MenuEntry
+            icon="arrowDownToLine"
+            label="Download"
+            onclick={() => {
+              download([one]);
+              onclose();
+            }}
+          />
         {/if}
         {#if forPlaying}
           <MenuEntry

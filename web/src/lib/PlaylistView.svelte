@@ -47,6 +47,7 @@
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, type LocalTrack } from './localPlayer.svelte';
+  import { download, inApp } from './app.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { albumMoved, albumOf, closePlaylist, panelDepth, viewPlaylist, panel, setTab, TABS } from './panel.svelte';
@@ -253,6 +254,16 @@
     ...(album ? [] : [{ value: 'album' as SortKey, label: 'Album' }]),
     { value: 'length', label: 'Length' },
   ]);
+  // The same order in the pill's View (lib/ViewSheet).
+  const listOrder = $derived({
+    fields: sortFields,
+    value: sortKey,
+    down: sortDown,
+    set: (value: string, down: boolean) => {
+      sortKey = value as SortKey;
+      sortDown = down;
+    },
+  });
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
@@ -729,7 +740,7 @@
         {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
         <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
       </span>
-      <span class="end"><TopPill /><PanelPlace /></span>
+      <span class="end"><TopPill view order={listOrder} /><PanelPlace /></span>
     </div>
   {/if}
 
@@ -964,6 +975,18 @@
         <button class="icon" class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
           ><Icon name="heart" size={24} /></button
         >
+        {#if inApp}
+          <button
+            class="icon"
+            aria-label="Download"
+            title="Download"
+            disabled={!ticked.length}
+            onclick={() => {
+              download(tracksOf(ticked));
+              selecting = null;
+            }}><Icon name="arrowDownToLine" size={24} /></button
+          >
+        {/if}
       </div>
     </div>
   {/if}
@@ -1087,7 +1110,11 @@
   />
 {/if}
 {#if menuOpen && selected.length}
-  <PlaylistMenu playlists={selected} onclose={() => (menuOpen = false)} />
+  <PlaylistMenu
+    playlists={selected}
+    ondownload={inApp && selected.length === 1 && playable.length ? () => download(tracksOf(playable)) : null}
+    onclose={() => (menuOpen = false)}
+  />
 {/if}
 {#if trackMenu}
   <TrackMenu track={trackMenu.track} start={trackMenu.start} onclose={() => (trackMenu = null)} />
@@ -1101,6 +1128,7 @@
     tracks={playable.map((r) => r.id!)}
     incoming={albumIncoming}
     forgetResume={resumeAt ? forgetResume : null}
+    ondownload={inApp && playable.length ? () => download(tracksOf(playable)) : null}
     onclose={() => (albumMenuOpen = false)}
   />
 {/if}
@@ -1585,7 +1613,7 @@
   .navpill button {
     display: grid;
     place-items: center;
-    width: 48px;
+    width: 44px;
     height: 44px;
     padding: 0;
     border: 0;

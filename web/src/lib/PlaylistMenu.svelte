@@ -25,12 +25,15 @@
     onclose,
     onrenamed,
     ondeleted,
+    ondownload = null,
   }: {
     /** One or more (in the order ticked). */
     playlists: Item[];
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
+    /** Its tracks onto the phone (the app's Downloads); given only in the app, for one playlist whose rows are known. */
+    ondownload?: (() => void) | null;
   } = $props();
 
   let mode = $state<'menu' | 'rename' | 'delete' | 'spoken'>('menu');
@@ -193,6 +196,16 @@
         }}
       />
       <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
+      {#if ondownload}
+        <MenuEntry
+          icon="arrowDownToLine"
+          label="Download"
+          onclick={() => {
+            onclose();
+            ondownload();
+          }}
+        />
+      {/if}
       <MenuEntry icon="download" label="Export…" onclick={() => viewTab('export')} />
       <MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync')} />
       {#if one}

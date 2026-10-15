@@ -47,7 +47,13 @@ export const pageView = $state({
   width: 0,
   /** Playlists: favourites only; not remembered (as it was on the page). */
   favouritesOnly: false,
+  /** The page's search (the pill's field): what its list is filtered by; empty again on another page. */
+  query: '',
 });
+
+/** The pill's search field's words on a page that has one. */
+export const searchFor = (page: string) =>
+  page === 'playlists' ? 'Filter playlists' : page === 'collection' || page === 'incoming' ? 'Filter albums' : null;
 
 /** The pages whose view settings the View sheet holds. */
 export const hasView = (page: string) => ['playlists', 'collection', 'incoming', 'crates'].includes(page);
