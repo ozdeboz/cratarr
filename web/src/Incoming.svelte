@@ -108,7 +108,7 @@
           {@const job = jobs.of(s.id, a.id)!}
           <span class="job">
             {job.state === 'waiting' ? 'Waiting to convert' : `Converting ${job.done} of ${job.total}`}
-            <span class="track" aria-hidden="true"><span style:width="{(100 * job.done) / Math.max(job.total, 1)}%"></span></span>
+            <span class="track" aria-hidden="true"><span style:width="{(100 * (job.done + job.part)) / Math.max(job.total, 1)}%"></span></span>
           </span>
         {:else if verdictOf(s, a)}
           {@const v = verdictOf(s, a)!}

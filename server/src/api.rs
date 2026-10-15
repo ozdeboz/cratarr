@@ -166,8 +166,20 @@ async fn track_info(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
 }
 
 /// An album's view in the panel (decision 0023), and its tracks for the local player (decision 0022).
+/// An album as the panel shows it. One that left Incoming is followed: where it is now, or what became of it.
 async fn album_view(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::AlbumView>, ApiError> {
-    Ok(Json(app.playing.album_view(&source, &album).await?))
+    use crate::app::AlbumFate;
+    let failed = match app.playing.album_view(&source, &album).await {
+        Ok(v) if !v.rows.is_empty() => return Ok(Json(v)),
+        Ok(v) => Ok(v),
+        Err(e) => Err(e),
+    };
+    match app.incoming.album_fate(&source, &album).await {
+        Some(AlbumFate::Moved(now)) if now != album => Ok(Json(app.playing.album_view(&source, &now).await?)),
+        Some(AlbumFate::NotYet(title)) => Err(ToggleError::Refused(format!("{title} is in Music now. The server has not added it yet.")).into()),
+        Some(AlbumFate::Deleted(title)) => Err(ToggleError::Refused(format!("{title} was deleted.")).into()),
+        _ => Ok(Json(failed?)),
+    }
 }
 
 /// A track's playlists and favourite, for the local player's track (decision 0022).

@@ -639,7 +639,8 @@ export const setPlaylistFavorite = (id: string, on: boolean, source?: string) =>
 /** The local player played most of the track: one play counts in the media server (decision 0022). */
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });
 /** An album as its view in the panel shows it: its tracks in play order, as a playlist's rows (decision 0023). */
-export type AlbumView = { source: string; title: string; artist: string | null; year: number | null; genres: string[]; rows: PlaylistRow[] };
+/** `id`: the album's, another than asked for when it moved (Keep, Replace) and the server followed it. */
+export type AlbumView = { source: string; id: string; title: string; artist: string | null; year: number | null; genres: string[]; rows: PlaylistRow[] };
 export const albumView = (source: string, album: string) =>
   quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
 export const handover = (ids: string[], index: number, positionSecs: number, source?: string) =>
@@ -712,6 +713,8 @@ export type Job = {
   action: 'keep' | 'replace';
   state: 'waiting' | 'converting' | 'done' | 'failed';
   done: number;
+  /** How far the file being converted is, 0 to 1. */
+  part: number;
   total: number;
   folder: string;
   undo: string | null;

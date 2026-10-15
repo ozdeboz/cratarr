@@ -170,13 +170,19 @@ pub fn needs_conversion(path: &Path) -> Result<Option<SourceFormat>> {
 /// pictures. The output appears whole or not at all: it is written to a temporary file next to it, then renamed.
 /// `output` may be `input` itself.
 pub fn to_cd_flac(input: &Path, output: &Path) -> Result<Report> {
+    to_cd_flac_told(input, output, |_| {})
+}
+
+/// [`to_cd_flac`], telling `progress` how far it is (0 to 1 of the input read) at each whole percent, when the
+/// file's header gives its length.
+pub fn to_cd_flac_told(input: &Path, output: &Path, progress: impl FnMut(f32)) -> Result<Report> {
     let dir = match output.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
     };
     let name = output.file_name().context("the output has no file name")?;
     let temp = dir.join(format!(".{}.cratarr-part", name.to_string_lossy()));
-    let result = convert_to(input, &temp, None);
+    let result = convert_to(input, &temp, None, progress);
     match result {
         Ok(report) => {
             std::fs::rename(&temp, output).with_context(|| format!("renaming into {}", output.display()))?;
@@ -191,7 +197,7 @@ pub fn to_cd_flac(input: &Path, output: &Path) -> Result<Report> {
 
 /// The conversion itself, into `out` (overwritten). With `raw`, also writes the 32-bit float signal just before
 /// dithering, interleaved little-endian: the measurement hook for the SoX comparison.
-fn convert_to(input: &Path, out: &Path, raw: Option<&Path>) -> Result<Report> {
+fn convert_to(input: &Path, out: &Path, raw: Option<&Path>, mut progress: impl FnMut(f32)) -> Result<Report> {
     let mut source = Source::open(input)?.with_context(|| format!("{} is not a lossless audio file", input.display()))?;
     let format = source.format.clone();
     if format.channels == 0 || format.channels > 8 {
@@ -212,8 +218,21 @@ fn convert_to(input: &Path, out: &Path, raw: Option<&Path>) -> Result<Report> {
         }
         sink.push(planes, start, len)
     };
+    let (mut read, mut told) = (0u64, 0u64);
     stream(
-        |planes| source.read(planes, &mut scratch),
+        |planes| {
+            let before = planes[0].len();
+            let more = source.read(planes, &mut scratch)?;
+            read += (planes[0].len() - before) as u64;
+            if let Some(total) = format.frames.filter(|t| *t > 0) {
+                let percent = (read * 100 / total).min(100);
+                if percent > told {
+                    told = percent;
+                    progress(percent as f32 / 100.0);
+                }
+            }
+            Ok(more)
+        },
         format.channels,
         format.sample_rate,
         rate,
@@ -709,6 +728,18 @@ mod tests {
     }
 
     #[test]
+    fn progress_rises_to_the_whole() {
+        let d = temp_dir();
+        let (src, out) = (d.join("in.flac"), d.join("out.flac"));
+        write_flac(&src, 96_000, 24, &sine(96_000, 1000.0, 0.5, 3.0, 2));
+        let mut told = Vec::new();
+        to_cd_flac_told(&src, &out, |p| told.push(p)).unwrap();
+        assert!(told.len() > 10, "{told:?}");
+        assert!(told.windows(2).all(|w| w[0] < w[1]), "{told:?}");
+        assert_eq!(told.last(), Some(&1.0));
+    }
+
+    #[test]
     fn the_48k_family_and_wav() {
         let d = temp_dir();
         for rate in [48_000u32, 192_000] {
@@ -849,7 +880,7 @@ mod tests {
     fn tool() {
         let Some((input, output, raw)) = _tool_paths() else { return };
         let start = std::time::Instant::now();
-        let report = convert_to(&input, &output, raw.as_deref()).unwrap();
+        let report = convert_to(&input, &output, raw.as_deref(), |_| {}).unwrap();
         let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
         let hwm = status.lines().find(|l| l.starts_with("VmHWM")).unwrap_or("VmHWM: ?").to_string();
         println!("REPORT {report:?} secs={:.2} {hwm}", start.elapsed().as_secs_f64());

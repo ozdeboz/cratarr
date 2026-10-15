@@ -85,6 +85,30 @@ impl CollectionService {
     }
 
     /// Reads the lists again, keeping a list whose read failed. Tells the pages when one changed.
+    /// Read the lists again a minute after an album action (Keep, Replace, Delete, an Undo): the server adds a kept
+    /// album within seconds of being told, so it shows without waiting for the quarter-hour read.
+    pub fn follow(self: &Arc<Self>, journal: &crate::journal::Journal) {
+        use tokio::sync::broadcast::error::RecvError;
+        let (mut done, mut undone) = (journal.subscribe(), journal.subscribe_undone());
+        let me = self.clone();
+        tokio::spawn(async move {
+            loop {
+                let heard = tokio::select! {
+                    r = done.recv() => r,
+                    r = undone.recv() => r,
+                };
+                if let Err(RecvError::Closed) = heard {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                // What came meanwhile is in this read.
+                done = done.resubscribe();
+                undone = undone.resubscribe();
+                me.refresh().await;
+            }
+        });
+    }
+
     pub async fn refresh(&self) {
         let _reading = self.reading.lock().await;
         let mut keep = HashSet::new();

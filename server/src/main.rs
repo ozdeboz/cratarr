@@ -119,6 +119,7 @@ async fn main() -> Result<()> {
     // The crates' favourites are asked for once at start, as the media server may take a minute (decision 0024).
     let warm = app.clone();
     tokio::spawn(async move { warm.playlists.warm_favourites().await });
+    app.collection.follow(&app.journal);
 
     // One background pass keeps Cratarr in step with the sources and the library (see `App::sync`); the first runs
     // at once, so the incoming lists are ready soon after start.

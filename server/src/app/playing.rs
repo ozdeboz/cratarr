@@ -64,6 +64,8 @@ pub const GENRES_SHOWN: usize = 5;
 #[derive(Debug, Serialize)]
 pub struct AlbumView {
     pub source: String,
+    /// The album's id: another than asked for when the album moved (Keep, Replace) and this is where it is now.
+    pub id: String,
     pub title: String,
     pub artist: Option<String>,
     pub year: Option<u32>,
@@ -432,7 +434,11 @@ impl PlayingService {
             return Err(ToggleError::Refused("That is not an album.".into()));
         }
         let (_, s) = self.source(source_id)?;
-        let tracks = s.tracks_of_album(album_id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        // The server's own words (a request and its status) go to the log, not the page.
+        let tracks = s.tracks_of_album(album_id).await.map_err(|e| {
+            tracing::warn!("{source_id}: album {album_id}: {e:#}");
+            ToggleError::Refused("The server could not read this album.".into())
+        })?;
         let first = tracks.first();
         let (title, artist, year) =
             (first.and_then(|t| t.album.clone()).unwrap_or_default(), first.and_then(|t| t.album_artist.clone()), first.and_then(|t| t.year));
@@ -455,7 +461,7 @@ impl PlayingService {
                 }
             })
             .collect();
-        Ok(AlbumView { source: source_id.to_string(), title, artist, year, genres, rows })
+        Ok(AlbumView { source: source_id.to_string(), id: album_id.to_string(), title, artist, year, genres, rows })
     }
 
     /// Plays an album of a connected server on that server's player. Returns the player's label.

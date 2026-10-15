@@ -130,6 +130,13 @@ export function playlistDeleted(id: string) {
   read();
 }
 
+/** An album that moved (kept or replaced into Music: a new id on the server) stays viewed as itself there. */
+export function albumMoved(source: string, from: string, to: string) {
+  if (panel.viewed !== albumSubject(source, from)) return;
+  replace(address([albumSubject(source, to)], 'tracks'));
+  read();
+}
+
 /** An album that left Incoming (kept, replaced or deleted) closes. */
 export function albumGone(source: string, id: string) {
   if (panel.viewed === albumSubject(source, id)) closePlaylist();

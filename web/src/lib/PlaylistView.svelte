@@ -44,7 +44,7 @@
   import { enqueue, type LocalTrack } from './localPlayer.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
-  import { albumOf, closePlaylist, viewPlaylist, panel, setTab, TABS } from './panel.svelte';
+  import { albumMoved, albumOf, closePlaylist, viewPlaylist, panel, setTab, TABS } from './panel.svelte';
   import { inSidebar } from './live.svelte';
   import ExportTab from './ExportTab.svelte';
   import PlaylistItem from './PlaylistItem.svelte';
@@ -183,6 +183,7 @@
       ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav)
       : a
         ? albumView(a.source, a.id).then((r) => {
+            if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id) albumHead = { title: r.title, artist: r.artist, year: r.year };
             return { ...r, total: r.rows.length };
           })
