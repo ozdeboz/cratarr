@@ -96,3 +96,16 @@ end a little early.
 - A device gone for long, or a queue replaced while it was away, can no longer bring an old queue back.
 - Removing a track from the library while a device is offline is not covered here: it belongs with the library's own
   sync, on the same reconnect.
+
+## Amendment (2026-10-15): step 4 as built
+
+- **Downloads** are in the app: the owner's chosen tracks (as the files are, or as Cratarr's smaller copies: 160 kb/s
+  Ogg Opus made from lossless files, `?as=opus`; lossy files come as they are), and the next five tracks of the queue,
+  kept as they would be streamed anyway. The player reads every track from the device first. Over Wi-Fi only unless
+  mobile data is allowed. The page's Downloads view (in the app) plays them without a server.
+- **Plays are events**, as decided: the app counts them itself (90% through, with their own time), keeps them until
+  Cratarr has them, and Cratarr counts each once (`POST /api/plays`).
+- **No edits to make again on reconnect, yet.** Cratarr refuses commands for a player that is not connected, so while
+  the app holds its queue (offline) nothing else changes it: on reconnect its queue is simply taken (step 1). The edit
+  log, the steps back online and the 24-hour rule are needed once Cratarr accepts edits for an absent player (Home
+  Assistant queueing for the phone while it is away, say); they wait for that.
