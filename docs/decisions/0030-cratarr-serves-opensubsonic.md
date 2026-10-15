@@ -7,9 +7,10 @@
 ## Context
 
 Cratarr manages playlists alongside a media server (Jellyfin, then Navidrome in a spike). The owner wants no separate
-music server: Cratarr serves the library itself, through the OpenSubsonic API, so any Subsonic app can use it. Cratarr already has most of what a server needs: the catalogue (every file, its tags, stable
-track ids that survive moves), original-file streaming and folder covers. The owner asked to copy proven code and
-patterns as far as possible rather than reinvent; with the AGPL (0029) the copyleft servers can be used.
+music server: Cratarr serves the library itself, through the OpenSubsonic API, so any Subsonic app can use it.
+Cratarr already has most of what a server needs: the catalogue (every file, its tags, stable track ids that survive
+moves), original-file streaming and folder covers. The owner asked to copy proven code and patterns as far as possible
+rather than reinvent; with the AGPL (0029) the copyleft servers can be used.
 
 What was studied (2026-10-15):
 
@@ -27,10 +28,10 @@ translated code keeps a notice naming its origin, copyright holder and licence, 
 
 **Data (patterns from Navidrome, translated):**
 
-- A derived **library database** (`library.db`), rebuilt from the catalogue: songs, albums, artists and a search index.
-  The catalogue is read through a read-only connection of its own (a full read takes seconds and must not hold up
-  the catalogue), and only when a cheap summary of its files changed; it stays the truth about files and tags.
-  Deleting `library.db` costs a rebuild.
+- A derived **library database** (`library.sqlite`), rebuilt from the catalogue: songs, albums, artists and a search
+  index. The catalogue is read through a read-only connection of its own (a full read takes seconds and must not hold
+  up the catalogue), and only when a cheap summary of its files changed; it stays the truth about files and tags.
+  Deleting `library.sqlite` costs a rebuild; it need not be backed up.
 - **One album per folder** (Cratarr's layout, decision 0016; gonic's model): songs of a folder whose tags disagree
   (a date on some tracks only) would otherwise split it, as Navidrome's grouping does (a library of 2,736 album
   folders gave 2,754 albums, one folder five). The folder's album id is the one most of its songs' tags give.
@@ -41,7 +42,7 @@ translated code keeps a notice naming its origin, copyright holder and licence, 
   artist from its MusicBrainz id, else its lower-cased name. Each song also carries Navidrome's "persistent id" (from
   its MusicBrainz track id, else album, disc, track number and title), so user data finds its song again after the
   catalogue is rebuilt and its track ids renumbered.
-- **User data in its own database** (`userdata.db`, never derived, kept in backups): one annotation table per user
+- **User data in its own database** (`userdata.sqlite`, never derived, kept in backups): one annotation table per user
   and item (plays, last played, rating, starred and when), as Navidrome's; play queues. Nothing is ever deleted when a
   file goes missing: missing songs and albums are flagged, not removed.
 - **Search:** SQLite FTS5 (unicode61, diacritics removed), each word as `(word OR word*)`, ranked by bm25 with column
@@ -108,7 +109,7 @@ again whenever they like, later perhaps every few minutes while both servers are
 - **Accounts:** the page chooses the server account (default: the one chosen last time, else the server's "your
   account") and the Cratarr account.
 - **Safe to repeat:** per Cratarr account, source, server account and item, the server's values from the last import
-  are kept (`imported` in `userdata.db`, following songs to new ids as their annotations do). Each import then:
+  are kept (`imported` in `userdata.sqlite`, following songs to new ids as their annotations do). Each import then:
   - adds to a song's plays the server's count minus the count imported last time, when more (a count reset on the
     server adds nothing, and later plays count from it), and counts them on its album and artists as a play is counted;
     last played is the later one;
@@ -131,5 +132,41 @@ again whenever they like, later perhaps every few minutes while both servers are
   9 to 12 s, and an hour later a page of 200 (what the import asks) 4.4 to 5.8 s; 250 albums 5 to 7 s. A whole import
   reads about 10,000 tracks in some 52 pages and 2,738 albums in 11: about seven minutes with the pauses.
 - **Not yet:** an import that reads only what changed since the last one (Jellyfin can list the played tracks newest
-  first, not the favourites changed since a moment), so running it every few minutes would read everything each time;
-  albums' added dates are kept but not yet served (`newest` still orders by the files' age).
+  first, not the favourites changed since a moment), so running it every few minutes would read everything each time.
+  (Albums' added dates are served since the same day: an album's is the earlier of its oldest file and the imported
+  date.)
+- **Done** (2026-10-15, the owner's Jellyfin, a first run cut short by a restart and a second run to the end, without
+  errors): Cratarr then had 5,072 played tracks with 8,148 plays, 4,787 favourite tracks, 355 favourite albums, 98
+  favourite artists (the rest are not in the library under the same name) and added dates for 2,735 of 2,738 albums.
+
+## Amendment (2026-10-15): what was built, and Cratarr's own library calls
+
+Plan steps 1 to 3 are built; step 4 is decision 0032 (Cratarr is its own source); step 5 goes with decision 0031.
+
+- **Playlists** are served as planned: a playlist's id is `pl-` and its name; lines become songs through the catalogue,
+  and songs become lines the way the playlist sync writes them (a track's path relative to the Music folder), never
+  from what a client sent. An edit goes through the playlist service, so it has its undo and reaches the other servers
+  by the sync. Lines whose file is missing stay in the file and are not shown; the positions a client sends count the
+  shown songs only.
+- **Covers** as planned: the folder's cover file, else the picture embedded in the album's first track; resized with
+  nghe's filter (Triangle) to JPEG at quality 85, one resize at a time (a client asks for hundreds at once, and a large
+  picture takes tens of megabytes to decode); a 100 MB disk cache, oldest out first. The cover id carries a
+  fingerprint of the picture's file (its name, size and time), so a cover is cached for good and a new picture gets a
+  new id.
+- **Cratarr's own library calls** under `/api/library`, for what the Subsonic API has no word for and for callers that
+  cannot log in the Subsonic way (Home Assistant's templates have no md5). Plain JSON, open on the LAN as the rest of
+  `/api`; they act for the first account, the owner's; ids are the Subsonic ones (`tr-…`, `al-…`).
+  - **Album tags:** household-wide labels on albums, as Jellyfin's album tags were (Home Assistant uses them). Kept in
+    `userdata.sqlite`, lower-case and trimmed, under the album's id as it is or would be in Music, so they follow an
+    album kept from Incoming. Add, remove, clear, all tags, the albums with a tag.
+  - **Reviewing Incoming:** promote (Incoming's Keep: into Music) and reject (Incoming's Delete: to the trash, and
+    with Lidarr connected the album is no longer fetched), each undone through Incoming's own undo; the review is
+    remembered per album. Incoming itself works as before; the album is found there by its folder.
+  - Favourite and unfavourite a track, an album with its tags and review, a track's file, Incoming's albums, and a
+    health check that answers 503 when the library cannot be read within 10 s.
+- **Accounts:** the first account (name and password) is made in Settings' Subsonic section, and its password changed
+  there. External sign-in (an LDAP directory, say) is a later decision: such a directory would be a source the
+  accounts are copied from, never a service Cratarr needs while it runs.
+- **Backups:** `userdata.sqlite` holds what cannot be rebuilt (plays, favourites, ratings, tags, reviews, imported
+  dates) and must be backed up with the data folder's settings; `library.sqlite` need not be. Both are live SQLite
+  databases in WAL mode: copy them with SQLite's online backup, not as files.
