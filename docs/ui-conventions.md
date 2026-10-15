@@ -184,7 +184,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 - **Tiles** (`lib/Tile.svelte`): Row's sibling for things shown by their picture: the square picture on top, as wide
   as the column the page's Size makes, the title and muted lines under it (an album: its artist only, and the page's
   own lines), the action (Play) over the picture's lower right corner, and over its upper left one a pill with what
-  the list is ordered by when the lines do not say it already (an album list by Year or Added; decided 2026-10-16). Its states are the row's: a border when viewed, a tint when it holds what plays.
+  the list is ordered by when the lines do not say it already (an album list by Year or Added; decided 2026-10-16).
+  The album lists' View also has **Dates**: Relative ("3 days ago") or Absolute ("14 Oct"), remembered. Its states are the row's: a border when viewed, a tint when it holds what plays.
 - **A list's sections** (`lib/Section.svelte`): a heading with its count that folds the list, and while open one line
   on what the list is. A selection's Tracks (a section per playlist), the Repair tab's kinds of repair, the Info tab
   for several playlists, Health's kinds of problem (folded at first).
