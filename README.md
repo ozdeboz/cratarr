@@ -155,6 +155,12 @@ sidebar, or above the page on phones.
 
 See [docs/decisions](docs/decisions) for why, and what is planned next.
 
+## Credits
+
+- [Jellyfin](https://jellyfin.org), the media server Cratarr was first built alongside.
+- [Finamp](https://github.com/finamp-app/finamp), whose player and menus Cratarr's follow ([0019](docs/decisions/0019-remote-features-from-finamps-player.md), [0021](docs/decisions/0021-menus-are-finamp-style-sheets.md)).
+- [Seerr](https://github.com/seerr-team/seerr), for its layout, its settings that choose from what the servers already know ([0009](docs/decisions/0009-library-uses.md)), and sign-in through Jellyfin ([0015](docs/decisions/0015-playlists-by-spoken-name.md)).
+
 ## License
 
 Cratarr is free software under the GNU Affero General Public License, version 3 or (at your option) any later version: see [LICENSE](LICENSE). Whoever runs a modified Cratarr for others over a network offers them its source ([decision 0029](docs/decisions/0029-agpl-licence.md)).
