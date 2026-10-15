@@ -157,4 +157,4 @@ See [docs/decisions](docs/decisions) for why, and what is planned next.
 
 ## License
 
-MIT
+Cratarr is free software under the GNU Affero General Public License, version 3 or (at your option) any later version: see [LICENSE](LICENSE). Whoever runs a modified Cratarr for others over a network offers them its source ([decision 0029](docs/decisions/0029-agpl-licence.md)).

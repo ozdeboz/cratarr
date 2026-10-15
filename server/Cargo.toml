@@ -3,7 +3,7 @@ name = "cratarr-server"
 version = "0.7.6"
 edition = "2024"
 description = "Cratarr core: Jellyfin playlist index and API"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 anyhow = "1"
