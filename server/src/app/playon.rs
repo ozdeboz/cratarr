@@ -69,6 +69,9 @@ pub struct Report {
     /// Its repeat mode, as it applies it (it may change it itself: a new play turns repeat one off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeat: Option<Repeat>,
+    /// Its sleep timer, as it keeps it; none set (or one that fired) is left out or null.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sleep: Option<Sleep>,
     pub position_ms: u64,
     #[serde(default)]
     pub duration_ms: Option<u64>,
@@ -85,6 +88,16 @@ pub struct Report {
 
 fn full_volume() -> u8 {
     100
+}
+
+/// A sleep timer: the player pauses at `at_ms` (epoch milliseconds), or when the playing track ends. The player that
+/// plays keeps it, as only it is sure to be awake then (offline, behind a locked screen).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Sleep {
+    #[serde(default)]
+    pub at_ms: Option<u64>,
+    #[serde(default)]
+    pub end_of_track: bool,
 }
 
 /// What `play` plays when it is not given tracks; resolved here, so it never reaches the player.
@@ -165,6 +178,13 @@ pub enum Command {
     Shuffle { on: bool },
     /// Repeat off, one (the playing track) or all (the album or playlist), decision 0033 amended.
     Repeat { mode: Repeat },
+    /// The sleep timer: pause at `at_ms` (epoch milliseconds) or when the playing track ends; neither clears it.
+    Sleep {
+        #[serde(default)]
+        at_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        end_of_track: bool,
+    },
     /// Entry `entry` (or the one at place `index`) out.
     Remove {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -240,6 +260,8 @@ pub struct PlayerView {
     pub repeat: Repeat,
     /// What comes of the album or playlist plays out of its own order.
     pub shuffled: bool,
+    /// Its sleep timer, while one is set.
+    pub sleep: Option<Sleep>,
     /// Goes up whenever the queue changes: ask for the player by name to see the new one.
     pub queue_version: u64,
     /// The track at `index`.
@@ -350,6 +372,7 @@ impl Entry {
             queue_length: self.queue.tracks.len(),
             repeat: self.queue.repeat,
             shuffled: shuffled_order(&self.queue.tracks, index),
+            sleep: r.sleep.filter(|s| s.at_ms.is_some() || s.end_of_track),
             queue_version: self.queue.version,
             title: track.as_ref().map(|t| t.name.clone()),
             artist: track.as_ref().and_then(|t| t.artist.clone()),
@@ -746,10 +769,13 @@ impl PlayOn {
         if tracks.is_empty() {
             return Err(ToggleError::Refused(format!("{from} has nothing to hand over.")));
         }
-        let repeat = self.entries().get(from).map(|e| e.queue.repeat).unwrap_or_default();
+        let (repeat, sleep) = self.entries().get(from).map(|e| (e.queue.repeat, e.report.sleep)).unwrap_or_default();
         Box::pin(self.command(to, Command::play(tracks, index, position_ms))).await?;
-        // Repeat moves with the queue (decision 0033, amended), repeat one too.
+        // Repeat moves with the queue (decision 0033, amended), repeat one too; a sleep timer moves with the music.
         let _ = Box::pin(self.command(to, Command::Repeat { mode: repeat })).await;
+        if let Some(s) = sleep.filter(|s| s.at_ms.is_some() || s.end_of_track) {
+            let _ = Box::pin(self.command(to, Command::Sleep { at_ms: s.at_ms, end_of_track: s.end_of_track })).await;
+        }
         // The music is on its way there; this one stopping is no reason to fail the handover.
         let _ = Box::pin(self.command(from, Command::Stop)).await;
         Ok(())
@@ -993,6 +1019,26 @@ mod tests {
         let to_player = Command::play(vec![], 2, 5);
         assert_eq!(serde_json::to_string(&to_player).unwrap(), r#"{"command":"play","tracks":[],"index":2,"position_ms":5}"#);
         assert_eq!(serde_json::to_string(&Command::Seek { position_ms: Some(9), percent: None }).unwrap(), r#"{"command":"seek","position_ms":9}"#);
+        // The sleep timer: a time, the end of the track, or null to clear it; passed on as it came.
+        let c: Command = serde_json::from_str(r#"{"command":"sleep","at_ms":1760000000000}"#).unwrap();
+        assert_eq!(c, Command::Sleep { at_ms: Some(1_760_000_000_000), end_of_track: false });
+        assert_eq!(serde_json::to_string(&c).unwrap(), r#"{"command":"sleep","at_ms":1760000000000}"#);
+        let c: Command = serde_json::from_str(r#"{"command":"sleep","at_ms":null,"end_of_track":true}"#).unwrap();
+        assert_eq!(serde_json::to_string(&c).unwrap(), r#"{"command":"sleep","at_ms":null,"end_of_track":true}"#);
+        let mut q = Queue::default();
+        assert_eq!(q.edit(Command::Sleep { at_ms: None, end_of_track: false }).unwrap(), Command::Sleep { at_ms: None, end_of_track: false });
+        assert_eq!(q.version, 0);
+    }
+
+    #[test]
+    fn a_sleep_timer_shows_while_the_player_keeps_one() {
+        let mut e = Entry::new();
+        assert_eq!(e.view("p", false).sleep, None);
+        e.report.sleep = Some(Sleep { at_ms: Some(5), end_of_track: false });
+        assert_eq!(e.view("p", false).sleep, Some(Sleep { at_ms: Some(5), end_of_track: false }));
+        // One that fired, reported empty, is no timer.
+        e.report.sleep = Some(Sleep::default());
+        assert_eq!(e.view("p", false).sleep, None);
     }
 
     #[test]

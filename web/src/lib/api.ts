@@ -155,6 +155,8 @@ export type PlayOnPlayer = {
   /** Off, one or all (decision 0033, amended). */
   repeat?: 'off' | 'one' | 'all';
   shuffled?: boolean;
+  /** Its sleep timer, while one is set: it pauses at `at_ms` (epoch ms) or when the playing track ends. */
+  sleep?: { at_ms: number | null; end_of_track: boolean } | null;
   track: QueueTrack | null;
   queue?: QueueTrack[];
 };

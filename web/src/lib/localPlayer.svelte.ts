@@ -35,6 +35,8 @@ export type LocalTrack = {
 };
 
 export type Repeat = 'off' | 'one' | 'all';
+/** A sleep timer: pause at `atMs` (epoch ms), or when the playing track ends. */
+export type Sleep = { atMs: number | null; endOfTrack: boolean };
 
 /** One appended track: its queue index, where its sample 0 sits in the stream (s), its length (s; null while
  *  unknown), and the length the server read from the file (s), shown while the exact one is unknown. */
@@ -55,6 +57,9 @@ export const local = $state({
   shuffled: false,
   /** Repeat (decision 0033, amended): off, one (the playing track), all (the album or playlist). */
   repeat: 'off' as Repeat,
+  /** The sleep timer of the player that plays elsewhere (the app, Cratarr's player), as it reports it; null when none
+   *  is set or it fired. */
+  sleep: null as Sleep | null,
   /** What the queue was started from ("Chill", an album), for the queue sheet's "Playing from"; null when unknown. */
   from: null as string | null,
 });
@@ -488,6 +493,8 @@ const handed = () => inApp || driven !== null;
  *  then that player's, as it reports it (`reported`). */
 export function drive(name: string | null) {
   driven = name;
+  // The next player's own, from its first report.
+  local.sleep = null;
   reported = { positionMs: 0, at: performance.now() };
 }
 
@@ -497,8 +504,19 @@ const sameQueue = (a: LocalTrack[], b: LocalTrack[]) =>
   a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id && t.entry === b[i].entry);
 
 /** The player that plays: what it plays now (`queue` only when it changed). */
-export function reportedBy(m: { queue?: unknown; index?: unknown; positionMs?: unknown; durationMs?: unknown; paused?: unknown; error?: unknown; repeat?: unknown }) {
+export function reportedBy(m: {
+  queue?: unknown;
+  index?: unknown;
+  positionMs?: unknown;
+  durationMs?: unknown;
+  paused?: unknown;
+  error?: unknown;
+  repeat?: unknown;
+  sleep?: unknown;
+}) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
+  // Left out: not said (a report of the queue alone); null: none.
+  if (m.sleep !== undefined) local.sleep = sleepOf(m.sleep);
   if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) {
     // A queue the player changed (moved, added to) keeps the names this page already knows of its tracks.
     const known = new Map(local.queue.filter((t) => t.name).map((t) => [`${t.source}/${t.id}`, t]));
@@ -514,6 +532,21 @@ export function reportedBy(m: { queue?: unknown; index?: unknown; positionMs?: u
   local.position = reported.positionMs / 1000;
 }
 
+function sleepOf(s: unknown): Sleep | null {
+  if (!s || typeof s !== 'object') return null;
+  const { atMs, endOfTrack } = s as Record<string, unknown>;
+  const timer = { atMs: typeof atMs === 'number' ? atMs : null, endOfTrack: endOfTrack === true };
+  return timer.atMs === null && !timer.endOfTrack ? null : timer;
+}
+
+/** The sleep timer, for the player that plays elsewhere (the app, Cratarr's player), which keeps it: it is sure to be
+ *  awake when it fires. `null` clears it. Its reports set `local.sleep`. */
+export function handSleep(s: Sleep | null) {
+  if (!handed()) return;
+  local.sleep = s;
+  hand('sleep', { atMs: s?.atMs ?? null, endOfTrack: s?.endOfTrack ?? false });
+}
+
 /** A call for the player that plays: the app's own, or the one driven (its command, as /api/players takes it). */
 function hand(op: string, args: Record<string, unknown> = {}) {
   if (driven === null) return toApp({ type: 'player', op, ...args });
@@ -524,7 +557,9 @@ function hand(op: string, args: Record<string, unknown> = {}) {
         ? { command: 'seek', position_ms: args.positionMs }
         : op === 'play'
           ? { command: 'resume' }
-          : { command: op, ...args };
+          : op === 'sleep'
+            ? { command: 'sleep', at_ms: args.atMs, ...(args.endOfTrack ? { end_of_track: true } : {}) }
+            : { command: op, ...args };
   playerCommand(driven, command).catch((e) => (local.error = e instanceof Error ? e.message : String(e)));
 }
 

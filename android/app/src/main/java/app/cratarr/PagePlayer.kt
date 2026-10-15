@@ -1,6 +1,7 @@
 package app.cratarr
 
 import android.content.Context
+import android.content.SharedPreferences
 
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
@@ -17,11 +18,18 @@ import org.json.JSONObject
  */
 class PagePlayer(private val context: Context, private val controller: MediaController, private val send: (String) -> Unit) : Player.Listener {
 
+    /** The sleep timer changed (set, or done): the page is told. Held here, as Android keeps listeners only weakly. */
+    private val sleepChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key -> if (key == Prefs.SLEEP) report() }
+
     init {
         controller.addListener(this)
+        Prefs.shared(context).registerOnSharedPreferenceChangeListener(sleepChanged)
     }
 
-    fun release() = controller.removeListener(this)
+    fun release() {
+        controller.removeListener(this)
+        Prefs.shared(context).unregisterOnSharedPreferenceChangeListener(sleepChanged)
+    }
 
     fun handle(m: JSONObject) {
         val c = controller
@@ -51,6 +59,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             "previous" -> c.seekToPrevious()
             // Its items are located by the service when they reach it.
             "repeat" -> Repeat.set(context, c, m.optString("mode")) { it }
+            // Kept by the service (Sleep); the change reaches the page as a report.
+            "sleep" -> Sleep.set(context, m, "atMs", "endOfTrack")
             "seek" -> c.seekTo(m.optLong("positionMs"))
             "play" -> play()
             "pause" -> c.pause()
@@ -80,6 +90,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("paused", !c.playWhenReady || c.playbackState == Player.STATE_ENDED)
             .put("error", c.playerError?.let(::describe) ?: JSONObject.NULL)
             .put("repeat", Repeat.mode(context))
+            .put("sleep", Sleep.json(context, "atMs", "endOfTrack"))
         if (withQueue) out.put("queue", queueOf(c))
         send(out.toString())
     }

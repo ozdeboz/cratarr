@@ -44,18 +44,26 @@ class PlayerService : MediaSessionService() {
     private var link: PlayOnLink? = null
     private lateinit var prefs: Prefs
     private lateinit var notifications: NotificationManager
+    private lateinit var player: ExoPlayer
 
-    /** The server's address or the player's name changed: Play On connects again with them. */
+    /** The server's address or the player's name changed: Play On connects again with them. A sleep timer set: kept. */
     private val prefsChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == Prefs.SERVER_URL || key == Prefs.PLAYER_NAME || key == Prefs.STAY_READY) link?.reconnect()
+        if (key == Prefs.SLEEP) {
+            keepSleep()
+            link?.sleepChanged()
+        }
     }
+
+    /** The sleep timer's time, looked at again when it should have come (the device may have slept meanwhile). */
+    private val sleepAt = Runnable { sleepCheck() }
 
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
         notifications = getSystemService(NotificationManager::class.java)
         val music = AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build()
-        val player = ExoPlayer.Builder(this)
+        player = ExoPlayer.Builder(this)
             .setAudioAttributes(music, true)
             .setHandleAudioBecomingNoisy(true)
             // A wake lock and a Wi-Fi lock while it plays: the screen off stops neither the music nor its download.
@@ -67,6 +75,8 @@ class PlayerService : MediaSessionService() {
             .build()
         player.addListener(Keeper(player))
         Repeat.apply(this, player)
+        // A sleep timer from before: its music is gone.
+        Sleep.clear(this)
         // Previous from the lock screen, the notification and the page goes through here too: under repeat all, the
         // first track's previous is the last one.
         val sessionPlayer = object : ForwardingPlayer(player) {
@@ -143,6 +153,26 @@ class PlayerService : MediaSessionService() {
         }
     }
 
+    /** The sleep timer as set: the end of the track by the player itself, the time by a wait. */
+    private fun keepSleep() {
+        val timer = Sleep.get(this)
+        player.pauseAtEndOfMediaItems = timer?.endOfTrack == true
+        main.removeCallbacks(sleepAt)
+        timer?.atMs?.let { main.postDelayed(sleepAt, (it - System.currentTimeMillis()).coerceAtLeast(0)) }
+    }
+
+    private fun sleepCheck() {
+        val at = Sleep.get(this)?.atMs ?: return
+        val left = at - System.currentTimeMillis()
+        if (left > 0) {
+            main.postDelayed(sleepAt, left)
+            return
+        }
+        // Cleared first, so what the pause reports has no timer.
+        Sleep.clear(this)
+        player.pause()
+    }
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         // The app swiped away: music that plays goes on, and so does a player that stays ready; otherwise it goes.
         val player = session?.player
@@ -185,7 +215,24 @@ class PlayerService : MediaSessionService() {
             if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
                 main.removeCallbacks(count)
                 if (player.isPlaying) main.post(count)
+                // A sleep timer that ran out while the music was paused only clears (its wait may not have come yet:
+                // the device sleeps while nothing plays).
+                val at = Sleep.get(this@PlayerService)?.atMs
+                if (player.isPlaying && at != null && at <= System.currentTimeMillis()) Sleep.clear(this@PlayerService)
             }
+            // Nothing queued any more: no timer.
+            if (events.contains(Player.EVENT_TIMELINE_CHANGED) && player.mediaItemCount == 0 && Sleep.get(this@PlayerService) != null) {
+                Sleep.clear(this@PlayerService)
+            }
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            // The track the sleep timer waited for ended: the player paused itself, and the timer is done.
+            if (reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) Sleep.clear(this@PlayerService)
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED && Sleep.get(this@PlayerService)?.endOfTrack == true) Sleep.clear(this@PlayerService)
         }
 
         override fun onPlayerError(error: PlaybackException) {

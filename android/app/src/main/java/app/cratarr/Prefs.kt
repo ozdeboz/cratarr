@@ -58,7 +58,15 @@ class Prefs(context: Context) {
             p.edit().putBoolean(SHUFFLED, value).apply()
         }
 
+    /** The sleep timer (Sleep), as "atMs,endOfTrack" (no time: empty); null when none is set. */
+    var sleep: Sleep.Timer?
+        get() = p.getString(SLEEP, null)?.split(',')?.takeIf { it.size == 2 }?.let { (at, end) -> Sleep.Timer(at.toLongOrNull(), end == "true") }
+        set(value) {
+            p.edit().apply { if (value == null) remove(SLEEP) else putString(SLEEP, "${value.atMs ?: ""},${value.endOfTrack}") }.apply()
+        }
+
     companion object {
+        const val SLEEP = "sleep"
         const val REPEAT = "repeat"
         const val SHUFFLED = "shuffled"
         const val SERVER_URL = "server_url"

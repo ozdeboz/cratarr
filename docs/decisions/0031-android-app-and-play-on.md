@@ -90,3 +90,12 @@ So inside the app the music plays **natively**, as Finamp's does, and the page i
   browser the page plays itself, as before.
 - Play On reaches the app's player, not the page: the app holds the connection to Cratarr (step 3), so a frozen page
   does not matter; the page catches up with what the player did when it is shown.
+
+## Amendment (2026-10-16): the sleep timer
+
+The player keeps the sleep timer, as it keeps repeat: only the device that plays is sure to be awake when it fires
+(behind a locked screen, offline). Command `{"command": "sleep", "at_ms": <epoch ms> | null, "end_of_track"?: true}`
+(both empty clears it); the page's bridge op is `{"op": "sleep", "atMs", "endOfTrack"}`. The player's reports and
+view carry `sleep: {at_ms, end_of_track} | null`. When it fires, the player pauses, as the pause button does, and the
+timer clears; one that runs out while paused only clears. A handover takes it along; a stop ends it. A page that plays
+in the browser keeps its own.

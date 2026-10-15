@@ -228,6 +228,7 @@ class PlayOnLink(
             "next" -> p.seekToNextMediaItem()
             "previous" -> if (!Repeat.previous(service, p)) p.seekToPrevious()
             "repeat" -> Repeat.set(service, p, m.optString("mode"), service::located)
+            "sleep" -> Sleep.set(service, m, "at_ms", "end_of_track")
             "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))
             "volume" -> {
                 val v = m.optInt("level", 100).coerceIn(0, 100) / 100f
@@ -259,6 +260,9 @@ class PlayOnLink(
 
     // --- the reports ---
 
+    /** The sleep timer changed (set here, by the page, or done): Cratarr is told. */
+    fun sleepChanged() = soon()
+
     private val heartbeat = object : Runnable {
         override fun run() {
             report()
@@ -275,12 +279,17 @@ class PlayOnLink(
                 Player.EVENT_POSITION_DISCONTINUITY,
                 Player.EVENT_TIMELINE_CHANGED,
                 Player.EVENT_VOLUME_CHANGED,
-            ) && !reportPending
+            )
         ) {
-            // Changes close together go as one report.
-            reportPending = true
-            main.postDelayed({ reportPending = false; report() }, 300)
+            soon()
         }
+    }
+
+    /** Changes close together go as one report. */
+    private fun soon() {
+        if (reportPending) return
+        reportPending = true
+        main.postDelayed({ reportPending = false; report() }, 300)
     }
 
     /** What plays now, to Cratarr (the queue too when it changed since the last report that reached it). */
@@ -292,6 +301,7 @@ class PlayOnLink(
             .put("entry", p.currentMediaItem?.let(::entryOf) ?: JSONObject.NULL)
             .put("version", if (version >= 0) version else JSONObject.NULL)
             .put("repeat", Repeat.mode(service))
+            .put("sleep", Sleep.json(service, "at_ms", "end_of_track"))
             .put("position_ms", p.currentPosition.coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
