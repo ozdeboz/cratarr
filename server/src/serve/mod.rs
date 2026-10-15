@@ -67,6 +67,8 @@ pub struct Serve {
     resizing: tokio::sync::Semaphore,
     /// Cratarr's playlist service, once the app is up (`set_playlists`): the Subsonic playlists are its files.
     playlists: std::sync::OnceLock<Arc<crate::app::PlaylistService>>,
+    /// Playlists a client emptied, waiting briefly for the call that refills them (`playlists::Held`).
+    pub held: playlists::Held,
     /// Cratarr's Incoming, once the app is up (`set_incoming`): promote and reject are its Keep and Delete.
     incoming: std::sync::OnceLock<Arc<crate::app::IncomingService>>,
 }
@@ -102,6 +104,7 @@ impl Serve {
             art_cache: art::Cache::new(data_dir.map(|d| d.join("cover-cache")), art::CACHE_BYTES),
             resizing: tokio::sync::Semaphore::new(1),
             playlists: Default::default(),
+            held: Default::default(),
             incoming: Default::default(),
         }))
     }

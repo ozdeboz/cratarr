@@ -357,6 +357,36 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             }
             Ok(Answer::Json(json!({})))
         }
+        "createBookmark" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
+            let position = p.number("position").ok_or_else(|| missing("position"))?.max(0) as u64;
+            let lib = serve.library.clone();
+            let song = id.clone();
+            let (pid, _, _) = blocking(move || lib.play_targets(&song)).await?.ok_or_else(|| not_found("Song"))?;
+            serve.userdata.set_bookmark(&me, &id, Some(&pid), position, p.get("comment").unwrap_or_default(), p.get("c"))?;
+            Ok(Answer::Json(json!({})))
+        }
+        "getBookmarks" => {
+            let marks = serve.userdata.bookmarks(&me)?;
+            let ids: Vec<String> = marks.iter().map(|b| b.item.clone()).collect();
+            let mut songs = blocking(move || s.library.songs_by_id(&ids)).await?;
+            annotate_songs(serve, &me, &mut songs)?;
+            // Bookmarks of songs the library no longer has are kept, not shown (as Navidrome's join leaves them out).
+            let out: Vec<Value> = marks
+                .iter()
+                .filter_map(|b| {
+                    let song = songs.iter().find(|x| x.id == b.item)?;
+                    Some(json!({ "position": b.position_ms, "username": me, "comment": b.comment, "created": api::iso(b.created),
+                        "changed": api::iso(b.changed), "entry": song }))
+                })
+                .collect();
+            Ok(Answer::Json(json!({ "bookmarks": { "bookmark": out } })))
+        }
+        "deleteBookmark" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?;
+            serve.userdata.delete_bookmark(&me, id)?;
+            Ok(Answer::Json(json!({})))
+        }
         "getPlayQueue" => match serve.userdata.play_queue(&me)? {
             None => Ok(Answer::Json(json!({}))),
             Some(q) => {
@@ -397,6 +427,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let all = service.snapshot().await.map_err(toggle_failed)?;
             let mut out = Vec::with_capacity(all.len());
             for (name, lines, _) in all {
+                let lines = serve.held.shown(&name, lines);
                 let songs = shown_songs(serve, &lines).await?;
                 out.push(playlist_json(serve, &me, &name, &lines, &songs)?);
             }
@@ -405,7 +436,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         "getPlaylist" => {
             let name = playlist_name(p.get("id"))?;
             let service = playlist_service(serve)?;
-            let lines = service.entries(&name).await.map_err(toggle_failed)?;
+            let lines = serve.held.shown(&name, service.entries(&name).await.map_err(toggle_failed)?);
             let mut songs = shown_songs(serve, &lines).await?;
             annotate_songs(serve, &me, &mut songs)?;
             let mut body = playlist_json(serve, &me, &name, &lines, &songs)?;
@@ -419,6 +450,8 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 // With an id: the playlist's songs become these (lines of missing files stay).
                 Some(id) => {
                     let name = playlist_name(Some(id))?;
+                    // Its songs replaced: an emptying held for it comes to the same.
+                    serve.held.take(&name);
                     let lines = service.entries(&name).await.map_err(toggle_failed)?;
                     let shown = shown_flags(serve, &lines).await?;
                     let all: Vec<usize> = (0..shown.iter().filter(|s| **s).count()).collect();
@@ -448,15 +481,22 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let service = playlist_service(serve)?;
             let remove: Vec<usize> = p.all("songIndexToRemove").iter().filter_map(|i| i.trim().parse().ok()).collect();
             let add = lines_of_songs(serve, &p.all("songIdToAdd")).await?;
+            let renamed = p.get("name").filter(|n| !n.trim().is_empty() && *n != name);
             if !remove.is_empty() || !add.is_empty() {
                 let lines = service.entries(&name).await.map_err(toggle_failed)?;
+                let emptied = serve.held.take(&name).filter(|e| e.before == lines).map(|e| e.after);
                 let shown = shown_flags(serve, &lines).await?;
-                let new = super::playlists::edited(&lines, &shown, &remove, &add);
-                if new != lines {
-                    service.set_entries(&name, &lines, &new).await.map_err(toggle_failed)?;
+                match super::playlists::update_step(&lines, &shown, emptied, &remove, &add) {
+                    super::playlists::Step::Hold(new) if renamed.is_none() => hold_emptying(serve, &service, &name, lines, new),
+                    super::playlists::Step::Hold(new) | super::playlists::Step::Write(new) => {
+                        service.set_entries(&name, &lines, &new).await.map_err(toggle_failed)?;
+                    }
+                    super::playlists::Step::Unchanged => {}
                 }
+            } else if renamed.is_some() {
+                write_held(&service, &name, serve.held.take(&name)).await;
             }
-            if let Some(wanted) = p.get("name").filter(|n| !n.trim().is_empty() && *n != name) {
+            if let Some(wanted) = renamed {
                 let taken: Vec<String> =
                     service.snapshot().await.map_err(toggle_failed)?.into_iter().map(|(n, _, _)| n).filter(|n| *n != name).collect();
                 let new_name = super::playlists::new_name(wanted, &taken);
@@ -468,6 +508,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         }
         "deletePlaylist" => {
             let name = playlist_name(p.get("id"))?;
+            serve.held.take(&name);
             playlist_service(serve)?.delete(&name).await.map_err(toggle_failed)?;
             Ok(Answer::Json(json!({})))
         }
@@ -477,6 +518,25 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
 
 fn playlist_service(serve: &Serve) -> Result<Arc<crate::app::PlaylistService>, Failed> {
     serve.playlists().cloned().ok_or_else(|| Failed(0, "Playlists are not ready yet".into()))
+}
+
+/// Holds a playlist's emptying for the call that refills it (`playlists::Held`); written on its own when none comes.
+fn hold_emptying(serve: &Arc<Serve>, service: &Arc<crate::app::PlaylistService>, name: &str, before: Vec<String>, after: Vec<String>) {
+    let ticket = serve.held.hold(name, before, after);
+    let (serve, service, name) = (serve.clone(), service.clone(), name.to_string());
+    tokio::spawn(async move {
+        tokio::time::sleep(super::playlists::REFILL_WAIT).await;
+        write_held(&service, &name, serve.held.take_ticket(&name, ticket)).await;
+    });
+}
+
+/// Writes an emptying that was held (`None`: nothing held).
+async fn write_held(service: &crate::app::PlaylistService, name: &str, held: Option<super::playlists::Emptied>) {
+    if let Some(e) = held
+        && let Err(err) = service.set_entries(name, &e.before, &e.after).await
+    {
+        tracing::warn!("subsonic: emptying {name} not written: {err}");
+    }
 }
 
 fn playlist_name(id: Option<&str>) -> Result<String, Failed> {
@@ -674,6 +734,20 @@ mod tests {
         assert_eq!(q["playQueue"]["entry"][0]["id"], song.as_str());
         call(&s, &me, "unstar", &format!("id={song}")).await;
         assert!(call(&s, &me, "getStarred2", "").await["starred2"]["song"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_position_is_kept_in_a_song_until_it_ends() {
+        let (s, me) = server();
+        let song = call(&s, &me, "search3", "query=hunter").await["searchResult3"]["song"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(call(&s, &me, "createBookmark", &format!("id={song}&position=135000&c=Symfonium")).await, json!({}));
+        let marks = call(&s, &me, "getBookmarks", "").await;
+        let mark = &marks["bookmarks"]["bookmark"][0];
+        assert_eq!((mark["position"].as_u64(), mark["username"].as_str(), mark["entry"]["id"].as_str()), (Some(135_000), Some("me"), Some(song.as_str())));
+        assert_eq!(call(&s, &me, "createBookmark", "id=tr-999&position=1").await["error"], 70, "no such song");
+        assert_eq!(call(&s, &me, "deleteBookmark", &format!("id={song}")).await, json!({}));
+        assert_eq!(call(&s, &me, "deleteBookmark", &format!("id={song}")).await, json!({}), "safe to repeat");
+        assert!(call(&s, &me, "getBookmarks", "").await["bookmarks"]["bookmark"].as_array().unwrap().is_empty());
     }
 
     #[test]

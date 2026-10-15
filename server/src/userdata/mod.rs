@@ -8,7 +8,9 @@
 //! The annotation table is Navidrome's (`db/migrations`, `persistence/sql_annotations.go`,
 //! https://github.com/navidrome/navidrome, GPL-3.0-or-later, Copyright the Navidrome authors), translated: one row per
 //! user and item with plays, last played, rating and star, unique on (user, item, kind). Changed: songs also keep
-//! their persistent id; the play queue holds song ids as text.
+//! their persistent id; the play queue holds song ids as text. Bookmarks (a position kept in a song) are Navidrome's
+//! too (`persistence/sql_bookmarks.go`), one per user and song; changed: they follow the song by its persistent id, as
+//! its annotation does.
 
 #![allow(dead_code)] // the endpoints that use it come next (decision 0030, plan step 2)
 
@@ -48,6 +50,11 @@ CREATE TABLE IF NOT EXISTS imported (
   PRIMARY KEY (account, source, server_user, kind, item)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS imported_pid ON imported (pid);
 CREATE TABLE IF NOT EXISTS import_choices (source TEXT PRIMARY KEY, choice TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS bookmark (
+  user TEXT NOT NULL, item TEXT NOT NULL, pid TEXT, position_ms INTEGER NOT NULL, comment TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL, changed INTEGER NOT NULL, changed_by TEXT,
+  PRIMARY KEY (user, item)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS bookmark_pid ON bookmark (pid);
 ";
 
 /// What an annotation is about.
@@ -130,6 +137,18 @@ pub struct PlayQueue {
     pub current: Option<String>,
     pub position_ms: u64,
     /// Epoch seconds.
+    pub changed: i64,
+    pub changed_by: Option<String>,
+}
+
+/// A position kept in a song (OpenSubsonic `createBookmark`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bookmark {
+    pub item: String,
+    pub position_ms: u64,
+    pub comment: String,
+    /// Epoch seconds.
+    pub created: i64,
     pub changed: i64,
     pub changed_by: Option<String>,
 }
@@ -426,9 +445,11 @@ impl UserData {
         {
             let mut st = tx.prepare_cached("UPDATE OR IGNORE annotation SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
             let mut ledger = tx.prepare_cached("UPDATE OR IGNORE imported SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
+            let mut marks = tx.prepare_cached("UPDATE OR IGNORE bookmark SET item = ?2 WHERE pid = ?1 AND item != ?2")?;
             for (pid, item) in moves {
                 n += st.execute(params![pid, item])?;
                 ledger.execute(params![pid, item])?;
+                marks.execute(params![pid, item])?;
             }
         }
         tx.commit()?;
@@ -460,6 +481,41 @@ impl UserData {
             "INSERT OR REPLACE INTO play_queue (user, songs, current, position_ms, changed, changed_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![user, q.songs.join(","), q.current, q.position_ms as i64, q.changed, q.changed_by],
         )?;
+        Ok(())
+    }
+
+    /// Keeps a position in a song (`pid`: its persistent id), replacing the one kept before.
+    pub fn set_bookmark(&self, user: &str, item: &str, pid: Option<&str>, position_ms: u64, comment: &str, by: Option<&str>) -> Result<()> {
+        self.db().execute(
+            "INSERT INTO bookmark (user, item, pid, position_ms, comment, created, changed, changed_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
+             ON CONFLICT (user, item) DO UPDATE SET pid = coalesce(excluded.pid, bookmark.pid), position_ms = excluded.position_ms,
+               comment = excluded.comment, changed = excluded.changed, changed_by = excluded.changed_by",
+            params![user, item, pid, position_ms as i64, comment, now(), by],
+        )?;
+        Ok(())
+    }
+
+    /// A user's bookmarks, the last changed first.
+    pub fn bookmarks(&self, user: &str) -> Result<Vec<Bookmark>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT item, position_ms, comment, created, changed, changed_by FROM bookmark WHERE user = ?1 ORDER BY changed DESC, item",
+        )?;
+        let rows = st.query_map([user], |r| {
+            Ok(Bookmark {
+                item: r.get(0)?,
+                position_ms: r.get::<_, i64>(1)?.max(0) as u64,
+                comment: r.get(2)?,
+                created: r.get(3)?,
+                changed: r.get(4)?,
+                changed_by: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn delete_bookmark(&self, user: &str, item: &str) -> Result<()> {
+        self.db().execute("DELETE FROM bookmark WHERE user = ?1 AND item = ?2", params![user, item])?;
         Ok(())
     }
 
@@ -623,6 +679,22 @@ mod tests {
         u.follow_pids(&[("p".into(), "tr-9".into())]).unwrap();
         assert!(u.imported(KEY, Kind::Song, &["tr-9".into()]).unwrap().contains_key("tr-9"));
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 8);
+    }
+
+    #[test]
+    fn bookmarks_are_kept_per_song_and_follow_it() {
+        let u = UserData::open(None).unwrap();
+        u.set_bookmark("me", "tr-1", Some("p1"), 135_000, "", Some("Symfonium")).unwrap();
+        u.set_bookmark("me", "tr-1", None, 140_000, "chorus", None).unwrap();
+        u.set_bookmark("you", "tr-2", Some("p2"), 5, "", None).unwrap();
+        let mine = u.bookmarks("me").unwrap();
+        assert_eq!(mine.len(), 1, "one per song: the second replaced the first");
+        assert_eq!((mine[0].position_ms, mine[0].comment.as_str()), (140_000, "chorus"));
+        u.follow_pids(&[("p1".into(), "tr-9".into())]).unwrap();
+        assert_eq!(u.bookmarks("me").unwrap()[0].item, "tr-9", "kept its persistent id through the update");
+        u.delete_bookmark("me", "tr-9").unwrap();
+        assert!(u.bookmarks("me").unwrap().is_empty());
+        assert_eq!(u.bookmarks("you").unwrap().len(), 1);
     }
 
     #[test]

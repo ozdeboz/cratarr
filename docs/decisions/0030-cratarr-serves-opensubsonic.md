@@ -147,7 +147,12 @@ Plan steps 1 to 3 are built; step 4 is decision 0032 (Cratarr is its own source)
   and songs become lines the way the playlist sync writes them (a track's path relative to the Music folder), never
   from what a client sent. An edit goes through the playlist service, so it has its undo and reaches the other servers
   by the sync. Lines whose file is missing stay in the file and are not shown; the positions a client sends count the
-  shown songs only.
+  shown songs only. Symfonium edits a playlist in two calls, every song out and then the new list in (seen
+  2026-10-15); written one by one, that is two undos and a playlist empty for a moment on every synced server. So a
+  call that takes every song out and adds none waits 5 s for the call that refills the playlist, and the two are
+  written as one; nothing following, the emptying is written on its own. Meanwhile the playlist reads as emptied.
+- **Bookmarks** (a position kept in a song, which Symfonium sets while playing and deletes at the song's end) as
+  Navidrome keeps them: one per user and song, in `userdata.sqlite`, following the song by its persistent id.
 - **Covers** as planned: the folder's cover file, else the picture embedded in the album's first track; resized with
   nghe's filter (Triangle) to JPEG at quality 85, one resize at a time (a client asks for hundreds at once, and a large
   picture takes tens of megabytes to decode); a 100 MB disk cache, oldest out first. The cover id carries a
@@ -162,8 +167,9 @@ Plan steps 1 to 3 are built; step 4 is decision 0032 (Cratarr is its own source)
   - **Reviewing Incoming:** promote (Incoming's Keep: into Music) and reject (Incoming's Delete: to the trash, and
     with Lidarr connected the album is no longer fetched), each undone through Incoming's own undo; the review is
     remembered per album. Incoming itself works as before; the album is found there by its folder.
-  - Favourite and unfavourite a track, an album with its tags and review, a track's file, Incoming's albums, and a
-    health check that answers 503 when the library cannot be read within 10 s.
+  - Favourite and unfavourite a track, a track's facts (title, artist, album, year, genres, favourite: what Home
+    Assistant says of what plays), an album with its tags and review, a track's file, Incoming's albums, and a health
+    check that answers 503 when the library cannot be read within 10 s.
 - **Accounts:** the first account (name and password) is made in Settings' Subsonic section, and its password changed
   there. External sign-in (an LDAP directory, say) is a later decision: such a directory would be a source the
   accounts are copied from, never a service Cratarr needs while it runs.
