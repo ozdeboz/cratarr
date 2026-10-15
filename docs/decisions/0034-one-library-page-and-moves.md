@@ -94,14 +94,15 @@ back. Today it works from Incoming only.
 **A dashboard page** (its own decision, later) brings back the quick look: new arrivals from the Incoming libraries,
 what converts, and more.
 
-## Open questions for the owner
+## Settled with the owner (2026-10-16)
 
-1. **Any direction?** The proposal is any used library to any other of the same server, including Music back into
-   Incoming. The target's policies decide what happens on the way in.
-2. **More than one Music library?** Several are allowed, as 0009 already allows. A move between two of them is then a
-   rename plus the target's format policy.
-3. **Library names on the page.** An album's library shows as its name (a chip on the row, a fact on the tile), or
-   only when more than one library is switched on.
+1. **Any direction:** "yes anyway, since it's generic". An album moves from any used library to any other of the
+   same server, Music back into Incoming included. The target's policies decide what happens on the way in.
+2. **More than one Music library:** allowed, as 0009 already allows. A move between two of them is a rename plus the
+   target's format policy.
+
+Still open: **library names on the page.** An album's library would show as its name (a chip on the row, a fact on the
+tile) only when more than one library is switched on, to keep the page calm. The owner has not answered yet.
 
 ## Consequences
 
