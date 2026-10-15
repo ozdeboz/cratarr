@@ -25,3 +25,17 @@ Cratarr is licensed under the **GNU Affero General Public License, version 3 or 
 - Nobody can make a closed version of Cratarr, nor build it into closed software.
 - Changing the licence later needs every contributor's consent once others contribute.
 - An iOS version through Apple's App Store would be hard; F-Droid and Google Play accept the AGPL.
+
+## Amendment (2026-10-15): the Android app keeps Jellyfin's licence
+
+The Android app starts as Jellyfin's Android app (jellyfin/jellyfin-android), imported into `android/`. That app is
+GPL-2.0 and says nothing of later versions, and its many contributors cannot all be asked, so it cannot become AGPL:
+`android/` stays GPL-2.0, with its own `LICENSE.md`, and the rest of the repository stays AGPL-3.0-or-later. One
+repository may hold both: they are separate programs that talk over the network, which both licences treat as
+mere aggregation.
+
+- No code moves between `android/` and the rest, in either direction (GPL-2.0-only and AGPL-3.0 code cannot be
+  combined into one program).
+- The app loads Cratarr's pages from the server, as Jellyfin's app does; the web app is not built into the APK.
+- Jellyfin's copyright notices stay; Cratarr's own changes to the app are GPL-2.0 as well.
+

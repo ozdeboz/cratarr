@@ -164,3 +164,5 @@ See [docs/decisions](docs/decisions) for why, and what is planned next.
 ## License
 
 Cratarr is free software under the GNU Affero General Public License, version 3 or (at your option) any later version: see [LICENSE](LICENSE). Whoever runs a modified Cratarr for others over a network offers them its source ([decision 0029](docs/decisions/0029-agpl-licence.md)).
+
+The Android app in [android/](android) is [Jellyfin's Android app](https://github.com/jellyfin/jellyfin-android) made into Cratarr's, and keeps its own licence, the GNU General Public License version 2 ([android/LICENSE.md](android/LICENSE.md)).
