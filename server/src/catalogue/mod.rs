@@ -249,6 +249,8 @@ pub struct Catalogue {
     poke: tokio::sync::Notify,
     /// The crates' facts of a folder, as of the database's change count (see `crate_facts`).
     facts: Mutex<Option<(i64, u64, Arc<Vec<crate::crates::Facts>>)>>,
+    /// The database file, for readers with their own connection (`reader`); `None` in memory.
+    file: Option<PathBuf>,
 }
 
 fn now() -> i64 {
@@ -288,6 +290,7 @@ impl Catalogue {
             progress: Mutex::default(),
             poke: Default::default(),
             facts: Mutex::default(),
+            file: file.map(Path::to_path_buf),
         };
         // A better reader may read what an older one could not.
         if cat.meta("reader").as_deref() != Some(&tags::READER_VERSION.to_string()) {
@@ -364,6 +367,11 @@ impl Catalogue {
     }
 
     /// Ask for a pass now.
+    /// What the background pass is doing now, if anything (see `Progress::doing`).
+    pub fn doing(&self) -> Option<String> {
+        self.progress.lock().unwrap_or_else(|p| p.into_inner()).doing.clone()
+    }
+
     pub fn poke(&self) {
         self.poke.notify_one();
     }
@@ -815,46 +823,21 @@ impl Catalogue {
     /// id and when that was first seen, the file's facts, and the tags named in `ServedRow::TAGS` in the file's order.
     /// Read-only; blocking.
     pub fn served_rows(&self, folder: i64) -> Result<Vec<ServedRow>> {
-        let db = self.db();
-        let mut rows: Vec<ServedRow> = Vec::new();
-        let mut index: HashMap<String, usize> = HashMap::new();
-        let mut st = db.prepare(&format!(
-            "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime
-             FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND f.state = ?2"
-        ))?;
-        let files = st.query_map(params![folder, READ], |r| {
-            Ok(ServedRow {
-                rel: r.get(0)?,
-                track: r.get(1)?,
-                born: r.get(2)?,
-                format: r.get::<_, Option<String>>(3)?.map(|f| f.to_uppercase()),
-                kbps: r.get::<_, Option<i64>>(4)?.filter(|k| *k > 0).map(|k| k as u32),
-                duration_ms: r.get::<_, Option<i64>>(5)?.filter(|d| *d > 0).map(|d| d as u64),
-                size: r.get::<_, i64>(6)?.max(0) as u64,
-                mtime: r.get(7)?,
-                tags: Vec::new(),
-            })
-        })?;
-        for f in files {
-            let f = f?;
-            index.insert(f.rel.clone(), rows.len());
-            rows.push(f);
-        }
-        let names = ServedRow::TAGS.map(|n| format!("'{n}'")).join(", ");
-        let mut st = db.prepare(&format!("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ({names}) ORDER BY rel, n"))?;
-        let tags = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
-        for t in tags {
-            let (rel, name, value) = t?;
-            if let Some(&i) = index.get(&rel) {
-                rows[i].tags.push((name, value));
-            }
-        }
-        Ok(rows)
+        served_rows(&self.db(), folder)
     }
 
-    /// Changes made through the catalogue since it was opened: a reader compares it to notice that anything changed.
-    pub fn change_count(&self) -> u64 {
-        self.db().total_changes()
+    /// A read-only connection of its own to the catalogue's file, for long reads that must not hold up the catalogue
+    /// (WAL lets it read beside the writer). `None` for a catalogue in memory.
+    pub fn reader(&self) -> Option<Connection> {
+        let file = self.file.as_ref()?;
+        let conn = Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()?;
+        conn.busy_timeout(Duration::from_secs(10)).ok()?;
+        Some(conn)
+    }
+
+    /// A cheap summary of the served files (count, sizes, times, track ids): when it changes, `served_rows` would too.
+    pub fn served_fingerprint(&self) -> Result<String> {
+        served_fingerprint(&self.db())
     }
 
     /// Files with a problem, worst first ("broken", then damaged tags, …), at most `limit`. Blocking.
@@ -1364,6 +1347,54 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
             _ = cat.poke.notified() => {}
         }
     }
+}
+
+/// See `Catalogue::served_rows`; any connection to the catalogue's file.
+pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
+    let mut rows: Vec<ServedRow> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut st = db.prepare(&format!(
+        "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime
+         FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND f.state = ?2"
+    ))?;
+    let files = st.query_map(params![folder, READ], |r| {
+        Ok(ServedRow {
+            rel: r.get(0)?,
+            track: r.get(1)?,
+            born: r.get(2)?,
+            format: r.get::<_, Option<String>>(3)?.map(|f| f.to_uppercase()),
+            kbps: r.get::<_, Option<i64>>(4)?.filter(|k| *k > 0).map(|k| k as u32),
+            duration_ms: r.get::<_, Option<i64>>(5)?.filter(|d| *d > 0).map(|d| d as u64),
+            size: r.get::<_, i64>(6)?.max(0) as u64,
+            mtime: r.get(7)?,
+            tags: Vec::new(),
+        })
+    })?;
+    for f in files {
+        let f = f?;
+        index.insert(f.rel.clone(), rows.len());
+        rows.push(f);
+    }
+    let names = ServedRow::TAGS.map(|n| format!("'{n}'")).join(", ");
+    let mut st = db.prepare(&format!("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ({names}) ORDER BY rel, n"))?;
+    let tags = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+    for t in tags {
+        let (rel, name, value) = t?;
+        if let Some(&i) = index.get(&rel) {
+            rows[i].tags.push((name, value));
+        }
+    }
+    Ok(rows)
+}
+
+/// See `Catalogue::served_fingerprint`; any connection to the catalogue's file.
+pub fn served_fingerprint(db: &Connection) -> Result<String> {
+    let (n, size, mtime, tracks, folders): (i64, f64, f64, f64, f64) = db.query_row(
+        &format!("SELECT count(*), total(size), total(mtime), total(track), total(folder) FROM files WHERE {PRESENT} AND state = ?1"),
+        [READ],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    )?;
+    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders}"))
 }
 
 #[cfg(test)]

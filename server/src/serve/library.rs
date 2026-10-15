@@ -133,7 +133,9 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
     Song { row, folder, title, artists, artist_credit, album, album_artist, album_artists, album_id, genres }
 }
 
-/// What the catalogue's files say, cheaply: when it differs from what the library was built from, it is built again.
+/// What these files say, cheaply: when it differs from what the library was built from, it is built again (tests;
+/// the server checks the catalogue itself, `refresh_from`).
+#[cfg(test)]
 pub fn fingerprint(folders: &[FolderRows]) -> String {
     let mut h = md5::Md5::default();
     use md5::Digest;
@@ -165,23 +167,62 @@ impl Library {
         self.db.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Builds the library again from the catalogue's files, unless it was built from these already. Returns whether it
-    /// was built. Blocking.
+    /// Builds the library again from these files, unless it was built from them already. Returns whether it was
+    /// built. Blocking.
+    #[cfg(test)]
     pub fn refresh(&self, folders: &[FolderRows], rules: &Rules) -> Result<bool> {
         let print = fingerprint(folders);
-        let built: Option<String> =
-            self.db().query_row("SELECT value FROM meta WHERE key = ?1", [BUILT_FROM], |r| r.get(0)).optional()?;
-        if built.as_deref() == Some(print.as_str()) {
+        if self.built_from().as_deref() == Some(print.as_str()) {
             return Ok(false);
         }
         self.build(folders, rules)?;
+        self.set_built_from(&print)
+    }
+
+    /// Builds the library again from the catalogue when its files changed (a cheap check first), reading through a
+    /// connection of its own so the catalogue is not held up meanwhile (a full read takes seconds). Returns whether it
+    /// was built. Blocking.
+    pub fn refresh_from(&self, cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<bool> {
+        let reader = cat.reader();
+        let count = cat.folders().len() as i64;
+        let print = format!(
+            "catalogue {} {} {}",
+            cat.generation(),
+            count,
+            match &reader {
+                Some(c) => crate::catalogue::served_fingerprint(c)?,
+                None => cat.served_fingerprint()?,
+            }
+        );
+        if self.built_from().as_deref() == Some(print.as_str()) {
+            return Ok(false);
+        }
+        let folders = (0..count)
+            .map(|folder| {
+                let rows = match &reader {
+                    Some(c) => crate::catalogue::served_rows(c, folder)?,
+                    None => cat.served_rows(folder)?,
+                };
+                Ok(FolderRows { folder, rows })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.build(&folders, rules)?;
+        self.set_built_from(&print)
+    }
+
+    fn built_from(&self) -> Option<String> {
+        self.db().query_row("SELECT value FROM meta WHERE key = ?1", [BUILT_FROM], |r| r.get(0)).optional().ok().flatten()
+    }
+
+    fn set_built_from(&self, print: &str) -> Result<bool> {
         self.db().execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![BUILT_FROM, print])?;
         Ok(true)
     }
 
     fn build(&self, folders: &[FolderRows], rules: &Rules) -> Result<()> {
-        let songs: Vec<Song> =
+        let mut songs: Vec<Song> =
             folders.iter().flat_map(|f| f.rows.iter().filter(|r| r.track.is_some()).map(move |r| (f.folder, r))).map(|(folder, r)| song(r, folder, rules)).collect();
+        one_album_per_folder(&mut songs);
         let mut db = self.db();
         let tx = db.transaction()?;
         tx.execute_batch(
@@ -335,6 +376,52 @@ impl Library {
     }
 }
 
+/// One album per folder (Cratarr's music layout, decision 0016; gonic's model): songs of one folder whose tags disagree
+/// (a date or an album artist on some tracks only) would otherwise split it into several albums. The folder's album is
+/// the one most of its songs name, the first in path order on a tie, so its id still comes from the tags and survives
+/// a move.
+fn one_album_per_folder(songs: &mut [Song]) {
+    let dir = |s: &Song| (s.folder, s.row.rel.rsplit_once('/').map_or(String::new(), |(d, _)| d.to_string()));
+    let mut votes: HashMap<(i64, String), Vec<(usize, &str)>> = HashMap::new();
+    let mut order: Vec<usize> = (0..songs.len()).collect();
+    order.sort_by(|a, b| songs[*a].row.rel.cmp(&songs[*b].row.rel));
+    for &i in &order {
+        let s = &songs[i];
+        let list = votes.entry(dir(s)).or_default();
+        match list.iter_mut().find(|(_, id)| *id == s.album_id) {
+            Some(v) => v.0 += 1,
+            None => list.push((1, s.album_id.as_str())),
+        }
+    }
+    let chosen: HashMap<(i64, String), (String, usize)> = votes
+        .into_iter()
+        .map(|(d, list)| {
+            let best = list.iter().max_by(|a, b| a.0.cmp(&b.0).then(std::cmp::Ordering::Greater)).map_or("", |v| v.1).to_string();
+            (d, (best, list.len()))
+        })
+        .collect();
+    // The album's own name and artist come from a song that named it.
+    let mut lead: HashMap<String, (String, String, Vec<String>)> = HashMap::new();
+    for s in songs.iter() {
+        if let Some((id, _)) = chosen.get(&dir(s))
+            && *id == s.album_id
+        {
+            lead.entry(id.clone()).or_insert_with(|| (s.album.clone(), s.album_artist.clone(), s.album_artists.clone()));
+        }
+    }
+    for s in songs.iter_mut() {
+        let Some((id, kinds)) = chosen.get(&dir(s)) else { continue };
+        if *kinds > 1
+            && let Some((album, artist, artists)) = lead.get(id)
+        {
+            s.album_id = id.clone();
+            s.album = album.clone();
+            s.album_artist = artist.clone();
+            s.album_artists = artists.clone();
+        }
+    }
+}
+
 /// The folder several paths share ("" when none).
 fn common_dir(dirs: &[&str]) -> String {
     let mut common: Option<Vec<&str>> = None;
@@ -425,6 +512,17 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_is_one_album_even_when_its_tags_disagree() {
+        let lib = Library::open(None).unwrap();
+        let t = |n: i64, date: &str| row(n, &format!("A/X (2013)/0{n} t.flac"), &[("title", "t"), ("artist", "A"), ("album", "X"), ("date", date)]);
+        let folders = vec![FolderRows { folder: 0, rows: vec![t(1, "2013"), t(2, "2013"), t(3, "2015")] }];
+        lib.refresh(&folders, &Rules::default()).unwrap();
+        assert_eq!(lib.counts().unwrap().1, 1);
+        let year: i64 = lib.db().query_row("SELECT year FROM albums", [], |r| r.get(0)).unwrap();
+        assert_eq!(year, 2015, "the album's aggregates still count every song");
+    }
+
+    #[test]
     fn built_again_only_when_the_files_change() {
         let lib = Library::open(None).unwrap();
         let mut folders = sample();
@@ -449,6 +547,36 @@ mod tests {
         assert_eq!(found("artists_fts", "orb"), 1);
         assert_eq!(fts_query("\" *"), None, "nothing left to search for");
         assert_eq!(fts_query("a OR b").as_deref(), Some("(\"a\" OR \"a\"*) AND (\"OR\" OR \"OR\"*) AND (\"b\" OR \"b\"*)"), "quoted: a word, not an operator");
+    }
+
+    /// A real catalogue, built into a library: `CRATARR_REAL_CATALOGUE=<copy of catalogue.sqlite> cargo test
+    /// real_catalogue -- --ignored --nocapture`. Prints the time taken and what came out.
+    #[test]
+    #[ignore]
+    fn real_catalogue() {
+        let Ok(file) = std::env::var("CRATARR_REAL_CATALOGUE") else { return };
+        let cat = crate::catalogue::Catalogue::open(Some(Path::new(&file)), vec!["/media/Music".into(), "/media/lidarr-music".into()]).unwrap();
+        let lib = Library::open(None).unwrap();
+        let t = std::time::Instant::now();
+        assert!(lib.refresh_from(&cat, &Rules::default()).unwrap());
+        let first = t.elapsed();
+        assert!(!lib.refresh_from(&cat, &Rules::default()).unwrap(), "nothing changed");
+        println!("read and built {:?}, checked again {:?}, (songs, albums, artists) {:?}", first, t.elapsed() - first, lib.counts().unwrap());
+        let db = lib.db();
+        let per_folder: Vec<(i64, i64)> =
+            db.prepare("SELECT folder, count(*) FROM albums GROUP BY folder").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        println!("albums per folder {per_folder:?}");
+        let dirs: i64 = db.query_row("SELECT count(DISTINCT folder || '/' || dir) FROM albums", [], |r| r.get(0)).unwrap();
+        println!("distinct album folders {dirs}");
+        // Albums whose songs lie in more than one folder, and folders split into several albums: grouping by tags vs folders.
+        let split: Vec<(String, i64)> = db
+            .prepare("SELECT folder || '/' || substr(rel, 1, length(rel) - length(replace(rel, rtrim(rel, replace(rel, '/', '')), ''))) d, count(DISTINCT album_id) n FROM songs GROUP BY d HAVING n > 1 ORDER BY n DESC LIMIT 8")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        println!("folders split over several albums (first 8): {split:#?}");
     }
 
     #[test]

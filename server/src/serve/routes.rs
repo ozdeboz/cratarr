@@ -1,0 +1,510 @@
+//! The `/rest` endpoints (decision 0030). Requests are read from the query string and, for POST, a form body (Navidrome
+//! treats form fields as query parameters, `server/subsonic/middlewares.go`); `getAlbum.view` is `getAlbum`. Every
+//! answer is the JSON envelope with HTTP 200, errors included; endpoints not implemented answer 501, as Navidrome's.
+//! XML (Subsonic's default when `f` is missing) is not offered yet: the clients in view ask for JSON.
+
+use std::sync::Arc;
+
+use axum::Router;
+use axum::body::Bytes;
+use axum::extract::{Path, RawQuery, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use serde_json::{Value, json};
+
+use super::Serve;
+use super::api::{self, Album, Artist, Song};
+use super::read::AlbumOrder;
+use super::users::User;
+use crate::userdata::{Annotation, Kind, PlayQueue};
+
+/// A request's parameters; a name may repeat (`id=1&id=2`).
+pub struct Params(Vec<(String, String)>);
+
+impl Params {
+    pub fn parse(query: Option<&str>, body: &[u8]) -> Self {
+        let mut pairs: Vec<(String, String)> = query.map(|q| serde_urlencoded::from_str(q).unwrap_or_default()).unwrap_or_default();
+        if !body.is_empty()
+            && let Ok(more) = serde_urlencoded::from_bytes::<Vec<(String, String)>>(body)
+        {
+            pairs.extend(more);
+        }
+        Self(pairs)
+    }
+
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.0.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
+    }
+
+    pub fn all(&self, name: &str) -> Vec<String> {
+        self.0.iter().filter(|(n, _)| n == name).map(|(_, v)| v.clone()).collect()
+    }
+
+    fn number(&self, name: &str) -> Option<i64> {
+        self.get(name).and_then(|v| v.trim().parse().ok())
+    }
+
+    fn size(&self, name: &str, default: usize, max: usize) -> usize {
+        self.number(name).map_or(default, |n| (n.max(0) as usize).min(max))
+    }
+}
+
+/// What a handler answers: a JSON body, or bytes (a stream, a cover).
+pub enum Answer {
+    Json(Value),
+    Raw(Response),
+}
+
+/// A handler's failure, as a Subsonic error code and message.
+pub struct Failed(u32, String);
+
+impl<E: std::fmt::Display> From<E> for Failed {
+    fn from(e: E) -> Self {
+        Failed(0, format!("{e:#}"))
+    }
+}
+
+fn missing(name: &str) -> Failed {
+    Failed(10, format!("Required parameter is missing: {name}"))
+}
+
+fn not_found(what: &str) -> Failed {
+    Failed(70, format!("{what} not found"))
+}
+
+pub fn router(serve: Arc<Serve>) -> Router {
+    Router::new().route("/rest/{method}", get(rest).post(rest)).with_state(serve)
+}
+
+async fn rest(State(serve): State<Arc<Serve>>, Path(method): Path<String>, RawQuery(query): RawQuery, headers: HeaderMap, body: Bytes) -> Response {
+    let params = Params::parse(query.as_deref(), if is_form(&headers) { &body } else { &[] });
+    let method = method.strip_suffix(".view").unwrap_or(&method).to_string();
+    let user = match serve.users.check(params.get("u"), params.get("t"), params.get("s"), params.get("p")) {
+        Ok(u) => u,
+        Err(refused) => return json_response(api::error(refused.code(), refused.message())),
+    };
+    match handle(&serve, &user, &method, &params, &headers).await {
+        Ok(Answer::Json(body)) => json_response(api::ok(body)),
+        Ok(Answer::Raw(r)) => r,
+        Err(Failed(501, m)) => (StatusCode::NOT_IMPLEMENTED, axum::Json(api::error(0, &m))).into_response(),
+        Err(Failed(code, message)) => json_response(api::error(code, &message)),
+    }
+}
+
+fn is_form(headers: &HeaderMap) -> bool {
+    headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|c| c.starts_with("application/x-www-form-urlencoded"))
+}
+
+fn json_response(v: Value) -> Response {
+    axum::Json(v).into_response()
+}
+
+/// Runs blocking library work off the async threads.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, Failed> {
+    tokio::task::spawn_blocking(f).await.map_err(|e| Failed(0, e.to_string()))?.map_err(Failed::from)
+}
+
+/// The music folder a request limits itself to (`musicFolderId`: Cratarr's folder number plus one).
+fn folder_of(p: &Params) -> Option<i64> {
+    p.number("musicFolderId").filter(|n| *n > 0).map(|n| n - 1)
+}
+
+pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, headers: &HeaderMap) -> Result<Answer, Failed> {
+    let s = serve.clone();
+    let me = user.name.clone();
+    match method {
+        "ping" => Ok(Answer::Json(json!({}))),
+        "getLicense" => Ok(Answer::Json(json!({ "license": { "valid": true } }))),
+        "getOpenSubsonicExtensions" => Ok(Answer::Json(json!({ "openSubsonicExtensions": [
+            { "name": "formPost", "versions": [1] },
+        ] }))),
+        "getUser" => Ok(Answer::Json(json!({ "user": {
+            "username": user.name, "adminRole": user.admin, "settingsRole": user.admin, "streamRole": true,
+            "downloadRole": true, "playlistRole": true, "coverArtRole": true, "commentRole": false, "podcastRole": false,
+            "shareRole": false, "jukeboxRole": false, "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
+            "folder": (0..serve.catalogue.folders().len()).map(|i| i + 1).collect::<Vec<_>>(),
+        } }))),
+        "getMusicFolders" => {
+            let folders: Vec<Value> = serve
+                .catalogue
+                .folders()
+                .iter()
+                .enumerate()
+                .map(|(i, f)| json!({ "id": i + 1, "name": f.file_name().map_or_else(|| f.display().to_string(), |n| n.to_string_lossy().to_string()) }))
+                .collect();
+            Ok(Answer::Json(json!({ "musicFolders": { "musicFolder": folders } })))
+        }
+        "getScanStatus" => Ok(Answer::Json(json!({ "scanStatus": { "scanning": serve.catalogue.doing().is_some() } }))),
+        "startScan" => {
+            serve.catalogue.poke();
+            Ok(Answer::Json(json!({ "scanStatus": { "scanning": true } })))
+        }
+        "getArtists" | "getIndexes" => {
+            // getIndexes: nothing new since the client's copy (Navidrome's `ifModifiedSince`, `server/subsonic/browsing.go`).
+            let built = serve.built_at();
+            if method == "getIndexes" && p.number("ifModifiedSince").is_some_and(|since| since >= built * 1000) {
+                return Ok(Answer::Json(json!({ "indexes": { "lastModified": built * 1000, "ignoredArticles": "The A An" } })));
+            }
+            let mut artists = blocking(move || s.library.album_artists_index()).await?;
+            annotate_artists(serve, &me, &mut artists)?;
+            let mut index: Vec<(String, Vec<Artist>)> = Vec::new();
+            for a in artists {
+                let letter = a.sort_name.chars().next().map_or("#".to_string(), |c| if c.is_alphabetic() { c.to_uppercase().collect() } else { "#".into() });
+                match index.last_mut() {
+                    Some((l, list)) if *l == letter => list.push(a),
+                    _ => index.push((letter, vec![a])),
+                }
+            }
+            let index: Vec<Value> = index.into_iter().map(|(name, artist)| json!({ "name": name, "artist": artist })).collect();
+            let key = if method == "getIndexes" { "indexes" } else { "artists" };
+            Ok(Answer::Json(json!({ key: { "ignoredArticles": "The A An", "lastModified": built * 1000, "index": index } })))
+        }
+        "getArtist" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
+            let mut artist = blocking(move || s.library.artist(&id)).await?.ok_or_else(|| not_found("Artist"))?;
+            if let Some(albums) = artist.album.as_mut() {
+                annotate_albums(serve, &me, albums)?;
+            }
+            annotate_artists(serve, &me, std::slice::from_mut(&mut artist))?;
+            Ok(Answer::Json(json!({ "artist": artist })))
+        }
+        "getAlbum" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
+            let mut album = blocking(move || s.library.album(&id)).await?.ok_or_else(|| not_found("Album"))?;
+            if let Some(songs) = album.song.as_mut() {
+                annotate_songs(serve, &me, songs)?;
+            }
+            annotate_albums(serve, &me, std::slice::from_mut(&mut album))?;
+            Ok(Answer::Json(json!({ "album": album })))
+        }
+        "getSong" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
+            let mut songs = blocking(move || s.library.songs_by_id(&[id])).await?;
+            annotate_songs(serve, &me, &mut songs)?;
+            let song = songs.pop().ok_or_else(|| not_found("Song"))?;
+            Ok(Answer::Json(json!({ "song": song })))
+        }
+        "getGenres" => {
+            let genres = blocking(move || s.library.genres()).await?;
+            let genres: Vec<Value> = genres.into_iter().map(|(name, songs, albums)| json!({ "value": name, "songCount": songs, "albumCount": albums })).collect();
+            Ok(Answer::Json(json!({ "genres": { "genre": genres } })))
+        }
+        "getAlbumList2" | "getAlbumList" => {
+            let kind = p.get("type").ok_or_else(|| missing("type"))?.to_string();
+            let size = p.size("size", 10, 500);
+            let offset = p.size("offset", 0, usize::MAX);
+            let folder = folder_of(p);
+            let mut albums = match kind.as_str() {
+                "starred" | "frequent" | "recent" | "highest" => {
+                    let ids = serve.userdata.album_list(&me, &kind, size, offset)?;
+                    blocking(move || s.library.albums_by_id(&ids)).await?
+                }
+                other => {
+                    let order = match other {
+                        "newest" => AlbumOrder::Newest,
+                        "alphabeticalByName" => AlbumOrder::ByName,
+                        "alphabeticalByArtist" => AlbumOrder::ByArtist,
+                        "random" => AlbumOrder::Random,
+                        "byYear" => AlbumOrder::ByYear {
+                            from: p.number("fromYear").ok_or_else(|| missing("fromYear"))?.max(0) as u32,
+                            to: p.number("toYear").ok_or_else(|| missing("toYear"))?.max(0) as u32,
+                        },
+                        "byGenre" => AlbumOrder::ByGenre(p.get("genre").ok_or_else(|| missing("genre"))?.to_string()),
+                        _ => return Err(Failed(0, format!("Unknown list type: {other}"))),
+                    };
+                    blocking(move || s.library.album_list(&order, size, offset, folder)).await?
+                }
+            };
+            annotate_albums(serve, &me, &mut albums)?;
+            if method == "getAlbumList" {
+                // The folder-based form: each album as a directory.
+                let albums: Vec<Value> = albums.iter().map(album_as_directory).collect();
+                return Ok(Answer::Json(json!({ "albumList": { "album": albums } })));
+            }
+            Ok(Answer::Json(json!({ "albumList2": { "album": albums } })))
+        }
+        "getRandomSongs" => {
+            let size = p.size("size", 10, 500);
+            let genre = p.get("genre").map(str::to_string);
+            let years = (p.number("fromYear").map(|y| y.max(0) as u32), p.number("toYear").map(|y| y.max(0) as u32));
+            let folder = folder_of(p);
+            let mut songs = blocking(move || s.library.random_songs(size, genre.as_deref(), years, folder)).await?;
+            annotate_songs(serve, &me, &mut songs)?;
+            Ok(Answer::Json(json!({ "randomSongs": { "song": songs } })))
+        }
+        "getSongsByGenre" => {
+            let genre = p.get("genre").ok_or_else(|| missing("genre"))?.to_string();
+            let size = p.size("count", 10, 500);
+            let offset = p.size("offset", 0, usize::MAX);
+            let folder = folder_of(p);
+            let mut songs = blocking(move || s.library.songs_by_genre(&genre, size, offset, folder)).await?;
+            annotate_songs(serve, &me, &mut songs)?;
+            Ok(Answer::Json(json!({ "songsByGenre": { "song": songs } })))
+        }
+        "getStarred2" | "getStarred" => {
+            let (songs, albums, artists) =
+                (serve.userdata.starred(&me, Kind::Song)?, serve.userdata.starred(&me, Kind::Album)?, serve.userdata.starred(&me, Kind::Artist)?);
+            let (mut songs, mut albums, mut artists) = blocking(move || {
+                let artists: Vec<Artist> = artists.iter().filter_map(|id| s.library.artist(id).ok().flatten()).map(|mut a| {
+                    a.album = None;
+                    a
+                }).collect();
+                Ok((s.library.songs_by_id(&songs)?, s.library.albums_by_id(&albums)?, artists))
+            })
+            .await?;
+            annotate_songs(serve, &me, &mut songs)?;
+            annotate_albums(serve, &me, &mut albums)?;
+            annotate_artists(serve, &me, &mut artists)?;
+            let key = if method == "getStarred2" { "starred2" } else { "starred" };
+            Ok(Answer::Json(json!({ key: { "artist": artists, "album": albums, "song": songs } })))
+        }
+        "search3" | "search2" => {
+            let query = p.get("query").unwrap_or("").to_string();
+            let counts = (
+                (p.size("artistCount", 20, 500), p.size("artistOffset", 0, usize::MAX)),
+                (p.size("albumCount", 20, 500), p.size("albumOffset", 0, usize::MAX)),
+                (p.size("songCount", 20, 500), p.size("songOffset", 0, usize::MAX)),
+            );
+            let folder = folder_of(p);
+            let (mut artists, mut albums, mut songs) = blocking(move || s.library.search(&query, counts.0, counts.1, counts.2, folder)).await?;
+            annotate_artists(serve, &me, &mut artists)?;
+            annotate_albums(serve, &me, &mut albums)?;
+            annotate_songs(serve, &me, &mut songs)?;
+            let key = if method == "search3" { "searchResult3" } else { "searchResult2" };
+            Ok(Answer::Json(json!({ key: { "artist": artists, "album": albums, "song": songs } })))
+        }
+        "star" | "unstar" => {
+            let on = method == "star";
+            let songs = p.all("id");
+            let (albums, artists) = (p.all("albumId"), p.all("artistId"));
+            // `id` may name an album or an artist too (the folder-based form).
+            let (mut song_ids, mut album_ids, mut artist_ids) = (Vec::new(), albums, artists);
+            for id in songs {
+                match id.get(..3) {
+                    Some(super::ids::ALBUM) => album_ids.push(id),
+                    Some(super::ids::ARTIST) => artist_ids.push(id),
+                    _ => song_ids.push(id),
+                }
+            }
+            serve.userdata.set_starred(&me, Kind::Song, &song_ids, on)?;
+            serve.userdata.set_starred(&me, Kind::Album, &album_ids, on)?;
+            serve.userdata.set_starred(&me, Kind::Artist, &artist_ids, on)?;
+            Ok(Answer::Json(json!({})))
+        }
+        "setRating" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?;
+            let rating = p.number("rating").ok_or_else(|| missing("rating"))?.clamp(0, 5) as u8;
+            let kind = match id.get(..3) {
+                Some(super::ids::ALBUM) => Kind::Album,
+                Some(super::ids::ARTIST) => Kind::Artist,
+                _ => Kind::Song,
+            };
+            serve.userdata.set_rating(&me, kind, id, rating)?;
+            Ok(Answer::Json(json!({})))
+        }
+        "scrobble" => {
+            // A submission counts a play; `submission=false` says what plays now, which Cratarr does not keep yet.
+            if p.get("submission").is_none_or(|v| v != "false") {
+                let times = p.all("time");
+                for (i, id) in p.all("id").into_iter().enumerate() {
+                    let at = times.get(i).and_then(|t| t.parse::<i64>().ok()).map_or_else(now, |ms| ms / 1000);
+                    let lib = serve.library.clone();
+                    let song = id.clone();
+                    if let Some((pid, album, artists)) = blocking(move || lib.play_targets(&song)).await? {
+                        serve.userdata.count_play(&me, (&id, &pid), &album, &artists, at)?;
+                    }
+                }
+            }
+            Ok(Answer::Json(json!({})))
+        }
+        "getPlayQueue" => match serve.userdata.play_queue(&me)? {
+            None => Ok(Answer::Json(json!({}))),
+            Some(q) => {
+                let ids = q.songs.clone();
+                let mut songs = blocking(move || s.library.songs_by_id(&ids)).await?;
+                annotate_songs(serve, &me, &mut songs)?;
+                let mut body = json!({ "entry": songs, "position": q.position_ms, "username": me, "changed": api::iso(q.changed),
+                    "changedBy": q.changed_by.unwrap_or_default() });
+                if let Some(c) = q.current {
+                    body["current"] = c.into();
+                }
+                Ok(Answer::Json(json!({ "playQueue": body })))
+            }
+        },
+        "savePlayQueue" => {
+            let q = PlayQueue {
+                songs: p.all("id"),
+                current: p.get("current").map(str::to_string),
+                position_ms: p.number("position").unwrap_or(0).max(0) as u64,
+                changed: now(),
+                changed_by: p.get("c").map(str::to_string),
+            };
+            serve.userdata.save_play_queue(&me, &q)?;
+            Ok(Answer::Json(json!({})))
+        }
+        "stream" | "download" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
+            let path = serve.song_path(&id).await?.ok_or_else(|| not_found("Song"))?;
+            Ok(Answer::Raw(super::files::serve_file(&path, headers, method == "download").await))
+        }
+        "getCoverArt" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
+            let size = p.number("size").filter(|n| *n > 0).map(|n| n as u32);
+            Ok(Answer::Raw(serve.cover(&id, size, headers).await?))
+        }
+        _ => Err(Failed(501, format!("{method} is not implemented"))),
+    }
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+/// An album as the folder-based API shows it (`getAlbumList`): a directory.
+fn album_as_directory(a: &Album) -> Value {
+    json!({ "id": a.id, "parent": a.artist_id, "isDir": true, "title": a.name, "album": a.name, "artist": a.artist,
+        "year": a.year, "genre": a.genre, "coverArt": a.cover_art, "created": a.created, "starred": a.starred,
+        "userRating": a.user_rating, "playCount": a.play_count, "songCount": a.song_count, "duration": a.duration })
+}
+
+fn apply(a: Option<&Annotation>, starred: &mut Option<String>, plays: &mut Option<u32>, played: &mut Option<String>, rating: &mut Option<u8>) {
+    let Some(a) = a else { return };
+    *starred = a.starred_at.map(api::iso);
+    *plays = (a.play_count > 0).then_some(a.play_count);
+    *played = a.play_date.filter(|d| *d > 0).map(api::iso);
+    *rating = (a.rating > 0).then_some(a.rating);
+}
+
+fn annotate_songs(serve: &Serve, user: &str, songs: &mut [Song]) -> Result<(), Failed> {
+    let ids: Vec<String> = songs.iter().map(|s| s.id.clone()).collect();
+    let found = serve.userdata.get(user, Kind::Song, &ids)?;
+    for s in songs {
+        apply(found.get(&s.id), &mut s.starred, &mut s.play_count, &mut s.played, &mut s.user_rating);
+    }
+    Ok(())
+}
+
+fn annotate_albums(serve: &Serve, user: &str, albums: &mut [Album]) -> Result<(), Failed> {
+    let ids: Vec<String> = albums.iter().map(|a| a.id.clone()).collect();
+    let found = serve.userdata.get(user, Kind::Album, &ids)?;
+    for a in albums {
+        apply(found.get(&a.id), &mut a.starred, &mut a.play_count, &mut a.played, &mut a.user_rating);
+    }
+    Ok(())
+}
+
+fn annotate_artists(serve: &Serve, user: &str, artists: &mut [Artist]) -> Result<(), Failed> {
+    let ids: Vec<String> = artists.iter().map(|a| a.id.clone()).collect();
+    let found = serve.userdata.get(user, Kind::Artist, &ids)?;
+    for a in artists {
+        let (mut plays, mut played) = (None, None);
+        apply(found.get(&a.id), &mut a.starred, &mut plays, &mut played, &mut a.user_rating);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalogue::{Catalogue, Rules, ServedRow};
+    use crate::serve::library::FolderRows;
+
+    fn row(track: i64, rel: &str, tags: &[(&str, &str)]) -> ServedRow {
+        ServedRow {
+            rel: rel.into(),
+            track: Some(track),
+            born: Some(1_700_000_000 + track),
+            format: Some("FLAC".into()),
+            kbps: Some(900),
+            duration_ms: Some(200_000),
+            size: 1000,
+            mtime: 1,
+            tags: tags.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
+        }
+    }
+
+    fn server() -> (Arc<Serve>, User) {
+        let cat = Arc::new(Catalogue::open(None, vec!["/music".into()]).unwrap());
+        let serve = Serve::open(None, cat, Rules::default(), &|_| None).unwrap();
+        let t = |n: i64, title: &str| {
+            row(n, &format!("Björk/Homogenic (1997)/0{n} {title}.flac"), &[
+                ("title", title),
+                ("artist", "Björk"),
+                ("album", "Homogenic"),
+                ("tracknumber", &n.to_string()),
+                ("date", "1997"),
+                ("genre", "Electronic"),
+            ])
+        };
+        serve.library.refresh(&[FolderRows { folder: 0, rows: vec![t(1, "Hunter"), t(2, "Jóga")] }], &Rules::default()).unwrap();
+        serve.users.set("me", "pw").unwrap();
+        let me = serve.users.check(Some("me"), None, None, Some("pw")).unwrap();
+        (serve, me)
+    }
+
+    async fn call(serve: &Arc<Serve>, me: &User, method: &str, query: &str) -> Value {
+        match handle(serve, me, method, &Params::parse(Some(query), &[]), &HeaderMap::new()).await {
+            Ok(Answer::Json(v)) => v,
+            Ok(Answer::Raw(_)) => panic!("{method} answered bytes"),
+            Err(Failed(code, m)) => json!({ "error": code, "message": m }),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_client_browses_the_library() {
+        let (s, me) = server();
+        assert_eq!(call(&s, &me, "ping", "").await, json!({}));
+        let folders = call(&s, &me, "getMusicFolders", "").await;
+        assert_eq!(folders["musicFolders"]["musicFolder"][0], json!({ "id": 1, "name": "music" }));
+        let list = call(&s, &me, "getAlbumList2", "type=newest&size=5").await;
+        let album = &list["albumList2"]["album"][0];
+        assert_eq!((album["name"].as_str(), album["songCount"].as_u64(), album["year"].as_u64()), (Some("Homogenic"), Some(2), Some(1997)));
+        let id = album["id"].as_str().unwrap().to_string();
+        let full = call(&s, &me, "getAlbum", &format!("id={id}")).await;
+        let songs = full["album"]["song"].as_array().unwrap();
+        assert_eq!(songs.iter().map(|x| x["title"].as_str().unwrap()).collect::<Vec<_>>(), ["Hunter", "Jóga"]);
+        assert_eq!(songs[0]["contentType"], "audio/flac");
+        assert_eq!(songs[0]["duration"], 200);
+        let artists = call(&s, &me, "getArtists", "").await;
+        assert_eq!(artists["artists"]["index"][0]["name"], "B");
+        let found = call(&s, &me, "search3", "query=joga").await;
+        assert_eq!(found["searchResult3"]["song"][0]["title"], "Jóga");
+        let everything = call(&s, &me, "search3", "query=&songCount=500").await;
+        assert_eq!(everything["searchResult3"]["song"].as_array().unwrap().len(), 2, "an empty query lists all");
+        let missing = call(&s, &me, "getAlbum", "id=al-nothing").await;
+        assert_eq!(missing["error"], 70);
+        let unknown = call(&s, &me, "getPodcasts", "").await;
+        assert_eq!(unknown["error"], 501);
+    }
+
+    #[tokio::test]
+    async fn stars_plays_and_the_play_queue_are_kept() {
+        let (s, me) = server();
+        let song = call(&s, &me, "search3", "query=hunter").await["searchResult3"]["song"][0]["id"].as_str().unwrap().to_string();
+        let album = call(&s, &me, "getAlbumList2", "type=newest").await["albumList2"]["album"][0]["id"].as_str().unwrap().to_string();
+        call(&s, &me, "star", &format!("id={song}&albumId={album}")).await;
+        let starred = call(&s, &me, "getStarred2", "").await;
+        assert_eq!(starred["starred2"]["song"][0]["id"], song.as_str());
+        assert_eq!(starred["starred2"]["album"][0]["id"], album.as_str());
+        assert!(starred["starred2"]["song"][0]["starred"].is_string());
+        call(&s, &me, "scrobble", &format!("id={song}&time=1792065086000")).await;
+        let again = call(&s, &me, "getSong", &format!("id={song}")).await;
+        assert_eq!((again["song"]["playCount"].as_u64(), again["song"]["played"].as_str()), (Some(1), Some("2026-10-15T11:51:26Z")));
+        let frequent = call(&s, &me, "getAlbumList2", "type=frequent").await;
+        assert_eq!(frequent["albumList2"]["album"][0]["id"], album.as_str());
+        call(&s, &me, "savePlayQueue", &format!("id={song}&current={song}&position=1500&c=Feishin")).await;
+        let q = call(&s, &me, "getPlayQueue", "").await;
+        assert_eq!((q["playQueue"]["current"].as_str(), q["playQueue"]["position"].as_u64()), (Some(song.as_str()), Some(1500)));
+        assert_eq!(q["playQueue"]["entry"][0]["id"], song.as_str());
+        call(&s, &me, "unstar", &format!("id={song}")).await;
+        assert!(call(&s, &me, "getStarred2", "").await["starred2"]["song"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn parameters_repeat_and_forms_count() {
+        let p = Params::parse(Some("id=1&id=2&u=me"), b"songId=3");
+        assert_eq!(p.all("id"), ["1", "2"]);
+        assert_eq!(p.get("songId"), Some("3"));
+    }
+}

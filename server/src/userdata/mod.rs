@@ -152,6 +152,23 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Albums in one of the orders only user data decides (`getAlbumList2`): `starred` (newest star first),
+    /// `frequent` (most played), `recent` (last played), `highest` (best rated).
+    pub fn album_list(&self, user: &str, order: &str, size: usize, offset: usize) -> Result<Vec<String>> {
+        let (filter, by) = match order {
+            "starred" => ("starred = 1", "starred_at DESC"),
+            "frequent" => ("play_count > 0", "play_count DESC, play_date DESC"),
+            "recent" => ("play_date IS NOT NULL", "play_date DESC"),
+            _ => ("rating > 0", "rating DESC, starred_at DESC"),
+        };
+        let db = self.db();
+        let mut st = db.prepare(&format!(
+            "SELECT item FROM annotation WHERE user = ?1 AND kind = 'album' AND {filter} ORDER BY {by}, item LIMIT ?2 OFFSET ?3"
+        ))?;
+        let rows = st.query_map(params![user, size as i64, offset as i64], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn set_rating(&self, user: &str, kind: Kind, item: &str, rating: u8) -> Result<()> {
         self.db().execute(
             "INSERT INTO annotation (user, item, kind, rating) VALUES (?1, ?2, ?3, ?4)

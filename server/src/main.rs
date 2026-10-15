@@ -108,6 +108,8 @@ async fn main() -> Result<()> {
 
     // A source that is down only costs its own features; an unreadable Music folder is fatal.
     let bind = cfg.bind.clone();
+    let data_dir = cfg.data_dir.clone();
+    let tag_rules = saved.tag_rules.clone();
     let app = app::App::new(cfg, saved, origin).await.context("cannot open the catalogue")?;
     let n = app.playlists.count().await.context("cannot read the playlist folder")?;
     tracing::info!("found {n} playlists");
@@ -136,9 +138,14 @@ async fn main() -> Result<()> {
         }
     });
 
+    // The OpenSubsonic API (decision 0030), kept in step with the catalogue in the background.
+    let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), app.library.catalogue(), tag_rules, &env)
+        .context("cannot open the OpenSubsonic library")?;
+    served.follow();
+
     let listener = tokio::net::TcpListener::bind(&bind).await.with_context(|| format!("cannot bind {bind}"))?;
     tracing::info!("listening on {bind}");
-    axum::serve(listener, api::router(app))
+    axum::serve(listener, api::router(app).merge(serve::routes::router(served)))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

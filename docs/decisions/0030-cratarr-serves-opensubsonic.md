@@ -29,7 +29,12 @@ translated code keeps a notice naming its origin, copyright holder and licence, 
 **Data (patterns from Navidrome, translated):**
 
 - A derived **library database** (`library.db`), rebuilt from the catalogue: songs, albums, artists and a search index.
-  The catalogue is attached read-only; it stays the truth about files and tags. Deleting `library.db` costs a rebuild.
+  The catalogue is read through a read-only connection of its own (a full read takes seconds and must not hold up
+  the catalogue), and only when a cheap summary of its files changed; it stays the truth about files and tags.
+  Deleting `library.db` costs a rebuild.
+- **One album per folder** (Cratarr's layout, decision 0016; gonic's model): songs of a folder whose tags disagree
+  (a date on some tracks only) would otherwise split it, as Navidrome's grouping does (a library of 2,736 album
+  folders gave 2,754 albums, one folder five). The folder's album id is the one most of its songs' tags give.
 - **Album aggregates on the album row** (track count, length, size, years, genres, discs, added = oldest track), and
   album and artist rows recomputed only for what changed since the last pass.
 - **Ids:** songs `tr-<catalogue track id>` (they survive moves, decision 0011); albums and artists stable hashes in
@@ -59,8 +64,11 @@ translated code keeps a notice naming its origin, copyright holder and licence, 
 **Playlists:** Cratarr's playlists (the `.m3u` files, decision 0002) are the Subsonic playlists; a client's edit is an
 edit of the file.
 
-**Users:** logins are Cratarr's own. The classic Subsonic login needs the password itself, so passwords are stored
-encrypted with a key in the data folder (as nghe), not hashed; API keys (the OpenSubsonic extension) are offered too.
+**Users:** logins are Cratarr's own. The classic Subsonic login needs the password itself, so passwords cannot be
+hashed; they are kept as Cratarr keeps its other secrets, in an owner-only file in the data folder
+(`subsonic-users.json`), not in the user data database that goes into backups. (nghe encrypts them with a key in its
+configuration; a key kept in the same data folder would protect nothing.) API keys (the OpenSubsonic extension) can
+follow.
 
 ## Plan
 
