@@ -99,6 +99,12 @@ impl Users {
         self.save(&users)
     }
 
+    /// The first administrator's name: whose data Cratarr's own calls act on.
+    pub fn owner(&self) -> Option<String> {
+        let users = self.users.read().unwrap_or_else(|p| p.into_inner());
+        users.iter().find(|u| u.admin).or_else(|| users.first()).map(|u| u.name.clone())
+    }
+
     /// The accounts' names, the administrator first.
     pub fn names(&self) -> Vec<String> {
         let users = self.users.read().unwrap_or_else(|p| p.into_inner());

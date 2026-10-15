@@ -15,6 +15,16 @@ const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.art
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
   a.created, a.mbid, a.compilation";
 
+/// A song in Cratarr's ids, with its album's name and album artist (see `Library::song_ids`).
+#[allow(dead_code)] // for the pushed player state (decision 0031), which comes next
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SongIds {
+    pub song_id: String,
+    pub album_id: String,
+    pub album: String,
+    pub album_artist: String,
+}
+
 /// How album lists are ordered (`getAlbumList2`'s types that the library alone decides).
 #[derive(Debug, Clone, PartialEq)]
 pub enum AlbumOrder {
@@ -332,6 +342,39 @@ impl Library {
         Ok((found_artists, found_albums, found_songs))
     }
 
+    /// An album's id as it is (or would be) in Music: what its tags are kept under.
+    pub fn album_base(&self, album: &str) -> Result<Option<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT base_id FROM albums WHERE id = ?1")?;
+        Ok(st.query_map([album], |r| r.get::<_, String>(0))?.next().transpose()?)
+    }
+
+    /// The albums kept under these Music-form ids (an album in Incoming and its kept copy share one), in the order
+    /// given.
+    pub fn albums_by_base(&self, bases: &[String]) -> Result<Vec<Album>> {
+        let db = self.db();
+        let mut ns = Vec::new();
+        {
+            let mut st = db.prepare_cached("SELECT n FROM albums WHERE base_id = ?1 ORDER BY folder")?;
+            for b in bases {
+                for n in st.query_map([b], |r| r.get::<_, i64>(0))? {
+                    ns.push(n?);
+                }
+            }
+        }
+        let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
+        self.album_artists(&db, &mut albums)?;
+        Ok(albums)
+    }
+
+    /// Answers when both its tables can be read: (songs, albums). For the health check.
+    pub fn health(&self) -> Result<(u64, u64)> {
+        let db = self.db();
+        let songs: i64 = db.query_row("SELECT count(*) FROM songs", [], |r| r.get(0))?;
+        let albums: i64 = db.query_row("SELECT count(*) FROM albums", [], |r| r.get(0))?;
+        Ok((songs as u64, albums as u64))
+    }
+
     /// Where a song's file is: (catalogue folder, path in it).
     pub fn file_of(&self, song: &str) -> Result<Option<(i64, String)>> {
         let db = self.db();
@@ -344,6 +387,21 @@ impl Library {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT folder, dir FROM albums WHERE id = ?1")?;
         Ok(st.query_map([album], |r| Ok((r.get(0)?, r.get(1)?)))?.next().transpose()?)
+    }
+
+    /// What a player reports about a song in Cratarr's ids (the pushed player state, decision 0031): the song id, its
+    /// album's id, the album's name and album artist. `None` when the track is not in the library.
+    #[allow(dead_code)] // see `SongIds`
+    pub fn song_ids(&self, track: i64) -> Result<Option<SongIds>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT s.id, s.album_id, a.name, a.artist FROM songs s JOIN albums a ON a.id = s.album_id WHERE s.id = ?1",
+        )?;
+        let id = super::ids::song(track);
+        Ok(st
+            .query_map([&id], |r| Ok(SongIds { song_id: r.get(0)?, album_id: r.get(1)?, album: r.get(2)?, album_artist: r.get(3)? }))?
+            .next()
+            .transpose()?)
     }
 
     /// A song's album and artists, for counting a play.

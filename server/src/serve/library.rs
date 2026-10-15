@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS albums (
   n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, artist TEXT NOT NULL, artist_id TEXT NOT NULL,
   year INTEGER, original_year INTEGER, genre TEXT, genres TEXT NOT NULL, song_count INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL, size INTEGER NOT NULL, discs INTEGER NOT NULL, created INTEGER, mbid TEXT,
-  folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL);
+  folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS albums_by_base ON albums (base_id);
 CREATE INDEX IF NOT EXISTS albums_by_name ON albums (order_name, n);
 CREATE INDEX IF NOT EXISTS albums_by_created ON albums (created DESC, n);
 CREATE INDEX IF NOT EXISTS albums_by_year ON albums (year, n);
@@ -61,7 +62,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(name, content='', cont
 ";
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 2;
+const LAYOUT: i64 = 3;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -113,6 +114,9 @@ struct Song<'a> {
     album_artist: String,
     album_artists: Vec<String>,
     album_id: String,
+    /// The album's id as it is (or would be) in Music, folder 0: what its tags are kept under, so they follow an
+    /// album kept from Incoming.
+    album_base: String,
     genres: Vec<String>,
 }
 
@@ -134,8 +138,9 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
     }
     let album = row.first("album").map(str::to_string).unwrap_or_else(|| "[Unknown Album]".into());
     let album_id = ids::album(row, &album_artist, folder);
+    let album_base = ids::album(row, &album_artist, 0);
     let genres = rules.values("genre", &row.all("genre").map(str::to_string).collect::<Vec<_>>());
-    Song { row, folder, title, artists, artist_credit, album, album_artist, album_artists, album_id, genres }
+    Song { row, folder, title, artists, artist_credit, album, album_artist, album_artists, album_id, album_base, genres }
 }
 
 /// What these files say, cheaply: when it differs from what the library was built from, it is built again (tests;
@@ -304,8 +309,8 @@ impl Library {
         {
             let mut ins_album = tx.prepare(
                 "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
-                   size, discs, created, mbid, folder, dir, compilation, order_name)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                   size, discs, created, mbid, folder, dir, compilation, order_name, base_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             )?;
             let mut ins_fts = tx.prepare("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
             let mut ins_aa = tx.prepare("INSERT INTO album_artists (album_id, artist_id, name, position) VALUES (?1, ?2, ?3, ?4)")?;
@@ -350,6 +355,7 @@ impl Library {
                     dir,
                     compilation,
                     order_name(&first.album),
+                    first.album_base,
                 ])?;
                 ins_fts.execute(params![tx.last_insert_rowid(), first.album, first.album_artist])?;
                 for (i, name) in first.album_artists.iter().enumerate() {
@@ -421,20 +427,21 @@ fn one_album_per_folder(songs: &mut [Song]) {
         })
         .collect();
     // The album's own name and artist come from a song that named it.
-    let mut lead: HashMap<String, (String, String, Vec<String>)> = HashMap::new();
+    let mut lead: HashMap<String, (String, String, Vec<String>, String)> = HashMap::new();
     for s in songs.iter() {
         if let Some((id, _)) = chosen.get(&dir(s))
             && *id == s.album_id
         {
-            lead.entry(id.clone()).or_insert_with(|| (s.album.clone(), s.album_artist.clone(), s.album_artists.clone()));
+            lead.entry(id.clone()).or_insert_with(|| (s.album.clone(), s.album_artist.clone(), s.album_artists.clone(), s.album_base.clone()));
         }
     }
     for s in songs.iter_mut() {
         let Some((id, kinds)) = chosen.get(&dir(s)) else { continue };
         if *kinds > 1
-            && let Some((album, artist, artists)) = lead.get(id)
+            && let Some((album, artist, artists, base)) = lead.get(id)
         {
             s.album_id = id.clone();
+            s.album_base = base.clone();
             s.album = album.clone();
             s.album_artist = artist.clone();
             s.album_artists = artists.clone();

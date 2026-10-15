@@ -10,6 +10,8 @@
 
 #![allow(dead_code)] // the endpoints that use it come next (decision 0030, plan step 2)
 
+pub mod tags;
+
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -91,6 +93,7 @@ impl UserData {
         };
         conn.busy_timeout(Duration::from_secs(15))?;
         conn.execute_batch(SCHEMA).context("creating the user data tables")?;
+        conn.execute_batch(tags::SCHEMA).context("creating the album tag table")?;
         Ok(Self { db: Mutex::new(conn) })
     }
 
@@ -267,6 +270,12 @@ impl UserData {
             "INSERT OR REPLACE INTO play_queue (user, songs, current, position_ms, changed, changed_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![user, q.songs.join(","), q.current, q.position_ms as i64, q.changed, q.changed_by],
         )?;
+        Ok(())
+    }
+
+    /// Answers when the database can be read. For the health check.
+    pub fn health(&self) -> Result<()> {
+        self.db().query_row("SELECT count(*) FROM annotation", [], |r| r.get::<_, i64>(0))?;
         Ok(())
     }
 

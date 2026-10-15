@@ -5,6 +5,7 @@ pub mod api;
 pub mod files;
 pub mod ids;
 pub mod library;
+pub mod library_api;
 pub mod read;
 pub mod routes;
 pub mod users;
