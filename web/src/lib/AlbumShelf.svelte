@@ -86,6 +86,9 @@
   );
 
   const view = (source: string, a: ListedAlbum) => viewPlaylist(albumSubject(source, a.id));
+  // A tile shows its title and artist; the value the list is ordered by, when it is neither, is a pill over the cover's
+  // upper left corner (decided 2026-10-16).
+  const axisOf = (a: ListedAlbum) => (order === 'year' ? (a.year ? String(a.year) : null) : order === 'added' && a.added ? addedOn(a.added) : null);
   const openMenu = (s: ShelfSource, a: ListedAlbum, anchor: DOMRect) => (onmenu ? onmenu(s, a, anchor) : (menu = { source: s, a, anchor }));
 
   // Select: the ticked albums by `source/id`; null while not selecting.
@@ -191,6 +194,7 @@
             {#if prefs.albumLayout === 'grid'}
               <Tile
                 title={a.title}
+                tag={axisOf(a)}
                 label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.title}` : `View ${a.title}`}
                 active={viewed || on}
                 strong={here}
@@ -200,7 +204,6 @@
                 {#snippet image()}{@render cover(s, a)}{/snippet}
                 {#snippet sub()}
                   <span class="line">{a.artist ?? 'Unknown artist'}</span>
-                  {#if a.year}<span class="line">{a.year}</span>{/if}
                   {@render extra?.(s, a)}
                 {/snippet}
                 {#snippet action()}{#if selecting}{@render tickOf(s, a)}{:else}{@render play(s, a)}{/if}{/snippet}
