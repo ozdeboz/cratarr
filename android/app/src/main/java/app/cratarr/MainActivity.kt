@@ -7,6 +7,7 @@ package app.cratarr
 import android.Manifest
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
@@ -29,10 +30,16 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONException
 import org.json.JSONObject
@@ -45,8 +52,13 @@ class MainActivity : AppCompatActivity() {
     /** The address the WebView shows. */
     private var shown: String? = null
 
-    /** The page that said hello: where the commands go. */
+    /** The page that said hello: where the player's reports go. */
     private var page: JavaScriptReplyProxy? = null
+
+    /** The app's player (PlayerService), once connected; the page's player calls before that wait in `waiting`. */
+    private lateinit var controllerFuture: ListenableFuture<MediaController>
+    private var player: PagePlayer? = null
+    private val waiting = mutableListOf<JSONObject>()
     private var dialog: AlertDialog? = null
 
     private var fileCallback: ValueCallback<Array<Uri>>? = null
@@ -75,9 +87,27 @@ class MainActivity : AppCompatActivity() {
                 }
             },
         )
-        // For as long as the activity lives, also with the screen locked: that is when the lock screen sends them.
+        controllerFuture = MediaController.Builder(this, SessionToken(this, ComponentName(this, PlayerService::class.java))).buildAsync()
+        controllerFuture.addListener(
+            {
+                val connected = PagePlayer(controllerFuture.get()) { message -> page?.postMessage(message) }
+                player = connected
+                waiting.forEach(connected::handle)
+                waiting.clear()
+                connected.report(withQueue = true)
+            },
+            ContextCompat.getMainExecutor(this),
+        )
+        // The position once a second while the page is in view (changes are reported as they happen; a page out of
+        // view gets those only, as it may be frozen and would get them all at once when thawed).
         lifecycleScope.launch {
-            PageCommands.commands.collect { message -> page?.postMessage(message) }
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                player?.report(withQueue = true)
+                while (true) {
+                    delay(1_000)
+                    player?.report()
+                }
+            }
         }
         addSettingsShortcut()
         askForNotifications()
@@ -90,7 +120,6 @@ class MainActivity : AppCompatActivity() {
             url == null -> askForAddress()
             url != shown -> show(url)
         }
-        PlayerService.sync(this)
     }
 
     override fun onDestroy() {
@@ -99,7 +128,8 @@ class MainActivity : AppCompatActivity() {
             it.destroy()
         }
         webView = null
-        if (isFinishing) PlayerService.quit(this)
+        player?.release()
+        MediaController.releaseFuture(controllerFuture)
         super.onDestroy()
     }
 
@@ -146,7 +176,7 @@ class MainActivity : AppCompatActivity() {
         view.loadUrl(url)
     }
 
-    /** A message from the page: `hello`, `state` (what plays), `stopped`, `settings`, `open` (a link outside). */
+    /** A message from the page: `hello`, `player` (its player's calls), `settings`, `open` (a link outside). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -163,9 +193,9 @@ class MainActivity : AppCompatActivity() {
                     .put("player", prefs.playerName)
                     .put("stayReady", prefs.stayReady)
                 reply.postMessage(app.toString())
+                player?.report(withQueue = true)
             }
-            "state" -> PlayerService.report(this, data)
-            "stopped" -> PlayerService.stopped(this)
+            "player" -> player?.handle(message) ?: waiting.add(message)
             "settings" -> startActivity(Intent(this, SettingsActivity::class.java))
             "open" -> message.optString("url").takeIf { it.isNotEmpty() }?.let { openOutside(it) }
         }

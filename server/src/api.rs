@@ -23,6 +23,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/events", get(events))
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/stream/{source}/{id}", get(stream))
+        .route("/api/file/{source}/{id}", get(file))
         .route("/api/track/{source}/{id}", get(track_info))
         .route("/api/track/{source}/{id}/playlists", get(track_state))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
@@ -473,6 +474,17 @@ struct StreamFrom {
 
 /// A track's audio for the local player (decision 0022): FLAC as fragmented MP4, MP3 as it is, read from Cratarr's own
 /// mount one piece at a time (a fragment of about a second, or 64 KB) so memory stays small.
+/// A track's file as it is, with byte ranges: for a native player (the Android app's, decision 0031 amended), which
+/// seeks in the file itself and plays gapless from its own headers.
+async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+    let cat = app.library.catalogue();
+    let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
+    let Some((path, _, _)) = found else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
+    };
+    crate::serve::files::serve_file(&path, &headers, false).await
+}
+
 async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<StreamFrom>) -> Response {
     use crate::stream::{FlacToMp4, Kind};
     let cat = app.library.catalogue();

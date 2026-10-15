@@ -8,6 +8,11 @@
 // The stream's time is mapped back to "which track, how far in" through the segments: one per appended track, from
 // where its sample 0 sits in the stream. Skipping to an appended track moves within the stream (no gap, no reload);
 // anything else (a jump back, a seek outside what is loaded) starts a fresh stream at that point.
+//
+// Inside the Android app the app plays instead, natively (decision 0031, amended): every call below is handed to it
+// (app.svelte.ts), and what it reports is shown in `local`; the stream here is not used.
+
+import { inApp, onApp, toApp } from './app.svelte';
 
 export type LocalTrack = {
   source: string;
@@ -59,10 +64,10 @@ const RESTART_AFTER = 5;
 // (bufferedchange). Neither: the local player is not offered.
 const Managed = typeof window === 'undefined' ? undefined : (window as unknown as { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource;
 const Source = Managed ?? (typeof MediaSource === 'undefined' ? undefined : MediaSource);
-/** Whether this browser can play here at all (FLAC or MP3 in its stream). */
-export const canPlayHere = !!Source && (Source.isTypeSupported(MP4) || Source.isTypeSupported(MPEG));
+/** Whether this browser can play here at all (FLAC or MP3 in its stream), or the app plays for it. */
+export const canPlayHere = inApp || (!!Source && (Source.isTypeSupported(MP4) || Source.isTypeSupported(MPEG)));
 
-const audio = typeof Audio === 'undefined' || !canPlayHere ? null : new Audio();
+const audio = typeof Audio === 'undefined' || !canPlayHere || inApp ? null : new Audio();
 // Safari opens a managed stream only for an element that cannot be sent to AirPlay (the stream cannot go there).
 if (audio && Managed) audio.disableRemotePlayback = true;
 let ms: MediaSource | null = null;
@@ -450,12 +455,41 @@ function showOnLockScreen() {
 /** The engine's audio element, for measuring (tools/gapless-lab, web/engine-lab.html); never for playback control. */
 export const engineAudio = () => audio;
 
+// --- inside the app: what it plays, as it reports it ---
+
+/** The app's last report: its position then (ms), and when it came; the position in between is counted on here. */
+let reported = { positionMs: 0, at: 0 };
+const sameQueue = (a: LocalTrack[], b: LocalTrack[]) => a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id);
+/** A call for the app's player. */
+const app = (op: string, args: Record<string, unknown> = {}) => toApp({ type: 'player', op, ...args });
+
+if (inApp) {
+  onApp('player', (m) => {
+    if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) local.queue = m.queue as LocalTrack[];
+    local.index = typeof m.index === 'number' ? m.index : -1;
+    local.paused = m.paused !== false;
+    local.duration = typeof m.durationMs === 'number' && m.durationMs > 0 ? m.durationMs / 1000 : null;
+    local.error = typeof m.error === 'string' ? m.error : null;
+    reported = { positionMs: Number(m.positionMs) || 0, at: performance.now() };
+    local.position = reported.positionMs / 1000;
+  });
+  setInterval(() => {
+    if (local.paused || local.index < 0) return;
+    const p = (reported.positionMs + performance.now() - reported.at) / 1000;
+    local.position = local.duration ? Math.min(p, local.duration) : p;
+  }, 250);
+}
+
 // --- what the player and the lock screen ask of it ---
 
 /** Plays `tracks` from `index`. */
 export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null) {
   local.queue = tracks;
   local.from = from;
+  if (inApp) {
+    Object.assign(local, { index, position: 0, paused: false, error: null });
+    return app('queue', { tracks, index, positionMs: 0, play: true });
+  }
   fresh(index, 0);
 }
 
@@ -464,6 +498,7 @@ export function enqueue(tracks: LocalTrack[], how: 'next' | 'last') {
   if (local.index < 0) return playQueue(tracks);
   const at = how === 'next' ? local.index + 1 : local.queue.length;
   local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
+  if (inApp) return app('add', { at, tracks });
   cutFrom(at);
 }
 
@@ -475,6 +510,7 @@ export function move(from: number, to: number) {
   const [t] = q.splice(from, 1);
   q.splice(to, 0, t);
   local.queue = q;
+  if (inApp) return app('move', { from, to });
   cutFrom(Math.min(from, to));
 }
 
@@ -482,6 +518,7 @@ export function move(from: number, to: number) {
 export function remove(index: number) {
   if (index <= local.index || index >= local.queue.length) return;
   local.queue = local.queue.filter((_, i) => i !== index);
+  if (inApp) return app('remove', { index });
   cutFrom(index);
 }
 
@@ -519,6 +556,10 @@ function cutFrom(at: number) {
 }
 
 export function togglePlay() {
+  if (inApp) {
+    local.paused = !local.paused;
+    return app('toggle');
+  }
   if (!audio) return;
   if (audio.paused) audio.play().catch(() => {});
   else audio.pause();
@@ -526,6 +567,10 @@ export function togglePlay() {
 
 /** To queue track `index`: within the stream when it is already appended (gapless), else a fresh stream. */
 export function jump(index: number) {
+  if (inApp && index >= 0 && index < local.queue.length) {
+    Object.assign(local, { index, position: 0, paused: false });
+    return app('jump', { index });
+  }
   if (!audio || index < 0 || index >= local.queue.length) return;
   const seg = segments.find((s) => s.index === index);
   if (seg && audio.buffered.length && seg.start >= audio.buffered.start(0)) {
@@ -540,12 +585,18 @@ export function jump(index: number) {
 export const next = () => jump(local.index + 1);
 
 export function previous() {
+  if (inApp) return app('previous');
   if (local.position > RESTART_AFTER) seek(0);
   else jump(Math.max(0, local.index - 1));
 }
 
 /** To `secs` into the playing track: within what is loaded, else a fresh stream from there. */
 export function seek(secs: number) {
+  if (inApp) {
+    local.position = secs;
+    reported = { positionMs: secs * 1000, at: performance.now() };
+    return app('seek', { positionMs: Math.round(secs * 1000) });
+  }
   if (!audio) return;
   const w = where();
   const target = w ? w.seg.start + secs : secs;
@@ -561,6 +612,7 @@ export function seek(secs: number) {
 /** Stops and forgets the queue (switching output to elsewhere). Returns where it was, for the handover. */
 export function stop(): { queue: LocalTrack[]; index: number; position: number } {
   const was = { queue: local.queue, index: local.index, position: local.position };
+  if (inApp) app('stop');
   generation++;
   fetching?.abort();
   audio?.pause();

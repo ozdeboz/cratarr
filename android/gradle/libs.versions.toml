@@ -17,6 +17,7 @@ androidx-activity = "1.13.0"
 androidx-lifecycle = "2.11.0"
 androidx-webkit = "1.15.0"
 androidx-preference = "1.2.1"
+androidx-media3 = "1.11.1"
 
 [plugins]
 android-app = { id = "com.android.application", version.ref = "android-plugin" }
@@ -29,3 +30,5 @@ androidx-activity = { group = "androidx.activity", name = "activity", version.re
 androidx-lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-runtime", version.ref = "androidx-lifecycle" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "androidx-webkit" }
 androidx-preference = { group = "androidx.preference", name = "preference", version.ref = "androidx-preference" }
+androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "androidx-media3" }
+androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "androidx-media3" }

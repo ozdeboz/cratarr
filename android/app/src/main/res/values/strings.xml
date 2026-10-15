@@ -11,15 +11,7 @@
 
     <string name="player_name">Player name</string>
     <string name="stay_ready">Stay ready</string>
-    <string name="stay_ready_summary">Keep listening for Play On while idle (for a device on its charger)</string>
+    <string name="stay_ready_summary">Stay in the foreground while paused, so Play On still arrives (for a device on its charger)</string>
     <string name="battery">Battery optimisation</string>
     <string name="battery_summary">Allow Cratarr to run in the background</string>
-
-    <string name="ready">Ready</string>
-    <string name="playback">Playback</string>
-    <string name="action_previous">Previous</string>
-    <string name="action_play">Play</string>
-    <string name="action_pause">Pause</string>
-    <string name="action_next">Next</string>
-    <string name="action_stop">Stop</string>
 </resources>
