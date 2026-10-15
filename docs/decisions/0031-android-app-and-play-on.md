@@ -71,3 +71,22 @@ source (GPL-2.0).
   diverges: most of it is removed.
 - The page's playback is Chromium's, in the WebView: the app can keep it alive, not feed it. A stall at a track
   change with the screen locked would be the page's to fix (the next track is buffered ahead).
+
+## Amendment (2026-10-15): the app plays natively
+
+Measured on the tablet through the app (`tools/playon-probe`): the app keeps the device awake, but Chromium freezes a
+hidden page 70 to 90 s after its music stops, and only showing the page again thaws it; behind the lock screen even a
+woken screen does not. A page can therefore not be the player that Play On reaches after a pause. Finamp, which Home
+Assistant drives today, has the same gap for another reason (it leaves the foreground on pause), and HA works around it
+by launching Finamp and waking the screen before every command.
+
+So inside the app the music plays **natively**, as Finamp's does, and the page is its face:
+
+- The app's player is Media3's ExoPlayer in a media session service: the lock screen, the notification, headphone
+  buttons, audio focus, pausing when the audio would become noisy, and the wake and Wi-Fi locks come with it. It plays
+  the original files (`/api/file/{source}/{id}`, with byte ranges), gapless from their own headers (LAME's for MP3).
+- The page's local player hands over to it when the page runs in the app: the same calls (play a queue, add, move,
+  remove, jump, next, previous, seek, play/pause, stop) go over the bridge, and the app reports back what plays. In a
+  browser the page plays itself, as before.
+- Play On reaches the app's player, not the page: the app holds the connection to Cratarr (step 3), so a frozen page
+  does not matter; the page catches up with what the player did when it is shown.
