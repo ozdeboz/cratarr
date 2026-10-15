@@ -329,6 +329,11 @@ impl JellyfinSource {
         if let Some(user) = whose(sessions, &self.player, self.account.as_deref(), track) {
             return Ok(user);
         }
+        self.fallback_account().await
+    }
+
+    /// The server's only account, or its administrator (asked for once).
+    async fn fallback_account(&self) -> Result<String> {
         Ok(self
             .fallback
             .get_or_try_init(|| async {
@@ -478,6 +483,15 @@ impl Source for JellyfinSource {
 
     fn users(&self) -> Fut<'_, Vec<(String, String)>> {
         Box::pin(self.jf.users())
+    }
+
+    fn sync_account(&self) -> Fut<'_, String> {
+        Box::pin(async move {
+            match &self.account {
+                Some(a) => Ok(a.clone()),
+                None => self.fallback_account().await,
+            }
+        })
     }
 
     fn own_playlists<'a>(&'a self, user: &'a str) -> Fut<'a, Vec<super::OwnPlaylist>> {

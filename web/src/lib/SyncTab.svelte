@@ -1,9 +1,8 @@
 <script lang="ts">
-  // The panel's Sync tab (decisions 0014, 0025): every target, linked or not, for the selected playlists. With several
-  // playlists a target linked for only some shows a dash and "3 of 5"; ticking links all of them, unticking takes all
-  // their links off. Every link is kept both ways, except Shared: a copy the server cannot edit. Each change is made
-  // at once.
-  import { getTargets, linkPlaylist, unlinkPlaylist, type Link, type TargetChoice } from './api';
+  // The panel's Sync tab (decisions 0014, 0025): whether the selected playlists are shared with everyone, and their
+  // copy in each account, with any problem it has. Your account has every playlist and follows by itself; sharing puts
+  // a playlist in every account. With several playlists: "3 of 5" where only some are; ticking shares all of them.
+  import { linkPlaylist, unlinkPlaylist, type Link } from './api';
   import { refresh } from './live.svelte';
   import { shownPlaylists } from './output.svelte';
   import Row from './Row.svelte';
@@ -11,86 +10,79 @@
 
   let { ids }: { ids: string[] } = $props();
 
-  let targets = $state<TargetChoice[] | null>(null);
-  $effect(() => {
-    getTargets().then(
-      (t) => (targets = t),
-      (e) => toast.fail(e, 'Could not list the targets'),
-    );
-  });
+  const SHARED = 'shared';
+  const linksOf = (id: string): Link[] => shownPlaylists().find((p) => p.id === id)?.links ?? [];
 
-  // The links as the server last said, with what was just changed laid over them until it says again.
-  let changed = $state<Record<string, Link | null>>({});
-  const key = (id: string, target: string) => `${id}\n${target}`;
-  const linkOf = (id: string, target: string): Link | null => {
-    const k = key(id, target);
-    if (k in changed) return changed[k];
-    return shownPlaylists().find((p) => p.id === id)?.links.find((l) => l.target === target) ?? null;
-  };
+  // Shared as the server last said, with what was just changed laid over it until it says again.
+  let changed = $state<Record<string, boolean>>({});
+  const isShared = (id: string) => (id in changed ? changed[id] : linksOf(id).some((l) => l.target === SHARED));
+  const sharedCount = $derived(ids.filter(isShared).length);
 
   let working = $state(false);
-  async function set(t: TargetChoice, on: boolean) {
+  async function share(on: boolean) {
     if (working) return;
     working = true;
     const touched: string[] = [];
     try {
-      for (const id of ids) {
-        const l = linkOf(id, t.target);
-        if (!on) {
-          if (!l) continue;
-          changed[key(id, t.target)] = null;
-          touched.push(id);
-          await unlinkPlaylist(id, t.target);
-          continue;
-        }
-        if (l) continue;
-        changed[key(id, t.target)] = { target: t.target, label: t.label, status: null };
+      for (const id of ids.filter((id) => isShared(id) !== on)) {
+        changed[id] = on;
         touched.push(id);
-        await linkPlaylist(id, t.target);
+        await (on ? linkPlaylist(id, SHARED) : unlinkPlaylist(id, SHARED));
       }
     } catch (e) {
-      for (const id of touched) delete changed[key(id, t.target)];
-      toast.fail(e, 'Could not change the link');
+      for (const id of touched) delete changed[id];
+      toast.fail(e, on ? 'Could not share it' : 'Could not stop sharing it');
     } finally {
       working = false;
       await refresh();
       changed = {};
     }
   }
+
+  // Each account's copies of the selected playlists: how many there are, and their problems.
+  const accounts = $derived.by(() => {
+    const out = new Map<string, { label: string; count: number; errors: string[] }>();
+    for (const id of ids) {
+      for (const l of linksOf(id).filter((l) => l.target !== SHARED)) {
+        const a = out.get(l.target) ?? { label: l.label, count: 0, errors: [] };
+        a.count++;
+        if (l.status?.error) a.errors.push(ids.length > 1 ? `${id}: ${l.status.error}` : l.status.error);
+        out.set(l.target, a);
+      }
+    }
+    return [...out.values()];
+  });
 </script>
 
 <div class="tab">
-  {#if !targets}
-    <p class="empty">Loading…</p>
-  {:else}
-    {#each targets as t (t.target)}
-      {@const links = ids.map((id) => linkOf(id, t.target)).filter((l) => !!l)}
-      {@const all = links.length === ids.length}
-      {@const some = links.length > 0 && !all}
-      {@const errors = ids.flatMap((id) => {
-        const e = linkOf(id, t.target)?.status?.error;
-        return e ? [ids.length > 1 ? `${id}: ${e}` : e] : [];
-      })}
-      <!-- A large row: ticking its box links it. -->
-      <Row size="large" as="label" title={t.label} count={some ? `${links.length} of ${ids.length}` : undefined} wrap>
-        {#snippet lead()}
-          <input type="checkbox" checked={all} indeterminate={some} disabled={working} onchange={(e) => set(t, e.currentTarget.checked)} />
-        {/snippet}
-        {#snippet sub()}{#if errors.length}<span class="error">{errors.join(' · ')}</span>{/if}{/snippet}
-      </Row>
-    {/each}
-  {/if}
+  <Row
+    size="large"
+    as="label"
+    title="Shared with everyone"
+    count={sharedCount > 0 && sharedCount < ids.length ? `${sharedCount} of ${ids.length}` : undefined}
+    wrap
+  >
+    {#snippet lead()}
+      <input
+        type="checkbox"
+        checked={sharedCount === ids.length}
+        indeterminate={sharedCount > 0 && sharedCount < ids.length}
+        disabled={working}
+        onchange={(e) => share(e.currentTarget.checked)}
+      />
+    {/snippet}
+  </Row>
+  {#each accounts as a (a.label)}
+    <Row size="large" title={a.label} count={ids.length > 1 && a.count < ids.length ? `${a.count} of ${ids.length}` : undefined} wrap>
+      {#snippet sub()}{#if a.errors.length}<span class="error">{a.errors.join(' · ')}</span>{/if}{/snippet}
+    </Row>
+  {/each}
 </div>
 
 <style>
-  /* Large rows (lib/Row.svelte); what is the tab's own is the controls. */
+  /* Large rows (lib/Row.svelte); what is the tab's own is the box. */
   .tab {
     padding: 0 8px;
-  }
-
-  .empty {
-    margin: 12px;
-    color: var(--muted);
   }
 
   input[type='checkbox'] {

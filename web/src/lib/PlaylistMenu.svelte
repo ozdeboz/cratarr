@@ -3,7 +3,7 @@
   // playlist, the panel's ⋮, or the ⋮ for the ticked ones (one or several). A sheet as Finamp's track menu: the
   // playlist on its card (a mosaic of its first albums' covers; for several, their covers and "3 playlists"), Play,
   // Shuffle, Play next and Add to queue as the large actions (several: one playlist after another, each track once),
-  // then View, the favourite, Pin, Export… and Sync to… (they show the panel on that tab), Spoken as… and Rename (one
+  // then View, the favourite, Pin, Export… and Sync… (they show the panel on that tab), Spoken as… and Rename (one
   // playlist only), and Delete (one Undo for all), each done inside the sheet.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
@@ -86,7 +86,7 @@
     }
   }
 
-  /** View, Export… and Sync to…: the panel shows these playlists, on that tab (decision 0025). */
+  /** View, Export… and Sync…: the panel shows these playlists, on that tab (decision 0025). */
   function viewTab(tab: Tab) {
     viewSelection([...ids], tab);
     onclose();
@@ -166,7 +166,7 @@
   images={covers}
   {title}
   chips={one
-    ? [tracks(one.count), ...(one.dead > 0 ? [missing(one.dead)] : []), ...(one.links ?? []).map((l) => l.label)]
+    ? [tracks(one.count), ...(one.dead > 0 ? [missing(one.dead)] : []), ...((one.links ?? []).some((l) => l.target === 'shared') ? ['Shared'] : [])]
     : [tracks(playlists.reduce((k, x) => k + x.count, 0)), ...playlists.slice(0, 3).map((x) => x.name), ...(n > 3 ? [`and ${n - 3} more`] : [])]}
   actions={mode === 'menu'
     ? [
@@ -194,7 +194,7 @@
       />
       <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
       <MenuEntry icon="download" label="Export…" onclick={() => viewTab('export')} />
-      <MenuEntry icon="link" label="Sync to…" onclick={() => viewTab('sync')} />
+      <MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync')} />
       {#if one}
         <MenuEntry
           icon="mic"

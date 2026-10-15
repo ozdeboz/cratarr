@@ -590,6 +590,7 @@ impl Catalogue {
     }
 
     /// What the catalogue knows of each of these files of a folder, in order. Blocking.
+    #[cfg(test)]
     pub fn file_rows(&self, source: &str, folder: i64, rels: &[String]) -> Result<Vec<FileRow>> {
         let places: Vec<Option<(i64, String)>> = rels.iter().map(|r| Some((folder, r.clone()))).collect();
         self.rows_at(source, &places)

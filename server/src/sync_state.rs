@@ -84,6 +84,8 @@ pub struct LinkView {
     pub target: String,
     pub label: String,
     pub status: Option<LinkStatus>,
+    /// The account's copy exists (false while it waits to be made, a few per pass). Always true for "shared".
+    pub made: bool,
 }
 
 /// A sync link: a playlist and one target it is kept in.
@@ -122,7 +124,14 @@ CREATE TABLE IF NOT EXISTS retired (
   PRIMARY KEY (playlist, kind, source, user)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS spoken (playlist TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY (playlist, name)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS left_by (playlist TEXT NOT NULL, source TEXT NOT NULL, user TEXT NOT NULL,
+  PRIMARY KEY (playlist, source, user)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS retire (playlist TEXT PRIMARY KEY, copy TEXT NOT NULL) WITHOUT ROWID;
 ";
+
+/// Recorded once the playlists were made native (decision 0014, amended 2026-10-15): Shared copies in Music are
+/// retired, and every playlist is its owner's only.
+const NATIVE: &str = "native";
 
 /// Columns added after the first schema; added to an existing file when missing.
 const ADDED_COLUMNS: [(&str, &str); 1] = [("links", "base_ids TEXT NOT NULL DEFAULT '[]'")];
@@ -221,6 +230,8 @@ impl SyncState {
     pub fn rename(&self, from: &str, to: &str) -> Result<usize> {
         let db = self.db();
         db.execute("UPDATE OR REPLACE targets SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
+        db.execute("UPDATE OR REPLACE left_by SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
+        db.execute("UPDATE OR REPLACE retire SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
         db.execute("UPDATE OR REPLACE spoken SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
         Ok(db.execute("UPDATE links SET name = ?2 WHERE name = ?1", params![from, to])?)
     }
@@ -304,6 +315,64 @@ impl SyncState {
         Ok(())
     }
 
+    /// The accounts that took a shared playlist out of their account (it stays out for them), as (source, user).
+    pub fn left_by(&self, playlist: &str) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT source, user FROM left_by WHERE playlist = ?1 ORDER BY source, user")?;
+        let rows = st.query_map([playlist], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_left(&self, playlist: &str, source: &str, user: &str) -> Result<()> {
+        self.db().execute("INSERT OR IGNORE INTO left_by (playlist, source, user) VALUES (?1, ?2, ?3)", params![playlist, source, user])?;
+        Ok(())
+    }
+
+    /// Shared again: every account gets it again.
+    pub fn clear_left(&self, playlist: &str) -> Result<()> {
+        self.db().execute("DELETE FROM left_by WHERE playlist = ?1", [playlist])?;
+        Ok(())
+    }
+
+    /// The copies in Music (imported by the server) still to remove, as (playlist, copy file name): each goes once the
+    /// playlist's copy in its owner's account exists.
+    pub fn to_retire(&self) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT playlist, copy FROM retire ORDER BY playlist")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn put_retire(&self, playlist: &str, copy: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO retire (playlist, copy) VALUES (?1, ?2)", params![playlist, copy])?;
+        Ok(())
+    }
+
+    pub fn retired_copy(&self, playlist: &str) -> Result<()> {
+        self.db().execute("DELETE FROM retire WHERE playlist = ?1", [playlist])?;
+        Ok(())
+    }
+
+    /// Once (decision 0014, amended 2026-10-15): every Shared copy in Music is to be retired, and no playlist is
+    /// shared any more (they were the owner's own; sharing is chosen anew per playlist). Returns how many, or None
+    /// when done before.
+    pub fn make_native(&self) -> Result<Option<usize>> {
+        if self.meta(NATIVE).is_some() {
+            return Ok(None);
+        }
+        let n = {
+            let mut db = self.db();
+            let tx = db.transaction()?;
+            tx.execute("INSERT OR REPLACE INTO retire (playlist, copy) SELECT playlist, COALESCE(copy, playlist) FROM targets WHERE kind = 'shared'", [])?;
+            let n = tx.execute("DELETE FROM targets WHERE kind = 'shared'", [])?;
+            tx.execute("DELETE FROM retired WHERE kind = 'shared'", [])?;
+            tx.commit()?;
+            n
+        };
+        self.set_meta(NATIVE, "1")?;
+        Ok(Some(n))
+    }
+
     /// The other names each playlist is spoken as (decision 0015), by playlist.
     pub fn spoken(&self) -> Result<std::collections::HashMap<String, Vec<String>>> {
         let db = self.db();
@@ -363,6 +432,29 @@ mod tests {
         s.put("jf", "u1", &link("A")).unwrap();
         assert_eq!(s.follow_catalogue("g2").unwrap(), None, "once: lists agreed since are kept");
         assert_eq!(s.links("jf", "u1").unwrap()[0].base, vec![1, 2]);
+    }
+
+    #[test]
+    fn going_native_retires_the_shared_copies_once_and_shares_nothing() {
+        let s = SyncState::open(None).unwrap();
+        let user = Kind::User { source: "jf".into(), user: "u1".into() };
+        s.put_target(&Target { playlist: "Chill".into(), kind: Kind::Shared, copy: Some("Chill".into()) }).unwrap();
+        s.put_target(&Target { playlist: "Old".into(), kind: Kind::Shared, copy: None }).unwrap();
+        s.put_target(&Target { playlist: "Chill".into(), kind: user.clone(), copy: None }).unwrap();
+        assert_eq!(s.make_native().unwrap(), Some(2));
+        assert_eq!(s.to_retire().unwrap(), vec![("Chill".into(), "Chill".into()), ("Old".into(), "Old".into())]);
+        assert_eq!(s.targets().unwrap(), vec![Target { playlist: "Chill".into(), kind: user, copy: None }]);
+        assert_eq!(s.make_native().unwrap(), None, "once");
+        s.rename("Chill", "Calm").unwrap();
+        s.set_left("Calm", "jf", "u2").unwrap();
+        assert_eq!(s.left_by("Calm").unwrap(), vec![("jf".into(), "u2".into())]);
+        s.rename("Calm", "Hush").unwrap();
+        assert_eq!(s.left_by("Hush").unwrap(), vec![("jf".into(), "u2".into())]);
+        s.clear_left("Hush").unwrap();
+        assert!(s.left_by("Hush").unwrap().is_empty());
+        assert!(s.to_retire().unwrap().iter().any(|(p, c)| p == "Hush" && c == "Chill"), "the copy keeps its file name");
+        s.retired_copy("Hush").unwrap();
+        assert_eq!(s.to_retire().unwrap().len(), 1);
     }
 
     #[test]

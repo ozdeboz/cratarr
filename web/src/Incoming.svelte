@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ApiError, getIncoming, type ListedAlbum, type IncomingSource, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
+  import Meter from './lib/Meter.svelte';
   import IncomingSheet, { offerOf, type IncomingOffer } from './lib/IncomingSheet.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
@@ -106,10 +107,10 @@
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}
           {@const job = jobs.of(s.id, a.id)!}
-          <span class="job">
-            {job.state === 'waiting' ? 'Waiting to convert' : `Converting ${job.done} of ${job.total}`}
-            <span class="track" aria-hidden="true"><span style:width="{(100 * (job.done + job.part)) / Math.max(job.total, 1)}%"></span></span>
-          </span>
+          <Meter
+            label={job.state === 'waiting' ? 'Waiting to convert' : `Converting ${job.done} of ${job.total}`}
+            value={(job.done + job.part) / Math.max(job.total, 1)}
+          />
         {:else if verdictOf(s, a)}
           {@const v = verdictOf(s, a)!}
           <span class="verdict" class:upgrade={v.kind === 'upgrade'} title={v.library}>
@@ -156,31 +157,6 @@
     margin-top: 3px;
     color: var(--muted);
     font-size: 0.8rem;
-  }
-
-  /* In the conversion queue: what it is at, and a thin bar of the files done. */
-  .job {
-    display: block;
-    margin-top: 3px;
-    color: var(--accent);
-    font-size: 0.8rem;
-  }
-
-  .job .track {
-    display: block;
-    max-width: 240px;
-    height: 3px;
-    margin-top: 4px;
-    border-radius: 2px;
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    overflow: hidden;
-  }
-
-  .job .track span {
-    display: block;
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.4s;
   }
 
   .verdict .badge {

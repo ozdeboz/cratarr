@@ -93,3 +93,30 @@ last. The link's direction and conflict-rule columns stay in the sync state so o
 - **A renamed server copy keeps its heart.** Jellyfin renames with an API key by making a new copy and deleting the old
   one; the heart is carried over. Another linked playlist already holding the new name is never taken over: the
   rename waits, and the Sync tab says why.
+
+## Amendment (2026-10-15, later): no links to set; shared means in everyone's account
+
+The owner found per-playlist links implicit and confusing (a Finamp playlist only came into Cratarr once some other
+playlist was linked to that account), and the imported Shared copy wrong for sharing: nobody can edit an imported
+playlist in Jellyfin. Decided, with the owner's choices:
+
+- **Your account syncs, always.** Per server, "your account" is the account chosen in Settings, else the server's
+  administrator (stable: it does not change with who holds the followed player). Every playlist has an editable copy
+  there, and every playlist made there (in Finamp) comes into Cratarr. Nothing to set per playlist; no links.
+- **Shared means in everyone's account.** A shared playlist has an editable copy in every account on the server, each
+  kept in step two-way with the one playlist in Cratarr. A playlist not shared is in your account only, and that is
+  where every playlist starts (the owner: "they're mine only"): sharing is chosen per playlist.
+- **Someone else deleting their copy** of a shared playlist takes it out of their account only, and it stays out for
+  them (until it is shared again). Only you delete a playlist for everyone: in Cratarr, or in your own account.
+- **Other people's own playlists stay theirs.** Their accounts sync only what is shared; their own playlists come into
+  Cratarr once Cratarr has sign-in per person (a decision of its own).
+- **Cratarr's copy stays out of Jellyfin's reach,** in `Music/.playlists` (Jellyfin skips hidden folders). No copy is
+  written into Music any more.
+- **Migration:** every playlist (all 66 were Shared) becomes yours only: none is put in other accounts. Each one's
+  imported copy in Music is removed once its editable copy exists in your account, and your heart on the imported
+  playlist moves to it. Copies are made a few per pass, so Jellyfin is not flooded (66 take a few minutes). Other
+  accounts no longer see them (all of the owner's devices use his account). Finamp downloads of those playlists need
+  downloading again (new playlist ids). The same holds for a first start that adopts playlists found in Music.
+- **Reads are spread:** each pass reads about a tenth of the copies whatever their stamp says, so every copy is read at
+  least every ten passes without a burst.
+- The Sync tab becomes one switch, "Shared with everyone", with each account's copy and any problem it has.

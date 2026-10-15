@@ -13,16 +13,16 @@ export type Playlist = {
   spoken: string[];
 };
 
-/** A sync link: a playlist kept in step on a target. */
+/** A playlist's sync: "shared" (with everyone), or its copy in an account. */
 export type Link = {
   /** "shared", or "user/<server>/<account>". */
   target: string;
   label: string;
   status: { at: number; error: string | null } | null;
+  /** The account's copy exists (false while it waits to be made). */
+  made: boolean;
 };
-/** A target a playlist can be linked to. `copy_only`: a copy the server cannot edit (Shared): nothing comes back from
- *  it. */
-export type TargetChoice = { target: string; label: string; copy_only: boolean };
+
 
 export type NowPlaying = {
   /** The source it came from (covers are looked up there). */
@@ -313,7 +313,6 @@ export const renamePlaylist = (id: string, to: string) =>
 export const deletePlaylist = (id: string) =>
   request<{ deleted: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
-export const getTargets = () => request<TargetChoice[]>('/api/sync/targets');
 /** The other names a playlist is spoken as, exactly these. */
 /** The names a playlist is also spoken as, from what was typed (comma-separated). */
 export const spokenNames = (text: string) =>

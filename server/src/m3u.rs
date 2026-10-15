@@ -120,6 +120,7 @@ pub fn with_prefix(content: &str, prefix: &str) -> String {
 }
 
 /// The inverse of `with_prefix`: `prefix` taken off the front of every entry line that has it, all else kept as is.
+#[cfg(test)]
 pub fn without_prefix(content: &str, prefix: &str) -> String {
     let mut out = String::with_capacity(content.len());
     for line in content.split_inclusive('\n') {

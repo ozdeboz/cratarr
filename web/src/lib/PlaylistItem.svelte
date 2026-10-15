@@ -1,6 +1,6 @@
 <script lang="ts">
   // A playlist as a row, wherever playlists are listed (docs/ui-conventions.md → Rows): its name, then its marks (pinned,
-  // kept in an account's own playlists), and at the end its count with its flags (a favourite's small heart above the
+  // shared with everyone), under it its sync while copies are still being made, and at the end its count with its flags (a favourite's small heart above the
   // problems' dot, in the dot's place, so the row gets no wider). Medium on the Playlists page, small in the Export tab,
   // large in the Info and Repair tabs; what the row's action is belongs to where it is.
   import type { Snippet } from 'svelte';
@@ -8,6 +8,7 @@
   import type { Playlist } from './api';
   import { isPlaylistFavorite } from './favourites.svelte';
   import Icon from './Icon.svelte';
+  import Meter from './Meter.svelte';
   import { prefs } from './prefs.svelte';
   import Row from './Row.svelte';
 
@@ -40,7 +41,11 @@
   } = $props();
 
   const missing = (n: number) => `${n} missing ${n === 1 ? 'track' : 'tracks'}`;
-  const own = $derived((p.links ?? []).filter((l) => l.target !== 'shared'));
+  const shared = $derived((p.links ?? []).some((l) => l.target === 'shared'));
+  // Its copies in the accounts: shown while some are still to be made (a few per pass).
+  const copies = $derived((p.links ?? []).filter((l) => l.target !== 'shared'));
+  const made = $derived(copies.filter((l) => l.made).length);
+  const syncing = $derived(made < copies.length);
   const fav = $derived(isPlaylistFavorite(p.id));
   const dead = $derived(p.dead ?? 0);
 </script>
@@ -48,7 +53,7 @@
 <Row
   {size}
   title={p.name}
-  {sub}
+  sub={sub ?? (syncing ? syncMeter : undefined)}
   {action}
   {onclick}
   {label}
@@ -62,7 +67,7 @@
 >
   {#snippet badges()}
     {#if prefs.pinned.includes(p.id)}<span class="mark" title="Pinned"><Icon name="pin" size={13} /></span>{/if}
-    {#if own.length}<span class="mark" title={own.map((l) => l.label).join(', ')}><Icon name="user" size={13} /></span>{/if}
+    {#if shared}<span class="mark" title="Shared with everyone"><Icon name="users" size={13} /></span>{/if}
   {/snippet}
   {#snippet meta()}
     {#if fav || dead > 0}
@@ -74,8 +79,12 @@
   {/snippet}
 </Row>
 
+{#snippet syncMeter()}
+  <Meter label={made === 0 ? 'Waiting to sync' : `Syncing ${made} of ${copies.length}`} value={made / copies.length} />
+{/snippet}
+
 <style>
-  /* Kept in an account's own playlists too (decision 0014), or pinned. */
+  /* Shared with everyone (decision 0014), or pinned. */
   .mark {
     display: flex;
     flex: none;

@@ -319,6 +319,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { Ok(Vec::new()) })
     }
 
+    /// Optional (decision 0014, amended 2026-10-15): "your account": the one whose playlists are Cratarr's, kept in
+    /// step always. Its setting, else the server's only account or its administrator: stable, whoever plays.
+    fn sync_account(&self) -> Fut<'_, String> {
+        Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })
+    }
+
     /// Optional (decision 0012): a user's own playlists (not ones imported from files), with their change stamps.
     fn own_playlists<'a>(&'a self, _user: &'a str) -> Fut<'a, Vec<OwnPlaylist>> {
         Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })

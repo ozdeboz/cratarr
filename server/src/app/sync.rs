@@ -1,11 +1,14 @@
-//! Sync links (decisions 0012, 0014): each playlist is one `.m3u` file in `Music/.playlists`, and each of its links
-//! keeps a copy of it on a target in step.
-//! - **Shared:** a copy in the Music folder, which the media server imports for everyone. The server cannot edit an
-//!   imported playlist, so nothing comes back from it: the copy is written whenever the playlist changes.
-//! - **A user's own playlist on a server:** kept in step both ways by the engine below (`sync_server`). A pass compares
-//!   each copy with the list both last agreed on and merges (`playlist_merge`). When both sides changed the order or
-//!   the name between two passes, the server's leads: it does not say when it saved its copy, so which change came
-//!   last cannot be told (both fell between two passes).
+//! Playlist sync (decisions 0012, 0014): each playlist is one `.m3u` file in `Music/.playlists`, out of the media
+//! server's reach (it skips hidden folders), and has an editable copy in accounts on the server, each kept in step both
+//! ways. Nothing is set per playlist but whether it is shared:
+//! - **your account** (per server: its setting, else the server's administrator) has every playlist, and every
+//!   playlist made there (in Finamp) comes into Cratarr;
+//! - **a shared playlist** is in every account; someone else taking it out of their account takes it out for them
+//!   only. Other accounts' own playlists stay theirs.
+//!
+//! The engine below (`sync_server`) keeps one account's copies in step: a pass compares each copy with the list both
+//! last agreed on and merges (`playlist_merge`). When both sides changed the order or the name between two passes, the
+//! server's leads: it does not say when it saved its copy, so which change came last cannot be told.
 //!
 //! Every step is safe to repeat and to interrupt (the next pass finishes or undoes it, never guesses):
 //! - a link is matched by the server copy's id, and remembers both agreed names, so a rename made on either side is
@@ -15,11 +18,12 @@
 //! - a file edited while a pass merged is left for the next pass;
 //! - a server copy made but not yet remembered is found again by its name, not made twice;
 //! - a file deleted because its server copy went can be restored in Cratarr;
-//! - one playlist's problem is its own: the others go on, and the page shows it on that playlist's link.
+//! - one playlist's problem is its own: the others go on, and the page shows it on that playlist's copy.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use anyhow::{Result, bail};
 
@@ -31,17 +35,19 @@ use crate::playlists::Store;
 use crate::source::{PlaylistChange, Source};
 use crate::sync_state::{Kind, Link, LinkStatus, LinkView, SyncState, Target};
 
-/// Recorded in the sync state once the playlists in Music were adopted (decision 0014): never again, so the shared
-/// copies there are not taken for playlists.
+/// Recorded in the sync state once the playlists in Music were adopted (decision 0014): never again, so the copies
+/// there are not taken for playlists.
 const ADOPTED: &str = "adopted";
 
-/// A target a playlist can be linked to.
+/// At most this many new copies are made on a server per account and pass: a first start (or the move to editable
+/// copies) does not flood the server.
+pub(super) const COPIES_PER_PASS: usize = 8;
+
+/// What can be set for a playlist's sync: whether it is shared with everyone.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TargetChoice {
     pub target: String,
     pub label: String,
-    /// A copy the server cannot edit (Shared, which it imports): nothing comes back from it.
-    pub copy_only: bool,
 }
 
 pub struct SyncService {
@@ -54,8 +60,12 @@ pub struct SyncService {
     last: std::sync::Mutex<HashMap<(String, String), LinkStatus>>,
     /// Account names by (source, user id), for the labels.
     names: std::sync::Mutex<HashMap<(String, String), String>>,
-    /// Passes so far: every `VERIFY_EVERY`th reads every linked server copy.
-    passes: std::sync::atomic::AtomicU64,
+    /// "Your account" per source, as the last pass found it.
+    owners: std::sync::Mutex<HashMap<String, String>>,
+    /// Passes so far: each reads a tenth of the copies whatever their stamp says (`Verify::Slice`).
+    passes: AtomicU64,
+    /// A pass is asked for (after an edit) and not started yet.
+    wanted: AtomicBool,
 }
 
 impl SyncService {
@@ -68,7 +78,9 @@ impl SyncService {
             one_at_a_time: tokio::sync::Mutex::new(()),
             last: Default::default(),
             names: Default::default(),
+            owners: Default::default(),
             passes: Default::default(),
+            wanted: Default::default(),
         }
     }
 
@@ -101,8 +113,10 @@ impl SyncService {
         self.last.lock().unwrap_or_else(|p| p.into_inner()).insert((playlist.to_string(), kind.key()), status);
     }
 
-    /// One pass: the playlists in Music adopted (once), then every link brought in step.
+    /// One pass: the playlists in Music adopted (once), the copies in Music retired (once made native), then per
+    /// server: which account has which playlist, and every account's copies brought in step.
     pub async fn pass(&self) {
+        self.wanted.store(false, Ordering::Relaxed);
         let _one = self.one_at_a_time.lock().await;
         self.follow.catch_up().await;
         if let Err(e) = self.adopt().await {
@@ -120,34 +134,58 @@ impl SyncService {
                 return;
             }
         }
-        // Mid album action, a line can name a file that just moved: merged now, its track would leave the server copy.
-        if self.follow.busy() {
-            return;
-        }
-        let targets = match self.state.targets() {
-            Ok(t) => t,
+        match self.state.make_native() {
+            Ok(Some(n)) => tracing::info!("playlist sync: {n} shared copies in Music are replaced by copies in your account"),
+            Ok(None) => {}
             Err(e) => {
                 tracing::warn!("playlist sync: {e:#}");
                 return;
             }
-        };
-        self.push_shared(&store, targets.iter().filter(|t| t.kind == Kind::Shared).cloned().collect()).await;
-        let users: BTreeSet<(String, String)> = targets
-            .iter()
-            .filter_map(|t| match &t.kind {
-                Kind::User { source, user } => Some((source.clone(), user.clone())),
-                Kind::Shared => None,
-            })
-            .collect();
-        let verify = self.passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % VERIFY_EVERY == 0;
+        }
+        // Mid album action, a line can name a file that just moved: merged now, its track would leave the server copy.
+        if self.follow.busy() {
+            return;
+        }
+        let pass = self.passes.fetch_add(1, Ordering::Relaxed);
         for (a, s) in self.lib.connected() {
-            for (_, user) in users.iter().filter(|(source, _)| *source == a.cfg.id) {
-                let done = sync_server(&store, self.lib.catalogue(), &*s, &self.state, &a.cfg.id, user, verify).await;
-                if let Err(e) = &done {
-                    tracing::warn!("playlist sync with {}: {e:#}", a.cfg.id);
+            let source = a.cfg.id.clone();
+            let owner = match s.sync_account().await {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::debug!("playlist sync: {source} keeps no playlists: {e:#}");
+                    continue;
                 }
-                // The account's error on every link; else each playlist's own.
-                let kind = Kind::User { source: a.cfg.id.clone(), user: user.clone() };
+            };
+            self.owners.lock().unwrap_or_else(|p| p.into_inner()).insert(source.clone(), owner.clone());
+            if let Err(e) = self.reconcile(&store, &*s, &source, &owner).await {
+                tracing::warn!("playlist sync with {source}: {e:#}");
+                continue;
+            }
+            let mut accounts: Vec<String> = self
+                .state
+                .targets()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|t| match t.kind {
+                    Kind::User { source: s2, user } if s2 == source => Some(user),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            // Yours first: its new playlists come in before the others' copies are made.
+            accounts.sort_by_key(|u| u != &owner);
+            if !accounts.contains(&owner) {
+                accounts.insert(0, owner.clone());
+            }
+            for user in &accounts {
+                let mine = user == &owner;
+                let done = sync_server(&store, self.lib.catalogue(), &*s, &self.state, &source, user, mine, Verify::Slice(pass)).await;
+                if let Err(e) = &done {
+                    tracing::warn!("playlist sync with {source} ({user}): {e:#}");
+                }
+                // The account's error on every copy; else each playlist's own.
+                let kind = Kind::User { source: source.clone(), user: user.clone() };
                 for t in self.state.targets().unwrap_or_default().iter().filter(|t| t.kind == kind) {
                     let error = match &done {
                         Err(e) => Some(format!("{e:#}")),
@@ -156,18 +194,106 @@ impl SyncService {
                     self.record(&t.playlist, &kind, error);
                 }
             }
+            self.retire_copies(&store, &*s, &source, &owner).await;
         }
     }
 
-    /// Bring the shared copies of these playlists in step now, after an edit (the pass would in 30 s).
-    pub(super) fn changed(self: &Arc<Self>, playlists: Vec<String>) {
+    /// Which account has which playlist on one server: yours every playlist, every account the shared ones (but for
+    /// those who took one out). A copy no longer wanted (a playlist no longer shared) is deleted from that account.
+    async fn reconcile(&self, store: &Store, s: &dyn Source, source: &str, owner: &str) -> Result<()> {
+        let files: Vec<String> = store.snapshot().await?.into_iter().map(|(n, _, _)| n).collect();
+        let targets = self.state.targets()?;
+        let shared: BTreeSet<&str> = targets.iter().filter(|t| t.kind == Kind::Shared).map(|t| t.playlist.as_str()).collect();
+        let users: Vec<String> = if shared.is_empty() && self.name_known(source, owner) {
+            Vec::new()
+        } else {
+            let all = s.users().await?;
+            let mut names = self.names.lock().unwrap_or_else(|p| p.into_inner());
+            for (id, name) in &all {
+                names.insert((source.to_string(), id.clone()), name.clone());
+            }
+            all.into_iter().map(|(id, _)| id).collect()
+        };
+        let mut left = HashMap::new();
+        for p in &shared {
+            left.insert(p.to_string(), self.state.left_by(p)?);
+        }
+        let want = wanted(&files, &shared, source, owner, &users, &left);
+        for (playlist, user) in &want {
+            let kind = Kind::User { source: source.to_string(), user: user.clone() };
+            if !targets.iter().any(|t| &t.playlist == playlist && t.kind == kind) {
+                self.state.put_target(&Target { playlist: playlist.clone(), kind, copy: None })?;
+            }
+        }
+        // A copy no longer wanted, of a playlist still here (a deleted one's copies go through the account's pass).
+        for t in targets.iter().filter(|t| files.contains(&t.playlist)) {
+            let Kind::User { source: s2, user } = &t.kind else { continue };
+            if s2 != source || want.contains(&(t.playlist.clone(), user.clone())) {
+                continue;
+            }
+            if let Some(link) = self.state.links(source, user)?.into_iter().find(|l| l.name == t.playlist) {
+                s.delete_playlist(&link.remote).await?;
+                self.state.remove(source, user, &t.playlist)?;
+            }
+            self.state.remove_target(&t.playlist, &t.kind)?;
+            self.last.lock().unwrap_or_else(|p| p.into_inner()).remove(&(t.playlist.clone(), t.kind.key()));
+        }
+        Ok(())
+    }
+
+    fn name_known(&self, source: &str, user: &str) -> bool {
+        self.names.lock().unwrap_or_else(|p| p.into_inner()).contains_key(&(source.to_string(), user.to_string()))
+    }
+
+    /// The copies in Music the server imported (Shared before, or adopted at the first start), each removed once the
+    /// playlist's copy in your account exists, with your heart on it carried over. A deleted playlist's copy goes too.
+    async fn retire_copies(&self, store: &Store, s: &dyn Source, source: &str, owner: &str) {
+        let Ok(list) = self.state.to_retire() else { return };
+        if list.is_empty() {
+            return;
+        }
+        let names: Vec<String> = match store.snapshot().await {
+            Ok(f) => f.into_iter().map(|(n, _, _)| n).collect(),
+            Err(_) => return,
+        };
+        let linked: Vec<String> = self.state.links(source, owner).unwrap_or_default().into_iter().map(|l| l.name).collect();
+        let mut hearts: Option<std::collections::BTreeMap<String, bool>> = None;
+        for (playlist, copy) in list {
+            let gone = !names.contains(&playlist);
+            if !gone && !linked.contains(&playlist) {
+                continue;
+            }
+            let done: Result<()> = async {
+                if !gone {
+                    if hearts.is_none() {
+                        hearts = Some(s.playlist_favorites().await.unwrap_or_default());
+                    }
+                    // Hearting by name hearts every copy of that name: the new one too.
+                    if hearts.as_ref().is_some_and(|h| h.get(&playlist).copied().unwrap_or(false)) {
+                        s.set_playlist_favorite(&playlist, true).await?;
+                    }
+                }
+                self.remove_copy(&copy).await?;
+                self.state.retired_copy(&playlist)?;
+                Ok(())
+            }
+            .await;
+            if let Err(e) = done {
+                tracing::warn!("playlist sync: the copy of {playlist} in Music: {e:#}");
+            }
+        }
+    }
+
+    /// Bring the copies of these playlists in step soon after an edit (the pass would in 30 s).
+    pub(super) fn changed(self: &Arc<Self>, _playlists: Vec<String>) {
+        if self.wanted.swap(true, Ordering::Relaxed) {
+            return;
+        }
         let me = self.clone();
         tokio::spawn(async move {
-            let _one = me.one_at_a_time.lock().await;
-            let Some(store) = me.lib.store_opt() else { return };
-            let shared: Vec<Target> =
-                me.state.targets().unwrap_or_default().into_iter().filter(|t| t.kind == Kind::Shared && playlists.contains(&t.playlist)).collect();
-            me.push_shared(&store, shared).await;
+            // A burst of edits makes one pass.
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            me.pass().await;
         });
     }
 
@@ -192,34 +318,50 @@ impl SyncService {
         done
     }
 
-    /// A playlist's links, for the page.
-    pub(super) fn links_of(&self, playlist: &str) -> Vec<LinkView> {
+    /// Every playlist's sync as the page shows it, by playlist: shared or not, and its copy in each account (made yet
+    /// or not) with how its last pass went (yours first).
+    pub(super) fn links(&self) -> HashMap<String, Vec<LinkView>> {
         let last = self.last.lock().unwrap_or_else(|p| p.into_inner()).clone();
-        self.state
-            .targets()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|t| t.playlist == playlist)
-            .map(|t| LinkView {
+        let owners = self.owners.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let targets = self.state.targets().unwrap_or_default();
+        // Which copies exist: every account's links, read once.
+        let mut made: std::collections::HashSet<(String, String, String)> = Default::default();
+        let accounts: BTreeSet<(String, String)> = targets
+            .iter()
+            .filter_map(|t| if let Kind::User { source, user } = &t.kind { Some((source.clone(), user.clone())) } else { None })
+            .collect();
+        for (source, user) in accounts {
+            for l in self.state.links(&source, &user).unwrap_or_default() {
+                made.insert((source.clone(), user.clone(), l.name));
+            }
+        }
+        let mut out: HashMap<String, Vec<(bool, LinkView)>> = HashMap::new();
+        for t in targets {
+            let (yours, made) = match &t.kind {
+                Kind::User { source, user } => {
+                    (owners.get(source) == Some(user), made.contains(&(source.clone(), user.clone(), t.playlist.clone())))
+                }
+                Kind::Shared => (false, true),
+            };
+            let view = LinkView {
                 target: t.kind.key(),
                 label: self.label(&t.kind),
                 status: last.get(&(t.playlist.clone(), t.kind.key())).cloned(),
+                made,
+            };
+            out.entry(t.playlist.clone()).or_default().push((!yours, view));
+        }
+        out.into_iter()
+            .map(|(p, mut v)| {
+                v.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.label.cmp(&b.1.label)));
+                (p, v.into_iter().map(|(_, v)| v).collect())
             })
             .collect()
     }
 
-    /// Every playlist's links, by playlist.
-    pub(super) fn links(&self) -> HashMap<String, Vec<LinkView>> {
-        let mut out: HashMap<String, Vec<LinkView>> = HashMap::new();
-        for t in self.state.targets().unwrap_or_default() {
-            out.entry(t.playlist.clone()).or_default();
-        }
-        out.into_keys().map(|p| (p.clone(), self.links_of(&p))).collect()
-    }
-
     fn label(&self, kind: &Kind) -> String {
         match kind {
-            Kind::Shared => "Shared".into(),
+            Kind::Shared => "Everyone".into(),
             Kind::User { source, user } => {
                 let name = self.names.lock().unwrap_or_else(|p| p.into_inner()).get(&(source.clone(), user.clone())).cloned();
                 let name = name.unwrap_or_else(|| user.clone());
@@ -243,90 +385,66 @@ impl SyncService {
         Ok(self.state.set_spoken(playlist, names)?)
     }
 
-    /// What a playlist can be linked to: Shared, and each account on each connected server that keeps playlists.
+    /// What can be set for a playlist's sync: sharing it with everyone.
     pub(super) async fn choices(&self) -> Vec<TargetChoice> {
-        let mut out = vec![TargetChoice { target: Kind::Shared.key(), label: "Shared".into(), copy_only: true }];
-        for (a, s) in self.lib.connected() {
-            match s.users().await {
-                Ok(users) => {
-                    for (id, name) in users {
-                        self.names.lock().unwrap_or_else(|p| p.into_inner()).insert((a.cfg.id.clone(), id.clone()), name);
-                        let kind = Kind::User { source: a.cfg.id.clone(), user: id };
-                        out.push(TargetChoice { target: kind.key(), label: self.label(&kind), copy_only: false });
-                    }
-                }
-                Err(e) => tracing::debug!("{}: no accounts to sync to: {e:#}", a.cfg.id),
-            }
-        }
-        out
+        vec![TargetChoice { target: Kind::Shared.key(), label: "Shared with everyone".into() }]
     }
 
-    /// Link a playlist to a target, or change how it is kept. The copy is made now (Shared) or by the next pass.
+    /// Share a playlist with everyone: the next pass gives every account a copy (also those that took it out before).
+    /// Accounts follow by themselves; only sharing is set.
     pub(super) async fn link(self: &Arc<Self>, playlist: &str, kind: Kind) -> Result<(), ToggleError> {
+        if kind != Kind::Shared {
+            return Err(ToggleError::Refused("accounts follow by themselves; only sharing is set".into()));
+        }
         let store = self.lib.store()?;
         if store.entries(playlist).await.is_err() {
             return Err(ToggleError::UnknownPlaylist);
         }
-        if let Kind::User { source, .. } = &kind
-            && !self.lib.connected().iter().any(|(a, _)| &a.cfg.id == source)
-        {
-            return Err(ToggleError::Refused("that server is not connected".into()));
-        }
         {
             let _one = self.one_at_a_time.lock().await;
-            let copy = self.state.targets()?.into_iter().find(|t| t.playlist == playlist && t.kind == kind).and_then(|t| t.copy);
-            self.state.put_target(&Target { playlist: playlist.to_string(), kind, copy })?;
+            self.state.put_target(&Target { playlist: playlist.to_string(), kind, copy: None })?;
+            self.state.clear_left(playlist)?;
         }
-        let me = self.clone();
-        tokio::spawn(async move { me.pass().await });
+        self.changed(vec![playlist.to_string()]);
         Ok(())
     }
 
-    /// A restored playlist (its deletion undone) gets back the links it had, else it is Shared, as a new one.
+    /// A restored playlist (its deletion undone) gets back what it had: shared, and the copies (made again by the next
+    /// pass).
     pub(super) async fn restore_links(self: &Arc<Self>, playlist: &str) -> Result<(), ToggleError> {
-        let revived = {
+        {
             let _one = self.one_at_a_time.lock().await;
-            self.state.revive_targets(playlist)?
-        };
-        if revived == 0 {
-            return self.link(playlist, Kind::Shared).await;
+            self.state.revive_targets(playlist)?;
         }
-        let me = self.clone();
-        tokio::spawn(async move { me.pass().await });
+        self.changed(vec![playlist.to_string()]);
         Ok(())
     }
 
-    /// A new playlist: Shared, as playlists were before sync links; links a deleted one of the same name had are not
-    /// its.
+    /// A new playlist: yours only (the next pass makes its copy); what a deleted one of the same name had is not its.
     pub(super) async fn new_playlist(self: &Arc<Self>, playlist: &str) -> Result<(), ToggleError> {
         self.state.forget_retired(playlist)?;
-        self.link(playlist, Kind::Shared).await
-    }
-
-    /// Take a link off: its copy on the target is deleted.
-    pub(super) async fn unlink(&self, playlist: &str, kind: &Kind) -> Result<(), ToggleError> {
-        let _one = self.one_at_a_time.lock().await;
-        let Some(t) = self.state.targets()?.into_iter().find(|t| t.playlist == playlist && &t.kind == kind) else {
-            return Ok(());
-        };
-        match kind {
-            Kind::Shared => self.remove_copy(t.copy.as_deref().unwrap_or(playlist)).await?,
-            Kind::User { source, user } => {
-                if let Some(link) = self.state.links(source, user)?.into_iter().find(|l| l.name == playlist) {
-                    let s = self.lib.connected().into_iter().find(|(a, _)| &a.cfg.id == source).map(|(_, s)| s);
-                    let s = s.ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
-                    s.delete_playlist(&link.remote).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-                    self.state.remove(source, user, playlist)?;
-                }
-            }
-        }
-        self.state.remove_target(playlist, kind)?;
-        self.last.lock().unwrap_or_else(|p| p.into_inner()).remove(&(playlist.to_string(), kind.key()));
+        self.state.clear_left(playlist)?;
+        self.changed(vec![playlist.to_string()]);
         Ok(())
     }
 
-    /// Adopt the playlists in Music (decision 0014), once: each is copied into `.playlists` (unless already there) and
-    /// gets a Shared link whose copy is the file it came from, so nothing visible changes.
+    /// Stop sharing a playlist: the next pass deletes the other accounts' copies; yours stays.
+    pub(super) async fn unlink(self: &Arc<Self>, playlist: &str, kind: &Kind) -> Result<(), ToggleError> {
+        if kind != &Kind::Shared {
+            return Err(ToggleError::Refused("accounts follow by themselves; only sharing is set".into()));
+        }
+        {
+            let _one = self.one_at_a_time.lock().await;
+            self.state.remove_target(playlist, kind)?;
+            self.state.clear_left(playlist)?;
+        }
+        self.last.lock().unwrap_or_else(|p| p.into_inner()).remove(&(playlist.to_string(), kind.key()));
+        self.changed(vec![playlist.to_string()]);
+        Ok(())
+    }
+
+    /// Adopt the playlists in Music (decision 0014), once: each is copied into `.playlists` (unless already there);
+    /// the file in Music, which the server imported, is retired once the playlist's copy in your account exists.
     async fn adopt(&self) -> Result<()> {
         if self.state.meta(ADOPTED).is_some() {
             return Ok(());
@@ -335,64 +453,15 @@ impl SyncService {
         let m = PathBuf::from(&music);
         let names = blocking(move || crate::playlists::adopt_into_playlist_dir(&m)).await??;
         for name in &names {
-            let shared = Target {
-                playlist: name.clone(),
-                kind: Kind::Shared,
-                copy: Some(name.clone()),
-            };
-            self.state.put_target(&shared)?;
+            self.state.put_retire(name, name)?;
         }
         self.state.set_meta(ADOPTED, &epoch_now().to_string())?;
         self.lib.reopen_store();
-        tracing::info!("adopted {} playlist(s) from Music into {}, each linked Shared", names.len(), crate::playlists::PLAYLIST_DIR);
+        tracing::info!("adopted {} playlist(s) from Music into {}", names.len(), crate::playlists::PLAYLIST_DIR);
         Ok(())
     }
 
-    /// Write the shared copies that differ from their playlist, remove those of renamed or deleted playlists, and tell
-    /// the servers which changed.
-    async fn push_shared(&self, store: &Store, shared: Vec<Target>) {
-        let Some(music) = self.lib.music() else { return };
-        for mut t in shared {
-            let text = store.text(&t.playlist).await;
-            let done: Result<()> = async {
-                let Some(text) = text else {
-                    // The playlist is gone: its copy goes too.
-                    self.remove_copy(t.copy.as_deref().unwrap_or(&t.playlist)).await?;
-                    self.state.retire_target(&t.playlist, &Kind::Shared)?;
-                    return Ok(());
-                };
-                if let Some(old) = t.copy.clone().filter(|old| old != &t.playlist) {
-                    self.remove_copy(&old).await?;
-                    t.copy = None;
-                    self.state.put_target(&t)?;
-                }
-                let path = PathBuf::from(&music).join(format!("{}.m3u", t.playlist));
-                let want = crate::m3u::without_prefix(&text, "../");
-                let (p, w) = (path.clone(), want.clone());
-                let had = blocking(move || std::fs::read(&p).ok()).await?;
-                if had.as_deref() != Some(w.as_bytes()) {
-                    if had.is_some() && t.copy.as_deref() != Some(t.playlist.as_str()) {
-                        bail!("Music already has a file named {}.m3u", t.playlist);
-                    }
-                    blocking(move || write_whole(&path, &want)).await??;
-                    let change = if had.is_some() { PlaylistChange::Edited } else { PlaylistChange::Created };
-                    super::playlists::tell_sources(&self.lib, vec![(t.playlist.clone(), change)]);
-                }
-                if t.copy.as_deref() != Some(t.playlist.as_str()) {
-                    t.copy = Some(t.playlist.clone());
-                    self.state.put_target(&t)?;
-                }
-                Ok(())
-            }
-            .await;
-            if let Err(e) = &done {
-                tracing::warn!("playlist sync: the shared copy of {}: {e:#}", t.playlist);
-            }
-            self.record(&t.playlist, &Kind::Shared, done.err().map(|e| format!("{e:#}")));
-        }
-    }
-
-    /// Remove a shared copy from Music, and tell the servers it is gone.
+    /// Remove a copy from Music, and tell the servers it is gone.
     async fn remove_copy(&self, name: &str) -> Result<()> {
         let Some(music) = self.lib.music() else { return Ok(()) };
         let path = PathBuf::from(&music).join(format!("{name}.m3u"));
@@ -409,21 +478,53 @@ impl SyncService {
     }
 }
 
-/// Write a file whole or not at all: a temporary file next to it, then renamed into place. Blocking.
-fn write_whole(path: &Path, text: &str) -> Result<()> {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = path.with_file_name(format!(".{name}.cratarr-tmp"));
-    std::fs::write(&tmp, text)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o664));
+/// Which account should have which playlist on one server, as (playlist, user): yours every playlist; every account
+/// the shared ones, but for those who took one out (`left`, by playlist: (source, user)).
+fn wanted(
+    files: &[String],
+    shared: &BTreeSet<&str>,
+    source: &str,
+    owner: &str,
+    users: &[String],
+    left: &HashMap<String, Vec<(String, String)>>,
+) -> BTreeSet<(String, String)> {
+    let mut out = BTreeSet::new();
+    for p in files {
+        out.insert((p.clone(), owner.to_string()));
+        if shared.contains(p.as_str()) {
+            let gone = left.get(p).cloned().unwrap_or_default();
+            for u in users.iter().filter(|u| !gone.iter().any(|(s, g)| s == source && g == *u)) {
+                out.insert((p.clone(), u.clone()));
+            }
+        }
     }
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e.into());
+    out
+}
+
+/// Which linked copies a pass reads whatever their change stamp says.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) enum Verify {
+    /// Only those whose stamp moved.
+    None,
+    /// Every one.
+    All,
+    /// About a tenth: those whose turn it is in this pass (by their id), so each is read at least every
+    /// `VERIFY_EVERY` passes without a burst.
+    Slice(u64),
+}
+
+impl Verify {
+    fn of(self, remote: &str) -> bool {
+        match self {
+            Verify::None => false,
+            Verify::All => true,
+            Verify::Slice(pass) => {
+                let h = remote.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(b)));
+                (h.wrapping_add(pass)) % VERIFY_EVERY == 0
+            }
+        }
     }
-    Ok(())
 }
 
 /// Agreed tracks whose file is away for now, and their items on the server as the link remembers them.
@@ -556,7 +657,7 @@ fn believable(linked: usize, lost: usize) -> bool {
     linked < 4 || lost * 2 <= linked
 }
 
-/// Every this many passes each linked pair's contents are read on the server whatever its change stamp says (about
+/// Each linked copy is read on the server at least every this many passes whatever its change stamp says (about
 /// every five minutes at one pass in 30 s): a change a server did not stamp is found all the same.
 pub(super) const VERIFY_EVERY: u64 = 10;
 
@@ -573,6 +674,10 @@ pub(super) type Undone = HashMap<String, String>;
 /// - new on one side: made on the other; a name that cannot be a file name here, or is taken, gets the nearest free
 ///   one ("Chill 2"), and the server copy is renamed to match;
 /// - a track whose file is away for now (an unmounted folder, a rescan under way) is no removal on either side.
+///
+/// `yours`: the account is your account. Another account only holds the playlists shared with it: none of its own
+/// come in, and its taking a copy out takes the playlist out for it only.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn sync_server(
     store: &Store,
     cat: Arc<Catalogue>,
@@ -580,7 +685,8 @@ pub(super) async fn sync_server(
     state: &SyncState,
     source_id: &str,
     user: &str,
-    verify: bool,
+    yours: bool,
+    verify: Verify,
 ) -> Result<Undone> {
     let kind = Kind::User { source: source_id.to_string(), user: user.to_string() };
     let mine: Vec<Target> = state.targets()?.into_iter().filter(|t| t.kind == kind).collect();
@@ -623,6 +729,7 @@ pub(super) async fn sync_server(
         }
         let name = link.name.clone();
         let pair = Pair { store, s, state, tr: &tr, source_id, user, own: &own, linked_remotes: &linked_remotes };
+        let verify = verify.of(&link.remote);
         if let Err(e) = pair.sync(link, remote, lines, &has_file, verify).await {
             tracing::warn!("playlist sync: {name} with {source_id}: {e:#}");
             undone.insert(name, format!("{e:#}"));
@@ -636,6 +743,13 @@ pub(super) async fn sync_server(
         let file = files.iter().find(|(n, _, _)| n == &l.name).map(|(_, lines, _)| lines);
         let done: Result<()> = async {
             match (file, remote) {
+                (Some(_), None) if !yours => {
+                    // Someone else took a shared playlist out of their account: out for them only, and it stays out.
+                    tracing::info!("playlist sync: {user} on {source_id} took {} out of their account", l.name);
+                    state.set_left(&l.name, source_id, user)?;
+                    state.remove(source_id, user, &l.name)?;
+                    state.remove_target(&l.name, &kind)?;
+                }
                 (Some(lines), None) => {
                     if changed_here(&tr, l, lines).await? {
                         // Edited here since: a new server copy is made (step 4); the playlist stays.
@@ -652,7 +766,7 @@ pub(super) async fn sync_server(
                         Err(e) => bail!("cannot delete it: {e:?}"),
                     }
                 }
-                (None, Some(r)) => {
+                (None, Some(r)) if yours => {
                     let ids = s.playlist_tracks(user, &r.id).await?;
                     let (t, link) = (tr.clone(), l.clone());
                     let (tracks, changed) = blocking(move || {
@@ -672,7 +786,8 @@ pub(super) async fn sync_server(
                         }
                         let (t, back) = (tr.clone(), tracks.clone());
                         let new_lines = blocking(move || t.lines(&back.into_iter().map(Item::Track).collect::<Vec<_>>())).await?;
-                        store.set_entries(&l.name, &new_lines).await.map_err(|e| anyhow::anyhow!("cannot restore it: {e:?}"))?;
+                        // Into the empty file just made (a file made meanwhile is left as it is, for the next pass).
+                        store.set_entries_if(&l.name, &[], &new_lines).await.map_err(|e| anyhow::anyhow!("cannot restore it: {e:?}"))?;
                         state.revive_targets(&l.name)?;
                         let (t, back) = (tr.clone(), tracks);
                         let agreed = blocking(move || t.on_server(&back.into_iter().map(Item::Track).collect::<Vec<_>>(), &Away::new())).await?;
@@ -682,6 +797,12 @@ pub(super) async fn sync_server(
                     }
                     tracing::info!("playlist sync: {} was deleted here; deleting it on {source_id}", l.name);
                     // Kept on failure: the next pass tries again (or finds it gone).
+                    s.delete_playlist(&l.remote).await?;
+                    state.remove(source_id, user, &l.name)?;
+                    state.retire_target(&l.name, &kind)?;
+                }
+                (None, Some(_)) => {
+                    // Deleted in Cratarr (only you delete a playlist for everyone): their copy goes too.
                     s.delete_playlist(&l.remote).await?;
                     state.remove(source_id, user, &l.name)?;
                     state.retire_target(&l.name, &kind)?;
@@ -716,14 +837,21 @@ pub(super) async fn sync_server(
     // then, and is no new playlist.
     let mut claimed: BTreeSet<String> = links.iter().map(|l| l.remote.clone()).chain(linked_remotes.iter().cloned()).collect();
     let linked_names: Vec<String> = links.iter().map(|l| l.name.clone()).collect();
+    let mut made = 0;
     for (name, lines, _) in files.iter().filter(|(n, _, _)| !linked_names.contains(n)) {
         if target_of(name).is_none() {
             continue;
         }
+        // A server copy of that name nobody holds, in your account: made before this pass could remember it, or on
+        // both sides. In another account it is theirs, never merged with a playlist shared with them.
+        let same_name = own.iter().find(|o| yours && &o.name == name && !claimed.contains(&o.id));
+        if same_name.is_none() && made >= COPIES_PER_PASS {
+            // The rest next pass: the server is not flooded.
+            continue;
+        }
         let done: Result<()> = async {
-            // A server copy of that name nobody holds: made before this pass could remember it, or on both sides.
             // Linked with no agreed list, so the first merge keeps everything from both.
-            if let Some(o) = own.iter().find(|o| &o.name == name && !claimed.contains(&o.id)) {
+            if let Some(o) = same_name {
                 claimed.insert(o.id.clone());
                 let link = Link::new(name, &o.id, &o.name);
                 state.put(source_id, user, &link)?;
@@ -736,6 +864,7 @@ pub(super) async fn sync_server(
             })
             .await?;
             let ids: Vec<String> = on_server.iter().map(|(_, s)| s.clone()).collect();
+            made += 1;
             let remote = s.create_playlist(user, name, &ids).await?;
             claimed.insert(remote.clone());
             let (base, ids) = on_server.into_iter().unzip();
@@ -751,8 +880,9 @@ pub(super) async fn sync_server(
     // Made on the server (in Finamp, say): a new playlist here, linked. Its name as the server has it when that is a
     // usable file name no playlist here has; else the nearest free one, and the server copy is renamed to match on
     // the next pass. Two server playlists of one name are two playlists here.
+    // Only from your account: another account's own playlists stay theirs.
     let mut names_here: Vec<String> = files.iter().map(|(n, _, _)| n.clone()).collect();
-    for o in own.iter().filter(|o| !claimed.contains(&o.id)) {
+    for o in own.iter().filter(|o| yours && !claimed.contains(&o.id)) {
         let name = crate::playlists::free_name(&crate::playlists::usable_name(&o.name), |n| names_here.iter().any(|h| h.eq_ignore_ascii_case(n)));
         names_here.push(name.clone());
         let done: Result<()> = async {
@@ -935,6 +1065,7 @@ fn with_vanished_kept(base: &[i64], mut items: Vec<Item>, away: impl Fn(i64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use crate::source::{Fut, OwnPlaylist, Playing, PlaylistEvent, Status, Track};
     use std::collections::BTreeMap;
     use std::sync::Mutex;
@@ -1082,7 +1213,7 @@ mod tests {
             let t = Target { playlist: p.id, kind: me(), copy: None };
             state.put_target(&t).unwrap();
         }
-        let undone = sync_server(store, cat.clone(), srv, state, "srv", "me", false).await?;
+        let undone = sync_server(store, cat.clone(), srv, state, "srv", "me", true, Verify::None).await?;
         if !undone.is_empty() {
             bail!("undone: {undone:?}");
         }
@@ -1230,6 +1361,75 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    #[test]
+    fn yours_has_every_playlist_and_everyone_the_shared_ones() {
+        let files = lines(&["Chill", "Gym", "Road"]);
+        let shared: BTreeSet<&str> = ["Gym", "Road"].into_iter().collect();
+        let users = lines(&["me", "elva", "mike"]);
+        let left: HashMap<String, Vec<(String, String)>> = [("Road".to_string(), vec![("srv".to_string(), "mike".to_string())])].into();
+        let got: Vec<(String, String)> = wanted(&files, &shared, "srv", "me", &users, &left).into_iter().collect();
+        let want: Vec<(String, String)> = [("Chill", "me"), ("Gym", "elva"), ("Gym", "me"), ("Gym", "mike"), ("Road", "elva"), ("Road", "me")]
+            .iter()
+            .map(|(p, u)| (p.to_string(), u.to_string()))
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    #[tokio::test]
+    async fn copies_are_made_a_few_per_pass() {
+        let (d, cat, store) = library();
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        for i in 0..COPIES_PER_PASS + 3 {
+            store.create(&format!("P{i:02}")).await.unwrap();
+        }
+        run(&store, &cat, &srv, &state).await.unwrap();
+        assert_eq!(srv.lists.lock().unwrap().len(), COPIES_PER_PASS);
+        run(&store, &cat, &srv, &state).await.unwrap();
+        assert_eq!(srv.lists.lock().unwrap().len(), COPIES_PER_PASS + 3);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn another_account_holds_what_is_shared_with_it_and_nothing_else() {
+        let (d, cat, store) = library();
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        let elva = Kind::User { source: "srv".into(), user: "elva".into() };
+        store.create("Gym").await.unwrap();
+        store.set_entries("Gym", &lines(&["A/01.mp3"])).await.unwrap();
+        state.put_target(&Target { playlist: "Gym".into(), kind: elva.clone(), copy: None }).unwrap();
+        // Her own playlists: one of the same name, one other. Neither comes in, nor is merged.
+        srv.create_playlist("elva", "Gym", &lines(&["s4"])).await.unwrap();
+        srv.create_playlist("elva", "Hers", &lines(&["s3"])).await.unwrap();
+        let sync = || sync_server(&store, cat.clone(), &srv, &state, "srv", "elva", false, Verify::None);
+        sync().await.unwrap();
+        sync().await.unwrap();
+        assert!(store.entries("Hers").await.is_err(), "her own playlist stays hers");
+        assert_eq!(store.entries("Gym").await.unwrap(), lines(&["A/01.mp3"]), "not merged with hers");
+        let copies: Vec<Vec<String>> = srv.lists.lock().unwrap().iter().filter(|p| p.1 == "Gym").map(|p| p.2.clone()).collect();
+        assert_eq!(copies.len(), 2, "hers and the shared copy");
+        // Her edit to the shared copy comes back.
+        let shared_id = state.links("srv", "elva").unwrap()[0].remote.clone();
+        srv.lists.lock().unwrap().iter_mut().find(|p| p.0 == shared_id).unwrap().2.push("s2".into());
+        srv.lists.lock().unwrap().iter_mut().find(|p| p.0 == shared_id).unwrap().3 += 1;
+        sync().await.unwrap();
+        assert_eq!(store.entries("Gym").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3"]));
+        // She takes it out of her account: out for her only; the playlist stays, and it stays out for her.
+        srv.delete_playlist(&shared_id).await.unwrap();
+        sync().await.unwrap();
+        assert!(store.entries("Gym").await.is_ok());
+        assert_eq!(state.left_by("Gym").unwrap(), vec![("srv".to_string(), "elva".to_string())]);
+        assert!(!state.targets().unwrap().iter().any(|t| t.kind == elva));
+        // Deleted in Cratarr: her copy goes too.
+        state.clear_left("Gym").unwrap();
+        state.put_target(&Target { playlist: "Gym".into(), kind: elva.clone(), copy: None }).unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.lists.lock().unwrap().iter().filter(|p| p.1 == "Gym").count(), 2);
+        store.delete("Gym").await.unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.names(), lines(&["Gym", "Hers"]), "only her own are left");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[tokio::test]
     async fn an_edit_wins_over_a_deletion_on_the_other_side() {
         let (d, cat, store) = library();
@@ -1276,8 +1476,8 @@ mod tests {
         srv.create_playlist("me", "Chill", &lines(&["s1"])).await.unwrap();
         srv.create_playlist("me", "Chill", &lines(&["s2"])).await.unwrap();
         srv.create_playlist("me", "AC/DC?", &lines(&["s3"])).await.unwrap();
-        sync_server(&store, cat.clone(), &srv, &state, "srv", "me", false).await.unwrap();
-        sync_server(&store, cat.clone(), &srv, &state, "srv", "me", false).await.unwrap();
+        sync_server(&store, cat.clone(), &srv, &state, "srv", "me", true, Verify::None).await.unwrap();
+        sync_server(&store, cat.clone(), &srv, &state, "srv", "me", true, Verify::None).await.unwrap();
         assert_eq!(store.entries("Chill").await.unwrap(), Vec::<String>::new(), "the one here is untouched");
         assert_eq!(store.entries("Chill 2").await.unwrap(), lines(&["A/01.mp3"]));
         assert_eq!(store.entries("Chill 3").await.unwrap(), lines(&["A/02.mp3"]));
@@ -1387,7 +1587,7 @@ mod tests {
         srv.refuse.lock().unwrap().push(a1);
         store.set_entries("A1", &lines(&["A/01.mp3"])).await.unwrap();
         store.set_entries("A2", &lines(&["A/02.mp3"])).await.unwrap();
-        let undone = sync_server(&store, cat.clone(), &srv, &state, "srv", "me", false).await.unwrap();
+        let undone = sync_server(&store, cat.clone(), &srv, &state, "srv", "me", true, Verify::None).await.unwrap();
         assert_eq!(undone.keys().collect::<Vec<_>>(), vec!["A1"]);
         assert_eq!(srv.items("A2"), lines(&["s2"]));
         // Tried again next pass.
@@ -1408,7 +1608,7 @@ mod tests {
         srv.edit_quietly("Chill", |v| v.reverse());
         run(&store, &cat, &srv, &state).await.unwrap();
         assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3"]), "not seen without a stamp");
-        sync_server(&store, cat.clone(), &srv, &state, "srv", "me", true).await.unwrap();
+        sync_server(&store, cat.clone(), &srv, &state, "srv", "me", true, Verify::All).await.unwrap();
         assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/02.mp3", "A/01.mp3"]));
         std::fs::remove_dir_all(&d).ok();
     }
@@ -1454,7 +1654,7 @@ mod tests {
         srv.create_playlist("me", "Mix", &lines(&["s1", "i1"])).await.unwrap();
         state.put_target(&Target { playlist: "Other".into(), kind: me(), copy: None }).unwrap();
         for _ in 0..3 {
-            sync_server(&store, cat.clone(), &srv, &state, "srv", "me", true).await.unwrap();
+            sync_server(&store, cat.clone(), &srv, &state, "srv", "me", true, Verify::All).await.unwrap();
         }
         assert_eq!(store.entries("Mix").await.unwrap(), lines(&["A/01.mp3", "../lidarr-music/X/01.flac"]));
         assert_eq!(srv.items("Mix"), lines(&["s1", "i1"]));
