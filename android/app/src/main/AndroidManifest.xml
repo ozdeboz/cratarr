@@ -32,12 +32,6 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".SettingsActivity"
-            android:exported="false"
-            android:label="@string/settings"
-            android:theme="@style/SettingsTheme" />
-
         <service
             android:name=".PlayerService"
             android:exported="true"

@@ -29,6 +29,10 @@
     type NamingView,
   } from './lib/api';
   import { prefs, type Theme } from './lib/prefs.svelte';
+  import { allowBackground, appInfo, askDevice, changeAddress, inApp, setDevice } from './lib/app.svelte';
+
+  // Inside the Android app: its settings as they are now (Android's background permission may have changed meanwhile).
+  if (inApp) askDevice();
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
   import { toast } from './lib/toast.svelte';
@@ -408,6 +412,30 @@
 
 <main>
   {#if loadError}<Notice text={loadError} />{/if}
+
+  <!-- Inside the Android app (decision 0031): its own settings, this device's only, at the top. -->
+  {#if inApp}
+    <section aria-labelledby="device-h" class="device">
+      <h2 id="device-h">{appInfo.player ?? 'This device'}</h2>
+      <p class="lede">This device only.</p>
+      <label class="pref">
+        <span class="l">Player name</span>
+        <input type="text" value={appInfo.player ?? ''} onchange={(e) => e.currentTarget.value.trim() && setDevice({ player: e.currentTarget.value.trim() })} />
+      </label>
+      <label class="pref check">
+        <span class="l">Stay ready <small>Keeps listening for Play On while idle</small></span>
+        <input type="checkbox" checked={appInfo.stayReady} onchange={(e) => setDevice({ stayReady: e.currentTarget.checked })} />
+      </label>
+      <div class="pref">
+        <span class="l">Background <small>{appInfo.batteryAllowed ? 'Allowed to run' : 'Android may stop Cratarr'}</small></span>
+        {#if !appInfo.batteryAllowed}<button onclick={allowBackground}>Allow</button>{/if}
+      </div>
+      <div class="pref">
+        <span class="l">Server <small>{appInfo.server ?? ''}</small></span>
+        <button onclick={changeAddress}>Change</button>
+      </div>
+    </section>
+  {/if}
 
   {#if s}
     {@const many = drafts.length > 1}

@@ -78,7 +78,6 @@ dependencies {
     implementation(libs.androidx.activity)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.webkit)
-    implementation(libs.androidx.preference)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
 }

@@ -16,6 +16,8 @@ import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.text.InputType
 import android.util.Log
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -67,9 +69,13 @@ class MainActivity : AppCompatActivity() {
         fileCallback = null
     }
 
+    /** Open on Cratarr's Settings page (the launcher's Settings shortcut). */
+    private var openSettings = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = Prefs(this)
+        openSettings = intent?.getBooleanExtra(EXTRA_SETTINGS, false) == true
         frame = FrameLayout(this)
         setContentView(frame)
         ViewCompat.setOnApplyWindowInsetsListener(frame) { view, insets ->
@@ -113,8 +119,17 @@ class MainActivity : AppCompatActivity() {
         askForNotifications()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_SETTINGS, false)) {
+            if (page != null) webView?.evaluateJavascript("location.hash = '#/settings'", null) else openSettings = true
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        // Back from Android's background dialog, say: the page shows the settings as they are now.
+        page?.postMessage(appMessage())
         val url = prefs.serverUrl
         when {
             url == null -> askForAddress()
@@ -174,10 +189,12 @@ class MainActivity : AppCompatActivity() {
         frame.addView(view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         webView = view
         shown = url
-        view.loadUrl(url)
+        view.loadUrl(if (openSettings) "${url.trimEnd('/')}/#/settings" else url)
+        openSettings = false
     }
 
-    /** A message from the page: `hello`, `player` (its player's calls), `settings`, `open` (a link outside). */
+    /** A message from the page: `hello`, `player` (its player's calls), `device` and `device-set` (this device's
+     *  settings), `battery`, `address`, `open` (a link outside). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -188,17 +205,41 @@ class MainActivity : AppCompatActivity() {
         when (message.optString("type")) {
             "hello" -> {
                 page = reply
-                val app = JSONObject()
-                    .put("type", "app")
-                    .put("version", BuildConfig.VERSION_NAME)
-                    .put("player", prefs.playerName)
-                    .put("stayReady", prefs.stayReady)
-                reply.postMessage(app.toString())
+                reply.postMessage(appMessage())
                 player?.report(withQueue = true)
             }
             "player" -> player?.handle(message) ?: waiting.add(message)
-            "settings" -> startActivity(Intent(this, SettingsActivity::class.java))
+            "device" -> reply.postMessage(appMessage())
+            "device-set" -> {
+                message.optString("player").trim().takeIf { it.isNotEmpty() }?.let { prefs.playerName = it }
+                if (message.has("stayReady")) {
+                    prefs.stayReady = message.optBoolean("stayReady")
+                    PlayerService.ready(this)
+                }
+                reply.postMessage(appMessage())
+            }
+            "battery" -> askToRunInBackground()
+            "address" -> askForAddress()
             "open" -> message.optString("url").takeIf { it.isNotEmpty() }?.let { openOutside(it) }
+        }
+    }
+
+    /** This device's settings, for the page's "This device" section. */
+    private fun appMessage(): String = JSONObject()
+        .put("type", "app")
+        .put("version", BuildConfig.VERSION_NAME)
+        .put("player", prefs.playerName)
+        .put("stayReady", prefs.stayReady)
+        .put("server", prefs.serverUrl ?: "")
+        .put("batteryAllowed", getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
+        .toString()
+
+    /** Android's own dialog: let the app run in the background (left out of battery optimisation). */
+    private fun askToRunInBackground() {
+        try {
+            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+        } catch (e: ActivityNotFoundException) {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
     }
 
@@ -251,12 +292,12 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** Settings from the launcher (a long press on the icon), as the pages are the whole screen. */
+    /** Cratarr's Settings page from the launcher (a long press on the icon): "This device" is at its top. */
     private fun addSettingsShortcut() {
         val shortcut = ShortcutInfo.Builder(this, "settings")
             .setShortLabel(getString(R.string.settings))
             .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
-            .setIntent(Intent(this, SettingsActivity::class.java).setAction(Intent.ACTION_VIEW))
+            .setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_VIEW).putExtra(EXTRA_SETTINGS, true))
             .build()
         getSystemService(ShortcutManager::class.java)?.dynamicShortcuts = listOf(shortcut)
     }
@@ -269,5 +310,6 @@ class MainActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "Cratarr"
+        const val EXTRA_SETTINGS = "cratarr.SETTINGS"
     }
 }

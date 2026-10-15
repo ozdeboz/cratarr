@@ -25,7 +25,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
-import androidx.preference.PreferenceManager
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 
@@ -64,7 +63,7 @@ class PlayerService : MediaSessionService() {
             .setCallback(Callback())
             .build()
         link = PlayOnLink(this, player, prefs).also { it.start() }
-        PreferenceManager.getDefaultSharedPreferences(this).registerOnSharedPreferenceChangeListener(prefsChanged)
+        Prefs.shared(this).registerOnSharedPreferenceChangeListener(prefsChanged)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -74,7 +73,11 @@ class PlayerService : MediaSessionService() {
             val idle = session?.player?.mediaItemCount == 0
             if (prefs.stayReady && idle) showReady()
             // Not ready (any more), nothing queued: nothing keeps it.
-            if (!prefs.stayReady && idle) stopSelf()
+            if (!prefs.stayReady && idle) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                notifications.cancel(READY_NOTIFICATION)
+                stopSelf()
+            }
             return START_STICKY
         }
         return super.onStartCommand(intent, flags, startId)
@@ -125,7 +128,7 @@ class PlayerService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        PreferenceManager.getDefaultSharedPreferences(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)
+        Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)
         link?.stop()
         link = null
         session?.run {
@@ -161,11 +164,11 @@ class PlayerService : MediaSessionService() {
         private const val READY_NOTIFICATION = 7
         private const val ACTION_READY = "cratarr.READY"
 
-        /** Started as Stay ready says. Called while the app is in front, where a foreground start is allowed. */
+        /** Started (or let go) as Stay ready says. Called while the app is in front, where a foreground start is allowed. */
         fun ready(context: Context) {
-            if (!Prefs(context).stayReady) return
+            val intent = Intent(context, PlayerService::class.java).setAction(ACTION_READY)
             try {
-                ContextCompat.startForegroundService(context, Intent(context, PlayerService::class.java).setAction(ACTION_READY))
+                if (Prefs(context).stayReady) ContextCompat.startForegroundService(context, intent) else context.startService(intent)
             } catch (e: IllegalStateException) {
                 Log.w(TAG, "cannot start staying ready: ${e.message}")
             }
