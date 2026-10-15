@@ -608,7 +608,7 @@
           <button class="primary" disabled={sub.busy || !sub.user.trim() || !sub.password} aria-busy={sub.busy} onclick={createAccount}>Create account</button>
         </div>
       {:else}
-        <dl>
+        <dl class="account">
           <dt>Account</dt>
           <dd>{sub.accounts.join(', ')}</dd>
         </dl>
@@ -742,6 +742,10 @@
 
   dt {
     color: var(--muted);
+  }
+
+  dl.account {
+    margin-bottom: 14px;
   }
 
   dd {
