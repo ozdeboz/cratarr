@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-server"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "anyhow",
  "axum",
