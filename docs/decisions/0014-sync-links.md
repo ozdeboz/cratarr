@@ -63,19 +63,24 @@ owner decided on 2026-10-12, with both sessions, that this is a per-playlist cho
 The owner decided that push goes. A push link quietly undid edits made in Finamp, which protects nothing anyone wants
 protected: both sides are the owner's own playlist. (Tools that sync one way do so because their source is not edited
 on the receiving side, a streaming service or a generated list; that is not this case.) Shared stays a copy the server
-cannot edit, which is a limit of the server, not a choice: it has no direction and no conflict rule.
+cannot edit, which is a limit of the server, not a choice: nothing comes back from it.
+
+The owner also decided that the conflict rule goes: there is nothing worth choosing. Additions and removals from both
+sides always merge; the rule only ever picked the order (or the name) when both sides changed it between two passes,
+some 30 s. Which change came last cannot be told then: the server does not give a playlist's save time (Jellyfin's
+DateLastSaved comes back empty), and both changes fell between two passes. So the server's leads, as the change seen
+last. The link's direction and conflict-rule columns stay in the sync state so older files open; they are not read.
 
 - **Every account link is two-way.** Links saved as push read as two-way; nothing else changes for them. The Sync tab
-  offers only the conflict rule.
+  is ticks only: a link has nothing to set.
 - **An edit wins over a deletion** (the owner's choice): a playlist deleted on one side is deleted on the other only
   when the other is unchanged since both last agreed. Otherwise it comes back where it was deleted, with the edits:
   in Cratarr with every link it had (its Shared copy too), on the server as a new copy.
 - **Names Cratarr cannot use** (the owner's choice): a server playlist whose name is taken here, used twice on the
   server, or not a usable file name, comes in under the nearest free usable name ("Chill 2", "AC-DC-"); the server copy
   is then renamed to match, so both sides agree. Nothing is merged with a playlist of the same name.
-- **Renamed on both sides** (the owner's choice): the conflict rule picks the name, as it picks the order (newest: the
-  server's, the change seen last). A server rename to a taken name gets the nearest free one here, and the server
-  follows.
+- **Changed on both sides between two passes:** the server's order, and the server's name when both renamed (see
+  above). A server rename to a taken name gets the nearest free one here, and the server follows.
 - **A track whose file is away for now** (an unmounted folder, a rescan under way) is no removal: its line stays as a
   missing one, and the server copy keeps it (the server-side rule above, the other way round). The catalogue drops a
   missing file's server links at once, so each link remembers the server item of every track both sides agreed on;

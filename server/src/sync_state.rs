@@ -68,16 +68,6 @@ impl Kind {
     }
 }
 
-/// Which side leads when both changed: the newest change, the playlist, or the target. (Shared is a copy the
-/// server cannot edit, so nothing comes back from it to conflict.)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Conflict {
-    Newest,
-    Playlist,
-    Target,
-}
-
 /// How a link's last pass went.
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct LinkStatus {
@@ -93,7 +83,6 @@ pub struct LinkView {
     /// "shared", or "user/<source>/<user>".
     pub target: String,
     pub label: String,
-    pub conflict: Conflict,
     pub status: Option<LinkStatus>,
 }
 
@@ -102,14 +91,15 @@ pub struct LinkView {
 pub struct Target {
     pub playlist: String,
     pub kind: Kind,
-    pub conflict: Conflict,
     /// Shared: the name its copy was last written under (a rename leaves the old one to remove).
     pub copy: Option<String>,
 }
 
-/// The `direction` column: every link is two-way now (decision 0014, amended 2026-10-15). Links saved as "push"
-/// before read as two-way; the column stays so older files open unchanged.
+/// The `direction` and `conflict` columns: every link is two-way, and when both sides changed the order or the name
+/// in one pass the server's leads (decision 0014, amended 2026-10-15). What older files say there is not read; the
+/// columns stay so they open unchanged.
 const TWO_WAY: &str = "two_way";
+const SERVER_LEADS: &str = "newest";
 
 /// The meta key of the catalogue generation the agreed lists were made with (`follow_catalogue`).
 const CATALOGUE: &str = "catalogue";
@@ -136,14 +126,6 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 /// Columns added after the first schema; added to an existing file when missing.
 const ADDED_COLUMNS: [(&str, &str); 1] = [("links", "base_ids TEXT NOT NULL DEFAULT '[]'")];
-
-fn enum_text<T: serde::Serialize>(v: T) -> String {
-    serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
-}
-
-fn enum_of<T: serde::de::DeserializeOwned>(text: &str) -> Option<T> {
-    serde_json::from_value(serde_json::Value::String(text.into())).ok()
-}
 
 pub struct SyncState {
     db: Mutex<Connection>,
@@ -246,27 +228,25 @@ impl SyncState {
     /// Every sync link (decision 0014), by playlist.
     pub fn targets(&self) -> Result<Vec<Target>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT playlist, kind, source, user, conflict, copy FROM targets ORDER BY playlist, kind, source, user")?;
+        let mut st = db.prepare("SELECT playlist, kind, source, user, copy FROM targets ORDER BY playlist, kind, source, user")?;
         let rows = st.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (playlist, kind, source, user, conflict, copy) = row?;
+            let (playlist, kind, source, user, copy) = row?;
             let kind = match kind.as_str() {
                 "shared" => Kind::Shared,
                 "user" => Kind::User { source, user },
                 _ => continue,
             };
-            let Some(conflict) = enum_of(&conflict) else { continue };
-            out.push(Target { playlist, kind, conflict, copy });
+            out.push(Target { playlist, kind, copy });
         }
         Ok(out)
     }
@@ -275,7 +255,7 @@ impl SyncState {
         let (kind, source, user) = t.kind.columns();
         self.db().execute(
             "INSERT OR REPLACE INTO targets (playlist, kind, source, user, direction, conflict, copy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![t.playlist, kind, source, user, TWO_WAY, enum_text(t.conflict), t.copy],
+            params![t.playlist, kind, source, user, TWO_WAY, SERVER_LEADS, t.copy],
         )?;
         Ok(())
     }
@@ -392,7 +372,7 @@ mod tests {
             .execute("INSERT INTO targets (playlist, kind, source, user, direction, conflict) VALUES ('Chill', 'user', 'jf', 'u1', 'push', 'newest')", [])
             .unwrap();
         let user = Kind::User { source: "jf".into(), user: "u1".into() };
-        assert_eq!(s.targets().unwrap(), vec![Target { playlist: "Chill".into(), kind: user, conflict: Conflict::Newest, copy: None }]);
+        assert_eq!(s.targets().unwrap(), vec![Target { playlist: "Chill".into(), kind: user, copy: None }]);
     }
 
     #[test]
@@ -412,11 +392,11 @@ mod tests {
     fn targets_are_kept_per_playlist_and_follow_a_rename() {
         let s = SyncState::open(None).unwrap();
         let user = Kind::User { source: "jellyfin".into(), user: "u1".into() };
-        let t = |kind: Kind, conflict| Target { playlist: "Chill".into(), kind, conflict, copy: None };
-        s.put_target(&t(Kind::Shared, Conflict::Newest)).unwrap();
-        s.put_target(&t(user.clone(), Conflict::Newest)).unwrap();
-        s.put_target(&t(user.clone(), Conflict::Playlist)).unwrap();
-        assert_eq!(s.targets().unwrap(), vec![t(Kind::Shared, Conflict::Newest), t(user.clone(), Conflict::Playlist)], "one link per target");
+        let t = |kind: Kind, copy: Option<&str>| Target { playlist: "Chill".into(), kind, copy: copy.map(str::to_string) };
+        s.put_target(&t(Kind::Shared, None)).unwrap();
+        s.put_target(&t(user.clone(), None)).unwrap();
+        s.put_target(&t(user.clone(), Some("x"))).unwrap();
+        assert_eq!(s.targets().unwrap(), vec![t(Kind::Shared, None), t(user.clone(), Some("x"))], "one link per target");
         s.rename("Chill", "Calm").unwrap();
         assert!(s.targets().unwrap().iter().all(|t| t.playlist == "Calm"));
         s.remove_target("Calm", &user).unwrap();
@@ -424,7 +404,7 @@ mod tests {
         assert_eq!(Kind::from_key(&user.key()), Some(user));
         assert_eq!(Kind::from_key("shared"), Some(Kind::Shared));
         assert_eq!(Kind::from_key("user/x"), None);
-        let mut shared = t(Kind::Shared, Conflict::Newest);
+        let mut shared = t(Kind::Shared, None);
         shared.playlist = "Calm".into();
         s.retire_target("Calm", &Kind::Shared).unwrap();
         assert!(s.targets().unwrap().iter().all(|t| t.playlist != "Calm"), "put aside");

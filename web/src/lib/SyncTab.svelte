@@ -1,9 +1,9 @@
 <script lang="ts">
-  // The panel's Sync tab (decisions 0014, 0025): every target, linked or not, for the selected playlists, and how each
-  // link is kept. With several playlists a target linked for only some shows a dash and "3 of 5"; ticking links all of
-  // them, unticking takes all their links off; a conflict rule chosen applies to all ("Mixed" until then). Every link
-  // is kept both ways, except Shared: a copy the server cannot edit. Each change is made at once.
-  import { getTargets, linkPlaylist, unlinkPlaylist, type Conflict, type Link, type TargetChoice } from './api';
+  // The panel's Sync tab (decisions 0014, 0025): every target, linked or not, for the selected playlists. With several
+  // playlists a target linked for only some shows a dash and "3 of 5"; ticking links all of them, unticking takes all
+  // their links off. Every link is kept both ways, except Shared: a copy the server cannot edit. Each change is made
+  // at once.
+  import { getTargets, linkPlaylist, unlinkPlaylist, type Link, type TargetChoice } from './api';
   import { refresh } from './live.svelte';
   import { shownPlaylists } from './output.svelte';
   import Row from './Row.svelte';
@@ -29,7 +29,7 @@
   };
 
   let working = $state(false);
-  async function set(t: TargetChoice, on: boolean, conflict?: Conflict) {
+  async function set(t: TargetChoice, on: boolean) {
     if (working) return;
     working = true;
     const touched: string[] = [];
@@ -43,11 +43,10 @@
           await unlinkPlaylist(id, t.target);
           continue;
         }
-        const c = conflict ?? l?.conflict ?? 'newest';
-        if (l && l.conflict === c) continue;
-        changed[key(id, t.target)] = { target: t.target, label: t.label, conflict: c, status: l?.status ?? null };
+        if (l) continue;
+        changed[key(id, t.target)] = { target: t.target, label: t.label, status: null };
         touched.push(id);
-        await linkPlaylist(id, t.target, c);
+        await linkPlaylist(id, t.target);
       }
     } catch (e) {
       for (const id of touched) delete changed[key(id, t.target)];
@@ -57,11 +56,6 @@
       await refresh();
       changed = {};
     }
-  }
-
-  /** One value when every linked playlist has it, else null ("Mixed"). */
-  function common<T>(values: T[]): T | null {
-    return values.length && values.every((v) => v === values[0]) ? values[0] : null;
   }
 </script>
 
@@ -73,27 +67,16 @@
       {@const links = ids.map((id) => linkOf(id, t.target)).filter((l) => !!l)}
       {@const all = links.length === ids.length}
       {@const some = links.length > 0 && !all}
-      {@const conflict = common(links.map((l) => l.conflict))}
       {@const errors = ids.flatMap((id) => {
         const e = linkOf(id, t.target)?.status?.error;
         return e ? [ids.length > 1 ? `${id}: ${e}` : e] : [];
       })}
-      <!-- A large row: ticking its box links it; once linked, how it is kept is its action (under it when narrow). -->
+      <!-- A large row: ticking its box links it. -->
       <Row size="large" as="label" title={t.label} count={some ? `${links.length} of ${ids.length}` : undefined} wrap>
         {#snippet lead()}
           <input type="checkbox" checked={all} indeterminate={some} disabled={working} onchange={(e) => set(t, e.currentTarget.checked)} />
         {/snippet}
         {#snippet sub()}{#if errors.length}<span class="error">{errors.join(' · ')}</span>{/if}{/snippet}
-        {#snippet action()}
-          {#if links.length && !t.copy_only}
-            <select aria-label="When both changed" value={conflict ?? ''} disabled={working} onchange={(e) => set(t, true, e.currentTarget.value as Conflict)}>
-              {#if conflict === null}<option value="" disabled>Mixed</option>{/if}
-              <option value="newest">Newest wins</option>
-              <option value="playlist">Cratarr wins</option>
-              <option value="target">{t.label} wins</option>
-            </select>
-          {/if}
-        {/snippet}
       </Row>
     {/each}
   {/if}
@@ -116,17 +99,6 @@
     height: 18px;
     margin: 0 4px 0 12px;
     accent-color: var(--accent);
-  }
-
-  select {
-    min-height: 34px;
-    padding: 0 8px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    font: inherit;
-    font-size: 0.85rem;
-    color: inherit;
   }
 
   .error {
