@@ -601,18 +601,15 @@ impl Source for JellyfinSource {
                 changes.iter().map(|(p, on)| (crate::jellyfin::unsubstitute(p, &substitutions), *on)).collect();
             let kinds: Vec<(String, &str)> = changes.iter().map(|(p, on)| (p.clone(), if *on { "Created" } else { "Deleted" })).collect();
             self.jf.library_changed(&kinds).await?;
-            // A notice alone does not find new folders in a library Jellyfin does not watch: have each library that
-            // got one look now (see `Jellyfin::refresh_library`).
-            let created: Vec<&str> = changes.iter().filter(|(_, on)| *on).map(|(p, _)| p.as_str()).collect();
-            if created.is_empty() {
-                return Ok(());
-            }
+            // A notice alone finds neither a new nor a gone file in a library Jellyfin does not watch (a new .m3u in
+            // Music was still not listed 110 s after its notice, 2026-10-15): have each library that got one look
+            // now (see `Jellyfin::refresh_library`).
             let inside = |path: &str, location: &str| {
                 let l = location.trim_end_matches('/');
                 path.strip_prefix(l).is_some_and(|rest| rest.starts_with('/'))
             };
             for f in self.jf.virtual_folders().await? {
-                if created.iter().any(|p| f.locations.iter().any(|l| inside(p, l))) {
+                if changes.iter().any(|(p, _)| f.locations.iter().any(|l| inside(p, l))) {
                     self.jf.refresh_library(&f.item_id).await?;
                 }
             }
@@ -805,20 +802,21 @@ impl Source for JellyfinSource {
 
     fn playlists_changed(&self, events: Vec<PlaylistEvent>) -> Fut<'_, ()> {
         Box::pin(async move {
-            // New and removed files: Jellyfin's Music library does not watch the folder, so tell it.
-            let files: Vec<(String, &str)> = events
+            // New and removed files, as any file: Jellyfin's Music library does not watch the folder, so tell it. The
+            // paths are as its API shows them; told so, Jellyfin ignored them (the 66 retired files stayed listed).
+            let files: Vec<(String, bool)> = events
                 .iter()
                 .filter_map(|e| {
-                    let kind = match e.change {
-                        PlaylistChange::Created => "Created",
-                        PlaylistChange::Deleted => "Deleted",
+                    let on = match e.change {
+                        PlaylistChange::Created => true,
+                        PlaylistChange::Deleted => false,
                         PlaylistChange::Edited => return None,
                     };
-                    e.path.clone().map(|p| (p, kind))
+                    e.path.clone().map(|p| (p, on))
                 })
                 .collect();
             if !files.is_empty() {
-                if let Err(e) = self.jf.library_changed(&files).await {
+                if let Err(e) = self.files_changed(&files).await {
                     tracing::warn!("could not tell Jellyfin about the playlist file change: {e:#}");
                 }
             }

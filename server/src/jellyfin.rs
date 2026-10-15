@@ -135,6 +135,13 @@ struct UserName {
 /// Ids per playlist request: they travel in the query string, which Jellyfin caps near 8 KB (decision 0006: 240 ids).
 const PLAYLIST_BATCH: usize = 200;
 
+/// A playlist's entries without images and user data: only ids are read, and the full answer for a 721-track
+/// playlist took 98 s on a busy server against 48 s for this (2026-10-15), past the 20 s every request gets.
+const PLAYLIST_ITEMS_LIGHT: &str = "&Fields=&EnableImages=false&EnableUserData=false";
+
+/// How long a long read may take (`get_long`): the light read above still took 48 s there.
+const LONG_READ: std::time::Duration = std::time::Duration::from_secs(180);
+
 /// A playlist as a user's listing shows it.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
@@ -359,17 +366,30 @@ impl Jellyfin {
     }
 
     async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
-        let body = self.get_shared(path).await.map_err(anyhow::Error::msg)?;
+        self.get_within(path, None).await
+    }
+
+    /// `get` for an answer a busy server takes long over (a long playlist's entries): `LONG_READ` instead of 20 s.
+    async fn get_long<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
+        self.get_within(path, Some(LONG_READ)).await
+    }
+
+    async fn get_within<T: for<'de> Deserialize<'de>>(&self, path: &str, timeout: Option<std::time::Duration>) -> Result<T> {
+        let body = self.get_shared(path, timeout).await.map_err(anyhow::Error::msg)?;
         serde_json::from_slice(&body).with_context(|| format!("GET {path}: response did not have the expected shape"))
     }
 
     /// The body of `GET path`, asked once however many ask for it at the same time.
-    async fn get_shared(&self, path: &str) -> std::result::Result<Arc<[u8]>, String> {
+    async fn get_shared(&self, path: &str, timeout: Option<std::time::Duration>) -> std::result::Result<Arc<[u8]>, String> {
         let answer = self.asking.lock().unwrap().entry(path.to_string()).or_default().clone();
         let body = answer
             .get_or_init(|| async {
                 let body: Result<Arc<[u8]>> = async {
-                    let resp = self.send(self.http.get(format!("{}{path}", self.base))).await.with_context(|| format!("GET {path}"))?;
+                    let mut req = self.http.get(format!("{}{path}", self.base));
+                    if let Some(t) = timeout {
+                        req = req.timeout(t);
+                    }
+                    let resp = self.send(req).await.with_context(|| format!("GET {path}"))?;
                     let status = resp.status();
                     if !status.is_success() {
                         bail!("GET {path} returned {status}");
@@ -521,7 +541,7 @@ impl Jellyfin {
 
     /// A playlist's track ids in order. Jellyfin answers this only with a user (observed on 10.11: 400 without).
     pub async fn playlist_entries(&self, user: &str, playlist: &str) -> Result<Vec<String>> {
-        let page: ItemsPage<IdOnly> = self.get(&format!("/Playlists/{playlist}/Items?UserId={user}")).await?;
+        let page: ItemsPage<IdOnly> = self.get_long(&format!("/Playlists/{playlist}/Items?UserId={user}{PLAYLIST_ITEMS_LIGHT}")).await?;
         Ok(page.items.into_iter().map(|i| i.id).collect())
     }
 
@@ -546,7 +566,7 @@ impl Jellyfin {
             id: String,
             playlist_item_id: Option<String>,
         }
-        let page: ItemsPage<Entry> = self.get(&format!("/Playlists/{playlist}/Items?UserId={user}")).await?;
+        let page: ItemsPage<Entry> = self.get_long(&format!("/Playlists/{playlist}/Items?UserId={user}{PLAYLIST_ITEMS_LIGHT}")).await?;
         Ok(page.items.into_iter().map(|e| (e.playlist_item_id.clone().unwrap_or_else(|| e.id.clone()), e.id)).map(|(entry, id)| (id, entry)).collect())
     }
 
