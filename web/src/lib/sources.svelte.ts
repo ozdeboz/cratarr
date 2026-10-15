@@ -24,5 +24,6 @@ export function showLibrary(source: string, library: string, on: boolean) {
 
 export function remember(list: SourceTab[]) {
   known.list = list;
-  if (!prefs.source) prefs.source = noChoice();
+  // No choice, or a choice the server no longer has (a source switched off: it would list nothing), is Cratarr's own.
+  if (!list.some((s) => s.id === prefs.source)) prefs.source = noChoice();
 }
