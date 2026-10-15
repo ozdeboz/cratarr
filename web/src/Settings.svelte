@@ -1,8 +1,11 @@
 <script lang="ts">
   import {
     ApiError,
+    changeSubsonicPassword,
     checkNaming,
+    createSubsonicAccount,
     getCatalogue,
+    getSubsonicAccounts,
     getSettings,
     previewLidarr,
     previewSource,
@@ -75,6 +78,39 @@
         namingError = e instanceof ApiError ? e.message : 'Unexpected error';
       }
     }, 300);
+  }
+
+  // Subsonic apps' accounts (decision 0030): acted on at once, not through the Save bar.
+  let sub = $state({ accounts: null as string[] | null, user: '', current: '', password: '', busy: false });
+  getSubsonicAccounts()
+    .then((a) => (sub.accounts = a.accounts))
+    .catch(() => (sub.accounts = null));
+
+  async function createAccount() {
+    sub.busy = true;
+    try {
+      sub.accounts = (await createSubsonicAccount(sub.user.trim(), sub.password)).accounts;
+      sub.password = '';
+    } catch (e) {
+      toast.fail(e, 'Could not create the account');
+    } finally {
+      sub.busy = false;
+    }
+  }
+
+  async function changePassword() {
+    if (!sub.accounts?.length) return;
+    sub.busy = true;
+    try {
+      await changeSubsonicPassword(sub.accounts[0], sub.current, sub.password);
+      sub.current = '';
+      sub.password = '';
+      toast.show({ text: 'Password changed.' });
+    } catch (e) {
+      toast.fail(e, 'Could not change the password');
+    } finally {
+      sub.busy = false;
+    }
   }
 
   const count = (n: number) => n.toLocaleString();
@@ -551,6 +587,46 @@
     </section>
   {:else if !loadError}
     <p class="lede">Loading…</p>
+  {/if}
+
+  {#if s && sub.accounts}
+    <section aria-labelledby="sub-h">
+      <h2 id="sub-h">Subsonic</h2>
+      <p class="lede">Server address for Subsonic apps: <code>{location.origin}</code></p>
+      {#if sub.accounts.length === 0}
+        <div class="fields">
+          <label>
+            <span class="l">Username</span>
+            <input bind:value={sub.user} spellcheck="false" autocomplete="username" autocapitalize="off" />
+          </label>
+          <label>
+            <span class="l">Password</span>
+            <input type="password" bind:value={sub.password} autocomplete="new-password" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" disabled={sub.busy || !sub.user.trim() || !sub.password} aria-busy={sub.busy} onclick={createAccount}>Create account</button>
+        </div>
+      {:else}
+        <dl>
+          <dt>Account</dt>
+          <dd>{sub.accounts.join(', ')}</dd>
+        </dl>
+        <div class="fields">
+          <label>
+            <span class="l">Current password</span>
+            <input type="password" bind:value={sub.current} autocomplete="current-password" />
+          </label>
+          <label>
+            <span class="l">New password</span>
+            <input type="password" bind:value={sub.password} autocomplete="new-password" />
+          </label>
+        </div>
+        <div class="row">
+          <button disabled={sub.busy || !sub.current || !sub.password} aria-busy={sub.busy} onclick={changePassword}>Change password</button>
+        </div>
+      {/if}
+    </section>
   {/if}
 
   <!-- Shown with the rest, so the sections never jump around while the page loads. -->

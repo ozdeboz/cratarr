@@ -476,6 +476,15 @@ export type FileProblem = {
 
 export const getFileProblems = () => request<FileProblem[]>('/api/catalogue/problems');
 
+/** The Subsonic accounts (decision 0030): names only, passwords are never sent back. */
+export type SubsonicAccounts = { accounts: string[] };
+export const getSubsonicAccounts = () => quietly<SubsonicAccounts>('/api/subsonic/accounts');
+/** The first account; refused once one exists. */
+export const createSubsonicAccount = (username: string, password: string) =>
+  post<SubsonicAccounts>('/api/subsonic/accounts', { username, password });
+export const changeSubsonicPassword = (username: string, current: string, password: string) =>
+  post<SubsonicAccounts>('/api/subsonic/password', { username, current, password });
+
 /** Lidarr on the Settings page; the key is never sent. */
 export type LidarrView = { url: string; key_set: boolean; version: string | null; error: string | null };
 

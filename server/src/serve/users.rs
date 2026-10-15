@@ -99,6 +99,57 @@ impl Users {
         self.save(&users)
     }
 
+    /// The accounts' names, the administrator first.
+    pub fn names(&self) -> Vec<String> {
+        let users = self.users.read().unwrap_or_else(|p| p.into_inner());
+        let mut names: Vec<(bool, String)> = users.iter().map(|u| (!u.admin, u.name.clone())).collect();
+        names.sort();
+        names.into_iter().map(|(_, n)| n).collect()
+    }
+
+    /// The first account, from the Settings page (as Navidrome's first-run "create admin"): refused once any exists.
+    pub fn create_first(&self, name: &str, password: &str) -> Result<(), &'static str> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().any(char::is_whitespace) {
+            return Err("Choose a username without spaces.");
+        }
+        if password.is_empty() {
+            return Err("Choose a password.");
+        }
+        let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
+        if !users.is_empty() {
+            return Err("There is an account already.");
+        }
+        users.push(User { name: name.to_string(), password: password.to_string(), admin: true });
+        self.save(&users).map_err(|e| {
+            tracing::warn!("subsonic: could not save the account: {e:#}");
+            users.clear();
+            "The account could not be saved."
+        })
+    }
+
+    /// A new password for an account, given its current one.
+    pub fn change_password(&self, name: &str, current: &str, new: &str) -> Result<(), &'static str> {
+        if new.is_empty() {
+            return Err("Choose a password.");
+        }
+        let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
+        let Some(u) = users.iter_mut().find(|u| u.name == name) else { return Err("There is no such account.") };
+        if !same(&u.password, current) {
+            return Err("The current password is wrong.");
+        }
+        let old = std::mem::replace(&mut u.password, new.to_string());
+        let saved = self.save(&users);
+        if let Err(e) = saved {
+            tracing::warn!("subsonic: could not save the new password: {e:#}");
+            if let Some(u) = users.iter_mut().find(|u| u.name == name) {
+                u.password = old;
+            }
+            return Err("The password could not be saved.");
+        }
+        Ok(())
+    }
+
     fn save(&self, users: &[User]) -> Result<()> {
         let Some(path) = &self.file else { return Ok(()) };
         use std::io::Write;
@@ -154,6 +205,19 @@ mod tests {
         assert_eq!(users.check(Some("nobody"), None, None, Some("sesame")), Err(Refused::Wrong));
         assert!(users.check(Some("sesame-user"), None, None, None).is_err());
         assert!(users.check(None, Some(t), Some("c19b2d"), None).is_err_and(|e| e == Refused::Missing));
+    }
+
+    #[test]
+    fn the_first_account_from_the_page_and_only_the_first() {
+        let users = Users::open(None).unwrap();
+        assert_eq!(users.create_first("two words", "pw"), Err("Choose a username without spaces."));
+        assert_eq!(users.create_first("me", ""), Err("Choose a password."));
+        assert!(users.create_first(" me ", "pw").is_ok());
+        assert_eq!(users.names(), ["me"]);
+        assert_eq!(users.create_first("intruder", "pw"), Err("There is an account already."));
+        assert_eq!(users.change_password("me", "wrong", "new"), Err("The current password is wrong."));
+        assert!(users.change_password("me", "pw", "new").is_ok());
+        assert!(users.check(Some("me"), None, None, Some("new")).unwrap().admin);
     }
 
     #[test]

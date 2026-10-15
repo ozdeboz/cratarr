@@ -74,7 +74,43 @@ fn not_found(what: &str) -> Failed {
 }
 
 pub fn router(serve: Arc<Serve>) -> Router {
-    Router::new().route("/rest/{method}", get(rest).post(rest)).with_state(serve)
+    Router::new()
+        .route("/rest/{method}", get(rest).post(rest))
+        .route("/api/subsonic/accounts", get(accounts).post(create_account))
+        .route("/api/subsonic/password", axum::routing::post(change_password))
+        .with_state(serve)
+}
+
+/// The Settings page's Subsonic section: the accounts, and creating the first one (decision 0030).
+async fn accounts(State(serve): State<Arc<Serve>>) -> Response {
+    axum::Json(json!({ "accounts": serve.users.names() })).into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct NewAccount {
+    username: String,
+    password: String,
+}
+
+async fn create_account(State(serve): State<Arc<Serve>>, axum::Json(a): axum::Json<NewAccount>) -> Response {
+    match serve.users.create_first(&a.username, &a.password) {
+        Ok(()) => axum::Json(json!({ "accounts": serve.users.names() })).into_response(),
+        Err(why) => (StatusCode::CONFLICT, axum::Json(json!({ "error": why }))).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct NewPassword {
+    username: String,
+    current: String,
+    password: String,
+}
+
+async fn change_password(State(serve): State<Arc<Serve>>, axum::Json(p): axum::Json<NewPassword>) -> Response {
+    match serve.users.change_password(&p.username, &p.current, &p.password) {
+        Ok(()) => axum::Json(json!({ "accounts": serve.users.names() })).into_response(),
+        Err(why) => (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": why }))).into_response(),
+    }
 }
 
 async fn rest(State(serve): State<Arc<Serve>>, Path(method): Path<String>, RawQuery(query): RawQuery, headers: HeaderMap, body: Bytes) -> Response {
