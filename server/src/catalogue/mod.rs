@@ -983,6 +983,8 @@ impl Catalogue {
     }
 
     /// The rows under `from` (a file, or a folder and everything in it) now live under `to`. `trashed` is set on them.
+    /// A walk can have seen the files at `to` first (they moved before this was called) and made rows of its own
+    /// there, with new track ids: those go, and the moved rows, with their track ids, take their place.
     fn rekey(&self, from_folder: i64, from: &str, to_folder: i64, to: &str, trashed: Option<&str>) -> Result<usize> {
         let (from, to) = (from.trim_end_matches('/'), to.trim_end_matches('/'));
         let mut db = self.db();
@@ -995,6 +997,11 @@ impl Catalogue {
         };
         for rel in &rels {
             let new_rel = format!("{to}{}", &rel[from.len()..]);
+            if (to_folder, new_rel.as_str()) != (from_folder, rel.as_str()) {
+                for table in ["files", "tags", "source_ids"] {
+                    tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![to_folder, new_rel])?;
+                }
+            }
             tx.execute("DELETE FROM source_ids WHERE folder = ?1 AND rel = ?2", params![from_folder, rel])?;
             tx.execute(
                 "UPDATE files SET folder = ?3, rel = ?4, trashed = ?5, gone_at = NULL WHERE folder = ?1 AND rel = ?2",
@@ -1554,6 +1561,15 @@ mod tests {
         cat.walk_all();
         assert_eq!(cat.identify().unwrap(), (0, 0), "nothing new, nothing recognised: the rows moved");
         assert_eq!(cat.file_of(one), Some((0, "A - B (2020) adopted/01 One.mp3".to_string())));
+        // Moved again, and a walk saw the files at their new place before the rows followed: the rows it made there
+        // give way, and the track keeps its id.
+        std::fs::rename(a.join("A - B (2020) adopted"), a.join("A - B (2020) kept")).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.move_files(0, "A - B (2020) adopted", 0, "A - B (2020) kept").unwrap(), 2);
+        assert_eq!(cat.file_of(one), Some((0, "A - B (2020) kept/01 One.mp3".to_string())));
+        std::fs::rename(a.join("A - B (2020) kept"), a.join("A - B (2020) adopted")).unwrap();
+        assert_eq!(cat.move_files(0, "A - B (2020) kept", 0, "A - B (2020) adopted").unwrap(), 2);
         // Replace: a new file takes the old one's id.
         std::fs::write(a.join("A - B (2020) adopted/01 One.flac"), b"flac now").unwrap();
         cat.walk_all();
