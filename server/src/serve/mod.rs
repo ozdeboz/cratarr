@@ -58,6 +58,9 @@ pub struct Serve {
     built_at: RwLock<i64>,
     /// Told each time the library is built (its time): views kept from the built-in source can read it again.
     built: tokio::sync::watch::Sender<i64>,
+    /// What the last check was made from: (the catalogue's last pass, the rules and added dates). The same again: no
+    /// need to look at the catalogue.
+    checked: std::sync::Mutex<Option<(Option<i64>, String)>>,
     /// Resized covers on disk (`art`).
     art_cache: art::Cache,
     /// One cover resized at a time: a client asks for hundreds at once, and decoding one takes tens of megabytes.
@@ -95,6 +98,7 @@ impl Serve {
             rules: RwLock::new(rules),
             built_at: RwLock::new(now()),
             built: tokio::sync::watch::channel(0).0,
+            checked: Default::default(),
             art_cache: art::Cache::new(data_dir.map(|d| d.join("cover-cache")), art::CACHE_BYTES),
             resizing: tokio::sync::Semaphore::new(1),
             playlists: Default::default(),
@@ -146,8 +150,25 @@ impl Serve {
     /// Builds the library again when the catalogue's files changed; after a rebuilt catalogue, user data follows its
     /// songs to their new ids. Blocking.
     pub fn refresh(&self) -> Result<bool> {
+        // The tag rules as saved in Settings, so a change there needs no restart.
+        if let Some(dir) = &self.data_dir
+            && let Ok(Some(saved)) = crate::settings::load(&dir.join("settings.json"), &|k: &str| std::env::var(k).ok())
+        {
+            *self.rules.write().unwrap_or_else(|p| p.into_inner()) = saved.tag_rules;
+        }
         let rules = self.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
-        self.library.set_added(self.userdata.added()?);
+        let added = self.userdata.added()?;
+        // The catalogue is only looked at after it finished a pass (or the rules or added dates changed): reading its
+        // files' summary every minute kept its 200 MB file in memory for nothing.
+        let inputs = (self.catalogue().last_pass(), format!("{}|{}", serde_json::to_string(&rules)?, added.len() as i64 + added.values().sum::<i64>()));
+        {
+            let mut last = self.checked.lock().unwrap_or_else(|p| p.into_inner());
+            if last.as_ref() == Some(&inputs) {
+                return Ok(false);
+            }
+            *last = Some(inputs);
+        }
+        self.library.set_added(added);
         let built = self.library.refresh_from(self.catalogue(), &rules)?;
         if built {
             let at = now();

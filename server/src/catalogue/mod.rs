@@ -449,6 +449,11 @@ impl Catalogue {
     }
 
     /// Ask for a pass now.
+    /// When the last background pass finished, epoch seconds.
+    pub fn last_pass(&self) -> Option<i64> {
+        self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass
+    }
+
     /// What the background pass is doing now, if anything (see `Progress::doing`).
     pub fn doing(&self) -> Option<String> {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).doing.clone()

@@ -223,10 +223,14 @@ impl Library {
         let reader = cat.reader();
         let count = cat.folders().len() as i64;
         let print = format!(
-            "catalogue {} {} {} added {}",
+            "catalogue {} {} {} rules {:x} added {}",
             cat.generation(),
             count,
             self.added_print(),
+            {
+                use md5::Digest;
+                md5::Md5::digest(serde_json::to_string(rules)?.as_bytes())
+            },
             match &reader {
                 Some(c) => crate::catalogue::served_fingerprint(c)?,
                 None => cat.served_fingerprint()?,
