@@ -1,5 +1,3 @@
-include(":app")
-
 pluginManagement {
     repositories {
         gradlePluginPortal()
@@ -7,3 +5,13 @@ pluginManagement {
         google()
     }
 }
+
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "cratarr-android"
+include(":app")
