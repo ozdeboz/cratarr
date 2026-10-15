@@ -1,6 +1,6 @@
 # 0034: One Library page, and moving albums between libraries
 
-- Status: proposed
+- Status: accepted (the owner's answers and claude-5f's review, 2026-10-16)
 - Date: 2026-10-16
 - Builds on: 0009 (library uses), 0013 (Keep and Replace), 0028 (Collection and one album list), 0032 (Cratarr is its
   own source)
@@ -45,7 +45,7 @@ The owner, 2026-10-16:
 
 **An album's facts show wherever it shows**, not only on Incoming:
 
-- its library;
+- its library, as a dot (below);
 - how it relates to albums in the other used libraries: an upgrade of one, or a duplicate of one (0013's verdicts,
   now against every other used library, not only Music);
 - whether Cratarr can write its folder;
@@ -86,9 +86,21 @@ Everything 0013 promises stays, now for any move:
 **Replace** is a move that takes the place of the album it upgrades in the target library. Pairing, the refusal when an
 old track has no match, and the old folder going to the trash all stay as in 0013.
 
-**Delete** stays as it is: from an Incoming library, to the trash, with Undo (0010). Whether Music albums can be
-deleted too is open (below). It would be new destructive power over the main library, and the owner has not asked
-for it.
+**Delete** works from any library, to the trash on that disk (outside the Music folder, 0010 and 0013), with Undo for
+the trash days. Deleting from the **primary library** (Music: the one Music folder) takes **an extra step in its
+confirmation**. The owner: "Primary should get an extra step in the confirmation." Deleting from another library
+confirms as today.
+
+**A library's colour and dot.** Each non-primary library has a colour, chosen in Settings → Libraries; a new library
+gets one from a small palette until the user picks. The primary library has none, because it is the norm.
+
+- An album from a non-primary library carries **a small dot in its library's colour** where it shows: its row
+  (beside the title), its tile (beside the title), the panel's album header, and its menu's card.
+- The filter's library chips show the same dot, so the dot means the same thing everywhere.
+- The dots show while more than one library is switched on. With one on, every album would carry the same dot.
+- No library names on rows or tiles: the dot is the label. The owner: "That really keeps it clean."
+- The colour is kept with the library's settings on the server (settings.json, beside its use and naming template),
+  so every browser and app shows the same one.
 
 **The server** (claude-5f's side; the shapes are a sketch for the build):
 
@@ -128,23 +140,23 @@ So this decision keeps **one Music folder**. Several Music libraries may still s
 *folders* would need their own decision: folder roles, playlist lines across folders, album ids. With one Music folder,
 Home Assistant's promote ("into Music") stays unambiguous.
 
-## Still open
+## Settled with the owner, later the same day
 
-- **Library names on the page.** The proposal shows an album's library by name (a chip on the row, a fact on the tile)
-  only when more than one library is switched on, to keep the page calm.
-- **Delete from Music.** Allowed (to the trash, with Undo) or not, as today?
+- **Library labels:** only while more than one library is switched on, as a coloured dot rather than a name (above).
+- **Delete from Music:** yes, with an extra confirmation step for the primary library (above).
 
 ## Consequences
 
 - The navigation loses one entry: Library replaces Incoming and Collection. The Incoming tab's count of albums
   converting moves to Library, and later to the dashboard.
-- A Music album gets the menu Incoming albums have: Move, and Replace where it applies; Delete only if the owner
-  says so.
+- A Music album gets the menu Incoming albums have: Move, Replace where it applies, and Delete (with its extra
+  step).
 - Music → Incoming changes the album's Subsonic id: it gains its folder's prefix. Tags follow through `album_base`,
   but an app that cached the album id holds a stale one.
-- Settings → Libraries gains each library's format policy.
+- Settings → Libraries gains each library's format policy and, for a non-primary library, its colour.
 - Work split:
-  - web (claude-a5): the Library page, facts on every album, Move in the menus and the select bar (several albums at
-    once go through the queue one by one), and the redirects;
+  - web (claude-a5): the Library page, facts and dots on every album, Move and Delete (with the primary's extra step)
+    in the menus and the select bar (several albums at once go through the queue one by one), the colour picker in
+    Settings → Libraries, and the redirects;
   - server (claude-5f): one list endpoint with facts against every library, move and replace with the target's
-    policies, the format policy setting, and HA's calls on the new move.
+    policies, delete from any library, the format policy and colour settings, and HA's calls on the new move.
