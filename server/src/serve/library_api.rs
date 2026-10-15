@@ -214,7 +214,7 @@ mod tests {
             ..ServedRow::default()
         };
         serve.library.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![row(1), row(2)] }], &Rules::default()).unwrap();
-        serve.users.set("oskar", "pw").unwrap();
+        serve.users.set("owner", "pw").unwrap();
         serve
     }
 
@@ -249,9 +249,9 @@ mod tests {
         assert_eq!(call(&s, "POST", "/api/library/albums/al-nothing/tags/gig").await.0, StatusCode::NOT_FOUND);
         assert_eq!(call(&s, "POST", "/api/library/tracks/tr-1/favourite").await.0, StatusCode::NO_CONTENT);
         assert_eq!(call(&s, "POST", "/api/library/tracks/tr-1/favourite").await.0, StatusCode::NO_CONTENT, "safe to repeat");
-        assert_eq!(s.userdata.starred("oskar", Kind::Song).unwrap(), ["tr-1"], "the same store as Subsonic's star");
+        assert_eq!(s.userdata.starred("owner", Kind::Song).unwrap(), ["tr-1"], "the same store as Subsonic's star");
         assert_eq!(call(&s, "DELETE", "/api/library/tracks/tr-1/favourite").await.0, StatusCode::NO_CONTENT);
-        assert!(s.userdata.starred("oskar", Kind::Song).unwrap().is_empty());
+        assert!(s.userdata.starred("owner", Kind::Song).unwrap().is_empty());
         assert_eq!(call(&s, "POST", "/api/library/tracks/tr-9/favourite").await.0, StatusCode::NOT_FOUND);
     }
 
