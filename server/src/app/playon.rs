@@ -114,7 +114,7 @@ pub enum Command {
         position_ms: u64,
         #[serde(default, skip_serializing)]
         shuffle: bool,
-        /// Loaded, not started: a queue given back to a player that came back without one.
+        /// Loaded, not started: a queue given back, paused, to a player that came back without one.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         paused: bool,
     },
@@ -344,7 +344,7 @@ pub struct PlayOn {
     playlists: Arc<PlaylistService>,
 }
 
-/// A player's queue as saved, with where it was in it.
+/// A player's queue as saved, with where it was in it and whether it played.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Saved {
     #[serde(flatten)]
@@ -353,6 +353,8 @@ struct Saved {
     entry: Option<String>,
     #[serde(default)]
     position_ms: u64,
+    #[serde(default)]
+    playing: bool,
 }
 
 impl PlayOn {
@@ -370,6 +372,7 @@ impl PlayOn {
                 e.report.index = s.entry.as_deref().and_then(|x| s.queue.at(x)).map_or(-1, |i| i as i64);
                 e.report.entry = s.entry;
                 e.report.position_ms = s.position_ms;
+                e.report.playing = s.playing;
                 e.queue = s.queue;
                 (name, e)
             })
@@ -490,7 +493,7 @@ impl PlayOn {
                     .iter()
                     .map(|(n, e)| {
                         let v = e.view(n, false);
-                        (n.clone(), Saved { queue: e.queue.clone(), entry: v.current_entry_id, position_ms: v.position_ms })
+                        (n.clone(), Saved { queue: e.queue.clone(), entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing })
                     })
                     .collect();
                 drop(me);
@@ -563,14 +566,14 @@ impl PlayOn {
         let before = e.view(name, false);
         e.seen = SystemTime::now();
         e.heard = Instant::now();
-        // Back without a queue (the app was updated, or killed): it gets its queue back, paused where it was.
+        // Back without a queue (the app was updated, or killed): it gets its queue back where it was, playing on if it
+        // played (the owner's wish, 2026-10-15), else paused.
         let came_back_empty = std::mem::take(&mut e.fresh) && report.index < 0 && !e.queue.tracks.is_empty();
         let give_back = came_back_empty.then(|| {
-            let (index, position_ms) = (before.index.max(0) as usize, before.position_ms);
-            Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused: true }
+            let (index, position_ms, paused) = (before.index.max(0) as usize, before.position_ms, !before.playing);
+            Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused }
         });
         if give_back.is_some() {
-            e.report.playing = false;
             e.at = Instant::now();
         } else {
             if let Some(q) = report.queue.clone() {
