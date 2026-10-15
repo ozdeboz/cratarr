@@ -700,9 +700,27 @@ export const setPlaylistFavorite = (id: string, on: boolean, source?: string) =>
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });
 /** An album as its view in the panel shows it: its tracks in play order, as a playlist's rows (decision 0023). */
 /** `id`: the album's, another than asked for when it moved (Keep, Replace) and the server followed it. */
-export type AlbumView = { source: string; id: string; title: string; artist: string | null; year: number | null; genres: string[]; rows: PlaylistRow[] };
+export type AlbumView = {
+  source: string;
+  id: string;
+  title: string;
+  artist: string | null;
+  year: number | null;
+  genres: string[];
+  /** "FLAC", "MP3"…; null when mixed or unknown. */
+  format: string | null;
+  /** Its weakest track's bitrate. */
+  bitrate_kbps: number | null;
+  rows: PlaylistRow[];
+};
 export const albumView = (source: string, album: string) =>
   quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
+/** Where an album of Cratarr's own library was left (Resume): a track and a position, from the bookmarks apps keep
+ *  (decision 0030); `track` null when there is none. */
+export const albumResume = (album: string) =>
+  quietly<{ track: string | null; position_secs?: number }>(`/api/library/albums/${encodeURIComponent(album)}/resume`);
+/** The album's resume point gone. */
+export const forgetAlbumResume = (album: string) => request<void>(`/api/library/albums/${encodeURIComponent(album)}/resume`, { method: 'DELETE' });
 export const handover = (ids: string[], index: number, positionSecs: number, source?: string) =>
   post<{ player: string }>(`/api/player/handover${follow(source)}`, { ids, index, position_secs: positionSecs });
 /** Previous / play-pause / next on the player that plays now. */

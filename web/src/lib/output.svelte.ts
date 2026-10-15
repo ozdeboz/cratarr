@@ -257,12 +257,12 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
 
 /** Plays a playlist from one of its tracks (a tap on a row of its view, decision 0023): these tracks from `index`, here
  *  or on the server's player. */
-export async function playPlaylistFrom(name: string, source: string, tracks: LocalTrack[], index: number) {
-  if (isLocal()) return playQueue(tracks, index, name);
+export async function playPlaylistFrom(name: string, source: string, tracks: LocalTrack[], index: number, position = 0) {
+  if (isLocal()) return playQueue(tracks, index, name, position);
   await handover(
     tracks.map((t) => t.id),
     index,
-    0,
+    position,
     source,
   );
   setTimeout(refresh, 700);

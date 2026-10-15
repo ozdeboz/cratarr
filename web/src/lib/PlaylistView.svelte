@@ -16,6 +16,7 @@
   // An album (`?view=album:<server>/<id>`, from the Incoming page or a track's View album) shows as a crate does, its
   // tracks in play order, with all four actions: an album, like a crate, is a list of tracks but no playlist file.
   import {
+    albumResume,
     albumView,
     coverUrl,
     crateRows,
@@ -73,8 +74,8 @@
   const album = $derived(albumOf(panel.viewed));
   /** A crate or an album: tracks without a playlist's file (no tabs, no editing, no statistics). */
   const plain = $derived(!!crate || !!album);
-  /** What the album's tracks say of it: its name, artist and year. */
-  let albumHead = $state<{ title: string; artist: string | null; year: number | null } | null>(null);
+  /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
+  let albumHead = $state<{ title: string; artist: string | null; year: number | null; format: string | null; kbps: number | null } | null>(null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
   let listGenres = $state<string[] | null>(null);
   /** The selected playlists; several: Tracks shows a section per playlist (decision 0025). */
@@ -90,11 +91,6 @@
   const chosenDead = $derived(chosen.reduce((n, x) => n + x.dead, 0));
   // The heart: on when every selected playlist is a favourite; a tap sets all of them.
   const allFav = $derived(ids.length > 0 && ids.every((x) => isPlaylistFavorite(x)));
-  // The pin (Pin to top, as in the menu): on when every selected playlist is pinned; a tap pins or unpins all of them.
-  const allPinned = $derived(ids.length > 0 && ids.every((x) => prefs.pinned.includes(x)));
-  function togglePins() {
-    prefs.pinned = allPinned ? prefs.pinned.filter((x) => !ids.includes(x)) : [...prefs.pinned, ...ids.filter((x) => !prefs.pinned.includes(x))];
-  }
   const chosenCount = $derived(chosen.reduce((n, x) => n + x.count, 0));
   const np = $derived(playing());
   /** A crate's size (its rows come in pages). */
@@ -184,7 +180,7 @@
       : a
         ? albumView(a.source, a.id).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
-            if (want === id) albumHead = { title: r.title, artist: r.artist, year: r.year };
+            if (want === id) albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null };
             return { ...r, total: r.rows.length };
           })
         : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length, genres: null }));
@@ -290,16 +286,85 @@
   let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists' } | null>(null);
   const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? null });
 
-  // Finamp's playback actions: a new queue (Play, Shuffle), or the whole playlist next or at the end of the queue.
-  const ACTIONS: { mode: PlayMode; icon: IconName; label: string }[] = [
-    { mode: 'play', icon: 'play', label: 'Play' },
-    { mode: 'shuffle', icon: 'shuffle', label: 'Shuffle' },
-    { mode: 'next', icon: 'playNext', label: 'Play next' },
-    { mode: 'last', icon: 'playlists', label: 'Add to queue' },
-  ];
-  // A crate plays and shuffles; in place of Play next and Add to queue, its favourites toggle (decision 0024, amended):
-  // its icon and label say what the crate shows now.
+  // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
+  // or at the end of the queue; an album also Resume. A crate plays and shuffles; its favourites toggle sits at the
+  // bar's end (decision 0024, amended): its icon and label say what the crate shows now.
+  type BarAction = { key: string; icon: IconName; label: string; run: () => void; disabled: boolean };
+  const canPlay = $derived(multi ? chosenCount > 0 : playable.length > 0);
+  const barActions = $derived.by((): BarAction[] => {
+    const play = (key: PlayMode, icon: IconName, label: string): BarAction => ({ key, icon, label, run: () => act(key), disabled: !canPlay });
+    const list = [play('play', 'play', 'Play')];
+    if (album) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
+    list.push(play('shuffle', 'shuffle', 'Shuffle'));
+    if (!crate) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
+    return list;
+  });
   const favState = $derived(crate ? FAVOURITES[favouritesOf(crate)] : null);
+  const closeLabel = $derived(crate ? 'Close the crate' : album ? 'Close the album' : multi ? 'Close the playlists' : 'Close the playlist');
+
+  // Under the cover, as Symfonium's: the name large, then one line of what it is (an album: its length, year, format
+  // and bitrate; a playlist or a crate: how many tracks, and the length), and the genres.
+  const details = $derived.by(() => {
+    if (crate) return rows ? plural(total, 'track') : 'Loading…';
+    if (multi) return plural(chosenCount, 'track');
+    if (!rows) return 'Loading…';
+    const h = album ? albumHead : null;
+    const parts = album
+      ? [length ? clockText(length) : null, h?.year, h?.format, h?.kbps ? `${h.kbps} kb/s` : null]
+      : [plural(p?.count ?? rows.length, 'track'), length ? clockText(length) : null];
+    return parts.filter((x) => x !== null && x !== undefined && x !== '').join(' • ');
+  });
+  const shownGenres = $derived(multi ? [] : plain ? (listGenres ?? []) : (point?.genres ?? []));
+
+  // Two bars, as Symfonium's album screen: the top one over the cover (back, where it plays), and the action bar at the
+  // cover's foot. Scrolled up to the top, the action bar stays there and takes the top bar's place, with back at its
+  // start and where it plays at its end; the top bar fades as it comes near.
+  let actbar = $state<HTMLElement>();
+  let stuck = $state(false);
+  let topFade = $state(1);
+  const BAR = 52;
+  function onScroll() {
+    const sc = scroller;
+    const a = actbar;
+    if (!sc || !a) return;
+    // Its distance from the top: 0 while it stays there (a sticky element's offset is where it shows).
+    const y = a.offsetTop - sc.scrollTop;
+    stuck = y <= 0.5;
+    topFade = Math.min(1, Math.max(0, (y - BAR) / BAR));
+  }
+  $effect(() => {
+    // Another subject shows from its cover.
+    void id;
+    stuck = false;
+    topFade = 1;
+  });
+
+  // Resume (Symfonium's clock): where an album of Cratarr's own library was left, from the bookmarks apps keep
+  // (decision 0030). Other sources' albums have none to offer.
+  let resumeAt = $state<{ track: string; position: number } | null>(null);
+  $effect(() => {
+    const a = album;
+    void undos.n;
+    resumeAt = null;
+    if (!a || !a.id.startsWith('al-')) return;
+    albumResume(a.id).then(
+      (r) => {
+        if (album?.id === a.id && r.track) resumeAt = { track: r.track, position: r.position_secs ?? 0 };
+      },
+      () => {},
+    );
+  });
+  async function resumeAlbum() {
+    const at = resumeAt;
+    const i = at ? playable.findIndex((r) => r.id === at.track) : -1;
+    if (!at || i < 0) return;
+    navigator.vibrate?.(8);
+    try {
+      await playPlaylistFrom(title, source, tracksOf(playable), i, at.position);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    }
+  }
   // A crate's next page, when the end of the list comes into view.
   let more = $state<HTMLElement>();
   let loadingMore = false;
@@ -513,7 +578,8 @@
 </script>
 
 <section class="view" aria-label={title}>
-  <div class="bar" class:editing={!!editing}>
+  {#if editing || making}
+    <div class="bar" class:editing={!!editing}>
     {#if editing}
       <!-- ✕ stays in its corner while editing (closing drops the edit), as the place button in the other; Cancel sits
            against Save. -->
@@ -530,49 +596,21 @@
         <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
         <PanelPlace />
       </span>
-    {:else if crate}
-      <button class="icon" aria-label="Close the crate" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
-      <span class="end">
-        {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => viewPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
-        <button class="icon" aria-label="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
-        <PanelPlace />
-      </span>
-    {:else if album}
-      <button class="icon" aria-label="Close the album" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
-      <span class="end">
-        {#if incoming && offer}
-          {#if offer.keepable && offer.job === null}
-            <button class="icon" aria-label={`Keep in ${incoming.music}`} title={`Keep in ${incoming.music}`} onclick={() => (incomingAsk = 'keep')}><Icon name="check" size={22} /></button>
-          {/if}
-          {#if offer.replaceable}
-            <button class="icon" aria-label={`Replace in ${incoming.music}`} title={`Replace in ${incoming.music}`} onclick={() => (incomingAsk = 'replace')}><Icon name="swap" size={22} /></button>
-          {/if}
-          {#if offer.deletable && offer.job === null}
-            <button class="icon" aria-label="Delete album" title="Delete album" onclick={() => (incomingAsk = 'delete')}><Icon name="trash" size={22} /></button>
-          {/if}
-        {/if}
-        <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
-        <PanelPlace />
-      </span>
-    {:else}
-      <button class="icon" aria-label={multi ? 'Close the playlists' : 'Close the playlist'} onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
-      <span class="end">
-        {#if p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
-        <button class="icon" class:fav={allPinned} aria-pressed={allPinned} aria-label={allPinned ? 'Unpin' : 'Pin to top'} title={allPinned ? 'Unpin' : 'Pin to top'} onclick={togglePins}
-          ><Icon name="pin" size={22} /></button
-        >
-        <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
-          ><Icon name="heart" size={24} /></button
-        >
-        <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
-        <PanelPlace />
-      </span>
     {/if}
-  </div>
+    </div>
+  {:else}
+    <!-- Symfonium's top bar, over the cover: back, and where it plays. It fades as the action bar comes up, and is gone
+         once that has the top. -->
+    <div class="topbar" class:gone={stuck} style:opacity={topFade} inert={stuck}>
+      <button class="icon over" aria-label={closeLabel} onclick={() => closePlaylist()}><Icon name="back" size={24} /></button>
+      <span class="end over"><PanelPlace /></span>
+    </div>
+  {/if}
 
-  <div class="scroll" bind:this={scroller}>
-    <header class="head">
-      <div class="top">
+  <div class="scroll" bind:this={scroller} onscroll={onScroll}>
+    {#if editing || making}
+      <header class="head">
+        <div class="top">
         <div class="art" class:mosaic={covers.length === 4}>
           {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? 'crates' : 'albums'} size={48} /></span>{/each}
         </div>
@@ -634,19 +672,59 @@
         </div>
         {/if}
       </div>
-      {#if !editing && !making}
-      <div class="actions" role="group" aria-label="Play">
-        {#each crate ? ACTIONS.slice(0, 2) : ACTIONS as a (a.mode)}
-          <button onclick={() => act(a.mode)} disabled={multi ? !chosenCount : !playable.length}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
-        {/each}
-        {#if crate && favState}
-          <button class="favs" class:filled={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} onclick={() => crate && cycleFavourites(crate)}
-            ><Icon name={favState.icon} size={28} /><span>{favState.label}</span></button
-          >
-        {/if}
+      </header>
+    {:else}
+      <div class="hero" class:mosaic={covers.length === 4} class:bare={!covers.length}>
+        {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? 'crates' : 'albums'} size={56} /></span>{/each}
       </div>
-      {/if}
-    </header>
+      <!-- The action bar, at the cover's foot; at the top it stays, with back and where it plays. -->
+      <div class="actbar" class:stuck bind:this={actbar} role="toolbar" aria-label="Play">
+        {#if stuck}<button class="icon" aria-label={closeLabel} onclick={() => closePlaylist()}><Icon name="back" size={24} /></button>{/if}
+        {#each barActions as a (a.key)}
+          <button class="icon" aria-label={a.label} title={a.label} disabled={a.disabled} onclick={a.run}><Icon name={a.icon} size={24} /></button>
+        {/each}
+        <span class="grow"></span>
+        {#if crate}
+          {#if favState}
+            <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
+              ><Icon name={favState.icon} size={24} /></button
+            >
+          {/if}
+          {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => viewPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
+          <button class="icon" aria-label="Make playlist" title="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
+        {:else if album}
+          {#if incoming && offer}
+            {#if offer.keepable && offer.job === null}
+              <button class="icon" aria-label={`Keep in ${incoming.music}`} title={`Keep in ${incoming.music}`} onclick={() => (incomingAsk = 'keep')}><Icon name="check" size={22} /></button>
+            {/if}
+            {#if offer.replaceable}
+              <button class="icon" aria-label={`Replace in ${incoming.music}`} title={`Replace in ${incoming.music}`} onclick={() => (incomingAsk = 'replace')}><Icon name="swap" size={22} /></button>
+            {/if}
+            {#if offer.deletable && offer.job === null}
+              <button class="icon" aria-label="Delete album" title="Delete album" onclick={() => (incomingAsk = 'delete')}><Icon name="trash" size={22} /></button>
+            {/if}
+          {/if}
+          <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
+        {:else}
+          {#if p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
+          <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
+            ><Icon name="heart" size={24} /></button
+          >
+          <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
+        {/if}
+        {#if stuck}<PanelPlace />{/if}
+      </div>
+      <header class="meta">
+        <h2>{title}</h2>
+        {#if details}<p class="details">{details}</p>{/if}
+        {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
+        {#if album && albumHead?.artist}
+          <span class="chip">{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{albumHead.artist}</span></span>
+        {/if}
+        {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<span>{g}</span>{/each}</p>{/if}
+        {#if p?.dead || chosenDead}<p class="details dead">{p?.dead || chosenDead} missing</p>{/if}
+      </header>
+    {/if}
 
     {#if !plain && !editing}
       <div class="tabs" role="tablist" aria-label="About the playlist">
@@ -740,8 +818,8 @@
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
     {:else if rows}
-      <ol class="rows">
-        {#each rows as r, i (i)}{@render trackRow(r, source, title, rows)}{/each}
+      <ol class="rows" class:numbered={!!album}>
+        {#each rows as r, i (i)}{#if album}{@render albumRow(r, i, rows)}{:else}{@render trackRow(r, source, title, rows)}{/if}{/each}
       </ol>
       {#if crate && rows.length < total}<p class="empty" bind:this={more}>Loading…</p>{/if}
     {:else}
@@ -812,9 +890,36 @@
   </li>
 {/snippet}
 
+<!-- An album's track (Symfonium's album screen): its number (the playing one's dots instead), the title, and the artist
+     only when it is not the album's; the cover is the header's. -->
+{#snippet albumRow(r: PlaylistRow, i: number, list: PlaylistRow[])}
+  {@const ok = !!r.id && !r.missing}
+  {@const here = ok && !!np && np.id === r.id}
+  <li class:now={here}>
+    <span class="behind" aria-hidden="true"><Icon name="playNext" size={40} /><span>Play next</span></span>
+    <Row
+      size="large"
+      title={r.name ?? r.file}
+      sub={r.missing ? 'Missing file' : r.artist && r.artist !== albumHead?.artist ? r.artist : undefined}
+      count={r.duration_secs ? clockText(r.duration_secs) : undefined}
+      off={!ok}
+      disabled={!ok}
+      onclick={() => playFrom(title, source, list, r)}
+      attach={fromAction(swipe, () => ({ enabled: ok, onswipe: () => playNext(r, source) }))}
+      attachMain={fromAction(longpress, () => () => ok && (trackMenu = { track: asTrack(r, source), start: 'menu' }))}
+    >
+      {#snippet lead()}
+        <span class="num">{#if here}<span class="dots" class:still={paused()} aria-label="Playing"><i></i><i></i><i></i><i></i></span>{:else}{i + 1}{/if}</span>
+      {/snippet}
+      {#snippet action()}
+        {#if ok}<RowHeart {source} id={r.id!} name={r.name ?? r.file} onopen={() => (trackMenu = { track: asTrack(r, source), start: 'lists' })} />{/if}
+      {/snippet}
+    </Row>
+  </li>
+{/snippet}
+
 {#snippet cover(r: PlaylistRow, src: string, here = false)}
-  <!-- An Incoming album's tracks are outside Music, where the track covers come from: the album's own. -->
-  <TrackCover src={album ? albumCoverUrl(album.source, album.id) : r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
+  <TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
 {/snippet}
 
 {#if incomingAsk && incoming && offer}
@@ -837,6 +942,8 @@
 
 <style>
   .view {
+    /* The top bar floats over the cover. */
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -1042,6 +1149,8 @@
   }
 
   .scroll {
+    /* What the action bar's offset is measured in. */
+    position: relative;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -1158,60 +1267,6 @@
     color: var(--danger, #c33);
   }
 
-  /* Finamp's playback actions: unfilled, an icon over a small label, spread evenly. */
-  .actions {
-    display: flex;
-    justify-content: space-evenly;
-  }
-
-  .actions button {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 2px;
-    padding: 5px 4px;
-    border: 0;
-    border-radius: 8px;
-    background: none;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .actions button:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--text) 7%, transparent);
-  }
-
-  .actions button span {
-    font-size: 12px;
-    font-weight: 300;
-    line-height: 1.4;
-  }
-
-  /* The crate's favourites toggle: Only favourites fills its heart. */
-  .actions .favs.filled :global(svg) {
-    fill: currentColor;
-  }
-
-  /* A narrow panel: the actions show their icons only (their names stay as their labels for screen readers). */
-  @container (max-width: 339px) {
-    .actions button span {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
-  }
-
-  .actions button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
   .info-tab {
     padding: 0 8px;
   }
@@ -1243,7 +1298,7 @@
   /* The tabs (decision 0025): under the header, staying at the top while the content scrolls. */
   .tabs {
     position: sticky;
-    top: 0;
+    top: 52px;
     z-index: 2;
     display: flex;
     gap: 4px;
@@ -1323,6 +1378,234 @@
     margin-left: 10px;
     font-weight: 300;
     opacity: 0.6;
+  }
+
+  /* Symfonium's top bar over the cover: back, and where the panel is, on dark rounds so they show on any picture. */
+  .topbar {
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: 3;
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 4px 0;
+    pointer-events: none;
+  }
+
+  .topbar > * {
+    pointer-events: auto;
+  }
+
+  .topbar.gone {
+    visibility: hidden;
+  }
+
+  .topbar .icon.over,
+  .end.over :global(.place) {
+    background: rgb(0 0 0 / 0.38);
+    color: #fff;
+  }
+
+  .end.over :global(.place) {
+    border-radius: 50%;
+  }
+
+  /* The cover, edge to edge as Symfonium's; beside the page never so tall that the tracks drop out of sight. Its foot
+     fades into the panel, where the action bar sits. */
+  .hero {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    max-height: 60vh;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  .hero img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .hero.mosaic {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  /* A crate has no cover: a band with its icon. */
+  .hero.bare {
+    display: grid;
+    place-items: center;
+    aspect-ratio: auto;
+    height: 168px;
+    color: var(--muted);
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    inset: auto 0 0;
+    height: 40%;
+    background: linear-gradient(to bottom, transparent, var(--surface));
+    pointer-events: none;
+  }
+
+  /* The action bar, icons only: over the cover's foot, then staying at the top (with back and the panel's place). */
+  .actbar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    height: 52px;
+    margin-top: -52px;
+    padding: 0 4px;
+  }
+
+  .actbar.stuck {
+    background: var(--surface);
+    box-shadow: 0 1px 0 var(--border);
+  }
+
+  .actbar .icon {
+    flex: none;
+    width: 44px;
+    height: 44px;
+  }
+
+  .grow {
+    flex: 1;
+  }
+
+  /* The narrowest panel: the bar's icons a little closer, so all of them fit on one line once it has the top. */
+  @container (max-width: 379px) {
+    .actbar .icon,
+    .actbar :global(.place) {
+      width: 38px;
+    }
+  }
+
+  /* Under the cover: the name large, one line of what it is, the artist as a chip, the genres. */
+  .meta {
+    display: grid;
+    justify-items: start;
+    gap: 8px;
+    padding: 10px 16px 12px;
+  }
+
+  .meta h2 {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    padding: 0;
+    font-size: 26px;
+    font-weight: 400;
+    line-height: 1.2;
+  }
+
+  .details {
+    margin: 0;
+    color: var(--muted);
+    font-size: 15px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    max-width: 100%;
+    padding-right: 16px;
+    overflow: hidden;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--text) 9%, transparent);
+    font-size: 15px;
+  }
+
+  .chip img {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    object-fit: cover;
+  }
+
+  .chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  p.genres {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 0;
+  }
+
+  /* An album's rows (Symfonium's): no cover, the number in front, a little lower than a playlist's. */
+  .rows.numbered li {
+    height: 58px;
+    contain-intrinsic-size: auto 58px;
+  }
+
+  .rows.numbered :global(.row.large) {
+    min-height: 52px;
+  }
+
+  .num {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    color: var(--muted);
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The playing track's dots in place of its number; still while paused. */
+  .dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .dots i {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--art-accent, var(--accent));
+    animation: dot 1.1s ease-in-out infinite;
+  }
+
+  .dots i:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+
+  .dots i:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+
+  .dots i:nth-child(4) {
+    animation-delay: 0.45s;
+  }
+
+  .dots.still i {
+    animation: none;
+  }
+
+  @keyframes dot {
+    0%,
+    100% {
+      opacity: 0.35;
+      transform: translateY(0);
+    }
+    50% {
+      opacity: 1;
+      transform: translateY(-3px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dots i {
+      animation: none;
+    }
   }
 
   .empty,
