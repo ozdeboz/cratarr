@@ -7,7 +7,8 @@
   // Small and medium are Finamp's add-to-playlist tiles (tinted in the accent, a divider before the action); large is
   // Finamp's list tile (plain, a cover or control in front).
   //
-  // Parts, left to right: `lead` (a cover, a checkbox), the title with its `badges` after it (and `sub`, a second line,
+  // Parts, left to right: `front` (a control of its own before the tap target: an album's cover that plays), `lead`
+  // (a cover, a checkbox), the title with its `badges` after it (and `sub`, a second line,
   // under it), at the end of the text its `count` (a number, a duration: muted) and `meta` (its flags), then `action`. The text (with the lead) is the row's
   // own tap target when `onclick` is given, a label with `as="label"` (its checkbox toggles).
   import type { Snippet } from 'svelte';
@@ -18,6 +19,7 @@
     title,
     sub,
     lead,
+    front,
     badges,
     count,
     meta,
@@ -41,6 +43,8 @@
     /** A second line: muted (large), or under the title on small and medium; on extra large, lines of its own. */
     sub?: string | Snippet;
     lead?: Snippet;
+    /** Before the tap target, a control of its own (an album's cover that plays it). */
+    front?: Snippet;
     badges?: Snippet;
     count?: string | number;
     meta?: Snippet;
@@ -81,12 +85,13 @@
   class:strong
   class:off
   class:wrap
-  class:led={!!lead}
+  class:led={!!lead || !!front}
   class:press={tinted && !!onclick && !disabled}
   title={tooltip}
   {style}
   {@attach attach}
 >
+  {#if front}{@render front()}{/if}
   {#if tag === 'button'}
     <button type="button" class="main" {disabled} aria-label={label} {onclick} {@attach attachMain}>{@render inside()}</button>
   {:else if tag === 'label'}
@@ -385,6 +390,7 @@
   .xl,
   .xl.led {
     min-height: 84px;
+    gap: 12px;
     padding: 6px;
     border-radius: 12px;
   }

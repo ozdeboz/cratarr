@@ -111,7 +111,7 @@
               </Tile>
             {:else}
               <Row size="xl" title={a.title} label="View {a.title}" active={viewed} onclick={() => view(s.id, a)} attach={longPress(s, a)}>
-                {#snippet lead()}<span class="cover">{@render cover(s, a)}</span>{/snippet}
+                {#snippet front()}{@render playCover(s, a)}{/snippet}
                 {#snippet badges()}
                   {#if a.year}<span class="released">{a.year}</span>{/if}
                 {/snippet}
@@ -125,7 +125,6 @@
                   </span>
                   {@render extra?.(s, a)}
                 {/snippet}
-                {#snippet action()}{@render play(s, a)}{/snippet}
               </Row>
             {/if}
           </li>
@@ -141,6 +140,20 @@
   {:else}
     <img src={albumCoverUrl(s.id, a.id)} alt="" loading="lazy" decoding="async" onerror={() => (noCover[a.id] = true)} />
   {/if}
+{/snippet}
+
+<!-- A row's cover plays the album (decided 2026-10-16): wherever a cover plays, the play icon is in its lower right
+     corner, as on a tile's. -->
+{#snippet playCover(s: ShelfSource, a: ListedAlbum)}
+  <button
+    class="cover plays"
+    aria-label="Play {a.title}"
+    title="Play"
+    disabled={albumPlay.starting !== null}
+    aria-busy={albumPlay.starting === a.id}
+    onclick={() => playListedAlbum(s.id, a)}
+    >{@render cover(s, a)}<span class="corner" aria-hidden="true"><Icon name="play" size={14} /></span></button
+  >
 {/snippet}
 
 {#snippet play(s: ShelfSource, a: ListedAlbum)}
@@ -231,7 +244,34 @@
     background: var(--surface);
   }
 
-  .cover > *,
+  /* The cover that plays: a button, its play icon a small round in the accent in the lower right corner (the tile's
+     Play, smaller). */
+  .cover.plays {
+    position: relative;
+    padding: 0;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .cover.plays:disabled {
+    cursor: default;
+  }
+
+  .cover.plays .corner {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-text);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
+  }
+
+  .cover > :not(.corner),
   img {
     display: block;
     width: 100%;

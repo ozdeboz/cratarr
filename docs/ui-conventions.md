@@ -173,7 +173,9 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 - **Album lists** (Incoming, Collection; decision 0028, `lib/AlbumShelf.svelte`): the filter, the order (Collection:
   Artist, Title, Year, Added), Rows or Covers, and Size, over each server's albums in columns as the playlist chips
   are. Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was
-  added, and the page's own lines: Incoming's conversion and how it relates to Music); Covers are tiles. Layout and
+  added, and the page's own lines: Incoming's conversion and how it relates to Music); Covers are tiles. A row's cover
+  plays the album (the rest of the row views it; no play button at the row's end): **wherever a cover plays, its
+  play icon is in the cover's lower right corner**, as on a tile (decided 2026-10-16). Layout and
   size are one choice for every album list, remembered by the browser.
 - **Tiles** (`lib/Tile.svelte`): Row's sibling for things shown by their picture: the square picture on top, as wide
   as the column the page's Size makes, the title and muted lines under it, the action (Play) over the picture's
