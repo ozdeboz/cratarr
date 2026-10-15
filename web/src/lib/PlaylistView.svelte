@@ -50,7 +50,7 @@
   import { enqueue, type LocalTrack } from './localPlayer.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
-  import { albumMoved, albumOf, closePlaylist, viewPlaylist, panel, setTab, TABS } from './panel.svelte';
+  import { albumMoved, albumOf, closePlaylist, panelDepth, viewPlaylist, panel, setTab, TABS } from './panel.svelte';
   import { inSidebar } from './live.svelte';
   import ExportTab from './ExportTab.svelte';
   import PlaylistItem from './PlaylistItem.svelte';
@@ -62,6 +62,7 @@
   import SyncTab from './SyncTab.svelte';
   import PlaylistMenu from './PlaylistMenu.svelte';
   import PanelPlace from './PanelPlace.svelte';
+  import TopPill from './TopPill.svelte';
   import { work } from './panelWork.svelte';
   import { prefs } from './prefs.svelte';
   import { clockText, paused, playing } from './remote.svelte';
@@ -405,27 +406,32 @@
   });
   const shownGenres = $derived(multi ? [] : plain ? (listGenres ?? []) : (point?.genres ?? []));
 
-  // Two bars, as Symfonium's album screen: the top one over the cover (back, where it plays), and the action bar at the
-  // cover's foot. Scrolled up to the top, the action bar stays there and takes the top bar's place, with back at its
-  // start and where it plays at its end; the top bar fades as it comes near.
+  // As Symfonium's album screen: two floating pills over the cover (back and ✕; the filter and where it plays), and the
+  // action bar at the cover's foot. Scrolled up to the top, the action bar stays there, and the pills float just under
+  // it (chosen 2026-10-15), over the list that scrolls under them.
   let actbar = $state<HTMLElement>();
   let stuck = $state(false);
-  let topFade = $state(1);
-  const BAR = 52;
   function onScroll() {
     const sc = scroller;
     const a = actbar;
     if (!sc || !a) return;
     // Its distance from the top: 0 while it stays there (a sticky element's offset is where it shows).
-    const y = a.offsetTop - sc.scrollTop;
-    stuck = y <= 0.5;
-    topFade = Math.min(1, Math.max(0, (y - BAR) / BAR));
+    stuck = a.offsetTop - sc.scrollTop <= 0.5;
   }
   $effect(() => {
     // Another subject shows from its cover.
     void id;
     stuck = false;
-    topFade = 1;
+  });
+  // Back is offered when the panel has a view before this one (each view is a history step of its own); ✕ always.
+  let canGoBack = $state(false);
+  $effect(() => {
+    void panel.viewed;
+    void panel.tab;
+    const on = () => (canGoBack = panelDepth() > 1);
+    on();
+    addEventListener('popstate', on);
+    return () => removeEventListener('popstate', on);
   });
 
   // Resume (Symfonium's clock): where an album of Cratarr's own library was left, from the bookmarks apps keep
@@ -717,11 +723,15 @@
     {/if}
     </div>
   {:else}
-    <!-- Symfonium's top bar, over the cover: back, and where it plays. It fades as the action bar comes up, and is gone
-         once that has the top. -->
-    <div class="topbar" class:gone={stuck} style:opacity={topFade} inert={stuck}>
-      <button class="icon over" aria-label={closeLabel} onclick={() => closePlaylist()}><Icon name="back" size={24} /></button>
-      <span class="end over"><PanelPlace /></span>
+    <!-- Symfonium's floating pills over the cover: back (when there is a view before this one) and ✕ on the left; the
+         filter and where it plays, and the panel's place, on the right. Once the action bar has the top they float just
+         under it. -->
+    <div class="pills" class:below={stuck}>
+      <span class="navpill">
+        {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
+        <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
+      </span>
+      <span class="end"><TopPill /><PanelPlace /></span>
     </div>
   {/if}
 
@@ -795,9 +805,8 @@
       <div class="hero" class:mosaic={covers.length === 4} class:bare={!covers.length}>
         {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? 'crates' : 'albums'} size={56} /></span>{/each}
       </div>
-      <!-- The action bar, at the cover's foot; at the top it stays, with back and where it plays. -->
+      <!-- The action bar, at the cover's foot; at the top it stays. -->
       <div class="actbar" class:stuck bind:this={actbar} role="toolbar" aria-label="Play">
-        {#if stuck}<button class="icon" aria-label={closeLabel} onclick={() => closePlaylist()}><Icon name="back" size={24} /></button>{/if}
         {#each barActions as a (a.key)}
           <button class="icon" aria-label={a.label} title={a.label} disabled={a.disabled} onclick={a.run}><Icon name={a.icon} size={24} /></button>
         {/each}
@@ -820,7 +829,6 @@
           >
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (menuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {/if}
-        {#if stuck}<PanelPlace />{/if}
       </div>
       <header class="meta">
         <h2>{title}</h2>
@@ -1555,33 +1563,60 @@
     opacity: 0.6;
   }
 
-  /* Symfonium's top bar over the cover: back, and where the panel is, on dark rounds so they show on any picture. */
-  .topbar {
+  /* Symfonium's floating pills, over the cover; under the action bar once that has the top (its 52 px). */
+  .pills {
     position: absolute;
     inset: 0 0 auto;
     z-index: 3;
     display: flex;
+    align-items: flex-start;
     justify-content: space-between;
-    padding: 4px 4px 0;
+    padding: 6px 8px 0;
     pointer-events: none;
+    transition: transform 150ms ease;
   }
 
-  .topbar > * {
+  .pills > * {
     pointer-events: auto;
   }
 
-  .topbar.gone {
-    visibility: hidden;
+  .pills.below {
+    transform: translateY(52px);
   }
 
-  .topbar .icon.over,
-  .end.over :global(.place) {
-    background: rgb(0 0 0 / 0.38);
-    color: #fff;
+  .pills .end {
+    display: flex;
+    align-items: center;
+    gap: 6px;
   }
 
-  .end.over :global(.place) {
+  /* Back and ✕ (lib/TopPill's look). */
+  .navpill {
+    display: flex;
+    padding: 2px;
+    border-radius: 26px;
+    background: color-mix(in srgb, var(--surface) 80%, transparent);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
+  }
+
+  .navpill button {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 22px;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .pills .end :global(.place) {
     border-radius: 50%;
+    background: color-mix(in srgb, var(--surface) 80%, transparent);
+    backdrop-filter: blur(12px);
   }
 
   /* The cover, edge to edge as Symfonium's; beside the page never so tall that the tracks drop out of sight. Its foot
@@ -1652,10 +1687,9 @@
     flex: 1;
   }
 
-  /* The narrowest panel: the bar's icons a little closer, so all of them fit on one line once it has the top. */
+  /* The narrowest panel: the bar's icons a little closer, so all of them fit on one line. */
   @container (max-width: 379px) {
-    .actbar .icon,
-    .actbar :global(.place) {
+    .actbar .icon {
       width: 38px;
     }
   }

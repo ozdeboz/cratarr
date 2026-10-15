@@ -60,11 +60,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   playlists: their covers and count in the header, ✕ alone in the bar, and on Tracks a folding section per playlist
   (read-only). ✕ (and Esc, Back) closes the panel: the player folds to the mini-player rather than showing in its
   place (decision 0025). Its header is Symfonium's album screen (2026-10-15): the cover edge to edge (a playlist's
-  mosaic; a crate's band with its icon), under a **top bar** floating over it (back, the panel's place), and at the cover's foot the **action bar**, icons only: Play, Resume (an album of Cratarr's own
+  mosaic; a crate's band with its icon), under **two floating pills** (back, when the panel has a view before this
+  one, and ✕; the filter and where it plays, and the panel's place), and at the cover's foot the **action bar**, icons only: Play, Resume (an album of Cratarr's own
   library: where it was left), Shuffle, Play next, Add to queue, then the subject's own (the heart; a playlist's pencil
   on Tracks and menu; an album's menu with Incoming's Keep, Replace and Delete; a crate's favourites toggle, pencil
-  and Make playlist). Scrolled up to the top the action bar stays there and takes the top bar's place (back at its
-  start, the panel's place at its end). Under the cover the name large, one line of what it is (an album: length,
+  and Make playlist). Scrolled up to the top the action bar stays there, and the pills float just under it, over the
+  list. The pills are the panel's (not the pages'), so the player covers them once open. Under the cover the name large, one line of what it is (an album: length,
   year, format, bitrate; otherwise how many tracks and the length), an album's artist as a chip, the genres. Over the
   tracks **their order** (the subject's own, or by title, artist, album, length; a tap chooses, the arrow turns it
   round), how many, and **select mode** (a long-press on a track, or the icon: circles to tick, and a bar floating over

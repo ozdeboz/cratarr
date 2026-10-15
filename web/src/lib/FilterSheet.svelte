@@ -1,10 +1,11 @@
 <script lang="ts">
-  // The panel's source filter, after Symfonium's sheet of that name (opened from the funnel in the panel's top bar):
+  // The filter, after Symfonium's source filter (opened from the funnel in the panel's floating pill, lib/TopPill):
   // what the album and playlist views leave out, then a card per server this browser can follow, with its kind and
   // its libraries. A tap on a server's card follows it; a tap on the followed one goes back to following whichever
-  // started playing most recently (SourcePicker's Automatic), so every choice the picker offers is here too. The
+  // started playing most recently (Automatic), the choice the server dropdown it replaces also offered. The
   // libraries are only shown, with their use: Cratarr has no per-library visibility, and a use is set only in Settings
   // (decision 0009).
+  import { pageView } from './pageView.svelte';
   import { getSettings, getStatus, type LibraryUse, type Settings } from './api';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -12,9 +13,10 @@
   import { known, remember } from './sources.svelte';
   import { toast } from './toast.svelte';
 
-  let { onclose }: { onclose: () => void } = $props();
+  // `page`: the page it was opened on, whose own filters it shows too (Playlists: favourites only).
+  let { page = null, onclose }: { page?: string | null; onclose: () => void } = $props();
 
-  // The servers as SourcePicker gets them: the status call fills the list when no playlist poll has yet.
+  // The servers: the status call fills the list when no playlist poll has yet.
   $effect(() => {
     getStatus()
       .then((s) => known.list.length === 0 && remember(s.sources))
@@ -44,7 +46,7 @@
     known.list.map((s) => {
       const view = settings?.sources.find((v) => v.id === s.id);
       // A tab's label is its kind ("Jellyfin"); the server's own name comes with the settings. Two of one kind without
-      // it are told apart by their id, as in SourcePicker.
+      // it are told apart by their id.
       const twin = known.list.filter((x) => x.label === s.label).length > 1;
       const own = view?.status.server_name ?? null;
       const libraries = (view?.server_libraries ?? []).map((l) => ({
@@ -64,6 +66,11 @@
 <MenuSheet label="Filter" icon="funnel" title="Filter" {onclose}>
   <div class="cards">
     <div class="toggles">
+      {#if page === 'playlists'}
+        <button class="switch" role="switch" aria-checked={pageView.favouritesOnly} onclick={() => (pageView.favouritesOnly = !pageView.favouritesOnly)}>
+          <span>Favourites only</span><i aria-hidden="true"></i>
+        </button>
+      {/if}
       <button class="switch" role="switch" aria-checked={prefs.hideMissing} onclick={() => (prefs.hideMissing = !prefs.hideMissing)}>
         <span>Hide missing tracks</span><i aria-hidden="true"></i>
       </button>

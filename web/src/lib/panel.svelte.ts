@@ -52,6 +52,8 @@ function address(names: string[], tab: Tab) {
 // The history entries the panel added in this visit carry how many there are: closing goes Back over all of them, so
 // the history stays tidy (viewing adds one; a tab switch in the full-screen panel adds one more).
 const depth = (): number => (history.state && typeof history.state.panel === 'number' ? history.state.panel : 0);
+/** How many of the panel's own views (and tab steps) this visit went through to here: back goes to the one before. */
+export const panelDepth = depth;
 function push(url: string) {
   history.pushState({ panel: depth() + 1 }, '', url);
 }

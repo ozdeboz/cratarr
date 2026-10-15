@@ -1,6 +1,6 @@
 <script lang="ts">
-  // An album list (Incoming, Collection): the filter, the order (when the page offers one), rows or a grid of covers,
-  // and the size, over each server's albums in columns as the playlist chips are. Rows are extra large rows (Row),
+  // An album list (Incoming, Collection): the filter, then each server's albums in columns as the playlist chips are,
+  // in the order, layout and size chosen in the pill's View (lib/ViewSheet, decided 2026-10-15). Rows are extra large rows (Row),
   // the grid is tiles (Tile). A tap views the album in the panel, Play plays it, a long-press opens its menu: the
   // page's own (`onmenu`), else View and Play.
   import type { Snippet } from 'svelte';
@@ -15,8 +15,7 @@
   import { prefs, type AlbumLayout, type CollectionOrder } from './prefs.svelte';
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
-  import Seg from './Seg.svelte';
-  import SizeControl from './SizeControl.svelte';
+  import { ALBUM_WIDTHS, pageView } from './pageView.svelte';
   import Tile from './Tile.svelte';
 
   let {
@@ -37,24 +36,12 @@
     onmenu?: (source: ShelfSource, a: ListedAlbum, anchor: DOMRect) => void;
   } = $props();
 
-  // An item's least width per size step (prefs.ZOOM_STEPS): rows need room for their lines, covers less.
-  const WIDTHS: Record<AlbumLayout, readonly number[]> = {
-    rows: [240, 280, 340, 420, 520, 680],
-    grid: [110, 140, 170, 210, 260, 340],
-  };
-  const LAYOUTS = [
-    { value: 'rows' as const, label: 'Rows', icon: 'list' as const },
-    { value: 'grid' as const, label: 'Covers', icon: 'layoutGrid' as const },
-  ];
-  const ORDERS = [
-    { value: 'artist' as const, label: 'Artist' },
-    { value: 'title' as const, label: 'Title' },
-    { value: 'year' as const, label: 'Year' },
-    { value: 'added' as const, label: 'Added', title: 'Recently added first' },
-  ];
-
   let filter = $state('');
   let width = $state(0);
+  // View's size steps depend on the width the lists have.
+  $effect(() => {
+    pageView.width = width;
+  });
   let noCover = $state<Record<string, boolean>>({});
   // What is playing (the shell polls it), so the album being listened to stands out.
   const playing = $derived(nowPlaying());
@@ -89,9 +76,6 @@
 
 <div class="tools">
   <input class="filter" type="search" placeholder="Filter albums" aria-label="Filter albums" bind:value={filter} />
-  {#if order}<Seg label="Order" options={ORDERS} bind:value={prefs.collectionOrder} />{/if}
-  <Seg label="Layout" options={LAYOUTS} bind:value={prefs.albumLayout} />
-  <SizeControl widths={WIDTHS[prefs.albumLayout]} {width} bind:value={prefs.albumZoom} />
 </div>
 
 <div class="lists" bind:clientWidth={width}>
@@ -105,7 +89,7 @@
       <p class="empty">{empty}</p>
     {:else}
       <p class="count">{s.albums.length} {s.albums.length === 1 ? 'album' : 'albums'}{order ? '.' : ', newest first.'}</p>
-      <ul class={prefs.albumLayout} style:--min="{WIDTHS[prefs.albumLayout][prefs.albumZoom]}px">
+      <ul class={prefs.albumLayout} style:--min="{ALBUM_WIDTHS[prefs.albumLayout][prefs.albumZoom]}px">
         {#each albums as a (a.id)}
           {@const here = playing?.album_id === a.id}
           {@const viewed = panel.viewed === albumSubject(s.id, a.id)}

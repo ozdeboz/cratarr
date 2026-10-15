@@ -12,6 +12,8 @@
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
+  import TopPill from './lib/TopPill.svelte';
+  import { hasView } from './lib/pageView.svelte';
   import { playing } from './lib/remote.svelte';
   import { fade, fly } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
@@ -98,9 +100,34 @@
   const TOP_BAR = 65;
   /** The mini-player's height with its margin, kept free under the page and the toasts. */
   const MINI_SPACE = 88;
-  /** The same for the small button shown with nothing to play. */
-  const DEVICE_SPACE = 68;
-  const miniSpace = $derived(mini ? (playing() ? MINI_SPACE : DEVICE_SPACE) : 0);
+  const miniSpace = $derived(mini && playing() ? MINI_SPACE : 0);
+  // The page's row (Symfonium's, decided 2026-10-15), floating over the page's top: back on the left, when this visit
+  // has a step before this one; on the right, on a page with something to play, the pill (lib/TopPill): the filter
+  // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
+  // page). The page starts under the row, so at rest nothing lies under it.
+  const PLAYABLE = ['playlists', 'crates', 'collection', 'incoming'];
+  const pagePill = $derived(PLAYABLE.includes(page));
+  const pillDevice = $derived(!playing() && !(sidebar && panelShowsPlayer()));
+  // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
+  // the one the app opened with.
+  let navAt = $state(0);
+  let lastNav = -1;
+  function stamp() {
+    const st = history.state ?? {};
+    if (typeof st.nav !== 'number') history.replaceState({ ...st, nav: lastNav + 1 }, '');
+    navAt = history.state.nav;
+    lastNav = navAt;
+  }
+  $effect(() => {
+    stamp();
+    addEventListener('hashchange', stamp);
+    addEventListener('popstate', stamp);
+    return () => {
+      removeEventListener('hashchange', stamp);
+      removeEventListener('popstate', stamp);
+    };
+  });
+  const pageRow = $derived(!playlistLayer && !overlay && (navAt > 0 || pagePill));
   $effect(() => {
     const root = document.documentElement.style;
     root.setProperty('--top-h', phone ? `${TOP_BAR}px` : '0px');
@@ -254,7 +281,7 @@
   </aside>
 
   <div class="content" class:with-side={sidebar} style:--player-w="{playerWidth}px" bind:this={contentEl}>
-    <div class="page">
+    <div class="page" class:under-row={pageRow}>
     {#if withPicker}
       {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
     {/if}
@@ -306,6 +333,16 @@
   {/if}
   {#if mini}
     <div class="mini-dock"><MiniPlayer /></div>
+  {/if}
+  {#if pageRow}
+    <div class="page-row" class:beside={sidebar} style:--player-w="{playerWidth}px">
+      {#if navAt > 0}
+        <span class="navpill"><button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button></span>
+      {:else}
+        <span></span>
+      {/if}
+      {#if pagePill}<TopPill {page} view={hasView(page)} device={pillDevice} />{/if}
+    </div>
   {/if}
   {#if overlay}
     <!-- Over everything, as Finamp's: it slides up when it opens (300 ms, easeInOutQuad) and fades when it closes
@@ -378,6 +415,55 @@
     display: flex;
     flex-direction: column;
     background: var(--surface);
+  }
+
+  /* The page's row: back and the pill floating over the page's top, which starts under them (.under-row); under the page
+     bar on a phone, beside the navigation and left of the panel on a wide window. Over the page and its bar, under a
+     viewed playlist. */
+  .page-row {
+    position: fixed;
+    top: calc(var(--top-h, 0px) + env(safe-area-inset-top) + 8px);
+    left: 12px;
+    right: 12px;
+    z-index: 20;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+
+  .page-row > :global(*) {
+    pointer-events: auto;
+  }
+
+  .page-row.beside {
+    right: calc(var(--player-w) + 10px + 12px);
+  }
+
+  .page.under-row {
+    padding-top: 60px;
+  }
+
+  /* Back, round as the pill (lib/TopPill). */
+  .navpill {
+    display: flex;
+    padding: 2px;
+    border-radius: 26px;
+    background: color-mix(in srgb, var(--surface) 80%, transparent);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
+  }
+
+  .navpill button {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 22px;
+    background: none;
+    color: inherit;
+    cursor: pointer;
   }
 
   .overlay {
@@ -598,7 +684,8 @@
       height: var(--app-h, 100dvh);
     }
 
-    .mini-dock {
+    .mini-dock,
+    .page-row {
       left: calc(240px + 12px);
     }
 

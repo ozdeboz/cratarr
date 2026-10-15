@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PLAYLIST_WIDTHS, pageView } from './lib/pageView.svelte';
   import { tick as settled } from 'svelte';
   import { createPlaylist, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
@@ -38,10 +39,12 @@
     searchField?.focus();
   }
   /** The filter section's Favourites toggle: only favourite playlists. */
-  let favouritesOnly = $state(false);
   // Size = chip width, which sets how many columns fit; one width per step in prefs.ZOOM_STEPS.
-  const WIDTHS = [110, 140, 170, 210, 260, 340];
   let gridWidth = $state(0);
+  $effect(() => {
+    pageView.width = gridWidth;
+  });
+  $effect(() => () => (pageView.favouritesOnly = false));
   // Taps flip the chip at once; the server's answer replaces this guess.
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
@@ -60,7 +63,7 @@
       return { ...p, member, count: p.count + (member === p.member ? 0 : member ? 1 : -1) };
     });
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
-    if (favouritesOnly) list = list.filter((p) => isPlaylistFavorite(p.id));
+    if (pageView.favouritesOnly) list = list.filter((p) => isPlaylistFavorite(p.id));
     // Pinned ones first, in the order pinned; "✓ first" applies within the pinned and within the rest.
     const pin = (id: string) => {
       const i = prefs.pinned.indexOf(id);
@@ -138,18 +141,10 @@
     <NewButton label="New playlist" onclick={openNew} />
   {/if}
 
-  <!-- The page's controls in two sections: what it always needs (the button that shows or hides the other section,
-       Select, Size), and the filter section (the filter and the order), which folds away; remembered by the browser. -->
+  <!-- The page's controls: Select, the search, and View N while ticking. Its order, size and favourites-only are in
+       the pill's View and Filter (lib/TopPill, decided 2026-10-15). -->
   <div class="tools">
     <div class="row">
-    <button
-      class="new toggle"
-      class:active={!prefs.filterOpen && (filter.trim() !== '' || favouritesOnly)}
-      aria-expanded={prefs.filterOpen}
-      aria-controls="playlist-filter"
-      aria-label={prefs.filterOpen ? 'Hide the filter' : 'Show the filter'}
-      onclick={() => (prefs.filterOpen = !prefs.filterOpen)}><Icon name="filter" size={22} /></button
-    >
     <!-- Select (decision 0025): on, it is highlighted, a chip's name ticks it, and a tap on it again ends it. The ticked
          ones' menu is the ⋮ in the page's top right corner; on a phone they are viewed in the panel with View N. -->
     <button
@@ -159,7 +154,29 @@
       title="Select"
       onclick={() => (select.on ? endSelect() : startSelect())}><Icon name="copyCheck" size={22} /></button
     >
-    <SizeControl widths={WIDTHS} width={gridWidth} bind:value={prefs.zoom} />
+    <button class="new toggle magnifier" class:active={filter.trim() !== ''} aria-label="Filter playlists" aria-expanded={searching} onclick={openSearch}
+      ><Icon name="search" size={22} /></button
+    >
+    <div class="search" class:open={searching}>
+      <input
+        type="search"
+        placeholder="Filter playlists"
+        aria-label="Filter playlists"
+        bind:value={filter}
+        bind:this={searchField}
+        onkeydown={(e) => e.key === 'Escape' && (searching = false)}
+        onblur={() => filter.trim() === '' && (searching = false)}
+      />
+      <button
+        class="clear"
+        aria-label="Clear the filter"
+        onmousedown={(e) => e.preventDefault()}
+        onclick={() => {
+          filter = '';
+          searching = false;
+        }}><Icon name="close" size={20} /></button
+      >
+    </div>
     {#if select.on && select.picked.length && !showsPicked()}
       <!-- View N: at the right end of the row (beside the corner); on a small page its icon only. -->
       {@const viewLabel = select.picked.length === 1 ? 'View 1 playlist' : `View ${select.picked.length} playlists`}
@@ -168,50 +185,7 @@
       >
     {/if}
     </div>
-    {#if prefs.filterOpen}
-      <div class="row filters" id="playlist-filter">
-        <button class="new toggle magnifier" class:active={filter.trim() !== ''} aria-label="Filter playlists" aria-expanded={searching} onclick={openSearch}
-          ><Icon name="search" size={22} /></button
-        >
-        <div class="search" class:open={searching}>
-          <input
-            type="search"
-            placeholder="Filter playlists"
-            aria-label="Filter playlists"
-            bind:value={filter}
-            bind:this={searchField}
-            onkeydown={(e) => e.key === 'Escape' && (searching = false)}
-            onblur={() => filter.trim() === '' && (searching = false)}
-          />
-          <button
-            class="clear"
-            aria-label="Clear the filter"
-            onmousedown={(e) => e.preventDefault()}
-            onclick={() => {
-              filter = '';
-              searching = false;
-            }}><Icon name="close" size={20} /></button
-          >
-        </div>
-        <Seg
-          label="Order"
-          options={[
-            { value: false, label: 'A–Z' },
-            { value: true, label: '✓ first', title: 'Playlists with the playing track first' },
-          ]}
-          bind:value={prefs.membersFirst}
-        />
-        <button
-          class="new toggle fav"
-          aria-pressed={favouritesOnly}
-          aria-label="Favourites only"
-          title="Favourites only"
-          onclick={() => (favouritesOnly = !favouritesOnly)}><Icon name="heart" size={22} /></button
-        >
-      </div>
-    {/if}
   </div>
-
   {#if error}
     <Notice text={error} />
   {/if}
@@ -219,7 +193,7 @@
   {#if !view && !error}
     <p class="empty">Loading…</p>
   {:else}
-    <ul class="grid" class:pending={pending()} style:--min="{WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
+    <ul class="grid" class:pending={pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
       {#each items as p (p.id)}
         <li>
           <!-- The label views the playlist (decision 0023), in Select ticks it (decision 0025); the circle adds or removes
@@ -306,16 +280,11 @@
     color: inherit;
   }
 
-  /* Favourites only and Select: on, in the accent (the heart filled). */
-  button.new.select[aria-pressed='true'],
-  button.new.fav[aria-pressed='true'] {
+  /* Select: on, in the accent. */
+  button.new.select[aria-pressed='true'] {
     border-color: var(--accent);
     background: var(--accent);
     color: var(--accent-text);
-  }
-
-  button.new.fav[aria-pressed='true'] :global(svg) {
-    fill: currentColor;
   }
 
   /* Folded away while a filter applies: the button says so, since chips are missing. */
@@ -340,11 +309,10 @@
     background: var(--surface);
   }
 
-  /* The filter field: in its row while the page is wide enough for the row on one line (the field at its 220 px
-     beside the order and the heart); narrower, a magnifier, and once opened lying over the row. */
-  /* The row never wraps: the field takes what the order and the heart leave (an input's own minimum width would push
+  /* The filter field: in the row while the page is wide enough; narrower, a magnifier, and once opened lying over the
+     row. The row never wraps: the field takes what Select and View N leave (an input's own minimum width would push
      them to a line of their own), and below the container query's width it folds to the magnifier. */
-  .tools .row.filters {
+  .tools .row {
     position: relative;
     flex-wrap: nowrap;
   }
