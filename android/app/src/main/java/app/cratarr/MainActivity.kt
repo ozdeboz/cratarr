@@ -120,6 +120,7 @@ class MainActivity : AppCompatActivity() {
             url == null -> askForAddress()
             url != shown -> show(url)
         }
+        PlayerService.ready(this)
     }
 
     override fun onDestroy() {

@@ -1,0 +1,283 @@
+package app.cratarr
+
+import android.net.Uri
+import android.net.wifi.WifiManager
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.util.Log
+import androidx.media3.common.C
+import androidx.media3.common.Player
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
+
+/**
+ * Play On, the app's side (decision 0031, step 3): this player's connection to Cratarr. It keeps
+ * `GET /api/players/{name}/connect` open (server-sent events: the commands for it), runs each command on the app's own
+ * player, and reports what it plays with `PUT /api/players/{name}/state`: on every change, and every 30 s besides.
+ * Cratarr counts the player online while the connection is open. With Stay ready, a wake lock and a Wi-Fi lock keep
+ * the connection up while nothing plays.
+ */
+class PlayOnLink(
+    private val service: PlayerService,
+    private val player: Player,
+    private val prefs: Prefs,
+) : Player.Listener {
+    private val main = Handler(Looper.getMainLooper())
+    private val reports = Executors.newSingleThreadExecutor()
+    private val wakeLock = service.getSystemService(PowerManager::class.java)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "cratarr:ready")
+        .apply { setReferenceCounted(false) }
+
+    @Suppress("DEPRECATION") // the mode that keeps Wi-Fi up with the screen off
+    private val wifiLock = (service.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as WifiManager)
+        .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "cratarr:ready")
+        .apply { setReferenceCounted(false) }
+
+    @Volatile private var running = false
+    @Volatile private var connection: HttpURLConnection? = null
+    private var thread: Thread? = null
+
+    /** The volume before a duck (0 to 1); null when not ducked. */
+    private var unducked: Float? = null
+    private var queueSent = false
+    private var reportPending = false
+
+    fun start() {
+        if (running) return
+        running = true
+        player.addListener(this)
+        thread = Thread(::listen, "cratarr-play-on").apply { isDaemon = true; start() }
+        main.post(heartbeat)
+        holdIfReady()
+    }
+
+    fun stop() {
+        running = false
+        player.removeListener(this)
+        main.removeCallbacks(heartbeat)
+        connection?.disconnect()
+        thread?.interrupt()
+        hold(false)
+        reports.shutdown()
+    }
+
+    /** The address or the name changed: connect again with them. */
+    fun reconnect() {
+        queueSent = false
+        connection?.disconnect()
+        holdIfReady()
+    }
+
+    private fun holdIfReady() = hold(prefs.stayReady)
+
+    // Held without a timeout on purpose: for as long as the device stays ready.
+    @android.annotation.SuppressLint("WakelockTimeout")
+    private fun hold(on: Boolean) {
+        if (on) {
+            if (!wakeLock.isHeld) wakeLock.acquire()
+            if (!wifiLock.isHeld) wifiLock.acquire()
+        } else {
+            if (wakeLock.isHeld) wakeLock.release()
+            if (wifiLock.isHeld) wifiLock.release()
+        }
+    }
+
+    private fun base(): String? {
+        val server = prefs.serverUrl?.trimEnd('/') ?: return null
+        return "$server/api/players/${Uri.encode(prefs.playerName)}"
+    }
+
+    // --- the commands ---
+
+    /** The connection, kept open; after it drops, again after 2 s, then longer (at most a minute) while it fails. */
+    private fun listen() {
+        var wait = 2_000L
+        while (running) {
+            val base = base()
+            if (base == null) {
+                sleep(10_000)
+                continue
+            }
+            try {
+                val c = URL("$base/connect").openConnection() as HttpURLConnection
+                connection = c
+                c.connectTimeout = 10_000
+                // Cratarr sends a keep-alive every 15 s: a minute of silence is a dead connection.
+                c.readTimeout = 60_000
+                c.setRequestProperty("Accept", "text/event-stream")
+                if (c.responseCode != 200) throw java.io.IOException("HTTP ${c.responseCode}")
+                Log.i(TAG, "connected as ${prefs.playerName}")
+                wait = 2_000L
+                main.post { queueSent = false; report() }
+                read(BufferedReader(InputStreamReader(c.inputStream, Charsets.UTF_8)))
+            } catch (e: Exception) {
+                if (running) Log.w(TAG, "connection to Cratarr: ${e.message}")
+            } finally {
+                connection?.disconnect()
+                connection = null
+            }
+            if (!running) return
+            sleep(wait)
+            wait = (wait * 2).coerceAtMost(60_000L)
+        }
+    }
+
+    private fun read(reader: BufferedReader) {
+        var event = ""
+        val data = StringBuilder()
+        while (running) {
+            val line = reader.readLine() ?: return
+            when {
+                line.isEmpty() -> {
+                    if (event == "command" && data.isNotEmpty()) {
+                        val json = data.toString()
+                        main.post { run(json) }
+                    }
+                    event = ""
+                    data.setLength(0)
+                }
+                line.startsWith("event:") -> event = line.removePrefix("event:").trim()
+                line.startsWith("data:") -> {
+                    if (data.isNotEmpty()) data.append('\n')
+                    data.append(line.removePrefix("data:").removePrefix(" "))
+                }
+            }
+        }
+    }
+
+    private fun sleep(ms: Long) {
+        try {
+            Thread.sleep(ms)
+        } catch (e: InterruptedException) {
+            // stopped
+        }
+    }
+
+    /** One command from Cratarr, on the player (main thread). */
+    private fun run(json: String) {
+        val m = try {
+            JSONObject(json)
+        } catch (e: JSONException) {
+            Log.w(TAG, "a command that cannot be read: $json")
+            return
+        }
+        val p = player
+        when (m.optString("command")) {
+            "play" -> {
+                val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
+                if (items.isEmpty()) return
+                p.setMediaItems(items, m.optInt("index", 0).coerceIn(0, items.size - 1), m.optLong("position_ms", 0))
+                p.prepare()
+                p.play()
+            }
+            "pause" -> p.pause()
+            "resume" -> play()
+            "toggle" -> if (p.playWhenReady && p.playbackState != Player.STATE_ENDED) p.pause() else play()
+            "stop" -> {
+                p.stop()
+                p.clearMediaItems()
+            }
+            "next" -> p.seekToNextMediaItem()
+            "previous" -> p.seekToPrevious()
+            "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))
+            "volume" -> {
+                val v = m.optInt("level", 100).coerceIn(0, 100) / 100f
+                if (unducked != null) unducked = v else p.volume = v
+            }
+            "duck" -> if (unducked == null) {
+                unducked = p.volume
+                p.volume = p.volume * DUCKED
+            }
+            "unduck" -> unducked?.let {
+                p.volume = it
+                unducked = null
+            }
+            else -> Log.w(TAG, "a command this app does not know: $json")
+        }
+        report()
+    }
+
+    private fun play() {
+        val p = player
+        if (p.playbackState == Player.STATE_IDLE) p.prepare()
+        if (p.playbackState == Player.STATE_ENDED) p.seekTo(p.currentMediaItemIndex, 0)
+        p.play()
+    }
+
+    // --- the reports ---
+
+    private val heartbeat = object : Runnable {
+        override fun run() {
+            report()
+            main.postDelayed(this, HEARTBEAT_MS)
+        }
+    }
+
+    override fun onEvents(player: Player, events: Player.Events) {
+        if (events.contains(Player.EVENT_TIMELINE_CHANGED)) queueSent = false
+        if (events.containsAny(
+                Player.EVENT_MEDIA_ITEM_TRANSITION,
+                Player.EVENT_PLAY_WHEN_READY_CHANGED,
+                Player.EVENT_PLAYBACK_STATE_CHANGED,
+                Player.EVENT_POSITION_DISCONTINUITY,
+                Player.EVENT_TIMELINE_CHANGED,
+                Player.EVENT_VOLUME_CHANGED,
+            ) && !reportPending
+        ) {
+            // Changes close together go as one report.
+            reportPending = true
+            main.postDelayed({ reportPending = false; report() }, 300)
+        }
+    }
+
+    /** What plays now, to Cratarr (the queue too when it changed since the last report that reached it). */
+    private fun report() {
+        val base = base() ?: return
+        val p = player
+        val out = JSONObject()
+            .put("index", if (p.mediaItemCount == 0) -1 else p.currentMediaItemIndex)
+            .put("position_ms", p.currentPosition.coerceAtLeast(0))
+            .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
+            .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
+            .put("volume", ((unducked ?: p.volume) * 100).toInt())
+            .put("ducked", unducked != null)
+        val withQueue = !queueSent
+        if (withQueue) out.put("queue", queueOf(p))
+        val body = out.toString()
+        if (reports.isShutdown) return
+        reports.execute {
+            val sent = put("$base/state", body)
+            if (withQueue && sent) main.post { queueSent = true }
+        }
+    }
+
+    private fun put(url: String, body: String): Boolean = try {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.requestMethod = "PUT"
+        c.connectTimeout = 10_000
+        c.readTimeout = 10_000
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val ok = c.responseCode in 200..299
+        c.disconnect()
+        ok
+    } catch (e: Exception) {
+        Log.w(TAG, "report to Cratarr: ${e.message}")
+        false
+    }
+
+    private companion object {
+        const val TAG = "CratarrPlayOn"
+        const val HEARTBEAT_MS = 30_000L
+        /** A ducked player plays at this part of its volume. */
+        const val DUCKED = 0.25f
+    }
+}
