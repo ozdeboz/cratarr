@@ -1,6 +1,6 @@
 <script lang="ts">
   import ListHead from './lib/ListHead.svelte';
-  import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView } from './lib/pageView.svelte';
+  import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, usePageAction } from './lib/pageView.svelte';
   import { createPlaylist, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap, refresh } from './lib/live.svelte';
@@ -8,7 +8,6 @@
   import { toast } from './lib/toast.svelte';
   import { withUndo } from './lib/undo.svelte';
   import { followCreate, followDelete } from './lib/follow.svelte';
-  import NewButton from './lib/NewButton.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import NameSheet from './lib/NameSheet.svelte';
   import Icon from './lib/Icon.svelte';
@@ -41,7 +40,7 @@
 
   // The open menu (a sheet, decision 0021): a playlist's (lib/PlaylistMenu), the "New playlist" one, or the ticked
   // playlists' (Select's ⋮, decision 0025).
-  type Menu = { kind: 'new'; anchor: DOMRect } | { kind: 'selection' };
+  type Menu = { kind: 'new' } | { kind: 'selection' };
   let menu = $state<Menu | null>(null);
   let working = $state(false);
 
@@ -122,35 +121,24 @@
     }
   }
 
-  function openNew(e: MouseEvent) {
-    menu = { kind: 'new', anchor: (e.currentTarget as HTMLElement).getBoundingClientRect() };
-  }
+  // The pill's last button (lib/TopPill): New playlist, or with playlists ticked their menu (⋮, decision 0025).
+  usePageAction(() =>
+    select.on && select.picked.length
+      ? { icon: 'moreVert', label: 'Menu of the ticked playlists', run: () => (menu = { kind: 'selection' }) }
+      : { icon: 'plus', label: 'New playlist', run: () => (menu = { kind: 'new' }) },
+  );
 
 </script>
 
-<main class:ticked={select.on && select.picked.length > 0}>
-  <!-- The page's top right corner: New playlist (+), or with playlists ticked their menu (⋮, decision 0025). -->
-  {#if select.on && select.picked.length}
-    <button class="new corner" aria-label="Menu of the ticked playlists" onclick={() => (menu = { kind: 'selection' })}
-      ><Icon name="moreVert" size={22} /></button
-    >
-  {:else}
-    <NewButton label="New playlist" onclick={openNew} />
-  {/if}
-
-  <!-- View N while ticking. The search, size and favourites-only are the pill's (lib/TopPill), the order the list's
-       header (decided 2026-10-15). -->
-  <div class="tools">
-    <div class="row">
-    {#if select.on && select.picked.length && !showsPicked()}
-      <!-- View N: at the right end of the row (beside the corner); on a small page its icon only. -->
-      {@const viewLabel = select.picked.length === 1 ? 'View 1 playlist' : `View ${select.picked.length} playlists`}
-      <button class="new primary view-picked" aria-label={viewLabel} title={viewLabel} onclick={viewPicked}
-        ><Icon name="playlists" size={22} /><span class="view-text">{viewLabel}</span></button
-      >
-    {/if}
+<main>
+  <!-- View N while ticking (the ticked ones in the panel). The search, size, favourites-only, New playlist and the
+       ticked ones' menu are the pill's (lib/TopPill), the order the list's header (decided 2026-10-15). -->
+  {#if select.on && select.picked.length && !showsPicked()}
+    {@const viewLabel = select.picked.length === 1 ? 'View 1 playlist' : `View ${select.picked.length} playlists`}
+    <div class="tools">
+      <button class="new primary view-picked" aria-label={viewLabel} title={viewLabel} onclick={viewPicked}><Icon name="playlists" size={22} /></button>
     </div>
-  </div>
+  {/if}
   {#if error}
     <Notice text={error} />
   {/if}
@@ -159,7 +147,7 @@
     <p class="empty">Loading…</p>
   {:else}
     <!-- The list's header (lib/ListHead): its order, how many, and Select (decision 0025: on, a chip's name ticks it; the
-         ticked ones' menu is the ⋮ in the page's top right corner; on a phone they are viewed in the panel with View N). -->
+         ticked ones' menu is the ⋮ at the pill's end; on a phone they are viewed in the panel with View N). -->
     <ListHead
       fields={PLAYLIST_ORDERS}
       bind:value={prefs.playlistOrder}
@@ -220,34 +208,9 @@
     container-type: inline-size;
   }
 
-  /* The corner's + (with its label on a wide page) or ⋮: the actions keep clear of it. */
-  .tools > .row:first-child {
-    padding-right: 56px;
-  }
-
-  @container (min-width: 400px) {
-    .tools > .row:first-child {
-      padding-right: 170px;
-    }
-
-    /* With playlists ticked the corner is the ⋮, without a label. */
-    main.ticked .tools > .row:first-child {
-      padding-right: 56px;
-    }
-  }
-
   .tools {
-    display: grid;
-    gap: 12px;
-    margin: 0 0 14px;
-  }
-
-  /* As tall as the corner's button, which stands in it (empty but while ticking). */
-  .tools .row {
     display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-    min-height: 44px;
+    margin: 0 0 14px;
   }
 
   button.new {
@@ -259,37 +222,12 @@
     cursor: pointer;
   }
 
-  button.new.corner {
-    position: absolute;
-    top: 14px;
-    right: clamp(12px, 2vw, 32px);
+  .view-picked {
     display: grid;
     place-items: center;
     width: 44px;
-    padding: 0;
-    color: inherit;
-  }
-
-  .view-picked {
-    display: flex;
-    align-items: center;
-    gap: 6px;
     margin-left: auto;
-    padding: 0 10px;
-  }
-
-  .view-picked .view-text {
-    display: none;
-  }
-
-  @container (min-width: 480px) {
-    .view-picked {
-      padding: 0 14px 0 10px;
-    }
-
-    .view-picked .view-text {
-      display: inline;
-    }
+    padding: 0;
   }
 
   button.new.primary {

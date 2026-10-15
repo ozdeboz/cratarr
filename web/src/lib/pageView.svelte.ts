@@ -2,7 +2,12 @@
 // layout, size) live in the View sheet (lib/ViewSheet) and its own filters in the Filter sheet (lib/FilterSheet), not
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
+import { untrack } from 'svelte';
+import type { IconName } from './Icon.svelte';
 import type { AlbumLayout, CollectionOrder, CrateOrder, PlaylistOrder } from './prefs.svelte';
+
+/** The page's own button at the pill's end: a + where it makes something, or with things ticked their menu (⋮). */
+export type PageAction = { icon: IconName; label: string; run: () => void };
 
 /** A playlist chip's least width per size step (prefs.zoom). */
 export const PLAYLIST_WIDTHS: readonly number[] = [110, 140, 170, 210, 260, 340];
@@ -49,7 +54,21 @@ export const pageView = $state({
   favouritesOnly: false,
   /** The page's search (the pill's field): what its list is filtered by; empty again on another page. */
   query: '',
+  /** The page's own button at the pill's end (usePageAction), while it shows. */
+  action: null as PageAction | null,
 });
+
+/** Gives the pill's last button to the calling page while it shows (an effect: it follows what `get` reads). */
+export function usePageAction(get: () => PageAction | null) {
+  $effect(() => {
+    const mine = get();
+    pageView.action = mine;
+    // Gone with the page, unless the next page has set its own already.
+    return () => {
+      if (untrack(() => pageView.action?.run) === mine?.run) pageView.action = null;
+    };
+  });
+}
 
 /** The pill's search field's words on a page that has one. */
 export const searchFor = (page: string) =>

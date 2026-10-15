@@ -15,6 +15,9 @@
   --accent-text: #06281a;
   --warn: #f5b942;
   --danger: #ff6b6b;
+  /* The floating controls' surface (the pill, back, ✕, the mark): a little see-through, what is under it blurred. */
+  --float-bg: color-mix(in srgb, var(--surface) 70%, transparent);
+  --float-blur: blur(16px) saturate(1.4);
   color-scheme: dark;
 }
 

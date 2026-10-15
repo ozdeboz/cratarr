@@ -180,8 +180,8 @@
     <!-- ✕ closes the panel (the draft stays, as when the builder is left); Cancel, against Save, drops the draft. -->
     <button class="icon" aria-label="Close the builder" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
     <span class="end">
-      <button class="barbtn iconic" aria-label="Cancel" onclick={cancel} disabled={saving}><Icon name="reset" size={18} /><span>Cancel</span></button>
-      <button class="barbtn save iconic" aria-label="Save" onclick={save} disabled={saving || !draft?.name.trim()} aria-busy={saving}><Icon name="arrowDownToLine" size={18} /><span>Save</span></button>
+      <button class="barbtn iconic" aria-label="Cancel" title="Cancel" onclick={cancel} disabled={saving}><Icon name="reset" size={20} /></button>
+      <button class="barbtn save iconic" aria-label="Save" title="Save" onclick={save} disabled={saving || !draft?.name.trim()} aria-busy={saving}><Icon name="arrowDownToLine" size={20} /></button>
       <PanelPlace />
     </span>
   </div>
@@ -312,27 +312,15 @@
     cursor: pointer;
   }
 
-  /* Cancel and Save carry an icon beside their label (✕, an arrow down to a line). */
   .barbtn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
   }
 
-  /* A narrow panel: Cancel and Save show their icons only (the labels stay for screen readers). */
-  @container (max-width: 339px) {
-    .barbtn.iconic span {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
-
-    .barbtn.iconic {
-      padding: 0 10px;
-    }
+  /* Cancel and Save are icons (their labels on a long-press, lib/labels). */
+  .barbtn.iconic {
+    padding: 0 10px;
   }
 
   .barbtn.save {

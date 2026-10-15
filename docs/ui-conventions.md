@@ -72,12 +72,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   round), how many, and **select mode** (a long-press on a track, or the icon: circles to tick, and a bar floating over
   the list's end plays, puts next, queues or favours the ticked tracks, and in the app downloads them). An album's rows have no cover: the number,
   the playing one's dots instead; every track's row ends in ⋮ (its menu). In
-  edit mode the bar is ✕ (it stays), Cancel (a reset arrow) and Save (an arrow down to a line; on a panel under 340 px their icons only). Rows as the
+  edit mode the bar is ✕ (it stays), Cancel (a reset arrow) and Save (an arrow down to a line), icons. Rows as the
   queue's; edit mode as Finamp's playlist edit screen: the title is editable where it is, looking the same (Spoken
   as… is in the playlist's menu); rows with handle and ✕, swipe to
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
-- **New playlist, New crate** ask for the name in the same sheet (`lib/NameSheet.svelte`), from the + in the page's top
-  right corner (`lib/NewButton.svelte`: its label beside it on a wide page, by container query); a new crate then opens
+- **New playlist, New crate** ask for the name in the same sheet (`lib/NameSheet.svelte`), from the + at the end of the page's
+  pill (`lib/TopPill.svelte`, `pageView.usePageAction`); a new crate then opens
   in the builder with that name, saved with its Save.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as chips
   with their live counts, styled as the playlist chips (the viewed one bordered). A crate is viewed in the panel as a
@@ -93,8 +93,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
   tap on the label views the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
-  label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone "View N playlists");
-  the circle keeps adding or removing the playing track; with playlists ticked, a ⋮ in the page's top right corner (where
+  label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone View N, an icon);
+  the circle keeps adding or removing the playing track; with playlists ticked, a ⋮ at the pill's end (where
   + New playlist is otherwise) is the playlist menu for them (the same menu as a long-press; for several without
   Spoken as… and Rename). A ticked playlist has the border of the one viewed in the
   panel: one state, one look. A favourite playlist has a small red heart (Finamp's list mark)
@@ -111,8 +111,16 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   most 520 px on a wide page; ✕ empties and folds it, Esc folds it, the magnifier stays in the accent while a search
   applies; each page starts with it empty), the **filter** sheet, **View** (the list's order and direction, as its
   header's; a playlist's size; albums' rows or covers and size), and where it plays when nothing else leads there.
-  The page's own controls are only what is not in the pill: Playlists' + or ⋮ in the corner (the + with its label,
-  "New playlist", once the page is wide enough) and View N while selecting.
+  Last in the pill the page's own button where it has one: a + where it makes something (New playlist, New crate),
+  on Playlists with playlists ticked their ⋮. The floating controls (the pill, back, ✕, the mark) share one surface:
+  a little see-through, blurring what is under them (`--float-bg`, `--float-blur`). The mark is only its circle,
+  never on a tile; so are the web app's icons, but for the ones the platform cuts to shape (maskable, iOS, Android's
+  launcher).
+- **Icon buttons carry no text**, on any width (decided 2026-10-16): no label that shows only when there is room. A
+  long-press (touch) or right-click (desktop) on one shows its label in a small tip beside it (`lib/labels.svelte.ts`,
+  one listener for the whole page: any button or link whose only content is an icon, named by its title or
+  aria-label). A row's long-press (select, its menu) does not start on an icon button inside the row, and a button
+  with its own long-press keeps that.
 - **Over the page or beside it** (decision 0018): the player's top-right button is in every panel's top-right corner
   too (a playlist, a crate, the builder; `lib/PanelPlace.svelte`), on a window with room beside the page: beside the
   page "Over the page" (⤢), over it "Beside the page" (sidebar), always in that corner. It only changes the place:

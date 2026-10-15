@@ -2,8 +2,9 @@
   // Symfonium's floating pill (2026-10-15), at the top right of the panel (lib/PlaylistView) and of a page with something
   // to play (App.svelte): the page's search (it opens into a field over the row), the filter (lib/FilterSheet), View
   // (lib/ViewSheet: a page's order, layout and size, or the panel list's order), and where it plays (lib/OutputSheet)
-  // where nothing else leads to it (no mini-player, no player beside the page). Google's Cast guidelines put the device
-  // button at the top right of the screen that plays.
+  // where nothing else leads to it (no mini-player, no player beside the page), and last the page's own button (a + to
+  // make something, its ticked ones' ⋮; pageView.usePageAction). Google's Cast guidelines put the device button at the
+  // top right of the screen that plays.
   import FilterSheet from './FilterSheet.svelte';
   import Icon from './Icon.svelte';
   import OutputSheet from './OutputSheet.svelte';
@@ -60,13 +61,17 @@
     <button aria-label="Clear the search" title="Clear" onmousedown={(e) => e.preventDefault()} onclick={clear}><Icon name="close" size={20} /></button>
   </div>
 {:else}
-  <div class="pill" role="toolbar" aria-label="Search, filter and where it plays">
+  <div class="pill" role="toolbar" aria-label="The page's tools">
     {#if words}
       <button class:lit={pageView.query.trim() !== ''} aria-label={words} title={words} onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
     {/if}
     <button aria-label="Filter" title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}><Icon name="funnel" size={22} /></button>
     {#if view && (page || order)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)}><Icon name="sliders" size={22} /></button>{/if}
     {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
+    {#if page && pageView.action}
+      {@const a = pageView.action}
+      <button aria-label={a.label} title={a.label} onclick={a.run}><Icon name={a.icon} size={22} /></button>
+    {/if}
   </div>
 {/if}
 {#if filterOpen}
@@ -80,13 +85,14 @@
 {/if}
 
 <style>
-  /* A dark round-ended pill as Symfonium's, a little see-through so a cover under it still shows. */
+  /* A dark round-ended pill as Symfonium's, a little see-through and blurring what is under it. */
   .pill {
     display: flex;
     padding: 2px;
     border-radius: 26px;
-    background: color-mix(in srgb, var(--surface) 80%, transparent);
-    backdrop-filter: blur(12px);
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
     box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
   }
 

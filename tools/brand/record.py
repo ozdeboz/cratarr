@@ -55,22 +55,27 @@ def path(version="full"):
     return "".join(parts)
 
 
-def icon_svg(version, px, rounded):
-    """A whole icon: the dark square (rounded or full bleed) and the mark, as the launcher shows it (72 of 108)."""
-    corner = ' rx="15.75"' if rounded else ""  # 112 of 512, as the icon had
+def icon_svg(version, px, bare):
+    """A whole icon. Bare: the mark alone, the record's circle and nothing round it (the mark is only the circle, the
+    owner said 2026-10-16), filling the icon. Otherwise the dark square, full bleed, with the mark as the launcher shows
+    it (72 of 108), for where the platform cuts the icon's shape itself."""
+    if bare:
+        return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{px}" height="{px}" viewBox="{C - EDGE:g} {C - EDGE:g} {2 * EDGE:g} {2 * EDGE:g}">'
+                f'<path fill="{GREEN}" d="{path(version)}"/></svg>')
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{px}" height="{px}" viewBox="18 18 72 72">'
-            f'<rect x="18" y="18" width="72" height="72"{corner} fill="{DARK}"/><path fill="{GREEN}" d="{path(version)}"/></svg>')
+            f'<rect x="18" y="18" width="72" height="72" fill="{DARK}"/><path fill="{GREEN}" d="{path(version)}"/></svg>')
 
 
 def web(out):
     out = pathlib.Path(out)
-    # (file, size, version, rounded): full bleed where the platform shapes the icon itself
+    # (file, size, version, bare): the square only where the platform shapes the icon itself (a maskable icon; iOS,
+    # which fills what is see-through)
     icons = [("icon-192.png", 192, "full", True), ("icon-512.png", 512, "full", True),
              ("maskable-512.png", 512, "full", False), ("apple-touch-icon.png", 180, "full", False),
              ("favicon-32.png", 32, "two", True), ("favicon-16.png", 16, "one", True)]
-    for name, px, version, rounded in icons:
+    for name, px, version, bare in icons:
         svg = out / (name + ".svg")
-        svg.write_text(icon_svg(version, px, rounded))
+        svg.write_text(icon_svg(version, px, bare))
         subprocess.check_call(["resvg", str(svg), str(out / name)])
         svg.unlink()
 

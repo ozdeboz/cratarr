@@ -5,12 +5,11 @@
   // chip has its small heart, a crate's shows its favourites setting (the panel's toggle sets it).
   import { prefs } from './lib/prefs.svelte';
   import ListHead from './lib/ListHead.svelte';
-  import { CRATE_ORDERS, howMany } from './lib/pageView.svelte';
+  import { CRATE_ORDERS, howMany, usePageAction } from './lib/pageView.svelte';
   import { crates, CRATE, EDIT_CRATE, FAVOURITES, favouritesOf, loadCrates, startCrate } from './lib/crates.svelte';
   import Icon from './lib/Icon.svelte';
   import Row from './lib/Row.svelte';
   import NameSheet from './lib/NameSheet.svelte';
-  import NewButton from './lib/NewButton.svelte';
   import { shownPlaylists } from './lib/output.svelte';
   import { viewPlaylist, panel } from './lib/panel.svelte';
   import Notice from './lib/Notice.svelte';
@@ -24,6 +23,7 @@
 
   // New crate: named in the same sheet as a new playlist, then built in the panel.
   let naming = $state(false);
+  usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => (naming = true) }));
   // The list's order (its header, or View): as made, or by name; either way round.
   const sorted = $derived.by(() => {
     const list = [...(crates.list ?? [])];
@@ -38,8 +38,6 @@
   {:else if !crates.list}
     <p class="empty">Loading…</p>
   {:else}
-    <!-- The page's top right corner: New crate, as New playlist on Playlists. -->
-    <div class="toolbar"><NewButton label="New crate" onclick={() => (naming = true)} /></div>
     <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(sorted.length, 'crate')} />
     <ul class="grid">
       {#each sorted as c (c.id)}
@@ -83,12 +81,6 @@
     position: relative;
     padding: 14px clamp(12px, 2vw, 32px) 48px;
     container-type: inline-size;
-  }
-
-  /* The toolbar's row: the corner's New crate sits in it (as Playlists' first row). */
-  .toolbar {
-    min-height: 44px;
-    margin-bottom: 14px;
   }
 
   .grid {

@@ -11,9 +11,12 @@
   import Icon, { type IconName } from './lib/Icon.svelte';
   import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
+  import SheetArea from './lib/SheetArea.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
   import TopPill from './lib/TopPill.svelte';
   import Mark from './lib/Mark.svelte';
+  import LabelTip from './lib/LabelTip.svelte';
+  import { installLabels } from './lib/labels.svelte';
   import { hasView, pageView } from './lib/pageView.svelte';
   import { playing } from './lib/remote.svelte';
   import { fade, fly } from 'svelte/transition';
@@ -108,6 +111,8 @@
   // page). The page starts under the row, so at rest nothing lies under it.
   const PLAYABLE = ['playlists', 'crates', 'collection', 'incoming'];
   const pagePill = $derived(PLAYABLE.includes(page));
+  // An icon button's label on a long-press or right-click, everywhere (lib/labels).
+  $effect(installLabels);
   // Each page starts with its search empty (the pill's field).
   $effect(() => {
     void page;
@@ -164,6 +169,9 @@
   let dragged = $state<number | null>(null);
   const playerWidth = $derived(fitWidth(dragged ?? prefs.playerWidth));
   let contentEl = $state<HTMLElement>();
+  // The page's side and the panel's: sheets opened in either stand over it (lib/SheetArea.svelte).
+  let pageEl = $state<HTMLElement>();
+  let sideEl = $state<HTMLElement>();
   function grip(e: PointerEvent) {
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
@@ -288,7 +296,8 @@
   </aside>
 
   <div class="content" class:with-side={sidebar} style:--player-w="{playerWidth}px" bind:this={contentEl}>
-    <div class="page" class:under-row={pageRow}>
+    <div class="page" class:under-row={pageRow} bind:this={pageEl}>
+    <SheetArea area={() => pageEl}>
     {#if withPicker}
       {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
     {/if}
@@ -311,6 +320,7 @@
     {:else}
       <Playlists />
     {/if}
+    </SheetArea>
     </div>
     {#if sidebar}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -327,8 +337,10 @@
         onkeydown={gripKey}
       ></div>
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={`${miniSpace}px`}>
-        {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if builderOf(panel.viewed)}<CrateBuilder id={builderOf(panel.viewed)!.id} />{:else}<PlaylistView />{/if}
+      <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+        <SheetArea area={() => sideEl}>
+          {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if builderOf(panel.viewed)}<CrateBuilder id={builderOf(panel.viewed)!.id} />{:else}<PlaylistView />{/if}
+        </SheetArea>
       </aside>
     {/if}
   </div>
@@ -352,7 +364,7 @@
       {:else}
         <span></span>
       {/if}
-      {#if pagePill}<TopPill {page} view={hasView(page)} device={pillDevice} />{/if}
+      {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} /></SheetArea>{/if}
     </div>
   {/if}
   {#if overlay}
@@ -373,6 +385,7 @@
   {/if}
 
   <Toasts />
+<LabelTip />
   <ProgressBar />
 
   <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
@@ -455,10 +468,15 @@
   }
 
   /* The mark in back's place: the record, round as back is, as tall as the pill. */
+  /* The mark alone, a circle (no tile behind it), on the floating controls' surface. */
   .home {
     display: grid;
     border-radius: 50%;
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
     box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
+    -webkit-touch-callout: none;
   }
 
   /* Back, round as the pill (lib/TopPill). */
@@ -466,8 +484,9 @@
     display: flex;
     padding: 2px;
     border-radius: 26px;
-    background: color-mix(in srgb, var(--surface) 80%, transparent);
-    backdrop-filter: blur(12px);
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
     box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
   }
 

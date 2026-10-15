@@ -718,14 +718,14 @@
            against Save. -->
       <button class="icon" aria-label="Close the playlist" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
-        <button class="barbtn iconic" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" onclick={() => (editing = null)} disabled={editing.saving}><Icon name="reset" size={18} /><span>Cancel</span></button>
-        <button class="barbtn save iconic" aria-label="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={18} /><span>Save</span></button>
+        <button class="barbtn iconic" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" title="Cancel" onclick={() => (editing = null)} disabled={editing.saving}><Icon name="reset" size={20} /></button>
+        <button class="barbtn save iconic" aria-label="Save" title="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={20} /></button>
         <PanelPlace />
       </span>
     {:else if making}
       <button class="icon" aria-label="Close the crate" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
-        <button class="barbtn iconic" aria-label="Cancel" onclick={() => (making = null)} disabled={making.saving}><Icon name="reset" size={18} /><span>Cancel</span></button>
+        <button class="barbtn iconic" aria-label="Cancel" title="Cancel" onclick={() => (making = null)} disabled={making.saving}><Icon name="reset" size={20} /></button>
         <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
         <PanelPlace />
       </span>
@@ -1185,27 +1185,15 @@
     cursor: pointer;
   }
 
-  /* Cancel and Save carry an icon beside their label (a reset arrow, an arrow down to a line). */
   .barbtn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
   }
 
-  /* A narrow panel: Cancel and Save show their icons only (the labels stay for screen readers). */
-  @container (max-width: 339px) {
-    .barbtn.iconic span {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
-
-    .barbtn.iconic {
-      padding: 0 10px;
-    }
+  /* Cancel and Save are icons (their labels on a long-press, lib/labels). */
+  .barbtn.iconic {
+    padding: 0 10px;
   }
 
   /* Cancel with changes made: it throws them away, so it reads as destructive. */
@@ -1605,8 +1593,9 @@
     display: flex;
     padding: 2px;
     border-radius: 26px;
-    background: color-mix(in srgb, var(--surface) 80%, transparent);
-    backdrop-filter: blur(12px);
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
     box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
@@ -1625,8 +1614,9 @@
 
   .pills .end :global(.place) {
     border-radius: 50%;
-    background: color-mix(in srgb, var(--surface) 80%, transparent);
-    backdrop-filter: blur(12px);
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
   }
 
   /* The cover, edge to edge as Symfonium's; beside the page never so tall that the tracks drop out of sight. Its foot
