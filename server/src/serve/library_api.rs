@@ -1,6 +1,6 @@
 //! Cratarr's own library calls (decision 0030), for what the Subsonic API has no word for and for callers that cannot
-//! log in the Subsonic way (Home Assistant's templates have no md5): album tags, favourites, a health check, and a
-//! song's file. Plain JSON under `/api/library`, open on the LAN as the rest of `/api`; errors are a status with
+//! log in the Subsonic way (Home Assistant's templates have no md5): album tags, favourites, a health check, a song's
+//! facts and its file. Plain JSON under `/api/library`, open on the LAN as the rest of `/api`; errors are a status with
 //! `{"error": "…"}`. They act for Cratarr's first account, the owner's.
 //!
 //! Ids are the ones the Subsonic API hands out: songs `tr-…`, albums `al-…`.
@@ -29,6 +29,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/library/albums/{album}/tags/{tag}", post(add_tag).delete(remove_tag))
         .route("/api/library/tags", get(all_tags))
         .route("/api/library/tags/{tag}", get(tagged))
+        .route("/api/library/tracks/{track}", get(track))
         .route("/api/library/tracks/{track}/favourite", post(favourite).delete(unfavourite))
         .route("/api/library/tracks/{track}/file", get(file))
         .with_state(serve.clone())
@@ -174,6 +175,31 @@ async fn set_favourite(serve: Arc<Serve>, track: String, on: bool) -> Response {
     }
 }
 
+/// A track's facts, for a caller that names what plays ("what year is this?"): title, artists, album, year, genres,
+/// and whether it is a favourite of the owner's.
+async fn track(State(serve): State<Arc<Serve>>, Path(track): Path<String>) -> Response {
+    let s = serve.clone();
+    let found = blocking(move || {
+        let Some(song) = s.library.songs_by_id(std::slice::from_ref(&track))?.pop() else { return Ok(None) };
+        let favourite = match s.users.owner() {
+            Some(owner) => s.userdata.get(&owner, Kind::Song, std::slice::from_ref(&song.id))?.get(&song.id).is_some_and(|a| a.starred_at.is_some()),
+            None => false,
+        };
+        Ok(Some((song, favourite)))
+    })
+    .await;
+    match found {
+        Ok(Some((t, favourite))) => axum::Json(json!({
+            "id": t.id, "title": t.title, "artist": t.display_artist, "album": t.album, "album_id": t.album_id,
+            "album_artist": t.display_album_artist, "year": t.year, "genres": t.genres.iter().map(|g| &g.name).collect::<Vec<_>>(),
+            "favourite": favourite,
+        }))
+        .into_response(),
+        Ok(None) => fail(StatusCode::NOT_FOUND, "no such track"),
+        Err(r) => r,
+    }
+}
+
 async fn favourite(State(serve): State<Arc<Serve>>, Path(track): Path<String>) -> Response {
     set_favourite(serve, track, true).await
 }
@@ -210,7 +236,13 @@ mod tests {
             born: Some(1),
             size: 10,
             mtime: 1,
-            tags: vec![("title".into(), format!("t{n}")), ("artist".into(), "A".into()), ("album".into(), "X".into())],
+            tags: vec![
+                ("title".into(), format!("t{n}")),
+                ("artist".into(), "A".into()),
+                ("album".into(), "X".into()),
+                ("date".into(), "2001".into()),
+                ("genre".into(), "Dub".into()),
+            ],
             ..ServedRow::default()
         };
         serve.library.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![row(1), row(2)] }], &Rules::default()).unwrap();
@@ -253,6 +285,19 @@ mod tests {
         assert_eq!(call(&s, "DELETE", "/api/library/tracks/tr-1/favourite").await.0, StatusCode::NO_CONTENT);
         assert!(s.userdata.starred("owner", Kind::Song).unwrap().is_empty());
         assert_eq!(call(&s, "POST", "/api/library/tracks/tr-9/favourite").await.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn home_assistant_reads_what_plays() {
+        let s = server();
+        call(&s, "POST", "/api/library/tracks/tr-2/favourite").await;
+        let (status, t) = call(&s, "GET", "/api/library/tracks/tr-2").await;
+        assert_eq!(status, StatusCode::OK);
+        let album = s.library.song_ids(2).unwrap().unwrap().album_id;
+        assert_eq!(t, serde_json::json!({ "id": "tr-2", "title": "t2", "artist": "A", "album": "X", "album_id": album,
+            "album_artist": "A", "year": 2001, "genres": ["Dub"], "favourite": true }));
+        assert_eq!(call(&s, "GET", "/api/library/tracks/tr-1").await.1["favourite"], false);
+        assert_eq!(call(&s, "GET", "/api/library/tracks/tr-9").await.0, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
