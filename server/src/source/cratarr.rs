@@ -312,12 +312,17 @@ impl Source for CratarrSource {
 
     /// A play counts for the owner's account, as a Subsonic app's scrobble does (decision 0030).
     fn count_play<'a>(&'a self, track: &'a str) -> Fut<'a, ()> {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        self.count_play_at(track, now)
+    }
+
+    /// A play told late keeps its own time (decision 0033).
+    fn count_play_at<'a>(&'a self, track: &'a str, at: i64) -> Fut<'a, ()> {
         Box::pin(async move {
             let s = server()?;
             let me = owner(&s)?;
             let (lib, song) = (s.library.clone(), track.to_string());
             let Some((pid, album, artists)) = blocking(move || lib.play_targets(&song)).await? else { bail!("no such track") };
-            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
             s.userdata.count_play(&me, (track, &pid), &album, &artists, at)?;
             Ok(())
         })

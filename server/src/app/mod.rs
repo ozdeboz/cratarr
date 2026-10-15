@@ -21,6 +21,7 @@ mod library;
 mod playing;
 mod playlists;
 mod playon;
+mod plays;
 mod queue;
 mod settings;
 mod shelf;
@@ -39,6 +40,7 @@ pub use library::{Library, SourceTab};
 pub use playing::{AlbumRef, AlbumView, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, CrateView, PlayMode, PlayResult, PlaylistService};
 pub use playon::{Command as PlayOnCommand, PlayOn, PlayOnSettings, QueueTrack, Report as PlayerReport};
+pub use plays::{PlayEvent, Plays};
 pub use sync::TargetChoice;
 pub use events::connect as events;
 pub use settings::{NamingView, SettingsService, SettingsView, SourceView};
@@ -83,6 +85,8 @@ pub struct App {
     pub events: events::PlayerWatch,
     /// The players Cratarr commands itself: the Android app (decision 0031).
     pub play_on: Arc<PlayOn>,
+    /// Plays the players tell, late too, each counted once (decision 0033, step 4).
+    pub plays: Plays,
 }
 
 impl App {
@@ -122,6 +126,7 @@ impl App {
         );
         let insights = InsightsService::new(library.clone());
         let play_on = PlayOn::new(library.clone(), playlists.clone(), cfg.data_dir.as_deref());
+        let plays = Plays::new(cfg.data_dir.as_deref());
         // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was
         // empty is read again.
         if let Some(served) = crate::serve::instance() {
@@ -134,7 +139,7 @@ impl App {
                 }
             });
         }
-        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on }))
+        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on, plays }))
     }
 
     /// For the navigation header.

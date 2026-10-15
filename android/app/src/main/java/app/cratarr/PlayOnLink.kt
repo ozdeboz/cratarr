@@ -115,6 +115,8 @@ class PlayOnLink(
                 if (c.responseCode != 200) throw java.io.IOException("HTTP ${c.responseCode}")
                 Log.i(TAG, "connected as ${prefs.playerName}")
                 wait = 2_000L
+                // Back in reach: the plays made meanwhile (offline, say) are told now.
+                Plays.tell(service)
                 main.post { queueSent = false; report() }
                 read(BufferedReader(InputStreamReader(c.inputStream, Charsets.UTF_8)))
             } catch (e: Exception) {

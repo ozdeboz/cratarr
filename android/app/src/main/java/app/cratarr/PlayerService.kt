@@ -140,11 +140,27 @@ class PlayerService : MediaSessionService() {
         if (!prefs.stayReady && (player == null || !player.playWhenReady || player.mediaItemCount == 0)) stopSelf()
     }
 
-    /** Keeps the next tracks on the device as the queue moves on, and skips a track that cannot be played. */
+    /**
+     * Keeps the next tracks on the device as the queue moves on, counts the plays (Plays), and skips a track that cannot
+     * be played.
+     */
     private inner class Keeper(private val player: ExoPlayer) : Player.Listener {
         private val keep = Runnable {
             val items = (0 until player.mediaItemCount).map(player::getMediaItemAt)
             Downloads.keepAhead(this@PlayerService, items, player.currentMediaItemIndex)
+        }
+
+        /** The playing track has been counted, this time it plays. */
+        private var counted = false
+        private val count = object : Runnable {
+            override fun run() {
+                val d = player.duration
+                if (!counted && d > 0 && player.currentPosition >= d * Plays.PLAYED_AT) {
+                    counted = true
+                    player.currentMediaItem?.let(::trackOf)?.let { Plays.played(this@PlayerService, it) }
+                }
+                if (player.isPlaying) main.postDelayed(this, COUNT_EVERY_MS)
+            }
         }
 
         override fun onEvents(player: Player, events: Player.Events) {
@@ -152,6 +168,12 @@ class PlayerService : MediaSessionService() {
                 // Changes close together (a queue being built) as one.
                 main.removeCallbacks(keep)
                 main.postDelayed(keep, 1_000)
+            }
+            // Each time a track is reached it can count again (a repeat, a jump back).
+            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) counted = false
+            if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
+                main.removeCallbacks(count)
+                if (player.isPlaying) main.post(count)
             }
         }
 
@@ -200,6 +222,8 @@ class PlayerService : MediaSessionService() {
     companion object {
         private const val TAG = "CratarrPlayer"
         private const val RESTART_AFTER_MS = 5_000L
+        /** How often the playing track is looked at for counting. */
+        private const val COUNT_EVERY_MS = 5_000L
         private const val READY_CHANNEL = "ready"
         private const val READY_NOTIFICATION = 7
         private const val ACTION_READY = "cratarr.READY"

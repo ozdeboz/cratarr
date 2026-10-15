@@ -24,6 +24,7 @@ import {
 import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
 import { canPlayHere, local, playQueue, enqueue, stop, togglePlay, type LocalTrack } from './localPlayer.svelte';
+import { inApp } from './app.svelte';
 import { drivenName, follow } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -166,8 +167,9 @@ $effect.root(() => {
   $effect(() => {
     const t = local.queue[local.index];
     const at = `${local.index}/${t ? keyOf(t) : ''}`;
-    // Counted where it plays: here; a player of Cratarr's counts its own.
-    if (!t || !playsHere()) return;
+    // Counted where it plays: here; a player of Cratarr's counts its own, and so does the app this page may run in
+    // (decision 0033: offline and behind a locked screen too).
+    if (!t || !playsHere() || inApp) return;
     if (counted !== at) counted = null;
     const d = local.duration;
     if (counted === at || !d || local.position < d * PLAYED_AT) return;

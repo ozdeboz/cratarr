@@ -35,6 +35,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
         .route("/api/track/{source}/{id}/favorite", post(track_favorite))
         .route("/api/track/{source}/{id}/played", post(track_played))
+        .route("/api/plays", post(plays))
         .route("/api/favorites/{source}", post(favorites))
         .route("/api/queue/add", post(queue_add))
         .route("/api/queue/jump", post(queue_jump))
@@ -1030,6 +1031,16 @@ async fn playlist_covers(
 async fn track_played(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
     app.playing.count_play(&source, &id).await?;
     Ok(Json(json!({ "counted": true })))
+}
+
+#[derive(Deserialize)]
+struct PlayEvents {
+    events: Vec<crate::app::PlayEvent>,
+}
+
+/// Plays a player tells, late too (decision 0033, step 4): each counted once; the answer names those it may forget.
+async fn plays(State(app): State<Arc<App>>, Json(p): Json<PlayEvents>) -> Json<serde_json::Value> {
+    Json(json!({ "done": app.plays.take(&app.playing, p.events).await }))
 }
 
 /// The local player hands its queue to the server's player (decision 0019 / 0022): these tracks, from `index`, starting

@@ -42,6 +42,15 @@ fun mediaItems(tracks: JSONArray?): List<MediaItem> {
     }
 }
 
+/** An item's track, as the page described it. */
+fun trackOf(item: MediaItem): JSONObject? = item.mediaMetadata.extras?.getString(TRACK)?.let {
+    try {
+        JSONObject(it)
+    } catch (e: Exception) {
+        null
+    }
+}
+
 /** An item's entry in the queue. */
 fun entryOf(item: MediaItem): String? =
     item.mediaMetadata.extras?.getString(TRACK)?.let { JSONObject(it).optString("entry") }?.takeIf { it.isNotEmpty() }

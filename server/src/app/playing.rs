@@ -250,8 +250,17 @@ impl PlayingService {
 
     /// Count a play of a track the page played itself (decision 0022).
     pub async fn count_play(&self, source_id: &str, id: &str) -> Result<(), ToggleError> {
+        self.count_play_at(source_id, id, None).await
+    }
+
+    /// Count a play, played at `at` (epoch seconds) when a player tells it late (decision 0033); now without.
+    pub async fn count_play_at(&self, source_id: &str, id: &str, at: Option<i64>) -> Result<(), ToggleError> {
         let (_, s, _) = self.find(source_id, id).await?;
-        s.count_play(id).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
+        let counted = match at {
+            Some(at) => s.count_play_at(id, at).await,
+            None => s.count_play(id).await,
+        };
+        counted.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
         // The play count changed: the next state asks again.
         *self.info.lock().unwrap_or_else(|p| p.into_inner()) = None;
         Ok(())
