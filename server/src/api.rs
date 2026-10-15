@@ -522,15 +522,92 @@ async fn save_play_on_settings(State(app): State<Arc<App>>, Json(s): Json<crate:
     Ok(Json(app.play_on.save_settings(s).await?))
 }
 
+#[derive(Deserialize)]
+struct FileAs {
+    /// `opus`: a lossless track as a smaller copy (decision 0033, step 4); a lossy one comes as it is.
+    #[serde(default, rename = "as")]
+    as_: Option<String>,
+}
+
 /// A track's file as it is, with byte ranges: for a native player (the Android app's, decision 0031 amended), which
-/// seeks in the file itself and plays gapless from its own headers.
-async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+/// seeks in the file itself and plays gapless from its own headers. With `?as=opus`, the downloads' smaller copy.
+async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<FileAs>, headers: HeaderMap) -> Response {
     let cat = app.library.catalogue();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
     let Some((path, _, _)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
+    if q.as_.as_deref() == Some("opus")
+        && let Some(copy) = opus_copy(path.clone()).await
+    {
+        return copy;
+    }
     crate::serve::files::serve_file(&path, &headers, false).await
+}
+
+/// At most this many copies are made at once: each keeps a core busy.
+static COPIES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+/// A lossless file as Ogg Opus, made as it is sent (no length, no ranges: downloads take it whole). `None` for a file
+/// that is not lossless.
+async fn opus_copy(path: std::path::PathBuf) -> Option<Response> {
+    let probe = path.clone();
+    let lossless = tokio::task::spawn_blocking(move || crate::convert::Source::open(&probe).ok().flatten().is_some()).await.ok()?;
+    if !lossless {
+        return None;
+    }
+    let permit = COPIES.acquire().await.ok()?;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
+    tokio::task::spawn_blocking(move || {
+        let failed = tx.clone();
+        let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
+        if let Err(e) = crate::opus_copy::copy(&path, out) {
+            let stopped = e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe);
+            if !stopped {
+                tracing::warn!("Opus copy of {}: {e:#}", path.display());
+                // The body has started: an error breaks it off, so the download fails instead of keeping half a file.
+                let _ = failed.blocking_send(Err(std::io::Error::other(format!("{e:#}"))));
+            }
+        }
+        drop(permit);
+    });
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/ogg"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Some((headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response())
+}
+
+/// A blocking writer into a response body, a piece at a time; it fails once the receiver has gone (the download was
+/// stopped), so the copy stops too.
+struct ChannelWriter {
+    tx: tokio::sync::mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>,
+    buf: Vec<u8>,
+}
+
+impl ChannelWriter {
+    const PIECE: usize = 64 * 1024;
+
+    fn send(&mut self) -> std::io::Result<()> {
+        if self.buf.is_empty() {
+            return Ok(());
+        }
+        let piece = std::mem::replace(&mut self.buf, Vec::with_capacity(Self::PIECE));
+        self.tx.blocking_send(Ok(piece.into())).map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+    }
+}
+
+impl std::io::Write for ChannelWriter {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(data);
+        if self.buf.len() >= Self::PIECE {
+            self.send()?;
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.send()
+    }
 }
 
 async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<StreamFrom>) -> Response {

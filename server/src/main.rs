@@ -19,6 +19,7 @@ mod mounts;
 mod moves;
 mod naming;
 mod nowplaying;
+mod opus_copy;
 mod placement;
 mod playlist_rewrite;
 #[allow(dead_code)] // the playlist sync uses it (decision 0012)

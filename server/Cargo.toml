@@ -11,6 +11,9 @@ axum = "0.8"
 # Hi-res to CD conversion (decision 0013). Exact pins, minimal features: lossless decoders only.
 flacenc = { version = "=0.5.1", default-features = false }
 lofty = "0.25.4"
+# Smaller copies for the app's downloads (decision 0033, step 4): libopus, the reference encoder, built from its
+# bundled source (needs cmake at build time).
+opusic-sys = { version = "=0.7.5", default-features = false, features = ["bundled"] }
 # Covers resized for the OpenSubsonic API (decision 0030); decoders for the pictures albums carry.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 # The Subsonic login token (source::subsonic).

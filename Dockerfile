@@ -10,7 +10,8 @@ RUN pnpm build
 FROM rust:1-alpine AS server
 # release (the default) or preview (no whole-program optimisation: quicker, for trying a change).
 ARG PROFILE=release
-RUN apk add --no-cache musl-dev build-base
+# cmake: libopus is built from its bundled source (the downloads' smaller copies, decision 0033).
+RUN apk add --no-cache musl-dev build-base cmake
 WORKDIR /app
 COPY server/ server/
 COPY --from=web /app/web/dist web/dist

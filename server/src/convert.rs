@@ -260,8 +260,8 @@ fn convert_to(input: &Path, out: &Path, raw: Option<&Path>, mut progress: impl F
 }
 
 /// Pull audio through the resampler into `sink`, a chunk at a time. `read` appends decoded frames to the per-channel
-/// buffers and says false at the end. Returns the number of input frames.
-fn stream(
+/// buffers and says false at the end. Returns the number of input frames. Also the downloads' copies' (`opus_copy`).
+pub(crate) fn stream(
     mut read: impl FnMut(&mut [Vec<f32>]) -> Result<bool>,
     channels: usize,
     from_rate: u32,
@@ -342,16 +342,16 @@ fn stream(
 }
 
 /// A decoder over one lossless file.
-struct Source {
+pub(crate) struct Source {
     reader: Box<dyn FormatReader>,
     decoder: Box<dyn AudioDecoder>,
     track: u32,
-    format: SourceFormat,
+    pub(crate) format: SourceFormat,
 }
 
 impl Source {
     /// `None` when the file is not one of the lossless kinds this converts.
-    fn open(path: &Path) -> Result<Option<Source>> {
+    pub(crate) fn open(path: &Path) -> Result<Option<Source>> {
         let kind = Probe::open(path)
             .with_context(|| format!("opening {}", path.display()))?
             .guess_file_type()?
@@ -386,7 +386,7 @@ impl Source {
 
     /// Decode the next packet and append it to `planes`. False at the end. A damaged packet is an error, not a
     /// gap: the result replaces the original.
-    fn read(&mut self, planes: &mut [Vec<f32>], scratch: &mut Vec<Vec<f32>>) -> Result<bool> {
+    pub(crate) fn read(&mut self, planes: &mut [Vec<f32>], scratch: &mut Vec<Vec<f32>>) -> Result<bool> {
         loop {
             let Some(packet) = self.reader.next_packet()? else { return Ok(false) };
             if packet.track_id != self.track {

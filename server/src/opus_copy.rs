@@ -1,0 +1,377 @@
+//! Smaller copies for the app's downloads (decision 0033, step 4): a lossless track as Ogg Opus, made as it is sent.
+//! Decoding and resampling are the converter's (decision 0013); the frames are libopus's, the reference encoder; the
+//! Ogg pages (RFC 3533, RFC 7845) are written here. Lossy files are never made into copies: they are small already,
+//! and a second lossy pass only loses more.
+//!
+//! Memory is bounded and small, whatever the length of the track: audio streams through a few thousand frames at a
+//! time and each Ogg page goes out as soon as it is full.
+//!
+//! Blocking; run on a blocking thread.
+
+use std::io::Write;
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+use lofty::file::TaggedFileExt;
+use lofty::tag::Accessor;
+
+use crate::convert;
+
+/// The copies' bit rate: transparent for most music to most ears, about a sixth of a CD FLAC.
+pub const BITRATE: i32 = 160_000;
+/// Opus always runs at 48 kHz.
+const RATE: u32 = 48_000;
+/// 20 ms frames, the encoder's best for music.
+const FRAME: usize = 960;
+/// An Opus packet is at most this long.
+const MAX_PACKET: usize = 4000;
+/// Audio packets per Ogg page: about a second.
+const PAGE_PACKETS: usize = 50;
+const VENDOR: &str = concat!("Cratarr ", env!("CARGO_PKG_VERSION"), " (libopus)");
+
+/// Writes `input` to `out` as Ogg Opus. `false` (nothing written) when it is not a lossless file.
+pub fn copy(input: &Path, out: impl Write) -> Result<bool> {
+    let Some(mut source) = convert::Source::open(input)? else { return Ok(false) };
+    let format = source.format.clone();
+    // Opus's simple channel mapping holds one or two; a surround file keeps its front pair.
+    let channels = format.channels.min(2);
+    if channels == 0 {
+        bail!("{} has no audio channels", input.display());
+    }
+    let mut encoder = Encoder::new(channels)?;
+    let pre_skip = encoder.lookahead()?;
+    let mut ogg = Ogg::new(out, serial(input));
+    ogg.page(&[&opus_head(channels, pre_skip, format.sample_rate)], 0, BOS)?;
+    ogg.page(&[&opus_tags(input)], 0, 0)?;
+
+    // Interleaved samples waiting for a whole frame; the frames' packets waiting for their page.
+    let mut pcm: Vec<f32> = Vec::with_capacity(FRAME * channels * 2);
+    let mut packets: Vec<Vec<u8>> = Vec::with_capacity(PAGE_PACKETS);
+    let mut encoded = 0u64;
+    let mut sink = |planes: &[Vec<f32>], start: usize, len: usize| -> Result<()> {
+        for i in start..start + len {
+            for p in &planes[..channels] {
+                pcm.push(p[i]);
+            }
+        }
+        while pcm.len() >= FRAME * channels {
+            packets.push(encoder.encode(&pcm[..FRAME * channels])?);
+            pcm.drain(..FRAME * channels);
+            encoded += FRAME as u64;
+            if packets.len() == PAGE_PACKETS {
+                let refs: Vec<&[u8]> = packets.iter().map(Vec::as_slice).collect();
+                ogg.page(&refs, pre_skip as u64 + encoded, 0)?;
+                packets.clear();
+            }
+        }
+        Ok(())
+    };
+    let mut scratch = Vec::new();
+    let frames = convert::stream(|planes| source.read(planes, &mut scratch), format.channels, format.sample_rate, RATE, &mut sink)?;
+    drop(sink);
+
+    // The last frame, padded with silence; the last page's position says where the music ends, so a player trims
+    // the padding (RFC 7845 §4).
+    if !pcm.is_empty() {
+        pcm.resize(FRAME * channels, 0.0);
+        packets.push(encoder.encode(&pcm)?);
+    }
+    let length = convert::output_frames(frames, format.sample_rate, RATE);
+    let refs: Vec<&[u8]> = packets.iter().map(Vec::as_slice).collect();
+    ogg.page(&refs, pre_skip as u64 + length, EOS)?;
+    ogg.out.flush()?;
+    Ok(true)
+}
+
+/// A stream serial number, the same for the same file (copies of a track are alike).
+fn serial(input: &Path) -> u32 {
+    crc32(input.to_string_lossy().as_bytes())
+}
+
+/// The identification header (RFC 7845 §5.1).
+fn opus_head(channels: usize, pre_skip: u16, input_rate: u32) -> Vec<u8> {
+    let mut b = Vec::with_capacity(19);
+    b.extend_from_slice(b"OpusHead");
+    b.push(1);
+    b.push(channels as u8);
+    b.extend_from_slice(&pre_skip.to_le_bytes());
+    b.extend_from_slice(&input_rate.to_le_bytes());
+    b.extend_from_slice(&0i16.to_le_bytes());
+    b.push(0);
+    b
+}
+
+/// The comment header (RFC 7845 §5.2): the track's title, artist, album, album artist, number and year, so the copy
+/// names itself wherever it ends up.
+fn opus_tags(input: &Path) -> Vec<u8> {
+    let mut comments: Vec<String> = Vec::new();
+    let options = lofty::config::ParseOptions::new().read_properties(false);
+    if let Ok(tagged) = lofty::probe::Probe::open(input).and_then(|p| p.options(options).read())
+        && let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag())
+    {
+        let mut add = |key: &str, value: Option<String>| {
+            if let Some(v) = value.filter(|v| !v.is_empty()) {
+                comments.push(format!("{key}={v}"));
+            }
+        };
+        add("TITLE", tag.title().map(|v| v.to_string()));
+        add("ARTIST", tag.artist().map(|v| v.to_string()));
+        add("ALBUM", tag.album().map(|v| v.to_string()));
+        add("ALBUMARTIST", tag.get_string(lofty::tag::ItemKey::AlbumArtist).map(str::to_string));
+        add("TRACKNUMBER", tag.track().map(|n| n.to_string()));
+        add("DISCNUMBER", tag.disk().map(|n| n.to_string()));
+        add("DATE", tag.date().map(|d| d.to_string()));
+    }
+    let mut b = Vec::new();
+    b.extend_from_slice(b"OpusTags");
+    b.extend_from_slice(&(VENDOR.len() as u32).to_le_bytes());
+    b.extend_from_slice(VENDOR.as_bytes());
+    b.extend_from_slice(&(comments.len() as u32).to_le_bytes());
+    for c in comments {
+        b.extend_from_slice(&(c.len() as u32).to_le_bytes());
+        b.extend_from_slice(c.as_bytes());
+    }
+    b
+}
+
+/// libopus's encoder, for music at [`BITRATE`].
+struct Encoder {
+    raw: *mut opusic_sys::OpusEncoder,
+    channels: usize,
+    out: Vec<u8>,
+}
+
+impl Encoder {
+    fn new(channels: usize) -> Result<Self> {
+        let mut error = 0;
+        // SAFETY: plain constructor; the result is checked before use and freed in `drop`.
+        let raw = unsafe { opusic_sys::opus_encoder_create(RATE as i32, channels as i32, opusic_sys::OPUS_APPLICATION_AUDIO, &mut error) };
+        if raw.is_null() || error != opusic_sys::OPUS_OK {
+            bail!("the Opus encoder did not start (error {error})");
+        }
+        let me = Self { raw, channels, out: vec![0; MAX_PACKET] };
+        me.set(opusic_sys::OPUS_SET_BITRATE_REQUEST, BITRATE)?;
+        me.set(opusic_sys::OPUS_SET_SIGNAL_REQUEST, opusic_sys::OPUS_SIGNAL_MUSIC)?;
+        me.set(opusic_sys::OPUS_SET_COMPLEXITY_REQUEST, 10)?;
+        Ok(me)
+    }
+
+    fn set(&self, request: i32, value: i32) -> Result<()> {
+        // SAFETY: a SET request takes one opus_int32.
+        let r = unsafe { opusic_sys::opus_encoder_ctl(self.raw, request, value) };
+        if r != opusic_sys::OPUS_OK {
+            bail!("the Opus encoder refused setting {request} (error {r})");
+        }
+        Ok(())
+    }
+
+    /// How many samples the encoder delays the music by: the stream's pre-skip.
+    fn lookahead(&self) -> Result<u16> {
+        let mut v: i32 = 0;
+        // SAFETY: a GET request takes a pointer to one opus_int32.
+        let r = unsafe { opusic_sys::opus_encoder_ctl(self.raw, opusic_sys::OPUS_GET_LOOKAHEAD_REQUEST, &mut v as *mut i32) };
+        if r != opusic_sys::OPUS_OK {
+            bail!("the Opus encoder did not tell its lookahead (error {r})");
+        }
+        u16::try_from(v).context("an Opus lookahead out of range")
+    }
+
+    /// One frame of interleaved samples into one packet.
+    fn encode(&mut self, frame: &[f32]) -> Result<Vec<u8>> {
+        debug_assert_eq!(frame.len(), FRAME * self.channels);
+        // SAFETY: `frame` holds FRAME samples per channel, `out` MAX_PACKET bytes, as the call is told.
+        let n = unsafe {
+            opusic_sys::opus_encode_float(self.raw, frame.as_ptr(), FRAME as i32, self.out.as_mut_ptr(), MAX_PACKET as i32)
+        };
+        if n < 0 {
+            bail!("the Opus encoder failed (error {n})");
+        }
+        Ok(self.out[..n as usize].to_vec())
+    }
+}
+
+impl Drop for Encoder {
+    fn drop(&mut self) {
+        // SAFETY: created by opus_encoder_create, freed once.
+        unsafe { opusic_sys::opus_encoder_destroy(self.raw) };
+    }
+}
+
+const BOS: u8 = 0x02;
+const EOS: u8 = 0x04;
+
+/// One logical Ogg stream, written a page at a time.
+struct Ogg<W: Write> {
+    out: W,
+    serial: u32,
+    sequence: u32,
+}
+
+impl<W: Write> Ogg<W> {
+    fn new(out: W, serial: u32) -> Self {
+        Self { out, serial, sequence: 0 }
+    }
+
+    /// A page of whole packets, `granule` the position at the end of its last one.
+    fn page(&mut self, packets: &[&[u8]], granule: u64, flags: u8) -> Result<()> {
+        let mut lacing = Vec::new();
+        for p in packets {
+            lacing.extend(std::iter::repeat_n(255u8, p.len() / 255));
+            lacing.push((p.len() % 255) as u8);
+        }
+        if lacing.len() > 255 {
+            bail!("an Ogg page of {} segments", lacing.len());
+        }
+        let mut page = Vec::with_capacity(27 + lacing.len() + packets.iter().map(|p| p.len()).sum::<usize>());
+        page.extend_from_slice(b"OggS");
+        page.push(0);
+        page.push(flags);
+        page.extend_from_slice(&granule.to_le_bytes());
+        page.extend_from_slice(&self.serial.to_le_bytes());
+        page.extend_from_slice(&self.sequence.to_le_bytes());
+        page.extend_from_slice(&[0; 4]);
+        page.push(lacing.len() as u8);
+        page.extend_from_slice(&lacing);
+        for p in packets {
+            page.extend_from_slice(p);
+        }
+        let crc = crc32(&page);
+        page[22..26].copy_from_slice(&crc.to_le_bytes());
+        self.out.write_all(&page)?;
+        self.sequence += 1;
+        Ok(())
+    }
+}
+
+/// Ogg's CRC-32: polynomial 0x04C11DB7, not reflected, starting at 0.
+fn crc32(data: &[u8]) -> u32 {
+    static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = [0u32; 256];
+        for (i, e) in t.iter_mut().enumerate() {
+            let mut r = (i as u32) << 24;
+            for _ in 0..8 {
+                r = if r & 0x8000_0000 != 0 { (r << 1) ^ 0x04C1_1DB7 } else { r << 1 };
+            }
+            *e = r;
+        }
+        t
+    });
+    data.iter().fold(0u32, |crc, &b| (crc << 8) ^ table[((crc >> 24) as u8 ^ b) as usize])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 16-bit stereo WAV of a 440 Hz sine, `secs` long.
+    fn wav(path: &Path, rate: u32, secs: f64) {
+        let n = (f64::from(rate) * secs) as u32;
+        let data_len = n * 4;
+        let mut b = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&(36 + data_len).to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&rate.to_le_bytes());
+        b.extend_from_slice(&(rate * 4).to_le_bytes());
+        b.extend_from_slice(&4u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..n {
+            let v = (0.5 * (2.0 * std::f64::consts::PI * 440.0 * f64::from(i) / f64::from(rate)).sin() * 32767.0) as i16;
+            b.extend_from_slice(&v.to_le_bytes());
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        std::fs::write(path, b).unwrap();
+    }
+
+    /// The pages of an Ogg stream: (flags, granule, sequence, packets), each page's CRC checked.
+    fn pages(mut b: &[u8]) -> Vec<(u8, u64, u32, Vec<Vec<u8>>)> {
+        let mut out = Vec::new();
+        while !b.is_empty() {
+            assert_eq!(&b[..4], b"OggS");
+            let n = b[26] as usize;
+            let lacing = &b[27..27 + n];
+            let body: usize = lacing.iter().map(|&l| l as usize).sum();
+            let len = 27 + n + body;
+            let mut page = b[..len].to_vec();
+            let crc = u32::from_le_bytes(page[22..26].try_into().unwrap());
+            page[22..26].copy_from_slice(&[0; 4]);
+            assert_eq!(crc32(&page), crc, "page CRC");
+            let mut packets = Vec::new();
+            let (mut at, mut cur) = (27 + n, Vec::new());
+            for &l in lacing {
+                cur.extend_from_slice(&b[at..at + l as usize]);
+                at += l as usize;
+                if l < 255 {
+                    packets.push(std::mem::take(&mut cur));
+                }
+            }
+            out.push((b[5], u64::from_le_bytes(b[6..14].try_into().unwrap()), u32::from_le_bytes(b[18..22].try_into().unwrap()), packets));
+            b = &b[len..];
+        }
+        out
+    }
+
+    #[test]
+    fn the_crc_is_oggs() {
+        assert_eq!(crc32(b""), 0);
+        // CRC-32/CKSUM's check value (0x765E7680) without its final inversion: Ogg's parameters.
+        assert_eq!(crc32(b"123456789"), 0x89A1_897F);
+    }
+
+    #[test]
+    fn a_lossless_track_becomes_a_well_formed_ogg_opus_copy_of_the_same_length() {
+        let dir = std::env::temp_dir().join(format!("cratarr-opus-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("a.wav");
+        wav(&input, 44_100, 3.0);
+        let mut out = Vec::new();
+        assert!(copy(&input, &mut out).unwrap());
+        let pages = pages(&out);
+        let (flags, granule, seq, head) = &pages[0];
+        assert_eq!((*flags, *granule, *seq), (BOS, 0, 0));
+        assert_eq!(&head[0][..8], b"OpusHead");
+        assert_eq!(head[0][9], 2, "stereo");
+        let pre_skip = u64::from(u16::from_le_bytes([head[0][10], head[0][11]]));
+        assert_eq!(u32::from_le_bytes(head[0][12..16].try_into().unwrap()), 44_100, "the original rate, for information");
+        assert_eq!(&pages[1].3[0][..8], b"OpusTags");
+        let last = pages.last().unwrap();
+        assert_eq!(last.0, EOS);
+        assert_eq!(last.1, pre_skip + 3 * 48_000, "ends exactly where the music does");
+        assert!(pages.windows(2).all(|w| w[1].2 == w[0].2 + 1), "pages in sequence");
+        let audio: usize = pages[2..].iter().map(|p| p.3.len()).sum();
+        assert_eq!(audio, (3 * 48_000usize).div_ceil(FRAME), "one packet per 20 ms");
+        // About 160 kb/s: 3 s near 60 kB, far below the 529 kB of the WAV.
+        assert!(out.len() > 30_000 && out.len() < 90_000, "{} bytes", out.len());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A copy of a real file, to listen to or check with another decoder: CRATARR_OPUS_IN to CRATARR_OPUS_OUT.
+    #[test]
+    #[ignore]
+    fn copy_a_file() {
+        let (Some(input), Some(output)) = (std::env::var_os("CRATARR_OPUS_IN"), std::env::var_os("CRATARR_OPUS_OUT")) else { return };
+        let out = std::io::BufWriter::new(std::fs::File::create(output).unwrap());
+        assert!(copy(Path::new(&input), out).unwrap(), "not a lossless file");
+    }
+
+    #[test]
+    fn a_lossy_track_is_not_copied() {
+        let dir = std::env::temp_dir().join(format!("cratarr-opus-mp3-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("a.mp3");
+        // An MPEG-1 Layer III frame header and some padding: not lossless, whatever follows.
+        let mut b = vec![0xFF, 0xFB, 0x90, 0x64];
+        b.resize(4096, 0);
+        std::fs::write(&input, b).unwrap();
+        let mut out = Vec::new();
+        assert!(!copy(&input, &mut out).unwrap_or(false));
+        assert!(out.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
