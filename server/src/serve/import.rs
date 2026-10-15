@@ -306,7 +306,7 @@ impl AlbumPlaces {
 
 /// An album of the library from a source's naming of it: through its track, else its folder.
 fn album_of(serve: &Serve, source: &str, places: &AlbumPlaces, a: &AlbumRef) -> Result<Option<String>> {
-    if let Some(track) = a.track.as_deref().and_then(|t| serve.catalogue.track_of_source(source, t))
+    if let Some(track) = a.track.as_deref().and_then(|t| serve.catalogue().track_of_source(source, t))
         && let Some((_, album, _)) = serve.library.play_targets(&ids::song(track))?
     {
         return Ok(Some(album));
@@ -315,7 +315,7 @@ fn album_of(serve: &Serve, source: &str, places: &AlbumPlaces, a: &AlbumRef) -> 
 }
 
 fn album_places(serve: &Serve) -> Result<AlbumPlaces> {
-    Ok(AlbumPlaces::new(serve.library.album_places()?, &serve.catalogue.folders()))
+    Ok(AlbumPlaces::new(serve.library.album_places()?, &serve.catalogue().folders()))
 }
 
 /// What one run has seen so far, across its pages.
@@ -336,7 +336,7 @@ fn tracks_page(serve: &Serve, req: &Request, items: Vec<TrackData>, run: &mut Ru
     let mut found = Vec::new();
     for t in items {
         run.listed.insert(t.id.clone());
-        let Some(track) = serve.catalogue.track_of_source(&req.source, &t.id) else {
+        let Some(track) = serve.catalogue().track_of_source(&req.source, &t.id) else {
             run.missed.insert(t.id.clone());
             continue;
         };
@@ -803,7 +803,8 @@ mod tests {
         let links: Vec<(String, i64, String)> = files.iter().enumerate().map(|(i, f)| (format!("s{}", i + 1), 0, f.to_string())).collect();
         cat.record_links("jf", "lib", &links, 1).unwrap();
         let tracks = files.map(|f| cat.track_of(0, f).unwrap());
-        let serve = Serve::open(None, cat, Rules::default(), &|_| None).unwrap();
+        let serve = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(cat);
         let tagged = |i: usize, artist: &str, album: &str, date: &str| ServedRow {
             rel: files[i].into(),
             track: Some(tracks[i]),

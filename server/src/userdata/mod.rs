@@ -57,6 +57,8 @@ pub enum Kind {
     Song,
     Album,
     Artist,
+    /// A playlist by its name (a favourite playlist, as Finamp's hearts; decision 0023).
+    Playlist,
 }
 
 impl Kind {
@@ -65,6 +67,7 @@ impl Kind {
             Kind::Song => "song",
             Kind::Album => "album",
             Kind::Artist => "artist",
+            Kind::Playlist => "playlist",
         }
     }
 }
@@ -284,6 +287,19 @@ impl UserData {
             }
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Sets an item's whole annotation for a user (a song taking over another's data, decision 0013). Safe to repeat.
+    pub fn set_annotation(&self, user: &str, kind: Kind, item: &str, pid: Option<&str>, a: &Annotation) -> Result<()> {
+        self.db().execute(
+            "INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT (user, item, kind) DO UPDATE SET pid = coalesce(excluded.pid, annotation.pid),
+               play_count = excluded.play_count, play_date = excluded.play_date, rating = excluded.rating,
+               starred = excluded.starred, starred_at = excluded.starred_at",
+            params![user, item, kind.as_str(), pid, a.play_count, a.play_date, a.rating, a.starred_at.is_some(), a.starred_at],
+        )?;
         Ok(())
     }
 

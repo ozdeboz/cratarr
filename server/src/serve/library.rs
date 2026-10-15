@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS albums (
   n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, artist TEXT NOT NULL, artist_id TEXT NOT NULL,
   year INTEGER, original_year INTEGER, genre TEXT, genres TEXT NOT NULL, song_count INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL, size INTEGER NOT NULL, discs INTEGER NOT NULL, created INTEGER, mbid TEXT,
-  folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL);
+  folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL,
+  format TEXT, min_kbps INTEGER);
 CREATE INDEX IF NOT EXISTS albums_by_base ON albums (base_id);
 CREATE INDEX IF NOT EXISTS albums_by_name ON albums (order_name, n);
 CREATE INDEX IF NOT EXISTS albums_by_created ON albums (created DESC, n);
@@ -62,7 +63,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(name, content='', cont
 ";
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 3;
+const LAYOUT: i64 = 5;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -325,8 +326,8 @@ impl Library {
         {
             let mut ins_album = tx.prepare(
                 "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
-                   size, discs, created, mbid, folder, dir, compilation, order_name, base_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                   size, discs, created, mbid, folder, dir, compilation, order_name, base_id, format, min_kbps)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             )?;
             let mut ins_fts = tx.prepare("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
             let mut ins_aa = tx.prepare("INSERT INTO album_artists (album_id, artist_id, name, position) VALUES (?1, ?2, ?3, ?4)")?;
@@ -352,6 +353,9 @@ impl Library {
                 let discs = songs.iter().filter_map(|s| s.row.first("discnumber").and_then(leading_number)).max().unwrap_or(1);
                 let compilation = songs.iter().any(|s| s.row.first("compilation").is_some_and(|c| c == "1"));
                 let artist_id = ids::artist(&first.album_artists[0]);
+                // One format for the whole album, else none (mixed).
+                let formats: BTreeSet<&str> = songs.iter().filter_map(|s| s.row.format.as_deref()).collect();
+                let format = (formats.len() == 1).then(|| formats.iter().next().map(|f| f.to_string())).flatten();
                 ins_album.execute(params![
                     album_id,
                     first.album,
@@ -372,6 +376,8 @@ impl Library {
                     compilation,
                     order_name(&first.album),
                     first.album_base,
+                    format,
+                    songs.iter().filter_map(|s| s.row.kbps).min(),
                 ])?;
                 ins_fts.execute(params![tx.last_insert_rowid(), first.album, first.album_artist])?;
                 for (i, name) in first.album_artists.iter().enumerate() {
@@ -405,9 +411,18 @@ impl Library {
                 ins_fts.execute(params![tx.last_insert_rowid(), name])?;
             }
         }
+        // Where each catalogue folder is, so the library can be read before the catalogue is open (decision 0032).
+        let roots: Vec<(i64, &str)> = folders.iter().map(|f| (f.folder, f.root.as_str())).collect();
+        tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('roots', ?1)", [serde_json::to_string(&roots)?])?;
         tx.commit()?;
         db.execute_batch("ANALYZE;")?;
         Ok(())
+    }
+
+    /// Where each catalogue folder was at the last build: (folder, path).
+    pub fn roots(&self) -> Vec<(i64, String)> {
+        let v: Option<String> = self.db().query_row("SELECT value FROM meta WHERE key = 'roots'", [], |r| r.get(0)).optional().ok().flatten();
+        v.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
     }
 
     /// Counts, for the log and tests: (songs, albums, artists).

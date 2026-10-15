@@ -110,6 +110,9 @@ async fn main() -> Result<()> {
     let bind = cfg.bind.clone();
     let data_dir = cfg.data_dir.clone();
     let tag_rules = saved.tag_rules.clone();
+    let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), tag_rules, &env)
+        .context("cannot open the OpenSubsonic library")?;
+    serve::set_instance(served.clone());
     let app = app::App::new(cfg, saved, origin).await.context("cannot open the catalogue")?;
     let n = app.playlists.count().await.context("cannot read the playlist folder")?;
     tracing::info!("found {n} playlists");
@@ -138,9 +141,9 @@ async fn main() -> Result<()> {
         }
     });
 
-    // The OpenSubsonic API (decision 0030), kept in step with the catalogue in the background.
-    let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), app.library.catalogue(), tag_rules, &env)
-        .context("cannot open the OpenSubsonic library")?;
+    // The OpenSubsonic API (decision 0030), kept in step with the catalogue in the background. Opened before the app
+    // (above), so the built-in Cratarr source can answer while the app starts (decision 0032).
+    served.attach_catalogue(app.library.catalogue());
     served.set_playlists(app.playlists.clone());
     served.set_incoming(app.incoming.clone());
     served.follow();
