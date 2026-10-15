@@ -231,6 +231,62 @@ pub struct TrackPage {
     pub total: usize,
 }
 
+/// What one account did with one track, for an import into Cratarr's own user data (decision 0030, amended
+/// 2026-10-15). Times are epoch seconds.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackData {
+    /// The source's id of the track.
+    pub id: String,
+    pub plays: u32,
+    pub last_played: Option<i64>,
+    pub favorite: bool,
+    /// When it became a favourite, when the source keeps that.
+    pub favorite_at: Option<i64>,
+    /// 1 to 5; 0 when not rated.
+    pub rating: u8,
+}
+
+/// A page of [`TrackData`]. `next` asks for the page after it; `None` when the listing is done.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackDataPage {
+    pub items: Vec<TrackData>,
+    pub next: Option<String>,
+    /// Tracks in the whole listing, when the source can tell (on the first page at least).
+    pub total: Option<usize>,
+}
+
+/// An album as an import names it: the source's id, and one of its tracks (the source's id) or its folder (as the
+/// source sees it) to find it by in Cratarr's library.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AlbumRef {
+    pub id: String,
+    pub track: Option<String>,
+    pub path: Option<String>,
+}
+
+/// An artist as an import names it: the source's id and the name, by which Cratarr finds it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ArtistRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// One account's favourite albums and artists, every one, each with when it became a favourite when the source keeps
+/// that.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FavoriteGroups {
+    pub albums: Vec<(AlbumRef, Option<i64>)>,
+    pub artists: Vec<(ArtistRef, Option<i64>)>,
+}
+
+/// A page of albums with when the source added them (epoch seconds); `next` and `total` as in [`TrackDataPage`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AddedPage {
+    pub items: Vec<(AlbumRef, i64)>,
+    pub next: Option<String>,
+    pub total: Option<usize>,
+}
+
 /// A player control, as sent from the now-playing header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -463,6 +519,29 @@ pub trait Source: Send + Sync {
     /// folder without giving the page the source's address or key.
     fn album_cover<'a>(&'a self, _album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {
         Box::pin(async { Ok(None) })
+    }
+
+    /// Whether this source implements the three reads below, which import an account's plays, favourites, ratings and
+    /// its albums' added dates into Cratarr's own user data (decision 0030, amended 2026-10-15).
+    fn imports(&self) -> bool {
+        false
+    }
+
+    /// Optional: a page of what `user` did with tracks. Every track the user played or made a favourite is in the
+    /// listing at least once (twice is harmless). `cursor`: `None` for the first page, then the page's `next`. One
+    /// page is one request or a few, never several at once: imports run beside everything else.
+    fn track_data<'a>(&'a self, _user: &'a str, _cursor: Option<&'a str>) -> Fut<'a, TrackDataPage> {
+        Box::pin(async { anyhow::bail!("this server cannot list an account's plays") })
+    }
+
+    /// Optional: every album and artist `user` made a favourite.
+    fn favorite_groups<'a>(&'a self, _user: &'a str) -> Fut<'a, FavoriteGroups> {
+        Box::pin(async { anyhow::bail!("this server cannot list an account's favourites") })
+    }
+
+    /// Optional: a page of the source's albums with when it added them; `cursor` as in [`Source::track_data`].
+    fn albums_added<'a>(&'a self, _cursor: Option<&'a str>) -> Fut<'a, AddedPage> {
+        Box::pin(async { anyhow::bail!("this server cannot say when it added its albums") })
     }
 }
 

@@ -425,6 +425,21 @@ impl Library {
         Ok(Some((pid, album, artists)))
     }
 
+    /// Every album's folder: (id, catalogue folder, path in it), to find an album by the folder a media server names.
+    pub fn album_places(&self) -> Result<Vec<(String, i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, folder, dir FROM albums")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Whether the library has this artist.
+    pub fn has_artist(&self, id: &str) -> Result<bool> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT 1 FROM artists WHERE id = ?1")?;
+        Ok(st.exists([id])?)
+    }
+
     /// Every song's (persistent id, id), for user data to follow a rebuilt catalogue.
     pub fn pids(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();

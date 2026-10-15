@@ -5,13 +5,19 @@
     checkNaming,
     createSubsonicAccount,
     getCatalogue,
+    getImport,
+    getImportSources,
     getSubsonicAccounts,
     getSettings,
     previewLidarr,
     previewSource,
     saveSettings,
+    startImport,
     type Choice,
     type Field,
+    type ImportJob,
+    type ImportSource,
+    type ImportWhat,
     type Kind,
     type LibraryUse,
     type LidarrView,
@@ -23,6 +29,7 @@
     type NamingView,
   } from './lib/api';
   import { prefs, type Theme } from './lib/prefs.svelte';
+  import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
   import { toast } from './lib/toast.svelte';
 
@@ -91,6 +98,7 @@
     try {
       sub.accounts = (await createSubsonicAccount(sub.user.trim(), sub.password)).accounts;
       sub.password = '';
+      loadImports();
     } catch (e) {
       toast.fail(e, 'Could not create the account');
     } finally {
@@ -111,6 +119,83 @@
     } finally {
       sub.busy = false;
     }
+  }
+
+  // Importing plays and favourites from a server into a Subsonic account: the choices per server, and the import running
+  // now or the last one (one at a time), followed while it runs.
+  type ImportChoice = { user: string; account: string; what: ImportWhat };
+  let imp = $state({ sources: [] as ImportSource[], accounts: [] as string[], choice: {} as Record<string, ImportChoice>, job: null as ImportJob | null });
+  const IMPORT_WHAT: { key: keyof ImportWhat; label: string }[] = [
+    { key: 'plays', label: 'Plays' },
+    { key: 'favorites', label: 'Favourites' },
+    { key: 'ratings', label: 'Ratings' },
+    { key: 'added', label: 'Added dates' },
+  ];
+  const STEPS = { tracks: 'Tracks', groups: 'Favourite albums and artists', added: 'Added dates' };
+  const importing = $derived(!!imp.job && imp.job.finished === null);
+
+  async function loadImports() {
+    try {
+      const [srcs, last] = await Promise.all([getImportSources(), getImport()]);
+      imp.accounts = srcs.accounts;
+      for (const src of srcs.sources) {
+        // Kept while the page is open, unless it had no account to go into yet.
+        if (imp.choice[src.id]?.account) continue;
+        imp.choice[src.id] = {
+          user: src.user ?? src.users[0]?.id ?? '',
+          account: src.account ?? srcs.accounts[0] ?? '',
+          what: { plays: true, favorites: true, ratings: true, added: true, ...src.what },
+        };
+      }
+      imp.sources = srcs.sources;
+      imp.job = last.job;
+    } catch {
+      /* no servers to import from: the part stays hidden */
+    }
+  }
+  loadImports();
+
+  async function runImport(source: string, preview: boolean) {
+    const c = imp.choice[source];
+    try {
+      imp.job = (await startImport({ source, user: c.user, account: c.account, what: { ...c.what }, preview })).job;
+    } catch (e) {
+      toast.fail(e, 'Could not start the import');
+    }
+  }
+
+  // While an import runs, its progress.
+  $effect(() => {
+    if (!importing) return;
+    const t = setInterval(async () => {
+      try {
+        imp.job = (await getImport()).job;
+      } catch {
+        /* the last known progress stays */
+      }
+    }, 2000);
+    return () => clearInterval(t);
+  });
+
+  function importLine(j: ImportJob) {
+    const c = j.counts;
+    const parts = [
+      c.plays && `${count(c.plays)} plays on ${count(c.songs)} ${c.songs === 1 ? 'song' : 'songs'}`,
+      c.starred && `${count(c.starred)} ${c.starred === 1 ? 'favourite' : 'favourites'}`,
+      c.unstarred && `${count(c.unstarred)} no longer ${c.unstarred === 1 ? 'a favourite' : 'favourites'}`,
+      c.rated && `${count(c.rated)} ${c.rated === 1 ? 'rating' : 'ratings'}`,
+      c.added && `${count(c.added)} added ${c.added === 1 ? 'date' : 'dates'}`,
+      c.skipped && `${count(c.skipped)} not in the library`,
+    ].filter(Boolean);
+    const line = parts.length ? parts.join(' · ') : 'Nothing new';
+    return j.preview ? `Preview: ${line}` : line;
+  }
+
+  function stepLine(j: ImportJob) {
+    const st = j.step;
+    if (!st) return { label: 'Starting', value: 0 };
+    const of = st.total ? ` ${count(st.read)} of ${count(st.total)}` : st.read ? ` ${count(st.read)}` : '';
+    return { label: `${STEPS[st.name]}${of}`, value: st.total ? st.read / st.total : 0 };
   }
 
   const count = (n: number) => n.toLocaleString();
@@ -625,6 +710,53 @@
         <div class="row">
           <button disabled={sub.busy || !sub.current || !sub.password} aria-busy={sub.busy} onclick={changePassword}>Change password</button>
         </div>
+
+        {#each imp.sources as src (src.id)}
+          {@const c = imp.choice[src.id]}
+          {@const job = imp.job?.source === src.id ? imp.job : null}
+          <div class="sub import">
+            <h3>Import from {serverName(src.id)}</h3>
+            {#if src.error}
+              <p class="hint bad">{src.error}</p>
+            {:else if c}
+              {@const none = !Object.values(c.what).some(Boolean) || !c.user || !c.account}
+              <div class="fields pair">
+                <label>
+                  <span class="l">From</span>
+                  <select bind:value={c.user}>
+                    {#each src.users as u (u.id)}<option value={u.id}>{u.name}</option>{/each}
+                  </select>
+                </label>
+                <label>
+                  <span class="l">Into</span>
+                  <select bind:value={c.account}>
+                    {#each imp.accounts as a (a)}<option value={a}>{a}</option>{/each}
+                  </select>
+                </label>
+              </div>
+              <div class="ticks">
+                {#each IMPORT_WHAT as w (w.key)}
+                  <label class="check"><input type="checkbox" bind:checked={c.what[w.key]} />{w.label}</label>
+                {/each}
+              </div>
+              <div class="row">
+                <button disabled={importing || none} onclick={() => runImport(src.id, true)}>Preview</button>
+                <button class="primary" disabled={importing || none} onclick={() => runImport(src.id, false)}>Import</button>
+              </div>
+              {#if job}
+                {#if job.finished === null}
+                  {@const st = stepLine(job)}
+                  <Meter label={st.label} value={st.value} />
+                {:else if job.error}
+                  <p class="hint bad">{job.error}</p>
+                {:else}
+                  <p class="state"><span class="dot ok" aria-hidden="true"></span>{importLine(job)}</p>
+                {/if}
+                {#if job.note}<p class="hint warn">{job.note}</p>{/if}
+              {/if}
+            {/if}
+          </div>
+        {/each}
       {/if}
     </section>
   {/if}
@@ -1080,6 +1212,32 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .import {
+    display: grid;
+    gap: 14px;
+  }
+
+  .import h3 {
+    margin-bottom: 0;
+  }
+
+  .import .state,
+  .import .hint {
+    margin: 0;
+  }
+
+  @media (min-width: 521px) {
+    .fields.pair {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .ticks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
   }
 
   .days input {

@@ -128,19 +128,26 @@ impl Subsonic {
 
     /// One page of every song in a folder (an empty search lists them all, in a stable order).
     async fn songs(&self, folder: &str, start: usize, limit: usize) -> Result<Vec<Song>> {
+        self.songs_in(Some(folder), start, limit).await
+    }
+
+    /// One page of every song in a folder, or in every folder.
+    async fn songs_in(&self, folder: Option<&str>, start: usize, limit: usize) -> Result<Vec<Song>> {
         #[derive(Deserialize, Default)]
         struct Found {
             #[serde(default)]
             song: Vec<Song>,
         }
-        let q = [
+        let mut q = vec![
             ("query", String::new()),
             ("songCount", limit.to_string()),
             ("songOffset", start.to_string()),
             ("albumCount", "0".into()),
             ("artistCount", "0".into()),
-            ("musicFolderId", folder.to_string()),
         ];
+        if let Some(f) = folder {
+            q.push(("musicFolderId", f.to_string()));
+        }
         Ok(self.call::<Option<Found>>("search3", &q, "searchResult3").await?.unwrap_or_default().song)
     }
 
@@ -249,6 +256,10 @@ struct Song {
     play_count: Option<u32>,
     starred: Option<String>,
     explicit_status: Option<String>,
+    /// When last played (OpenSubsonic).
+    played: Option<String>,
+    /// 1 to 5.
+    user_rating: Option<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -380,9 +391,14 @@ impl SubsonicSource {
 
     /// Every song in a folder, in pages.
     async fn all_songs(&self, folder: &str) -> Result<Vec<Song>> {
+        self.all_songs_in(Some(folder)).await
+    }
+
+    /// Every song in a folder, or in every folder, in pages.
+    async fn all_songs_in(&self, folder: Option<&str>) -> Result<Vec<Song>> {
         let mut out = Vec::new();
         loop {
-            let page = self.api.songs(folder, out.len(), PAGE).await?;
+            let page = self.api.songs_in(folder, out.len(), PAGE).await?;
             let n = page.len();
             out.extend(page);
             if n < PAGE {
@@ -400,6 +416,32 @@ impl SubsonicSource {
     async fn rescan(&self) -> Result<()> {
         self.api.ok("startScan", &[]).await
     }
+
+    /// The API shows the plays and stars of the account that logs in, nobody else's.
+    fn own_login(&self, user: &str) -> Result<()> {
+        if user != self.api.user {
+            bail!("a Subsonic server shows only its own login's plays and favourites");
+        }
+        Ok(())
+    }
+}
+
+/// A song's plays, star and rating as an import reads them; `None` when it has none of them.
+fn song_data(s: Song) -> Option<super::TrackData> {
+    let plays = s.play_count.unwrap_or(0);
+    let rating = s.user_rating.unwrap_or(0).min(5);
+    if plays == 0 && s.starred.is_none() && rating == 0 {
+        return None;
+    }
+    let epoch = |d: Option<&str>| d.and_then(crate::nowplaying::parse_iso_epoch).filter(|t| *t > 0);
+    Some(super::TrackData {
+        last_played: epoch(s.played.as_deref()),
+        favorite: s.starred.is_some(),
+        favorite_at: epoch(s.starred.as_deref()),
+        id: s.id,
+        plays,
+        rating,
+    })
 }
 
 impl Source for SubsonicSource {
@@ -709,6 +751,103 @@ impl Source for SubsonicSource {
     fn album_cover<'a>(&'a self, album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {
         Box::pin(self.api.cover(album_id, crate::covers::MAX_BYTES))
     }
+
+    fn imports(&self) -> bool {
+        true
+    }
+
+    /// Every song of every folder (an empty search), keeping the ones played, starred or rated: the API cannot list
+    /// only those.
+    fn track_data<'a>(&'a self, user: &'a str, cursor: Option<&'a str>) -> Fut<'a, super::TrackDataPage> {
+        Box::pin(async move {
+            self.own_login(user)?;
+            let start: usize = match cursor {
+                Some(c) => c.parse().context("not a cursor")?,
+                None => 0,
+            };
+            let songs = self.api.songs_in(None, start, PAGE).await?;
+            let n = songs.len();
+            let items = songs.into_iter().filter_map(song_data).collect();
+            Ok(super::TrackDataPage { items, next: (n == PAGE).then(|| (start + n).to_string()), total: None })
+        })
+    }
+
+    /// The starred albums name no song or folder, so each album is asked for its own (one request each); one that
+    /// cannot be read is passed on without, and the import counts it as not found.
+    fn favorite_groups<'a>(&'a self, user: &'a str) -> Fut<'a, super::FavoriteGroups> {
+        Box::pin(async move {
+            self.own_login(user)?;
+            #[derive(Deserialize)]
+            struct Starred {
+                id: String,
+                name: Option<String>,
+                starred: Option<String>,
+            }
+            #[derive(Deserialize, Default)]
+            struct All {
+                #[serde(default)]
+                album: Vec<Starred>,
+                #[serde(default)]
+                artist: Vec<Starred>,
+            }
+            let all = self.api.call::<Option<All>>("getStarred2", &[], "starred2").await?.unwrap_or_default();
+            let at = |d: Option<&str>| d.and_then(crate::nowplaying::parse_iso_epoch).filter(|t| *t > 0);
+            let mut groups = super::FavoriteGroups::default();
+            for a in all.album {
+                let songs = self.api.album(&a.id).await.map(|x| x.song).unwrap_or_default();
+                let path = album_folder(songs.iter().filter_map(|s| s.path.as_deref()));
+                let track = songs.into_iter().next().map(|s| s.id);
+                groups.albums.push((super::AlbumRef { id: a.id, track, path }, at(a.starred.as_deref())));
+            }
+            for a in all.artist {
+                if let Some(name) = a.name.filter(|n| !n.trim().is_empty()) {
+                    groups.artists.push((super::ArtistRef { id: a.id, name }, at(a.starred.as_deref())));
+                }
+            }
+            Ok(groups)
+        })
+    }
+
+    /// Every album at once, in one page: the album list names no song or folder, so every song is listed as well (a
+    /// request per 500) to find each album's first song and folder.
+    fn albums_added<'a>(&'a self, _cursor: Option<&'a str>) -> Fut<'a, super::AddedPage> {
+        Box::pin(async move {
+            #[derive(Deserialize, Default)]
+            struct List {
+                #[serde(default)]
+                album: Vec<AlbumWithSongs>,
+            }
+            let mut heads: Vec<AlbumWithSongs> = Vec::new();
+            loop {
+                let q = [("type", "newest".to_string()), ("size", PAGE.to_string()), ("offset", heads.len().to_string())];
+                let page = self.api.call::<Option<List>>("getAlbumList2", &q, "albumList2").await?.unwrap_or_default().album;
+                let n = page.len();
+                heads.extend(page);
+                if n < PAGE {
+                    break;
+                }
+            }
+            let songs = self.all_songs_in(None).await?;
+            let mut by_album: HashMap<&str, Vec<&Song>> = HashMap::new();
+            for s in &songs {
+                if let Some(a) = s.album_id.as_deref() {
+                    by_album.entry(a).or_default().push(s);
+                }
+            }
+            let total = heads.len();
+            let items = heads
+                .into_iter()
+                .filter_map(|a| {
+                    let at = a.created.as_deref().and_then(crate::nowplaying::parse_iso_epoch).filter(|t| *t > 0)?;
+                    let own = by_album.get(a.id.as_str()).map(Vec::as_slice).unwrap_or_default();
+                    let path = album_folder(own.iter().filter_map(|s| s.path.as_deref()));
+                    let track = own.first().map(|s| s.id.clone());
+                    Some((super::AlbumRef { id: a.id, track, path }, at))
+                })
+                .collect();
+            Ok(super::AddedPage { items, next: None, total: Some(total) })
+        })
+    }
 }
 
 #[cfg(test)]
@@ -740,5 +879,16 @@ mod tests {
         assert!(s.starred.is_some());
         let d = summarize(&[&s]);
         assert_eq!((d.tracks, d.format.as_deref(), d.bitrate_kbps), (1, Some("MP3"), Some(64)));
+    }
+
+    #[test]
+    fn an_import_keeps_the_songs_played_starred_or_rated() {
+        let song = |extra: &str| -> Song { serde_json::from_str(&format!(r#"{{"id":"1","title":"t"{extra}}}"#)).unwrap() };
+        assert_eq!(song_data(song("")), None);
+        assert_eq!(song_data(song(r#","playCount":0,"userRating":0"#)), None);
+        let played = song_data(song(r#","playCount":3,"played":"2026-10-12T13:28:00Z""#)).unwrap();
+        assert_eq!((played.plays, played.last_played, played.favorite), (3, Some(1_791_811_680), false));
+        let starred = song_data(song(r#","starred":"2026-10-12T13:28:00Z","userRating":4"#)).unwrap();
+        assert_eq!((starred.plays, starred.favorite, starred.favorite_at, starred.rating), (0, true, Some(1_791_811_680), 4));
     }
 }

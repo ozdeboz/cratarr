@@ -2,6 +2,8 @@
 //! when an album was first added where that is known better than the catalogue does (imported from a media server).
 //! Its own SQLite file, never derived from anything: it belongs in backups. Nothing here is removed when a file goes
 //! missing; a song comes back to its data by its id, or by its persistent id once the catalogue renumbered its tracks.
+//! An import from a media server also keeps what it last brought in per item (`imported`), so the next one adds only
+//! what changed on the server since (`serve::import`).
 //!
 //! The annotation table is Navidrome's (`db/migrations`, `persistence/sql_annotations.go`,
 //! https://github.com/navidrome/navidrome, GPL-3.0-or-later, Copyright the Navidrome authors), translated: one row per
@@ -39,11 +41,19 @@ CREATE TABLE IF NOT EXISTS playlist_seen (name TEXT PRIMARY KEY, print TEXT NOT 
 CREATE TABLE IF NOT EXISTS album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
   name TEXT NOT NULL, album_artist TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS album_review_by_base ON album_review (base);
+CREATE TABLE IF NOT EXISTS imported (
+  account TEXT NOT NULL, source TEXT NOT NULL, server_user TEXT NOT NULL, kind TEXT NOT NULL, item TEXT NOT NULL,
+  server_item TEXT, pid TEXT, plays INTEGER NOT NULL DEFAULT 0, played INTEGER, starred INTEGER NOT NULL DEFAULT 0,
+  rating INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL,
+  PRIMARY KEY (account, source, server_user, kind, item)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS imported_pid ON imported (pid);
+CREATE TABLE IF NOT EXISTS import_choices (source TEXT PRIMARY KEY, choice TEXT NOT NULL);
 ";
 
 /// What an annotation is about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Kind {
+    #[default]
     Song,
     Album,
     Artist,
@@ -68,6 +78,47 @@ pub struct Annotation {
     pub rating: u8,
     /// Epoch seconds, when starred.
     pub starred_at: Option<i64>,
+}
+
+/// What an import last brought in for one item: the server's values then, so the next import adds only what changed
+/// since (decision 0030, amended 2026-10-15).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Imported {
+    /// The server's id of the item it came from.
+    pub server_item: Option<String>,
+    pub plays: u32,
+    /// Epoch seconds.
+    pub played: Option<i64>,
+    pub starred: bool,
+    pub rating: u8,
+}
+
+/// Whose import: the Cratarr account it goes into, the source (its id in the settings) and the account on the server.
+#[derive(Debug, Clone, Copy)]
+pub struct ImportKey<'a> {
+    pub account: &'a str,
+    pub source: &'a str,
+    pub server_user: &'a str,
+}
+
+/// One item's change from an import.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ImportChange {
+    pub kind: Kind,
+    pub item: String,
+    /// Songs: the persistent id, so the record follows the song when the catalogue renumbers its tracks.
+    pub pid: Option<String>,
+    /// Plays to add; for a song on its album and artists too, as a play is counted (`count_play`).
+    pub add_plays: u32,
+    /// Last played, kept when later than the one there.
+    pub played: Option<i64>,
+    pub album: Option<String>,
+    pub artists: Vec<String>,
+    /// Star (with when, else now) or unstar.
+    pub star: Option<(bool, Option<i64>)>,
+    pub rating: Option<u8>,
+    /// What the server said, kept for the next import.
+    pub now: Imported,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -104,6 +155,17 @@ pub struct UserData {
 
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+/// An `imported` row's (server_item, plays, played, starred, rating).
+fn imported_of(r: &rusqlite::Row) -> rusqlite::Result<Imported> {
+    Ok(Imported {
+        server_item: r.get(0)?,
+        plays: r.get::<_, i64>(1)?.max(0) as u32,
+        played: r.get(2)?,
+        starred: r.get::<_, i64>(3)? != 0,
+        rating: r.get::<_, i64>(4)?.clamp(0, 5) as u8,
+    })
 }
 
 impl UserData {
@@ -225,42 +287,132 @@ impl UserData {
         Ok(())
     }
 
-    /// Sets a song's whole annotation (an import from a media server). The persistent id goes along.
-    pub fn import(&self, user: &str, kind: Kind, item: &str, pid: Option<&str>, a: &Annotation) -> Result<()> {
-        self.db().execute(
-            "INSERT INTO annotation (user, item, kind, pid, play_count, play_date, rating, starred, starred_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT (user, item, kind) DO UPDATE SET pid = coalesce(excluded.pid, annotation.pid),
-               play_count = max(annotation.play_count, excluded.play_count),
-               play_date = max(coalesce(annotation.play_date, 0), coalesce(excluded.play_date, 0)),
-               rating = CASE WHEN annotation.rating = 0 THEN excluded.rating ELSE annotation.rating END,
-               starred = max(annotation.starred, excluded.starred),
-               starred_at = coalesce(annotation.starred_at, excluded.starred_at)",
-            params![
-                user,
-                item,
-                kind.as_str(),
-                pid,
-                a.play_count,
-                a.play_date,
-                a.rating,
-                a.starred_at.is_some(),
-                a.starred_at
-            ],
+    /// What earlier imports brought in for these items, by item; items never imported are left out.
+    pub fn imported(&self, key: ImportKey, kind: Kind, items: &[String]) -> Result<std::collections::HashMap<String, Imported>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT server_item, plays, played, starred, rating FROM imported
+             WHERE account = ?1 AND source = ?2 AND server_user = ?3 AND kind = ?4 AND item = ?5",
         )?;
+        let mut out = std::collections::HashMap::new();
+        for item in items {
+            if let Some(i) = st.query_row(params![key.account, key.source, key.server_user, kind.as_str(), item], imported_of).optional()? {
+                out.insert(item.clone(), i);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every item of one kind an earlier import left starred, with what it brought in.
+    pub fn imported_starred(&self, key: ImportKey, kind: Kind) -> Result<Vec<(String, Imported)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT item, server_item, plays, played, starred, rating FROM imported
+             WHERE account = ?1 AND source = ?2 AND server_user = ?3 AND kind = ?4 AND starred = 1 ORDER BY item",
+        )?;
+        let rows = st.query_map(params![key.account, key.source, key.server_user, kind.as_str()], |r| {
+            let mut i = Imported { server_item: r.get(1)?, ..Imported::default() };
+            i.plays = r.get::<_, i64>(2)?.max(0) as u32;
+            i.played = r.get(3)?;
+            i.starred = r.get::<_, i64>(4)? != 0;
+            i.rating = r.get::<_, i64>(5)?.clamp(0, 5) as u8;
+            Ok((r.get::<_, String>(0)?, i))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Applies an import's changes to `key.account`'s annotations and keeps what the server said, all or nothing.
+    /// Annotations keep Navidrome's shape: plays add up, last played is the later one, a star keeps its first time.
+    pub fn apply_import(&self, key: ImportKey, changes: &[ImportChange]) -> Result<()> {
+        let user = key.account;
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut plays = tx.prepare_cached(
+                "INSERT INTO annotation (user, item, kind, pid, play_count, play_date) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (user, item, kind) DO UPDATE SET play_count = annotation.play_count + excluded.play_count,
+                   play_date = CASE WHEN excluded.play_date IS NULL THEN annotation.play_date
+                     ELSE max(coalesce(annotation.play_date, 0), excluded.play_date) END,
+                   pid = coalesce(excluded.pid, annotation.pid)",
+            )?;
+            let mut star = tx.prepare_cached(
+                "INSERT INTO annotation (user, item, kind, pid, starred, starred_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (user, item, kind) DO UPDATE SET pid = coalesce(excluded.pid, annotation.pid),
+                   starred = excluded.starred,
+                   starred_at = CASE WHEN excluded.starred = 0 THEN NULL WHEN annotation.starred = 1 THEN annotation.starred_at ELSE excluded.starred_at END",
+            )?;
+            let mut rate = tx.prepare_cached(
+                "INSERT INTO annotation (user, item, kind, pid, rating) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (user, item, kind) DO UPDATE SET rating = excluded.rating, pid = coalesce(excluded.pid, annotation.pid)",
+            )?;
+            let mut keep = tx.prepare_cached(
+                "INSERT INTO imported (account, source, server_user, kind, item, server_item, pid, plays, played, starred, rating, at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                 ON CONFLICT (account, source, server_user, kind, item) DO UPDATE SET server_item = excluded.server_item,
+                   pid = coalesce(excluded.pid, imported.pid), plays = excluded.plays, played = excluded.played,
+                   starred = excluded.starred, rating = excluded.rating, at = excluded.at",
+            )?;
+            let at = now();
+            for c in changes {
+                let kind = c.kind;
+                if c.add_plays > 0 || c.played.is_some() {
+                    plays.execute(params![user, c.item, kind.as_str(), c.pid, c.add_plays, c.played])?;
+                    if kind == Kind::Song {
+                        let groups = c.album.iter().map(|a| (a, Kind::Album)).chain(c.artists.iter().map(|a| (a, Kind::Artist)));
+                        for (item, k) in groups {
+                            plays.execute(params![user, item, k.as_str(), Option::<String>::None, c.add_plays, c.played])?;
+                        }
+                    }
+                }
+                if let Some((on, when)) = c.star {
+                    star.execute(params![user, c.item, kind.as_str(), c.pid, on, on.then(|| when.unwrap_or(at))])?;
+                }
+                if let Some(r) = c.rating {
+                    rate.execute(params![user, c.item, kind.as_str(), c.pid, r.min(5)])?;
+                }
+                let n = &c.now;
+                keep.execute(params![
+                    key.account,
+                    key.source,
+                    key.server_user,
+                    kind.as_str(),
+                    c.item,
+                    n.server_item,
+                    c.pid,
+                    n.plays,
+                    n.played,
+                    n.starred,
+                    n.rating,
+                    at
+                ])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
-    /// Songs' annotations follow their persistent ids to new song ids (the catalogue was rebuilt): `moves` is
-    /// (persistent id, song id now). Returns how many moved.
+    /// The choices of the last import from a source (the page's JSON), to offer them again.
+    pub fn import_choice(&self, source: &str) -> Result<Option<String>> {
+        Ok(self.db().query_row("SELECT choice FROM import_choices WHERE source = ?1", [source], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_import_choice(&self, source: &str, choice: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO import_choices (source, choice) VALUES (?1, ?2)", params![source, choice])?;
+        Ok(())
+    }
+
+    /// Songs' annotations, and what imports brought in for them, follow their persistent ids to new song ids (the
+    /// catalogue was rebuilt): `moves` is (persistent id, song id now). Returns how many annotations moved.
     pub fn follow_pids(&self, moves: &[(String, String)]) -> Result<usize> {
         let mut db = self.db();
         let tx = db.transaction()?;
         let mut n = 0;
         {
             let mut st = tx.prepare_cached("UPDATE OR IGNORE annotation SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
+            let mut ledger = tx.prepare_cached("UPDATE OR IGNORE imported SET item = ?2 WHERE kind = 'song' AND pid = ?1 AND item != ?2")?;
             for (pid, item) in moves {
                 n += st.execute(params![pid, item])?;
+                ledger.execute(params![pid, item])?;
             }
         }
         tx.commit()?;
@@ -358,6 +510,22 @@ impl UserData {
         Ok(())
     }
 
+    /// `set_added` for many albums, all or none.
+    pub fn set_added_many(&self, albums: &[(String, i64)], origin: &str) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut st = tx.prepare_cached(
+                "INSERT INTO added (album, at, origin) VALUES (?1, ?2, ?3) ON CONFLICT (album) DO UPDATE SET at = min(added.at, excluded.at)",
+            )?;
+            for (album, at) in albums {
+                st.execute(params![album, at, origin])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn added(&self) -> Result<std::collections::HashMap<String, i64>> {
         let db = self.db();
         let mut st = db.prepare("SELECT album, at FROM added")?;
@@ -404,13 +572,41 @@ mod tests {
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 1);
     }
 
+    const KEY: ImportKey = ImportKey { account: "me", source: "jellyfin", server_user: "u1" };
+
     #[test]
-    fn an_import_never_lowers_what_is_there() {
+    fn imported_plays_add_to_the_song_its_album_and_artists_and_are_remembered() {
         let u = UserData::open(None).unwrap();
-        u.count_play("me", ("tr-1", "p"), "al-x", &[], 500).unwrap();
-        u.import("me", Kind::Song, "tr-1", Some("p"), &Annotation { play_count: 7, play_date: Some(100), rating: 0, starred_at: Some(5) }).unwrap();
+        u.count_play("me", ("tr-1", "p"), "al-x", &["ar-a".into()], 500).unwrap();
+        let change = ImportChange {
+            kind: Kind::Song,
+            item: "tr-1".into(),
+            pid: Some("p".into()),
+            add_plays: 7,
+            played: Some(100),
+            album: Some("al-x".into()),
+            artists: vec!["ar-a".into()],
+            star: Some((true, Some(5))),
+            rating: Some(4),
+            now: Imported { server_item: Some("s1".into()), plays: 7, played: Some(100), starred: true, rating: 4 },
+        };
+        u.apply_import(KEY, &[change.clone()]).unwrap();
         let a = &u.get("me", Kind::Song, &["tr-1".into()]).unwrap()["tr-1"];
-        assert_eq!((a.play_count, a.play_date, a.starred_at), (7, Some(500), Some(5)));
+        assert_eq!((a.play_count, a.play_date, a.starred_at, a.rating), (8, Some(500), Some(5), 4), "added to Cratarr's own play");
+        assert_eq!(u.get("me", Kind::Album, &["al-x".into()]).unwrap()["al-x"].play_count, 8);
+        assert_eq!(u.get("me", Kind::Artist, &["ar-a".into()]).unwrap()["ar-a"].play_count, 8);
+        assert_eq!(u.imported(KEY, Kind::Song, &["tr-1".into(), "tr-2".into()]).unwrap(), [("tr-1".to_string(), change.now.clone())].into());
+        assert_eq!(u.imported_starred(KEY, Kind::Song).unwrap(), vec![("tr-1".to_string(), change.now.clone())]);
+        let other = ImportKey { account: "you", ..KEY };
+        assert!(u.imported(other, Kind::Song, &["tr-1".into()]).unwrap().is_empty(), "per Cratarr account");
+        // Unstarring takes the star and its time away; a later star gets the time given.
+        let off = ImportChange { star: Some((false, None)), add_plays: 0, played: None, rating: None, ..change.clone() };
+        u.apply_import(KEY, &[off]).unwrap();
+        assert_eq!(u.get("me", Kind::Song, &["tr-1".into()]).unwrap()["tr-1"].starred_at, None);
+        // The record follows the song to a new id with its annotation.
+        u.follow_pids(&[("p".into(), "tr-9".into())]).unwrap();
+        assert!(u.imported(KEY, Kind::Song, &["tr-9".into()]).unwrap().contains_key("tr-9"));
+        assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 8);
     }
 
     #[test]
@@ -421,6 +617,10 @@ mod tests {
         assert_eq!(u.play_queue("me").unwrap(), Some(q));
         u.set_added("al-x", 200, "jellyfin").unwrap();
         u.set_added("al-x", 100, "jellyfin").unwrap();
-        assert_eq!(u.added().unwrap()["al-x"], 100);
+        u.set_added("al-x", 300, "jellyfin").unwrap();
+        assert_eq!(u.added().unwrap()["al-x"], 100, "the earliest stays");
+        assert_eq!(u.import_choice("jellyfin").unwrap(), None);
+        u.set_import_choice("jellyfin", "{}").unwrap();
+        assert_eq!(u.import_choice("jellyfin").unwrap().as_deref(), Some("{}"));
     }
 }

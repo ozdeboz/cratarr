@@ -948,6 +948,76 @@ impl Source for JellyfinSource {
     fn album_cover<'a>(&'a self, album_id: &'a str) -> Fut<'a, Option<(String, Vec<u8>)>> {
         Box::pin(self.jf.primary_image(album_id, crate::covers::MAX_BYTES))
     }
+
+    fn imports(&self) -> bool {
+        true
+    }
+
+    /// The played tracks, then the favourites (Jellyfin cannot list either at once). The first page also counts the
+    /// favourites, so the whole listing's size is known from the start.
+    fn track_data<'a>(&'a self, user: &'a str, cursor: Option<&'a str>) -> Fut<'a, super::TrackDataPage> {
+        Box::pin(async move {
+            let (filter, start) = import_cursor(cursor)?;
+            let (items, listed) = self.jf.user_track_data(user, filter, start, IMPORT_PAGE).await?;
+            let total = match cursor {
+                None => Some(listed + self.jf.count_user_tracks(user, "IsFavorite").await?),
+                Some(_) => None,
+            };
+            let next = next_import_cursor(filter, start, items.len());
+            Ok(super::TrackDataPage { items, next, total })
+        })
+    }
+
+    fn favorite_groups<'a>(&'a self, user: &'a str) -> Fut<'a, super::FavoriteGroups> {
+        Box::pin(self.jf.favorite_groups(user))
+    }
+
+    fn albums_added<'a>(&'a self, cursor: Option<&'a str>) -> Fut<'a, super::AddedPage> {
+        Box::pin(async move {
+            const PAGE: usize = 250;
+            let start: usize = match cursor {
+                Some(c) => c.parse().context("not a cursor")?,
+                None => 0,
+            };
+            let (items, total) = self.jf.albums_added(start, PAGE).await?;
+            // Counted before the undated ones were left out.
+            let next = (start + PAGE < total).then(|| (start + PAGE).to_string());
+            Ok(super::AddedPage { items, next, total: Some(total) })
+        })
+    }
+}
+
+/// Tracks per page of an import's listing: 200 took Jellyfin 4.4 to 5.8 s on 2026-10-15 (250 had taken 9 to 12 s an hour
+/// before), inside the 20 s a request may take, and a page holds one of Cratarr's turns at Jellyfin (`MAX_IN_FLIGHT`) no
+/// longer than that.
+const IMPORT_PAGE: usize = 200;
+
+/// Each page starts this many tracks before the last one ended: a favourite taken away meanwhile moves the rest of the
+/// listing up, and the track at the page's edge would be missed. Read twice instead, which is harmless.
+const IMPORT_OVERLAP: usize = 4;
+
+/// An import's cursor: the listing (`IsPlayed`, then `IsFavorite`) and where in it; `None` is the first page.
+fn import_cursor(cursor: Option<&str>) -> Result<(&'static str, usize)> {
+    let Some(c) = cursor else { return Ok(("IsPlayed", 0)) };
+    let (filter, start) = c.split_once(':').context("not a cursor")?;
+    let filter = match filter {
+        "IsPlayed" => "IsPlayed",
+        "IsFavorite" => "IsFavorite",
+        _ => bail!("not a cursor"),
+    };
+    Ok((filter, start.parse().context("not a cursor")?))
+}
+
+/// The page after one of `n` tracks from `start`: further on in the same listing while pages are full, then the
+/// favourites from their start, then nothing.
+fn next_import_cursor(filter: &str, start: usize, n: usize) -> Option<String> {
+    if n == IMPORT_PAGE {
+        Some(format!("{filter}:{}", start + n - IMPORT_OVERLAP))
+    } else if filter == "IsPlayed" {
+        Some("IsFavorite:0".into())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1201,6 +1271,17 @@ mod tests {
                 "Kodi on LibreELEC",
             ]
         );
+    }
+
+    #[test]
+    fn an_import_lists_the_played_tracks_then_the_favourites_with_pages_that_overlap() {
+        assert_eq!(import_cursor(None).unwrap(), ("IsPlayed", 0));
+        let next = next_import_cursor("IsPlayed", 0, IMPORT_PAGE).unwrap();
+        assert_eq!(import_cursor(Some(&next)).unwrap(), ("IsPlayed", IMPORT_PAGE - IMPORT_OVERLAP));
+        assert_eq!(next_import_cursor("IsPlayed", 400, 17).as_deref(), Some("IsFavorite:0"), "the played ones are done");
+        assert_eq!(next_import_cursor("IsFavorite", 400, 17), None, "and then the favourites");
+        assert!(import_cursor(Some("IsPlayed")).is_err());
+        assert!(import_cursor(Some("Likes:0")).is_err(), "only the two listings");
     }
 
     #[test]

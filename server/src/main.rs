@@ -144,6 +144,9 @@ async fn main() -> Result<()> {
     served.set_playlists(app.playlists.clone());
     served.set_incoming(app.incoming.clone());
     served.follow();
+    // Imports of plays and favourites read the sources in use (decision 0030, amended 2026-10-15).
+    let importer = app.clone();
+    served.import.connect(std::sync::Arc::new(move || importer.library.connected_sources()));
 
     let listener = tokio::net::TcpListener::bind(&bind).await.with_context(|| format!("cannot bind {bind}"))?;
     tracing::info!("listening on {bind}");
