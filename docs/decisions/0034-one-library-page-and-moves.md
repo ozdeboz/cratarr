@@ -60,35 +60,49 @@ The target library's policies apply on the way in:
 - **Format:** the target's format policy, a new per-library setting in Settings → Libraries. "CD format" converts
   lossless files above CD to 16-bit/44.1 kHz FLAC, as Keep does today. "As it is" moves the files unchanged. Music's
   setting is "CD format" and Incoming's "As it is", as today's behaviour.
-- **Lidarr:**
-  - moving an album out of a folder Lidarr fetches into unmonitors it (today's Keep);
-  - moving one into such a folder leaves Lidarr alone. Lidarr fetches; Cratarr does not ask it to.
+- **Lidarr:** "a folder Lidarr fetches into" is one of Lidarr's own root folders, read from its API (no setting).
+  - Moving an album out of one unmonitors the album (today's Keep). If Music is one of them, Music → Incoming
+    unmonitors as well: the album left.
+  - Moving an album into one: Cratarr asks Lidarr for nothing, but Lidarr sees the files on its next rescan, as it
+    already does after today's Keep.
 
 Everything 0013 promises stays, now for any move:
 
 - the plan is checked first (year, names, write access) and a refusal shows at once;
-- the queue: one album and one file at a time, kept across restarts;
+- the queue: one album and one file at a time, kept across restarts. A plain rename (same disk, "As it is") still
+  waits its turn behind conversions, so a move is never promised to be instant;
 - Cancel while the album waits or converts;
 - Undo through the journal (files back, track ids back, Lidarr monitoring back);
 - the media server hears of the move by folder;
 - a playing album goes on playing on its new item;
 - the event carries every track's move (`AlbumAdopted` generalises to `AlbumMoved`, with from and to), so playlists
-  and play data follow.
+  and play data follow;
+- **the journal keeps reading old entries:** `AlbumMoved` takes `#[serde(alias = "album_adopted")]`, with from and to
+  derived from the old entry's from_dir and to_dir, so Undo still works for every Keep made before;
+- **track ids are kept:** the catalogue rows move with the files, as for a Keep today. Play On queues, the app's
+  downloads and Subsonic song ids survive a move. Moves across file systems already work: moves.rs copies, then
+  deletes, when a rename can't.
 
 **Replace** is a move that takes the place of the album it upgrades in the target library. Pairing, the refusal when an
 old track has no match, and the old folder going to the trash all stay as in 0013.
 
-**Delete** works from any library: to the trash on that disk, outside the Music folder (0010, 0013), and Undo puts it
-back. Today it works from Incoming only.
+**Delete** stays as it is: from an Incoming library, to the trash, with Undo (0010). Whether Music albums can be
+deleted too is open (below). It would be new destructive power over the main library, and the owner has not asked
+for it.
 
 **The server** (claude-5f's side; the shapes are a sketch for the build):
 
-- `GET /api/albums` lists the followed server's albums of its used libraries, each with its library and facts. It
-  replaces `/api/incoming` and `/api/collection`; those stay until the page has moved, then go.
+- `GET /api/albums` lists the followed server's albums of its used libraries, each with its library and facts.
+  - It takes Collection's cap (100,000; Incoming's list stops at 1,000), or pages, so Music is never cut off.
+  - It replaces `/api/incoming` and `/api/collection`; those stay until the page has moved, then go.
 - `POST /api/albums/{source}/{album}/move {to, year?}`, and `.../replace {to, year?}`, replace `keep` and today's
-  `replace`. `delete` stays.
+  `replace`. `to` is a library's id, not its name. `delete` stays.
+- **Verdicts against every library** are cheap. A Music album's "an upgrade waits" is the inverse of today's map,
+  which names the Music folder. Comparing Incoming libraries with each other takes one more small index per folder.
+  Write access is cached per folder (600 s), not per album, so listing every Music album costs nothing more there.
 - Home Assistant's `/api/library/*` calls keep their shapes:
-  - promote moves into the Music library (with Replace when the album is an upgrade);
+  - promote moves into the Music library (with Replace when the album is an upgrade), converting as today, since
+    Music's format policy is "CD format";
   - reject deletes.
 
 **A dashboard page** (its own decision, later) brings back the quick look: new arrivals from the Incoming libraries,
@@ -98,17 +112,36 @@ what converts, and more.
 
 1. **Any direction:** "yes anyway, since it's generic". An album moves from any used library to any other of the
    same server, Music back into Incoming included. The target's policies decide what happens on the way in.
-2. **More than one Music library:** allowed, as 0009 already allows. A move between two of them is a rename plus the
-   target's format policy.
 
-Still open: **library names on the page.** An album's library would show as its name (a chip on the row, a fact on the
-tile) only when more than one library is switched on, to keep the page calm. The owner has not answered yet.
+## One Music folder, as today (review by claude-5f, 2026-10-16)
+
+The server has exactly one Music folder: the catalogue's folder 0. Every folder from 1 on is Incoming. Hanging on that:
+
+- shelf.rs `Shelf::Music` / `Incoming`;
+- the verdict index (folder 0 only);
+- playlist lines (relative to folder 0, `../` for anything else) and the playlist store, which lives in Music;
+- Subsonic album ids (bare for folder 0, `{folder}\` elsewhere, serve/ids.rs);
+- album tags under `album_base` ("as it is or would be in Music");
+- `music_name()`.
+
+So this decision keeps **one Music folder**. Several Music libraries may still share it, as 0009 allows. Several Music
+*folders* would need their own decision: folder roles, playlist lines across folders, album ids. With one Music folder,
+Home Assistant's promote ("into Music") stays unambiguous.
+
+## Still open
+
+- **Library names on the page.** The proposal shows an album's library by name (a chip on the row, a fact on the tile)
+  only when more than one library is switched on, to keep the page calm.
+- **Delete from Music.** Allowed (to the trash, with Undo) or not, as today?
 
 ## Consequences
 
 - The navigation loses one entry: Library replaces Incoming and Collection. The Incoming tab's count of albums
   converting moves to Library, and later to the dashboard.
-- A Music album gets the menu Incoming albums have: Move, Delete, and Replace where it applies.
+- A Music album gets the menu Incoming albums have: Move, and Replace where it applies; Delete only if the owner
+  says so.
+- Music → Incoming changes the album's Subsonic id: it gains its folder's prefix. Tags follow through `album_base`,
+  but an app that cached the album id holds a stale one.
 - Settings → Libraries gains each library's format policy.
 - Work split:
   - web (claude-a5): the Library page, facts on every album, Move in the menus and the select bar (several albums at
