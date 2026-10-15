@@ -1,4 +1,5 @@
-// The sources the server has connected, for the source picker. Filled by the status call (any page) and by the
+// The sources the server has connected, for the filter's server cards (lib/FilterSheet: which server a browser follows
+// filters what it shows, decided 2026-10-16; no dropdown on the pages). Filled by the shell's status call and by the
 // playlist poll (which also says which are playing).
 import type { SourceTab } from './api';
 import { prefs } from './prefs.svelte';

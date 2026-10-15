@@ -9,7 +9,6 @@
   import { inApp } from './lib/app.svelte';
   import Crates from './Crates.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
-  import SourcePicker from './lib/SourcePicker.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import SheetArea from './lib/SheetArea.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
@@ -32,7 +31,7 @@
   import CrateBuilder from './lib/CrateBuilder.svelte';
   import { builderOf } from './lib/crates.svelte';
   import { poll } from './lib/live.svelte';
-  import { known } from './lib/sources.svelte';
+  import { known, remember } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { jobs } from './lib/jobs.svelte';
@@ -63,10 +62,6 @@
     return [HEALTH, SETTINGS, INCOMING, COLLECTION, INSIGHTS, CRATES, DOWNLOADS].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
-  // The server picker belongs to the pages that act on what a server plays: Playlists (add it), Incoming and Collection
-  // (play an album). The player itself is part of the shell on every page (decision 0018, amended: Cratarr plays music
-  // itself).
-  const withPicker = $derived(page === 'playlists' || page === 'incoming' || page === 'collection');
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
   // otherwise the mini-player along the bottom (`mini`), which opens it over everything (`overlay`). The player over
   // everything closes when the page changes or the navigation is used, and the page behind it does not scroll.
@@ -231,6 +226,7 @@
     async function poll() {
       try {
         status = await getStatus();
+        if (!known.list.length) remember(status.sources);
         statusFailed = false;
         // A server problem is said once, in a toast, when it first shows (the sidebar keeps showing it).
         const problem = status.problems[0] ?? null;
@@ -277,9 +273,6 @@
     {#if connection}
       <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i>{connection.text}</a>
     {/if}
-    {#if !phone}
-      <div class="side-picker" class:shown={known.list.length > 1}><SourcePicker /></div>
-    {/if}
 
     <nav aria-label="Pages">
       {#each MAIN as p (p.id)}
@@ -298,9 +291,6 @@
   <div class="content" class:with-side={sidebar} style:--player-w="{playerWidth}px" bind:this={contentEl}>
     <div class="page" class:under-row={pageRow} bind:this={pageEl}>
     <SheetArea area={() => pageEl}>
-    {#if withPicker}
-      {#if phone}<div class="top-picker" class:shown={known.list.length > 1}><SourcePicker /></div>{/if}
-    {/if}
     {#if page === 'settings'}
       <Settings />
     {:else if page === 'health'}
@@ -751,16 +741,6 @@
     font-size: 1.35rem;
     font-weight: 700;
     letter-spacing: -0.01em;
-  }
-
-  /* One picker at a time: the sidebar's from 1024 px, otherwise a row above the page. It takes no room until there
-     is more than one source (the picker itself renders nothing then, but stays mounted to learn the sources). */
-  .side-picker.shown {
-    margin: -8px 8px 16px;
-  }
-
-  .top-picker.shown {
-    padding: 10px clamp(12px, 2vw, 32px) 0;
   }
 
   .conn {
