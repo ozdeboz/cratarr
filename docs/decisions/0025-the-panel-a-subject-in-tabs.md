@@ -70,3 +70,14 @@ Showing something in the panel is called **View** everywhere: the menus' entry (
 arrow out of its corner), the rows' labels, Select's "View N playlists", Insights' "View <playlist>", and the address
 (`?view=…`, in place of `?open=…` above and in 0023 and 0024). Old links (`?open=…`, Insights' `?playlist=…`) are no longer
 translated: there were none.
+
+## Amendment (2026-10-15): a playlist never holds a track twice
+
+A repeated track in a playlist is always a mistake (the same track added twice), so there is nothing to choose: a
+playlist holds each track once, the first copy (its oldest place) stays. Every write keeps only the first copy, the
+sync's merge (0012) never makes a repeat, and each sync pass takes the repeats out of a file that came with them
+(edited by hand, put back from a backup). The Repair tab loses its Repeated tracks section, and `/api/duplicates` goes.
+
+Found when the playlists became copies in your account (0014, amended 2026-10-15): Jellyfin holds a track in a playlist
+it makes only once, and the sync took each lost repeat for a removal there. That did what this rule does, the first
+copy kept, in six playlists.

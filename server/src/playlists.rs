@@ -60,21 +60,6 @@ pub struct Repair {
     pub to: String,
 }
 
-/// A playlist that lists the same entry more than once.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct DupGroup {
-    pub playlist: String,
-    /// How many lines `Store::dedupe` would remove.
-    pub extra: usize,
-    pub entries: Vec<DupEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct DupEntry {
-    pub entry: String,
-    pub copies: usize,
-}
-
 /// Figures across all playlists, from the playlist files alone.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct PlaylistStats {
@@ -458,8 +443,11 @@ impl Store {
     }
 
     /// Replace the playlist with `new_text`: back the old file up, write a temporary file next to it and rename it
-    /// into place. The caller must hold the write lock.
-    async fn commit(&self, id: &str, path: &Path, perms: std::fs::Permissions, new_text: &str) -> Result<()> {
+    /// into place. The caller must hold the write lock. A playlist never holds a track twice: only the first copy of
+    /// each is written (decision 0025, amended 2026-10-15). Returns the text as written.
+    async fn commit(&self, id: &str, path: &Path, perms: std::fs::Permissions, new_text: &str) -> Result<String> {
+        let (new_text, _) = m3u::with_deduped(new_text);
+        let new_text = new_text.as_str();
         self.backup(id, path).await?;
         let tmp = self.dir.join(format!(".{id}.m3u.cratarr-tmp"));
         tokio::fs::write(&tmp, new_text).await.with_context(|| format!("writing {}", tmp.display()))?;
@@ -474,7 +462,7 @@ impl Store {
                 .await
                 .insert(id.to_string(), Cached::parse((m.modified().unwrap_or(UNIX_EPOCH), m.len()), new_text, &self.prefix));
         }
-        Ok(())
+        Ok(new_text.to_string())
     }
 
     /// Make the playlist exactly `entries`, in order. Backed up like every edit. Returns false when it already was.
@@ -506,9 +494,9 @@ impl Store {
             return Ok(None);
         }
         let lines: Vec<String> = entries.iter().map(|e| self.line(e)).collect();
-        let new_text = m3u::with_entries(&text, &lines);
+        let mut new_text = m3u::with_entries(&text, &lines);
         if new_text != text {
-            self.commit(id, &path, perms, &new_text).await?;
+            new_text = self.commit(id, &path, perms, &new_text).await?;
         }
         Ok(Some(Edited { id: id.to_string(), before: text, after: new_text }))
     }
@@ -521,10 +509,8 @@ impl Store {
         if fingerprint(&now) != left {
             return Ok(None);
         }
-        if now != text {
-            self.commit(id, &path, perms, text).await?;
-        }
-        Ok(Some(Edited { id: id.to_string(), before: now, after: text.to_string() }))
+        let after = if now != text { self.commit(id, &path, perms, text).await? } else { now.clone() };
+        Ok(Some(Edited { id: id.to_string(), before: now, after }))
     }
 
     /// Delete a playlist (as `delete`) only while it is still what a change left (`left`); false when it changed since.
@@ -628,8 +614,9 @@ impl Store {
                 total += n;
             }
             if total > 0 {
-                self.commit(&id, &path, perms, &text).await?;
-                changed.push(Edited { id, before, after: text });
+                // A line pointed at a file the playlist already lists becomes a repeat: only the first stays.
+                let after = self.commit(&id, &path, perms, &text).await?;
+                changed.push(Edited { id, before, after });
             }
         }
         Ok(changed)
@@ -688,40 +675,40 @@ impl Store {
         Ok(out)
     }
 
-    pub async fn duplicates(&self) -> Result<Vec<DupGroup>> {
+    /// Take the repeats out of every playlist that has any, keeping the first copy of each track: a playlist never
+    /// holds a track twice, but a file can still come with repeats (edited by hand, put back from a backup). Returns
+    /// (playlist, how many lines went) for each changed one.
+    pub async fn without_repeats(&self) -> Result<Vec<(String, usize)>> {
         self.view(None).await?;
-        let cache = self.cache.read().await;
-        let mut out = Vec::new();
-        for (id, c) in cache.iter() {
-            let mut counts: HashMap<&str, usize> = HashMap::new();
-            for l in &c.lines {
-                *counts.entry(l.as_str()).or_default() += 1;
-            }
-            let mut entries: Vec<DupEntry> = counts
-                .into_iter()
-                .filter(|(_, n)| *n > 1)
-                .map(|(e, n)| DupEntry { entry: e.to_string(), copies: n })
-                .collect();
-            if entries.is_empty() {
-                continue;
-            }
-            entries.sort_by(|a, b| a.entry.cmp(&b.entry));
-            out.push(DupGroup { playlist: id.clone(), extra: entries.iter().map(|e| e.copies - 1).sum(), entries });
-        }
-        out.sort_by_key(|g| g.playlist.to_lowercase());
-        Ok(out)
-    }
-
-    /// Remove repeated entries from a playlist, keeping the first copy of each. Returns how many lines went, and the
-    /// file as it was and is.
-    pub async fn dedupe(&self, id: &str) -> Result<(usize, Edited), StoreError> {
+        let repeating: Vec<String> = {
+            let cache = self.cache.read().await;
+            cache
+                .iter()
+                .filter(|(_, c)| {
+                    let mut seen = HashSet::new();
+                    c.lines.iter().any(|l| !seen.insert(l))
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
         let _one_writer = self.write.lock().await;
-        let (path, perms, text) = self.load_for_edit(id).await?;
-        let (new_text, removed) = m3u::with_deduped(&text);
-        if removed > 0 {
-            self.commit(id, &path, perms, &new_text).await?;
+        let mut out = Vec::new();
+        for id in repeating {
+            let (path, perms, text) = match self.load_for_edit(&id).await {
+                Ok(f) => f,
+                Err(StoreError::Unknown) => continue, // gone since
+                Err(e) => {
+                    tracing::warn!("{id}: {e:#}");
+                    continue;
+                }
+            };
+            let (_, removed) = m3u::with_deduped(&text);
+            if removed > 0 {
+                self.commit(&id, &path, perms, &text).await?;
+                out.push((id, removed));
+            }
         }
-        Ok((removed, Edited { id: id.to_string(), before: text, after: new_text }))
+        Ok(out)
     }
 
     /// Create an empty playlist. Never overwrites an existing file.
@@ -1082,9 +1069,9 @@ B/2.mp3
         let s = d.store();
         assert_eq!(s.view(None).await.unwrap()[0].count, 3, "duplicate lines count, comments and blanks do not");
         s.toggle("a", "C/3.mp3").await.unwrap();
-        assert_eq!(s.view(None).await.unwrap()[0].count, 4);
+        assert_eq!(s.view(None).await.unwrap()[0].count, 3, "a write keeps only the first copy of A");
         s.toggle("a", "A/1.mp3").await.unwrap();
-        assert_eq!(s.view(None).await.unwrap()[0].count, 2, "removing drops every copy");
+        assert_eq!(s.view(None).await.unwrap()[0].count, 2);
     }
 
     #[tokio::test]
@@ -1277,20 +1264,29 @@ B/2.mp3
     }
 
     #[tokio::test]
-    async fn duplicates_are_found_and_removed_keeping_the_first_copy() {
+    async fn repeats_are_taken_out_keeping_the_first_copy() {
         let d = Dir::new();
         d.write("a.m3u", "A/1.mp3\nB/2.mp3\nA/1.mp3\nA/1.mp3\n");
         d.write("clean.m3u", "A/1.mp3\n");
         let s = d.store();
-        let dups = s.duplicates().await.unwrap();
-        assert_eq!(dups.len(), 1);
-        assert_eq!((dups[0].playlist.as_str(), dups[0].extra), ("a", 2));
-        assert_eq!(dups[0].entries, vec![DupEntry { entry: "A/1.mp3".into(), copies: 3 }]);
-        assert_eq!(s.dedupe("a").await.unwrap().0, 2);
+        assert_eq!(s.without_repeats().await.unwrap(), vec![("a".to_string(), 2)]);
         assert_eq!(d.read("a.m3u"), "A/1.mp3\nB/2.mp3\n");
-        assert!(s.duplicates().await.unwrap().is_empty());
-        assert_eq!(s.dedupe("clean").await.unwrap().0, 0);
+        assert!(s.without_repeats().await.unwrap().is_empty());
         assert_eq!(std::fs::read_dir(d.0.join(BACKUP_DIR)).unwrap().count(), 1, "only the changed playlist is backed up");
+    }
+
+    #[tokio::test]
+    async fn no_write_leaves_a_repeat() {
+        let d = Dir::new();
+        d.write("p.m3u", "A/1.mp3\nB/2.mp3\n");
+        let s = d.store();
+        let e = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let edit = s.replace_entries_if("p", &e(&["A/1.mp3", "B/2.mp3"]), &e(&["B/2.mp3", "A/1.mp3", "B/2.mp3"])).await.unwrap().unwrap();
+        assert_eq!(d.read("p.m3u"), "B/2.mp3\nA/1.mp3\n", "the first copy stays");
+        assert_eq!(edit.after, d.read("p.m3u"), "what was written, for undo");
+        let back = s.put_back_if("p", fingerprint(&edit.after), "C/3.mp3\nC/3.mp3\n").await.unwrap().unwrap();
+        assert_eq!(back.after, "C/3.mp3\n");
+        assert_eq!(d.read("p.m3u"), "C/3.mp3\n");
     }
 
     #[tokio::test]

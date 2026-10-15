@@ -254,10 +254,6 @@ export const applyOne = (r: Repair) => post<{ playlists: string[] } & Undo>('/ap
  *  Incoming's, whose albums' titles come back instead). */
 export const undo = (tokens: string[]) => post<{ redo: string[]; restored: string[] }>('/api/undo', { tokens });
 
-export type DupGroup = { playlist: string; extra: number; entries: { entry: string; copies: number }[] };
-
-export const getDuplicates = () => request<DupGroup[]>('/api/duplicates');
-export const dedupe = (playlist: string) => post<{ removed: number } & Undo>('/api/duplicates/dedupe', { playlist });
 
 export const createPlaylist = (name: string) => post<{ playlist: string } & Undo>('/api/playlists', { name });
 

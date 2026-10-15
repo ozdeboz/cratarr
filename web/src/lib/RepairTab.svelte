@@ -1,22 +1,19 @@
 <script lang="ts">
   // The panel's Repair tab (decision 0025; what the Repairs page offered for playlists), for the selected playlists:
-  // missing tracks found in another format (fixed together), likely matches (one at a time), repeated tracks, and
-  // missing tracks with no file anywhere (Not found: removed one by one or all). Every change can be undone.
+  // missing tracks found in another format (fixed together), likely matches (one at a time), and missing tracks with
+  // no file anywhere (Not found: removed one by one or all). Every change can be undone. Repeated tracks need no
+  // repair: a playlist never holds a track twice (decision 0025, amended 2026-10-15).
   import {
     applyOne,
     applySafe,
-    dedupe,
     editPlaylist,
-    getDuplicates,
     getRepairs,
     playlistRows,
-    type DupGroup,
     type PlaylistRow,
     type Repair,
   } from './api';
   import FileItem from './FileItem.svelte';
   import { refresh } from './live.svelte';
-  import PlaylistItem from './PlaylistItem.svelte';
   import Section from './Section.svelte';
   import { shownPlaylists } from './output.svelte';
   import { prefs } from './prefs.svelte';
@@ -28,7 +25,6 @@
   const mine = (playlist: string) => ids.some((id) => id.toLowerCase() === playlist.toLowerCase());
   let safe = $state<Repair[]>([]);
   let review = $state<Repair[]>([]);
-  let dups = $state<DupGroup[]>([]);
   /** Each selected playlist's missing lines (only asked for when it has any). */
   let missingOf = $state<Record<string, PlaylistRow[]>>({});
   let loaded = $state(false);
@@ -39,13 +35,12 @@
   async function load() {
     const want = [...ids];
     try {
-      const [r, d] = await Promise.all([getRepairs(), getDuplicates()]);
+      const r = await getRepairs();
       const dead = shownPlaylists().filter((p) => want.includes(p.id) && p.dead > 0);
       const rows = await Promise.all(dead.map((p) => playlistRows(p.id, prefs.source || undefined).then((x) => [p.id, x.rows.filter((row) => row.missing)] as const)));
       if (want.join('\n') !== ids.join('\n')) return;
       safe = r.safe.filter((x) => mine(x.playlist));
       review = r.review.filter((x) => mine(x.playlist));
-      dups = d.filter((g) => mine(g.playlist));
       missingOf = Object.fromEntries(rows);
       error = null;
     } catch (e) {
@@ -69,9 +64,8 @@
       (missingOf[id] ?? []).filter((r) => !offered.has(`${id.toLowerCase()}\n${r.entry}`)).map((r) => ({ playlist: id, row: r })),
     ),
   );
-  const nothing = $derived(loaded && !error && !safe.length && !review.length && !dups.length && !notFound.length);
+  const nothing = $derived(loaded && !error && !safe.length && !review.length && !notFound.length);
 
-  const fileOf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
   const tracks = (n: number) => `${n} ${n === 1 ? 'track' : 'tracks'}`;
   const inPlaylists = (n: number) => `${n} ${n === 1 ? 'playlist' : 'playlists'}`;
   const several = $derived(ids.length > 1);
@@ -173,35 +167,6 @@
               <FileItem path={x.row.entry} name={x.row.name ?? undefined} detail={x.row.artist ?? undefined} playlist={several ? x.playlist : undefined}>
                 {#snippet action()}<button class="text" onclick={() => removeLines([x])} disabled={busy}>Remove</button>{/snippet}
               </FileItem>
-            </li>
-          {/each}
-        </ul>
-      </Section>
-    {/if}
-
-    {#if dups.length > 0}
-      <Section title="Repeated tracks" count={tracks(dups.reduce((n, g) => n + g.extra, 0))} hint="The same track more than once in a playlist. Removing keeps the first.">
-        <ul class="rows">
-          {#each dups as g (g.playlist)}
-            <li>
-              <PlaylistItem
-                p={shownPlaylists().find((x) => x.id === g.playlist) ?? { id: g.playlist, name: g.playlist }}
-                size="large"
-                wrap
-                sub={`${g.extra} repeated · ${g.entries.slice(0, 3).map((e) => fileOf(e.entry)).join(' · ')}${g.entries.length > 3 ? ' …' : ''}`}
-              >
-                {#snippet action()}
-                  <button
-                    class="text"
-                    onclick={() =>
-                      run(
-                        async () => ({ playlists: [g.playlist], undo: (await dedupe(g.playlist)).undo }),
-                        `Removed ${g.extra} repeated ${g.extra === 1 ? 'track' : 'tracks'}`,
-                      )}
-                    disabled={busy}>Remove {g.extra === 1 ? 'repeat' : 'repeats'}</button
-                  >
-                {/snippet}
-              </PlaylistItem>
             </li>
           {/each}
         </ul>

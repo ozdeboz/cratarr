@@ -65,8 +65,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
         .route("/api/collection", get(collection))
         .route("/api/albums/duplicates", get(album_duplicates))
-        .route("/api/duplicates", get(duplicates))
-        .route("/api/duplicates/dedupe", post(dedupe))
         .route("/api/repairs", get(repairs))
         .route("/api/repairs/apply", post(apply_repairs))
         .route("/api/undo", post(undo))
@@ -668,11 +666,6 @@ struct RenameRequest {
     to: String,
 }
 
-#[derive(Deserialize)]
-struct PlaylistRequest {
-    playlist: String,
-}
-
 async fn create_playlist(State(app): State<Arc<App>>, Json(req): Json<NameRequest>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let undo = app.playlists.create(&req.name).await?;
     Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "undo": undo }))))
@@ -737,15 +730,6 @@ async fn unlink_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Qu
 
 async fn album_duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "groups": app.playlists.album_duplicates().await.map_err(ToggleError::from)? })))
-}
-
-async fn duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!(app.playlists.duplicates().await.map_err(ToggleError::from)?)))
-}
-
-async fn dedupe(State(app): State<Arc<App>>, Json(req): Json<PlaylistRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (removed, undo) = app.playlists.dedupe(&req.playlist).await?;
-    Ok(Json(json!({ "removed": removed, "undo": undo })))
 }
 
 /// One action's undo tokens (decision 0026): one, or one per playlist of an action on several.

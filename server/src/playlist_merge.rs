@@ -7,7 +7,8 @@
 //! - A missing track (an `.m3u` line with no track id) exists only in the `.m3u`; Jellyfin cannot see it, so it is
 //!   never taken as removed. It stays after the entry it followed.
 //!
-//! A playlist may hold the same track more than once; the n-th copy of a track is matched with the n-th copy.
+//! - The result never holds a track twice (decision 0025, amended 2026-10-15): the first copy stays. A list read
+//!   with repeats (a server or file that has them) is matched copy by copy, the n-th copy with the n-th.
 
 use std::collections::{HashMap, HashSet};
 
@@ -79,16 +80,23 @@ pub fn merge(base: &[i64], file: &[Item], server: &[i64], newer: Newer) -> Vec<I
         let at = other[..i].iter().rev().find_map(|p| tracks.iter().position(|t| t == p)).map_or(0, |p| p + 1);
         tracks.insert(at, *k);
     }
+    // The first copy of each track only.
+    let mut once = HashSet::new();
+    tracks.retain(|(id, _)| once.insert(*id));
     // The missing lines: each after the nearest earlier track of the file that is still there (or at the start),
-    // several after the same track in their file order.
+    // several after the same track in their file order; a line once.
     let mut out: Vec<Item> = tracks.iter().map(|(id, _)| Item::Track(*id)).collect();
     let mut placed_after: HashMap<Option<Key>, usize> = HashMap::new();
     let mut earlier: Vec<Key> = Vec::new();
     let mut ki = file_k.iter();
+    let mut lines_once = HashSet::new();
     for item in file {
         match item {
             Item::Track(_) => earlier.push(*ki.next().expect("one key per track")),
             Item::Missing(line) => {
+                if !lines_once.insert(line) {
+                    continue;
+                }
                 let anchor = earlier.iter().rev().find(|k| tracks.contains(k)).copied();
                 let n = placed_after.entry(anchor).or_default();
                 // Where the anchor is in `out` now (missing lines before it shift it).
@@ -168,11 +176,15 @@ mod tests {
     }
 
     #[test]
-    fn repeated_tracks_are_matched_copy_by_copy() {
-        // Track 1 twice; Finamp removed the second copy.
+    fn the_result_never_holds_a_track_twice() {
+        // Track 1 twice; the server holds it once.
         assert_eq!(ids(&merge(&[1, 2, 1], &t(&[1, 2, 1]), &[1, 2], Newer::File)), vec![1, 2]);
-        // Cratarr added a third copy of 2 at the end.
-        assert_eq!(ids(&merge(&[2, 2], &t(&[2, 2, 2]), &[2, 2], Newer::File)), vec![2, 2, 2]);
+        // The same track added on both sides, in different places: the first copy stays.
+        assert_eq!(ids(&merge(&[1, 2], &t(&[3, 1, 2]), &[1, 2, 3], Newer::File)), vec![3, 1, 2]);
+        // A server that lists a repeat: once.
+        assert_eq!(ids(&merge(&[2], &t(&[2]), &[2, 2], Newer::File)), vec![2]);
+        let file = vec![Item::Missing("gone/a.mp3".into()), Item::Track(1), Item::Missing("gone/a.mp3".into())];
+        assert_eq!(merge(&[1], &file, &[1], Newer::File), vec![Item::Missing("gone/a.mp3".into()), Item::Track(1)]);
     }
 
     #[test]

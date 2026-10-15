@@ -1,6 +1,6 @@
 <script lang="ts">
   // Health (decision 0025): the library's files the catalogue could not read properly, by kind, worst first. What is
-  // about playlists (missing and repeated tracks) is repaired in the panel's Repair tab. Each kind is a folded section of
+  // about playlists (missing tracks) is repaired in the panel's Repair tab. Each kind is a folded section of
   // file rows (lib/Section.svelte, lib/FileItem.svelte), as the Repair tab's.
   import { getFileProblems, type FileProblem } from './lib/api';
   import FileItem from './lib/FileItem.svelte';

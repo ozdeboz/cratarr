@@ -134,6 +134,16 @@ impl SyncService {
                 return;
             }
         }
+        // A playlist never holds a track twice (decision 0025, amended 2026-10-15): a file that came with repeats
+        // (edited by hand, put back) keeps the first copy of each, before its copies are compared.
+        match store.without_repeats().await {
+            Ok(done) => {
+                for (playlist, n) in done {
+                    tracing::info!("playlist sync: {playlist}: {n} repeated track(s) taken out, the first copy kept");
+                }
+            }
+            Err(e) => tracing::warn!("playlist sync: cannot take out repeated tracks: {e:#}"),
+        }
         match self.state.make_native() {
             Ok(Some(n)) => tracing::info!("playlist sync: {n} shared copies in Music are replaced by copies in your account"),
             Ok(None) => {}

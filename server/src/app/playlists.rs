@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::crates::{self, CrateDef};
 use crate::journal::{Change, EventId, Journal, TextChange, fingerprint};
-use crate::playlists::{DupGroup, Edited, PlaylistView, Repair, Repairs};
+use crate::playlists::{Edited, PlaylistView, Repair, Repairs};
 use crate::source::{self, PlaylistChange, PlaylistEvent};
 use crate::sync_state::Kind;
 
@@ -1029,20 +1029,6 @@ impl PlaylistService {
             out.push(AlbumGroup { albums, comparisons, suggestion });
         }
         Ok(out)
-    }
-
-    pub async fn duplicates(&self) -> Result<Vec<DupGroup>> {
-        self.lib.store()?.duplicates().await
-    }
-
-    /// Remove repeated entries from one playlist (the first copy of each stays). Returns how many went, and the undo
-    /// token.
-    pub async fn dedupe(&self, id: &str) -> Result<(usize, Option<String>), ToggleError> {
-        let (removed, edit) = self.lib.store()?.dedupe(id).await?;
-        if removed > 0 {
-            self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
-        }
-        Ok((removed, self.keep_texts(vec![edit])))
     }
 
     /// A new playlist is Shared, as playlists were before sync links (decision 0014). Returns the undo token.
