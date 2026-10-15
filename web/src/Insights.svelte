@@ -8,6 +8,7 @@
   import { viewPlaylist, panel } from './lib/panel.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import { prefs } from './lib/prefs.svelte';
+  import PageLoading from './lib/PageLoading.svelte';
   import ProximityGraph from './lib/ProximityGraph.svelte';
 
   // The data and what is derived from it live in a store shared with the playlist view's Related (decision 0023).
@@ -113,7 +114,7 @@
   {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if !data}
-    <p class="empty">Loading…</p>
+    <PageLoading />
   {:else if prefs.insightsTab === 'statistics'}
     {@const l = data.library}
     {@const p = data.playlists}

@@ -70,6 +70,8 @@
   import { swipe } from './swipe';
   import { toast } from './toast.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
+  import MarkLoader from './MarkLoader.svelte';
+  import PageLoading from './PageLoading.svelte';
   import type { PlayMode } from './api';
 
   const id = $derived(panel.viewed ?? '');
@@ -866,7 +868,7 @@
           {#if s && 'error' in s}
             <p class="error" role="alert">{s.error}</p>
           {:else if !s}
-            <p class="empty">Loading…</p>
+            <PageLoading />
           {:else if !s.rows.length}
             <p class="empty">No tracks yet.</p>
           {:else}
@@ -938,9 +940,9 @@
       <ol class="rows" class:numbered={!!album} class:selecting={!!selecting}>
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
       </ol>
-      {#if crate && rows.length < total}<p class="empty" bind:this={more}>Loading…</p>{/if}
+      {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
     {:else}
-      <p class="empty">Loading…</p>
+      <PageLoading />
     {/if}
   </div>
 
@@ -975,7 +977,7 @@
   {@const near = insights.closest(i)}
   <div class="about" aria-label={`About ${pid}`}>
     {#if !pt}
-      <p class="note">{insights.shown ? 'Nothing is known about it yet.' : 'Loading…'}</p>
+      {#if insights.shown}<p class="note">Nothing is known about it yet.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
     {:else}
       {#if pt.focus !== null && insights.focus[i] !== undefined}
         <p class="note">More focused than {Math.round(100 * insights.focus[i])}% of your playlists</p>
@@ -1797,5 +1799,12 @@
 
   .error {
     color: var(--danger, #c33);
+  }
+
+  /* The loading sign, small, where more is coming (lib/MarkLoader.svelte). */
+  .loading {
+    display: grid;
+    place-items: center;
+    padding: 16px 0;
   }
 </style>

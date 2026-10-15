@@ -13,6 +13,7 @@
   import { shownPlaylists } from './lib/output.svelte';
   import { viewPlaylist, panel } from './lib/panel.svelte';
   import Notice from './lib/Notice.svelte';
+  import PageLoading from './lib/PageLoading.svelte';
 
   // Asked for when the page shows, and again when the playlists change (sorting a track shrinks Unlisted).
   const listsKey = $derived(shownPlaylists().map((p) => p.count).join(','));
@@ -36,7 +37,7 @@
   {#if crates.error && !crates.list}
     <Notice text={crates.error} />
   {:else if !crates.list}
-    <p class="empty">Loading…</p>
+    <PageLoading />
   {:else}
     <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(sorted.length, 'crate')} />
     <ul class="grid">
@@ -110,11 +111,5 @@
 
   .heart.filled :global(svg) {
     fill: currentColor;
-  }
-
-  .empty {
-    margin-top: 32px;
-    text-align: center;
-    color: var(--muted);
   }
 </style>

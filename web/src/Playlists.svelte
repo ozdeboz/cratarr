@@ -18,6 +18,7 @@
   import { pending, playing } from './lib/remote.svelte';
   import { longpress } from './lib/longpress';
   import { fromAction } from 'svelte/attachments';
+  import PageLoading from './lib/PageLoading.svelte';
   import PlaylistItem from './lib/PlaylistItem.svelte';
   import { viewPlaylist, panel } from './lib/panel.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './lib/favourites.svelte';
@@ -156,7 +157,7 @@
   {/if}
 
   {#if !view && !error}
-    <p class="empty">Loading…</p>
+    <PageLoading />
   {:else}
     <!-- The list's header (lib/ListHead): its order, how many, and Select (decision 0025: on, a chip's name ticks it; the
          ticked ones are the select bar's: played, favoured, viewed in the panel, their menu). -->

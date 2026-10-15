@@ -3,6 +3,7 @@
   import { ApiError, getCollection, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import { on, stream } from './lib/events.svelte';
+  import PageLoading from './lib/PageLoading.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
 
@@ -58,7 +59,7 @@
   {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if sources === null}
-    <p class="empty">Loading…</p>
+    <PageLoading />
   {:else if sources.length === 0}
     <p class="empty">No server with a Music library is connected.</p>
   {:else}

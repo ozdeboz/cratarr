@@ -23,6 +23,7 @@
   import { prefs } from './prefs.svelte';
   import { toast } from './toast.svelte';
   import Row from './Row.svelte';
+  import PageLoading from './PageLoading.svelte';
   import TrackCover from './TrackCover.svelte';
   import { withUndo } from './undo.svelte';
 
@@ -190,7 +191,7 @@
     {#if error}
       <p class="error" role="alert">{error}</p>
     {:else if !draft}
-      <p class="empty">Loading…</p>
+      <PageLoading />
     {:else}
       <label class="field name">
         <span>Name</span>
@@ -501,11 +502,6 @@
   .note.warn,
   .error {
     color: var(--danger, #c33);
-  }
-
-  .empty {
-    margin: 16px;
-    color: var(--muted);
   }
 
   .delete {

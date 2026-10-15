@@ -14,6 +14,7 @@
   } from './api';
   import FileItem from './FileItem.svelte';
   import { refresh } from './live.svelte';
+  import PageLoading from './PageLoading.svelte';
   import Section from './Section.svelte';
   import { shownPlaylists } from './output.svelte';
   import { prefs } from './prefs.svelte';
@@ -125,7 +126,7 @@
   {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if !loaded}
-    <p class="empty">Loading…</p>
+    <PageLoading />
   {:else if nothing}
     <p class="empty">Nothing to repair.</p>
   {:else}

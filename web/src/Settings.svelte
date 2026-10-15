@@ -38,6 +38,7 @@
   }
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
+  import PageLoading from './lib/PageLoading.svelte';
   import { toast } from './lib/toast.svelte';
 
   // The downloads' size, as This device shows it.
@@ -715,7 +716,7 @@
       </details>
     </section>
   {:else if !loadError}
-    <p class="lede">Loading…</p>
+    <PageLoading />
   {/if}
 
   {#if s && sub.accounts}

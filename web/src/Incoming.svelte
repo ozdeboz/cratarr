@@ -3,6 +3,7 @@
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
   import IncomingSheet, { offerOf, type IncomingOffer } from './lib/IncomingSheet.svelte';
+  import PageLoading from './lib/PageLoading.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
   import { jobs } from './lib/jobs.svelte';
@@ -99,7 +100,7 @@
   {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if sources === null}
-    <p class="empty">Loading…</p>
+    <PageLoading />
   {:else if sources.length === 0}
     <p class="empty">No server with an Incoming library is connected.</p>
   {:else}

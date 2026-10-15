@@ -5,6 +5,7 @@
   import { getFileProblems, type FileProblem } from './lib/api';
   import FileItem from './lib/FileItem.svelte';
   import Notice from './lib/Notice.svelte';
+  import PageLoading from './lib/PageLoading.svelte';
   import Section from './lib/Section.svelte';
 
   let problems = $state<FileProblem[] | null>(null);
@@ -33,7 +34,7 @@
   {#if error}
     <Notice text={error} />
   {:else if !problems}
-    <p class="empty">Loading…</p>
+    <PageLoading />
   {:else if !problems.length}
     <p class="empty">Every file in the library reads properly.</p>
   {:else}
