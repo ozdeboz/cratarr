@@ -259,10 +259,21 @@ impl PlayingService {
 
     /// Count a play, played at `at` (epoch seconds) when a player tells it late (decision 0033); now without.
     pub async fn count_play_at(&self, source_id: &str, id: &str, at: Option<i64>) -> Result<(), ToggleError> {
-        let (_, s, _) = self.find(source_id, id).await?;
+        let (s, id) = match self.find(source_id, id).await {
+            Ok((_, s, _)) => (s, id.to_string()),
+            // A track of a server no longer on (Jellyfin, once Cratarr is its own library, decision 0032), still in a
+            // queue: its play counts in Cratarr's own library, by the file the catalogue links it to.
+            Err(gone) => {
+                let (cat, src, item) = (self.lib.catalogue(), source_id.to_string(), id.to_string());
+                let own = tokio::task::spawn_blocking(move || cat.track_of_source(&src, &item)).await.ok().flatten().ok_or(gone)?;
+                let own = crate::serve::ids::song(own);
+                let (_, s, _) = self.find(crate::source::cratarr::KIND.id, &own).await?;
+                (s, own)
+            }
+        };
         let counted = match at {
-            Some(at) => s.count_play_at(id, at).await,
-            None => s.count_play(id).await,
+            Some(at) => s.count_play_at(&id, at).await,
+            None => s.count_play(&id).await,
         };
         counted.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
         // The play count changed: the next state asks again.
