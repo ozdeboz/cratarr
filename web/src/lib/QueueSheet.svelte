@@ -7,6 +7,7 @@
   // its menu; a row's heart adds it to a playlist, a long-press on the heart makes it a favourite or not; on this device
   // a row's handle reorders and a swipe left removes it (the server's player takes neither command). Haptics as
   // Finamp's: light on a tap or a drag starting, heavy on a drop, a removal and opening.
+  import { untrack } from 'svelte';
   import { linear } from 'svelte/easing';
   import { fade, fly } from 'svelte/transition';
   import { albumCoverUrl } from './api';
@@ -54,9 +55,12 @@
   // The rows' hearts: which of the listed tracks are favourites, asked for in one go when the list changes.
   const listed = $derived(np ? [...previous.map((t) => t.id), ...np.upcoming.map((u) => u.id)] : []);
   const listedKey = $derived(listed.join(','));
+  const listedSource = $derived(np?.source ?? null);
+  // Only on a new list: `np` and `listed` are new objects on every player update.
   $effect(() => {
+    const source = listedSource;
     void listedKey;
-    if (np?.source) loadFavorites(np.source, listed);
+    if (source) untrack(() => loadFavorites(source, listed));
   });
 
   // A row's menu: the whole menu (long-press on the row) or straight to its playlists (the row's heart).
