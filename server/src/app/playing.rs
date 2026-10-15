@@ -504,6 +504,19 @@ impl PlayingService {
         if !valid_item_id(id) {
             return Outcome::NotFound;
         }
+        // Where the catalogue has the track: in any of its folders, and for Cratarr's own ids without the source
+        // connected (decision 0032).
+        let (cat, source, item) = (self.lib.catalogue(), source_id.to_string(), id.to_string());
+        let place = tokio::task::spawn_blocking(move || {
+            let (folder, rel) = cat.file_of(cat.track_of_source(&source, &item)?)?;
+            Some((cat.folders().get(usize::try_from(folder).ok()?)?.clone(), rel))
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some((root, rel)) = place {
+            return resolve(&root, &rel, if_none_match).await;
+        }
         let Some((a, s)) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id) else { return Outcome::NotFound };
         let Ok(track) = s.track(id).await else { return Outcome::NotFound };
         let Some(music) = self.lib.music() else { return Outcome::NotFound };
