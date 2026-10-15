@@ -24,6 +24,12 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/stream/{source}/{id}", get(stream))
         .route("/api/file/{source}/{id}", get(file))
+        .route("/api/players", get(players))
+        .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
+        .route("/api/players/{name}", get(player))
+        .route("/api/players/{name}/command", post(player_command))
+        .route("/api/players/{name}/state", axum::routing::put(player_state))
+        .route("/api/players/{name}/connect", get(player_connect))
         .route("/api/track/{source}/{id}", get(track_info))
         .route("/api/track/{source}/{id}/playlists", get(track_state))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
@@ -474,6 +480,48 @@ struct StreamFrom {
 
 /// A track's audio for the local player (decision 0022): FLAC as fragmented MP4, MP3 as it is, read from Cratarr's own
 /// mount one piece at a time (a fragment of about a second, or 64 KB) so memory stays small.
+// --- Play On (decision 0031; app/playon.rs) ---
+
+async fn players(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
+    Json(json!({ "players": app.play_on.list() }))
+}
+
+async fn player(State(app): State<Arc<App>>, Path(name): Path<String>) -> Result<Response, ApiError> {
+    match app.play_on.get(&name) {
+        Some(p) => Ok(Json(p).into_response()),
+        None => Ok((StatusCode::NOT_FOUND, Json(json!({ "error": format!("No player is called {name}.") }))).into_response()),
+    }
+}
+
+async fn player_command(State(app): State<Arc<App>>, Path(name): Path<String>, Json(c): Json<crate::app::PlayOnCommand>) -> Result<StatusCode, ApiError> {
+    app.play_on.command(&name, c).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn player_state(State(app): State<Arc<App>>, Path(name): Path<String>, Json(r): Json<crate::app::PlayerReport>) -> Result<StatusCode, ApiError> {
+    app.play_on.report(&name, r)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The player's own connection: the commands for it, as server-sent events (`command`).
+async fn player_connect(
+    State(app): State<Arc<App>>,
+    Path(name): Path<String>,
+) -> Result<axum::response::sse::Sse<impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>, ApiError> {
+    use tokio_stream::StreamExt;
+    let commands = app.play_on.connect(&name)?;
+    let stream = commands.map(|c| Ok(axum::response::sse::Event::default().event("command").data(c)));
+    Ok(axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15))))
+}
+
+async fn play_on_settings(State(app): State<Arc<App>>) -> Json<crate::app::PlayOnSettings> {
+    Json(app.play_on.settings())
+}
+
+async fn save_play_on_settings(State(app): State<Arc<App>>, Json(s): Json<crate::app::PlayOnSettings>) -> Result<Json<crate::app::PlayOnSettings>, ApiError> {
+    Ok(Json(app.play_on.save_settings(s).await?))
+}
+
 /// A track's file as it is, with byte ranges: for a native player (the Android app's, decision 0031 amended), which
 /// seeks in the file itself and plays gapless from its own headers.
 async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {

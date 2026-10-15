@@ -20,6 +20,7 @@ mod insights;
 mod library;
 mod playing;
 mod playlists;
+mod playon;
 mod settings;
 mod shelf;
 mod sync;
@@ -36,6 +37,7 @@ pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{AlbumRef, AlbumView, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, CrateView, PlayMode, PlayResult, PlaylistService};
+pub use playon::{Command as PlayOnCommand, PlayOn, PlayOnSettings, Report as PlayerReport};
 pub use sync::TargetChoice;
 pub use events::connect as events;
 pub use settings::{NamingView, SettingsService, SettingsView, SourceView};
@@ -78,6 +80,8 @@ pub struct App {
     pub journal: Arc<crate::journal::Journal>,
     /// Notices when a player changes, for the live channel.
     pub events: events::PlayerWatch,
+    /// The players Cratarr commands itself: the Android app (decision 0031).
+    pub play_on: Arc<PlayOn>,
 }
 
 impl App {
@@ -116,7 +120,8 @@ impl App {
             origin,
         );
         let insights = InsightsService::new(library.clone());
-        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default() }))
+        let play_on = PlayOn::new(playlists.clone(), cfg.data_dir.as_deref());
+        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on }))
     }
 
     /// For the navigation header.
