@@ -78,6 +78,8 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/rest/{method}", get(rest).post(rest))
         .route("/api/subsonic/accounts", get(accounts).post(create_account))
         .route("/api/subsonic/password", axum::routing::post(change_password))
+        .route("/api/subsonic/import", get(super::import::status).post(super::import::start))
+        .route("/api/subsonic/import/sources", get(super::import::sources))
         .with_state(serve)
 }
 

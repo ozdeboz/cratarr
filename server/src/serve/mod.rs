@@ -4,6 +4,7 @@
 pub mod api;
 pub mod files;
 pub mod ids;
+pub mod import;
 pub mod library;
 pub mod read;
 pub mod routes;
@@ -30,6 +31,8 @@ pub struct Serve {
     pub userdata: Arc<UserData>,
     pub users: users::Users,
     pub catalogue: Arc<Catalogue>,
+    /// Imports from media servers into the user data (decision 0030, amended 2026-10-15).
+    pub import: import::Importer,
     rules: RwLock<Rules>,
     /// When the library was last built, epoch seconds (`getIndexes`' `lastModified`).
     built_at: RwLock<i64>,
@@ -52,7 +55,15 @@ impl Serve {
         {
             users.set(u.trim(), &p)?;
         }
-        Ok(Arc::new(Self { library, userdata, users, catalogue, rules: RwLock::new(rules), built_at: RwLock::new(now()) }))
+        Ok(Arc::new(Self {
+            library,
+            userdata,
+            users,
+            catalogue,
+            import: import::Importer::default(),
+            rules: RwLock::new(rules),
+            built_at: RwLock::new(now()),
+        }))
     }
 
     pub fn built_at(&self) -> i64 {

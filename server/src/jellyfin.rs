@@ -898,6 +898,98 @@ impl Jellyfin {
         }
     }
 
+    /// A page of `user`'s audio items that pass `filter` (`IsPlayed` or `IsFavorite`), with their user data, by name so the
+    /// pages stay put, and how many pass it (decision 0030, amended 2026-10-15: the import). Jellyfin cannot list "played
+    /// or favourite" at once: several filters must all hold. Measured on 10.11 (2026-10-15), an account with 5,204 played
+    /// and 4,789 favourite tracks: 250 per page took 9 to 12 s whatever the order or fields, 100 took 4.5 s (Jellyfin
+    /// builds each item slowly); an hour later 200 took 4.4 to 5.8 s, and the count alone 0.3 s.
+    pub async fn user_track_data(&self, user: &str, filter: &str, start: usize, limit: usize) -> Result<(Vec<crate::source::TrackData>, usize)> {
+        anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
+        anyhow::ensure!(matches!(filter, "IsPlayed" | "IsFavorite"), "not a filter");
+        let page: Counted<DataItem> = self
+            .get(&format!(
+                "/Items?UserId={user}&Recursive=true&IncludeItemTypes=Audio&Filters={filter}&SortBy=SortName&EnableImages=false&EnableUserData=true&Fields=&StartIndex={start}&Limit={limit}"
+            ))
+            .await?;
+        let total = page.total_record_count.unwrap_or(start + page.items.len());
+        Ok((page.items.into_iter().map(track_data).collect(), total))
+    }
+
+    /// How many of `user`'s audio items pass `filter` (as `user_track_data`), without listing them.
+    pub async fn count_user_tracks(&self, user: &str, filter: &str) -> Result<usize> {
+        anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
+        anyhow::ensure!(matches!(filter, "IsPlayed" | "IsFavorite"), "not a filter");
+        let page: Counted<IdOnly> =
+            self.get(&format!("/Items?UserId={user}&Recursive=true&IncludeItemTypes=Audio&Filters={filter}&EnableUserData=false&Fields=&Limit=0")).await?;
+        Ok(page.total_record_count.unwrap_or(0))
+    }
+
+    /// Every album and artist `user` made a favourite: albums with their folders (Jellyfin keeps no date for a favourite).
+    /// Measured 2026-10-15: 356 albums in two pages of 5 to 8 s, 118 artists in 0.2 s.
+    pub async fn favorite_groups(&self, user: &str) -> Result<crate::source::FavoriteGroups> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Item {
+            id: String,
+            name: Option<String>,
+            path: Option<String>,
+        }
+        anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
+        const PAGE: usize = 250;
+        let mut groups = crate::source::FavoriteGroups::default();
+        for kind in ["MusicAlbum", "MusicArtist"] {
+            let mut start = 0;
+            loop {
+                let page: ItemsPage<Item> = self
+                    .get(&format!(
+                        "/Items?UserId={user}&Recursive=true&IncludeItemTypes={kind}&Filters=IsFavorite&SortBy=SortName&EnableImages=false&EnableUserData=false&Fields=Path&StartIndex={start}&Limit={PAGE}"
+                    ))
+                    .await?;
+                let n = page.items.len();
+                for i in page.items {
+                    if kind == "MusicAlbum" {
+                        groups.albums.push((crate::source::AlbumRef { id: i.id, track: None, path: i.path }, None));
+                    } else if let Some(name) = i.name.filter(|n| !n.trim().is_empty()) {
+                        groups.artists.push((crate::source::ArtistRef { id: i.id, name }, None));
+                    }
+                }
+                start += n;
+                if n < PAGE {
+                    break;
+                }
+            }
+        }
+        Ok(groups)
+    }
+
+    /// A page of every album with its folder and when Jellyfin added it (`DateCreated`), by name, and how many there are.
+    /// Measured 2026-10-15: 250 albums in 5 to 7 s, of 2,738.
+    pub async fn albums_added(&self, start: usize, limit: usize) -> Result<(Vec<(crate::source::AlbumRef, i64)>, usize)> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Item {
+            id: String,
+            path: Option<String>,
+            date_created: Option<String>,
+        }
+        let page: Counted<Item> = self
+            .get(&format!(
+                "/Items?Recursive=true&IncludeItemTypes=MusicAlbum&SortBy=SortName&EnableImages=false&EnableUserData=false&Fields=Path,DateCreated&StartIndex={start}&Limit={limit}"
+            ))
+            .await?;
+        let total = page.total_record_count.unwrap_or(start + page.items.len());
+        let items = page
+            .items
+            .into_iter()
+            .filter_map(|i| {
+                // Jellyfin writes 0001-01-01 for "never".
+                let at = i.date_created.as_deref().and_then(crate::nowplaying::parse_iso_epoch).filter(|t| *t > 0)?;
+                Some((crate::source::AlbumRef { id: i.id, track: None, path: i.path }, at))
+            })
+            .collect();
+        Ok((items, total))
+    }
+
     /// Count one play of the item for `user`: the play count up by one, last played now, played (decision 0022). Jellyfin's
     /// own "mark played" only makes the count at least one, so the count is read and written back.
     pub async fn count_play(&self, item: &str, user: &str) -> Result<()> {
@@ -970,6 +1062,54 @@ pub fn unsubstitute(path: &str, substitutions: &[(String, String)]) -> String {
         .iter()
         .find_map(|(from, to)| path.strip_prefix(to.as_str()).map(|rest| format!("{from}{rest}")))
         .unwrap_or_else(|| path.to_string())
+}
+
+/// A listing with its whole size.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct Counted<T> {
+    items: Vec<T>,
+    total_record_count: Option<usize>,
+}
+
+/// An audio item with the asking user's data on it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct DataItem {
+    id: String,
+    user_data: Option<ItemUserData>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ItemUserData {
+    play_count: Option<u32>,
+    is_favorite: Option<bool>,
+    last_played_date: Option<String>,
+    /// Jellyfin's 0 to 10.
+    rating: Option<f64>,
+}
+
+fn track_data(i: DataItem) -> crate::source::TrackData {
+    let d = i.user_data;
+    let d = d.as_ref();
+    crate::source::TrackData {
+        id: i.id,
+        plays: d.and_then(|d| d.play_count).unwrap_or(0),
+        last_played: d.and_then(|d| d.last_played_date.as_deref()).and_then(crate::nowplaying::parse_iso_epoch).filter(|t| *t > 0),
+        favorite: d.and_then(|d| d.is_favorite).unwrap_or(false),
+        // Jellyfin keeps no date for a favourite.
+        favorite_at: None,
+        rating: stars(d.and_then(|d| d.rating)),
+    }
+}
+
+/// Jellyfin's 0 to 10 rating as 1 to 5 stars; 0 when none.
+fn stars(rating: Option<f64>) -> u8 {
+    match rating {
+        Some(r) if r > 0.0 => ((r / 2.0).round() as u8).clamp(1, 5),
+        _ => 0,
+    }
 }
 
 fn album_head(a: ListedAlbumItem) -> (crate::source::Album, Option<String>) {
@@ -1120,6 +1260,24 @@ mod tests {
                 .unwrap();
         assert_eq!(summarize(&mixed), AlbumSummary { tracks: 2, format: None, bitrate_kbps: Some(192) });
         assert_eq!(summarize(&[]), AlbumSummary::default());
+    }
+
+    #[test]
+    fn an_accounts_track_data_reads_as_jellyfin_sends_it() {
+        // As 10.11 answered a played listing on 2026-10-15 (trimmed).
+        let page: Counted<DataItem> = serde_json::from_str(
+            r#"{"Items":[{"Name":"(OO)","Id":"189177e4bc5e102ade47a58f175bdcd8","Type":"Audio","AlbumId":"203caf071e0344091acdd16de0ebcbee",
+                "UserData":{"PlaybackPositionTicks":0,"PlayCount":5,"IsFavorite":false,"LastPlayedDate":"2026-09-16T13:00:33.6700176Z","Played":true,"Key":"k","ItemId":"189177e4bc5e102ade47a58f175bdcd8"}},
+               {"Name":"Step","Id":"962f1fb63a0b3d0405159378ae2417cd","UserData":{"PlayCount":0,"IsFavorite":true,"Played":false,"Rating":7.0}},
+               {"Name":"bare","Id":"a"}],"TotalRecordCount":5203,"StartIndex":0}"#,
+        )
+        .unwrap();
+        assert_eq!(page.total_record_count, Some(5203));
+        let d: Vec<crate::source::TrackData> = page.items.into_iter().map(track_data).collect();
+        assert_eq!((d[0].plays, d[0].last_played, d[0].favorite, d[0].rating), (5, Some(1_789_563_633), false, 0));
+        assert_eq!((d[1].plays, d[1].last_played, d[1].favorite, d[1].rating), (0, None, true, 4), "7 of 10 is 4 of 5 stars, rounded");
+        assert_eq!(d[2], crate::source::TrackData { id: "a".into(), ..Default::default() });
+        assert_eq!((stars(Some(10.0)), stars(Some(0.4)), stars(Some(0.0)), stars(None)), (5, 1, 0, 0));
     }
 
     const SESSIONS: &str = include_str!("../tests/fixtures/sessions.json");

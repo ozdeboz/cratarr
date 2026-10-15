@@ -142,6 +142,9 @@ async fn main() -> Result<()> {
     let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), app.library.catalogue(), tag_rules, &env)
         .context("cannot open the OpenSubsonic library")?;
     served.follow();
+    // Imports of plays and favourites read the sources in use (decision 0030, amended 2026-10-15).
+    let importer = app.clone();
+    served.import.connect(std::sync::Arc::new(move || importer.library.connected_sources()));
 
     let listener = tokio::net::TcpListener::bind(&bind).await.with_context(|| format!("cannot bind {bind}"))?;
     tracing::info!("listening on {bind}");
