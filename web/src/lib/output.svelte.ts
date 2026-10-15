@@ -216,9 +216,8 @@ export async function playPlaylistHere(id: string, mode: PlayMode): Promise<bool
     .filter((r) => r.id && !r.missing)
     .map((r) => ({ source, id: r.id!, name: r.name ?? '', artist: r.artist, album: r.album, album_id: null }));
   if (!named.length) throw new Error('None of its tracks can be found.');
-  const tracks = mode === 'shuffle' ? [...named].sort(() => Math.random() - 0.5) : named;
-  if (mode === 'next' || mode === 'last') enqueue(tracks, mode);
-  else playQueue(tracks, 0, id);
+  if (mode === 'next' || mode === 'last') enqueue(named, mode);
+  else playQueue(named, 0, id, 0, mode === 'shuffle');
   return true;
 }
 
@@ -246,9 +245,9 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
   if (!all.length) throw new Error('None of their tracks can be found.');
   const order = mode === 'shuffle' ? [...all].sort(() => Math.random() - 0.5) : all;
   if (isLocal()) {
-    const tracks: LocalTrack[] = order.map((id) => ({ source, id, name: '', artist: null, album: null, album_id: null }));
+    const tracks: LocalTrack[] = all.map((id) => ({ source, id, name: '', artist: null, album: null, album_id: null }));
     if (mode === 'next' || mode === 'last') enqueue(tracks, mode);
-    else playQueue(tracks, 0, null);
+    else playQueue(tracks, 0, null, 0, mode === 'shuffle');
     return;
   }
   if (mode === 'next' || mode === 'last') await queueTracks(order, mode, source);

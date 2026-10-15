@@ -32,6 +32,11 @@ class PagePlayer(private val controller: MediaController, private val send: (Str
             "add" -> c.addMediaItems(m.optInt("at", c.mediaItemCount), mediaItems(m.optJSONArray("tracks")))
             "move" -> c.moveMediaItem(m.optInt("from"), m.optInt("to"))
             "remove" -> c.removeMediaItem(m.optInt("index"))
+            // Everything after the playing track replaced (the shuffle switch); the playing track plays on.
+            "upcoming" -> {
+                val from = (c.currentMediaItemIndex + 1).coerceAtMost(c.mediaItemCount)
+                c.replaceMediaItems(from, c.mediaItemCount, mediaItems(m.optJSONArray("tracks")))
+            }
             "jump" -> {
                 c.seekTo(m.optInt("index"), 0)
                 play()

@@ -201,6 +201,12 @@ class PlayOnLink(
                 if (from in 0 until p.mediaItemCount && to in 0 until p.mediaItemCount && from != to) p.moveMediaItem(from, to)
             }
             "remove" -> placed(m, "entry", "index").takeIf { it in 0 until p.mediaItemCount }?.let(p::removeMediaItem)
+            // Everything after the playing track replaced (a shuffle turned on or off); the playing track plays on.
+            "upcoming" -> {
+                val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
+                val from = (p.currentMediaItemIndex + 1).coerceAtMost(p.mediaItemCount)
+                p.replaceMediaItems(from, p.mediaItemCount, items)
+            }
             "jump" -> placed(m, "entry", "index").takeIf { it in 0 until p.mediaItemCount }?.let {
                 p.seekTo(it, 0)
                 play()

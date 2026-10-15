@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
-use super::playon::{Command, QueueTrack};
+use super::playon::{Command, QueueTrack, shuffled};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Queue {
@@ -51,6 +51,20 @@ fn with_entries(tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
 
 /// The lane of tracks added by hand (`QueueTrack::lane`).
 const LANE_NEXT: &str = "next";
+
+/// The place in the album or playlist the queue has reached: the last track up to the playing one that has one.
+fn reached(played: &[QueueTrack]) -> Option<u32> {
+    played.iter().rev().find_map(|t| t.n)
+}
+
+/// Back in the album's or playlist's own order, from `from` on; those from before it last, so nothing is lost. Tracks
+/// without a place keep theirs, at the end.
+fn in_order(rest: Vec<QueueTrack>, from: Option<u32>) -> Vec<QueueTrack> {
+    let (mut placed, unplaced): (Vec<QueueTrack>, Vec<QueueTrack>) = rest.into_iter().partition(|t| t.n.is_some());
+    placed.sort_by_key(|t| t.n);
+    let (after, before): (Vec<QueueTrack>, Vec<QueueTrack>) = placed.into_iter().partition(|t| from.is_none_or(|f| t.n > Some(f)));
+    after.into_iter().chain(before).chain(unplaced).collect()
+}
 
 fn missing() -> ToggleError {
     ToggleError::Refused("That entry is not in the queue.".into())
@@ -147,6 +161,30 @@ impl Queue {
                 let entry = moved.entry.clone();
                 self.tracks.insert(to, moved);
                 Command::Move { from: Some(from), to: Some(to), entry: Some(entry), after: Some(self.anchor(to)) }
+            }
+            // Everything after the playing track, replaced; the playing track plays on.
+            Command::Upcoming { tracks } => {
+                let keep = current.map_or(0, |c| c + 1).min(self.tracks.len());
+                let tracks = with_entries(tracks);
+                self.tracks.truncate(keep);
+                self.tracks.extend(tracks.iter().cloned());
+                Command::Upcoming { tracks }
+            }
+            // Shuffle on or off (0033's second order): what comes of the album or playlist mixed, or back in its own order
+            // from the playing track on; what was added by hand stays ahead. Told as the new upcoming tracks.
+            Command::Shuffle { on } => {
+                let c = current.filter(|c| *c < self.tracks.len()).ok_or_else(|| ToggleError::Refused("Nothing plays.".into()))?;
+                let ahead = self.added_ahead(Some(c));
+                let mut rest = self.tracks[c + 1 + ahead.len()..].to_vec();
+                if on {
+                    shuffled(&mut rest);
+                } else {
+                    rest = in_order(rest, reached(&self.tracks[..=c]));
+                }
+                let upcoming: Vec<QueueTrack> = ahead.into_iter().chain(rest).collect();
+                self.tracks.truncate(c + 1);
+                self.tracks.extend(upcoming.iter().cloned());
+                Command::Upcoming { tracks: upcoming }
             }
             Command::Remove { index, entry } => {
                 let i = self.place(entry.as_deref(), index)?;
@@ -287,6 +325,32 @@ mod tests {
         let mut empty = Queue::default();
         empty.edit_at(Command::Add { tracks: vec![track("z")], at: None, after: None, how: Some("last".into()) }, None).unwrap();
         assert_eq!(ids(&empty), "z");
+    }
+
+    #[test]
+    fn shuffle_mixes_what_comes_of_the_album_and_off_brings_its_order_back() {
+        let tracks: Vec<QueueTrack> = (0..12u32).map(|i| QueueTrack { n: Some(i), ..track(&format!("t{i}")) }).collect();
+        let mut q = Queue::default();
+        q.edit(Command::play(tracks, 0, 0)).unwrap();
+        // Playing t0, one added by hand ahead.
+        q.edit_at(Command::Add { tracks: vec![track("x")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
+        let Command::Upcoming { tracks: told } = q.edit_at(Command::Shuffle { on: true }, Some(0)).unwrap() else { panic!() };
+        assert_eq!(told.len(), 12, "every track still there");
+        assert_eq!(told[0].id, "x", "what was added by hand stays ahead");
+        let mut ns: Vec<u32> = told[1..].iter().filter_map(|t| t.n).collect();
+        assert_ne!(ns, (1..12).collect::<Vec<_>>(), "11 tracks in their own order after a shuffle: one chance in 40 million");
+        ns.sort();
+        assert_eq!(ns, (1..12).collect::<Vec<_>>());
+        // On to the fourth track of the shuffled order; shuffle off: the album goes on from that track's place.
+        let at = 4;
+        let here = q.tracks[at].n.unwrap();
+        let Command::Upcoming { tracks: told } = q.edit_at(Command::Shuffle { on: false }, Some(at)).unwrap() else { panic!() };
+        let order: Vec<u32> = told.iter().filter_map(|t| t.n).collect();
+        let mut want: Vec<u32> = q.tracks[at + 1..].iter().filter_map(|t| t.n).collect();
+        want.sort();
+        let (after, before): (Vec<u32>, Vec<u32>) = want.into_iter().partition(|n| *n > here);
+        assert_eq!(order, [after, before].concat(), "from the playing track's place on, the earlier ones last");
+        assert!(q.edit_at(Command::Shuffle { on: true }, None).is_err(), "nothing plays");
     }
 
     #[test]

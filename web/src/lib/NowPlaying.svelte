@@ -15,6 +15,7 @@
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
+  import { local, setShuffle } from './localPlayer.svelte';
   import { keepViewed, panel } from './panel.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
@@ -344,11 +345,19 @@
             </div>
           {/if}
           <div class="transport" role="group" aria-label="Player controls">
+            <!-- Finamp's shuffle, left of previous; a space of its size right of next keeps play in the middle. Only
+                 where the page holds the queue (here, the app, a Cratarr player). -->
+            {#if isLocal()}
+              <button class="shuffle" class:on={local.shuffled} aria-label="Shuffle" aria-pressed={local.shuffled} onclick={() => setShuffle(!local.shuffled)}
+                ><Icon name="shuffle" size={22} /></button
+              >
+            {/if}
             <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
             <button class="main" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
               ><Icon name={paused() ? 'play' : 'pause'} size={32} /></button
             >
             <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={24} /></button>
+            {#if isLocal()}<span class="slot" aria-hidden="true"></span>{/if}
           </div>
         </div>
         <i class="sp c"></i>
@@ -671,6 +680,20 @@
     border-radius: 50%;
     color: var(--text);
     cursor: pointer;
+  }
+
+  /* Shuffle shows its state by colour, as Finamp's. */
+  .transport button.shuffle {
+    color: var(--muted);
+  }
+
+  .transport button.shuffle.on {
+    color: var(--art-accent, var(--accent));
+  }
+
+  .transport .slot {
+    width: 48px;
+    height: 48px;
   }
 
   /* Play/pause in Finamp's shape: a rounded square (a quarter of its size as radius), tinted with the text colour,

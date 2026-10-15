@@ -39,6 +39,9 @@ pub struct QueueTrack {
     /// `next`: added by hand (Play next, Add to queue), not part of the album or playlist that plays (0033's lanes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane: Option<String>,
+    /// Its place in the album or playlist as it was played, before any shuffle: turning shuffle off orders by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n: Option<u32>,
     pub source: String,
     pub id: String,
     #[serde(default)]
@@ -143,6 +146,10 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         after: Option<String>,
     },
+    /// Everything after the playing track replaced by these; the playing track plays on.
+    Upcoming { tracks: Vec<QueueTrack> },
+    /// Shuffle on or off (decision 0033's second order); a player is told the new upcoming tracks.
+    Shuffle { on: bool },
     /// Entry `entry` (or the one at place `index`) out.
     Remove {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -633,6 +640,10 @@ impl PlayOn {
                 if tracks.is_empty() {
                     return Err(ToggleError::Refused("There is nothing there that can be played.".into()));
                 }
+                // The album's or playlist's own order kept on its tracks, for turning shuffle off later.
+                for (i, t) in tracks.iter_mut().enumerate().filter(|(_, t)| t.lane.is_none() && t.n.is_none()) {
+                    t.n = u32::try_from(i).ok();
+                }
                 if shuffle {
                     shuffled(&mut tracks);
                     (index, position_ms) = (0, 0);
@@ -734,7 +745,21 @@ impl PlayOn {
 
     /// A playlist's playable tracks, as players hold them.
     async fn playlist_tracks(&self, playlist: &str) -> Result<Vec<QueueTrack>, ToggleError> {
-        let (source, rows) = self.playlists.rows(playlist, None).await?;
+        // By its name, regardless of capitals when no playlist has the very name ("Restaurant de Lift" for "Restaurant
+        // De Lift"), as the spoken names are found.
+        let list = self.playlists.view(None).await?;
+        let name = match list.iter().find(|p| p.id == playlist) {
+            Some(p) => p.id.clone(),
+            None => {
+                let want = playlist.to_lowercase();
+                let mut like = list.iter().filter(|p| p.id.to_lowercase() == want);
+                match (like.next(), like.next()) {
+                    (Some(p), None) => p.id.clone(),
+                    _ => playlist.to_string(),
+                }
+            }
+        };
+        let (source, rows) = self.playlists.rows(&name, None).await?;
         Ok(rows
             .into_iter()
             .filter(|r| !r.missing)
@@ -870,7 +895,7 @@ async fn own_tracks(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleEr
 }
 
 /// In place, in a random order (xorshift seeded from the clock: a shuffle needs no better).
-fn shuffled<T>(items: &mut [T]) {
+pub(super) fn shuffled<T>(items: &mut [T]) {
     let mut x = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
     for i in (1..items.len()).rev() {
         x ^= x << 13;

@@ -22,6 +22,8 @@ export type LocalTrack = {
   /** `next`: added by hand (Play next, Add to queue), not part of the album or playlist that plays (decision 0033's
    *  two lanes). */
   lane?: 'next';
+  /** Its place in the album or playlist as it was played, before any shuffle: turning shuffle off orders by it. */
+  n?: number;
   source: string;
   id: string;
   name: string;
@@ -47,6 +49,8 @@ export const local = $state({
   duration: null as number | null,
   /** The last thing that failed, in plain words. */
   error: null as string | null,
+  /** What comes of the album or playlist plays shuffled (the player's shuffle switch). */
+  shuffled: false,
   /** What the queue was started from ("Chill", an album), for the queue sheet's "Playing from"; null when unknown. */
   from: null as string | null,
 });
@@ -488,6 +492,8 @@ export function reportedBy(m: { queue?: unknown; index?: unknown; positionMs?: u
     // A queue the player changed (moved, added to) keeps the names this page already knows of its tracks.
     const known = new Map(local.queue.filter((t) => t.name).map((t) => [`${t.source}/${t.id}`, t]));
     local.queue = (m.queue as LocalTrack[]).map((t) => (t.name ? t : (known.get(`${t.source}/${t.id}`) ?? t)));
+    // A queue the page did not order itself (a page opened while it played): shuffled when its order says so.
+    local.shuffled = looksShuffled(local.queue, typeof m.index === 'number' ? m.index : -1);
   }
   local.index = typeof m.index === 'number' ? m.index : -1;
   local.paused = m.paused !== false;
@@ -529,9 +535,66 @@ export function addedAhead(queue: LocalTrack[], index: number): LocalTrack[] {
   return run;
 }
 
-/** Plays `tracks` from `index`, `position` seconds into it. Something new replaces the album or playlist that played,
- *  not what was added by hand: those come right after its first track, as before (decision 0033's two lanes). */
-export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null, position = 0) {
+/** The album's or playlist's own order kept on its tracks (`n`), for turning shuffle off later. */
+const numbered = (tracks: LocalTrack[]) => tracks.map((t, i) => (t.lane || t.n !== undefined ? t : { ...t, n: i }));
+
+/** In a random order (Fisher-Yates). */
+function shuffledCopy<T>(items: T[]): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/** What comes of the album or playlist in its own order again, from the playing track on; those from before it last,
+ *  so nothing is lost. Tracks without a place keep theirs, at the end. */
+function inOrder(rest: LocalTrack[], from: number): LocalTrack[] {
+  const placed = rest.filter((t) => t.n !== undefined).sort((a, b) => a.n! - b.n!);
+  return [...placed.filter((t) => t.n! > from), ...placed.filter((t) => t.n! <= from), ...rest.filter((t) => t.n === undefined)];
+}
+
+/** The place in the album or playlist the queue has reached: the playing track's, else the last one's before it. */
+function reached(queue: LocalTrack[], index: number): number {
+  for (let i = index; i >= 0; i--) if (queue[i]?.n !== undefined) return queue[i].n!;
+  return -1;
+}
+
+/** Whether what comes of the album or playlist is out of its own order: more than the one turn back that starting
+ *  partway in gives. */
+function looksShuffled(queue: LocalTrack[], index: number): boolean {
+  const ns = queue.slice(index + 1).flatMap((t) => (t.lane || t.n === undefined ? [] : [t.n]));
+  let back = 0;
+  for (let i = 1; i < ns.length; i++) if (ns[i] < ns[i - 1]) back++;
+  return back > 1;
+}
+
+/** Shuffle on (what comes of the album or playlist, mixed) or off (back in its own order, from the playing track on).
+ *  What was added by hand stays ahead, in its order (decision 0033). */
+export function setShuffle(on: boolean) {
+  local.shuffled = on;
+  if (local.index < 0) return;
+  const ahead = addedAhead(local.queue, local.index);
+  const rest = local.queue.slice(local.index + 1 + ahead.length);
+  replaceUpcoming([...ahead, ...(on ? shuffledCopy(rest) : inOrder(rest, reached(local.queue, local.index)))]);
+}
+
+/** Everything after the playing track, replaced; the playing track plays on. */
+function replaceUpcoming(upcoming: LocalTrack[]) {
+  local.queue = [...local.queue.slice(0, local.index + 1), ...upcoming];
+  if (handed()) return hand('upcoming', { tracks: upcoming });
+  cutFrom(local.index + 1);
+}
+
+/** Plays `tracks` from `index`, `position` seconds into it; `shuffle`: all of them mixed, from the first. Something new
+ *  replaces the album or playlist that played, not what was added by hand: those come right after its first track, as
+ *  before (decision 0033's two lanes). */
+export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null, position = 0, shuffle = false) {
+  tracks = numbered(tracks);
+  if (shuffle) [tracks, index, position] = [shuffledCopy(tracks), 0, 0];
+  // A queue moved here whole keeps its shuffle.
+  local.shuffled = shuffle || looksShuffled(tracks, index);
   // Those the new queue holds already (a queue moved here whole) are not added twice.
   const holds = (t: LocalTrack) => tracks.some((x) => x === t || (!!t.entry && x.entry === t.entry));
   const ahead = local.index < 0 ? [] : addedAhead(local.queue, local.index).filter((t) => !holds(t));
