@@ -168,7 +168,8 @@ pub fn needs_conversion(path: &Path) -> Result<Option<SourceFormat>> {
 
 /// Convert a lossless file to 16-bit FLAC at 44.1 kHz (or the source's rate when lower), with all its tags and
 /// pictures. The output appears whole or not at all: it is written to a temporary file next to it, then renamed.
-/// `output` may be `input` itself.
+/// `output` may be `input` itself. It gets the input's permissions, as a copy would (a new file's own were 644 where
+/// the library's files are 664, so the group could not write the converted ones: NAS, 2026-10-15).
 pub fn to_cd_flac(input: &Path, output: &Path) -> Result<Report> {
     to_cd_flac_told(input, output, |_| {})
 }
@@ -185,6 +186,9 @@ pub fn to_cd_flac_told(input: &Path, output: &Path, progress: impl FnMut(f32)) -
     let result = convert_to(input, &temp, None, progress);
     match result {
         Ok(report) => {
+            if let Ok(m) = std::fs::metadata(input) {
+                std::fs::set_permissions(&temp, m.permissions()).with_context(|| format!("giving {} the input's permissions", temp.display()))?;
+            }
             std::fs::rename(&temp, output).with_context(|| format!("renaming into {}", output.display()))?;
             Ok(report)
         }
@@ -697,8 +701,18 @@ mod tests {
         let found = needs_conversion(&src).unwrap().unwrap();
         assert_eq!((found.container, found.sample_rate, found.bits_per_sample, found.channels), (Container::Flac, 96_000, 24, 2));
         assert_eq!(found.frames, Some(288_000));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o664)).unwrap();
+        }
 
         let report = to_cd_flac(&src, &out).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&out).unwrap().permissions().mode() & 0o777, 0o664, "the input's permissions, as a copy");
+        }
         assert_eq!(report.sample_rate, 44_100);
         assert_eq!(report.frames, 132_300);
         assert_eq!(report.clipped, 0);
