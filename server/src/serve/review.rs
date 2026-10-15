@@ -20,6 +20,9 @@ pub const PROMOTED: &str = "promoted";
 pub const REJECTED: &str = "rejected";
 pub const UNREVIEWED: &str = "unreviewed";
 
+/// In a review's undo key: a Keep queued for conversion, by the server's album id (its job has the real key).
+const JOB: &str = "job:";
+
 pub fn router(serve: Arc<Serve>) -> Router {
     Router::new()
         .route("/api/library/albums/{album}/promote", post(promote))
@@ -99,7 +102,8 @@ async fn act(serve: Arc<Serve>, id: String, wanted: &'static str) -> Response {
     };
     let undo = if wanted == PROMOTED {
         match incoming.keep(&source, &server_album, None).await {
-            Ok(k) => k.undo,
+            // A Keep that waits for its conversion gets its undo key when the job is done: remember the job's album.
+            Ok(k) => Some(k.undo.unwrap_or_else(|| format!("{JOB}{server_album}"))),
             Err(e) => return fail(StatusCode::CONFLICT, e.to_string()),
         }
     } else {
@@ -139,9 +143,20 @@ async fn unreview(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Re
         Err(e) => return failed(e),
     };
     let Some(incoming) = serve.incoming().cloned() else { return fail(StatusCode::SERVICE_UNAVAILABLE, "Incoming is not ready yet") };
-    let Some(key) = done.undo.as_deref() else {
-        return fail(StatusCode::CONFLICT, format!("{} is still being converted; take it back once it is done", done.name));
+    let still = || fail(StatusCode::CONFLICT, format!("{} is still being converted; take it back once it is done", done.name));
+    let key = match done.undo.as_deref() {
+        // A queued Keep: its job has the undo key once done.
+        Some(job) if job.starts_with(JOB) => {
+            let album = &job[JOB.len()..];
+            match incoming.jobs().into_iter().rev().find(|j| j.album_id == album).and_then(|j| j.undo) {
+                Some(k) => k,
+                None => return still(),
+            }
+        }
+        Some(k) => k.to_string(),
+        None => return still(),
     };
+    let key = key.as_str();
     if let Err(e) = incoming.undo(key).await {
         return fail(StatusCode::CONFLICT, e.to_string());
     }
