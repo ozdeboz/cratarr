@@ -110,14 +110,15 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   were pinned, marked with a small pin after the name; "✓ first" applies within the pinned and within the rest. Pins
   are remembered by the browser, like the sort order and size; a rename keeps the pin.
 - **A page's floating row** (2026-10-15, `App.svelte`, `lib/TopPill.svelte`): back on the left (a round as tall as the
-  pill; Cratarr's mark, the same size, going home to Incoming when there is no back), and on a page with something to
+  pill; nothing there while there is nowhere to go back to: no mark in its place, 2026-10-16), and on a page with something to
   play the pill on the right: **search** (a magnifier that opens into a field over the row, the whole row on a phone, at
   most 520 px on a wide page; ✕ empties and folds it, Esc folds it, the magnifier stays in the accent while a search
   applies; each page starts with it empty), the **filter** sheet, **View** (the list's order and direction, as its
   header's; a playlist's size; albums' rows or covers and size), and where it plays when nothing else leads there.
   Last in the pill the page's own button where it has one: a + where it makes something (New playlist, New crate),
-  on Playlists with playlists ticked their ⋮. The floating controls (the pill, back, ✕, the mark) share one surface:
-  a little see-through, blurring what is under them (`--float-bg`, `--float-blur`). The mark is only its circle,
+  (what is ticked has the select bar, lib/SelectBar). The floating controls (the pill, back, ✕, the select bars)
+  share one surface: the mini-player's unplayed colour (the playing cover's), a little see-through, blurring what is
+  under them (`--float-bg`, `--float-blur`). The mark (the sidebar's) is only its circle,
   never on a tile; so are the web app's icons, but for the ones the platform cuts to shape (maskable, iOS, Android's
   launcher).
 - **Filters** (the filter sheet, from the funnel in a floating pill; decided 2026-10-16): only the **server** a

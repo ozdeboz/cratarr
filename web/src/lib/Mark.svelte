@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Cratarr's mark, the record itself (round, as the floating buttons are), in its three-ring version: the sidebar's
-  // brand and back's place on a page (decided 2026-10-15). `size` is its diameter. The path is tools/brand/record.py's
+  // Cratarr's mark, the record itself (round), in its three-ring version: the sidebar's brand (decided 2026-10-15; no
+  // longer in back's place on a phone's page row, 2026-10-16). `size` is its diameter. The path is tools/brand/record.py's
   // `full`; the view is the record's own square (radius 24 about 54, 54).
   let { size = 34 }: { size?: number } = $props();
 </script>
