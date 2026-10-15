@@ -367,6 +367,15 @@ impl Library {
         Ok(albums)
     }
 
+    /// The albums outside the Music folder (waiting in Incoming), newest first.
+    pub fn incoming_albums(&self) -> Result<Vec<Album>> {
+        let db = self.db();
+        let ns = numbers(&db, "SELECT n FROM albums WHERE folder > 0 ORDER BY created DESC, n", &[])?;
+        let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
+        self.album_artists(&db, &mut albums)?;
+        Ok(albums)
+    }
+
     /// Answers when both its tables can be read: (songs, albums). For the health check.
     pub fn health(&self) -> Result<(u64, u64)> {
         let db = self.db();

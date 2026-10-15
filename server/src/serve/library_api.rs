@@ -31,7 +31,8 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/library/tags/{tag}", get(tagged))
         .route("/api/library/tracks/{track}/favourite", post(favourite).delete(unfavourite))
         .route("/api/library/tracks/{track}/file", get(file))
-        .with_state(serve)
+        .with_state(serve.clone())
+        .merge(super::review::router(serve))
 }
 
 fn fail(status: StatusCode, message: impl Into<String>) -> Response {
@@ -64,17 +65,22 @@ async fn health(State(serve): State<Arc<Serve>>) -> Response {
     }
 }
 
-/// An album with its tags; `review` is null for an album that is not waiting in Incoming.
+/// An album with its tags and review state ("unreviewed", "promoted", "rejected"; null for an album of the curated
+/// library).
 async fn album(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Response {
     let s = serve.clone();
     let found = blocking(move || {
         let Some(album) = s.library.albums_by_id(std::slice::from_ref(&id))?.pop() else { return Ok(None) };
         let base = s.library.album_base(&id)?.unwrap_or_else(|| id.clone());
-        Ok(Some((album, s.userdata.tags_of(&base)?)))
+        let in_incoming = s.library.album_dir(&id)?.is_some_and(|(folder, _)| folder > 0);
+        let review = super::review::state_of(&s, &id, in_incoming)?;
+        Ok(Some((album, s.userdata.tags_of(&base)?, review)))
     })
     .await;
     match found {
-        Ok(Some((a, tags))) => axum::Json(json!({ "id": a.id, "name": a.name, "album_artist": a.artist, "tags": tags, "review": null })).into_response(),
+        Ok(Some((a, tags, review))) => {
+            axum::Json(json!({ "id": a.id, "name": a.name, "album_artist": a.artist, "tags": tags, "review": review })).into_response()
+        }
         Ok(None) => fail(StatusCode::NOT_FOUND, "no such album"),
         Err(r) => r,
     }
@@ -246,5 +252,20 @@ mod tests {
         assert_eq!(call(&s, "DELETE", "/api/library/tracks/tr-1/favourite").await.0, StatusCode::NO_CONTENT);
         assert!(s.userdata.starred("oskar", Kind::Song).unwrap().is_empty());
         assert_eq!(call(&s, "POST", "/api/library/tracks/tr-9/favourite").await.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn only_incoming_albums_are_reviewed() {
+        let s = server();
+        let id = s.library.song_ids(1).unwrap().unwrap().album_id;
+        let (_, a) = call(&s, "GET", &format!("/api/library/albums/{id}")).await;
+        assert!(a["review"].is_null(), "an album of the library has no review");
+        let (status, refused) = call(&s, "POST", &format!("/api/library/albums/{id}/reject")).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(refused["error"], "X is in the library, not in Incoming");
+        assert_eq!(call(&s, "POST", "/api/library/albums/al-nothing/promote").await.0, StatusCode::NOT_FOUND);
+        assert_eq!(call(&s, "DELETE", &format!("/api/library/albums/{id}/review")).await.0, StatusCode::CONFLICT);
+        let (status, list) = call(&s, "GET", "/api/library/incoming?review=unreviewed").await;
+        assert_eq!((status, list["albums"].as_array().map(Vec::len)), (StatusCode::OK, Some(0)));
     }
 }

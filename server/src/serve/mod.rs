@@ -8,6 +8,7 @@ pub mod library;
 pub mod library_api;
 pub mod playlists;
 pub mod read;
+pub mod review;
 pub mod routes;
 pub mod users;
 
@@ -37,6 +38,8 @@ pub struct Serve {
     built_at: RwLock<i64>,
     /// Cratarr's playlist service, once the app is up (`set_playlists`): the Subsonic playlists are its files.
     playlists: std::sync::OnceLock<Arc<crate::app::PlaylistService>>,
+    /// Cratarr's Incoming, once the app is up (`set_incoming`): promote and reject are its Keep and Delete.
+    incoming: std::sync::OnceLock<Arc<crate::app::IncomingService>>,
 }
 
 fn now() -> i64 {
@@ -56,7 +59,7 @@ impl Serve {
         {
             users.set(u.trim(), &p)?;
         }
-        Ok(Arc::new(Self { library, userdata, users, catalogue, rules: RwLock::new(rules), built_at: RwLock::new(now()), playlists: Default::default() }))
+        Ok(Arc::new(Self { library, userdata, users, catalogue, rules: RwLock::new(rules), built_at: RwLock::new(now()), playlists: Default::default(), incoming: Default::default() }))
     }
 
     pub fn set_playlists(&self, service: Arc<crate::app::PlaylistService>) {
@@ -65,6 +68,14 @@ impl Serve {
 
     pub fn playlists(&self) -> Option<&Arc<crate::app::PlaylistService>> {
         self.playlists.get()
+    }
+
+    pub fn set_incoming(&self, service: Arc<crate::app::IncomingService>) {
+        let _ = self.incoming.set(service);
+    }
+
+    pub fn incoming(&self) -> Option<&Arc<crate::app::IncomingService>> {
+        self.incoming.get()
     }
 
     pub fn built_at(&self) -> i64 {

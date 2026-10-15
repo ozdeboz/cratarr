@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS play_queue (
   changed INTEGER NOT NULL, changed_by TEXT);
 CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, origin TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS playlist_seen (name TEXT PRIMARY KEY, print TEXT NOT NULL, created INTEGER NOT NULL, changed INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
+  name TEXT NOT NULL, album_artist TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS album_review_by_base ON album_review (base);
 ";
 
 /// What an annotation is about.
@@ -75,6 +78,24 @@ pub struct PlayQueue {
     /// Epoch seconds.
     pub changed: i64,
     pub changed_by: Option<String>,
+}
+
+/// An Incoming album promoted (kept into Music) or rejected (deleted) by its id: what was done, and the key that
+/// undoes it (Incoming's own undo, decision 0026).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Review {
+    /// The album id it was asked by (its Incoming id).
+    pub album: String,
+    /// Its Music-form id (see `serve::ids::album`), the same before and after a Keep.
+    pub base: String,
+    /// "promoted" or "rejected".
+    pub state: String,
+    /// Epoch seconds.
+    pub at: i64,
+    /// `None` while a Keep waits for its conversion.
+    pub undo: Option<String>,
+    pub name: String,
+    pub album_artist: String,
 }
 
 pub struct UserData {
@@ -286,6 +307,40 @@ impl UserData {
             params![name, print, at],
         )?;
         Ok(db.query_row("SELECT created, changed FROM playlist_seen WHERE name = ?1", [name], |r| Ok((r.get(0)?, r.get(1)?)))?)
+    }
+
+    /// An album's review (promoted or rejected from Incoming) as asked by its id, and the undo key of what was done.
+    pub fn review(&self, album: &str) -> Result<Option<Review>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album, base, state, at, undo, name, album_artist FROM album_review WHERE album = ?1 OR base = ?1 ORDER BY at DESC LIMIT 1")?;
+        Ok(st
+            .query_map([album], |r| {
+                Ok(Review {
+                    album: r.get(0)?,
+                    base: r.get(1)?,
+                    state: r.get(2)?,
+                    at: r.get(3)?,
+                    undo: r.get(4)?,
+                    name: r.get(5)?,
+                    album_artist: r.get(6)?,
+                })
+            })?
+            .next()
+            .transpose()?)
+    }
+
+    pub fn set_review(&self, r: &Review) -> Result<()> {
+        self.db().execute(
+            "INSERT OR REPLACE INTO album_review (album, base, state, at, undo, name, album_artist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![r.album, r.base, r.state, r.at, r.undo, r.name, r.album_artist],
+        )?;
+        Ok(())
+    }
+
+    /// Back to unreviewed.
+    pub fn clear_review(&self, album: &str) -> Result<()> {
+        self.db().execute("DELETE FROM album_review WHERE album = ?1", [album])?;
+        Ok(())
     }
 
     /// Answers when the database can be read. For the health check.
