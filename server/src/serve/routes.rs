@@ -437,7 +437,7 @@ mod tests {
                 ("genre", "Electronic"),
             ])
         };
-        serve.library.refresh(&[FolderRows { folder: 0, rows: vec![t(1, "Hunter"), t(2, "Jóga")] }], &Rules::default()).unwrap();
+        serve.library.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![t(1, "Hunter"), t(2, "Jóga")] }], &Rules::default()).unwrap();
         serve.users.set("me", "pw").unwrap();
         let me = serve.users.check(Some("me"), None, None, Some("pw")).unwrap();
         (serve, me)

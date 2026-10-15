@@ -10,7 +10,7 @@ use rusqlite::{Connection, params_from_iter};
 use super::api::{Album, Artist, ArtistRef, GenreRef, Song, content_type, iso};
 use super::library::{Library, fts_query};
 
-const SONG_COLS: &str = "s.n, s.id, s.folder, s.rel, s.album_id, s.title, s.artist, s.album, s.album_artist, s.track_no, s.disc_no,
+const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.artist, s.album, s.album_artist, s.track_no, s.disc_no,
   s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid";
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
   a.created, a.mbid, a.compilation";

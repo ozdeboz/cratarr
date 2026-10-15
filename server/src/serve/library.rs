@@ -29,7 +29,7 @@ PRAGMA synchronous = NORMAL;
 PRAGMA temp_store = MEMORY;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS songs (
-  n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, pid TEXT NOT NULL, folder INTEGER NOT NULL, rel TEXT NOT NULL,
+  n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, pid TEXT NOT NULL, folder INTEGER NOT NULL, rel TEXT NOT NULL, path TEXT NOT NULL,
   album_id TEXT NOT NULL, title TEXT NOT NULL, artist TEXT, album TEXT NOT NULL, album_artist TEXT,
   track_no INTEGER, disc_no INTEGER, year INTEGER, genre TEXT, bpm INTEGER, duration_ms INTEGER, size INTEGER NOT NULL,
   suffix TEXT, kbps INTEGER, created INTEGER, mbid TEXT, order_title TEXT NOT NULL);
@@ -60,12 +60,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS albums_fts USING fts5(name, artist, content='
 CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(name, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
 ";
 
+/// The tables' layout; a library of another layout is built again.
+const LAYOUT: i64 = 2;
+
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
 
 /// One folder of the catalogue as the library reads it: its id there and its files.
 pub struct FolderRows {
     pub folder: i64,
+    /// The folder as Cratarr sees it; a song's `path` is this and its place in it.
+    pub root: String,
     pub rows: Vec<ServedRow>,
 }
 
@@ -159,7 +164,19 @@ impl Library {
             None => Connection::open_in_memory()?,
         };
         conn.busy_timeout(Duration::from_secs(15))?;
+        // Derived data: a library from an older layout is simply built again.
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version != LAYOUT {
+            let tables: Vec<String> = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts_%'")?
+                .query_map([], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            for t in tables {
+                conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{t}\""))?;
+            }
+        }
         conn.execute_batch(SCHEMA).context("creating the library tables")?;
+        conn.execute_batch(&format!("PRAGMA user_version = {LAYOUT}"))?;
         Ok(Self { db: Mutex::new(conn) })
     }
 
@@ -203,7 +220,8 @@ impl Library {
                     Some(c) => crate::catalogue::served_rows(c, folder)?,
                     None => cat.served_rows(folder)?,
                 };
-                Ok(FolderRows { folder, rows })
+                let root = cat.folders().get(folder as usize).map(|p| p.display().to_string()).unwrap_or_default();
+                Ok(FolderRows { folder, root, rows })
             })
             .collect::<Result<Vec<_>>>()?;
         self.build(&folders, rules)?;
@@ -223,6 +241,7 @@ impl Library {
         let mut songs: Vec<Song> =
             folders.iter().flat_map(|f| f.rows.iter().filter(|r| r.track.is_some()).map(move |r| (f.folder, r))).map(|(folder, r)| song(r, folder, rules)).collect();
         one_album_per_folder(&mut songs);
+        let roots: HashMap<i64, &str> = folders.iter().map(|f| (f.folder, f.root.as_str())).collect();
         let mut db = self.db();
         let tx = db.transaction()?;
         tx.execute_batch(
@@ -238,8 +257,8 @@ impl Library {
         {
             let mut ins_song = tx.prepare(
                 "INSERT INTO songs (id, pid, folder, rel, album_id, title, artist, album, album_artist, track_no, disc_no, year,
-                   genre, bpm, duration_ms, size, suffix, kbps, created, mbid, order_title)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+                   genre, bpm, duration_ms, size, suffix, kbps, created, mbid, order_title, path)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             )?;
             let mut ins_fts = tx.prepare("INSERT INTO songs_fts (rowid, title, artist, album) VALUES (?1, ?2, ?3, ?4)")?;
             let mut ins_artist = tx.prepare("INSERT INTO song_artists (song_id, artist_id, name, position) VALUES (?1, ?2, ?3, ?4)")?;
@@ -269,6 +288,7 @@ impl Library {
                     r.born,
                     r.first("musicbrainz_trackid"),
                     order_name(&s.title),
+                    format!("{}/{}", roots.get(&s.folder).map_or("", |r| r.trim_end_matches('/')), r.rel),
                 ])?;
                 let n = tx.last_insert_rowid();
                 ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
@@ -478,6 +498,7 @@ mod tests {
         };
         vec![FolderRows {
             folder: 0,
+            root: "/music".into(),
             rows: vec![
                 homogenic(1, "01", "Hunter"),
                 homogenic(2, "02", "Jóga"),
@@ -515,7 +536,7 @@ mod tests {
     fn a_folder_is_one_album_even_when_its_tags_disagree() {
         let lib = Library::open(None).unwrap();
         let t = |n: i64, date: &str| row(n, &format!("A/X (2013)/0{n} t.flac"), &[("title", "t"), ("artist", "A"), ("album", "X"), ("date", date)]);
-        let folders = vec![FolderRows { folder: 0, rows: vec![t(1, "2013"), t(2, "2013"), t(3, "2015")] }];
+        let folders = vec![FolderRows { folder: 0, root: "/music".into(), rows: vec![t(1, "2013"), t(2, "2013"), t(3, "2015")] }];
         lib.refresh(&folders, &Rules::default()).unwrap();
         assert_eq!(lib.counts().unwrap().1, 1);
         let year: i64 = lib.db().query_row("SELECT year FROM albums", [], |r| r.get(0)).unwrap();
