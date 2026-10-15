@@ -651,6 +651,13 @@ impl Catalogue {
         self.rows_at(source, &places)
     }
 
+    /// What the catalogue knows of each of these tracks, by a source's ids, in order (a player's queue sent by ids
+    /// only). Ids it cannot place leave the facts empty. Blocking.
+    pub fn source_rows(&self, source: &str, ids: &[String]) -> Result<Vec<FileRow>> {
+        let places: Vec<Option<(i64, String)>> = ids.iter().map(|id| self.track_of_source(source, id).and_then(|t| self.file_of(t))).collect();
+        self.rows_at(source, &places)
+    }
+
     /// What the catalogue knows of each of these files of a folder, in order. Blocking.
     #[cfg(test)]
     pub fn file_rows(&self, source: &str, folder: i64, rels: &[String]) -> Result<Vec<FileRow>> {

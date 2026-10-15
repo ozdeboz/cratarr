@@ -407,7 +407,8 @@ function where(): { seg: Segment; offset: number } | null {
 // up to date. Four times a second is plenty for the display; the audio itself runs on its own.
 let lastShown = -1;
 function tick() {
-  if (!audio || local.index < 0) return;
+  // Played elsewhere (another of Cratarr's players): this page's own, idle audio says nothing about it.
+  if (!audio || local.index < 0 || handed()) return;
   local.paused = audio.paused;
   const w = where();
   if (w) {
@@ -477,7 +478,11 @@ const sameQueue = (a: LocalTrack[], b: LocalTrack[]) => a.length === b.length &&
 
 /** The player that plays: what it plays now (`queue` only when it changed). */
 export function reportedBy(m: { queue?: unknown; index?: unknown; positionMs?: unknown; durationMs?: unknown; paused?: unknown; error?: unknown }) {
-  if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) local.queue = m.queue as LocalTrack[];
+  if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) {
+    // A queue the player changed (moved, added to) keeps the names this page already knows of its tracks.
+    const known = new Map(local.queue.filter((t) => t.name).map((t) => [`${t.source}/${t.id}`, t]));
+    local.queue = (m.queue as LocalTrack[]).map((t) => (t.name ? t : (known.get(`${t.source}/${t.id}`) ?? t)));
+  }
   local.index = typeof m.index === 'number' ? m.index : -1;
   local.paused = m.paused !== false;
   local.duration = typeof m.durationMs === 'number' && m.durationMs > 0 ? m.durationMs / 1000 : null;

@@ -416,6 +416,7 @@ impl PlayOn {
                     shuffled(&mut tracks);
                     (index, position_ms) = (0, 0);
                 }
+                let tracks = self.named(tracks).await;
                 Command::Play { playlist: None, tracks: Some(tracks), index, position_ms, shuffle: false }
             }
             Command::Seek { position_ms: None, percent: Some(p) } => {
@@ -424,6 +425,7 @@ impl PlayOn {
                 Command::Seek { position_ms: Some((d as f64 * p.clamp(0.0, 100.0) / 100.0) as u64), percent: None }
             }
             Command::Seek { position_ms: None, percent: None } => return Err(ToggleError::Refused("Seek where?".into())),
+            Command::Add { tracks, at } => Command::Add { tracks: self.named(tracks).await, at },
             other => other,
         };
         self.send(name, &command)
@@ -452,6 +454,35 @@ impl PlayOn {
         // The music is on its way there; this one pausing is no reason to fail the handover.
         let _ = self.send(from, &Command::Pause);
         Ok(())
+    }
+
+    /// Tracks sent by their ids only (a page sends a playlist's ids and looks their names up later) get their title,
+    /// artist and album from the catalogue, so the player, the pages and Home Assistant all show them.
+    async fn named(&self, tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
+        if tracks.iter().all(|t| !t.name.is_empty()) {
+            return tracks;
+        }
+        let (cat, sent) = (self.lib.catalogue(), tracks.clone());
+        let named = tokio::task::spawn_blocking(move || {
+            let mut tracks = tracks;
+            let mut by_source: HashMap<String, Vec<usize>> = HashMap::new();
+            for (i, t) in tracks.iter().enumerate().filter(|(_, t)| t.name.is_empty()) {
+                by_source.entry(t.source.clone()).or_default().push(i);
+            }
+            for (source, at) in by_source {
+                let ids: Vec<String> = at.iter().map(|&i| tracks[i].id.clone()).collect();
+                let Ok(rows) = cat.source_rows(&source, &ids) else { continue };
+                for (&i, r) in at.iter().zip(rows) {
+                    let t = &mut tracks[i];
+                    t.name = r.title.unwrap_or_default();
+                    t.artist = t.artist.take().or(r.artist);
+                    t.album = t.album.take().or(r.album);
+                }
+            }
+            tracks
+        })
+        .await;
+        named.unwrap_or(sent)
     }
 
     /// A playlist's playable tracks, as players hold them.

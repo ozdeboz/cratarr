@@ -7,6 +7,7 @@ import {
   albumView,
   handover,
   playPlaylist,
+  playlistRows,
   playlistTrackIds,
   queueTracks,
   setMember,
@@ -206,10 +207,13 @@ $effect.root(() => {
 /** Plays a playlist where the output is: the server's player, or here (its tracks fetched, then the details). */
 export async function playPlaylistHere(id: string, mode: PlayMode): Promise<boolean> {
   if (!isLocal()) return false;
-  const { source, ids } = await playlistTrackIds(id, prefs.source || undefined);
-  if (!ids.length) throw new Error('None of its tracks can be found.');
-  const order = mode === 'shuffle' ? [...ids].sort(() => Math.random() - 0.5) : ids;
-  const tracks: LocalTrack[] = order.map((tid) => ({ source, id: tid, name: '', artist: null, album: null, album_id: null }));
+  // With their names: a player elsewhere (the app, a Cratarr player) shows them at once, on its lock screen too.
+  const { source, rows } = await playlistRows(id, prefs.source || undefined);
+  const named: LocalTrack[] = rows
+    .filter((r) => r.id && !r.missing)
+    .map((r) => ({ source, id: r.id!, name: r.name ?? '', artist: r.artist, album: r.album, album_id: null }));
+  if (!named.length) throw new Error('None of its tracks can be found.');
+  const tracks = mode === 'shuffle' ? [...named].sort(() => Math.random() - 0.5) : named;
   if (mode === 'next' || mode === 'last') enqueue(tracks, mode);
   else playQueue(tracks, 0, id);
   return true;
