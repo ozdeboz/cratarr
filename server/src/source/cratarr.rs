@@ -16,6 +16,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 
 use super::{Album, AlbumDetails, AlbumTrack, Choice, Field, Fut, Kind, Library, LibraryScan, Listed, PlaylistEvent, Source, Status, Track, TrackInfo, TrackPage, Values};
+use crate::app::{PlayOn, PlayOnCommand as Command};
 use crate::serve::Serve;
 use crate::userdata::{Annotation, Kind as Item};
 
@@ -93,6 +94,26 @@ pub fn library_folders(mounts: &[String]) -> Vec<PathBuf> {
 }
 
 struct CratarrSource;
+
+/// The player Cratarr follows, by name (any online one when none has anything loaded).
+fn followed() -> Result<(Arc<PlayOn>, String)> {
+    let on = PlayOn::instance().context("Play On is not running")?;
+    let name = on.followed().map(|p| p.name).context("no Cratarr player is connected")?;
+    Ok((on, name))
+}
+
+/// Tracks of this source by id, as players take them (their names are filled in by Play On).
+fn queue_tracks(ids: &[String]) -> Vec<crate::app::QueueTrack> {
+    ids.iter().map(|id| crate::app::QueueTrack { source: KIND.id.to_string(), id: id.clone(), ..Default::default() }).collect()
+}
+
+/// This source's id (`tr-…`) of a player's track, whichever source it was queued from. Blocking.
+fn own_id(s: &Serve, source: &str, id: &str) -> Option<String> {
+    if source == KIND.id {
+        return Some(id.to_string());
+    }
+    s.catalogue().track_of_source(source, id).map(crate::serve::ids::song)
+}
 
 fn server() -> Result<Arc<Serve>> {
     crate::serve::instance().context("Cratarr's library is still starting")
@@ -189,9 +210,117 @@ impl Source for CratarrSource {
         Box::pin(async move { Ok(vec![library_id.to_string()]) })
     }
 
+    // --- What plays and the commands: Cratarr's own players (Play On, decision 0031), the one it follows. ---
+
     fn now_playing(&self) -> Fut<'_, Option<super::Playing>> {
-        // What plays is the players' (decision 0031).
-        Box::pin(async { Ok(None) })
+        Box::pin(async move {
+            let Some(p) = PlayOn::instance().and_then(|on| on.followed()) else { return Ok(None) };
+            let queue = p.queue.clone().unwrap_or_default();
+            let Ok(at) = usize::try_from(p.index) else { return Ok(None) };
+            let Some(here) = queue.get(at) else { return Ok(None) };
+            let s = server()?;
+            let ids: Vec<(String, String)> = queue[at..].iter().take(21).map(|t| (t.source.clone(), t.id.clone())).collect();
+            let ours = blocking(move || Ok(ids.iter().map(|(src, id)| own_id(&s, src, id)).collect::<Vec<_>>())).await?;
+            let track_of = |t: &crate::app::QueueTrack, id: &Option<String>| Track {
+                id: id.clone().unwrap_or_else(|| t.id.clone()),
+                title: t.name.clone(),
+                artist: t.artist.clone(),
+                album: t.album.clone(),
+                album_id: None,
+                path: None,
+                library_id: None,
+            };
+            Ok(Some(super::Playing {
+                track: track_of(here, &ours[0]),
+                progress: Some(crate::nowplaying::Progress {
+                    position_secs: p.position_ms as f64 / 1000.0,
+                    duration_secs: p.duration_ms.map(|d| d as f64 / 1000.0),
+                    paused: !p.playing,
+                    estimated: false,
+                }),
+                player: Some(p.name.clone()),
+                started_at: None,
+                favorite: None,
+                upcoming: queue[at + 1..]
+                    .iter()
+                    .zip(ours.iter().skip(1))
+                    .map(|(t, id)| super::Upcoming { track: track_of(t, id), duration_secs: None })
+                    .collect(),
+            }))
+        })
+    }
+
+    fn players(&self) -> Fut<'_, Option<String>> {
+        Box::pin(async { Ok(PlayOn::instance().map(|on| on.summary())) })
+    }
+
+    fn transport<'a>(&'a self, command: super::Transport) -> Fut<'a, String> {
+        Box::pin(async move {
+            let (on, name) = followed()?;
+            let c = match command {
+                super::Transport::Previous => Command::Previous,
+                super::Transport::PlayPause => Command::Toggle,
+                super::Transport::Next => Command::Next,
+                super::Transport::Stop => Command::Stop,
+            };
+            on.command(&name, c).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(name)
+        })
+    }
+
+    fn play_tracks<'a>(&'a self, ids: &'a [String], how: super::PlayHow) -> Fut<'a, String> {
+        Box::pin(async move {
+            let (on, name) = followed()?;
+            let tracks = queue_tracks(ids);
+            let at = on.followed().filter(|p| p.name == name).map_or(0, |p| usize::try_from(p.index + 1).unwrap_or(0));
+            let c = match how {
+                super::PlayHow::Now => Command::Play { playlist: None, tracks: Some(tracks), index: 0, position_ms: 0, shuffle: false },
+                super::PlayHow::Next => Command::Add { tracks, at: Some(at) },
+                super::PlayHow::Last => Command::Add { tracks, at: None },
+            };
+            on.command(&name, c).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(name)
+        })
+    }
+
+    fn play_from<'a>(&'a self, ids: &'a [String], start_secs: f64) -> Fut<'a, String> {
+        Box::pin(async move {
+            let (on, name) = followed()?;
+            let c = Command::Play { playlist: None, tracks: Some(queue_tracks(ids)), index: 0, position_ms: (start_secs * 1000.0) as u64, shuffle: false };
+            on.command(&name, c).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(name)
+        })
+    }
+
+    fn jump_to<'a>(&'a self, track: &'a str) -> Fut<'a, String> {
+        Box::pin(async move {
+            let (on, name) = followed()?;
+            let p = on.followed().context("no Cratarr player plays")?;
+            let queue = p.queue.unwrap_or_default();
+            let s = server()?;
+            let ids: Vec<(String, String)> = queue.iter().map(|t| (t.source.clone(), t.id.clone())).collect();
+            let want = track.to_string();
+            let found = blocking(move || {
+                Ok(ids.iter().enumerate().skip(usize::try_from(p.index).unwrap_or(0)).find(|(_, (src, id))| own_id(&s, src, id).as_deref() == Some(want.as_str())).map(|(i, _)| i))
+            })
+            .await?;
+            let index = found.context("that track is not in the player's queue")?;
+            on.command(&name, Command::Jump { index }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(name)
+        })
+    }
+
+    /// A play counts for the owner's account, as a Subsonic app's scrobble does (decision 0030).
+    fn count_play<'a>(&'a self, track: &'a str) -> Fut<'a, ()> {
+        Box::pin(async move {
+            let s = server()?;
+            let me = owner(&s)?;
+            let (lib, song) = (s.library.clone(), track.to_string());
+            let Some((pid, album, artists)) = blocking(move || lib.play_targets(&song)).await? else { bail!("no such track") };
+            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+            s.userdata.count_play(&me, (track, &pid), &album, &artists, at)?;
+            Ok(())
+        })
     }
 
     fn track<'a>(&'a self, id: &'a str) -> Fut<'a, Track> {

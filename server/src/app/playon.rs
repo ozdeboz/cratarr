@@ -246,6 +246,9 @@ impl Entry {
     }
 }
 
+/// The one PlayOn, for the Cratarr source's players (decision 0032), which plugins cannot be handed.
+static INSTANCE: std::sync::OnceLock<Arc<PlayOn>> = std::sync::OnceLock::new();
+
 pub struct PlayOn {
     entries: Mutex<HashMap<String, Entry>>,
     changed: broadcast::Sender<()>,
@@ -274,7 +277,35 @@ impl PlayOn {
         });
         me.clone().tell_webhooks();
         me.clone().watch_leases();
+        let _ = INSTANCE.set(me.clone());
         me
+    }
+
+    /// The PlayOn of this Cratarr, once it is open.
+    pub fn instance() -> Option<Arc<Self>> {
+        INSTANCE.get().cloned()
+    }
+
+    /// The player Cratarr itself follows (its own source, 0032): of those online with something loaded, the one
+    /// playing, else the one heard from last; else any online one. With its queue. `None` when none is online.
+    pub fn followed(&self) -> Option<PlayerView> {
+        let entries = self.entries();
+        let online = entries.iter().filter(|(_, e)| e.online());
+        let best = online
+            .clone()
+            .filter(|(_, e)| e.report.index >= 0)
+            .max_by_key(|(_, e)| (e.report.playing, std::cmp::Reverse(e.at.elapsed())))
+            .or_else(|| online.max_by_key(|(_, e)| std::cmp::Reverse(e.heard.elapsed())));
+        best.map(|(n, e)| e.view(n, true))
+    }
+
+    /// A short summary of what the players do (track, playing, queue), compared to notice a change cheaply.
+    pub fn summary(&self) -> String {
+        self.list()
+            .iter()
+            .map(|p| format!("{}|{}|{}|{}|{}", p.name, p.online, p.index, p.playing, p.queue_version))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Cratarr's ids of a player's track, from its own library (0030); `None` parts when that does not know it.

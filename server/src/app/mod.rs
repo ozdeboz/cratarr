@@ -37,7 +37,7 @@ pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{AlbumRef, AlbumView, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, CrateView, PlayMode, PlayResult, PlaylistService};
-pub use playon::{Command as PlayOnCommand, PlayOn, PlayOnSettings, Report as PlayerReport};
+pub use playon::{Command as PlayOnCommand, PlayOn, PlayOnSettings, QueueTrack, Report as PlayerReport};
 pub use sync::TargetChoice;
 pub use events::connect as events;
 pub use settings::{NamingView, SettingsService, SettingsView, SourceView};
