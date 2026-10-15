@@ -1,7 +1,8 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
-import { playAlbum, type ListedAlbum } from './api';
-import { untilNewTrack } from './live.svelte';
-import { playAlbumHere } from './output.svelte';
+import { albumView, playAlbum, queueTracks, type ListedAlbum } from './api';
+import { refresh, untilNewTrack } from './live.svelte';
+import { enqueue, type LocalTrack } from './localPlayer.svelte';
+import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
 import { toast } from './toast.svelte';
 
 /** The album being started (its Play buttons wait meanwhile). */
@@ -20,6 +21,34 @@ export async function playListedAlbum(source: string, a: ListedAlbum) {
     toast.fail(e, 'Could not start playing');
   } finally {
     albumPlay.starting = null;
+  }
+}
+
+/** Several albums' tracks, one album after another, in each album's order (an album's select bar). */
+export async function tracksOfAlbums(list: { source: string; a: ListedAlbum }[]): Promise<LocalTrack[]> {
+  const views = await Promise.all(list.map(({ source, a }) => albumView(source, a.id).then((r) => ({ r, a }))));
+  return views.flatMap(({ r, a }) =>
+    r.rows
+      .filter((x) => x.id && !x.missing)
+      .map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: a.id })),
+  );
+}
+
+/** Plays, puts next or queues several albums, one after another: here when the output is this browser (decision
+ *  0022), else on the server's player (as the panel's ticked tracks). */
+export async function playAlbums(list: { source: string; a: ListedAlbum }[], mode: 'play' | 'next' | 'last') {
+  const tracks = await tracksOfAlbums(list);
+  if (!tracks.length) throw new Error('Those albums have no tracks.');
+  const source = tracks[0].source;
+  if (mode === 'play') await playPlaylistFrom(list.length === 1 ? list[0].a.title : `${list.length} albums`, source, tracks, 0);
+  else if (isLocal()) enqueue(tracks, mode);
+  else {
+    await queueTracks(
+      tracks.map((t) => t.id),
+      mode,
+      source,
+    );
+    setTimeout(refresh, 700);
   }
 }
 

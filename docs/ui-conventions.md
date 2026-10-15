@@ -175,8 +175,11 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   Artist, Title, Year, Added), Rows or Covers, and Size, over each server's albums in columns as the playlist chips
   are. Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was
   added, and the page's own lines: Incoming's conversion and how it relates to Music); Covers are tiles. A row's cover
-  plays the album (the rest of the row views it; no play button at the row's end): **wherever a cover plays, its
-  play icon is in the cover's lower right corner**, as on a tile (decided 2026-10-16). Layout and
+  plays the album (the rest of the row views it); a row ends in ⋮ (its menu): **wherever a cover plays, its play
+  icon is in the cover's lower right corner**, as on a tile (decided 2026-10-16). **Select** as on every list: the
+  header's icon or a long-press ticks albums (a row lighter edge to edge, a tile bordered, the tick at a row's end or
+  over a tile's corner), and the select bar plays, puts next, queues, favours (in the app downloads) the ticked ones,
+  one album after another, or opens the menu of one (a tile's menu is this way). Layout and
   size are one choice for every album list, remembered by the browser.
 - **Tiles** (`lib/Tile.svelte`): Row's sibling for things shown by their picture: the square picture on top, as wide
   as the column the page's Size makes, the title and muted lines under it, the action (Play) over the picture's
