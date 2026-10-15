@@ -11,6 +11,8 @@
   import TrackMenu from './TrackMenu.svelte';
   import QueueSheet from './QueueSheet.svelte';
   import OutputSheet from './OutputSheet.svelte';
+  import SleepSheet from './SleepSheet.svelte';
+  import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
@@ -103,6 +105,7 @@
   let menuStart = $state<'menu' | 'lists'>('menu');
   let queueOpen = $state(false);
   let outputOpen = $state(false);
+  let sleepOpen = $state(false);
   const openMenu = (e: Event, start: 'menu' | 'lists' = 'menu') => {
     menuStart = start;
     menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -277,6 +280,19 @@
     {:else if player.roomy}
       <button class="corner right" aria-label="Beside the page" onclick={toSidebar}><Icon name="sidebar" size={22} /></button>
     {/if}
+    <!-- The sleep timer, top right (left of the corner button where there is one); only where the page holds the queue.
+         Lit while one runs, what is left under it. -->
+    {#if np && isLocal()}
+      <button
+        class="corner sleep"
+        class:shifted={place === 'side' || player.roomy}
+        class:on={sleep() !== null}
+        aria-label={sleep() ? `Sleep timer, ${sleepLeft()}` : 'Sleep timer'}
+        aria-haspopup="dialog"
+        onclick={() => (sleepOpen = true)}
+        ><Icon name="moon" size={22} />{#if sleep()}<small>{sleepLeft()}</small>{/if}</button
+      >
+    {/if}
     <!-- Finamp's layout: the cover's region, then the controls' box with three groups spread in it (track name,
          controls, actions); in landscape side by side. Sizes from lib/playerLayout.ts. -->
     <div class="album" style:width={layout ? `${layout.album.width}px` : null} style:height={layout ? `${layout.album.height}px` : null}>
@@ -414,6 +430,9 @@
 {#if outputOpen}
   <OutputSheet onclose={() => (outputOpen = false)} />
 {/if}
+{#if sleepOpen}
+  <SleepSheet onclose={() => (sleepOpen = false)} />
+{/if}
 
 <style>
   /* The player's own surface: the cover, heavily blurred, under a veil (dark, or light in the light theme), as
@@ -548,6 +567,37 @@
 
   .corner.right {
     right: 8px;
+  }
+
+  /* The sleep timer: a corner button that grows down for its small label, as the top row's labelled buttons. */
+  .corner.sleep {
+    right: 8px;
+    width: auto;
+    min-width: 40px;
+    height: auto;
+    min-height: 40px;
+    gap: 1px;
+    padding: 4px;
+    border-radius: 12px;
+  }
+
+  .corner.sleep.shifted {
+    right: 52px;
+  }
+
+  .corner.sleep.on {
+    color: var(--art-accent);
+  }
+
+  .corner.sleep.on :global(svg) {
+    fill: currentColor;
+  }
+
+  .corner.sleep small {
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .cover-btn {
