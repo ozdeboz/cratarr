@@ -241,16 +241,19 @@ pub enum Kind {
 
 /// A track's file on Cratarr's own mount and how it is streamed; `None` when the catalogue does not know the track
 /// or its file is gone. Blocking (the catalogue).
-pub fn locate(cat: &crate::catalogue::Catalogue, source: &str, item: &str) -> Option<(std::path::PathBuf, Option<Kind>)> {
+/// Where a server's track is on disk, its kind (None: not one that plays here), and its length as the catalogue read
+/// it (milliseconds).
+pub fn locate(cat: &crate::catalogue::Catalogue, source: &str, item: &str) -> Option<(std::path::PathBuf, Option<Kind>, Option<u64>)> {
     let track = cat.track_of_source(source, item)?;
     let (folder, rel) = cat.file_of(track)?;
+    let duration_ms = cat.duration_of(folder, &rel);
     let path = cat.folders().get(folder as usize)?.join(rel);
     let kind = match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
         Some("flac") => Some(Kind::Flac),
         Some("mp3") => Some(Kind::Mp3),
         _ => None,
     };
-    Some((path, kind))
+    Some((path, kind, duration_ms))
 }
 
 fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {

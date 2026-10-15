@@ -20,9 +20,9 @@ export type LocalTrack = {
   addable?: boolean;
 };
 
-/** One appended track: its queue index, where its sample 0 sits in the stream (s), and its length (s; null while
- *  unknown). */
-type Segment = { index: number; start: number; length: number | null };
+/** One appended track: its queue index, where its sample 0 sits in the stream (s), its length (s; null while
+ *  unknown), and the length the server read from the file (s), shown while the exact one is unknown. */
+type Segment = { index: number; start: number; length: number | null; told: number | null };
 
 export const local = $state({
   queue: [] as LocalTrack[],
@@ -241,7 +241,8 @@ async function appendTrack(index: number, from: number, gen: number) {
     let head = new Uint8Array(0);
     let placed = false;
     let length: number | null = null;
-    const segment: Segment = { index, start, length: null };
+    const told = Number(res.headers.get('x-duration-ms')) / 1000 || null;
+    const segment: Segment = { index, start, length: null, told };
     const place = async (rate: number, skip: number, samples: number | null) => {
       if (!sb) {
         sb = ms!.addSourceBuffer(kind);
@@ -330,7 +331,7 @@ async function appendTrack(index: number, from: number, gen: number) {
       lastAppended = index;
       // Placed already (it failed midway): that segment becomes the empty one, not a second segment for the track.
       if (placedSegment) placedSegment.length = 0;
-      else segments.push({ index, start: streamEnd, length: 0 });
+      else segments.push({ index, start: streamEnd, length: 0, told: null });
     }
   } finally {
     // Not when a newer append is under way (this one was cut).
@@ -405,7 +406,7 @@ function tick() {
   if (w) {
     if (w.seg.index !== local.index) local.index = w.seg.index;
     local.position = Math.max(0, w.offset);
-    local.duration = w.seg.length;
+    local.duration = w.seg.length ?? w.seg.told;
   }
   if (local.error && local.index > errorIndex && !audio.paused) local.error = null;
   if (local.index !== lastShown) {

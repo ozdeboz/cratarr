@@ -969,6 +969,20 @@ impl Catalogue {
             .collect()
     }
 
+    /// A file's length as read from it (milliseconds), when known.
+    pub fn duration_of(&self, folder: i64, rel: &str) -> Option<u64> {
+        self.db()
+            .query_row(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {
+                r.get::<_, Option<i64>>(0)
+            })
+            .optional()
+            .ok()
+            .flatten()
+            .flatten()
+            .filter(|d| *d > 0)
+            .map(|d| d as u64)
+    }
+
     pub fn file_of(&self, track: i64) -> Option<(i64, String)> {
         self.db()
             .query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))

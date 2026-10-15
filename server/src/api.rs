@@ -457,7 +457,7 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
     use crate::stream::{FlacToMp4, Kind};
     let cat = app.library.catalogue();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
-    let Some((path, kind)) = found else {
+    let Some((path, kind, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
     let Some(kind) = kind else {
@@ -501,6 +501,11 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
         }
         Kind::Mp3 => {
             headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
+            // An MP3 without a LAME/Xing header (constant bitrate) does not say its length: the page shows this one
+            // (and can seek by it) until the whole track is in.
+            if let Some(ms) = duration_ms {
+                headers.insert("x-duration-ms", HeaderValue::from(ms));
+            }
             tokio::spawn(async move {
                 use tokio::io::AsyncReadExt;
                 let Ok(mut file) = tokio::fs::File::open(&path).await else { return };
