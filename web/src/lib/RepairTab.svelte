@@ -50,10 +50,18 @@
       loaded = true;
     }
   }
+  // Asked again when the selected playlists' missing counts change, and when they first arrive: opened from the
+  // address, the tab can ask before the list is in, and would find nothing missing.
+  const deadKey = $derived(ids.map((id) => shownPlaylists().find((p) => p.id === id)?.dead ?? '').join('\n'));
+  let shownFor = '';
   $effect(() => {
-    void ids.join('\n');
-    loaded = false;
-    confirming = false;
+    const key = ids.join('\n');
+    void deadKey;
+    if (key !== shownFor) {
+      shownFor = key;
+      loaded = false;
+      confirming = false;
+    }
     load();
   });
 
