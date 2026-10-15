@@ -17,7 +17,7 @@
   import LabelTip from './lib/LabelTip.svelte';
   import { installLabels } from './lib/labels.svelte';
   import { hasView, pageView } from './lib/pageView.svelte';
-  import { playing } from './lib/remote.svelte';
+  import { art, playing } from './lib/remote.svelte';
   import { fade, fly } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
   import { reducedMotion } from './lib/motion';
@@ -139,6 +139,10 @@
     const root = document.documentElement.style;
     root.setProperty('--top-h', phone ? `${TOP_BAR}px` : '0px');
     root.setProperty('--bottom-h', `${miniSpace}px`);
+  });
+  // The playing cover's colour, for the floating controls' surface (app.css --float-bg): the mini-player's.
+  $effect(() => {
+    document.documentElement.style.setProperty('--now-accent', art.accent ?? 'var(--accent)');
   });
   // The window's height as it is shown (--app-h), for the columns that are as tall as the window: an installed app on
   // Android counts more than the visible window in 100dvh (the sidebar's end went under the screen's edge, 2026-10-14).

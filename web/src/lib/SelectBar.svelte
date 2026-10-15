@@ -36,7 +36,10 @@
     z-index: 4;
     width: min(300px, calc(100% - 32px));
     border-radius: 16px;
-    background: color-mix(in srgb, var(--art-accent, var(--accent)) 30%, var(--surface));
+    /* The floating controls' surface (app.css): see-through, blurring what is under it. */
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
     box-shadow: 0 4px 16px rgb(0 0 0 / 0.35);
   }
 

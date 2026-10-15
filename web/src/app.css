@@ -5,6 +5,14 @@
   initial-value: #3ddc97;
 }
 
+/* The playing cover's colour for the whole page (App sets it on the root from lib/remote's art), for the floating
+   controls; it fades between tracks as the mini-player's does. */
+@property --now-accent {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #3ddc97;
+}
+
 :root {
   --bg: #0f1115;
   --surface: #181b22;
@@ -15,9 +23,11 @@
   --accent-text: #06281a;
   --warn: #f5b942;
   --danger: #ff6b6b;
-  /* The floating controls' surface (the pill, back, ✕, the mark): a little see-through, what is under it blurred. */
-  --float-bg: color-mix(in srgb, var(--surface) 70%, transparent);
+  /* The floating controls' surface (the pill, back, ✕, the mark, the select bars): the colour of the mini-player's
+     unplayed part (the playing cover's at 25 % over the page), a little see-through, what is under it blurred. */
+  --float-bg: color-mix(in srgb, color-mix(in srgb, var(--now-accent) 25%, var(--bg)) 70%, transparent);
   --float-blur: blur(16px) saturate(1.4);
+  transition: --now-accent 1s linear;
   color-scheme: dark;
 }
 
