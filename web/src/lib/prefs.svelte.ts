@@ -9,6 +9,8 @@ export type Prefs = {
   zoom: number;
   /** Playlists the track is in come first. */
   showProgress: boolean;
+  /** View's Dates: an album's date added as how long ago ("3 days ago"), not the date. */
+  relativeDates: boolean;
   /** Source this browser follows when several are active; '' = whichever started playing most recently. */
   source: string;
   /** Libraries switched off in the filter (`source/library`): remembered, as the server is (decided 2026-10-16). */
@@ -56,6 +58,7 @@ export const DEFAULTS: Prefs = {
   theme: 'auto',
   zoom: 2,
   showProgress: true,
+  relativeDates: false,
   source: '',
   hiddenLibraries: [],
   insightsTab: 'statistics',
@@ -100,6 +103,7 @@ function read(): Prefs {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
+      if (typeof saved.relativeDates === 'boolean') p.relativeDates = saved.relativeDates;
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;

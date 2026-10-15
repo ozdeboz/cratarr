@@ -42,6 +42,12 @@ export const CRATE_ORDERS: { value: CrateOrder; label: string }[] = [
   { value: 'name', label: 'Name' },
 ];
 
+/** View's Dates, on the album lists: how long ago, or the date. */
+export const DATES = [
+  { value: true, label: 'Relative' },
+  { value: false, label: 'Absolute' },
+];
+
 export const DIRECTIONS = [
   { value: false, label: 'Ascending', icon: 'arrowUp' as const },
   { value: true, label: 'Descending', icon: 'arrowDown' as const },

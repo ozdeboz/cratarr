@@ -1,7 +1,8 @@
 <script lang="ts">
   // The square tile (docs/ui-conventions.md → Tiles): a thing shown by its picture, in a grid of columns as wide as
   // the page's Size makes them (an album's cover). Row's sibling: the picture on top, filling the tile's width, the
-  // title and `sub` under it, and the `action` (Play) over the picture's corner. The picture and the text are the
+  // title and `sub` under it, the `action` (Play) over the picture's lower right corner and the `tag` (what the list is
+  // ordered by) over its upper left one. The picture and the text are the
   // tile's tap target when `onclick` is given.
   import type { Snippet } from 'svelte';
   import type { Attachment } from 'svelte/attachments';
@@ -11,6 +12,7 @@
     sub,
     image,
     action,
+    tag = null,
     onclick,
     label,
     active = false,
@@ -24,6 +26,8 @@
     image: Snippet;
     /** Over the picture's lower right corner. */
     action?: Snippet;
+    /** A pill over the picture's upper left corner: the value the list is ordered by (a year, a date). */
+    tag?: string | null;
     onclick?: () => void;
     /** The tap target's accessible name, when the title alone does not say what a tap does. */
     label?: string;
@@ -42,6 +46,7 @@
   {:else}
     <div class="main">{@render inside()}</div>
   {/if}
+  {#if tag}<span class="tag">{tag}</span>{/if}
   {#if action}<span class="act">{@render action()}</span>{/if}
 </div>
 
@@ -108,6 +113,26 @@
     overflow: hidden;
     color: var(--muted);
     font-size: 13px;
+  }
+
+  /* The ordered-by pill, 8 px in from the picture's upper left corner, on the floating controls' surface (app.css). */
+  .tag {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    max-width: calc(100% - 28px);
+    overflow: hidden;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   /* 8 px in from the picture's corner: the padding (6 px) + its width (100cqw, the content box) − the button − 8 px. */

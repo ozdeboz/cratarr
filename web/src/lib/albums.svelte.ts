@@ -3,6 +3,7 @@ import { albumView, playAlbum, queueTracks, type ListedAlbum } from './api';
 import { refresh, untilNewTrack } from './live.svelte';
 import { enqueue, type LocalTrack } from './localPlayer.svelte';
 import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
+import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
 /** The album being started (its Play buttons wait meanwhile). */
@@ -58,9 +59,23 @@ export const quality = (a: ListedAlbum) =>
   [a.format ?? 'Mixed formats', lossless(a) || a.bitrate_kbps === null ? null : `${a.bitrate_kbps} kbps`].filter(Boolean).join(' ');
 /** Lossy below 320 kbps somewhere. */
 export const weak = (a: ListedAlbum) => !lossless(a) && a.bitrate_kbps !== null && a.bitrate_kbps < 320;
-/** "14 Oct", with the year when it is not this one. */
+/** When an album was added: "14 Oct" (with the year when it is not this one), or as View's Dates say, how long ago
+ *  ("today", "3 days ago", "2 months ago"), in the browser's language. */
 export function addedOn(t: number) {
+  if (prefs.relativeDates) return ago(t);
   const d = new Date(t * 1000);
   const year = d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric';
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year });
+}
+
+const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+/** How long ago `t` (epoch seconds) was, in the largest unit that fits: days in the first week, then weeks, months,
+ *  years. Days are calendar days here (late yesterday is "yesterday", even an hour ago). */
+function ago(t: number) {
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((midnight(new Date()) - midnight(new Date(t * 1000))) / 86_400_000);
+  if (days < 7) return relative.format(-days, 'day');
+  if (days < 30) return relative.format(-Math.floor(days / 7), 'week');
+  if (days < 365) return relative.format(-Math.floor(days / 30.44), 'month');
+  return relative.format(-Math.floor(days / 365.25), 'year');
 }

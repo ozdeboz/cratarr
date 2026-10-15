@@ -13,7 +13,7 @@
   // same as its list header's), then for playlists the size, for albums rows or covers and the size.
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, CRATE_ORDERS, DIRECTIONS, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
+  import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, CRATE_ORDERS, DATES, DIRECTIONS, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
   import { prefs } from './prefs.svelte';
   import Seg from './Seg.svelte';
   import SizeControl from './SizeControl.svelte';
@@ -64,6 +64,7 @@
     <span>Size</span>
     <SizeControl widths={ALBUM_WIDTHS[prefs.albumLayout]} width={pageView.width} bind:value={prefs.albumZoom} />
   </div>
+  <div class="part"><span>Dates</span><Seg label="Dates" options={DATES} bind:value={prefs.relativeDates} /></div>
 {/snippet}
 
 <style>
