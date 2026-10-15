@@ -11,6 +11,8 @@ axum = "0.8"
 # Hi-res to CD conversion (decision 0013). Exact pins, minimal features: lossless decoders only.
 flacenc = { version = "=0.5.1", default-features = false }
 lofty = "0.25.4"
+# Covers resized for the OpenSubsonic API (decision 0030); decoders for the pictures albums carry.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 # The Subsonic login token (source::subsonic).
 md-5 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -11,9 +11,9 @@ use super::api::{Album, Artist, ArtistRef, GenreRef, Song, content_type, iso};
 use super::library::{Library, fts_query};
 
 const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.artist, s.album, s.album_artist, s.track_no, s.disc_no,
-  s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid";
+  s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover";
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
-  a.created, a.mbid, a.compilation";
+  a.created, a.mbid, a.compilation, a.cover";
 
 /// A song in Cratarr's ids, with its album's name and album artist (see `Library::song_ids`).
 #[allow(dead_code)] // for the pushed player state (decision 0031), which comes next
@@ -53,7 +53,7 @@ fn song_of(r: &rusqlite::Row) -> rusqlite::Result<Song> {
         year: r.get(11)?,
         genres: genre.iter().map(|g| GenreRef { name: g.clone() }).collect(),
         genre,
-        cover_art: album_id.clone(),
+        cover_art: r.get::<_, Option<String>>(20)?.unwrap_or_else(|| album_id.clone()),
         size: r.get::<_, i64>(15)?.max(0) as u64,
         content_type: content_type(&suffix).to_string(),
         duration: r.get::<_, Option<i64>>(14)?.map_or(0, |d| (d.max(0) as u64 + 500) / 1000),
@@ -78,7 +78,7 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
     let artist: String = r.get(3)?;
     let id: String = r.get(1)?;
     Ok(Album {
-        cover_art: id.clone(),
+        cover_art: r.get::<_, Option<String>>(13)?.unwrap_or_else(|| id.clone()),
         id,
         name: r.get(2)?,
         display_artist: artist.clone(),
@@ -420,6 +420,18 @@ impl Library {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT folder, rel FROM songs WHERE id = ?1")?;
         Ok(st.query_map([song], |r| Ok((r.get(0)?, r.get(1)?)))?.next().transpose()?)
+    }
+
+    /// What an album's art is found from: (catalogue folder, its folder in it, its cover id, its first track's path in
+    /// the catalogue folder).
+    pub fn album_art(&self, album: &str) -> Result<Option<(i64, String, Option<String>, Option<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT folder, dir, cover FROM albums WHERE id = ?1")?;
+        let found = st.query_map([album], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))?.next().transpose()?;
+        let Some((folder, dir, cover)) = found else { return Ok(None) };
+        let mut first = db.prepare_cached("SELECT rel FROM songs WHERE album_id = ?1 ORDER BY rel LIMIT 1")?;
+        let rel = first.query_map([album], |r| r.get::<_, String>(0))?.next().transpose()?;
+        Ok(Some((folder, dir, cover, rel)))
     }
 
     /// An album's folder: (catalogue folder, path in it).

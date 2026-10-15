@@ -2,6 +2,7 @@
 //! `/rest` endpoints. Copied and translated code keeps a notice naming where it came from.
 
 pub mod api;
+pub mod art;
 pub mod files;
 pub mod ids;
 pub mod import;
@@ -57,6 +58,10 @@ pub struct Serve {
     built_at: RwLock<i64>,
     /// Told each time the library is built (its time): views kept from the built-in source can read it again.
     built: tokio::sync::watch::Sender<i64>,
+    /// Resized covers on disk (`art`).
+    art_cache: art::Cache,
+    /// One cover resized at a time: a client asks for hundreds at once, and decoding one takes tens of megabytes.
+    resizing: tokio::sync::Semaphore,
     /// Cratarr's playlist service, once the app is up (`set_playlists`): the Subsonic playlists are its files.
     playlists: std::sync::OnceLock<Arc<crate::app::PlaylistService>>,
     /// Cratarr's Incoming, once the app is up (`set_incoming`): promote and reject are its Keep and Delete.
@@ -90,6 +95,8 @@ impl Serve {
             rules: RwLock::new(rules),
             built_at: RwLock::new(now()),
             built: tokio::sync::watch::channel(0).0,
+            art_cache: art::Cache::new(data_dir.map(|d| d.join("cover-cache")), art::CACHE_BYTES),
+            resizing: tokio::sync::Semaphore::new(1),
             playlists: Default::default(),
             incoming: Default::default(),
         }))
@@ -196,57 +203,92 @@ impl Serve {
         Ok(found.and_then(|(folder, rel)| folders.get(folder as usize).map(|root| root.join(rel))))
     }
 
-    /// An album's cover image from its folder: (content type, bytes); `None` when it has none.
-    pub async fn cover_bytes(&self, album: &str) -> Result<Option<(String, Vec<u8>)>> {
-        let lib = self.library.clone();
-        let id = album.to_string();
-        let dir = tokio::task::spawn_blocking(move || lib.album_dir(&id)).await??;
-        let folders = self.catalogue().folders();
-        let Some((root, dir)) = dir.and_then(|(f, d)| folders.get(f as usize).map(|r| (r.clone(), d))) else { return Ok(None) };
-        Ok(match crate::covers::resolve(&root, &format!("{dir}/cover"), None).await {
-            crate::covers::Outcome::Image { content_type, bytes, .. } => Some((content_type.to_string(), bytes)),
-            _ => None,
-        })
+    /// The album an art id (an album's, a song's or an artist's, maybe with a fingerprint after `_`) stands for, and the
+    /// fingerprint asked for. Blocking.
+    fn art_album(&self, id: &str) -> Result<(Option<String>, Option<String>)> {
+        let (id, asked) = match id.split_once('_') {
+            Some((a, p)) => (a.to_string(), Some(p.to_string())),
+            None => (id.to_string(), None),
+        };
+        let lib = &self.library;
+        let album = if id.starts_with(ids::ARTIST) {
+            lib.artist(&id)?.and_then(|a| a.album.and_then(|albums| albums.last().map(|al| al.id.clone())))
+        } else if id.starts_with(ids::SONG) {
+            lib.songs_by_id(std::slice::from_ref(&id))?.pop().map(|s| s.album_id)
+        } else {
+            Some(id)
+        };
+        Ok((album, asked))
     }
 
-    /// An album's (or an artist's, or a song's) cover, from the album's folder.
-    pub async fn cover(&self, id: &str, _size: Option<u32>, headers: &HeaderMap) -> Result<Response> {
-        let lib = self.library.clone();
-        let id = id.to_string();
-        let dir = tokio::task::spawn_blocking(move || -> Result<Option<(i64, String)>> {
-            let album = if id.starts_with(ids::ARTIST) {
-                lib.artist(&id)?.and_then(|a| a.album.and_then(|albums| albums.last().map(|al| al.id.clone())))
-            } else if id.starts_with(ids::SONG) {
-                lib.songs_by_id(&[id.clone()])?.pop().map(|s| s.album_id)
-            } else {
-                Some(id.clone())
-            };
-            match album {
-                Some(a) => lib.album_dir(&a),
-                None => Ok(None),
-            }
+    /// An album's art as it is: (content type, bytes, its fingerprint). The folder's cover file, else the picture in
+    /// its first track. Blocking.
+    fn art_of(&self, album: &str) -> Result<Option<(String, Vec<u8>, String)>> {
+        let Some((folder, dir, cover, first)) = self.library.album_art(album)? else { return Ok(None) };
+        let Some(root) = self.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| PathBuf::from(r)) else {
+            return Ok(None);
+        };
+        let print = cover.as_deref().and_then(|c| c.split_once('_')).map(|(_, p)| p.to_string()).unwrap_or_default();
+        if let Some(file) = art::cover_file(&root.join(&dir))
+            && std::fs::metadata(&file).is_ok_and(|m| m.len() <= art::MAX_BYTES)
+            && let Ok(bytes) = std::fs::read(&file)
+        {
+            let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let ct = crate::covers::content_type(name).unwrap_or_else(|| art::sniff(&bytes));
+            return Ok(Some((ct.to_string(), bytes, print)));
+        }
+        Ok(first.and_then(|rel| art::embedded(&root.join(rel))).map(|(ct, bytes)| (ct, bytes, print)))
+    }
+
+    /// An album's cover image as it is: (content type, bytes); `None` when it has none.
+    pub async fn cover_bytes(self: &Arc<Self>, album: &str) -> Result<Option<(String, Vec<u8>)>> {
+        let (me, album) = (self.clone(), album.to_string());
+        Ok(tokio::task::spawn_blocking(move || me.art_of(&album)).await??.map(|(ct, bytes, _)| (ct, bytes)))
+    }
+
+    /// An album's (or a song's, or an artist's) cover, at most `size` pixels on its longer side when asked. An id with
+    /// the current fingerprint may be kept for good; any other is to be checked again (Navidrome's rule, see `art`).
+    pub async fn cover(self: &Arc<Self>, id: &str, size: Option<u32>, headers: &HeaderMap) -> Result<Response> {
+        let (me, want) = (self.clone(), id.to_string());
+        let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, String, Vec<u8>, String, Option<String>)>> {
+            let (album, asked) = me.art_album(&want)?;
+            let Some(album) = album else { return Ok(None) };
+            Ok(me.art_of(&album)?.map(|(ct, bytes, print)| (album, ct, bytes, print, asked)))
         })
         .await??;
-        let folders = self.catalogue().folders();
-        let Some((root, dir)) = dir.and_then(|(f, d)| folders.get(f as usize).map(|r| (r.clone(), d))) else {
-            return Ok(StatusCode::NOT_FOUND.into_response());
+        let Some((album, ct, bytes, print, asked)) = found else { return Ok(StatusCode::NOT_FOUND.into_response()) };
+        let etag = format!("\"{print}-{}\"", size.unwrap_or(0));
+        let lasting = !print.is_empty() && asked.as_deref() == Some(print.as_str());
+        let cache = HeaderValue::from_static(if lasting { "public, max-age=31536000, immutable" } else { "no-cache" });
+        let head = |ct: &str| {
+            [
+                (header::CACHE_CONTROL, cache.clone()),
+                (header::ETAG, HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("\"\""))),
+                (header::CONTENT_TYPE, HeaderValue::from_str(ct).unwrap_or(HeaderValue::from_static("image/jpeg"))),
+            ]
         };
-        let inm = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
-        let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"));
-        Ok(match crate::covers::resolve(&root, &format!("{dir}/cover"), inm).await {
-            crate::covers::Outcome::NotFound => StatusCode::NOT_FOUND.into_response(),
-            crate::covers::Outcome::NotModified { etag } => {
-                (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("\"\"")))]).into_response()
+        if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|h| crate::covers::etag_matches(h, &etag)) {
+            return Ok((StatusCode::NOT_MODIFIED, head(&ct)).into_response());
+        }
+        let Some(size) = size else { return Ok((head(&ct), bytes).into_response()) };
+        let key = format!("{album}:{print}:{size}");
+        if let Some(small) = self.art_cache.get(&key) {
+            return Ok((head("image/jpeg"), small).into_response());
+        }
+        let _turn = self.resizing.acquire().await?;
+        let me = self.clone();
+        let (small, bytes) = tokio::task::spawn_blocking(move || {
+            // A picture the resizer cannot read, or one small enough already, goes as it is.
+            let small = art::resize(&bytes, size).ok().flatten();
+            if let Some(s) = &small {
+                me.art_cache.put(&key, s);
             }
-            crate::covers::Outcome::Image { content_type, etag, bytes } => (
-                [
-                    cache,
-                    (header::ETAG, HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("\"\""))),
-                    (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
-                ],
-                bytes,
-            )
-                .into_response(),
+            (small, bytes)
+        })
+        .await?;
+        Ok(match small {
+            Some(s) => (head("image/jpeg"), s).into_response(),
+            None => (head(&ct), bytes).into_response(),
         })
     }
 }

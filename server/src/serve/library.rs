@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS songs (
   n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, pid TEXT NOT NULL, folder INTEGER NOT NULL, rel TEXT NOT NULL, path TEXT NOT NULL,
   album_id TEXT NOT NULL, title TEXT NOT NULL, artist TEXT, album TEXT NOT NULL, album_artist TEXT,
   track_no INTEGER, disc_no INTEGER, year INTEGER, genre TEXT, bpm INTEGER, duration_ms INTEGER, size INTEGER NOT NULL,
-  suffix TEXT, kbps INTEGER, created INTEGER, mbid TEXT, order_title TEXT NOT NULL);
+  suffix TEXT, kbps INTEGER, created INTEGER, mbid TEXT, order_title TEXT NOT NULL, cover TEXT);
 CREATE INDEX IF NOT EXISTS songs_by_album ON songs (album_id, disc_no, track_no, rel);
 CREATE INDEX IF NOT EXISTS songs_by_title ON songs (order_title, n);
 CREATE INDEX IF NOT EXISTS songs_by_pid ON songs (pid);
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS albums (
   year INTEGER, original_year INTEGER, genre TEXT, genres TEXT NOT NULL, song_count INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL, size INTEGER NOT NULL, discs INTEGER NOT NULL, created INTEGER, mbid TEXT,
   folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL,
-  format TEXT, min_kbps INTEGER);
+  format TEXT, min_kbps INTEGER, cover TEXT);
 CREATE INDEX IF NOT EXISTS albums_by_base ON albums (base_id);
 CREATE INDEX IF NOT EXISTS albums_by_name ON albums (order_name, n);
 CREATE INDEX IF NOT EXISTS albums_by_created ON albums (created DESC, n);
@@ -63,7 +63,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(name, content='', cont
 ";
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 5;
+const LAYOUT: i64 = 6;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -326,8 +326,8 @@ impl Library {
         {
             let mut ins_album = tx.prepare(
                 "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
-                   size, discs, created, mbid, folder, dir, compilation, order_name, base_id, format, min_kbps)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+                   size, discs, created, mbid, folder, dir, compilation, order_name, base_id, format, min_kbps, cover)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             )?;
             let mut ins_fts = tx.prepare("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
             let mut ins_aa = tx.prepare("INSERT INTO album_artists (album_id, artist_id, name, position) VALUES (?1, ?2, ?3, ?4)")?;
@@ -354,6 +354,10 @@ impl Library {
                 let compilation = songs.iter().any(|s| s.row.first("compilation").is_some_and(|c| c == "1"));
                 let artist_id = ids::artist(&first.album_artists[0]);
                 // One format for the whole album, else none (mixed).
+                // The art's id: the album's, with a fingerprint of its picture (see `art`).
+                let root = roots.get(&first.folder).copied().unwrap_or("");
+                let first_track = songs.iter().map(|s| &s.row.rel).min().map(|r| Path::new(root).join(r));
+                let cover = super::art::album_print(&Path::new(root).join(&dir), first_track.as_deref()).map(|p| format!("{album_id}_{p}"));
                 let formats: BTreeSet<&str> = songs.iter().filter_map(|s| s.row.format.as_deref()).collect();
                 let format = (formats.len() == 1).then(|| formats.iter().next().map(|f| f.to_string())).flatten();
                 ins_album.execute(params![
@@ -378,6 +382,7 @@ impl Library {
                     first.album_base,
                     format,
                     songs.iter().filter_map(|s| s.row.kbps).min(),
+                    cover,
                 ])?;
                 ins_fts.execute(params![tx.last_insert_rowid(), first.album, first.album_artist])?;
                 for (i, name) in first.album_artists.iter().enumerate() {
@@ -411,6 +416,7 @@ impl Library {
                 ins_fts.execute(params![tx.last_insert_rowid(), name])?;
             }
         }
+        tx.execute_batch("UPDATE songs SET cover = (SELECT a.cover FROM albums a WHERE a.id = songs.album_id);")?;
         // Where each catalogue folder is, so the library can be read before the catalogue is open (decision 0032).
         let roots: Vec<(i64, &str)> = folders.iter().map(|f| (f.folder, f.root.as_str())).collect();
         tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('roots', ?1)", [serde_json::to_string(&roots)?])?;
