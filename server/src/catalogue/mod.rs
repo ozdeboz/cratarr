@@ -59,7 +59,13 @@ CREATE TABLE IF NOT EXISTS tracks (id INTEGER PRIMARY KEY AUTOINCREMENT, born IN
 
 /// A file the catalogue counts: neither gone (no longer where it was, waiting to be recognised elsewhere) nor in the
 /// trash.
-const PRESENT: &str = "gone_at IS NULL AND trashed IS NULL";
+/// A file that counts: in a folder in use (a parked folder's are negative, see `set_folders`), there, not in the trash.
+const PRESENT: &str = "folder >= 0 AND gone_at IS NULL AND trashed IS NULL";
+/// The same, with the files table named `f` (in a join with `source_ids`, which has a folder too).
+const PRESENT_F: &str = "f.folder >= 0 AND f.gone_at IS NULL AND f.trashed IS NULL";
+
+/// How long a folder out of use keeps its rows (parked) before they are forgotten.
+const PARKED_KEEP_SECS: i64 = 30 * 24 * 3600;
 
 /// The meta key of `Catalogue::generation`.
 const GENERATION: &str = "generation";
@@ -318,46 +324,120 @@ impl Catalogue {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
-    /// Use these folders (index = id). A folder whose path changed loses its rows, unless the same files are there
-    /// under the new path (a mount moved, say `/music` to `/media/Music`): then it keeps them and nothing is read
-    /// again. The others keep theirs.
+    /// Use these folders (index = id). A folder whose path changed keeps its rows when the same files are there under
+    /// the new path (a mount moved, say `/music` to `/media/Music`), and nothing is read again.
+    ///
+    /// A folder that is no longer in use is parked, not forgotten: its rows (files, tags, links to the servers' ids)
+    /// move to a negative id and keep their track ids, and nothing counts them while parked. Back in use, at any place
+    /// in the list, with its files where they were, it picks them up again: the same ids, only changed files read
+    /// again. A source switched off and on (2026-10-15) cost Incoming its links and its track ids before this. Parked
+    /// folders are forgotten after `PARKED_KEEP_SECS`, or when other files are found at their path.
     pub fn set_folders(&self, folders: Vec<PathBuf>) -> Result<()> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let known: HashMap<i64, String> = {
-            let mut st = tx.prepare("SELECT id, path FROM folders")?;
-            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
-        };
-        let wanted: HashMap<i64, String> =
-            folders.iter().enumerate().map(|(i, p)| (i as i64, p.to_string_lossy().into_owned())).collect();
-        let moved = |id: i64, to: &str| -> Result<bool> {
-            let mut st = tx.prepare(&format!("SELECT rel FROM files WHERE folder = ?1 AND {PRESENT} LIMIT 20"))?;
+        let wanted: Vec<String> = folders.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        let same_files = |id: i64, at: &str| -> Result<bool> {
+            let mut st = tx.prepare("SELECT rel FROM files WHERE folder = ?1 AND gone_at IS NULL AND trashed IS NULL LIMIT 20")?;
             let rels: Vec<String> = st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-            Ok(!rels.is_empty() && rels.iter().all(|rel| Path::new(to).join(rel).is_file()))
+            Ok(!rels.is_empty() && rels.iter().all(|rel| Path::new(at).join(rel).is_file()))
         };
-        for (id, path) in &known {
-            let kept = match wanted.get(id) {
-                Some(to) if to != path => moved(*id, to)?,
-                _ => false,
-            };
-            if kept {
-                tracing::info!("catalogue: {path} is now {}, same files", wanted[id]);
+        let rekey = |from: i64, to: i64| -> Result<()> {
+            for table in ["files", "tags", "source_ids"] {
+                tx.execute(&format!("UPDATE {table} SET folder = ?2 WHERE folder = ?1"), params![from, to])?;
             }
-            if wanted.get(id) != Some(path) && !kept {
-                tx.execute(
-                    "UPDATE tracks SET retired_at = ?2 WHERE id IN (SELECT track FROM files WHERE folder = ?1 AND track IS NOT NULL)",
-                    params![id, now()],
-                )?;
-                for table in ["files", "tags", "source_ids"] {
-                    tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1"), [id])?;
+            tx.execute("UPDATE folders SET id = ?2 WHERE id = ?1", params![from, to])?;
+            Ok(())
+        };
+        let known = |tx: &rusqlite::Transaction| -> Result<Vec<(i64, String)>> {
+            let mut st = tx.prepare("SELECT id, path FROM folders")?;
+            Ok(st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+        };
+        let now_s = now();
+        // 1. Every folder in use that is not where it is wanted steps aside (parked), freeing its place.
+        let mut lowest = known(&tx)?.iter().map(|(id, _)| *id).min().unwrap_or(0).min(0);
+        let mut stepped: Vec<i64> = Vec::new();
+        for (id, path) in known(&tx)? {
+            if id < 0 || wanted.get(id as usize) == Some(&path) {
+                continue;
+            }
+            lowest -= 1;
+            rekey(id, lowest)?;
+            stepped.push(lowest);
+        }
+        // 2. Each wanted folder takes the rows kept under its path (parked a while, or only just stepped aside), when its
+        //    files are still there; else the rows of a folder that stepped aside and whose files are here now (a mount
+        //    that moved, say `/music` to `/media/Music`).
+        let mut forget: Vec<i64> = Vec::new();
+        for (i, path) in wanted.iter().enumerate() {
+            let i = i as i64;
+            let rows = known(&tx)?;
+            if rows.iter().any(|(id, p)| *id == i && p == path) {
+                continue;
+            }
+            let own = rows.iter().find(|(id, p)| *id < 0 && p == path).map(|(id, _)| *id);
+            let taken = match own {
+                Some(p) if same_files(p, path)? => Some(p),
+                Some(p) => {
+                    forget.push(p);
+                    None
                 }
-                tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;
-                // Its links to the servers' tracks went with it: every server lists all its tracks again on the next
-                // pass, also when the folder comes back as it was (Incoming lost its links that way when its source
-                // was switched off and on again, 2026-10-15: the folders then matched the last full listing's).
+                None => None,
+            };
+            let taken = match taken {
+                Some(p) => Some(p),
+                None => {
+                    let mut moved = None;
+                    for &p in &stepped {
+                        let unclaimed = rows.iter().any(|(id, q)| *id == p && !wanted.contains(q));
+                        if unclaimed && same_files(p, path)? {
+                            moved = Some(p);
+                            break;
+                        }
+                    }
+                    moved
+                }
+            };
+            if let Some(p) = taken {
+                rekey(p, i)?;
+                tx.execute("UPDATE folders SET path = ?2 WHERE id = ?1", params![i, path])?;
+                tx.execute("DELETE FROM meta WHERE key = ?1", [format!("parked:{p}")])?;
+                stepped.retain(|s| *s != p);
+                tracing::info!("catalogue: {path} is in use again, with its rows");
+                // Links may have gone stale while it was away: every server lists its tracks again.
                 tx.execute("DELETE FROM meta WHERE key LIKE 'full-folders:%'", [])?;
             }
         }
+        // 3. What stepped aside and was not taken is parked, from now on; parked too long, it is forgotten.
+        for p in &stepped {
+            tx.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?1, ?2)", params![format!("parked:{p}"), now_s.to_string()])?;
+        }
+        for (p, path) in known(&tx)?.into_iter().filter(|(id, _)| *id < 0) {
+            let since: i64 = tx
+                .query_row("SELECT value FROM meta WHERE key = ?1", [format!("parked:{p}")], |r| r.get::<_, String>(0))
+                .optional()?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(now_s);
+            if stepped.contains(&p) && now_s == since {
+                tracing::info!("catalogue: {path} is out of use; its rows are kept for {} days", PARKED_KEEP_SECS / 86_400);
+            }
+            if now_s - since >= PARKED_KEEP_SECS {
+                forget.push(p);
+            }
+        }
+        for p in forget {
+            tx.execute(
+                "UPDATE tracks SET retired_at = ?2 WHERE id IN (SELECT track FROM files WHERE folder = ?1 AND track IS NOT NULL)",
+                params![p, now_s],
+            )?;
+            for table in ["files", "tags", "source_ids"] {
+                tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1"), [p])?;
+            }
+            tx.execute("DELETE FROM folders WHERE id = ?1", [p])?;
+            tx.execute("DELETE FROM meta WHERE key = ?1", [format!("parked:{p}")])?;
+            // Its links to the servers' tracks went with it: every server lists all its tracks again on the next pass.
+            tx.execute("DELETE FROM meta WHERE key LIKE 'full-folders:%'", [])?;
+        }
+        let wanted: HashMap<i64, String> = wanted.into_iter().enumerate().map(|(i, p)| (i as i64, p)).collect();
         for (id, path) in &wanted {
             tx.execute("INSERT OR REPLACE INTO folders (id, path) VALUES (?1, ?2)", params![id, path])?;
         }
@@ -1078,7 +1158,7 @@ impl Catalogue {
                 &format!(
                     "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
                      WHERE s.source = ?1 AND s.track_id = ?2 AND {}",
-                    PRESENT.replace("gone_at", "f.gone_at").replace("trashed", "f.trashed")
+                    PRESENT_F
                 ),
                 params![source, item],
                 |r| r.get(0),
@@ -1096,7 +1176,7 @@ impl Catalogue {
                 &format!(
                     "SELECT s.track_id FROM files f JOIN source_ids s ON s.folder = f.folder AND s.rel = f.rel
                      WHERE f.track = ?2 AND s.source = ?1 AND {} LIMIT 1",
-                    PRESENT.replace("gone_at", "f.gone_at").replace("trashed", "f.trashed")
+                    PRESENT_F
                 ),
                 params![source, track],
                 |r| r.get(0),
@@ -1742,14 +1822,34 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_dropped_and_back_gets_its_links_listed_again() {
+    fn a_folder_out_of_use_is_parked_and_comes_back_with_its_track_ids() {
         let (a, b) = (music(), music());
         let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(1, "A - B (2020)/01 One.mp3").unwrap();
         cat.set_meta("full-folders:jf", "as at the last full listing");
         cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
         assert!(cat.meta("full-folders:jf").is_some(), "the same folders: nothing to list again");
+        // Out of use (its source switched off): parked, not counted, not forgotten.
         cat.set_folders(vec![a.clone()]).unwrap();
-        assert_eq!(cat.meta("full-folders:jf"), None, "a folder went, its links with it: list everything again");
+        assert_eq!(cat.status().unwrap().files, 2, "only the folder in use counts");
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), None);
+        // Back, even at another place in the list: the same track id, and the servers list again.
+        cat.set_folders(vec![b.clone(), a.clone()]).unwrap();
+        assert_eq!(cat.track_of(0, "A - B (2020)/01 One.mp3"), Some(one), "the same id after the break");
+        assert_eq!(cat.meta("full-folders:jf"), None, "links checked again after a break");
+        assert_eq!(cat.status().unwrap().files, 4);
+        // Parked, then other files at that path: forgotten.
+        cat.set_folders(vec![a.clone()]).unwrap();
+        std::fs::remove_dir_all(&b).unwrap();
+        std::fs::create_dir_all(b.join("X")).unwrap();
+        std::fs::write(b.join("X/other.mp3"), "x").unwrap();
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        cat.walk_all();
+        assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), None, "those files are gone: their rows with them");
+        assert_eq!(cat.status().unwrap().files, 3);
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
     }
