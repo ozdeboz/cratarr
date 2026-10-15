@@ -25,6 +25,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
     Router::new()
         .route("/api/library/health", get(health))
         .route("/api/library/albums/{album}", get(album))
+        .route("/api/library/albums/{album}/resume", get(resume).delete(forget_resume))
         .route("/api/library/albums/{album}/tags", axum::routing::delete(clear_tags))
         .route("/api/library/albums/{album}/tags/{tag}", post(add_tag).delete(remove_tag))
         .route("/api/library/tags", get(all_tags))
@@ -85,6 +86,49 @@ async fn album(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Respo
         Ok(None) => fail(StatusCode::NOT_FOUND, "no such album"),
         Err(r) => r,
     }
+}
+
+/// An album's songs (its ids), or 404.
+async fn album_songs(serve: &Arc<Serve>, id: String) -> Result<Vec<String>, Response> {
+    let s = serve.clone();
+    match blocking(move || Ok(s.library.album(&id)?.map(|a| a.song.unwrap_or_default().into_iter().map(|x| x.id).collect::<Vec<_>>()))).await {
+        Ok(Some(songs)) => Ok(songs),
+        Ok(None) => Err(fail(StatusCode::NOT_FOUND, "no such album")),
+        Err(r) => Err(r),
+    }
+}
+
+/// Where the owner left an album (Symfonium's Resume): the newest bookmark among its songs, kept by any app that
+/// keeps bookmarks; `{"track": null}` when there is none.
+async fn resume(State(serve): State<Arc<Serve>>, Path(album): Path<String>) -> Response {
+    let songs = match album_songs(&serve, album).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let Some(owner) = serve.users.owner() else { return axum::Json(json!({ "track": null })).into_response() };
+    match serve.userdata.bookmarks(&owner) {
+        // Newest first: the first of this album's is where it was left.
+        Ok(marks) => match marks.into_iter().find(|b| songs.contains(&b.item)) {
+            Some(b) => axum::Json(json!({ "track": b.item, "position_secs": b.position_ms as f64 / 1000.0 })).into_response(),
+            None => axum::Json(json!({ "track": null })).into_response(),
+        },
+        Err(e) => failed(e),
+    }
+}
+
+/// The album's resume point gone: its songs' bookmarks deleted.
+async fn forget_resume(State(serve): State<Arc<Serve>>, Path(album): Path<String>) -> Response {
+    let songs = match album_songs(&serve, album).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let Some(owner) = serve.users.owner() else { return StatusCode::NO_CONTENT.into_response() };
+    for song in &songs {
+        if let Err(e) = serve.userdata.delete_bookmark(&owner, song) {
+            return failed(e);
+        }
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// An album's name and the id its tags are kept under; `None` when it is not in the library.
@@ -298,6 +342,19 @@ mod tests {
             "album_artist": "A", "year": 2001, "genres": ["Dub"], "favourite": true }));
         assert_eq!(call(&s, "GET", "/api/library/tracks/tr-1").await.1["favourite"], false);
         assert_eq!(call(&s, "GET", "/api/library/tracks/tr-9").await.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn an_album_resumes_where_it_was_left() {
+        let s = server();
+        let id = s.library.song_ids(1).unwrap().unwrap().album_id;
+        assert_eq!(call(&s, "GET", &format!("/api/library/albums/{id}/resume")).await.1, serde_json::json!({ "track": null }));
+        s.userdata.set_bookmark("owner", "tr-2", None, 103_500, "", Some("Symfonium")).unwrap();
+        let (status, r) = call(&s, "GET", &format!("/api/library/albums/{id}/resume")).await;
+        assert_eq!((status, r), (StatusCode::OK, serde_json::json!({ "track": "tr-2", "position_secs": 103.5 })));
+        assert_eq!(call(&s, "DELETE", &format!("/api/library/albums/{id}/resume")).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(call(&s, "GET", &format!("/api/library/albums/{id}/resume")).await.1["track"], serde_json::Value::Null);
+        assert_eq!(call(&s, "GET", "/api/library/albums/al-nothing/resume").await.0, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

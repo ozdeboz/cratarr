@@ -71,6 +71,10 @@ pub struct AlbumView {
     pub year: Option<u32>,
     /// Its tracks' genres, most shared first.
     pub genres: Vec<String>,
+    /// "FLAC", "MP3"…: `None` when mixed, unknown, or the source cannot say (the header's detail line).
+    pub format: Option<String>,
+    /// Its weakest track's bitrate.
+    pub bitrate_kbps: Option<u32>,
     pub rows: Vec<super::playlists::PlaylistRow>,
 }
 
@@ -454,6 +458,9 @@ impl PlayingService {
         let (c, sid, ids) = (self.lib.catalogue(), source_id.to_string(), tracks.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
         let per_track = tokio::task::spawn_blocking(move || c.genres_of_ids(&sid, &ids)).await.unwrap_or_default();
         let genres = crate::crates::top_genres(per_track.iter().map(|g| g.as_slice()), GENRES_SHOWN);
+        // What the source knows of the files (Cratarr's own library does; a source that cannot say leaves them out).
+        let details = s.album_summary(album_id).await.ok().flatten();
+        let (format, bitrate_kbps) = details.map_or((None, None), |d| (d.format, d.bitrate_kbps));
         let rows = tracks
             .into_iter()
             .map(|t| {
@@ -470,7 +477,7 @@ impl PlayingService {
                 }
             })
             .collect();
-        Ok(AlbumView { source: source_id.to_string(), id: album_id.to_string(), title, artist, year, genres, rows })
+        Ok(AlbumView { source: source_id.to_string(), id: album_id.to_string(), title, artist, year, genres, format, bitrate_kbps, rows })
     }
 
     /// Plays an album of a connected server on that server's player. Returns the player's label.
