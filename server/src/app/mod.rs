@@ -121,6 +121,18 @@ impl App {
         );
         let insights = InsightsService::new(library.clone());
         let play_on = PlayOn::new(library.clone(), playlists.clone(), cfg.data_dir.as_deref());
+        // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was
+        // empty is read again.
+        if let Some(served) = crate::serve::instance() {
+            let mut built = served.subscribe_built();
+            let (collection, incoming) = (collection.clone(), incoming.clone());
+            tokio::spawn(async move {
+                while built.changed().await.is_ok() {
+                    incoming.forget_lists().await;
+                    collection.refresh().await;
+                }
+            });
+        }
         Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on }))
     }
 

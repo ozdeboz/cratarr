@@ -253,8 +253,6 @@ pub struct PlayOn {
     /// Numbers the webhook POSTs: a receiver drops one older than the last it took.
     seq: AtomicU64,
     lib: Arc<super::Library>,
-    /// Cratarr's own library (0030), for the tracks' ids; set at the start (`set_library`).
-    library: std::sync::OnceLock<Arc<crate::serve::library::Library>>,
     settings: Mutex<PlayOnSettings>,
     file: Option<PathBuf>,
     playlists: Arc<PlaylistService>,
@@ -270,7 +268,6 @@ impl PlayOn {
             connections: AtomicU64::new(0),
             seq: AtomicU64::new(0),
             lib,
-            library: std::sync::OnceLock::new(),
             settings: Mutex::new(settings),
             file,
             playlists,
@@ -280,14 +277,10 @@ impl PlayOn {
         me
     }
 
-    /// Cratarr's own library, once open: the players' tracks get its ids.
-    pub fn set_library(&self, library: Arc<crate::serve::library::Library>) {
-        let _ = self.library.set(library);
-    }
-
-    /// Cratarr's ids of a player's track (`None` parts when the library does not know it).
+    /// Cratarr's ids of a player's track, from its own library (0030); `None` parts when that does not know it.
     fn ids_of(&self, t: Option<&QueueTrack>) -> TrackIds {
-        let (Some(t), Some(library)) = (t, self.library.get()) else { return TrackIds::default() };
+        let (Some(t), Some(served)) = (t, crate::serve::instance()) else { return TrackIds::default() };
+        let library = &served.library;
         let Some(track) = self.lib.catalogue().track_of_source(&t.source, &t.id) else { return TrackIds::default() };
         match library.song_ids(track) {
             Ok(Some(ids)) => TrackIds { track_id: Some(ids.song_id), album_id: Some(ids.album_id), album_artist: Some(ids.album_artist) },
