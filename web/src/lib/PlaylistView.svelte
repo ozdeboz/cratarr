@@ -28,6 +28,7 @@
     queueTrack,
     queueTracks,
     getIncoming,
+    setTrackFavorite,
     setAlbumFavorite,
     type IncomingSource,
     type ListedAlbum,
@@ -40,6 +41,8 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
+  import MenuEntry from './MenuEntry.svelte';
+  import MenuSheet from './MenuSheet.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, type LocalTrack } from './localPlayer.svelte';
@@ -61,7 +64,6 @@
   import { prefs } from './prefs.svelte';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
-  import RowHeart from './RowHeart.svelte';
   import { swipe } from './swipe';
   import { toast } from './toast.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
@@ -234,6 +236,91 @@
 
   const length = $derived(rows ? rows.reduce((a, r) => a + (r.duration_secs ?? 0), 0) : 0);
   const playable = $derived(rows ? rows.filter((r) => r.id && !r.missing) : []);
+
+  // Symfonium's header over the tracks: their order (the subject's own, or by a field, either way round), how many, and
+  // select mode. The list shows and plays in that order; an album's rows keep their track numbers. A crate's order is
+  // of the pages it has shown.
+  type SortKey = 'own' | 'title' | 'artist' | 'album' | 'length';
+  let sortKey = $state<SortKey>('own');
+  let sortDown = $state(false);
+  let sortOpen = $state(false);
+  const sortFields = $derived<{ key: SortKey; label: string }[]>([
+    { key: 'own', label: album ? 'Track number' : crate ? 'Newest first' : 'Playlist order' },
+    { key: 'title', label: 'Title' },
+    { key: 'artist', label: 'Artist' },
+    ...(album ? [] : [{ key: 'album' as SortKey, label: 'Album' }]),
+    { key: 'length', label: 'Length' },
+  ]);
+  const sortLabel = $derived(sortFields.find((f) => f.key === sortKey)?.label ?? sortFields[0].label);
+  const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
+  /** The rows as the list shows them, each with its place in the subject (`i`). */
+  const shown = $derived.by(() => {
+    if (!rows) return null;
+    const list = rows.map((r, i) => ({ r, i }));
+    const text = (r: PlaylistRow) => (sortKey === 'title' ? (r.name ?? r.file) : sortKey === 'artist' ? (r.artist ?? '') : (r.album ?? ''));
+    if (sortKey === 'length') list.sort((a, b) => (a.r.duration_secs ?? 0) - (b.r.duration_secs ?? 0));
+    else if (sortKey !== 'own') list.sort((a, b) => ordered(text(a.r), text(b.r)));
+    if (sortDown) list.reverse();
+    return list;
+  });
+  const shownRows = $derived(shown ? shown.map((x) => x.r) : []);
+  const shownPlayable = $derived(shownRows.filter((r) => r.id && !r.missing));
+  const sorted = $derived(sortKey !== 'own' || sortDown);
+
+  // Select mode (Symfonium's): a long-press on a track or the header's icon starts it, a tap ticks a track, and a bar
+  // over the list acts on the ticked ones. A tick is a row (its place), so a track that is there twice is ticked once.
+  let selecting = $state<Set<number> | null>(null);
+  function startSelect(i?: number) {
+    navigator.vibrate?.(8);
+    selecting = new Set(i === undefined ? [] : [i]);
+  }
+  function tick(i: number) {
+    if (!selecting) return;
+    const s = new Set(selecting);
+    if (s.has(i)) s.delete(i);
+    else s.add(i);
+    selecting = s;
+  }
+  const ticked = $derived(selecting && shown ? shown.filter((x) => selecting!.has(x.i) && x.r.id && !x.r.missing).map((x) => x.r) : []);
+  const tickedFav = $derived(ticked.length > 0 && ticked.every((r) => isFavorite(source, r.id!)));
+  $effect(() => {
+    // Another subject: its own order, nothing ticked.
+    void id;
+    sortKey = 'own';
+    sortDown = false;
+    selecting = null;
+  });
+  async function actOnTicked(mode: 'play' | 'next' | 'last') {
+    const tracks = tracksOf(ticked);
+    if (!tracks.length) return;
+    navigator.vibrate?.(8);
+    try {
+      if (mode === 'play') await playPlaylistFrom(title, source, tracks, 0);
+      else if (isLocal()) enqueue(tracks, mode);
+      else {
+        await queueTracks(
+          tracks.map((t) => t.id),
+          mode,
+          source,
+        );
+        setTimeout(refresh, 700);
+      }
+      selecting = null;
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    }
+  }
+  /** The heart on the ticked tracks: all favourites, or none when all already are. Shown at once, back on a refusal. */
+  async function favouriteTicked() {
+    const list = ticked;
+    const on = !tickedFav;
+    navigator.vibrate?.(8);
+    for (const r of list) setFavorite(source, r.id!, on);
+    selecting = null;
+    const failed = (await Promise.allSettled(list.map((r) => setTrackFavorite(source, r.id!, on)))).flatMap((x, n) => (x.status === 'rejected' ? [list[n]] : []));
+    for (const r of failed) setFavorite(source, r.id!, !on);
+    if (failed.length) toast.fail(null, "The favourites didn't all change");
+  }
   // An album's tracks carry its id: its cover, and the Incoming page's mark on what plays.
   const tracksOf = (list: PlaylistRow[], src = source): LocalTrack[] =>
     list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album?.id ?? null }));
@@ -394,7 +481,7 @@
   async function act(mode: PlayMode) {
     navigator.vibrate?.(8);
     try {
-      if (plain) await actOnRows(mode);
+      if (plain || (sorted && !multi)) await actOnRows(mode);
       else await startPlaylists([...ids], mode);
       if (mode === 'next' || mode === 'last') toast.show({ text: mode === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
     } catch (e) {
@@ -402,9 +489,10 @@
     }
   }
 
-  /** A crate's or an album's actions work on the tracks it has shown (a crate's pages so far, newest first). */
+  /** A crate's or an album's actions (a sorted playlist's too) work on the tracks it has shown, in the order shown (a
+   *  crate's pages so far). */
   async function actOnRows(mode: PlayMode) {
-    const tracks = tracksOf(playable);
+    const tracks = tracksOf(shownPlayable);
     if (mode === 'play' || mode === 'shuffle') {
       const order = mode === 'shuffle' ? [...tracks].sort(() => Math.random() - 0.5) : tracks;
       return playPlaylistFrom(title, source, order, 0);
@@ -571,7 +659,11 @@
 
   // Esc closes it (when no sheet of its own is open; in edit mode Cancel is the way out).
   $effect(() => {
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !menuOpen && !trackMenu && !editing && !making && closePlaylist();
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || menuOpen || trackMenu || editing || making || sortOpen) return;
+      if (selecting) selecting = null;
+      else closePlaylist();
+    };
     addEventListener('keydown', esc);
     return () => removeEventListener('keydown', esc);
   });
@@ -817,15 +909,44 @@
       <p class="error" role="alert">{error}</p>
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
-    {:else if rows}
-      <ol class="rows" class:numbered={!!album}>
-        {#each rows as r, i (i)}{#if album}{@render albumRow(r, i, rows)}{:else}{@render trackRow(r, source, title, rows)}{/if}{/each}
+    {:else if rows && shown}
+      <div class="listhead">
+        <button class="sortby" onclick={() => (sortOpen = true)}>{sortLabel}</button>
+        <button class="icon dir" aria-label={sortDown ? 'Descending' : 'Ascending'} title={sortDown ? 'Descending' : 'Ascending'} onclick={() => (sortDown = !sortDown)}
+          ><Icon name={sortDown ? 'arrowDown' : 'arrowUp'} size={20} /></button
+        >
+        <span class="grow"></span>
+        <span class="count">{plural(crate ? total : rows.length, 'track')}</span>
+        <button class="icon" class:on={!!selecting} aria-pressed={!!selecting} aria-label="Start multi-select" title="Start multi-select" onclick={() => (selecting ? (selecting = null) : startSelect())}
+          ><Icon name="listChecks" size={22} /></button
+        >
+      </div>
+      <ol class="rows" class:numbered={!!album} class:selecting={!!selecting}>
+        {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
       </ol>
       {#if crate && rows.length < total}<p class="empty" bind:this={more}>Loading…</p>{/if}
     {:else}
       <p class="empty">Loading…</p>
     {/if}
   </div>
+
+  {#if selecting}
+    <!-- Symfonium's select bar, floating over the list's end: how many are ticked, ✕, and what to do with them. -->
+    <div class="selbar" role="toolbar" aria-label="Selected tracks">
+      <div class="selhead">
+        <span class="selcount">{selecting.size}/{shown?.length ?? 0}</span>
+        <button class="icon" aria-label="Stop selecting" onclick={() => (selecting = null)}><Icon name="close" size={22} /></button>
+      </div>
+      <div class="selacts">
+        <button class="icon" aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => actOnTicked('play')}><Icon name="play" size={24} /></button>
+        <button class="icon" aria-label="Play next" title="Play next" disabled={!ticked.length} onclick={() => actOnTicked('next')}><Icon name="playNext" size={24} /></button>
+        <button class="icon" aria-label="Add to queue" title="Add to queue" disabled={!ticked.length} onclick={() => actOnTicked('last')}><Icon name="listAdd" size={24} /></button>
+        <button class="icon" class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
+          ><Icon name="heart" size={24} /></button
+        >
+      </div>
+    </div>
+  {/if}
 </section>
 
 <!-- The Info tab's part for one playlist: how focused it is, and its closest playlists as large rows (a tap views one). -->
@@ -864,7 +985,7 @@
 
 <!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe left plays it next, a long-press is its
      menu, the heart adds it to playlists. -->
-{#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[])}
+{#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[], i: number | null = null)}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
   <li class:now={here}>
@@ -875,19 +996,33 @@
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       off={!ok}
       disabled={!ok}
-      onclick={() => playFrom(name, src, list, r)}
-      attach={fromAction(swipe, () => ({ enabled: ok, onswipe: () => playNext(r, src) }))}
-      attachMain={fromAction(longpress, () => () => ok && (trackMenu = { track: asTrack(r, src), start: 'menu' }))}
+      onclick={() => (selecting && i !== null ? tick(i) : playFrom(name, src, list, r))}
+      attach={fromAction(swipe, () => ({ enabled: ok && !selecting, onswipe: () => playNext(r, src) }))}
+      attachMain={fromAction(longpress, () => () => {
+        if (!ok) return;
+        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu' };
+        else if (selecting) tick(i);
+        else startSelect(i);
+      })}
     >
       {#snippet lead()}{@render cover(r, src, here)}{/snippet}
       {#snippet sub()}
         {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album}<span class="album">{r.album}</span>{/if}{/if}
       {/snippet}
-      {#snippet action()}
-        {#if ok}<RowHeart source={src} id={r.id!} name={r.name ?? r.file} onopen={() => (trackMenu = { track: asTrack(r, src), start: 'lists' })} />{/if}
-      {/snippet}
+      {#snippet action()}{#if ok}{@render rowEnd(r, src, i)}{/if}{/snippet}
     </Row>
   </li>
+{/snippet}
+
+<!-- A track's row ends in ⋮ (its menu, Symfonium's), or in select mode in its tick. -->
+{#snippet rowEnd(r: PlaylistRow, src: string, i: number | null)}
+  {#if selecting && i !== null}
+    <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
+      ><Icon name={selecting.has(i) ? 'circleCheck' : 'circle'} size={24} /></button
+    >
+  {:else}
+    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu' })}><Icon name="moreVert" size={22} /></button>
+  {/if}
 {/snippet}
 
 <!-- An album's track (Symfonium's album screen): its number (the playing one's dots instead), the title, and the artist
@@ -904,16 +1039,14 @@
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       off={!ok}
       disabled={!ok}
-      onclick={() => playFrom(title, source, list, r)}
-      attach={fromAction(swipe, () => ({ enabled: ok, onswipe: () => playNext(r, source) }))}
-      attachMain={fromAction(longpress, () => () => ok && (trackMenu = { track: asTrack(r, source), start: 'menu' }))}
+      onclick={() => (selecting ? tick(i) : playFrom(title, source, list, r))}
+      attach={fromAction(swipe, () => ({ enabled: ok && !selecting, onswipe: () => playNext(r, source) }))}
+      attachMain={fromAction(longpress, () => () => ok && (selecting ? tick(i) : startSelect(i)))}
     >
       {#snippet lead()}
         <span class="num">{#if here}<span class="dots" class:still={paused()} aria-label="Playing"><i></i><i></i><i></i><i></i></span>{:else}{i + 1}{/if}</span>
       {/snippet}
-      {#snippet action()}
-        {#if ok}<RowHeart {source} id={r.id!} name={r.name ?? r.file} onopen={() => (trackMenu = { track: asTrack(r, source), start: 'lists' })} />{/if}
-      {/snippet}
+      {#snippet action()}{#if ok}{@render rowEnd(r, source, i)}{/if}{/snippet}
     </Row>
   </li>
 {/snippet}
@@ -938,6 +1071,20 @@
 {/if}
 {#if trackMenu}
   <TrackMenu track={trackMenu.track} start={trackMenu.start} onclose={() => (trackMenu = null)} />
+{/if}
+{#if sortOpen}
+  <MenuSheet label="Order" title="Order" onclose={() => (sortOpen = false)}>
+    {#each sortFields as f (f.key)}
+      <MenuEntry
+        icon={f.key === sortKey ? 'circleCheck' : 'circle'}
+        label={f.label}
+        onclick={() => {
+          sortKey = f.key;
+          sortOpen = false;
+        }}
+      />
+    {/each}
+  </MenuSheet>
 {/if}
 
 <style>
@@ -1606,6 +1753,87 @@
     .dots i {
       animation: none;
     }
+  }
+
+  /* Symfonium's header over the tracks: the order (a tap on it chooses, the arrow turns it round), how many, select. */
+  .listhead {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 8px 4px 16px;
+    color: var(--muted);
+    font-size: 15px;
+  }
+
+  .sortby {
+    padding: 8px 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .listhead .icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .listhead .count {
+    padding-right: 4px;
+  }
+
+  .listhead .icon.on {
+    color: var(--art-accent, var(--accent));
+  }
+
+  /* A row's tick in select mode: an empty circle, filled with its check once ticked. */
+  .tick :global(svg) {
+    opacity: 0.7;
+  }
+
+  .tick.on {
+    color: var(--art-accent, var(--accent));
+  }
+
+  .tick.on :global(svg) {
+    opacity: 1;
+  }
+
+  /* The select bar: floating over the list's end, above the mini-player, in the cover's colour. */
+  .selbar {
+    position: absolute;
+    right: 16px;
+    bottom: calc(16px + var(--mini-h, 0px) + env(safe-area-inset-bottom));
+    z-index: 4;
+    width: min(300px, calc(100% - 32px));
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--art-accent, var(--accent)) 30%, var(--surface));
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.35);
+  }
+
+  .selhead {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    padding: 0 4px 0 48px;
+    border-bottom: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
+  }
+
+  .selcount {
+    text-align: center;
+    font-size: 15px;
+  }
+
+  .selacts {
+    display: flex;
+    justify-content: space-evenly;
+    padding: 4px;
+  }
+
+  /* While ticking, the list scrolls clear of the bar. */
+  .rows.selecting {
+    padding-bottom: 96px;
   }
 
   .empty,
