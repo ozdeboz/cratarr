@@ -121,8 +121,11 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   never on a tile; so are the web app's icons, but for the ones the platform cuts to shape (maskable, iOS, Android's
   launcher).
 - **Filters** (the filter sheet, from the funnel in a floating pill; decided 2026-10-16): only the **server** a
-  browser follows is remembered, and it holds everywhere (every page, the panel, what plays); its cards come last in
-  every filter sheet. Every other filter lasts only for the list it was set on and is not remembered, first in the
+  browser follows, with its **libraries**, is remembered, and it holds everywhere (every page, the panel, what plays);
+  its cards come last in every filter sheet. On the followed server's card the libraries the page lists are switches
+  (Collection: its Music libraries, Incoming: its Incoming ones; elsewhere a chip only shows a library's use), so a
+  library is switched where its effect shows; the last one on stays on, so a page never filters down to nothing; and
+  while one is off the funnel is lit (as the magnifier is while a search applies), the remembered filter's only trace. Every other filter lasts only for the list it was set on and is not remembered, first in the
   sheet: Playlists' Favourites only (off again on leaving the page), the panel's Hide missing tracks (off again when
   the panel shows something else), and any still to come (a tag, a genre).
 - **Icon buttons carry no text**, on any width (decided 2026-10-16): no label that shows only when there is room. A

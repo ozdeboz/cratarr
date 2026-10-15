@@ -142,6 +142,8 @@ pub struct IncomingSourceView {
     pub verdicts: BTreeMap<String, VerdictView>,
     /// The albums Cratarr can delete: it sees their folder and can write there.
     pub deletable: Vec<String>,
+    /// The libraries it was read from (the filter's library switches).
+    pub libraries: Vec<String>,
 }
 
 /// How an incoming album relates to the library.
@@ -1163,7 +1165,17 @@ impl IncomingService {
 
     async fn read_incoming(&self, a: &Active, s: &dyn Source, libraries: &[String]) -> IncomingSourceView {
         let ShelfRead { supported, albums, error } = self.shelves.read(a, s, libraries, Shelf::Incoming, INCOMING_LIMIT).await;
-        IncomingSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now(), verdicts: BTreeMap::new(), deletable: Vec::new() }
+        IncomingSourceView {
+            id: a.cfg.id.clone(),
+            label: label_of(&a.cfg),
+            supported,
+            albums,
+            error,
+            as_of: epoch_now(),
+            verdicts: BTreeMap::new(),
+            deletable: Vec::new(),
+            libraries: libraries.to_vec(),
+        }
     }
 }
 

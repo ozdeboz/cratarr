@@ -48,7 +48,11 @@ impl Shelves {
         if supported {
             for library in libraries {
                 match s.albums(library, limit).await {
-                    Ok(list) => listed.extend(list),
+                    // Each knows its library, for the pages' library switches.
+                    Ok(list) => listed.extend(list.into_iter().map(|mut l| {
+                        l.album.library = Some(library.clone());
+                        l
+                    })),
                     Err(e) => {
                         error.get_or_insert(format!("{e:#}"));
                     }

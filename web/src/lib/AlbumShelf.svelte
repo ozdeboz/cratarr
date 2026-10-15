@@ -17,6 +17,7 @@
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
   import { ALBUM_ORDERS, ALBUM_WIDTHS, howMany, pageView } from './pageView.svelte';
+  import { libraryShown } from './sources.svelte';
   import Tile from './Tile.svelte';
 
   let {
@@ -53,6 +54,11 @@
     const q = pageView.query.trim().toLowerCase();
     return !q || `${a.artist ?? ''} ${a.title}`.toLowerCase().includes(q);
   };
+  // The libraries switched off in the filter leave their albums out; the pill's funnel says so while one is.
+  $effect(() => {
+    pageView.narrowed = sources.some((s) => (s.libraries ?? []).some((l) => !libraryShown(s.id, l)));
+    return () => (pageView.narrowed = false);
+  });
   // Artists without a leading "The", numbers in number order, accents and case aside.
   const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
   const name = (s: string | null) => (s ?? '').replace(/^the\s+/i, '');
@@ -67,7 +73,7 @@
   };
   const shown = $derived(
     sources.map((s) => {
-      const albums = s.albums.filter(matches).sort(COMPARE[order]);
+      const albums = s.albums.filter((a) => (!a.library || libraryShown(s.id, a.library)) && matches(a)).sort(COMPARE[order]);
       return { s, albums: down ? albums.reverse() : albums };
     }),
   );

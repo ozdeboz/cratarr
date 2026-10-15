@@ -559,6 +559,7 @@ mod tests {
                 format: None,
                 bitrate_kbps: None,
                 tags: Vec::new(),
+                library: None,
             },
             folder: 1,
             dir: "X".into(),

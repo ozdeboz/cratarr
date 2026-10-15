@@ -619,6 +619,7 @@ impl Source for SubsonicSource {
                         year: a.year,
                         path,
                         tags: Vec::new(),
+                        library: None,
                         id: a.id,
                         tracks: d.tracks,
                         format: d.format,

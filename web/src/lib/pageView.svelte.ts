@@ -54,6 +54,8 @@ export const pageView = $state({
   favouritesOnly: false,
   /** The page's search (the pill's field): what its list is filtered by; empty again on another page. */
   query: '',
+  /** A library of the page's list is switched off (lib/AlbumShelf): the pill's funnel is lit. */
+  narrowed: false,
   /** The page's own button at the pill's end (usePageAction), while it shows. */
   action: null as PageAction | null,
 });

@@ -202,6 +202,9 @@ pub struct Album {
     pub bitrate_kbps: Option<u32>,
     /// The source's own tags or labels on the album, as they are.
     pub tags: Vec<String>,
+    /// The library it was listed from (the album pages' library switches filter by it); none outside a listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
 }
 
 /// One of a user's own playlists on the server (decision 0012).

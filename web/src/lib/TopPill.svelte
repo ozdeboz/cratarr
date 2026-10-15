@@ -9,6 +9,7 @@
   import Icon from './Icon.svelte';
   import OutputSheet from './OutputSheet.svelte';
   import { pageView, searchFor } from './pageView.svelte';
+  import { panel } from './panel.svelte';
   import ViewSheet, { type ListOrder } from './ViewSheet.svelte';
 
   let {
@@ -40,6 +41,9 @@
     void page;
     searching = false;
   });
+  // A filter leaves something out of what shows: a library switched off (remembered, so it is said here), Playlists'
+  // Favourites only, the panel's Hide missing tracks.
+  const filtering = $derived(page ? pageView.narrowed || (page === 'playlists' && pageView.favouritesOnly) : panel.hideMissing);
   function clear() {
     pageView.query = '';
     searching = false;
@@ -65,7 +69,7 @@
     {#if words}
       <button class:lit={pageView.query.trim() !== ''} aria-label={words} title={words} onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
     {/if}
-    <button aria-label="Filter" title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}><Icon name="funnel" size={22} /></button>
+    <button class:lit={filtering} aria-label="Filter" title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}><Icon name="funnel" size={22} /></button>
     {#if view && (page || order)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)}><Icon name="sliders" size={22} /></button>{/if}
     {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
     {#if page && pageView.action}
@@ -113,7 +117,7 @@
     background: color-mix(in srgb, var(--text) 8%, transparent);
   }
 
-  /* A search that applies. */
+  /* A search or a filter that applies. */
   button.lit {
     color: var(--accent);
   }

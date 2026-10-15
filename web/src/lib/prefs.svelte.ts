@@ -11,6 +11,8 @@ export type Prefs = {
   showProgress: boolean;
   /** Source this browser follows when several are active; '' = whichever started playing most recently. */
   source: string;
+  /** Libraries switched off in the filter (`source/library`): remembered, as the server is (decided 2026-10-16). */
+  hiddenLibraries: string[];
   /** Insights: the open tab, and which signals bring playlists together in Related. */
   insightsTab: 'statistics' | 'related';
   signals: { tracks: boolean; genre: boolean; artists: boolean };
@@ -55,6 +57,7 @@ export const DEFAULTS: Prefs = {
   zoom: 2,
   showProgress: true,
   source: '',
+  hiddenLibraries: [],
   insightsTab: 'statistics',
   signals: { tracks: true, genre: true, artists: true },
   playerWidth: 400,
@@ -77,7 +80,7 @@ export const DEFAULTS: Prefs = {
 };
 
 function read(): Prefs {
-  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[] };
+  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[] };
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (saved && typeof saved === 'object') {
@@ -103,6 +106,7 @@ function read(): Prefs {
       if (saved.output === 'remote' || saved.output === 'local' || (typeof saved.output === 'string' && saved.output.startsWith('player:')))
         p.output = saved.output;
       if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');
+      if (Array.isArray(saved.hiddenLibraries)) p.hiddenLibraries = saved.hiddenLibraries.filter((x: unknown): x is string => typeof x === 'string');
       if (saved.insightsTab === 'statistics' || saved.insightsTab === 'related') p.insightsTab = saved.insightsTab;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {
@@ -124,7 +128,7 @@ export const prefs = $state<Prefs>(read());
 
 /** Back to the default look; the followed source and the pins are not display matters and stay. */
 export function resetPrefs() {
-  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, pinned: prefs.pinned });
+  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, hiddenLibraries: prefs.hiddenLibraries, pinned: prefs.pinned });
 }
 
 /** Pin a playlist to the top of the Playlists page (after those pinned before it), or unpin it. */

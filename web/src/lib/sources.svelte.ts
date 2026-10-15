@@ -13,6 +13,15 @@ export const OWN = 'cratarr';
 /** What following no source in particular follows: Cratarr's own where the server has it. */
 export const noChoice = () => (known.list.some((s) => s.id === OWN) ? OWN : '');
 
+/** Whether a server's library shows on the album pages (the filter's library switches, remembered). */
+export const libraryShown = (source: string, library: string) => !prefs.hiddenLibraries.includes(`${source}/${library}`);
+
+/** Switches a library on or off. */
+export function showLibrary(source: string, library: string, on: boolean) {
+  const key = `${source}/${library}`;
+  prefs.hiddenLibraries = on ? prefs.hiddenLibraries.filter((k) => k !== key) : [...prefs.hiddenLibraries, key];
+}
+
 export function remember(list: SourceTab[]) {
   known.list = list;
   if (!prefs.source) prefs.source = noChoice();

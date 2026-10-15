@@ -1122,6 +1122,7 @@ fn album_head(a: ListedAlbumItem) -> (crate::source::Album, Option<String>) {
         year: a.production_year,
         path: a.path,
         tags: a.tags,
+        library: None,
         id: a.id,
         tracks: 0,
         format: None,

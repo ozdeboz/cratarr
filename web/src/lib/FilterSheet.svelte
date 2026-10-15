@@ -2,7 +2,9 @@
   // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/TopPill): first what
   // the list it was opened on leaves out, for that list only (decided 2026-10-16: Playlists' Favourites only, the
   // panel's Hide missing tracks; not remembered), then, last, the one filter that is remembered and holds everywhere: a
-  // card per server this browser can follow, with its kind and its libraries. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
+  // card per server this browser can follow, with its kind and its libraries. On the followed server's card the
+  // libraries the page lists (Collection: Music, Incoming: its own) are switches, remembered as the server is; the
+  // last one on stays on, so a page never filters down to nothing; elsewhere a chip only shows the library's use. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
   // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
   // has no per-library visibility, and a use is set only in Settings (decision 0009).
   import { pageView } from './pageView.svelte';
@@ -11,7 +13,7 @@
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { prefs } from './prefs.svelte';
-  import { known, noChoice, remember } from './sources.svelte';
+  import { known, libraryShown, noChoice, remember, showLibrary } from './sources.svelte';
   import { toast } from './toast.svelte';
 
   // `page`: the page it was opened on, whose own filters it shows (Playlists: favourites only); null in the panel
@@ -60,6 +62,10 @@
     }),
   );
 
+  // The use of the libraries the page lists, whose chips are switches.
+  const pageUse = $derived<'music' | 'incoming' | null>(page === 'collection' ? 'music' : page === 'incoming' ? 'incoming' : null);
+  const followedId = $derived(known.list.some((s) => s.id === prefs.source) ? prefs.source : noChoice());
+
   function follow(id: string) {
     prefs.source = prefs.source === id ? noChoice() : id;
   }
@@ -100,9 +106,19 @@
         {#if c.libraries.length}
           <ul class="libs">
             {#each c.libraries as l (l.id)}
-              <li class:unused={l.use === 'unused'} aria-label={`${l.name}, ${USE_WORD[l.use]}`}>
-                {#if l.use !== 'unused'}<Icon name={USE_ICON[l.use]} size={16} />{/if}<span>{l.name}</span>
-              </li>
+              {#if c.id === followedId && pageUse && l.use === pageUse}
+                {@const shown = libraryShown(c.id, l.id)}
+                {@const last = shown && c.libraries.filter((x) => x.use === pageUse && libraryShown(c.id, x.id)).length === 1}
+                <li>
+                  <button class="lib" class:off={!shown} aria-pressed={shown} disabled={last} aria-label={`${l.name}, ${USE_WORD[l.use]}`} onclick={() => showLibrary(c.id, l.id, !shown)}
+                    ><Icon name={USE_ICON[pageUse]} size={16} /><span>{l.name}</span></button
+                  >
+                </li>
+              {:else}
+                <li class="tag" class:unused={l.use === 'unused'} aria-label={`${l.name}, ${USE_WORD[l.use]}`}>
+                  {#if l.use !== 'unused'}<Icon name={USE_ICON[l.use]} size={16} />{/if}<span>{l.name}</span>
+                </li>
+              {/if}
             {/each}
           </ul>
         {/if}
@@ -299,6 +315,11 @@
 
   .libs li {
     display: flex;
+  }
+
+  .tag,
+  .lib {
+    display: flex;
     align-items: center;
     gap: 6px;
     min-height: 32px;
@@ -306,7 +327,24 @@
     border: 1px solid transparent;
     border-radius: 8px;
     background: color-mix(in srgb, var(--art-accent, var(--accent)) 18%, transparent);
+    color: inherit;
+    font: inherit;
     font-size: 0.9rem;
+  }
+
+  /* A switch: on as the chips are, off only outlined; the last one on cannot be switched off. */
+  .lib {
+    cursor: pointer;
+  }
+
+  .lib.off {
+    border-color: var(--border);
+    background: none;
+    color: var(--muted);
+  }
+
+  .lib:disabled {
+    cursor: default;
   }
 
   .libs li.unused {

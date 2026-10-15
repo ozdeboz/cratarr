@@ -620,6 +620,8 @@ export type ListedAlbum = {
   bitrate_kbps: number | null;
   /** The source's own tags, as they are. */
   tags: string[];
+  /** The library it was listed from (the filter's library switches). */
+  library?: string;
 };
 
 /** One server's album list. */
@@ -632,6 +634,8 @@ export type ShelfSource = {
   error: string | null;
   /** When the server read this list from the source, epoch seconds. */
   as_of: number;
+  /** The libraries it was read from (the filter's library switches). */
+  libraries?: string[];
 };
 
 export type IncomingSource = ShelfSource & {

@@ -25,6 +25,8 @@ pub struct CollectionSourceView {
     pub error: Option<String>,
     /// When this list was read from the server, epoch seconds.
     pub as_of: i64,
+    /// The libraries it was read from (the filter's library switches).
+    pub libraries: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,7 +149,7 @@ impl CollectionService {
 
     async fn read(&self, a: &Active, s: &dyn Source, libraries: &[String]) -> CollectionSourceView {
         let ShelfRead { supported, albums, error } = self.shelves.read(a, s, libraries, Shelf::Music, COLLECTION_LIMIT).await;
-        CollectionSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now() }
+        CollectionSourceView { id: a.cfg.id.clone(), label: label_of(&a.cfg), supported, albums, error, as_of: epoch_now(), libraries: libraries.to_vec() }
     }
 }
 

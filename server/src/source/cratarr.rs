@@ -383,6 +383,7 @@ impl Source for CratarrSource {
                             format,
                             bitrate_kbps: kbps,
                             tags: ud.tags_of(&base)?,
+                            library: None,
                             id: a.id,
                         },
                         stamp: Some(stamp),
