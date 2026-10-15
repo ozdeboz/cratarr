@@ -269,7 +269,7 @@
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
     if (!rows) return null;
-    const list = rows.map((r, i) => ({ r, i })).filter((x) => !prefs.hideMissing || (x.r.id && !x.r.missing));
+    const list = rows.map((r, i) => ({ r, i })).filter((x) => !panel.hideMissing || (x.r.id && !x.r.missing));
     const text = (r: PlaylistRow) => (sortKey === 'title' ? (r.name ?? r.file) : sortKey === 'artist' ? (r.artist ?? '') : (r.album ?? ''));
     if (sortKey === 'length') list.sort((a, b) => (a.r.duration_secs ?? 0) - (b.r.duration_secs ?? 0));
     else if (sortKey !== 'own') list.sort((a, b) => ordered(text(a.r), text(b.r)));
@@ -870,7 +870,7 @@
             <p class="empty">No tracks yet.</p>
           {:else}
             <ol class="rows">
-              {#each s.rows as r, i (i)}{@render trackRow(r, s.source, sid, s.rows)}{/each}
+              {#each s.rows as r, i (i)}{#if !panel.hideMissing || (r.id && !r.missing)}{@render trackRow(r, s.source, sid, s.rows)}{/if}{/each}
             </ol>
           {/if}
         </Section>

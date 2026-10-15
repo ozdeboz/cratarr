@@ -41,8 +41,6 @@ export type Prefs = {
   playlistDown: boolean;
   crateOrder: CrateOrder;
   crateDown: boolean;
-  /** The panel's source filter: tracks whose file is missing are left out of an album or a playlist. */
-  hideMissing: boolean;
 };
 
 export type AlbumLayout = 'rows' | 'grid';
@@ -76,7 +74,6 @@ export const DEFAULTS: Prefs = {
   playlistDown: false,
   crateOrder: 'own',
   crateDown: false,
-  hideMissing: false,
 };
 
 function read(): Prefs {
@@ -100,7 +97,6 @@ function read(): Prefs {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
-      if (typeof saved.hideMissing === 'boolean') p.hideMissing = saved.hideMissing;
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;

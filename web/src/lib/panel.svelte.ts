@@ -38,6 +38,9 @@ export const panel = $state({
   playerTop: false,
   /** Bumped when the viewed playlist is viewed again: its view scrolls back to the top. */
   again: 0,
+  /** The filter's Hide missing tracks, for what is viewed only: off again when something else is (not remembered,
+   *  as no filter but the server is, decided 2026-10-16). */
+  hideMissing: false,
 });
 
 const query = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
@@ -65,7 +68,10 @@ function read() {
   const q = query();
   const viewed = q.getAll('view');
   const first = viewed[0] ?? null;
-  if (first !== panel.viewed || viewed.join('\n') !== panel.selection.join('\n')) panel.playerTop = false;
+  if (first !== panel.viewed || viewed.join('\n') !== panel.selection.join('\n')) {
+    panel.playerTop = false;
+    panel.hideMissing = false;
+  }
   panel.viewed = first;
   panel.selection = first && !isSingleSubject(first) ? viewed : [];
   const tab = q.get('tab');

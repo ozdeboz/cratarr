@@ -120,6 +120,11 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   a little see-through, blurring what is under them (`--float-bg`, `--float-blur`). The mark is only its circle,
   never on a tile; so are the web app's icons, but for the ones the platform cuts to shape (maskable, iOS, Android's
   launcher).
+- **Filters** (the filter sheet, from the funnel in a floating pill; decided 2026-10-16): only the **server** a
+  browser follows is remembered, and it holds everywhere (every page, the panel, what plays); its cards come last in
+  every filter sheet. Every other filter lasts only for the list it was set on and is not remembered, first in the
+  sheet: Playlists' Favourites only (off again on leaving the page), the panel's Hide missing tracks (off again when
+  the panel shows something else), and any still to come (a tag, a genre).
 - **Icon buttons carry no text**, on any width (decided 2026-10-16): no label that shows only when there is room. A
   long-press (touch) or right-click (desktop) on one shows its label in a small tip beside it (`lib/labels.svelte.ts`,
   one listener for the whole page: any button or link whose only content is an icon, named by its title or

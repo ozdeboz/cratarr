@@ -1,10 +1,12 @@
 <script lang="ts">
-  // The filter, after Symfonium's source filter (opened from the funnel in the panel's floating pill, lib/TopPill):
-  // what the album and playlist views leave out, then a card per server this browser can follow, with its kind and
-  // its libraries. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
+  // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/TopPill): first what
+  // the list it was opened on leaves out, for that list only (decided 2026-10-16: Playlists' Favourites only, the
+  // panel's Hide missing tracks; not remembered), then, last, the one filter that is remembered and holds everywhere: a
+  // card per server this browser can follow, with its kind and its libraries. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
   // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
   // has no per-library visibility, and a use is set only in Settings (decision 0009).
   import { pageView } from './pageView.svelte';
+  import { panel } from './panel.svelte';
   import { getSettings, getStatus, type LibraryUse, type Settings } from './api';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -12,7 +14,8 @@
   import { known, noChoice, remember } from './sources.svelte';
   import { toast } from './toast.svelte';
 
-  // `page`: the page it was opened on, whose own filters it shows too (Playlists: favourites only).
+  // `page`: the page it was opened on, whose own filters it shows (Playlists: favourites only); null in the panel
+  // (Hide missing tracks).
   let { page = null, onclose }: { page?: string | null; onclose: () => void } = $props();
 
   // The servers: the status call fills the list when no playlist poll has yet.
@@ -64,16 +67,19 @@
 
 <MenuSheet label="Filter" icon="funnel" title="Filter" {onclose}>
   <div class="cards">
-    <div class="toggles">
-      {#if page === 'playlists'}
+    {#if page === 'playlists'}
+      <div class="toggles">
         <button class="switch" role="switch" aria-checked={pageView.favouritesOnly} onclick={() => (pageView.favouritesOnly = !pageView.favouritesOnly)}>
           <span>Favourites only</span><i aria-hidden="true"></i>
         </button>
-      {/if}
-      <button class="switch" role="switch" aria-checked={prefs.hideMissing} onclick={() => (prefs.hideMissing = !prefs.hideMissing)}>
-        <span>Hide missing tracks</span><i aria-hidden="true"></i>
-      </button>
-    </div>
+      </div>
+    {:else if page === null}
+      <div class="toggles">
+        <button class="switch" role="switch" aria-checked={panel.hideMissing} onclick={() => (panel.hideMissing = !panel.hideMissing)}>
+          <span>Hide missing tracks</span><i aria-hidden="true"></i>
+        </button>
+      </div>
+    {/if}
 
     {#each cards as c (c.id)}
       {@const on = prefs.source === c.id}
