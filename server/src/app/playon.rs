@@ -21,6 +21,9 @@ use tokio::sync::{broadcast, mpsc};
 
 use super::{PlaylistService, ToggleError};
 
+/// A player not heard from (a report, the 30 s heartbeat) for this long is offline, even if its connection still looks
+/// open: a device that lost power or the network leaves the connection open until a write fails, minutes later.
+const LEASE: Duration = Duration::from_secs(75);
 /// Changes reaching the webhooks within this long go out as one.
 const SETTLE: Duration = Duration::from_millis(300);
 /// How long a webhook may take to answer.
@@ -116,18 +119,30 @@ pub enum Command {
     Handover { to: String },
 }
 
+/// Cratarr's own ids of the playing track (decision 0030): what Home Assistant's library calls take.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct TrackIds {
+    pub track_id: Option<String>,
+    pub album_id: Option<String>,
+    pub album_artist: Option<String>,
+}
+
 /// A player as Home Assistant and the pages see it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PlayerView {
     pub name: String,
-    /// Connected now: commands reach it.
+    /// Connected now and heard from lately: commands reach it.
     pub online: bool,
+    /// `playing`, `paused` or `stopped` (nothing loaded).
+    pub state: &'static str,
     /// When it was last heard from (epoch seconds).
     pub seen: u64,
     pub playing: bool,
     pub index: i64,
     /// Now: counted on from the last report while it plays.
     pub position_ms: u64,
+    /// When `position_ms` was so (epoch ms): from then on it moves with the music while `playing`.
+    pub position_at: u64,
     pub duration_ms: Option<u64>,
     pub volume: u8,
     pub ducked: bool,
@@ -136,6 +151,14 @@ pub struct PlayerView {
     pub queue_version: u64,
     /// The track at `index`.
     pub track: Option<QueueTrack>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    /// Cratarr's own ids of the track at `index` (and its album artist).
+    #[serde(flatten)]
+    pub ids: TrackIds,
+    /// The queue entry that plays; `null` until queue entries have ids of their own (decision 0033).
+    pub current_entry_id: Option<String>,
     /// The whole queue, for one player asked for by name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<Vec<QueueTrack>>,
@@ -153,6 +176,10 @@ struct Entry {
     /// The open connection, as (its number, where its commands go).
     connection: Option<(u64, mpsc::Sender<String>)>,
     seen: SystemTime,
+    /// When it was last heard from, for the lease.
+    heard: Instant,
+    /// Cratarr's ids of the track at `report.index`, looked up when the track changes.
+    ids: TrackIds,
     report: Report,
     queue: Vec<QueueTrack>,
     queue_version: u64,
@@ -161,6 +188,23 @@ struct Entry {
 }
 
 impl Entry {
+    fn new() -> Self {
+        Self {
+            connection: None,
+            seen: SystemTime::now(),
+            heard: Instant::now(),
+            ids: TrackIds::default(),
+            report: Report { index: -1, volume: 100, ..Report::default() },
+            queue: Vec::new(),
+            queue_version: 0,
+            at: Instant::now(),
+        }
+    }
+
+    fn online(&self) -> bool {
+        self.connection.is_some() && self.heard.elapsed() < LEASE
+    }
+
     fn view(&self, name: &str, with_queue: bool) -> PlayerView {
         let r = &self.report;
         let mut position_ms = r.position_ms;
@@ -170,19 +214,33 @@ impl Entry {
                 position_ms = position_ms.min(d);
             }
         }
+        let track = usize::try_from(r.index).ok().and_then(|i| self.queue.get(i)).cloned();
         PlayerView {
             name: name.to_string(),
-            online: self.connection.is_some(),
+            online: self.online(),
+            state: if track.is_none() {
+                "stopped"
+            } else if r.playing {
+                "playing"
+            } else {
+                "paused"
+            },
             seen: self.seen.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
             playing: r.playing,
             index: r.index,
             position_ms,
+            position_at: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
             duration_ms: r.duration_ms,
             volume: r.volume,
             ducked: r.ducked,
             queue_length: self.queue.len(),
             queue_version: self.queue_version,
-            track: usize::try_from(r.index).ok().and_then(|i| self.queue.get(i)).cloned(),
+            title: track.as_ref().map(|t| t.name.clone()),
+            artist: track.as_ref().and_then(|t| t.artist.clone()),
+            album: track.as_ref().and_then(|t| t.album.clone()),
+            ids: self.ids.clone(),
+            current_entry_id: None,
+            track,
             queue: with_queue.then(|| self.queue.clone()),
         }
     }
@@ -192,25 +250,67 @@ pub struct PlayOn {
     entries: Mutex<HashMap<String, Entry>>,
     changed: broadcast::Sender<()>,
     connections: AtomicU64,
+    /// Numbers the webhook POSTs: a receiver drops one older than the last it took.
+    seq: AtomicU64,
+    lib: Arc<super::Library>,
+    /// Cratarr's own library (0030), for the tracks' ids; set at the start (`set_library`).
+    library: std::sync::OnceLock<Arc<crate::serve::library::Library>>,
     settings: Mutex<PlayOnSettings>,
     file: Option<PathBuf>,
     playlists: Arc<PlaylistService>,
 }
 
 impl PlayOn {
-    pub fn new(playlists: Arc<PlaylistService>, data_dir: Option<&str>) -> Arc<Self> {
+    pub fn new(lib: Arc<super::Library>, playlists: Arc<PlaylistService>, data_dir: Option<&str>) -> Arc<Self> {
         let file = data_dir.map(|d| PathBuf::from(d).join("players.json"));
         let settings = file.as_deref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
         let me = Arc::new(Self {
             entries: Mutex::default(),
             changed: broadcast::channel(16).0,
             connections: AtomicU64::new(0),
+            seq: AtomicU64::new(0),
+            lib,
+            library: std::sync::OnceLock::new(),
             settings: Mutex::new(settings),
             file,
             playlists,
         });
         me.clone().tell_webhooks();
+        me.clone().watch_leases();
         me
+    }
+
+    /// Cratarr's own library, once open: the players' tracks get its ids.
+    pub fn set_library(&self, library: Arc<crate::serve::library::Library>) {
+        let _ = self.library.set(library);
+    }
+
+    /// Cratarr's ids of a player's track (`None` parts when the library does not know it).
+    fn ids_of(&self, t: Option<&QueueTrack>) -> TrackIds {
+        let (Some(t), Some(library)) = (t, self.library.get()) else { return TrackIds::default() };
+        let Some(track) = self.lib.catalogue().track_of_source(&t.source, &t.id) else { return TrackIds::default() };
+        match library.song_ids(track) {
+            Ok(Some(ids)) => TrackIds { track_id: Some(ids.song_id), album_id: Some(ids.album_id), album_artist: Some(ids.album_artist) },
+            _ => TrackIds { track_id: Some(crate::serve::ids::song(track)), ..TrackIds::default() },
+        }
+    }
+
+    /// A player whose lease runs out goes offline without a word from it: looked at every 15 s.
+    fn watch_leases(self: Arc<Self>) {
+        let me = Arc::downgrade(&self);
+        drop(self);
+        tokio::spawn(async move {
+            let mut was: HashMap<String, bool> = HashMap::new();
+            loop {
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                let Some(me) = me.upgrade() else { return };
+                let now: HashMap<String, bool> = me.entries().iter().map(|(n, e)| (n.clone(), e.online())).collect();
+                if now.iter().any(|(n, on)| was.get(n).is_some_and(|w| w != on)) {
+                    me.changed();
+                }
+                was = now;
+            }
+        });
     }
 
     fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<String, Entry>> {
@@ -246,16 +346,10 @@ impl PlayOn {
         let id = self.connections.fetch_add(1, Ordering::Relaxed);
         {
             let mut entries = self.entries();
-            let e = entries.entry(name.to_string()).or_insert_with(|| Entry {
-                connection: None,
-                seen: SystemTime::now(),
-                report: Report { index: -1, volume: 100, ..Report::default() },
-                queue: Vec::new(),
-                queue_version: 0,
-                at: Instant::now(),
-            });
+            let e = entries.entry(name.to_string()).or_insert_with(Entry::new);
             e.connection = Some((id, tx));
             e.seen = SystemTime::now();
+            e.heard = Instant::now();
         }
         tracing::info!("player {name:?} connected");
         self.changed();
@@ -277,16 +371,10 @@ impl PlayOn {
     pub fn report(&self, name: &str, report: Report) -> Result<(), ToggleError> {
         valid_name(name)?;
         let mut entries = self.entries();
-        let e = entries.entry(name.to_string()).or_insert_with(|| Entry {
-            connection: None,
-            seen: SystemTime::now(),
-            report: Report::default(),
-            queue: Vec::new(),
-            queue_version: 0,
-            at: Instant::now(),
-        });
+        let e = entries.entry(name.to_string()).or_insert_with(Entry::new);
         let before = e.view(name, false);
         e.seen = SystemTime::now();
+        e.heard = Instant::now();
         if let Some(q) = report.queue.clone()
             && q != e.queue
         {
@@ -295,12 +383,24 @@ impl PlayOn {
         }
         e.report = Report { queue: None, ..report };
         e.at = Instant::now();
-        let after = e.view(name, false);
+        let track = e.view(name, false).track;
+        let new_track = track != before.track;
         drop(entries);
+        // A new track: its ids, looked up outside the lock.
+        if new_track {
+            let ids = self.ids_of(track.as_ref());
+            if let Some(e) = self.entries().get_mut(name) {
+                e.ids = ids;
+            }
+        }
+        let after = match self.entries().get(name) {
+            Some(e) => e.view(name, false),
+            None => return Ok(()),
+        };
         // A position that moves on as counted is no news; a jump (a seek) is.
         let jumped = before.position_ms.abs_diff(after.position_ms) > 2_000;
-        let other = PlayerView { position_ms: 0, seen: 0, ..before } != PlayerView { position_ms: 0, seen: 0, ..after };
-        if other || jumped {
+        let still = |v: &PlayerView| PlayerView { position_ms: 0, position_at: 0, seen: 0, ..v.clone() };
+        if still(&before) != still(&after) || jumped {
             self.changed();
         }
         Ok(())
@@ -410,9 +510,14 @@ impl PlayOn {
                 while rx.try_recv().is_ok() {}
                 let Some(me) = me.upgrade() else { return };
                 let (hooks, players) = (me.settings().webhooks, me.list());
+                let seq = me.seq.fetch_add(1, Ordering::Relaxed) + 1;
                 drop(me);
+                if hooks.is_empty() {
+                    continue;
+                }
+                let body = serde_json::json!({ "seq": seq, "players": players });
                 for url in hooks {
-                    if let Err(e) = http.post(&url).json(&serde_json::json!({ "players": players })).send().await.and_then(|r| r.error_for_status()) {
+                    if let Err(e) = http.post(&url).json(&body).send().await.and_then(|r| r.error_for_status()) {
                         tracing::warn!("Play On webhook {url}: {e}");
                     }
                 }

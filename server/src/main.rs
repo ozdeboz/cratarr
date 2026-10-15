@@ -143,6 +143,7 @@ async fn main() -> Result<()> {
         .context("cannot open the OpenSubsonic library")?;
     served.set_playlists(app.playlists.clone());
     served.set_incoming(app.incoming.clone());
+    app.play_on.set_library(served.library.clone());
     served.follow();
     // Imports of plays and favourites read the sources in use (decision 0030, amended 2026-10-15).
     let importer = app.clone();

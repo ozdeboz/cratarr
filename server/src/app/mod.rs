@@ -120,7 +120,7 @@ impl App {
             origin,
         );
         let insights = InsightsService::new(library.clone());
-        let play_on = PlayOn::new(playlists.clone(), cfg.data_dir.as_deref());
+        let play_on = PlayOn::new(library.clone(), playlists.clone(), cfg.data_dir.as_deref());
         Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on }))
     }
 
