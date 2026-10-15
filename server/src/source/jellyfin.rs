@@ -543,6 +543,11 @@ impl Source for JellyfinSource {
                 }
                 None => self.jf.create_playlist(user, name, &ids).await?,
             };
+            // The new copy keeps the old one's heart (best effort: a rename is not held up by it).
+            let hearted = self.jf.favorites(&[playlist.to_string()], user).await.is_ok_and(|f| f.iter().any(|(_, on)| *on));
+            if hearted && let Err(e) = self.jf.set_favorite(user, &target, true).await {
+                tracing::warn!("the renamed playlist {name:?} lost its heart: {e:#}");
+            }
             self.jf.delete_item(playlist).await?;
             Ok(target)
         })

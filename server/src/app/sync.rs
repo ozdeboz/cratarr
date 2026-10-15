@@ -1,9 +1,10 @@
 //! Sync links (decisions 0012, 0014): each playlist is one `.m3u` file in `Music/.playlists`, and each of its links
 //! keeps a copy of it on a target in step.
-//! - **Shared:** a copy in the Music folder, which the media server imports for everyone. Push only.
-//! - **A user's own playlist on a server:** kept in step by the engine below, push or two-way. A two-way pass compares
+//! - **Shared:** a copy in the Music folder, which the media server imports for everyone. The server cannot edit an
+//!   imported playlist, so nothing comes back from it: the copy is written whenever the playlist changes.
+//! - **A user's own playlist on a server:** kept in step both ways by the engine below (`sync_server`). A pass compares
 //!   each copy with the list both last agreed on and merges (`playlist_merge`); the link's conflict rule picks the side
-//!   that leads.
+//!   that leads when both changed.
 //!
 //! Every step is safe to repeat and to interrupt (the next pass finishes or undoes it, never guesses):
 //! - a link is matched by the server copy's id, and remembers both agreed names, so a rename made on either side is
@@ -12,7 +13,8 @@
 //! - a listing on either side that suddenly lacks most linked playlists is not believed (no mass deletion);
 //! - a file edited while a pass merged is left for the next pass;
 //! - a server copy made but not yet remembered is found again by its name, not made twice;
-//! - a file deleted because its server copy went can be restored in Cratarr.
+//! - a file deleted because its server copy went can be restored in Cratarr;
+//! - one playlist's problem is its own: the others go on, and the page shows it on that playlist's link.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -26,7 +28,7 @@ use crate::catalogue::Catalogue;
 use crate::playlist_merge::{Item, Newer, merge};
 use crate::playlists::Store;
 use crate::source::{PlaylistChange, Source};
-use crate::sync_state::{Conflict, Direction, Kind, Link, LinkStatus, LinkView, SyncState, Target};
+use crate::sync_state::{Conflict, Kind, Link, LinkStatus, LinkView, SyncState, Target};
 
 /// Recorded in the sync state once the playlists in Music were adopted (decision 0014): never again, so the shared
 /// copies there are not taken for playlists.
@@ -37,8 +39,8 @@ const ADOPTED: &str = "adopted";
 pub struct TargetChoice {
     pub target: String,
     pub label: String,
-    /// Push only (Shared: an imported playlist cannot be edited on the server).
-    pub push_only: bool,
+    /// A copy the server cannot edit (Shared, which it imports): nothing comes back from it, so it has no conflict rule.
+    pub copy_only: bool,
 }
 
 pub struct SyncService {
@@ -51,6 +53,8 @@ pub struct SyncService {
     last: std::sync::Mutex<HashMap<(String, String), LinkStatus>>,
     /// Account names by (source, user id), for the labels.
     names: std::sync::Mutex<HashMap<(String, String), String>>,
+    /// Passes so far: every `VERIFY_EVERY`th reads every linked server copy.
+    passes: std::sync::atomic::AtomicU64,
 }
 
 impl SyncService {
@@ -63,6 +67,7 @@ impl SyncService {
             one_at_a_time: tokio::sync::Mutex::new(()),
             last: Default::default(),
             names: Default::default(),
+            passes: Default::default(),
         }
     }
 
@@ -133,16 +138,21 @@ impl SyncService {
                 Kind::Shared => None,
             })
             .collect();
+        let verify = self.passes.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % VERIFY_EVERY == 0;
         for (a, s) in self.lib.connected() {
             for (_, user) in users.iter().filter(|(source, _)| *source == a.cfg.id) {
-                let done = sync_server(&store, self.lib.catalogue(), &*s, &self.state, &a.cfg.id, user).await;
+                let done = sync_server(&store, self.lib.catalogue(), &*s, &self.state, &a.cfg.id, user, verify).await;
                 if let Err(e) = &done {
                     tracing::warn!("playlist sync with {}: {e:#}", a.cfg.id);
                 }
+                // The account's error on every link; else each playlist's own.
                 let kind = Kind::User { source: a.cfg.id.clone(), user: user.clone() };
-                let error = done.err().map(|e| format!("{e:#}"));
                 for t in self.state.targets().unwrap_or_default().iter().filter(|t| t.kind == kind) {
-                    self.record(&t.playlist, &kind, error.clone());
+                    let error = match &done {
+                        Err(e) => Some(format!("{e:#}")),
+                        Ok(undone) => undone.get(&t.playlist).cloned(),
+                    };
+                    self.record(&t.playlist, &kind, error);
                 }
             }
         }
@@ -192,7 +202,6 @@ impl SyncService {
             .map(|t| LinkView {
                 target: t.kind.key(),
                 label: self.label(&t.kind),
-                direction: t.direction,
                 conflict: t.conflict,
                 status: last.get(&(t.playlist.clone(), t.kind.key())).cloned(),
             })
@@ -236,14 +245,14 @@ impl SyncService {
 
     /// What a playlist can be linked to: Shared, and each account on each connected server that keeps playlists.
     pub(super) async fn choices(&self) -> Vec<TargetChoice> {
-        let mut out = vec![TargetChoice { target: Kind::Shared.key(), label: "Shared".into(), push_only: true }];
+        let mut out = vec![TargetChoice { target: Kind::Shared.key(), label: "Shared".into(), copy_only: true }];
         for (a, s) in self.lib.connected() {
             match s.users().await {
                 Ok(users) => {
                     for (id, name) in users {
                         self.names.lock().unwrap_or_else(|p| p.into_inner()).insert((a.cfg.id.clone(), id.clone()), name);
                         let kind = Kind::User { source: a.cfg.id.clone(), user: id };
-                        out.push(TargetChoice { target: kind.key(), label: self.label(&kind), push_only: false });
+                        out.push(TargetChoice { target: kind.key(), label: self.label(&kind), copy_only: false });
                     }
                 }
                 Err(e) => tracing::debug!("{}: no accounts to sync to: {e:#}", a.cfg.id),
@@ -253,18 +262,11 @@ impl SyncService {
     }
 
     /// Link a playlist to a target, or change how it is kept. The copy is made now (Shared) or by the next pass.
-    pub(super) async fn link(
-        self: &Arc<Self>,
-        playlist: &str,
-        kind: Kind,
-        direction: Direction,
-        conflict: Conflict,
-    ) -> Result<(), ToggleError> {
+    pub(super) async fn link(self: &Arc<Self>, playlist: &str, kind: Kind, conflict: Conflict) -> Result<(), ToggleError> {
         let store = self.lib.store()?;
         if store.entries(playlist).await.is_err() {
             return Err(ToggleError::UnknownPlaylist);
         }
-        let direction = if kind == Kind::Shared { Direction::Push } else { direction };
         if let Kind::User { source, .. } = &kind
             && !self.lib.connected().iter().any(|(a, _)| &a.cfg.id == source)
         {
@@ -273,7 +275,7 @@ impl SyncService {
         {
             let _one = self.one_at_a_time.lock().await;
             let copy = self.state.targets()?.into_iter().find(|t| t.playlist == playlist && t.kind == kind).and_then(|t| t.copy);
-            self.state.put_target(&Target { playlist: playlist.to_string(), kind, direction, conflict, copy })?;
+            self.state.put_target(&Target { playlist: playlist.to_string(), kind, conflict, copy })?;
         }
         let me = self.clone();
         tokio::spawn(async move { me.pass().await });
@@ -287,7 +289,7 @@ impl SyncService {
             self.state.revive_targets(playlist)?
         };
         if revived == 0 {
-            return self.link(playlist, Kind::Shared, Direction::Push, Conflict::Newest).await;
+            return self.link(playlist, Kind::Shared, Conflict::Newest).await;
         }
         let me = self.clone();
         tokio::spawn(async move { me.pass().await });
@@ -298,7 +300,7 @@ impl SyncService {
     /// its.
     pub(super) async fn new_playlist(self: &Arc<Self>, playlist: &str) -> Result<(), ToggleError> {
         self.state.forget_retired(playlist)?;
-        self.link(playlist, Kind::Shared, Direction::Push, Conflict::Newest).await
+        self.link(playlist, Kind::Shared, Conflict::Newest).await
     }
 
     /// Take a link off: its copy on the target is deleted.
@@ -336,7 +338,6 @@ impl SyncService {
             let shared = Target {
                 playlist: name.clone(),
                 kind: Kind::Shared,
-                direction: Direction::Push,
                 conflict: Conflict::Newest,
                 copy: Some(name.clone()),
             };
@@ -426,6 +427,9 @@ fn write_whole(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
+/// Agreed tracks whose file is away for now, and their items on the server as the link remembers them.
+type Away = HashMap<i64, String>;
+
 /// Lines, track ids and server ids, through the catalogue. Blocking.
 struct Translate {
     cat: Arc<Catalogue>,
@@ -448,6 +452,20 @@ impl Translate {
         relative_to(self.folders.first()?, &self.folders.get(folder as usize)?.join(rel))
     }
 
+    /// A track's playlist line also while its file is away (where it was last seen).
+    fn line_any(&self, track: i64) -> Option<String> {
+        let (folder, rel) = self.cat.file_of_any(track)?;
+        if folder == 0 {
+            return Some(rel);
+        }
+        relative_to(self.folders.first()?, &self.folders.get(folder as usize)?.join(rel))
+    }
+
+    /// `items` with the agreed tracks whose file is away for now put back (`with_vanished_kept`).
+    fn with_away_kept(&self, base: &[i64], items: Vec<Item>) -> Vec<Item> {
+        with_vanished_kept(base, items, |t| if self.line(t).is_some() { None } else { Some(self.line_any(t)) })
+    }
+
     fn lines(&self, items: &[Item]) -> Vec<String> {
         items
             .iter()
@@ -462,13 +480,20 @@ impl Translate {
         self.cat.source_id_of(&self.source, track)
     }
 
+    /// A track's item on the server: the one the catalogue links its file to, else (its file away) the one `away`
+    /// remembers.
+    fn sid(&self, track: i64, away: &Away) -> Option<String> {
+        self.server_id(track).or_else(|| away.get(&track).cloned())
+    }
+
     /// The server's list as track ids, and the items Cratarr does not know, each with the position it had (kept on
-    /// the server as they are; the file cannot hold them).
-    fn from_server(&self, ids: &[String]) -> (Vec<i64>, Vec<(usize, String)>) {
+    /// the server as they are; the file cannot hold them). An item `away` remembers is its track.
+    fn from_server(&self, ids: &[String], away: &Away) -> (Vec<i64>, Vec<(usize, String)>) {
         let mut tracks = Vec::new();
         let mut unknown = Vec::new();
         for (i, id) in ids.iter().enumerate() {
-            match self.cat.track_of_source(&self.source, id) {
+            let remembered = || away.iter().find(|(_, a)| *a == id).map(|(t, _)| *t);
+            match self.cat.track_of_source(&self.source, id).or_else(remembered) {
                 Some(t) => tracks.push(t),
                 None => unknown.push((i, id.clone())),
             }
@@ -476,11 +501,21 @@ impl Translate {
         (tracks, unknown)
     }
 
-    /// The tracks of a merged list that the server knows, as (track, server id).
-    fn on_server(&self, items: &[Item]) -> Vec<(i64, String)> {
+    /// The tracks of a list that are on the server, as (track, server id): what both sides agree on.
+    fn on_server(&self, items: &[Item], away: &Away) -> Vec<(i64, String)> {
         items
             .iter()
-            .filter_map(|i| if let Item::Track(t) = i { self.server_id(*t).map(|s| (*t, s)) } else { None })
+            .filter_map(|i| if let Item::Track(t) = i { self.sid(*t, away).map(|s| (*t, s)) } else { None })
+            .collect()
+    }
+
+    /// What a link remembers of its agreed tracks whose file is away now: their items on the server.
+    fn away(&self, link: &Link) -> Away {
+        link.base
+            .iter()
+            .zip(&link.ids)
+            .filter(|(t, id)| !id.is_empty() && self.line(**t).is_none())
+            .map(|(t, id)| (*t, id.clone()))
             .collect()
     }
 }
@@ -516,7 +551,23 @@ fn believable(linked: usize, lost: usize) -> bool {
     linked < 4 || lost * 2 <= linked
 }
 
-/// One pass for one server and user: the playlists linked to this account (decision 0014).
+/// Every this many passes each linked pair's contents are read on the server whatever its change stamp says (about
+/// every five minutes at one pass in 30 s): a change a server did not stamp is found all the same.
+pub(super) const VERIFY_EVERY: u64 = 10;
+
+/// What one account's pass left undone: by playlist, why. A problem with one playlist is that playlist's alone (the
+/// rest go on, and it is tried again next pass); a problem with the whole account is the pass's error.
+pub(super) type Undone = HashMap<String, String>;
+
+/// One pass for one server and user: the playlists linked to this account (decision 0014). Two-way, whatever happened
+/// on either side since the last pass:
+/// - renamed on one side: the other follows; on both: the link's conflict rule picks the name;
+/// - edited: merged (`playlist_merge`), the conflict rule picking the order when both reordered;
+/// - deleted on one side: deleted on the other, unless the other changed since: an edit wins over a deletion, and the
+///   playlist comes back where it was deleted, with the edits;
+/// - new on one side: made on the other; a name that cannot be a file name here, or is taken, gets the nearest free
+///   one ("Chill 2"), and the server copy is renamed to match;
+/// - a track whose file is away for now (an unmounted folder, a rescan under way) is no removal on either side.
 pub(super) async fn sync_server(
     store: &Store,
     cat: Arc<Catalogue>,
@@ -524,7 +575,8 @@ pub(super) async fn sync_server(
     state: &SyncState,
     source_id: &str,
     user: &str,
-) -> Result<()> {
+    verify: bool,
+) -> Result<Undone> {
     let kind = Kind::User { source: source_id.to_string(), user: user.to_string() };
     let mine: Vec<Target> = state.targets()?.into_iter().filter(|t| t.kind == kind).collect();
     let target_of = |name: &str| mine.iter().find(|t| t.playlist == name).cloned();
@@ -532,6 +584,7 @@ pub(super) async fn sync_server(
     let files = store.snapshot().await?;
     let has_file = |n: &str| files.iter().any(|(f, _, _)| f == n);
     let mut links = state.links(source_id, user)?;
+    let mut undone = Undone::new();
 
     // 1. Names first. A link whose file is not under the name it has here: if the server copy's current name is a
     //    file no other link holds, that is the file (a rename made on either side, carried out or not).
@@ -554,145 +607,236 @@ pub(super) async fn sync_server(
         bail!("only {} of {} linked playlist files are here; not believed, nothing changed", links.len() - lost_here, links.len());
     }
     let tr = Arc::new(Translate { folders: cat.folders(), cat, source: source_id.to_string() });
+    let linked_remotes: Vec<String> = links.iter().map(|l| l.remote.clone()).collect();
 
     // 2. Each linked playlist present on both sides: names, then contents.
     for link in links.clone() {
         let Some(remote) = own.iter().find(|o| o.id == link.remote) else { continue };
         let Some((_, lines, _)) = files.iter().find(|(n, _, _)| n == &link.name) else { continue };
         let Some(target) = target_of(&link.name) else { continue };
-        let mut link = link;
-        if target.direction == Direction::Push && remote.name != link.name {
-            // Push: the playlist's name wins, also over a rename made on the server.
-            link.remote = s.rename_playlist(user, &remote.id, &link.name).await?;
-            link.remote_name = link.name.clone();
-            link.stamp = None;
-            state.put(source_id, user, &link)?;
-            continue;
+        let name = link.name.clone();
+        let pair = Pair { store, s, state, tr: &tr, source_id, user, own: &own, linked_remotes: &linked_remotes };
+        if let Err(e) = pair.sync(link, remote, lines, &target, &has_file, verify).await {
+            tracing::warn!("playlist sync: {name} with {source_id}: {e:#}");
+            undone.insert(name, format!("{e:#}"));
         }
-        if remote.name != link.remote_name {
-            // Renamed on the server (it wins over a rename here not yet carried over): the file follows.
-            if remote.name != link.name {
-                match store.rename(&link.name, &remote.name).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        tracing::warn!("playlist sync: cannot rename {} to {:?}: {e:?}", link.name, remote.name);
-                        continue;
-                    }
-                }
-                state.rename(&link.name, &remote.name)?;
-            }
-            link.name = remote.name.clone();
-            link.remote_name = remote.name.clone();
-            state.put(source_id, user, &link)?;
-            // Its content is looked at next pass, under the new name.
-            continue;
-        }
-        if link.name != link.remote_name {
-            // Renamed here: the server copy follows (a server may give it a new id doing so).
-            link.remote = s.rename_playlist(user, &remote.id, &link.name).await?;
-            link.remote_name = link.name.clone();
-            link.stamp = None;
-            state.put(source_id, user, &link)?;
-            // Its content is looked at next pass, under the server's new listing.
-            continue;
-        }
-        sync_content(store, s, state, &tr, source_id, user, &link, remote.stamp.clone(), lines, &target).await?;
     }
 
-    // 3. Gone on one side: gone on the other (two-way), or made again (push).
+    // 3. Gone on one side: gone on the other too, unless the other changed since they last agreed (then it comes
+    //    back where it was deleted, with those changes).
     for l in &links {
-        let on_server = own.iter().any(|o| o.id == l.remote);
-        let push = target_of(&l.name).is_some_and(|t| t.direction == Direction::Push);
-        match (has_file(&l.name), on_server) {
-            (true, false) if push => {
-                // Push: the copy is made again (step 4).
-                state.remove(source_id, user, &l.name)?;
-            }
-            (true, false) => {
-                tracing::info!("playlist sync: {} was deleted on {source_id}; deleting it here too", l.name);
-                match store.delete(&l.name).await {
-                    Ok(()) | Err(crate::playlists::StoreError::Unknown) => {
+        let remote = own.iter().find(|o| o.id == l.remote);
+        let file = files.iter().find(|(n, _, _)| n == &l.name).map(|(_, lines, _)| lines);
+        let done: Result<()> = async {
+            match (file, remote) {
+                (Some(lines), None) => {
+                    if changed_here(&tr, l, lines).await? {
+                        // Edited here since: a new server copy is made (step 4); the playlist stays.
+                        tracing::info!("playlist sync: {} was deleted on {source_id} but changed here since; made again there", l.name);
                         state.remove(source_id, user, &l.name)?;
-                        state.retire_target(&l.name, &kind)?;
+                        return Ok(());
                     }
-                    Err(e) => tracing::warn!("playlist sync: cannot delete {}: {e:?}", l.name),
-                }
-            }
-            (false, true) => {
-                tracing::info!("playlist sync: {} was deleted here; deleting it on {source_id}", l.name);
-                match s.delete_playlist(&l.remote).await {
-                    Ok(()) => {
-                        state.remove(source_id, user, &l.name)?;
-                        state.retire_target(&l.name, &kind)?;
+                    tracing::info!("playlist sync: {} was deleted on {source_id}; deleting it here too", l.name);
+                    match store.delete(&l.name).await {
+                        Ok(()) | Err(crate::playlists::StoreError::Unknown) => {
+                            state.remove(source_id, user, &l.name)?;
+                            state.retire_target(&l.name, &kind)?;
+                        }
+                        Err(e) => bail!("cannot delete it: {e:?}"),
                     }
-                    // Kept: the next pass tries again (or finds it gone).
-                    Err(e) => tracing::warn!("playlist sync: deleting {} on {source_id}: {e:#}", l.name),
                 }
+                (None, Some(r)) => {
+                    let ids = s.playlist_tracks(user, &r.id).await?;
+                    let (t, link) = (tr.clone(), l.clone());
+                    let (tracks, changed) = blocking(move || {
+                        let away = t.away(&link);
+                        let (listed, _) = t.from_server(&ids, &away);
+                        let changed = with_unlinked_kept(&link.base, listed.clone(), |x| t.sid(x, &away).is_some()) != link.base;
+                        (listed, changed)
+                    })
+                    .await?;
+                    if changed {
+                        // Edited on the server since: the playlist comes back here, as the server has it, with every
+                        // link it had (its Shared copy too).
+                        tracing::info!("playlist sync: {} was deleted here but changed on {source_id} since; restored", l.name);
+                        match store.create(&l.name).await {
+                            Ok(()) | Err(crate::playlists::StoreError::Exists) => {}
+                            Err(e) => bail!("cannot restore it: {e:?}"),
+                        }
+                        let (t, back) = (tr.clone(), tracks.clone());
+                        let new_lines = blocking(move || t.lines(&back.into_iter().map(Item::Track).collect::<Vec<_>>())).await?;
+                        store.set_entries(&l.name, &new_lines).await.map_err(|e| anyhow::anyhow!("cannot restore it: {e:?}"))?;
+                        state.revive_targets(&l.name)?;
+                        let (t, back) = (tr.clone(), tracks);
+                        let agreed = blocking(move || t.on_server(&back.into_iter().map(Item::Track).collect::<Vec<_>>(), &Away::new())).await?;
+                        let (base, ids) = agreed.into_iter().unzip();
+                        state.put(source_id, user, &Link { stamp: r.stamp.clone(), base, ids, ..l.clone() })?;
+                        return Ok(());
+                    }
+                    tracing::info!("playlist sync: {} was deleted here; deleting it on {source_id}", l.name);
+                    // Kept on failure: the next pass tries again (or finds it gone).
+                    s.delete_playlist(&l.remote).await?;
+                    state.remove(source_id, user, &l.name)?;
+                    state.retire_target(&l.name, &kind)?;
+                }
+                (None, None) => {
+                    state.remove(source_id, user, &l.name)?;
+                    state.retire_target(&l.name, &kind)?;
+                }
+                (Some(_), Some(_)) => {}
             }
-            (false, false) => {
-                state.remove(source_id, user, &l.name)?;
-                state.retire_target(&l.name, &kind)?;
-            }
-            (true, true) => {}
+            Ok(())
+        }
+        .await;
+        if let Err(e) = done {
+            tracing::warn!("playlist sync: {} with {source_id}: {e:#}", l.name);
+            undone.insert(l.name.clone(), format!("{e:#}"));
         }
     }
+    // Read again: this pass renamed, deleted and restored (the names at the start would make copies of what is gone).
+    let files = store.snapshot().await?;
+    let has_file = |n: &str| files.iter().any(|(f, _, _)| f == n);
+    let links = state.links(source_id, user)?;
     // A link to a playlist deleted before it ever had a copy there.
     for t in mine.iter().filter(|t| !has_file(&t.playlist) && !links.iter().any(|l| l.name == t.playlist)) {
         state.retire_target(&t.playlist, &kind)?;
     }
-    // Read again: this pass renamed and deleted (the names at the start would make copies of what is gone).
-    let links = state.links(source_id, user)?;
     let mine: Vec<Target> = state.targets()?.into_iter().filter(|t| t.kind == kind).collect();
     let target_of = |name: &str| mine.iter().find(|t| t.playlist == name).cloned();
 
     // 4. New on one side: a copy on the other.
-    let linked_remotes: Vec<String> = links.iter().map(|l| l.remote.clone()).collect();
+    // Every server copy linked at the start too: a copy renamed or deleted this pass is still in the listing read
+    // then, and is no new playlist.
+    let mut claimed: BTreeSet<String> = links.iter().map(|l| l.remote.clone()).chain(linked_remotes.iter().cloned()).collect();
     let linked_names: Vec<String> = links.iter().map(|l| l.name.clone()).collect();
     for (name, lines, _) in files.iter().filter(|(n, _, _)| !linked_names.contains(n)) {
         let Some(target) = target_of(name) else { continue };
-        // A server copy of that name nobody holds: made before this pass could remember it, or on both sides. Linked
-        // with no agreed list, so the first merge keeps everything from both.
-        if let Some(o) = own.iter().find(|o| &o.name == name && !linked_remotes.contains(&o.id)) {
-            let link = Link { name: name.clone(), remote: o.id.clone(), remote_name: o.name.clone(), stamp: None, base: Vec::new() };
-            state.put(source_id, user, &link)?;
-            sync_content(store, s, state, &tr, source_id, user, &link, o.stamp.clone(), lines, &target).await?;
-            continue;
-        }
-        let (t, l) = (tr.clone(), lines.clone());
-        let on_server = blocking(move || {
-            let items = t.items(&l);
-            t.on_server(&items)
-        })
-        .await?;
-        let ids: Vec<String> = on_server.iter().map(|(_, s)| s.clone()).collect();
-        let remote = s.create_playlist(user, name, &ids).await?;
-        let base = on_server.into_iter().map(|(t, _)| t).collect();
-        state.put(source_id, user, &Link { name: name.clone(), remote, remote_name: name.clone(), stamp: None, base })?;
-    }
-    // Made on the server (in Finamp, say): a new playlist here, linked two-way. Not for an account whose links all
-    // push (it only receives).
-    let takes_new = mine.is_empty() || mine.iter().any(|t| t.direction == Direction::TwoWay);
-    for o in own.iter().filter(|o| takes_new && !linked_remotes.contains(&o.id) && !has_file(&o.name)) {
-        // Remembered before its tracks are written, so a cut-short pass finds file and link again instead of making a
-        // second file.
-        match store.create(&o.name).await {
-            Ok(()) | Err(crate::playlists::StoreError::Exists) => {}
-            Err(e) => {
-                tracing::warn!("playlist sync: cannot make a file for {:?}: {e:?}", o.name);
-                continue;
+        let done: Result<()> = async {
+            // A server copy of that name nobody holds: made before this pass could remember it, or on both sides.
+            // Linked with no agreed list, so the first merge keeps everything from both.
+            if let Some(o) = own.iter().find(|o| &o.name == name && !claimed.contains(&o.id)) {
+                claimed.insert(o.id.clone());
+                let link = Link::new(name, &o.id, &o.name);
+                state.put(source_id, user, &link)?;
+                return sync_content(store, s, state, &tr, source_id, user, &link, o.stamp.clone(), lines, &target, true).await;
             }
+            let (t, l) = (tr.clone(), lines.clone());
+            let on_server = blocking(move || {
+                let items = t.items(&l);
+                t.on_server(&items, &Away::new())
+            })
+            .await?;
+            let ids: Vec<String> = on_server.iter().map(|(_, s)| s.clone()).collect();
+            let remote = s.create_playlist(user, name, &ids).await?;
+            claimed.insert(remote.clone());
+            let (base, ids) = on_server.into_iter().unzip();
+            state.put(source_id, user, &Link { base, ids, ..Link::new(name, &remote, name) })?;
+            Ok(())
         }
-        let target =
-            Target { playlist: o.name.clone(), kind: kind.clone(), direction: Direction::TwoWay, conflict: Conflict::Newest, copy: None };
-        state.put_target(&target)?;
-        let link = Link { name: o.name.clone(), remote: o.id.clone(), remote_name: o.name.clone(), stamp: None, base: Vec::new() };
-        state.put(source_id, user, &link)?;
-        sync_content(store, s, state, &tr, source_id, user, &link, o.stamp.clone(), &[], &target).await?;
+        .await;
+        if let Err(e) = done {
+            tracing::warn!("playlist sync: {name} with {source_id}: {e:#}");
+            undone.insert(name.clone(), format!("{e:#}"));
+        }
     }
-    Ok(())
+    // Made on the server (in Finamp, say): a new playlist here, linked. Its name as the server has it when that is a
+    // usable file name no playlist here has; else the nearest free one, and the server copy is renamed to match on
+    // the next pass. Two server playlists of one name are two playlists here.
+    let mut names_here: Vec<String> = files.iter().map(|(n, _, _)| n.clone()).collect();
+    for o in own.iter().filter(|o| !claimed.contains(&o.id)) {
+        let name = crate::playlists::free_name(&crate::playlists::usable_name(&o.name), |n| names_here.iter().any(|h| h.eq_ignore_ascii_case(n)));
+        names_here.push(name.clone());
+        let done: Result<()> = async {
+            // Remembered before its tracks are written, so a cut-short pass finds file and link again instead of
+            // making a second file.
+            store.create(&name).await.map_err(|e| anyhow::anyhow!("cannot make a playlist for {:?} from {source_id}: {e:?}", o.name))?;
+            let target = Target { playlist: name.clone(), kind: kind.clone(), conflict: Conflict::Newest, copy: None };
+            state.put_target(&target)?;
+            let link = Link::new(&name, &o.id, &o.name);
+            state.put(source_id, user, &link)?;
+            sync_content(store, s, state, &tr, source_id, user, &link, o.stamp.clone(), &[], &target, true).await
+        }
+        .await;
+        if let Err(e) = done {
+            tracing::warn!("playlist sync: {e:#}");
+            undone.insert(name, format!("{e:#}"));
+        }
+    }
+    Ok(undone)
 }
 
-/// Bring one linked pair's contents in step (names already agree).
+/// Whether the playlist here changed since both sides last agreed (in its tracks the server knows, or that are away
+/// for now).
+async fn changed_here(tr: &Arc<Translate>, link: &Link, lines: &[String]) -> Result<bool> {
+    let (t, l, base, link) = (tr.clone(), lines.to_vec(), link.base.clone(), link.clone());
+    blocking(move || {
+        let items = t.with_away_kept(&base, t.items(&l));
+        let away = t.away(&link);
+        t.on_server(&items, &away).into_iter().map(|(x, _)| x).collect::<Vec<_>>() != base
+    })
+    .await
+}
+
+/// One linked pair present on both sides, in one pass.
+struct Pair<'a> {
+    store: &'a Store,
+    s: &'a dyn Source,
+    state: &'a SyncState,
+    tr: &'a Arc<Translate>,
+    source_id: &'a str,
+    user: &'a str,
+    own: &'a [crate::source::OwnPlaylist],
+    linked_remotes: &'a [String],
+}
+
+impl Pair<'_> {
+    /// Names, then contents. A rename is carried over in one pass and the contents looked at in the next, under the
+    /// names both sides then agree on.
+    async fn sync(
+        &self,
+        mut link: Link,
+        remote: &crate::source::OwnPlaylist,
+        lines: &[String],
+        target: &Target,
+        has_file: &(dyn Fn(&str) -> bool + Sync),
+        verify: bool,
+    ) -> Result<()> {
+        let (state, source_id, user) = (self.state, self.source_id, self.user);
+        let renamed_there = remote.name != link.remote_name;
+        let renamed_here = link.name != link.remote_name;
+        // Renamed on both sides: the conflict rule picks (newest: the server's, the change seen last).
+        let there_leads = !renamed_here || target.conflict != Conflict::Playlist;
+        if renamed_there && there_leads {
+            // The file follows, under the nearest usable free name (the server copy then follows that, next pass).
+            if remote.name != link.name {
+                let to = crate::playlists::free_name(&crate::playlists::usable_name(&remote.name), |n| n != link.name && has_file(n));
+                if to != link.name {
+                    self.store.rename(&link.name, &to).await.map_err(|e| anyhow::anyhow!("cannot rename it to {to:?}: {e:?}"))?;
+                    state.rename(&link.name, &to)?;
+                    link.name = to;
+                }
+            }
+            link.remote_name = remote.name.clone();
+            state.put(source_id, user, &link)?;
+            return Ok(());
+        }
+        if renamed_here || renamed_there {
+            // The server copy follows the name here. Another linked playlist of that name there is not taken over.
+            if self.own.iter().any(|o| o.name == link.name && o.id != remote.id && self.linked_remotes.contains(&o.id)) {
+                bail!("{source_id} has another linked playlist named {:?}", link.name);
+            }
+            link.remote = self.s.rename_playlist(user, &remote.id, &link.name).await?;
+            link.remote_name = link.name.clone();
+            link.stamp = None;
+            state.put(source_id, user, &link)?;
+            return Ok(());
+        }
+        sync_content(self.store, self.s, state, self.tr, source_id, user, &link, remote.stamp.clone(), lines, target, verify).await
+    }
+}
+
+/// Bring one linked pair's contents in step (names already agree). The server's list is read when its stamp moved,
+/// when `verify`, or when the playlist here changed (so a write keeps what Cratarr does not know there).
 #[allow(clippy::too_many_arguments)]
 async fn sync_content(
     store: &Store,
@@ -705,61 +849,87 @@ async fn sync_content(
     stamp: Option<String>,
     lines: &[String],
     target: &Target,
+    verify: bool,
 ) -> Result<()> {
-    let server_changed = stamp != link.stamp || link.stamp.is_none();
-    let (t, l) = (tr.clone(), lines.to_vec());
-    let items = blocking(move || t.items(&l)).await?;
-    let (server_tracks, unknown) = if server_changed {
-        let ids = s.playlist_tracks(user, &link.remote).await?;
-        let t = tr.clone();
-        blocking(move || t.from_server(&ids)).await?
-    } else {
-        (link.base.clone(), Vec::new())
-    };
-    // A track the server stopped listing while Cratarr has no server item for it was not taken out by anyone: its
-    // file moved (Keep, Replace, a restructure) and the server's new item is not linked yet. Read as a removal it
-    // would leave the playlist here; it stays, and goes back to the server once linked.
-    let server_tracks = if server_changed {
-        let (t, base, listed) = (tr.clone(), link.base.clone(), server_tracks);
-        blocking(move || with_unlinked_kept(&base, listed, |track| t.server_id(track).is_some())).await?
-    } else {
-        server_tracks
-    };
-    let (t, its) = (tr.clone(), items.clone());
-    let file_on_server: Vec<i64> = blocking(move || t.on_server(&its).into_iter().map(|(t, _)| t).collect()).await?;
-    if !server_changed && file_on_server == link.base {
+    // A track whose file is away for now was not taken out here: it counts as still in the playlist (its line stays
+    // as it is, a missing one), and stays in the server copy for as long as the server lists it.
+    let (t, l, lk) = (tr.clone(), lines.to_vec(), link.clone());
+    let (items, file_tracks, away) = blocking(move || {
+        let items = t.with_away_kept(&lk.base, t.items(&l));
+        let away = t.away(&lk);
+        let tracks: Vec<i64> = t.on_server(&items, &away).into_iter().map(|(x, _)| x).collect();
+        (items, tracks, away)
+    })
+    .await?;
+    let away = Arc::new(away);
+    let stamp_moved = stamp != link.stamp || link.stamp.is_none();
+    if !stamp_moved && !verify && file_tracks == link.base {
         return Ok(());
     }
-    // Push: the playlist as it is. Two-way: merged, the conflict rule picking the side that leads.
-    let merged = match (target.direction, target.conflict) {
-        (Direction::Push, _) => items.clone(),
-        (Direction::TwoWay, Conflict::Playlist) => merge(&link.base, &items, &server_tracks, Newer::File),
-        (Direction::TwoWay, Conflict::Target) => merge(&link.base, &items, &server_tracks, Newer::Server),
-        (Direction::TwoWay, Conflict::Newest) => {
-            merge(&link.base, &items, &server_tracks, if server_changed { Newer::Server } else { Newer::File })
+    let ids = s.playlist_tracks(user, &link.remote).await?;
+    // A track the server stopped listing while Cratarr has no server item for it was not taken out by anyone: its
+    // file moved (Keep, Replace, a restructure) or is away, and the server's item for it is not linked. Read as a
+    // removal it would leave the playlist here; it stays, and goes back to the server once linked.
+    let (t, base, aw) = (tr.clone(), link.base.clone(), away.clone());
+    let (server_tracks, unknown) = blocking(move || {
+        let (listed, unknown) = t.from_server(&ids, &aw);
+        (with_unlinked_kept(&base, listed, |x| t.sid(x, &aw).is_some()), unknown)
+    })
+    .await?;
+    let server_changed = server_tracks != link.base;
+    if !server_changed && file_tracks == link.base {
+        if stamp != link.stamp {
+            state.put(source_id, user, &Link { stamp, ..link.clone() })?;
         }
+        return Ok(());
+    }
+    // The conflict rule picks the order when both reordered (newest: the server's, the change seen last).
+    let newer = match target.conflict {
+        Conflict::Playlist => Newer::File,
+        Conflict::Target => Newer::Server,
+        Conflict::Newest if server_changed => Newer::Server,
+        Conflict::Newest => Newer::File,
     };
-    let (t, m) = (tr.clone(), merged.clone());
-    let (new_lines, on_server) = blocking(move || (t.lines(&m), t.on_server(&m))).await?;
+    let merged = merge(&link.base, &items, &server_tracks, newer);
+    let (t, m, aw) = (tr.clone(), merged.clone(), away.clone());
+    let (new_lines, on_server) = blocking(move || (t.lines(&m), t.on_server(&m, &aw))).await?;
     if new_lines != lines && !store.set_entries_if(&link.name, lines, &new_lines).await? {
         // Edited while this pass merged: the next pass merges that too.
         return Ok(());
     }
     let server_now: Vec<String> = with_unknown(on_server.iter().map(|(_, s)| s.clone()).collect(), &unknown);
     let server_before: Vec<String> = {
-        let (t, before) = (tr.clone(), server_tracks.clone());
-        let ids = blocking(move || before.iter().filter_map(|x| t.server_id(*x)).collect::<Vec<_>>()).await?;
+        let (t, before, aw) = (tr.clone(), server_tracks.clone(), away.clone());
+        let ids = blocking(move || before.iter().filter_map(|x| t.sid(*x, &aw)).collect::<Vec<_>>()).await?;
         with_unknown(ids, &unknown)
     };
     let wrote_server = server_now != server_before;
     if wrote_server {
         s.set_playlist_tracks(user, &link.remote, &server_now).await?;
     }
-    let base = on_server.into_iter().map(|(t, _)| t).collect();
     // After a write the stamp changed: unknown until the next listing, which then finds nothing to do.
     let stamp = if wrote_server { None } else { stamp };
-    state.put(source_id, user, &Link { stamp, base, ..link.clone() })?;
+    let (base, ids) = on_server.into_iter().unzip();
+    state.put(source_id, user, &Link { stamp, base, ids, ..link.clone() })?;
     Ok(())
+}
+
+/// The playlist's items with the tracks of `base` whose file is away for now put back where they were: while away a
+/// track's line reads as a missing one, so it would look taken out. `away` says, for a track whose file is away,
+/// the line it had (`Some(None)` when not even that is known); `None` for a track whose file is there. Only a track
+/// whose line is still in the playlist is put back: a line taken out is a real removal.
+fn with_vanished_kept(base: &[i64], mut items: Vec<Item>, away: impl Fn(i64) -> Option<Option<String>>) -> Vec<Item> {
+    for (at, track) in base.iter().enumerate() {
+        if items.contains(&Item::Track(*track)) {
+            continue;
+        }
+        if let Some(Some(line)) = away(*track)
+            && items.contains(&Item::Missing(line))
+        {
+            items.insert(at.min(items.len()), Item::Track(*track));
+        }
+    }
+    items
 }
 
 #[cfg(test)]
@@ -773,6 +943,8 @@ mod tests {
     #[derive(Default)]
     struct Fake {
         lists: Mutex<Vec<(String, String, Vec<String>, u32)>>, // id, name, items, version
+        /// Writes to these playlists fail (a server refusing one playlist).
+        refuse: Mutex<Vec<String>>,
     }
 
     impl Fake {
@@ -781,6 +953,16 @@ mod tests {
             let p = l.iter_mut().find(|p| p.1 == name).unwrap();
             f(&mut p.2);
             p.3 += 1;
+        }
+        /// A change the server does not stamp.
+        fn edit_quietly(&self, name: &str, f: impl FnOnce(&mut Vec<String>)) {
+            let mut l = self.lists.lock().unwrap();
+            f(&mut l.iter_mut().find(|p| p.1 == name).unwrap().2);
+        }
+        fn names(&self) -> Vec<String> {
+            let mut n: Vec<String> = self.lists.lock().unwrap().iter().map(|p| p.1.clone()).collect();
+            n.sort();
+            n
         }
         fn items(&self, name: &str) -> Vec<String> {
             self.lists.lock().unwrap().iter().find(|p| p.1 == name).map(|p| p.2.clone()).unwrap_or_default()
@@ -840,6 +1022,9 @@ mod tests {
         }
         fn set_playlist_tracks<'a>(&'a self, _user: &'a str, id: &'a str, ids: &'a [String]) -> Fut<'a, ()> {
             Box::pin(async move {
+                if self.refuse.lock().unwrap().iter().any(|r| r == id) {
+                    anyhow::bail!("refused");
+                }
                 let mut l = self.lists.lock().unwrap();
                 let p = l.iter_mut().find(|p| p.0 == id).unwrap();
                 p.2 = ids.to_vec();
@@ -889,14 +1074,19 @@ mod tests {
         Kind::User { source: "srv".into(), user: "me".into() }
     }
 
-    /// Every playlist here linked two-way to "me" on "srv" (what 0012 did for all of them), then one pass.
+    /// Every playlist here linked to "me" on "srv" (what 0012 did for all of them), then one pass; what it left undone
+    /// is its error.
     async fn run(store: &Store, cat: &Arc<Catalogue>, srv: &Fake, state: &SyncState) -> Result<()> {
         let linked: Vec<String> = state.targets().unwrap().into_iter().map(|t| t.playlist).collect();
         for p in store.view(None).await.unwrap().into_iter().filter(|p| !linked.contains(&p.id)) {
-            let t = Target { playlist: p.id, kind: me(), direction: Direction::TwoWay, conflict: Conflict::Newest, copy: None };
+            let t = Target { playlist: p.id, kind: me(), conflict: Conflict::Newest, copy: None };
             state.put_target(&t).unwrap();
         }
-        sync_server(store, cat.clone(), srv, state, "srv", "me").await
+        let undone = sync_server(store, cat.clone(), srv, state, "srv", "me", false).await?;
+        if !undone.is_empty() {
+            bail!("undone: {undone:?}");
+        }
+        Ok(())
     }
 
     fn lines(v: &[&str]) -> Vec<String> {
@@ -1041,41 +1231,200 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_push_link_overwrites_what_changed_on_the_server_and_takes_nothing_back() {
+    async fn an_edit_wins_over_a_deletion_on_the_other_side() {
+        let (d, cat, store) = library();
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        let sync = || run(&store, &cat, &srv, &state);
+        store.create("Chill").await.unwrap();
+        store.set_entries("Chill", &lines(&["A/01.mp3"])).await.unwrap();
+        sync().await.unwrap();
+        // Deleted in Finamp, edited here: made again there, with the edit.
+        let id = srv.lists.lock().unwrap()[0].0.clone();
+        srv.delete_playlist(&id).await.unwrap();
+        store.set_entries("Chill", &lines(&["A/01.mp3", "A/02.mp3"])).await.unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s2"]));
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3"]));
+        // Deleted here, edited in Finamp: back here as Finamp has it, with its links.
+        let shared = Target { playlist: "Chill".into(), kind: Kind::Shared, conflict: Conflict::Newest, copy: None };
+        state.put_target(&shared).unwrap();
+        store.delete("Chill").await.unwrap();
+        state.retire_target("Chill", &Kind::Shared).unwrap();
+        srv.edit("Chill", |v| v.push("s3".into()));
+        sync().await.unwrap();
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3", "A/03.mp3"]));
+        assert!(state.targets().unwrap().contains(&shared), "its Shared link is back too");
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s2", "s3"]));
+        // Deleted on one side with nothing changed on the other: deleted on both.
+        store.delete("Chill").await.unwrap();
+        sync().await.unwrap();
+        assert!(srv.lists.lock().unwrap().is_empty());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_name_that_cannot_be_used_here_is_made_free_and_both_sides_agree() {
+        let (d, cat, store) = library();
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        let sync = || run(&store, &cat, &srv, &state);
+        // A playlist here not linked to this account, and Finamp playlists of its name, twice, and a name no file
+        // can have.
+        store.create("Chill").await.unwrap();
+        let other = Target { playlist: "Chill".into(), kind: Kind::Shared, conflict: Conflict::Newest, copy: None };
+        state.put_target(&other).unwrap();
+        srv.create_playlist("me", "Chill", &lines(&["s1"])).await.unwrap();
+        srv.create_playlist("me", "Chill", &lines(&["s2"])).await.unwrap();
+        srv.create_playlist("me", "AC/DC?", &lines(&["s3"])).await.unwrap();
+        sync_server(&store, cat.clone(), &srv, &state, "srv", "me", false).await.unwrap();
+        sync_server(&store, cat.clone(), &srv, &state, "srv", "me", false).await.unwrap();
+        assert_eq!(store.entries("Chill").await.unwrap(), Vec::<String>::new(), "the one here is untouched");
+        assert_eq!(store.entries("Chill 2").await.unwrap(), lines(&["A/01.mp3"]));
+        assert_eq!(store.entries("Chill 3").await.unwrap(), lines(&["A/02.mp3"]));
+        assert_eq!(store.entries("AC-DC-").await.unwrap(), lines(&["A/03.mp3"]));
+        // The server copies took the names here.
+        assert_eq!(srv.names(), lines(&["AC-DC-", "Chill 2", "Chill 3"]));
+        sync().await.unwrap();
+        assert_eq!(srv.names(), lines(&["AC-DC-", "Chill 2", "Chill 3"]), "settled");
+        // Renamed in Finamp to a name taken here: the file gets the nearest free one, the server copy follows.
+        let id = srv.lists.lock().unwrap().iter().find(|p| p.1 == "AC-DC-").unwrap().0.clone();
+        srv.rename_in_finamp(&id, "Chill 2");
+        sync().await.unwrap();
+        sync().await.unwrap();
+        assert_eq!(store.entries("Chill 4").await.unwrap(), lines(&["A/03.mp3"]));
+        assert_eq!(srv.names(), lines(&["Chill 2", "Chill 3", "Chill 4"]));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn renamed_on_both_sides_the_conflict_rule_picks_the_name() {
+        let (d, cat, store) = library();
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        store.create("Chill").await.unwrap();
+        let mut t = Target { playlist: "Chill".into(), kind: me(), conflict: Conflict::Playlist, copy: None };
+        state.put_target(&t).unwrap();
+        let sync = || sync_server(&store, cat.clone(), &srv, &state, "srv", "me", false);
+        sync().await.unwrap();
+        // The playlist leads: its name.
+        srv.rename_in_finamp("p1", "Calm");
+        state.rename("Chill", "Quiet").unwrap();
+        store.rename("Chill", "Quiet").await.unwrap();
+        sync().await.unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.names(), lines(&["Quiet"]));
+        assert!(store.entries("Quiet").await.is_ok());
+        // The newest (the server's, seen last) leads: its name.
+        t.playlist = "Quiet".into();
+        t.conflict = Conflict::Newest;
+        state.put_target(&t).unwrap();
+        let id = srv.lists.lock().unwrap()[0].0.clone();
+        srv.rename_in_finamp(&id, "Still");
+        state.rename("Quiet", "Hush").unwrap();
+        store.rename("Quiet", "Hush").await.unwrap();
+        sync().await.unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.names(), lines(&["Still"]));
+        assert!(store.entries("Still").await.is_ok());
+        assert!(store.entries("Hush").await.is_err());
+        assert_eq!(store.view(None).await.unwrap().len(), 1, "no stray playlist from a renamed copy's old id");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_track_whose_file_is_away_is_no_removal() {
+        let (d, cat, store) = library();
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        store.create("Chill").await.unwrap();
+        store.set_entries("Chill", &lines(&["A/01.mp3", "A/02.mp3", "A/03.mp3"])).await.unwrap();
+        let sync = || run(&store, &cat, &srv, &state);
+        sync().await.unwrap();
+        // A/02's file is away (an unmounted folder), and meanwhile a track is added in Finamp.
+        std::fs::remove_file(d.join("A/02.mp3")).unwrap();
+        cat.walk_all();
+        srv.edit("Chill", |v| v.push("s4".into()));
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s2", "s3", "s4"]), "the server keeps it");
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3", "A/03.mp3", "A/04.mp3"]), "its line stays");
+        // Its missing line taken out here (Repair, say): a real removal, also on the server.
+        std::fs::remove_file(d.join("A/02.mp3")).ok();
+        store.set_entries("Chill", &lines(&["A/01.mp3", "A/03.mp3", "A/04.mp3"])).await.unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s3", "s4"]));
+        // Its file back and added again here: once the server's item is linked again, it goes back there too.
+        std::fs::write(d.join("A/02.mp3"), "track 2").unwrap();
+        cat.walk_all();
+        store.set_entries("Chill", &lines(&["A/01.mp3", "A/02.mp3", "A/03.mp3", "A/04.mp3"])).await.unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s3", "s4"]), "not linked yet: nothing to send");
+        cat.record_links("srv", "lib", &[("s2".to_string(), 0, "A/02.mp3".to_string())], 3).unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.items("Chill"), lines(&["s1", "s2", "s3", "s4"]));
+        let before = srv.lists.lock().unwrap()[0].3;
+        sync().await.unwrap();
+        sync().await.unwrap();
+        assert_eq!(srv.lists.lock().unwrap()[0].3, before, "settled");
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3", "A/03.mp3", "A/04.mp3"]));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn an_away_file_that_comes_back_is_no_change() {
         let (d, cat, store) = library();
         let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
         store.create("Chill").await.unwrap();
         store.set_entries("Chill", &lines(&["A/01.mp3", "A/02.mp3"])).await.unwrap();
-        let push = Target { playlist: "Chill".into(), kind: me(), direction: Direction::Push, conflict: Conflict::Newest, copy: None };
-        state.put_target(&push).unwrap();
-        let sync = || sync_server(&store, cat.clone(), &srv, &state, "srv", "me");
+        let sync = || run(&store, &cat, &srv, &state);
         sync().await.unwrap();
-        assert_eq!(srv.items("Chill"), lines(&["s1", "s2"]));
-        // Changed in Finamp: put back as the playlist has it; the file is untouched.
-        srv.edit("Chill", |v| v.push("s3".into()));
+        std::fs::remove_file(d.join("A/02.mp3")).unwrap();
+        cat.walk_all();
+        sync().await.unwrap();
+        // Back, and linked again on the next listing.
+        std::fs::write(d.join("A/02.mp3"), "track 2").unwrap();
+        cat.walk_all();
+        sync().await.unwrap();
+        cat.record_links("srv", "lib", &[("s2".to_string(), 0, "A/02.mp3".to_string())], 3).unwrap();
+        sync().await.unwrap();
         sync().await.unwrap();
         assert_eq!(srv.items("Chill"), lines(&["s1", "s2"]));
         assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3"]));
-        // Renamed in Finamp: named back.
-        srv.rename_in_finamp("p1", "Calm");
-        sync().await.unwrap();
-        assert_eq!(srv.lists.lock().unwrap()[0].1, "Chill");
-        assert!(store.entries("Calm").await.is_err());
-        // Deleted in Finamp: made again.
-        let id = srv.lists.lock().unwrap()[0].0.clone();
-        srv.delete_playlist(&id).await.unwrap();
-        sync().await.unwrap();
-        sync().await.unwrap();
-        assert_eq!(srv.items("Chill"), lines(&["s1", "s2"]));
-        assert!(store.entries("Chill").await.is_ok(), "the playlist stays");
-        // Made in Finamp: not taken in, for an account that only receives.
-        srv.create_playlist("me", "Road", &lines(&["s4"])).await.unwrap();
-        sync().await.unwrap();
-        assert!(store.entries("Road").await.is_err());
-        // Only linked playlists take part.
-        store.create("Unlinked").await.unwrap();
-        sync().await.unwrap();
-        assert!(!srv.lists.lock().unwrap().iter().any(|p| p.1 == "Unlinked"));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn one_playlists_problem_does_not_hold_up_the_others() {
+        let (d, cat, store) = library();
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        for n in ["A1", "A2"] {
+            store.create(n).await.unwrap();
+        }
+        run(&store, &cat, &srv, &state).await.unwrap();
+        let a1 = srv.lists.lock().unwrap().iter().find(|p| p.1 == "A1").unwrap().0.clone();
+        srv.refuse.lock().unwrap().push(a1);
+        store.set_entries("A1", &lines(&["A/01.mp3"])).await.unwrap();
+        store.set_entries("A2", &lines(&["A/02.mp3"])).await.unwrap();
+        let undone = sync_server(&store, cat.clone(), &srv, &state, "srv", "me", false).await.unwrap();
+        assert_eq!(undone.keys().collect::<Vec<_>>(), vec!["A1"]);
+        assert_eq!(srv.items("A2"), lines(&["s2"]));
+        // Tried again next pass.
+        srv.refuse.lock().unwrap().clear();
+        run(&store, &cat, &srv, &state).await.unwrap();
+        assert_eq!(srv.items("A1"), lines(&["s1"]));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_change_the_server_did_not_stamp_is_found_when_verifying() {
+        let (d, cat, store) = library();
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        store.create("Chill").await.unwrap();
+        store.set_entries("Chill", &lines(&["A/01.mp3", "A/02.mp3"])).await.unwrap();
+        run(&store, &cat, &srv, &state).await.unwrap();
+        run(&store, &cat, &srv, &state).await.unwrap();
+        srv.edit_quietly("Chill", |v| v.reverse());
+        run(&store, &cat, &srv, &state).await.unwrap();
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/01.mp3", "A/02.mp3"]), "not seen without a stamp");
+        sync_server(&store, cat.clone(), &srv, &state, "srv", "me", true).await.unwrap();
+        assert_eq!(store.entries("Chill").await.unwrap(), lines(&["A/02.mp3", "A/01.mp3"]));
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -1085,9 +1434,9 @@ mod tests {
         let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
         store.create("Chill").await.unwrap();
         store.set_entries("Chill", &lines(&["A/01.mp3", "A/02.mp3"])).await.unwrap();
-        let mut t = Target { playlist: "Chill".into(), kind: me(), direction: Direction::TwoWay, conflict: Conflict::Playlist, copy: None };
+        let mut t = Target { playlist: "Chill".into(), kind: me(), conflict: Conflict::Playlist, copy: None };
         state.put_target(&t).unwrap();
-        let sync = || sync_server(&store, cat.clone(), &srv, &state, "srv", "me");
+        let sync = || sync_server(&store, cat.clone(), &srv, &state, "srv", "me", false);
         sync().await.unwrap();
         // Both reordered: the playlist's order leads.
         srv.edit("Chill", |v| v.reverse());

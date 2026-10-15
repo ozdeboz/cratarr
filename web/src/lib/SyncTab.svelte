@@ -1,9 +1,9 @@
 <script lang="ts">
   // The panel's Sync tab (decisions 0014, 0025): every target, linked or not, for the selected playlists, and how each
   // link is kept. With several playlists a target linked for only some shows a dash and "3 of 5"; ticking links all of
-  // them, unticking takes all their links off; a direction or conflict rule chosen applies to all ("Mixed" until then).
-  // Each change is made at once.
-  import { getTargets, linkPlaylist, unlinkPlaylist, type Conflict, type Direction, type Link, type TargetChoice } from './api';
+  // them, unticking takes all their links off; a conflict rule chosen applies to all ("Mixed" until then). Every link
+  // is kept both ways, except Shared: a copy the server cannot edit. Each change is made at once.
+  import { getTargets, linkPlaylist, unlinkPlaylist, type Conflict, type Link, type TargetChoice } from './api';
   import { refresh } from './live.svelte';
   import { shownPlaylists } from './output.svelte';
   import Row from './Row.svelte';
@@ -29,7 +29,7 @@
   };
 
   let working = $state(false);
-  async function set(t: TargetChoice, on: boolean, direction?: Direction, conflict?: Conflict) {
+  async function set(t: TargetChoice, on: boolean, conflict?: Conflict) {
     if (working) return;
     working = true;
     const touched: string[] = [];
@@ -43,12 +43,11 @@
           await unlinkPlaylist(id, t.target);
           continue;
         }
-        const d = direction ?? l?.direction ?? 'push';
         const c = conflict ?? l?.conflict ?? 'newest';
-        if (l && l.direction === d && l.conflict === c) continue;
-        changed[key(id, t.target)] = { target: t.target, label: t.label, direction: d, conflict: c, status: l?.status ?? null };
+        if (l && l.conflict === c) continue;
+        changed[key(id, t.target)] = { target: t.target, label: t.label, conflict: c, status: l?.status ?? null };
         touched.push(id);
-        await linkPlaylist(id, t.target, d, c);
+        await linkPlaylist(id, t.target, c);
       }
     } catch (e) {
       for (const id of touched) delete changed[key(id, t.target)];
@@ -74,7 +73,6 @@
       {@const links = ids.map((id) => linkOf(id, t.target)).filter((l) => !!l)}
       {@const all = links.length === ids.length}
       {@const some = links.length > 0 && !all}
-      {@const direction = common(links.map((l) => l.direction))}
       {@const conflict = common(links.map((l) => l.conflict))}
       {@const errors = ids.flatMap((id) => {
         const e = linkOf(id, t.target)?.status?.error;
@@ -87,25 +85,13 @@
         {/snippet}
         {#snippet sub()}{#if errors.length}<span class="error">{errors.join(' · ')}</span>{/if}{/snippet}
         {#snippet action()}
-          {#if links.length && !t.push_only}
-            <select aria-label="Direction" value={direction ?? ''} disabled={working} onchange={(e) => set(t, true, e.currentTarget.value as Direction)}>
-              {#if direction === null}<option value="" disabled>Mixed</option>{/if}
-              <option value="push">Push</option>
-              <option value="two_way">Two-way</option>
+          {#if links.length && !t.copy_only}
+            <select aria-label="When both changed" value={conflict ?? ''} disabled={working} onchange={(e) => set(t, true, e.currentTarget.value as Conflict)}>
+              {#if conflict === null}<option value="" disabled>Mixed</option>{/if}
+              <option value="newest">Newest wins</option>
+              <option value="playlist">Cratarr wins</option>
+              <option value="target">{t.label} wins</option>
             </select>
-            {#if direction === 'two_way'}
-              <select
-                aria-label="When both changed"
-                value={conflict ?? ''}
-                disabled={working}
-                onchange={(e) => set(t, true, 'two_way', e.currentTarget.value as Conflict)}
-              >
-                {#if conflict === null}<option value="" disabled>Mixed</option>{/if}
-                <option value="newest">Newest wins</option>
-                <option value="playlist">Cratarr wins</option>
-                <option value="target">{t.label} wins</option>
-              </select>
-            {/if}
           {/if}
         {/snippet}
       </Row>

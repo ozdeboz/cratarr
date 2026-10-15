@@ -4,7 +4,7 @@
 - Date: 2026-10-13
 - Supersedes: the "Playlists belong to" switch of 0012 (its sync engine stays)
 - Builds on: 0002 (playlists are `.m3u` files), 0007 (export), 0012 (own Jellyfin playlists)
-- Amended by: 0025 (links are set in the panel's Sync tab, for one playlist or several; the menu's Sync to… opens it)
+- Amended by: 0025 (links are set in the panel's Sync tab, for one playlist or several; the menu's Sync to… opens it); the amendment of 2026-10-15 below (no push: every account link is two-way)
 
 ## Context
 
@@ -57,3 +57,34 @@ owner decided on 2026-10-12, with both sessions, that this is a per-playlist cho
 - Home Assistant's voice lookup finds playlists by name: a playlist with a user's Jellyfin target has a new id
   there.
 - The data folder holds the links: they belong in its backup (as 0012 already says).
+
+## Amendment (2026-10-15): two-way only, for whatever happens on either side
+
+The owner decided that push goes. A push link quietly undid edits made in Finamp, which protects nothing anyone wants
+protected: both sides are the owner's own playlist. (Tools that sync one way do so because their source is not edited
+on the receiving side, a streaming service or a generated list; that is not this case.) Shared stays a copy the server
+cannot edit, which is a limit of the server, not a choice: it has no direction and no conflict rule.
+
+- **Every account link is two-way.** Links saved as push read as two-way; nothing else changes for them. The Sync tab
+  offers only the conflict rule.
+- **An edit wins over a deletion** (the owner's choice): a playlist deleted on one side is deleted on the other only
+  when the other is unchanged since both last agreed. Otherwise it comes back where it was deleted, with the edits:
+  in Cratarr with every link it had (its Shared copy too), on the server as a new copy.
+- **Names Cratarr cannot use** (the owner's choice): a server playlist whose name is taken here, used twice on the
+  server, or not a usable file name, comes in under the nearest free usable name ("Chill 2", "AC-DC-"); the server copy
+  is then renamed to match, so both sides agree. Nothing is merged with a playlist of the same name.
+- **Renamed on both sides** (the owner's choice): the conflict rule picks the name, as it picks the order (newest: the
+  server's, the change seen last). A server rename to a taken name gets the nearest free one here, and the server
+  follows.
+- **A track whose file is away for now** (an unmounted folder, a rescan under way) is no removal: its line stays as a
+  missing one, and the server copy keeps it (the server-side rule above, the other way round). The catalogue drops a
+  missing file's server links at once, so each link remembers the server item of every track both sides agreed on;
+  with it, taking the missing line out here is a real removal there too, and the file coming back changes nothing.
+- **One playlist's problem is its own:** the other playlists of the account go on, and the Sync tab shows the problem
+  on that playlist's link; it is tried again next pass. Only a problem with the whole account (the listing, a listing
+  not believed) stops the account's pass.
+- **A change the server did not stamp** is found anyway: every tenth pass (about five minutes) reads every linked copy
+  on the server whatever its change stamp says.
+- **A renamed server copy keeps its heart.** Jellyfin renames with an API key by making a new copy and deleting the old
+  one; the heart is carried over. Another linked playlist already holding the new name is never taken over: the
+  rename waits, and the Sync tab says why.

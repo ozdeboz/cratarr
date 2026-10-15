@@ -21,6 +21,16 @@ pub struct Link {
     pub stamp: Option<String>,
     /// What both copies last agreed on.
     pub base: Vec<i64>,
+    /// The server's item of each track in `base`, by position ("" when it had none, or `base` is from before this was
+    /// kept): what an agreed track is on the server while its file is away and the catalogue no longer links it.
+    pub ids: Vec<String>,
+}
+
+impl Link {
+    /// A link with nothing agreed yet.
+    pub fn new(name: &str, remote: &str, remote_name: &str) -> Self {
+        Link { name: name.into(), remote: remote.into(), remote_name: remote_name.into(), stamp: None, base: Vec::new(), ids: Vec::new() }
+    }
 }
 
 /// Where a playlist is kept in step (decision 0014).
@@ -58,15 +68,8 @@ impl Kind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Direction {
-    /// The playlist wins: changes on the target are overwritten.
-    Push,
-    TwoWay,
-}
-
-/// Two-way: which side leads when both changed.
+/// Which side leads when both changed: the newest change, the playlist, or the target. (Shared is a copy the
+/// server cannot edit, so nothing comes back from it to conflict.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Conflict {
@@ -90,7 +93,6 @@ pub struct LinkView {
     /// "shared", or "user/<source>/<user>".
     pub target: String,
     pub label: String,
-    pub direction: Direction,
     pub conflict: Conflict,
     pub status: Option<LinkStatus>,
 }
@@ -100,11 +102,14 @@ pub struct LinkView {
 pub struct Target {
     pub playlist: String,
     pub kind: Kind,
-    pub direction: Direction,
     pub conflict: Conflict,
     /// Shared: the name its copy was last written under (a rename leaves the old one to remove).
     pub copy: Option<String>,
 }
+
+/// The `direction` column: every link is two-way now (decision 0014, amended 2026-10-15). Links saved as "push"
+/// before read as two-way; the column stays so older files open unchanged.
+const TWO_WAY: &str = "two_way";
 
 /// The meta key of the catalogue generation the agreed lists were made with (`follow_catalogue`).
 const CATALOGUE: &str = "catalogue";
@@ -129,6 +134,9 @@ CREATE TABLE IF NOT EXISTS spoken (playlist TEXT NOT NULL, name TEXT NOT NULL, P
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
 
+/// Columns added after the first schema; added to an existing file when missing.
+const ADDED_COLUMNS: [(&str, &str); 1] = [("links", "base_ids TEXT NOT NULL DEFAULT '[]'")];
+
 fn enum_text<T: serde::Serialize>(v: T) -> String {
     serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
@@ -149,6 +157,13 @@ impl SyncState {
         };
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         conn.execute_batch(SCHEMA).context("creating the playlist sync state")?;
+        for (table, column) in ADDED_COLUMNS {
+            let name = column.split_whitespace().next().unwrap_or_default();
+            let has: bool = conn.query_row(&format!("SELECT COUNT(*) > 0 FROM pragma_table_info('{table}') WHERE name = ?1"), [name], |r| r.get(0))?;
+            if !has {
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column}"))?;
+            }
+        }
         Ok(Self { db: Mutex::new(conn) })
     }
 
@@ -160,21 +175,37 @@ impl SyncState {
     pub fn links(&self, source: &str, user: &str) -> Result<Vec<Link>> {
         let db = self.db();
         let mut st =
-            db.prepare("SELECT name, remote, remote_name, stamp, base FROM links WHERE source = ?1 AND user = ?2 ORDER BY name")?;
+            db.prepare("SELECT name, remote, remote_name, stamp, base, base_ids FROM links WHERE source = ?1 AND user = ?2 ORDER BY name")?;
         let rows = st.query_map(params![source, user], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, String>(4)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
         })?;
         rows.map(|r| {
-            let (name, remote, remote_name, stamp, base) = r?;
-            Ok(Link { name, remote, remote_name, stamp, base: serde_json::from_str(&base)? })
+            let (name, remote, remote_name, stamp, base, ids) = r?;
+            Ok(Link { name, remote, remote_name, stamp, base: serde_json::from_str(&base)?, ids: serde_json::from_str(&ids)? })
         })
         .collect()
     }
 
     pub fn put(&self, source: &str, user: &str, link: &Link) -> Result<()> {
         self.db().execute(
-            "INSERT OR REPLACE INTO links (source, user, name, remote, remote_name, stamp, base) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![source, user, link.name, link.remote, link.remote_name, link.stamp, serde_json::to_string(&link.base)?],
+            "INSERT OR REPLACE INTO links (source, user, name, remote, remote_name, stamp, base, base_ids) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                source,
+                user,
+                link.name,
+                link.remote,
+                link.remote_name,
+                link.stamp,
+                serde_json::to_string(&link.base)?,
+                serde_json::to_string(&link.ids)?
+            ],
         )?;
         Ok(())
     }
@@ -182,7 +213,7 @@ impl SyncState {
     /// Forget every link's agreed list and change stamp (its track ids belong to a catalogue that is gone): the next
     /// pass merges both sides as they are, adding what either has. Returns how many links.
     pub fn forget_baselines(&self) -> Result<usize> {
-        Ok(self.db().execute("UPDATE links SET base = '[]', stamp = NULL", [])?)
+        Ok(self.db().execute("UPDATE links SET base = '[]', base_ids = '[]', stamp = NULL", [])?)
     }
 
     /// The agreed lists hold the track ids of one catalogue (`Catalogue::generation`). Given the catalogue now: when
@@ -215,7 +246,7 @@ impl SyncState {
     /// Every sync link (decision 0014), by playlist.
     pub fn targets(&self) -> Result<Vec<Target>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT playlist, kind, source, user, direction, conflict, copy FROM targets ORDER BY playlist, kind, source, user")?;
+        let mut st = db.prepare("SELECT playlist, kind, source, user, conflict, copy FROM targets ORDER BY playlist, kind, source, user")?;
         let rows = st.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -223,20 +254,19 @@ impl SyncState {
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
-                r.get::<_, String>(5)?,
-                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(5)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (playlist, kind, source, user, direction, conflict, copy) = row?;
+            let (playlist, kind, source, user, conflict, copy) = row?;
             let kind = match kind.as_str() {
                 "shared" => Kind::Shared,
                 "user" => Kind::User { source, user },
                 _ => continue,
             };
-            let (Some(direction), Some(conflict)) = (enum_of(&direction), enum_of(&conflict)) else { continue };
-            out.push(Target { playlist, kind, direction, conflict, copy });
+            let Some(conflict) = enum_of(&conflict) else { continue };
+            out.push(Target { playlist, kind, conflict, copy });
         }
         Ok(out)
     }
@@ -245,7 +275,7 @@ impl SyncState {
         let (kind, source, user) = t.kind.columns();
         self.db().execute(
             "INSERT OR REPLACE INTO targets (playlist, kind, source, user, direction, conflict, copy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![t.playlist, kind, source, user, enum_text(t.direction), enum_text(t.conflict), t.copy],
+            params![t.playlist, kind, source, user, TWO_WAY, enum_text(t.conflict), t.copy],
         )?;
         Ok(())
     }
@@ -337,7 +367,7 @@ mod tests {
     #[test]
     fn a_new_catalogue_forgets_every_agreed_list_once() {
         let s = SyncState::open(None).unwrap();
-        let link = |n: &str| Link { name: n.into(), remote: format!("r-{n}"), remote_name: n.into(), stamp: Some("e".into()), base: vec![1, 2] };
+        let link = |n: &str| Link { stamp: Some("e".into()), base: vec![1, 2], ids: vec!["a".into(), "b".into()], ..Link::new(n, &format!("r-{n}"), n) };
         s.put("jf", "u1", &link("A")).unwrap();
         s.put("jf", "u2", &link("B")).unwrap();
         assert_eq!(s.follow_catalogue("g1").unwrap(), None, "the first seen is recorded, nothing forgotten");
@@ -347,7 +377,7 @@ mod tests {
         assert_eq!(s.follow_catalogue("g2").unwrap(), Some(2), "another catalogue: both lists forgotten");
         for u in ["u1", "u2"] {
             let l = &s.links("jf", u).unwrap()[0];
-            assert!(l.base.is_empty());
+            assert!(l.base.is_empty() && l.ids.is_empty());
             assert_eq!(l.stamp, None);
         }
         s.put("jf", "u1", &link("A")).unwrap();
@@ -356,9 +386,19 @@ mod tests {
     }
 
     #[test]
+    fn links_saved_as_push_read_as_two_way() {
+        let s = SyncState::open(None).unwrap();
+        s.db()
+            .execute("INSERT INTO targets (playlist, kind, source, user, direction, conflict) VALUES ('Chill', 'user', 'jf', 'u1', 'push', 'newest')", [])
+            .unwrap();
+        let user = Kind::User { source: "jf".into(), user: "u1".into() };
+        assert_eq!(s.targets().unwrap(), vec![Target { playlist: "Chill".into(), kind: user, conflict: Conflict::Newest, copy: None }]);
+    }
+
+    #[test]
     fn links_are_kept_per_server_and_user() {
         let s = SyncState::open(None).unwrap();
-        let l = Link { name: "Chill".into(), remote: "r1".into(), remote_name: "Chill".into(), stamp: Some("e1".into()), base: vec![3, 1, 2] };
+        let l = Link { stamp: Some("e1".into()), base: vec![3, 1, 2], ids: vec!["c".into(), "".into(), "b".into()], ..Link::new("Chill", "r1", "Chill") };
         s.put("jellyfin", "u1", &l).unwrap();
         assert_eq!(s.links("jellyfin", "u1").unwrap(), vec![l.clone()]);
         assert!(s.links("jellyfin", "u2").unwrap().is_empty());
@@ -372,11 +412,11 @@ mod tests {
     fn targets_are_kept_per_playlist_and_follow_a_rename() {
         let s = SyncState::open(None).unwrap();
         let user = Kind::User { source: "jellyfin".into(), user: "u1".into() };
-        let t = |kind: Kind, direction| Target { playlist: "Chill".into(), kind, direction, conflict: Conflict::Newest, copy: None };
-        s.put_target(&t(Kind::Shared, Direction::Push)).unwrap();
-        s.put_target(&t(user.clone(), Direction::TwoWay)).unwrap();
-        s.put_target(&t(user.clone(), Direction::Push)).unwrap();
-        assert_eq!(s.targets().unwrap(), vec![t(Kind::Shared, Direction::Push), t(user.clone(), Direction::Push)], "one link per target");
+        let t = |kind: Kind, conflict| Target { playlist: "Chill".into(), kind, conflict, copy: None };
+        s.put_target(&t(Kind::Shared, Conflict::Newest)).unwrap();
+        s.put_target(&t(user.clone(), Conflict::Newest)).unwrap();
+        s.put_target(&t(user.clone(), Conflict::Playlist)).unwrap();
+        assert_eq!(s.targets().unwrap(), vec![t(Kind::Shared, Conflict::Newest), t(user.clone(), Conflict::Playlist)], "one link per target");
         s.rename("Chill", "Calm").unwrap();
         assert!(s.targets().unwrap().iter().all(|t| t.playlist == "Calm"));
         s.remove_target("Calm", &user).unwrap();
@@ -384,7 +424,7 @@ mod tests {
         assert_eq!(Kind::from_key(&user.key()), Some(user));
         assert_eq!(Kind::from_key("shared"), Some(Kind::Shared));
         assert_eq!(Kind::from_key("user/x"), None);
-        let mut shared = t(Kind::Shared, Direction::Push);
+        let mut shared = t(Kind::Shared, Conflict::Newest);
         shared.playlist = "Calm".into();
         s.retire_target("Calm", &Kind::Shared).unwrap();
         assert!(s.targets().unwrap().iter().all(|t| t.playlist != "Calm"), "put aside");

@@ -15,7 +15,7 @@ use crate::crates::{self, CrateDef};
 use crate::journal::{Change, EventId, Journal, TextChange, fingerprint};
 use crate::playlists::{DupGroup, Edited, PlaylistView, Repair, Repairs};
 use crate::source::{self, PlaylistChange, PlaylistEvent};
-use crate::sync_state::{Conflict, Direction, Kind};
+use crate::sync_state::{Conflict, Kind};
 
 /// The most tracks one play sends: Finamp holds at most 100 in its queue (seen 2026-10-12; user: "we go by 100").
 pub const PLAY_MAX: usize = 100;
@@ -602,9 +602,9 @@ impl PlaylistService {
     }
 
     /// Link a playlist to a target (decision 0014), or change how it is kept.
-    pub async fn link(&self, id: &str, target: &str, direction: Direction, conflict: Conflict) -> Result<(), ToggleError> {
+    pub async fn link(&self, id: &str, target: &str, conflict: Conflict) -> Result<(), ToggleError> {
         let kind = Kind::from_key(target).ok_or_else(|| ToggleError::Refused("not a target".into()))?;
-        self.sync.link(id, kind, direction, conflict).await
+        self.sync.link(id, kind, conflict).await
     }
 
     /// Take a link off: its copy on the target is deleted.

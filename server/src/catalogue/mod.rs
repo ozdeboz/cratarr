@@ -983,6 +983,15 @@ impl Catalogue {
             .map(|d| d as u64)
     }
 
+    /// Where a track's file is, or was last seen while it is away (gone, not yet retired). Blocking.
+    pub fn file_of_any(&self, track: i64) -> Option<(i64, String)> {
+        self.db()
+            .query_row("SELECT folder, rel FROM files WHERE track = ?1 ORDER BY gone_at IS NOT NULL LIMIT 1", [track], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .ok()
+            .flatten()
+    }
+
     pub fn file_of(&self, track: i64) -> Option<(i64, String)> {
         self.db()
             .query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))

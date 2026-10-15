@@ -277,6 +277,35 @@ fn valid_new_name(name: &str) -> bool {
         && !name.chars().any(|c| c.is_control() || ":*?\"<>|".contains(c))
 }
 
+/// The nearest name `valid_new_name` takes, for a playlist named elsewhere (a server's): reserved characters become
+/// "-", leading dots and spaces and trailing dots and spaces go, long names are cut. "Playlist" when nothing is left.
+pub fn usable_name(wanted: &str) -> String {
+    let mut s: String = wanted.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '-' } else { c }).collect();
+    s = s.trim_start_matches(['.', ' ']).to_string();
+    // Room for a " 99" when the name is taken.
+    while s.len() > 96 {
+        s.pop();
+    }
+    s = s.trim_end_matches(['.', ' ']).to_string();
+    if is_backup_copy(&s) {
+        s.push_str(" playlist");
+    }
+    if s.is_empty() { "Playlist".into() } else { s }
+}
+
+/// `name`, or "name 2", "name 3"…: the first that `taken` says is free. A name that ends in a number counts on from
+/// it when the number is small ("Chill 2" taken: "Chill 3"; "Blink 182" taken: "Blink 182 2").
+pub fn free_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(name) {
+        return name.to_string();
+    }
+    let (stem, from) = match name.rsplit_once(' ') {
+        Some((stem, n)) if !stem.is_empty() && n.len() <= 2 && n.bytes().all(|b| b.is_ascii_digit()) => (stem, n.parse::<u32>().unwrap_or(1) + 1),
+        _ => (name, 2),
+    };
+    (from.max(2)..).map(|n| format!("{stem} {n}")).find(|n| !taken(n)).unwrap_or_default()
+}
+
 impl Store {
     /// Playlists kept in `dir` itself, entries relative to it.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
@@ -1274,6 +1303,27 @@ B/2.mp3
         assert!(s.view(None).await.unwrap().iter().any(|p| p.id == "Late Night"));
         assert!(matches!(s.create("old").await, Err(StoreError::Exists)));
         assert_eq!(d.read("old.m3u"), "A/1.mp3\n");
+    }
+
+    #[test]
+    fn a_name_from_elsewhere_is_made_usable_and_free() {
+        for (wanted, usable) in [
+            ("AC/DC: Live?", "AC-DC- Live-"),
+            ("  .hidden. ", "hidden"),
+            ("", "Playlist"),
+            ("...", "Playlist"),
+            ("old.bak", "old.bak playlist"),
+            ("Chill", "Chill"),
+        ] {
+            assert_eq!(usable_name(wanted), usable, "{wanted:?}");
+            assert!(valid_new_name(&usable_name(wanted)), "{wanted:?}");
+        }
+        assert!(valid_new_name(&usable_name(&"é".repeat(80))));
+        let taken = ["Chill", "Chill 2"];
+        assert_eq!(free_name("Chill", |n| taken.contains(&n)), "Chill 3");
+        assert_eq!(free_name("Calm", |n| taken.contains(&n)), "Calm");
+        assert_eq!(free_name("Chill 2", |n| taken.contains(&n)), "Chill 3");
+        assert_eq!(free_name("Blink 182", |n| n == "Blink 182"), "Blink 182 2");
     }
 
     #[tokio::test]

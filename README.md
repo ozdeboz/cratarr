@@ -127,7 +127,7 @@ folder until a Music library is saved; see `server/src/config.rs`).
 
 Each playlist is one `.m3u` file in the playlist folder, `Music/.playlists`. Per playlist, "Sync to…" in its menu keeps
 copies of it on targets: Shared (a copy in Music the media server imports for everyone) and accounts' own Jellyfin
-playlists (push or two-way); see [decision 0014](docs/decisions/0014-sync-links.md). Playlists that were in Music
+playlists (kept in step both ways); see [decision 0014](docs/decisions/0014-sync-links.md). Playlists that were in Music
 are adopted into the playlist folder once, each linked Shared, so nothing visible changes. A voice assistant finds a
 playlist by a spoken name and gets its tracks to play ([decision 0015](docs/decisions/0015-playlists-by-spoken-name.md)).
 

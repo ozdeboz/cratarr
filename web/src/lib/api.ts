@@ -13,20 +13,19 @@ export type Playlist = {
   spoken: string[];
 };
 
-export type Direction = 'push' | 'two_way';
-/** Two-way: which side leads when both changed. */
+/** Which side leads when both changed. */
 export type Conflict = 'newest' | 'playlist' | 'target';
 /** A sync link: a playlist kept in step on a target. */
 export type Link = {
   /** "shared", or "user/<server>/<account>". */
   target: string;
   label: string;
-  direction: Direction;
   conflict: Conflict;
   status: { at: number; error: string | null } | null;
 };
-/** A target a playlist can be linked to. */
-export type TargetChoice = { target: string; label: string; push_only: boolean };
+/** A target a playlist can be linked to. `copy_only`: a copy the server cannot edit (Shared), so nothing comes back
+ *  from it and it has no conflict rule. */
+export type TargetChoice = { target: string; label: string; copy_only: boolean };
 
 export type NowPlaying = {
   /** The source it came from (covers are looked up there). */
@@ -335,8 +334,8 @@ export const setSpoken = (id: string, names: string[]) =>
 const linkPath = (id: string, target: string, extra: Record<string, string> = {}) =>
   `/api/playlists/${encodeURIComponent(id)}/link?${new URLSearchParams({ target, ...extra })}`;
 /** Link a playlist to a target, or change how it is kept (the state wanted: safe to repeat). */
-export const linkPlaylist = (id: string, target: string, direction: Direction, conflict: Conflict) =>
-  request<null>(linkPath(id, target, { direction, conflict }), { method: 'PUT' });
+export const linkPlaylist = (id: string, target: string, conflict: Conflict) =>
+  request<null>(linkPath(id, target, { conflict }), { method: 'PUT' });
 /** Take a link off; its copy on the target is deleted. */
 export const unlinkPlaylist = (id: string, target: string) => request<null>(linkPath(id, target), { method: 'DELETE' });
 

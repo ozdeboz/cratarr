@@ -710,15 +710,13 @@ async fn sync_targets(State(app): State<Arc<App>>) -> Json<Vec<crate::app::Targe
 #[derive(Deserialize)]
 struct LinkQuery {
     target: String,
-    direction: Option<crate::sync_state::Direction>,
     conflict: Option<crate::sync_state::Conflict>,
 }
 
 /// Link a playlist to a target, or change how it is kept (the state wanted: safe to repeat).
 async fn link_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<LinkQuery>) -> Result<Json<()>, ApiError> {
-    let direction = q.direction.unwrap_or(crate::sync_state::Direction::Push);
     let conflict = q.conflict.unwrap_or(crate::sync_state::Conflict::Newest);
-    Ok(Json(app.playlists.link(&id, &q.target, direction, conflict).await?))
+    Ok(Json(app.playlists.link(&id, &q.target, conflict).await?))
 }
 
 /// Take a link off; its copy on the target is deleted.
