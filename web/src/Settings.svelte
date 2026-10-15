@@ -597,7 +597,7 @@
         <div class="fields">
           <label>
             <span class="l">Username</span>
-            <input bind:value={sub.user} spellcheck="false" autocomplete="username" autocapitalize="off" />
+            <input type="text" bind:value={sub.user} spellcheck="false" autocomplete="username" autocapitalize="off" />
           </label>
           <label>
             <span class="l">Password</span>
