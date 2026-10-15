@@ -117,7 +117,6 @@
       await changeSubsonicPassword(sub.accounts[0], sub.current, sub.password);
       sub.current = '';
       sub.password = '';
-      toast.show({ text: 'Password changed.' });
     } catch (e) {
       toast.fail(e, 'Could not change the password');
     } finally {
