@@ -14,7 +14,7 @@
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
   import { coverUrl, albumCoverUrl, playlistFromQueue, queueTrack, setTrackFavorite, setTrackMember, trackState, type TrackState } from './api';
-  import { refresh } from './live.svelte';
+  import { player, refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
@@ -60,6 +60,8 @@
     if (!t || !albumId) return;
     const subject = albumSubject(t.source, albumId);
     onclose();
+    // From the full-screen player: it closes, or it would cover the album.
+    player.full = false;
     viewPlaylist(subject);
   }
   const heartOn = $derived(forPlaying ? favorite() : !!other?.favorite);
