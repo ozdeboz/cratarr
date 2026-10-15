@@ -13,6 +13,7 @@
   import NowPlaying from './lib/NowPlaying.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
   import TopPill from './lib/TopPill.svelte';
+  import Mark from './lib/Mark.svelte';
   import { hasView } from './lib/pageView.svelte';
   import { playing } from './lib/remote.svelte';
   import { fade, fly } from 'svelte/transition';
@@ -256,7 +257,7 @@
 <div class="shell">
   <aside class="sidebar" onclickcapture={collapse}>
     <div class="brand">
-      <span class="logo"><Icon name="playlists" size={20} /></span>
+      <span class="logo"><Mark /></span>
       <span class="name">Cratarr</span>
     </div>
     {#if connection}
@@ -703,14 +704,11 @@
     padding: 0 8px;
   }
 
+  /* The mark (lib/Mark), its own rounded square. */
   .logo {
     display: grid;
-    place-items: center;
     width: 34px;
     height: 34px;
-    border-radius: 10px;
-    background: var(--accent);
-    color: var(--accent-text);
   }
 
   .brand .name {
