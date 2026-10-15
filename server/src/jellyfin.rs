@@ -904,11 +904,12 @@ impl Jellyfin {
     /// or favourite" at once: several filters must all hold. Measured on 10.11 (2026-10-15), an account with 5,204 played
     /// and 4,789 favourite tracks: 250 per page took 9 to 12 s whatever the order or fields, 100 took 4.5 s (Jellyfin
     /// builds each item slowly); an hour later 200 took 4.4 to 5.8 s, and the count alone 0.3 s.
+    /// Read with the long wait (`LONG_READ`): a busy Jellyfin took 40 s for a page on 2026-10-15, past the usual 20 s.
     pub async fn user_track_data(&self, user: &str, filter: &str, start: usize, limit: usize) -> Result<(Vec<crate::source::TrackData>, usize)> {
         anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
         anyhow::ensure!(matches!(filter, "IsPlayed" | "IsFavorite"), "not a filter");
         let page: Counted<DataItem> = self
-            .get(&format!(
+            .get_long(&format!(
                 "/Items?UserId={user}&Recursive=true&IncludeItemTypes=Audio&Filters={filter}&SortBy=SortName&EnableImages=false&EnableUserData=true&Fields=&StartIndex={start}&Limit={limit}"
             ))
             .await?;
@@ -921,7 +922,7 @@ impl Jellyfin {
         anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
         anyhow::ensure!(matches!(filter, "IsPlayed" | "IsFavorite"), "not a filter");
         let page: Counted<IdOnly> =
-            self.get(&format!("/Items?UserId={user}&Recursive=true&IncludeItemTypes=Audio&Filters={filter}&EnableUserData=false&Fields=&Limit=0")).await?;
+            self.get_long(&format!("/Items?UserId={user}&Recursive=true&IncludeItemTypes=Audio&Filters={filter}&EnableUserData=false&Fields=&Limit=0")).await?;
         Ok(page.total_record_count.unwrap_or(0))
     }
 
@@ -942,7 +943,7 @@ impl Jellyfin {
             let mut start = 0;
             loop {
                 let page: ItemsPage<Item> = self
-                    .get(&format!(
+                    .get_long(&format!(
                         "/Items?UserId={user}&Recursive=true&IncludeItemTypes={kind}&Filters=IsFavorite&SortBy=SortName&EnableImages=false&EnableUserData=false&Fields=Path&StartIndex={start}&Limit={PAGE}"
                     ))
                     .await?;
@@ -974,7 +975,7 @@ impl Jellyfin {
             date_created: Option<String>,
         }
         let page: Counted<Item> = self
-            .get(&format!(
+            .get_long(&format!(
                 "/Items?Recursive=true&IncludeItemTypes=MusicAlbum&SortBy=SortName&EnableImages=false&EnableUserData=false&Fields=Path,DateCreated&StartIndex={start}&Limit={limit}"
             ))
             .await?;
