@@ -109,3 +109,20 @@ end a little early.
   the app holds its queue (offline) nothing else changes it: on reconnect its queue is simply taken (step 1). The edit
   log, the steps back online and the 24-hour rule are needed once Cratarr accepts edits for an absent player (Home
   Assistant queueing for the phone while it is away, say); they wait for that.
+
+## Amendment (2026-10-16): repeat
+
+Decided by the owner. **Repeat** is one of three modes: **off** (the queue ends and stops, as now), **one** (the playing
+track starts again when it ends), **all** (after the last track the album or playlist starts again from its first).
+
+It is a setting of the queue, held by its owner as shuffle is: Cratarr's, or the app's while it holds its queue offline.
+It moves with a handover. The player that plays applies it when a track ends: only it knows that moment, and it has to
+work offline and without gaps.
+
+1. Tracks added by hand play once and are used up; only the album or playlist starts again.
+2. Shuffle and repeat all: each round is shuffled anew, and a round does not start with the track that just played.
+3. Next or previous under repeat one go to another track; repeat one stays on, for that track.
+4. Something new played turns repeat one off; repeat all stays on.
+5. Previous on the first track under repeat all goes to the last.
+
+Every round counts its plays again. A player's view tells its repeat mode; `repeat {mode: off|one|all}` sets it.
