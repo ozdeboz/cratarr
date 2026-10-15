@@ -52,6 +52,9 @@ struct Job {
     files: Vec<String>,
     /// How many are converted.
     done: usize,
+    /// How far the one being converted is, 0 to 1 (not written down: it starts again from the file's beginning).
+    #[serde(skip)]
+    part: f32,
     state: State,
     /// The album's new folder, as planned when it was queued.
     to: String,
@@ -74,6 +77,8 @@ pub struct JobView {
     pub action: Action,
     pub state: State,
     pub done: usize,
+    /// How far the file being converted is, 0 to 1.
+    pub part: f32,
     pub total: usize,
     /// The album's folder in Music.
     pub folder: String,
@@ -203,6 +208,15 @@ impl Queue {
         })
     }
 
+    /// How far job `id`'s current file is, told to the pages; not written down (it changes every percent).
+    fn part(&self, id: u64, part: f32) {
+        let mut jobs = self.lock();
+        if let Some(j) = jobs.list.iter_mut().find(|j| j.id == id) {
+            j.part = part;
+        }
+        let _ = self.tell.send(views(&jobs, epoch_now()));
+    }
+
     fn get(&self, id: u64) -> Option<Job> {
         self.lock().list.iter().find(|j| j.id == id).cloned()
     }
@@ -242,6 +256,7 @@ fn views(jobs: &Jobs, now: i64) -> Vec<JobView> {
             action: j.action,
             state: j.state,
             done: j.done,
+            part: j.part,
             total: j.files.len(),
             folder: j.to.clone(),
             undo: j.undo.clone(),
@@ -275,6 +290,7 @@ impl IncomingService {
                 year: year.map(str::to_string),
                 files,
                 done: 0,
+                part: 0.0,
                 state: State::Waiting,
                 to: to.clone(),
                 swap: None,
@@ -376,23 +392,37 @@ impl IncomingService {
                         return Outcome::Cancelled;
                     }
                     let (input, output) = (root.join(&job.dir).join(rel), root.join(staged(&job.dir, rel)));
-                    let converted = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                    let (tell, mut told) = tokio::sync::watch::channel(0f32);
+                    let mut work = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                         // Written whole or not at all, and the same input gives the same bytes: one already there is done.
                         if !output.is_file() {
                             crate::moves::create_dirs_like_parent(output.parent().unwrap_or(Path::new(".")))?;
-                            crate::convert::to_cd_flac(&input, &output)?;
+                            crate::convert::to_cd_flac_told(&input, &output, |p| {
+                                let _ = tell.send(p);
+                            })?;
                         }
                         Ok(())
-                    })
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{e}"))
-                    .and_then(|r| r);
+                    });
+                    // How far it is, to the pages as it goes: a long file (a 40-minute track) would otherwise show
+                    // nothing until it is done.
+                    let converted = loop {
+                        tokio::select! {
+                            r = &mut work => break r.map_err(|e| anyhow::anyhow!("{e}")).and_then(|r| r),
+                            Ok(()) = told.changed() => {
+                                let p = *told.borrow_and_update();
+                                self.queue.part(job.id, p);
+                            }
+                        }
+                    };
                     if let Err(e) = converted {
                         let (r, d) = (root.clone(), job.dir.clone());
                         let _ = tokio::task::spawn_blocking(move || clear_staging(&r, &d)).await;
                         return Outcome::Failed(format!("{rel} could not be converted: {e:#}"));
                     }
-                    self.queue.update(job.id, |j| j.done = i + 1);
+                    self.queue.update(job.id, |j| {
+                        j.done = i + 1;
+                        j.part = 0.0;
+                    });
                 }
                 if self.queue.get(job.id).is_none() {
                     let (r, d) = (root.clone(), job.dir.clone());
@@ -537,6 +567,7 @@ mod tests {
             year: None,
             files: vec!["01.flac".into()],
             done: 0,
+            part: 0.0,
             state,
             to: "X - T".into(),
             swap: None,

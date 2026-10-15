@@ -65,6 +65,18 @@ pub enum KeepRefused {
     Other(String),
 }
 
+/// What became of an album that left Incoming, for a page still showing it by its old id (the panel, the player's
+/// View album): a server gives a moved file a new item, so a kept album has a new id once the server has it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AlbumFate {
+    /// In Music: its id now.
+    Moved(String),
+    /// In Music, but the server has not added it yet (its title).
+    NotYet(String),
+    /// Deleted (its title).
+    Deleted(String),
+}
+
 #[derive(Debug, Serialize)]
 pub struct KeepResult {
     /// Pass to undo; `None` while queued (the job has it once done).
@@ -839,6 +851,28 @@ impl IncomingService {
             carry_on::carry_on(self.lib.clone(), p, &event);
         }
         Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
+    }
+
+    /// What became of a server's album after Keep, Replace or Delete; `None` when none of them happened to it.
+    pub async fn album_fate(&self, source_id: &str, album_id: &str) -> Option<AlbumFate> {
+        let event = self.journal.album_fate(source_id, album_id).ok()??;
+        let (moves, title) = match &event {
+            Event::AlbumAdopted { moves, title, .. } | Event::AlbumReplaced { moves, title, .. } => (moves, title),
+            Event::AlbumRejected { title, .. } => return Some(AlbumFate::Deleted(title.clone())),
+        };
+        let s = self.lib.connected_sources().into_iter().find(|(id, _)| id == source_id).map(|(_, s)| s)?;
+        // Its tracks' new items (once a sync pass linked them), and the album the server put them in.
+        let Some(folder) = moves.first().map(|m| m.to.0) else { return Some(AlbumFate::NotYet(title.clone())) };
+        let rels: Vec<String> = moves.iter().filter(|m| m.track.is_some()).map(|m| m.to.1.clone()).collect();
+        let items = self.lib.catalogue().track_ids(source_id, folder, &rels).unwrap_or_default();
+        for item in items.into_iter().flatten().take(3) {
+            if let Ok(t) = s.track(&item).await
+                && let Some(album) = t.album_id
+            {
+                return Some(AlbumFate::Moved(album));
+            }
+        }
+        Some(AlbumFate::NotYet(title.clone()))
     }
 
     /// Refused while the album waits in the conversion queue (Cancel it first).

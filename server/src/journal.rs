@@ -297,6 +297,21 @@ impl Journal {
         .collect()
     }
 
+    /// The last album action done (and not undone) on a server's album: what became of it, for a page still showing
+    /// the album by its old id.
+    pub fn album_fate(&self, source: &str, album_id: &str) -> Result<Option<Event>> {
+        let db = self.db();
+        let event: Option<String> = db
+            .query_row(
+                "SELECT event FROM events WHERE applied = 1 AND undone_at IS NULL
+                 AND json_extract(event, '$.source') = ?1 AND json_extract(event, '$.album_id') = ?2 ORDER BY id DESC LIMIT 1",
+                params![source, album_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(event.map(|e| serde_json::from_str(&e)).transpose()?)
+    }
+
     /// Mark an event undone, then tell whoever listens for that. False when it already was (so an Undo runs once).
     pub fn mark_undone(&self, id: EventId, at: i64) -> Result<bool> {
         let marked = self.db().execute("UPDATE events SET undone_at = ?2 WHERE id = ?1 AND undone_at IS NULL", params![id, at])? == 1;
@@ -400,6 +415,18 @@ mod tests {
             token: "100/X - Y".into(),
             release_group: Some("rg".into()),
         }
+    }
+
+    #[test]
+    fn an_albums_fate_is_its_last_action_not_undone() {
+        let j = Journal::open(None).unwrap();
+        assert_eq!(j.album_fate("jellyfin", "a1").unwrap(), None);
+        let id = j.record(100, &rejected("Album")).unwrap();
+        assert_eq!(j.album_fate("jellyfin", "a1").unwrap(), Some(rejected("Album")));
+        assert_eq!(j.album_fate("other", "a1").unwrap(), None);
+        assert_eq!(j.album_fate("jellyfin", "a2").unwrap(), None);
+        j.mark_undone(id, 101).unwrap();
+        assert_eq!(j.album_fate("jellyfin", "a1").unwrap(), None);
     }
 
     #[test]

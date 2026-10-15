@@ -31,7 +31,7 @@ use serde::Serialize;
 
 pub use collection::{CollectionService, CollectionView};
 pub use error::ToggleError;
-pub use incoming::{DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
+pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{AlbumRef, AlbumView, FromQueue, PlayingService, StateView, TrackStateView};

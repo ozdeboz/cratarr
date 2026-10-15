@@ -580,6 +580,11 @@ impl Source for JellyfinSource {
 
     fn files_changed<'a>(&'a self, changes: &'a [(String, bool)]) -> Fut<'a, ()> {
         Box::pin(async move {
+            // The paths as Jellyfin has them, not as its API shows them: a notice or a library location compared
+            // with a substituted path matches nothing (Keep into Music went unnoticed, 2026-10-15).
+            let substitutions = self.jf.path_substitutions().await?;
+            let changes: Vec<(String, bool)> =
+                changes.iter().map(|(p, on)| (crate::jellyfin::unsubstitute(p, &substitutions), *on)).collect();
             let kinds: Vec<(String, &str)> = changes.iter().map(|(p, on)| (p.clone(), if *on { "Created" } else { "Deleted" })).collect();
             self.jf.library_changed(&kinds).await?;
             // A notice alone does not find new folders in a library Jellyfin does not watch: have each library that

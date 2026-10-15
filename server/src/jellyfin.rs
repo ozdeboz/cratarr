@@ -411,6 +411,25 @@ impl Jellyfin {
         self.get("/Library/VirtualFolders").await
     }
 
+    /// The server's path substitutions (from, to): its API shows every item's path with them applied (`/Volume1/` shown
+    /// as `/data/`, say), while its libraries' locations and the paths it is told about stay unsubstituted.
+    pub async fn path_substitutions(&self) -> Result<Vec<(String, String)>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Substitution {
+            from: String,
+            to: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "PascalCase")]
+        struct Config {
+            #[serde(default)]
+            path_substitutions: Vec<Substitution>,
+        }
+        let c: Config = self.get("/System/Configuration").await?;
+        Ok(c.path_substitutions.into_iter().filter(|s| !s.to.is_empty()).map(|s| (s.from, s.to)).collect())
+    }
+
     /// Have one library look for new and gone folders now, as its Scan does (only that library). Measured
     /// 2026-10-13: a new album folder in Music was found 10 s after this, where a "file changed" notice alone waits for
     /// the library monitor (about 60 s) and does not look for new folders in a library it does not watch.
@@ -924,6 +943,15 @@ impl Jellyfin {
     }
 }
 
+/// A path as the API shows it, back as the server itself has it: the first substitution (from, to) whose `to` it
+/// starts with, undone.
+pub fn unsubstitute(path: &str, substitutions: &[(String, String)]) -> String {
+    substitutions
+        .iter()
+        .find_map(|(from, to)| path.strip_prefix(to.as_str()).map(|rest| format!("{from}{rest}")))
+        .unwrap_or_else(|| path.to_string())
+}
+
 fn album_head(a: ListedAlbumItem) -> (crate::source::Album, Option<String>) {
     let album = crate::source::Album {
         added: a.date_created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),
@@ -1019,6 +1047,15 @@ pub fn combine_user_data(a: &serde_json::Value, b: &serde_json::Value) -> serde_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn substituted_paths_go_back_to_the_servers_own() {
+        let subs = vec![("/Volume1/".to_string(), "/data/".to_string())];
+        assert_eq!(unsubstitute("/data/media/Music/Seiho/ABSTRAKTSEX (2013)", &subs), "/Volume1/media/Music/Seiho/ABSTRAKTSEX (2013)");
+        assert_eq!(unsubstitute("/media/Music/x", &subs), "/media/Music/x");
+        assert_eq!(unsubstitute("/database/x", &subs), "/database/x");
+        assert_eq!(unsubstitute("/data/x", &[]), "/data/x");
+    }
 
     #[test]
     fn two_items_play_data_add_up() {

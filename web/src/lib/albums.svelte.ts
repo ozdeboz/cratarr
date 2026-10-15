@@ -29,4 +29,9 @@ export const quality = (a: ListedAlbum) =>
   [a.format ?? 'Mixed formats', lossless(a) || a.bitrate_kbps === null ? null : `${a.bitrate_kbps} kbps`].filter(Boolean).join(' ');
 /** Lossy below 320 kbps somewhere. */
 export const weak = (a: ListedAlbum) => !lossless(a) && a.bitrate_kbps !== null && a.bitrate_kbps < 320;
-export const addedOn = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+/** "14 Oct", with the year when it is not this one. */
+export function addedOn(t: number) {
+  const d = new Date(t * 1000);
+  const year = d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric';
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year });
+}
