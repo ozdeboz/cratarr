@@ -122,6 +122,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw message ? new ApiError(message) : new ApiError(`Server returned ${res.status}`, true);
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -129,6 +130,39 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 const follow = (source?: string) => (source ? `?source=${encodeURIComponent(source)}` : '');
 
 export const getState = (source?: string) => quietly<State>(`/api/state${follow(source)}`);
+
+/** A track as Cratarr's players hold it (decision 0031): the local player's own description. */
+export type QueueTrack = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null };
+
+/** One of Cratarr's own players (Play On, decision 0031): the Android app on a tablet or a phone. */
+export type PlayOnPlayer = {
+  name: string;
+  /** Connected now: it takes commands. */
+  online: boolean;
+  /** Last heard from, epoch seconds. */
+  seen: number;
+  playing: boolean;
+  index: number;
+  position_ms: number;
+  duration_ms: number | null;
+  volume: number;
+  ducked: boolean;
+  queue_length: number;
+  /** Goes up when the queue changes: read the player by name for the new one. */
+  queue_version: number;
+  track: QueueTrack | null;
+  queue?: QueueTrack[];
+};
+
+export const getPlayers = () => quietly<{ players: PlayOnPlayer[] }>('/api/players');
+export const getPlayer = (name: string) => quietly<PlayOnPlayer>(`/api/players/${encodeURIComponent(name)}`);
+/** A command for one of Cratarr's players (`{ command: 'play', tracks, index, position_ms }`, `{ command: 'pause' }`…). */
+export const playerCommand = (name: string, command: Record<string, unknown>) =>
+  request<void>(`/api/players/${encodeURIComponent(name)}/command`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(command),
+  });
 
 export const coverUrl = (np: { source: string; id: string }) => `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
 

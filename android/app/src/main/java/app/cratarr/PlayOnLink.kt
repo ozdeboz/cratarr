@@ -177,6 +177,18 @@ class PlayOnLink(
                 p.prepare()
                 p.play()
             }
+            "add" -> {
+                val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
+                val at = if (m.has("at")) m.optInt("at").coerceIn(0, p.mediaItemCount) else p.mediaItemCount
+                p.addMediaItems(at, items)
+                if (p.playbackState == Player.STATE_IDLE) p.prepare()
+            }
+            "move" -> p.moveMediaItem(m.optInt("from"), m.optInt("to"))
+            "remove" -> m.optInt("index", -1).takeIf { it in 0 until p.mediaItemCount }?.let(p::removeMediaItem)
+            "jump" -> m.optInt("index", -1).takeIf { it in 0 until p.mediaItemCount }?.let {
+                p.seekTo(it, 0)
+                play()
+            }
             "pause" -> p.pause()
             "resume" -> play()
             "toggle" -> if (p.playWhenReady && p.playbackState != Player.STATE_ENDED) p.pause() else play()

@@ -1,5 +1,5 @@
-//! The page's live channel (server-sent events): what plays and which playlists hold it, the conversion queue, and a
-//! note when an album action changed a list. Pages open one stream; each connection is sent only what changed for it.
+//! The page's live channel (server-sent events): what plays and which playlists hold it, the conversion queue, Cratarr's
+//! own players (Play On), and a note when an album action changed a list. Pages open one stream; each connection is sent only what changed for it.
 //!
 //! What plays is noticed by watching the servers' players: about once a second, and only while some page listens.
 //! A server that cannot say cheaply what its players do (`Source::players`) is asked for the whole state every two
@@ -79,6 +79,7 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut jobs = app.incoming.subscribe_jobs();
     let mut arrived = app.incoming.subscribe_incoming();
     let mut collected = app.collection.subscribe();
+    let mut players = app.play_on.subscribe();
     let app = app.clone();
     tokio::spawn(async move {
         let mut sent = String::new();
@@ -103,6 +104,14 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
             return;
         }
         if !send_state(&mut sent).await {
+            return;
+        }
+        // Cratarr's own players (Play On, decision 0031): their list now and on every change.
+        let send_players = async || match Message::of("players", &app.play_on.list()) {
+            Some(m) => out.send(m).await.is_ok(),
+            None => true,
+        };
+        if !send_players().await {
             return;
         }
         // Whether the journal's two channels, the Incoming one and the Collection one still send (a closed one is left
@@ -132,6 +141,10 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 r = undone.recv(), if open[1] => changed(&out, r, &mut open[1], &["incoming", "playlists"]).await,
                 r = arrived.recv(), if open[2] => changed(&out, r, &mut open[2], &["incoming"]).await,
                 r = collected.recv(), if open[3] => changed(&out, r, &mut open[3], &["collection"]).await,
+                r = players.recv() => match r {
+                    Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => send_players().await,
+                    Err(broadcast::error::RecvError::Closed) => false,
+                },
                 () = out.closed() => false,
             };
             if !alive {

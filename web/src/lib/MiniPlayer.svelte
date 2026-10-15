@@ -5,7 +5,11 @@
   // there is room, else over it). Swipe left or right: next or previous; the bar follows the finger and springs
   // back. Swipe down does nothing (Finamp stops and clears the queue; not on a remote across the room). The title does
   // not scroll (Finamp's default).
+  // With nothing to play (no track, no queue) it is a small button for where the music will play: it opens Play on.
   import Icon from './Icon.svelte';
+  import { canPlayHere } from './localPlayer.svelte';
+  import OutputSheet from './OutputSheet.svelte';
+  import { drivenName } from './playOn.svelte';
   import { player } from './live.svelte';
   import { panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
@@ -16,6 +20,8 @@
   const pos = $derived(position());
   const dur = $derived(duration());
   const share = $derived(dur ? Math.min(1, pos / dur) : 0);
+  let outputOpen = $state(false);
+  const output = $derived(prefs.output === 'local' && canPlayHere ? 'This device' : (drivenName() ?? 'The server’s player'));
 
   /** The full player: beside the page when the window has room and that is the chosen place, else over it. */
   // Tapping it brings the player: into the panel beside the page (over a viewed playlist there), or over everything.
@@ -125,9 +131,44 @@
       {/if}
     </div>
   </div>
+{:else}
+  <div class="device-row">
+    <button class="device" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={20} /><span>{output}</span></button>
+  </div>
+{/if}
+{#if outputOpen}
+  <OutputSheet onclose={() => (outputOpen = false)} />
 {/if}
 
 <style>
+  /* Nothing to play: where it will play, a small button at the end of the bar's place. */
+  .device-row {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .device {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    max-width: 100%;
+    height: 44px;
+    padding: 0 16px 0 12px;
+    background: var(--surface);
+    border: 0;
+    border-radius: 22px;
+    box-shadow: 0 4px 20px rgb(0 0 0 / 0.45);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .device span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   /* Finamp's bar: 64 px high, 12 px from the edges, corners 12 px, a soft shadow; the cover square at the start. */
   .mini {
     position: relative;

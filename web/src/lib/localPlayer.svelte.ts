@@ -9,10 +9,12 @@
 // where its sample 0 sits in the stream. Skipping to an appended track moves within the stream (no gap, no reload);
 // anything else (a jump back, a seek outside what is loaded) starts a fresh stream at that point.
 //
-// Inside the Android app the app plays instead, natively (decision 0031, amended): every call below is handed to it
-// (app.svelte.ts), and what it reports is shown in `local`; the stream here is not used.
+// Inside the Android app the app plays instead, natively (decision 0031, amended), and the page can also drive another
+// of Cratarr's players (Play On, `drive`): then every call below is handed to that player (app.svelte.ts, or the
+// server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
 import { inApp, onApp, toApp } from './app.svelte';
+import { playerCommand } from './api';
 
 export type LocalTrack = {
   source: string;
@@ -455,26 +457,53 @@ function showOnLockScreen() {
 /** The engine's audio element, for measuring (tools/gapless-lab, web/engine-lab.html); never for playback control. */
 export const engineAudio = () => audio;
 
-// --- inside the app: what it plays, as it reports it ---
+// --- played elsewhere: the app's own player, or another of Cratarr's players; what it plays, as it reports it ---
 
-/** The app's last report: its position then (ms), and when it came; the position in between is counted on here. */
+/** One of Cratarr's players the page drives (Play On), by name; null: this browser or the app plays. */
+let driven: string | null = null;
+/** Whether the queue plays elsewhere than in this page's stream. */
+const handed = () => inApp || driven !== null;
+
+/** From now on the queue plays on one of Cratarr's players (by name), or here again (`null`). What `local` holds is
+ *  then that player's, as it reports it (`reported`). */
+export function drive(name: string | null) {
+  driven = name;
+  reported = { positionMs: 0, at: performance.now() };
+}
+
+/** The last report: the position then (ms), and when it came; the position in between is counted on here. */
 let reported = { positionMs: 0, at: 0 };
 const sameQueue = (a: LocalTrack[], b: LocalTrack[]) => a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id);
-/** A call for the app's player. */
-const app = (op: string, args: Record<string, unknown> = {}) => toApp({ type: 'player', op, ...args });
 
-if (inApp) {
-  onApp('player', (m) => {
-    if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) local.queue = m.queue as LocalTrack[];
-    local.index = typeof m.index === 'number' ? m.index : -1;
-    local.paused = m.paused !== false;
-    local.duration = typeof m.durationMs === 'number' && m.durationMs > 0 ? m.durationMs / 1000 : null;
-    local.error = typeof m.error === 'string' ? m.error : null;
-    reported = { positionMs: Number(m.positionMs) || 0, at: performance.now() };
-    local.position = reported.positionMs / 1000;
-  });
+/** The player that plays: what it plays now (`queue` only when it changed). */
+export function reportedBy(m: { queue?: unknown; index?: unknown; positionMs?: unknown; durationMs?: unknown; paused?: unknown; error?: unknown }) {
+  if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) local.queue = m.queue as LocalTrack[];
+  local.index = typeof m.index === 'number' ? m.index : -1;
+  local.paused = m.paused !== false;
+  local.duration = typeof m.durationMs === 'number' && m.durationMs > 0 ? m.durationMs / 1000 : null;
+  local.error = typeof m.error === 'string' ? m.error : null;
+  reported = { positionMs: Number(m.positionMs) || 0, at: performance.now() };
+  local.position = reported.positionMs / 1000;
+}
+
+/** A call for the player that plays: the app's own, or the one driven (its command, as /api/players takes it). */
+function hand(op: string, args: Record<string, unknown> = {}) {
+  if (driven === null) return toApp({ type: 'player', op, ...args });
+  const command: Record<string, unknown> =
+    op === 'queue'
+      ? { command: 'play', tracks: args.tracks, index: args.index, position_ms: args.positionMs }
+      : op === 'seek'
+        ? { command: 'seek', position_ms: args.positionMs }
+        : op === 'play'
+          ? { command: 'resume' }
+          : { command: op, ...args };
+  playerCommand(driven, command).catch((e) => (local.error = e instanceof Error ? e.message : String(e)));
+}
+
+if (inApp) onApp('player', (m) => driven === null && reportedBy(m as Parameters<typeof reportedBy>[0]));
+if (typeof window !== 'undefined') {
   setInterval(() => {
-    if (local.paused || local.index < 0) return;
+    if (!handed() || local.paused || local.index < 0) return;
     const p = (reported.positionMs + performance.now() - reported.at) / 1000;
     local.position = local.duration ? Math.min(p, local.duration) : p;
   }, 250);
@@ -486,9 +515,9 @@ if (inApp) {
 export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null) {
   local.queue = tracks;
   local.from = from;
-  if (inApp) {
+  if (handed()) {
     Object.assign(local, { index, position: 0, paused: false, error: null });
-    return app('queue', { tracks, index, positionMs: 0, play: true });
+    return hand('queue', { tracks, index, positionMs: 0, play: true });
   }
   fresh(index, 0);
 }
@@ -498,7 +527,7 @@ export function enqueue(tracks: LocalTrack[], how: 'next' | 'last') {
   if (local.index < 0) return playQueue(tracks);
   const at = how === 'next' ? local.index + 1 : local.queue.length;
   local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
-  if (inApp) return app('add', { at, tracks });
+  if (handed()) return hand('add', { at, tracks });
   cutFrom(at);
 }
 
@@ -510,7 +539,7 @@ export function move(from: number, to: number) {
   const [t] = q.splice(from, 1);
   q.splice(to, 0, t);
   local.queue = q;
-  if (inApp) return app('move', { from, to });
+  if (handed()) return hand('move', { from, to });
   cutFrom(Math.min(from, to));
 }
 
@@ -518,7 +547,7 @@ export function move(from: number, to: number) {
 export function remove(index: number) {
   if (index <= local.index || index >= local.queue.length) return;
   local.queue = local.queue.filter((_, i) => i !== index);
-  if (inApp) return app('remove', { index });
+  if (handed()) return hand('remove', { index });
   cutFrom(index);
 }
 
@@ -556,9 +585,9 @@ function cutFrom(at: number) {
 }
 
 export function togglePlay() {
-  if (inApp) {
+  if (handed()) {
     local.paused = !local.paused;
-    return app('toggle');
+    return hand('toggle');
   }
   if (!audio) return;
   if (audio.paused) audio.play().catch(() => {});
@@ -567,9 +596,9 @@ export function togglePlay() {
 
 /** To queue track `index`: within the stream when it is already appended (gapless), else a fresh stream. */
 export function jump(index: number) {
-  if (inApp && index >= 0 && index < local.queue.length) {
+  if (handed() && index >= 0 && index < local.queue.length) {
     Object.assign(local, { index, position: 0, paused: false });
-    return app('jump', { index });
+    return hand('jump', { index });
   }
   if (!audio || index < 0 || index >= local.queue.length) return;
   const seg = segments.find((s) => s.index === index);
@@ -585,17 +614,17 @@ export function jump(index: number) {
 export const next = () => jump(local.index + 1);
 
 export function previous() {
-  if (inApp) return app('previous');
+  if (handed()) return hand('previous');
   if (local.position > RESTART_AFTER) seek(0);
   else jump(Math.max(0, local.index - 1));
 }
 
 /** To `secs` into the playing track: within what is loaded, else a fresh stream from there. */
 export function seek(secs: number) {
-  if (inApp) {
+  if (handed()) {
     local.position = secs;
     reported = { positionMs: secs * 1000, at: performance.now() };
-    return app('seek', { positionMs: Math.round(secs * 1000) });
+    return hand('seek', { positionMs: Math.round(secs * 1000) });
   }
   if (!audio) return;
   const w = where();
@@ -612,7 +641,7 @@ export function seek(secs: number) {
 /** Stops and forgets the queue (switching output to elsewhere). Returns where it was, for the handover. */
 export function stop(): { queue: LocalTrack[]; index: number; position: number } {
   const was = { queue: local.queue, index: local.index, position: local.position };
-  if (inApp) app('stop');
+  if (handed()) hand('stop');
   generation++;
   fetching?.abort();
   audio?.pause();

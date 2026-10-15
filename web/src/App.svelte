@@ -67,8 +67,9 @@
   });
   const sidebar = $derived(inSidebar());
   const overlay = $derived(player.full && !sidebar);
-  // The mini-player stands in for the player wherever the panel does not show it (decision 0023).
-  const mini = $derived(!!playing() && !(sidebar && panelShowsPlayer()));
+  // The mini-player stands in for the player wherever the panel does not show it (decision 0023); with nothing to play
+  // it is the small button for where music plays.
+  const mini = $derived(!(sidebar && panelShowsPlayer()));
   // A viewed playlist without room beside the page: a layer of its own, under the mini-player and the player.
   const playlistLayer = $derived(!sidebar && panel.viewed !== null);
   $effect(() => {
@@ -93,10 +94,13 @@
   const TOP_BAR = 65;
   /** The mini-player's height with its margin, kept free under the page and the toasts. */
   const MINI_SPACE = 88;
+  /** The same for the small button shown with nothing to play. */
+  const DEVICE_SPACE = 68;
+  const miniSpace = $derived(mini ? (playing() ? MINI_SPACE : DEVICE_SPACE) : 0);
   $effect(() => {
     const root = document.documentElement.style;
     root.setProperty('--top-h', phone ? `${TOP_BAR}px` : '0px');
-    root.setProperty('--bottom-h', mini ? `${MINI_SPACE}px` : '0px');
+    root.setProperty('--bottom-h', `${miniSpace}px`);
   });
   // The window's height as it is shown (--app-h), for the columns that are as tall as the window: an installed app on
   // Android counts more than the visible window in 100dvh (the sidebar's end went under the screen's edge, 2026-10-14).
@@ -283,14 +287,14 @@
         onkeydown={gripKey}
       ></div>
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={mini ? `${MINI_SPACE}px` : '0px'}>
+      <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={`${miniSpace}px`}>
         {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if builderOf(panel.viewed)}<CrateBuilder id={builderOf(panel.viewed)!.id} />{:else}<PlaylistView />{/if}
       </aside>
     {/if}
   </div>
 
   {#if playlistLayer}
-    <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={mini ? `${MINI_SPACE}px` : '0px'} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
+    <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
       {#if builderOf(panel.viewed)}<CrateBuilder id={builderOf(panel.viewed)!.id} />{:else}<PlaylistView />{/if}
     </div>
   {/if}

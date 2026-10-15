@@ -82,6 +82,18 @@ pub enum Command {
         #[serde(default, skip_serializing)]
         shuffle: bool,
     },
+    /// Tracks into the queue at `at` (the end when left out).
+    Add {
+        tracks: Vec<QueueTrack>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<usize>,
+    },
+    /// Queue track `from` to place `to`.
+    Move { from: usize, to: usize },
+    /// Queue track `index` out.
+    Remove { index: usize },
+    /// To queue track `index`, from its start.
+    Jump { index: usize },
     Pause,
     Resume,
     Toggle,
@@ -120,6 +132,8 @@ pub struct PlayerView {
     pub volume: u8,
     pub ducked: bool,
     pub queue_length: usize,
+    /// Goes up whenever the queue changes: ask for the player by name to see the new one.
+    pub queue_version: u64,
     /// The track at `index`.
     pub track: Option<QueueTrack>,
     /// The whole queue, for one player asked for by name.
@@ -141,6 +155,7 @@ struct Entry {
     seen: SystemTime,
     report: Report,
     queue: Vec<QueueTrack>,
+    queue_version: u64,
     /// When `report` came.
     at: Instant,
 }
@@ -166,6 +181,7 @@ impl Entry {
             volume: r.volume,
             ducked: r.ducked,
             queue_length: self.queue.len(),
+            queue_version: self.queue_version,
             track: usize::try_from(r.index).ok().and_then(|i| self.queue.get(i)).cloned(),
             queue: with_queue.then(|| self.queue.clone()),
         }
@@ -205,6 +221,11 @@ impl PlayOn {
         let _ = self.changed.send(());
     }
 
+    /// Told on every change of a player (the pages' live channel).
+    pub fn subscribe(&self) -> broadcast::Receiver<()> {
+        self.changed.subscribe()
+    }
+
     /// Every player Cratarr has heard of since it started, by name.
     pub fn list(&self) -> Vec<PlayerView> {
         let mut out: Vec<PlayerView> = self.entries().iter().map(|(n, e)| e.view(n, false)).collect();
@@ -230,6 +251,7 @@ impl PlayOn {
                 seen: SystemTime::now(),
                 report: Report { index: -1, volume: 100, ..Report::default() },
                 queue: Vec::new(),
+                queue_version: 0,
                 at: Instant::now(),
             });
             e.connection = Some((id, tx));
@@ -260,12 +282,16 @@ impl PlayOn {
             seen: SystemTime::now(),
             report: Report::default(),
             queue: Vec::new(),
+            queue_version: 0,
             at: Instant::now(),
         });
         let before = e.view(name, false);
         e.seen = SystemTime::now();
-        if let Some(q) = report.queue.clone() {
+        if let Some(q) = report.queue.clone()
+            && q != e.queue
+        {
             e.queue = q;
+            e.queue_version += 1;
         }
         e.report = Report { queue: None, ..report };
         e.at = Instant::now();

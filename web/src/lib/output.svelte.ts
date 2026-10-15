@@ -1,7 +1,8 @@
-// Where music plays (decisions 0019, 0022): on a media server's player (remote: today's Finamp on the tablet) or in
-// this browser (local, lib/localPlayer.svelte.ts). The player shows either the same way: the local queue is presented
-// as a now-playing view like the server's. Switching moves the music: the queue and the position go to the other side,
-// which plays from there, and the side that played stops.
+// Where music plays (decisions 0019, 0022, 0031): on a media server's player (remote: Finamp on the tablet), in this
+// browser or app (local, lib/localPlayer.svelte.ts), or on one of Cratarr's own players (Play On, lib/playOn.svelte.ts),
+// which the page drives as it drives the local player. The player shows each the same way: the queue the page holds is
+// presented as a now-playing view like the server's. Switching moves the music: the queue and the position go to the
+// other side, which plays from there, and the side that played stops.
 import {
   albumView,
   handover,
@@ -22,16 +23,21 @@ import {
 import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
 import { canPlayHere, local, playQueue, enqueue, seek, stop, type LocalTrack } from './localPlayer.svelte';
+import { drivenName, follow } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
-// A browser that cannot play here (no stream for audio) plays on the server's player, whatever was chosen elsewhere.
-export const isLocal = () => prefs.output === 'local' && canPlayHere;
+// Whether the page holds the queue: it plays here, or on one of Cratarr's players it drives. A browser that cannot play
+// here (no stream for audio) plays on a player, whatever was chosen elsewhere.
+export const isLocal = () => (prefs.output === 'local' && canPlayHere) || drivenName() !== null;
+
+/** Whether the music plays in this page (its stream, or the app it runs in). */
+const playsHere = () => prefs.output === 'local' && canPlayHere;
 
 // Leaving the page stops what plays in this browser, so a reload or closing the tab asks first (the browser's own
 // "Leave site?"), but only while this browser is playing.
 addEventListener('beforeunload', (e) => {
-  if (!isLocal() || local.index < 0 || local.paused) return;
+  if (!playsHere() || local.index < 0 || local.paused) return;
   e.preventDefault();
   e.returnValue = '';
 });
@@ -49,7 +55,7 @@ export function localNowPlaying(): NowPlaying | null {
     album_id: t.album_id,
     addable: localState.view?.addable ?? t.addable ?? true,
     progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, estimated: false },
-    player: 'This device',
+    player: drivenName() ?? 'This device',
     favorite: localState.view?.favorite ?? null,
     // As the heart, the chips stay until the new track's arrive (no row coming and going between tracks).
     info: localState.view?.info ?? null,
@@ -159,7 +165,8 @@ $effect.root(() => {
   $effect(() => {
     const t = local.queue[local.index];
     const at = `${local.index}/${t ? keyOf(t) : ''}`;
-    if (!t) return;
+    // Counted where it plays: here; a player of Cratarr's counts its own.
+    if (!t || !playsHere()) return;
     if (counted !== at) counted = null;
     const d = local.duration;
     if (counted === at || !d || local.position < d * PLAYED_AT) return;
@@ -269,11 +276,11 @@ export async function playAlbumHere(source: string, album: string, title?: strin
   return true;
 }
 
-/** Moves the music here: what the server's player plays (and what comes next) from where it is; the player stops. */
-export async function toLocal() {
+/** What plays where the output is now, to move it: the queue, the place in it and the position (s). */
+function current(): { tracks: LocalTrack[]; index: number; position: number } | null {
+  if (isLocal()) return local.index < 0 ? null : { tracks: [...local.queue], index: local.index, position: local.position };
   const np = live.view?.now_playing ?? null;
-  prefs.output = 'local';
-  if (!np) return;
+  if (!np) return null;
   const tracks: LocalTrack[] = [np, ...np.upcoming].map((t) => ({
     source: np.source,
     id: t.id,
@@ -282,29 +289,37 @@ export async function toLocal() {
     album: t.album,
     album_id: t.album_id,
   }));
-  const at = np.progress?.position_secs ?? 0;
-  try {
-    await transport('stop', np.source);
-  } catch {
-    /* it may have stopped already */
-  }
-  playQueue(tracks, 0);
-  if (at > 1) setTimeout(() => seek(at), 300);
+  return { tracks, index: 0, position: np.progress?.position_secs ?? 0 };
 }
 
-/** Moves the music to the server's player: the local queue from the playing track and position; here stops. */
-export async function toRemote() {
-  if (local.index < 0) {
-    prefs.output = 'remote';
+/** Plays on `output` from now on, and moves what plays there: the queue from the playing track, at its position; the
+ *  side that played stops. */
+export async function moveTo(output: typeof prefs.output) {
+  if (output === prefs.output) return;
+  const was = current();
+  if (isLocal()) {
+    stop();
+  } else if (was) {
+    try {
+      await transport('stop', was.tracks[0].source);
+    } catch {
+      /* it may have stopped already */
+    }
+  }
+  prefs.output = output;
+  follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
+  if (!was) return;
+  if (output === 'remote') {
+    await handover(was.tracks.map((t) => t.id), was.index, was.position, was.tracks[0].source);
+    setTimeout(refresh, 700);
     return;
   }
-  const source = local.queue[local.index]?.source;
-  const was = stop();
-  prefs.output = 'remote';
-  try {
-    await handover(was.queue.map((t) => t.id), was.index, was.position, source);
-    setTimeout(refresh, 700);
-  } catch (e) {
-    toast.fail(e, "The music didn't move to the player");
-  }
+  playQueue(was.tracks, was.index);
+  if (was.position > 1) setTimeout(() => seek(was.position), 300);
 }
+
+/** Moves the music here. */
+export const toLocal = () => moveTo('local');
+
+/** Moves the music to the server's player. */
+export const toRemote = () => moveTo('remote');

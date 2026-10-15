@@ -20,8 +20,9 @@ export type Prefs = {
   /** Wide windows show the player beside the page (true) or the mini-player with the player over the page (false,
    *  after Maximise). */
   sidebar: boolean;
-  /** Where music plays (decision 0019 / 0022): on a server's player (`remote`) or in this browser (`local`). */
-  output: 'remote' | 'local';
+  /** Where music plays (decisions 0019, 0022, 0031): on a server's player (`remote`), in this browser or app (`local`),
+   *  or on one of Cratarr's own players by name (`player:Salon tablet`). */
+  output: 'remote' | 'local' | `player:${string}`;
   /** Playlists pinned to the top of the Playlists page, in the order pinned (ids). */
   pinned: string[];
   /** The Playlists page's filter section (the filter and the order) is shown. */
@@ -76,7 +77,8 @@ function read(): Prefs {
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;
-      if (saved.output === 'remote' || saved.output === 'local') p.output = saved.output;
+      if (saved.output === 'remote' || saved.output === 'local' || (typeof saved.output === 'string' && saved.output.startsWith('player:')))
+        p.output = saved.output;
       if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');
       if (saved.insightsTab === 'statistics' || saved.insightsTab === 'related') p.insightsTab = saved.insightsTab;
       if (saved.signals && typeof saved.signals === 'object') {
