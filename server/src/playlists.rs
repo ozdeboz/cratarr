@@ -720,7 +720,16 @@ impl Store {
         let path = self.path_of(name);
         // `create_new` fails if the file exists (also on a case-insensitive clash), so nothing is overwritten.
         match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&path).await {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // Group-writable as the playlists around it, as `restore` does: the container's umask (022) made new
+                // playlists 644 (seen 2026-10-15).
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).await;
+                }
+                Ok(())
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(StoreError::Exists),
             Err(e) => Err(anyhow!(e).context(format!("creating {name}.m3u")).into()),
         }
@@ -1296,6 +1305,12 @@ B/2.mp3
         let s = d.store();
         s.create("Late Night").await.unwrap();
         assert_eq!(d.read("Late Night.m3u"), "");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(d.0.join("Late Night.m3u")).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o664, "group-writable whatever the umask");
+        }
         assert!(s.view(None).await.unwrap().iter().any(|p| p.id == "Late Night"));
         assert!(matches!(s.create("old").await, Err(StoreError::Exists)));
         assert_eq!(d.read("old.m3u"), "A/1.mp3\n");
