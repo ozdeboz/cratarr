@@ -274,7 +274,7 @@ impl Source for CratarrSource {
             let tracks = queue_tracks(ids);
             let at = on.followed().filter(|p| p.name == name).map_or(0, |p| usize::try_from(p.index + 1).unwrap_or(0));
             let c = match how {
-                super::PlayHow::Now => Command::Play { playlist: None, tracks: Some(tracks), index: 0, position_ms: 0, shuffle: false },
+                super::PlayHow::Now => Command::play(tracks, 0, 0),
                 super::PlayHow::Next => Command::Add { tracks, at: Some(at) },
                 super::PlayHow::Last => Command::Add { tracks, at: None },
             };
@@ -286,7 +286,7 @@ impl Source for CratarrSource {
     fn play_from<'a>(&'a self, ids: &'a [String], start_secs: f64) -> Fut<'a, String> {
         Box::pin(async move {
             let (on, name) = followed()?;
-            let c = Command::Play { playlist: None, tracks: Some(queue_tracks(ids)), index: 0, position_ms: (start_secs * 1000.0) as u64, shuffle: false };
+            let c = Command::play(queue_tracks(ids), 0, (start_secs * 1000.0) as u64);
             on.command(&name, c).await.map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(name)
         })

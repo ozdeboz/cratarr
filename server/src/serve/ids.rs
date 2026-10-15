@@ -24,7 +24,6 @@ pub fn song(track: i64) -> String {
 }
 
 /// The Cratarr track id in a song id.
-#[cfg(test)]
 pub fn track_of(id: &str) -> Option<i64> {
     id.strip_prefix(SONG)?.parse().ok()
 }

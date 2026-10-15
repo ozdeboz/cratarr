@@ -1156,8 +1156,13 @@ impl Catalogue {
     }
 
     /// The track a server's item id stands for (decision 0012), when the item is linked to a file the catalogue
-    /// counts. Blocking.
+    /// counts. Cratarr's own source (decision 0032) needs no links: its ids are the track ids. Blocking.
     pub fn track_of_source(&self, source: &str, item: &str) -> Option<i64> {
+        if source == crate::source::cratarr::KIND.id {
+            let track = crate::serve::ids::track_of(item)?;
+            let present = format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}");
+            return self.db().query_row(&present, [track], |_| Ok(())).optional().ok().flatten().map(|()| track);
+        }
         self.db()
             .query_row(
                 &format!(
@@ -1834,6 +1839,9 @@ mod tests {
         read_as_audio(&cat);
         cat.identify().unwrap();
         let one = cat.track_of(1, "A - B (2020)/01 One.mp3").unwrap();
+        let own = crate::serve::ids::song(one);
+        assert_eq!(cat.track_of_source("cratarr", &own), Some(one), "Cratarr's own ids need no links");
+        assert_eq!(cat.track_of_source("cratarr", "al-x"), None);
         cat.set_meta("full-folders:jf", "as at the last full listing");
         cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
         assert!(cat.meta("full-folders:jf").is_some(), "the same folders: nothing to list again");
@@ -1841,6 +1849,7 @@ mod tests {
         cat.set_folders(vec![a.clone()]).unwrap();
         assert_eq!(cat.status().unwrap().files, 2, "only the folder in use counts");
         assert_eq!(cat.track_of(1, "A - B (2020)/01 One.mp3"), None);
+        assert_eq!(cat.track_of_source("cratarr", &own), None, "a parked track does not play");
         // Back, even at another place in the list: the same track id, and the servers list again.
         cat.set_folders(vec![b.clone(), a.clone()]).unwrap();
         assert_eq!(cat.track_of(0, "A - B (2020)/01 One.mp3"), Some(one), "the same id after the break");

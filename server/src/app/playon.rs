@@ -67,15 +67,38 @@ fn full_volume() -> u8 {
     100
 }
 
+/// What `play` plays when it is not given tracks; resolved here, so it never reaches the player.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlayFrom {
+    /// A playlist, by name.
+    #[serde(default, skip_serializing)]
+    pub playlist: Option<String>,
+    /// An album of Cratarr's own library (`al-…`), in its order.
+    #[serde(default, skip_serializing)]
+    pub album: Option<String>,
+    /// The owner's favourite tracks.
+    #[serde(default, skip_serializing)]
+    pub favourites: bool,
+    /// Tracks from the whole library, at random ([`LIBRARY_PICK`] of them unless `limit` says otherwise).
+    #[serde(default, skip_serializing)]
+    pub library: bool,
+    /// At most this many tracks, after shuffling.
+    #[serde(default, skip_serializing)]
+    pub limit: Option<usize>,
+}
+
+/// How many tracks `play {library}` picks when not told.
+const LIBRARY_PICK: usize = 100;
+
 /// What can be asked of a player.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
-    /// A playlist (by name) or tracks, from track `index`, `position_ms` into it; shuffled first when asked (then from
-    /// the start). What reaches the player is always `tracks`.
+    /// A playlist, an album, the favourites, the library or tracks, from track `index`, `position_ms` into it; shuffled
+    /// first when asked (then from the start). What reaches the player is always `tracks`.
     Play {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        playlist: Option<String>,
+        #[serde(flatten)]
+        from: PlayFrom,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tracks: Option<Vec<QueueTrack>>,
         #[serde(default)]
@@ -117,6 +140,13 @@ pub enum Command {
     Unduck,
     /// The queue and position move to player `to`, and this one pauses. Handled here; never sent to a player.
     Handover { to: String },
+}
+
+impl Command {
+    /// Play these tracks, as a player is told to.
+    pub fn play(tracks: Vec<QueueTrack>, index: usize, position_ms: u64) -> Self {
+        Command::Play { from: PlayFrom::default(), tracks: Some(tracks), index, position_ms, shuffle: false }
+    }
 }
 
 /// Cratarr's own ids of the playing track (decision 0030): what Home Assistant's library calls take.
@@ -460,11 +490,13 @@ impl PlayOn {
     pub async fn command(&self, name: &str, command: Command) -> Result<(), ToggleError> {
         let command = match command {
             Command::Handover { to } => return self.handover(name, &to).await,
-            Command::Play { playlist, tracks, index, position_ms, shuffle } => {
-                let (mut tracks, mut index, mut position_ms) = match (playlist, tracks) {
-                    (Some(p), _) => (self.playlist_tracks(&p).await?, index, position_ms),
-                    (None, Some(t)) => (t, index, position_ms),
-                    (None, None) => return Err(ToggleError::Refused("Play what? Give a playlist or tracks.".into())),
+            Command::Play { from, tracks, mut index, mut position_ms, shuffle } => {
+                let picked = match &from.playlist {
+                    Some(p) => Some(self.playlist_tracks(p).await?),
+                    None => own_tracks(&from).await?,
+                };
+                let Some(mut tracks) = picked.or(tracks) else {
+                    return Err(ToggleError::Refused("Play what? Give a playlist, an album, the favourites, the library or tracks.".into()));
                 };
                 if tracks.is_empty() {
                     return Err(ToggleError::Refused("There is nothing there that can be played.".into()));
@@ -473,8 +505,10 @@ impl PlayOn {
                     shuffled(&mut tracks);
                     (index, position_ms) = (0, 0);
                 }
-                let tracks = self.named(tracks).await;
-                Command::Play { playlist: None, tracks: Some(tracks), index, position_ms, shuffle: false }
+                if let Some(n) = from.limit {
+                    tracks.truncate(n.max(1));
+                }
+                Command::play(self.named(tracks).await, index, position_ms)
             }
             Command::Seek { position_ms: None, percent: Some(p) } => {
                 let duration = self.entries().get(name).and_then(|e| e.report.duration_ms);
@@ -507,7 +541,7 @@ impl PlayOn {
         if tracks.is_empty() {
             return Err(ToggleError::Refused(format!("{from} has nothing to hand over.")));
         }
-        self.send(to, &Command::Play { playlist: None, tracks: Some(tracks), index, position_ms, shuffle: false })?;
+        self.send(to, &Command::play(tracks, index, position_ms))?;
         // The music is on its way there; this one pausing is no reason to fail the handover.
         let _ = self.send(from, &Command::Pause);
         Ok(())
@@ -637,6 +671,43 @@ fn valid_name(name: &str) -> Result<(), ToggleError> {
 }
 
 /// In place, in a random order (xorshift seeded from the clock: a shuffle needs no better).
+/// Tracks of Cratarr's own library (decision 0032) for `play`: an album in its order, the owner's favourites, or
+/// tracks from the whole library at random. `None` when none of those is asked for.
+async fn own_tracks(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
+    if from.album.is_none() && !from.favourites && !from.library {
+        return Ok(None);
+    }
+    let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+    let from = from.clone();
+    let songs = tokio::task::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
+        if let Some(album) = &from.album {
+            return Ok(served.library.album(album)?.and_then(|a| a.song).unwrap_or_default());
+        }
+        if from.favourites {
+            let owner = served.users.owner().context("there is no Subsonic account yet: make one in Settings")?;
+            let ids = served.userdata.starred(&owner, crate::userdata::Kind::Song)?;
+            return served.library.songs_by_id(&ids);
+        }
+        served.library.random_songs(from.limit.unwrap_or(LIBRARY_PICK), None, (None, None), None)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))??;
+    let named = |s: String| Some(s).filter(|s| !s.is_empty());
+    Ok(Some(
+        songs
+            .into_iter()
+            .map(|s| QueueTrack {
+                source: crate::source::cratarr::KIND.id.to_string(),
+                id: s.id,
+                name: s.title,
+                artist: named(s.artist),
+                album: named(s.album),
+                album_id: named(s.album_id),
+            })
+            .collect(),
+    ))
+}
+
 fn shuffled<T>(items: &mut [T]) {
     let mut x = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
     for i in (1..items.len()).rev() {
@@ -672,12 +743,18 @@ mod tests {
     #[test]
     fn commands_read_as_home_assistant_sends_them_and_reach_the_player_resolved() {
         let c: Command = serde_json::from_str(r#"{"command":"play","playlist":"Chill","shuffle":true}"#).unwrap();
-        assert_eq!(c, Command::Play { playlist: Some("Chill".into()), tracks: None, index: 0, position_ms: 0, shuffle: true });
+        let chill = PlayFrom { playlist: Some("Chill".into()), ..PlayFrom::default() };
+        assert_eq!(c, Command::Play { from: chill, tracks: None, index: 0, position_ms: 0, shuffle: true });
+        let c: Command = serde_json::from_str(r#"{"command":"play","library":true,"shuffle":true,"limit":50}"#).unwrap();
+        let library = PlayFrom { library: true, limit: Some(50), ..PlayFrom::default() };
+        assert_eq!(c, Command::Play { from: library, tracks: None, index: 0, position_ms: 0, shuffle: true });
+        let c: Command = serde_json::from_str(r#"{"command":"play","album":"al-x"}"#).unwrap();
+        assert!(matches!(c, Command::Play { from: PlayFrom { album: Some(a), favourites: false, .. }, .. } if a == "al-x"));
         let c: Command = serde_json::from_str(r#"{"command":"seek","percent":50}"#).unwrap();
         assert_eq!(c, Command::Seek { position_ms: None, percent: Some(50.0) });
         assert_eq!(serde_json::from_str::<Command>(r#"{"command":"duck"}"#).unwrap(), Command::Duck);
         // To the player: tracks, never the playlist's name or the shuffle wish.
-        let to_player = Command::Play { playlist: None, tracks: Some(vec![]), index: 2, position_ms: 5, shuffle: false };
+        let to_player = Command::play(vec![], 2, 5);
         assert_eq!(serde_json::to_string(&to_player).unwrap(), r#"{"command":"play","tracks":[],"index":2,"position_ms":5}"#);
         assert_eq!(serde_json::to_string(&Command::Seek { position_ms: Some(9), percent: None }).unwrap(), r#"{"command":"seek","position_ms":9}"#);
     }
