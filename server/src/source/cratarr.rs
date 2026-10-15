@@ -275,8 +275,8 @@ impl Source for CratarrSource {
             let at = on.followed().filter(|p| p.name == name).map_or(0, |p| usize::try_from(p.index + 1).unwrap_or(0));
             let c = match how {
                 super::PlayHow::Now => Command::play(tracks, 0, 0),
-                super::PlayHow::Next => Command::Add { tracks, at: Some(at) },
-                super::PlayHow::Last => Command::Add { tracks, at: None },
+                super::PlayHow::Next => Command::Add { tracks, at: Some(at), after: None },
+                super::PlayHow::Last => Command::Add { tracks, at: None, after: None },
             };
             on.command(&name, c).await.map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(name)
@@ -305,7 +305,7 @@ impl Source for CratarrSource {
             })
             .await?;
             let index = found.context("that track is not in the player's queue")?;
-            on.command(&name, Command::Jump { index }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            on.command(&name, Command::Jump { index: Some(index), entry: None }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(name)
         })
     }

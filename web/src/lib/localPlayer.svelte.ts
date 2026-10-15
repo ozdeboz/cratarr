@@ -17,6 +17,8 @@ import { inApp, onApp, toApp } from './app.svelte';
 import { playerCommand } from './api';
 
 export type LocalTrack = {
+  /** Its entry in a player's queue (decision 0033), once Cratarr or the app has given it one. */
+  entry?: string;
   source: string;
   id: string;
   name: string;
@@ -474,7 +476,8 @@ export function drive(name: string | null) {
 
 /** The last report: the position then (ms), and when it came; the position in between is counted on here. */
 let reported = { positionMs: 0, at: 0 };
-const sameQueue = (a: LocalTrack[], b: LocalTrack[]) => a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id);
+const sameQueue = (a: LocalTrack[], b: LocalTrack[]) =>
+  a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id && t.entry === b[i].entry);
 
 /** The player that plays: what it plays now (`queue` only when it changed). */
 export function reportedBy(m: { queue?: unknown; index?: unknown; positionMs?: unknown; durationMs?: unknown; paused?: unknown; error?: unknown }) {
@@ -531,8 +534,9 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
 export function enqueue(tracks: LocalTrack[], how: 'next' | 'last') {
   if (local.index < 0) return playQueue(tracks);
   const at = how === 'next' ? local.index + 1 : local.queue.length;
+  const after = at === 0 ? '' : local.queue[at - 1].entry;
   local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
-  if (handed()) return hand('add', { at, tracks });
+  if (handed()) return hand('add', { at, tracks, ...(after === undefined ? {} : { after }) });
   cutFrom(at);
 }
 
@@ -544,15 +548,18 @@ export function move(from: number, to: number) {
   const [t] = q.splice(from, 1);
   q.splice(to, 0, t);
   local.queue = q;
-  if (handed()) return hand('move', { from, to });
+  // By entry where the tracks have them (decision 0033): the player's queue may have moved on since.
+  const after = to === 0 ? '' : q[to - 1].entry;
+  if (handed()) return hand('move', { from, to, ...(t.entry && after !== undefined ? { entry: t.entry, after } : {}) });
   cutFrom(Math.min(from, to));
 }
 
 /** Takes upcoming track `index` (a queue index after the playing track) out of the queue: the queue sheet's swipe. */
 export function remove(index: number) {
   if (index <= local.index || index >= local.queue.length) return;
+  const entry = local.queue[index].entry;
   local.queue = local.queue.filter((_, i) => i !== index);
-  if (handed()) return hand('remove', { index });
+  if (handed()) return hand('remove', { index, ...(entry ? { entry } : {}) });
   cutFrom(index);
 }
 
@@ -602,8 +609,9 @@ export function togglePlay() {
 /** To queue track `index`: within the stream when it is already appended (gapless), else a fresh stream. */
 export function jump(index: number) {
   if (handed() && index >= 0 && index < local.queue.length) {
+    const entry = local.queue[index].entry;
     Object.assign(local, { index, position: 0, paused: false });
-    return hand('jump', { index });
+    return hand('jump', { index, ...(entry ? { entry } : {}) });
   }
   if (!audio || index < 0 || index >= local.queue.length) return;
   const seg = segments.find((s) => s.index === index);

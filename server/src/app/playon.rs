@@ -19,6 +19,7 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+use super::queue::Queue;
 use super::{PlaylistService, ToggleError};
 
 /// A player not heard from (a report, the 30 s heartbeat) for this long is offline, even if its connection still looks
@@ -32,6 +33,9 @@ const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
 /// A track as players hold it: the page's own description (`LocalTrack` in web/src/lib/localPlayer.svelte.ts).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct QueueTrack {
+    /// Its entry in the queue (decision 0033): an id of its own, never reused, apart from the track's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub entry: String,
     pub source: String,
     pub id: String,
     #[serde(default)]
@@ -49,6 +53,9 @@ pub struct QueueTrack {
 pub struct Report {
     /// The playing track's place in the queue; -1 with nothing loaded.
     pub index: i64,
+    /// The entry that plays (decision 0033); apps from before it say only `index`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
     pub position_ms: u64,
     #[serde(default)]
     pub duration_ms: Option<u64>,
@@ -107,19 +114,44 @@ pub enum Command {
         position_ms: u64,
         #[serde(default, skip_serializing)]
         shuffle: bool,
+        /// Loaded, not started: a queue given back to a player that came back without one.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        paused: bool,
     },
-    /// Tracks into the queue at `at` (the end when left out).
+    /// Tracks into the queue after entry `after` ("" for first), else at place `at`, else at the end. A player is told
+    /// both (decision 0033).
     Add {
         tracks: Vec<QueueTrack>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
     },
-    /// Queue track `from` to place `to`.
-    Move { from: usize, to: usize },
-    /// Queue track `index` out.
-    Remove { index: usize },
-    /// To queue track `index`, from its start.
-    Jump { index: usize },
+    /// Entry `entry` (or the one at place `from`) to after entry `after` ("" for first), or to place `to`.
+    Move {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+    },
+    /// Entry `entry` (or the one at place `index`) out.
+    Remove {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<String>,
+    },
+    /// To entry `entry` (or the one at place `index`), from its start.
+    Jump {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry: Option<String>,
+    },
     Pause,
     Resume,
     Toggle,
@@ -138,14 +170,14 @@ pub enum Command {
     /// Quieter, for an announcement; `Unduck` brings it back.
     Duck,
     Unduck,
-    /// The queue and position move to player `to`, and this one pauses. Handled here; never sent to a player.
+    /// The queue and position move to player `to`, and this one stops. Handled here; never sent to a player.
     Handover { to: String },
 }
 
 impl Command {
     /// Play these tracks, as a player is told to.
     pub fn play(tracks: Vec<QueueTrack>, index: usize, position_ms: u64) -> Self {
-        Command::Play { from: PlayFrom::default(), tracks: Some(tracks), index, position_ms, shuffle: false }
+        Command::Play { from: PlayFrom::default(), tracks: Some(tracks), index, position_ms, shuffle: false, paused: false }
     }
 }
 
@@ -187,7 +219,7 @@ pub struct PlayerView {
     /// Cratarr's own ids of the track at `index` (and its album artist).
     #[serde(flatten)]
     pub ids: TrackIds,
-    /// The queue entry that plays; `null` until queue entries have ids of their own (decision 0033).
+    /// The queue entry that plays (decision 0033).
     pub current_entry_id: Option<String>,
     /// The whole queue, for one player asked for by name.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -213,10 +245,12 @@ struct Entry {
     /// Album ids from the tracks' own sources, for tracks queued without one (`source\nid` → album id).
     album_ids: HashMap<String, String>,
     report: Report,
-    queue: Vec<QueueTrack>,
-    queue_version: u64,
+    /// Its queue, held here (decision 0033).
+    queue: Queue,
     /// When `report` came.
     at: Instant,
+    /// Connected and not yet heard from: its first report says whether it came back without its queue.
+    fresh: bool,
 }
 
 impl Entry {
@@ -228,10 +262,16 @@ impl Entry {
             ids: TrackIds::default(),
             album_ids: HashMap::new(),
             report: Report { index: -1, volume: 100, ..Report::default() },
-            queue: Vec::new(),
-            queue_version: 0,
+            queue: Queue::default(),
             at: Instant::now(),
+            fresh: false,
         }
+    }
+
+    /// The place of the entry that plays: found by its entry where the player says it, else as the player counts.
+    fn index(&self) -> i64 {
+        let found = self.report.entry.as_deref().and_then(|e| self.queue.at(e));
+        found.map_or(self.report.index, |i| i as i64)
     }
 
     fn online(&self) -> bool {
@@ -247,7 +287,8 @@ impl Entry {
                 position_ms = position_ms.min(d);
             }
         }
-        let track = usize::try_from(r.index).ok().and_then(|i| self.queue.get(i)).cloned().map(|mut t| {
+        let index = self.index();
+        let track = usize::try_from(index).ok().and_then(|i| self.queue.tracks.get(i)).cloned().map(|mut t| {
             if t.album_id.is_none() {
                 t.album_id = self.album_ids.get(&format!("{}\n{}", t.source, t.id)).cloned();
             }
@@ -265,21 +306,21 @@ impl Entry {
             },
             seen: self.seen.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
             playing: r.playing,
-            index: r.index,
+            index,
             position_ms,
             position_at: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
             duration_ms: r.duration_ms,
             volume: r.volume,
             ducked: r.ducked,
-            queue_length: self.queue.len(),
-            queue_version: self.queue_version,
+            queue_length: self.queue.tracks.len(),
+            queue_version: self.queue.version,
             title: track.as_ref().map(|t| t.name.clone()),
             artist: track.as_ref().and_then(|t| t.artist.clone()),
             album: track.as_ref().and_then(|t| t.album.clone()),
             ids: self.ids.clone(),
-            current_entry_id: None,
+            current_entry_id: track.as_ref().map(|t| t.entry.clone()).filter(|e| !e.is_empty()),
             track,
-            queue: with_queue.then(|| self.queue.clone()),
+            queue: with_queue.then(|| self.queue.tracks.clone()),
         }
     }
 }
@@ -296,25 +337,57 @@ pub struct PlayOn {
     lib: Arc<super::Library>,
     settings: Mutex<PlayOnSettings>,
     file: Option<PathBuf>,
+    /// The queues, saved after every change (`queues.json`), so a player that comes back without one gets it back.
+    queues_file: Option<PathBuf>,
+    save: tokio::sync::Notify,
     playlists: Arc<PlaylistService>,
+}
+
+/// A player's queue as saved, with where it was in it.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Saved {
+    #[serde(flatten)]
+    queue: Queue,
+    #[serde(default)]
+    entry: Option<String>,
+    #[serde(default)]
+    position_ms: u64,
 }
 
 impl PlayOn {
     pub fn new(lib: Arc<super::Library>, playlists: Arc<PlaylistService>, data_dir: Option<&str>) -> Arc<Self> {
         let file = data_dir.map(|d| PathBuf::from(d).join("players.json"));
         let settings = file.as_deref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let queues_file = data_dir.map(|d| PathBuf::from(d).join("queues.json"));
+        let saved: HashMap<String, Saved> =
+            queues_file.as_deref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        // The players known before a restart, offline until they connect, with their queues.
+        let entries = saved
+            .into_iter()
+            .map(|(name, s)| {
+                let mut e = Entry::new();
+                e.report.index = s.entry.as_deref().and_then(|x| s.queue.at(x)).map_or(-1, |i| i as i64);
+                e.report.entry = s.entry;
+                e.report.position_ms = s.position_ms;
+                e.queue = s.queue;
+                (name, e)
+            })
+            .collect();
         let me = Arc::new(Self {
-            entries: Mutex::default(),
+            entries: Mutex::new(entries),
             changed: broadcast::channel(16).0,
             connections: AtomicU64::new(0),
             seq: AtomicU64::new(0),
             lib,
             settings: Mutex::new(settings),
             file,
+            queues_file,
+            save: tokio::sync::Notify::new(),
             playlists,
         });
         me.clone().tell_webhooks();
         me.clone().watch_leases();
+        me.clone().keep_queues();
         let _ = INSTANCE.set(me.clone());
         me
     }
@@ -331,7 +404,7 @@ impl PlayOn {
         let online = entries.iter().filter(|(_, e)| e.online());
         let best = online
             .clone()
-            .filter(|(_, e)| e.report.index >= 0)
+            .filter(|(_, e)| e.index() >= 0)
             .max_by_key(|(_, e)| (e.report.playing, std::cmp::Reverse(e.at.elapsed())))
             .or_else(|| online.max_by_key(|(_, e)| std::cmp::Reverse(e.heard.elapsed())));
         best.map(|(n, e)| e.view(n, true))
@@ -395,6 +468,43 @@ impl PlayOn {
 
     fn changed(&self) {
         let _ = self.changed.send(());
+        self.save.notify_one();
+    }
+
+    /// Saves the queues after changes (those close together as one), in the background.
+    fn keep_queues(self: Arc<Self>) {
+        let Some(file) = self.queues_file.clone() else { return };
+        let me = Arc::downgrade(&self);
+        drop(self);
+        tokio::spawn(async move {
+            let mut last = String::new();
+            loop {
+                let Some(notified) = me.upgrade() else { return };
+                notified.save.notified().await;
+                drop(notified);
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let Some(me) = me.upgrade() else { return };
+                let saved: std::collections::BTreeMap<String, Saved> = me
+                    .entries()
+                    .iter()
+                    .map(|(n, e)| {
+                        let v = e.view(n, false);
+                        (n.clone(), Saved { queue: e.queue.clone(), entry: v.current_entry_id, position_ms: v.position_ms })
+                    })
+                    .collect();
+                drop(me);
+                let Ok(body) = serde_json::to_string(&saved) else { continue };
+                if body == last {
+                    continue;
+                }
+                let (f, b) = (file.clone(), body.clone());
+                match tokio::task::spawn_blocking(move || write_private(&f, &b)).await {
+                    Ok(Ok(())) => last = body,
+                    Ok(Err(e)) => tracing::warn!("Play On: cannot save the queues: {e:#}"),
+                    Err(e) => tracing::warn!("Play On: cannot save the queues: {e}"),
+                }
+            }
+        });
     }
 
     /// Told on every change of a player (the pages' live channel).
@@ -426,6 +536,7 @@ impl PlayOn {
             e.connection = Some((id, tx));
             e.seen = SystemTime::now();
             e.heard = Instant::now();
+            e.fresh = true;
         }
         tracing::info!("player {name:?} connected");
         self.changed();
@@ -451,17 +562,29 @@ impl PlayOn {
         let before = e.view(name, false);
         e.seen = SystemTime::now();
         e.heard = Instant::now();
-        if let Some(q) = report.queue.clone()
-            && q != e.queue
-        {
-            e.queue = q;
-            e.queue_version += 1;
+        // Back without a queue (the app was updated, or killed): it gets its queue back, paused where it was.
+        let came_back_empty = std::mem::take(&mut e.fresh) && report.index < 0 && !e.queue.tracks.is_empty();
+        let give_back = came_back_empty.then(|| {
+            let (index, position_ms) = (before.index.max(0) as usize, before.position_ms);
+            Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused: true }
+        });
+        if give_back.is_some() {
+            e.report.playing = false;
+            e.at = Instant::now();
+        } else {
+            if let Some(q) = report.queue.clone() {
+                e.queue.adopt(q);
+            }
+            e.report = Report { queue: None, ..report };
+            e.at = Instant::now();
         }
-        e.report = Report { queue: None, ..report };
-        e.at = Instant::now();
         let track = e.view(name, false).track;
         let new_track = track != before.track;
         drop(entries);
+        if let Some(c) = give_back {
+            tracing::info!("player {name:?} came back without its queue: given back");
+            let _ = self.send(name, &c);
+        }
         // A new track: its ids, looked up outside the lock; its album's id from its own source when it came without one
         // (queued by a page, handed over): Home Assistant finds "this album" by it.
         if new_track {
@@ -490,7 +613,7 @@ impl PlayOn {
     pub async fn command(&self, name: &str, command: Command) -> Result<(), ToggleError> {
         let command = match command {
             Command::Handover { to } => return self.handover(name, &to).await,
-            Command::Play { from, tracks, mut index, mut position_ms, shuffle } => {
+            Command::Play { from, tracks, mut index, mut position_ms, shuffle, paused } => {
                 let picked = match &from.playlist {
                     Some(p) => Some(self.playlist_tracks(p).await?),
                     None => own_tracks(&from).await?,
@@ -508,42 +631,66 @@ impl PlayOn {
                 if let Some(n) = from.limit {
                     tracks.truncate(n.max(1));
                 }
-                Command::play(self.named(tracks).await, index, position_ms)
+                let tracks = Some(self.named(tracks).await);
+                Command::Play { from: PlayFrom::default(), tracks, index, position_ms, shuffle: false, paused }
             }
+            Command::Add { tracks, at, after } => Command::Add { tracks: self.named(tracks).await, at, after },
             Command::Seek { position_ms: None, percent: Some(p) } => {
                 let duration = self.entries().get(name).and_then(|e| e.report.duration_ms);
                 let Some(d) = duration else { return Err(ToggleError::Refused("The track's length is not known yet.".into())) };
                 Command::Seek { position_ms: Some((d as f64 * p.clamp(0.0, 100.0) / 100.0) as u64), percent: None }
             }
             Command::Seek { position_ms: None, percent: None } => return Err(ToggleError::Refused("Seek where?".into())),
-            Command::Add { tracks, at } => Command::Add { tracks: self.named(tracks).await, at },
             other => other,
         };
-        self.send(name, &command)
+        // The queue is edited here first (decision 0033), and the player told the edit by entry.
+        let mut entries = self.entries();
+        let Some(e) = entries.get_mut(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
+        if !e.online() {
+            return Err(ToggleError::Refused(format!("{name} is not connected.")));
+        }
+        let mut queue = e.queue.clone();
+        let told = queue.edit(command)?;
+        Self::tell(e, name, &told, queue.version)?;
+        let edited = queue != e.queue;
+        e.queue = queue;
+        drop(entries);
+        if edited {
+            self.changed();
+        }
+        Ok(())
     }
 
+    /// A command to a player as it is, its queue not edited here (a queue given back, a handover's stop).
     fn send(&self, name: &str, command: &Command) -> Result<(), ToggleError> {
-        let json = serde_json::to_string(command).map_err(anyhow::Error::from)?;
-        let entries = self.entries();
-        let Some(e) = entries.get(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
-        let Some((_, tx)) = &e.connection else { return Err(ToggleError::Refused(format!("{name} is not connected."))) };
-        tx.try_send(json).map_err(|_| ToggleError::Refused(format!("{name} does not take commands now.")))
+        let mut entries = self.entries();
+        let Some(e) = entries.get_mut(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
+        let version = e.queue.version;
+        Self::tell(e, name, command, version)
     }
 
-    /// The queue and position of `from` go to `to`, which plays them; `from` pauses.
+    /// Sends a command down a player's connection, with the version of the queue it leaves the player at.
+    fn tell(e: &mut Entry, name: &str, command: &Command, version: u64) -> Result<(), ToggleError> {
+        let mut json = serde_json::to_value(command).map_err(anyhow::Error::from)?;
+        json["version"] = version.into();
+        let Some((_, tx)) = &e.connection else { return Err(ToggleError::Refused(format!("{name} is not connected."))) };
+        tx.try_send(json.to_string()).map_err(|_| ToggleError::Refused(format!("{name} does not take commands now.")))
+    }
+
+    /// The queue and position of `from` go to `to`, which plays them, with their entries; `from` stops (decision 0033).
     async fn handover(&self, from: &str, to: &str) -> Result<(), ToggleError> {
         let (tracks, index, position_ms) = {
             let entries = self.entries();
             let Some(e) = entries.get(from) else { return Err(ToggleError::Refused(format!("No player is called {from}."))) };
             let v = e.view(from, false);
-            (e.queue.clone(), v.index.max(0) as usize, v.position_ms)
+            (e.queue.tracks.clone(), v.index.max(0) as usize, v.position_ms)
         };
         if tracks.is_empty() {
             return Err(ToggleError::Refused(format!("{from} has nothing to hand over.")));
         }
-        self.send(to, &Command::play(tracks, index, position_ms))?;
-        // The music is on its way there; this one pausing is no reason to fail the handover.
-        let _ = self.send(from, &Command::Pause);
+        Box::pin(self.command(to, Command::play(tracks, index, position_ms))).await?;
+        // The music is on its way there; this one stopping is no reason to fail the handover.
+        let _ = Box::pin(self.command(from, Command::Stop)).await;
         Ok(())
     }
 
@@ -583,7 +730,7 @@ impl PlayOn {
             .into_iter()
             .filter(|r| !r.missing)
             .filter_map(|r| {
-                Some(QueueTrack { source: source.clone(), id: r.id?, name: r.name.unwrap_or_default(), artist: r.artist, album: r.album, album_id: None })
+                Some(QueueTrack { source: source.clone(), id: r.id?, name: r.name.unwrap_or_default(), artist: r.artist, album: r.album, ..QueueTrack::default() })
             })
             .collect())
     }
@@ -670,7 +817,6 @@ fn valid_name(name: &str) -> Result<(), ToggleError> {
     Ok(())
 }
 
-/// In place, in a random order (xorshift seeded from the clock: a shuffle needs no better).
 /// Tracks of Cratarr's own library (decision 0032) for `play`: an album in its order, the owner's favourites, or
 /// tracks from the whole library at random. `None` when none of those is asked for.
 async fn own_tracks(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
@@ -703,11 +849,13 @@ async fn own_tracks(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleEr
                 artist: named(s.artist),
                 album: named(s.album),
                 album_id: named(s.album_id),
+                ..QueueTrack::default()
             })
             .collect(),
     ))
 }
 
+/// In place, in a random order (xorshift seeded from the clock: a shuffle needs no better).
 fn shuffled<T>(items: &mut [T]) {
     let mut x = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
     for i in (1..items.len()).rev() {
@@ -744,10 +892,10 @@ mod tests {
     fn commands_read_as_home_assistant_sends_them_and_reach_the_player_resolved() {
         let c: Command = serde_json::from_str(r#"{"command":"play","playlist":"Chill","shuffle":true}"#).unwrap();
         let chill = PlayFrom { playlist: Some("Chill".into()), ..PlayFrom::default() };
-        assert_eq!(c, Command::Play { from: chill, tracks: None, index: 0, position_ms: 0, shuffle: true });
+        assert_eq!(c, Command::Play { from: chill, tracks: None, index: 0, position_ms: 0, shuffle: true, paused: false });
         let c: Command = serde_json::from_str(r#"{"command":"play","library":true,"shuffle":true,"limit":50}"#).unwrap();
         let library = PlayFrom { library: true, limit: Some(50), ..PlayFrom::default() };
-        assert_eq!(c, Command::Play { from: library, tracks: None, index: 0, position_ms: 0, shuffle: true });
+        assert_eq!(c, Command::Play { from: library, tracks: None, index: 0, position_ms: 0, shuffle: true, paused: false });
         let c: Command = serde_json::from_str(r#"{"command":"play","album":"al-x"}"#).unwrap();
         assert!(matches!(c, Command::Play { from: PlayFrom { album: Some(a), favourites: false, .. }, .. } if a == "al-x"));
         let c: Command = serde_json::from_str(r#"{"command":"seek","percent":50}"#).unwrap();

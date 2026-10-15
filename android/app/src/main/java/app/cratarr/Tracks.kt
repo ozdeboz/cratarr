@@ -7,8 +7,12 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
-/** The page's own description of a track (`source`, `id`, `name`, `artist`, `album`, `album_id`), kept with its item. */
+/**
+ * The page's own description of a track (`entry`, `source`, `id`, `name`, `artist`, `album`, `album_id`), kept with its
+ * item. `entry` is its entry in the queue (decision 0033): Cratarr's, or one made here for a track that came without.
+ */
 private const val TRACK = "cratarr.track"
 
 /**
@@ -22,6 +26,7 @@ fun mediaItems(tracks: JSONArray?): List<MediaItem> {
         val source = t.optString("source")
         val id = t.optString("id")
         if (source.isEmpty() || id.isEmpty()) return@mapNotNull null
+        val track = if (t.optString("entry").isEmpty()) JSONObject(t.toString()).put("entry", UUID.randomUUID().toString()) else t
         fun text(key: String) = t.optString(key).takeIf { it.isNotEmpty() && it != "null" }
         MediaItem.Builder()
             .setMediaId("${Uri.encode(source)}/${Uri.encode(id)}")
@@ -30,12 +35,19 @@ fun mediaItems(tracks: JSONArray?): List<MediaItem> {
                     .setTitle(t.optString("name"))
                     .setArtist(text("artist"))
                     .setAlbumTitle(text("album"))
-                    .setExtras(Bundle().apply { putString(TRACK, t.toString()) })
+                    .setExtras(Bundle().apply { putString(TRACK, track.toString()) })
                     .build(),
             )
             .build()
     }
 }
+
+/** An item's entry in the queue. */
+fun entryOf(item: MediaItem): String? =
+    item.mediaMetadata.extras?.getString(TRACK)?.let { JSONObject(it).optString("entry") }?.takeIf { it.isNotEmpty() }
+
+/** The place of an entry in the player's queue; -1 when it is not there. */
+fun placeOf(player: Player, entry: String): Int = (0 until player.mediaItemCount).firstOrNull { entryOf(player.getMediaItemAt(it)) == entry } ?: -1
 
 /** The player's queue, as the page and Cratarr describe tracks. */
 fun queueOf(player: Player): JSONArray {

@@ -21,6 +21,7 @@ mod library;
 mod playing;
 mod playlists;
 mod playon;
+mod queue;
 mod settings;
 mod shelf;
 mod sync;

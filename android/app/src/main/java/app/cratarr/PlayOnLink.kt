@@ -175,17 +175,31 @@ class PlayOnLink(
                 if (items.isEmpty()) return
                 p.setMediaItems(items, m.optInt("index", 0).coerceIn(0, items.size - 1), m.optLong("position_ms", 0))
                 p.prepare()
-                p.play()
+                // A queue given back after the app came back without one waits for a play.
+                if (m.optBoolean("paused")) p.pause() else p.play()
             }
+            // Edits name entries (decision 0033); by place only when the entry is not found here.
             "add" -> {
                 val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
-                val at = if (m.has("at")) m.optInt("at").coerceIn(0, p.mediaItemCount) else p.mediaItemCount
+                val after = m.optString("after", null)?.let { if (it.isEmpty()) 0 else placeOf(p, it).takeIf { a -> a >= 0 }?.plus(1) }
+                val at = after ?: if (m.has("at")) m.optInt("at").coerceIn(0, p.mediaItemCount) else p.mediaItemCount
                 p.addMediaItems(at, items)
                 if (p.playbackState == Player.STATE_IDLE) p.prepare()
             }
-            "move" -> p.moveMediaItem(m.optInt("from"), m.optInt("to"))
-            "remove" -> m.optInt("index", -1).takeIf { it in 0 until p.mediaItemCount }?.let(p::removeMediaItem)
-            "jump" -> m.optInt("index", -1).takeIf { it in 0 until p.mediaItemCount }?.let {
+            "move" -> {
+                val from = placed(m, "entry", "from")
+                val after = m.optString("after", null)?.let { if (it.isEmpty()) 0 else placeOf(p, it) }
+                // The place it ends up at, counted with it taken out.
+                val to = when {
+                    after == null || after < 0 -> m.optInt("to", -1)
+                    after == 0 && m.optString("after").isEmpty() -> 0
+                    after > from -> after
+                    else -> after + 1
+                }
+                if (from in 0 until p.mediaItemCount && to in 0 until p.mediaItemCount && from != to) p.moveMediaItem(from, to)
+            }
+            "remove" -> placed(m, "entry", "index").takeIf { it in 0 until p.mediaItemCount }?.let(p::removeMediaItem)
+            "jump" -> placed(m, "entry", "index").takeIf { it in 0 until p.mediaItemCount }?.let {
                 p.seekTo(it, 0)
                 play()
             }
@@ -215,6 +229,10 @@ class PlayOnLink(
         }
         report()
     }
+
+    /** The place of the entry a command names, else the place it gives. */
+    private fun placed(m: JSONObject, entry: String, place: String): Int =
+        m.optString(entry, null)?.let { placeOf(player, it) }?.takeIf { it >= 0 } ?: m.optInt(place, -1)
 
     private fun play() {
         val p = player
@@ -255,6 +273,7 @@ class PlayOnLink(
         val p = player
         val out = JSONObject()
             .put("index", if (p.mediaItemCount == 0) -1 else p.currentMediaItemIndex)
+            .put("entry", p.currentMediaItem?.let(::entryOf) ?: JSONObject.NULL)
             .put("position_ms", p.currentPosition.coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
