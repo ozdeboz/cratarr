@@ -141,6 +141,7 @@ async fn main() -> Result<()> {
     // The OpenSubsonic API (decision 0030), kept in step with the catalogue in the background.
     let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), app.library.catalogue(), tag_rules, &env)
         .context("cannot open the OpenSubsonic library")?;
+    served.set_playlists(app.playlists.clone());
     served.follow();
 
     let listener = tokio::net::TcpListener::bind(&bind).await.with_context(|| format!("cannot bind {bind}"))?;

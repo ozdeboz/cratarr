@@ -390,8 +390,143 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let size = p.number("size").filter(|n| *n > 0).map(|n| n as u32);
             Ok(Answer::Raw(serve.cover(&id, size, headers).await?))
         }
+        "getPlaylists" => {
+            let service = playlist_service(serve)?;
+            let all = service.snapshot().await.map_err(toggle_failed)?;
+            let mut out = Vec::with_capacity(all.len());
+            for (name, lines, _) in all {
+                let songs = shown_songs(serve, &lines).await?;
+                out.push(playlist_json(serve, &me, &name, &lines, &songs)?);
+            }
+            Ok(Answer::Json(json!({ "playlists": { "playlist": out } })))
+        }
+        "getPlaylist" => {
+            let name = playlist_name(p.get("id"))?;
+            let service = playlist_service(serve)?;
+            let lines = service.entries(&name).await.map_err(toggle_failed)?;
+            let mut songs = shown_songs(serve, &lines).await?;
+            annotate_songs(serve, &me, &mut songs)?;
+            let mut body = playlist_json(serve, &me, &name, &lines, &songs)?;
+            body["entry"] = serde_json::to_value(&songs)?;
+            Ok(Answer::Json(json!({ "playlist": body })))
+        }
+        "createPlaylist" => {
+            let service = playlist_service(serve)?;
+            let add = lines_of_songs(serve, &p.all("songId")).await?;
+            let name = match p.get("playlistId") {
+                // With an id: the playlist's songs become these (lines of missing files stay).
+                Some(id) => {
+                    let name = playlist_name(Some(id))?;
+                    let lines = service.entries(&name).await.map_err(toggle_failed)?;
+                    let shown = shown_flags(serve, &lines).await?;
+                    let all: Vec<usize> = (0..shown.iter().filter(|s| **s).count()).collect();
+                    let new = super::playlists::edited(&lines, &shown, &all, &add);
+                    if new != lines {
+                        service.set_entries(&name, &lines, &new).await.map_err(toggle_failed)?;
+                    }
+                    name
+                }
+                None => {
+                    let wanted = p.get("name").filter(|n| !n.trim().is_empty()).ok_or_else(|| missing("name"))?;
+                    let taken: Vec<String> = service.snapshot().await.map_err(toggle_failed)?.into_iter().map(|(n, _, _)| n).collect();
+                    let name = super::playlists::new_name(wanted, &taken);
+                    service.create_with(&name, &add).await.map_err(toggle_failed)?;
+                    name
+                }
+            };
+            let lines = service.entries(&name).await.map_err(toggle_failed)?;
+            let mut songs = shown_songs(serve, &lines).await?;
+            annotate_songs(serve, &me, &mut songs)?;
+            let mut body = playlist_json(serve, &me, &name, &lines, &songs)?;
+            body["entry"] = serde_json::to_value(&songs)?;
+            Ok(Answer::Json(json!({ "playlist": body })))
+        }
+        "updatePlaylist" => {
+            let name = playlist_name(p.get("playlistId"))?;
+            let service = playlist_service(serve)?;
+            let remove: Vec<usize> = p.all("songIndexToRemove").iter().filter_map(|i| i.trim().parse().ok()).collect();
+            let add = lines_of_songs(serve, &p.all("songIdToAdd")).await?;
+            if !remove.is_empty() || !add.is_empty() {
+                let lines = service.entries(&name).await.map_err(toggle_failed)?;
+                let shown = shown_flags(serve, &lines).await?;
+                let new = super::playlists::edited(&lines, &shown, &remove, &add);
+                if new != lines {
+                    service.set_entries(&name, &lines, &new).await.map_err(toggle_failed)?;
+                }
+            }
+            if let Some(wanted) = p.get("name").filter(|n| !n.trim().is_empty() && *n != name) {
+                let taken: Vec<String> =
+                    service.snapshot().await.map_err(toggle_failed)?.into_iter().map(|(n, _, _)| n).filter(|n| *n != name).collect();
+                let new_name = super::playlists::new_name(wanted, &taken);
+                if new_name != name {
+                    service.rename(&name, &new_name).await.map_err(toggle_failed)?;
+                }
+            }
+            Ok(Answer::Json(json!({})))
+        }
+        "deletePlaylist" => {
+            let name = playlist_name(p.get("id"))?;
+            playlist_service(serve)?.delete(&name).await.map_err(toggle_failed)?;
+            Ok(Answer::Json(json!({})))
+        }
         _ => Err(Failed(501, format!("{method} is not implemented"))),
     }
+}
+
+fn playlist_service(serve: &Serve) -> Result<Arc<crate::app::PlaylistService>, Failed> {
+    serve.playlists().cloned().ok_or_else(|| Failed(0, "Playlists are not ready yet".into()))
+}
+
+fn playlist_name(id: Option<&str>) -> Result<String, Failed> {
+    let id = id.ok_or_else(|| missing("id"))?;
+    super::playlists::name_of(id).map(str::to_string).ok_or_else(|| not_found("Playlist"))
+}
+
+fn toggle_failed(e: crate::app::ToggleError) -> Failed {
+    match e {
+        crate::app::ToggleError::UnknownPlaylist => not_found("Playlist"),
+        other => Failed(0, other.to_string()),
+    }
+}
+
+/// Which of a playlist's lines are songs the library has (the others are not shown).
+async fn shown_flags(serve: &Arc<Serve>, lines: &[String]) -> Result<Vec<bool>, Failed> {
+    let cat = serve.catalogue.clone();
+    let lines = lines.to_vec();
+    blocking(move || Ok(lines.iter().map(|l| super::playlists::song_of_line(&cat, l).is_some()).collect())).await
+}
+
+/// A playlist's songs in order: its lines the library has.
+async fn shown_songs(serve: &Arc<Serve>, lines: &[String]) -> Result<Vec<Song>, Failed> {
+    let (cat, lib) = (serve.catalogue.clone(), serve.library.clone());
+    let lines = lines.to_vec();
+    blocking(move || {
+        let ids: Vec<String> = lines.iter().filter_map(|l| super::playlists::song_of_line(&cat, l)).collect();
+        lib.songs_by_id(&ids)
+    })
+    .await
+}
+
+/// The playlist lines of songs a client named; songs the library does not know are left out.
+async fn lines_of_songs(serve: &Arc<Serve>, songs: &[String]) -> Result<Vec<String>, Failed> {
+    let cat = serve.catalogue.clone();
+    let songs = songs.to_vec();
+    blocking(move || Ok(songs.iter().filter_map(|s| super::playlists::line_of_song(&cat, s)).collect())).await
+}
+
+fn playlist_json(serve: &Serve, me: &str, name: &str, lines: &[String], songs: &[Song]) -> Result<Value, Failed> {
+    use md5::Digest;
+    let print = format!("{:x}", md5::Md5::digest(lines.join("\n").as_bytes()));
+    let (created, changed) = serve.userdata.playlist_seen(name, &print)?;
+    let mut v = json!({
+        "id": super::playlists::id_of(name), "name": name, "owner": me, "public": true,
+        "songCount": songs.len(), "duration": songs.iter().map(|s| s.duration).sum::<u64>(),
+        "created": api::iso(created), "changed": api::iso(changed), "readonly": false,
+    });
+    if let Some(first) = songs.first() {
+        v["coverArt"] = first.cover_art.clone().into();
+    }
+    Ok(v)
 }
 
 fn now() -> i64 {

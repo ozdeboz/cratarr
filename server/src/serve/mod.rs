@@ -6,6 +6,7 @@ pub mod files;
 pub mod ids;
 pub mod library;
 pub mod library_api;
+pub mod playlists;
 pub mod read;
 pub mod routes;
 pub mod users;
@@ -34,6 +35,8 @@ pub struct Serve {
     rules: RwLock<Rules>,
     /// When the library was last built, epoch seconds (`getIndexes`' `lastModified`).
     built_at: RwLock<i64>,
+    /// Cratarr's playlist service, once the app is up (`set_playlists`): the Subsonic playlists are its files.
+    playlists: std::sync::OnceLock<Arc<crate::app::PlaylistService>>,
 }
 
 fn now() -> i64 {
@@ -53,7 +56,15 @@ impl Serve {
         {
             users.set(u.trim(), &p)?;
         }
-        Ok(Arc::new(Self { library, userdata, users, catalogue, rules: RwLock::new(rules), built_at: RwLock::new(now()) }))
+        Ok(Arc::new(Self { library, userdata, users, catalogue, rules: RwLock::new(rules), built_at: RwLock::new(now()), playlists: Default::default() }))
+    }
+
+    pub fn set_playlists(&self, service: Arc<crate::app::PlaylistService>) {
+        let _ = self.playlists.set(service);
+    }
+
+    pub fn playlists(&self) -> Option<&Arc<crate::app::PlaylistService>> {
+        self.playlists.get()
     }
 
     pub fn built_at(&self) -> i64 {

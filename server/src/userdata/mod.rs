@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS play_queue (
   user TEXT PRIMARY KEY, songs TEXT NOT NULL, current TEXT, position_ms INTEGER NOT NULL DEFAULT 0,
   changed INTEGER NOT NULL, changed_by TEXT);
 CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, origin TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS playlist_seen (name TEXT PRIMARY KEY, print TEXT NOT NULL, created INTEGER NOT NULL, changed INTEGER NOT NULL);
 ";
 
 /// What an annotation is about.
@@ -271,6 +272,20 @@ impl UserData {
             params![user, q.songs.join(","), q.current, q.position_ms as i64, q.changed, q.changed_by],
         )?;
         Ok(())
+    }
+
+    /// When a playlist was first seen and last seen changed (epoch seconds), given what it holds now (`print`): the
+    /// files keep no such dates, and Subsonic clients compare `changed` to know when to read a playlist again.
+    pub fn playlist_seen(&self, name: &str, print: &str) -> Result<(i64, i64)> {
+        let at = now();
+        let db = self.db();
+        db.execute(
+            "INSERT INTO playlist_seen (name, print, created, changed) VALUES (?1, ?2, ?3, ?3)
+             ON CONFLICT (name) DO UPDATE SET changed = CASE WHEN playlist_seen.print = excluded.print THEN playlist_seen.changed ELSE excluded.changed END,
+               print = excluded.print",
+            params![name, print, at],
+        )?;
+        Ok(db.query_row("SELECT created, changed FROM playlist_seen WHERE name = ?1", [name], |r| Ok((r.get(0)?, r.get(1)?)))?)
     }
 
     /// Answers when the database can be read. For the health check.

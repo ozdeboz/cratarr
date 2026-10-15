@@ -1052,6 +1052,28 @@ impl PlaylistService {
         Ok(self.keep_texts(vec![edit]))
     }
 
+    /// Every playlist's name, lines and missing-track count (the OpenSubsonic playlists, decision 0030).
+    pub async fn snapshot(&self) -> Result<Vec<(String, Vec<String>, usize)>, ToggleError> {
+        Ok(self.lib.store()?.snapshot().await?)
+    }
+
+    /// One playlist's lines.
+    pub async fn entries(&self, id: &str) -> Result<Vec<String>, ToggleError> {
+        Ok(self.lib.store()?.entries(id).await?)
+    }
+
+    /// A playlist's lines replaced as one write, as `edit`, but the new list may also hold lines it did not have (an
+    /// OpenSubsonic client adding songs, decision 0030). The caller makes the lines from the catalogue, never from what
+    /// a client sent. Refused when the playlist changed since `expected`. A line that would repeat is left out by the
+    /// store (decision 0025, amended). Returns the undo token (none when nothing changed).
+    pub async fn set_entries(&self, id: &str, expected: &[String], entries: &[String]) -> Result<Option<String>, ToggleError> {
+        let Some(edit) = self.lib.store()?.replace_entries_if(id, expected, entries).await? else {
+            return Err(ToggleError::Refused("The playlist changed meanwhile: look at it again.".into()));
+        };
+        self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
+        Ok(self.keep_texts(vec![edit]))
+    }
+
     /// The server (`want`, else the first connected) a playlist favourite is kept on.
     fn favourites_source(&self, want: Option<&str>) -> Result<Arc<dyn source::Source>, ToggleError> {
         let sources = self.lib.connected();
