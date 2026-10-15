@@ -574,8 +574,18 @@ impl Source for JellyfinSource {
     fn user_data<'a>(&'a self, item: &'a str) -> Fut<'a, Vec<(String, serde_json::Value)>> {
         Box::pin(async move {
             let mut out = Vec::new();
-            for (user, _) in self.jf.users().await? {
-                let data = self.jf.user_item_data(item, &user).await?;
+            for (user, name) in self.jf.users().await? {
+                // Each account on its own: one that cannot see the item (no access to its library: 404) has no data
+                // for it, and must not cost the others theirs (a Keep lost every account's play data that way while
+                // one account could not see Incoming, 2026-10-15).
+                let data = match self.jf.user_item_data(item, &user).await {
+                    Ok(d) => d,
+                    Err(e) if format!("{e:#}").contains("404") => continue,
+                    Err(e) => {
+                        tracing::warn!("could not read {name}'s play data of {item}: {e:#}");
+                        continue;
+                    }
+                };
                 if let Some(kept) = crate::jellyfin::user_data_to_keep(&data) {
                     out.push((user, kept));
                 }
