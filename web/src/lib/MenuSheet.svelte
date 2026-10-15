@@ -14,6 +14,7 @@
   import { decelerate, SHEET_IN, SHEET_OUT } from './motion';
   import Icon from './Icon.svelte';
   import { accentOf } from './remote.svelte';
+  import { sheetArea } from './SheetArea.svelte';
 
   let {
     label,
@@ -97,6 +98,26 @@
     return () => ro.disconnect();
   });
 
+  // The side it belongs to (the page's or the panel's, lib/SheetArea.svelte): with both in view, the sheet stands over
+  // that side and dims only it; a sheet of neither stays in the middle of the window.
+  const area = sheetArea();
+  let side = $state<{ left: number; width: number } | null>(null);
+  $effect(() => {
+    if (!area) return;
+    const measure = () => {
+      const r = area.getBoundingClientRect();
+      side = r.width > 0 ? { left: r.left, width: r.width } : null;
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(area);
+    addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      removeEventListener('resize', measure);
+    };
+  });
+
   // Focus the first control on open, so the keyboard lands in the menu.
   let sheet = $state<HTMLElement>();
   $effect(() => {
@@ -107,7 +128,9 @@
 <!-- At the end of the page (lib/portal.ts): over every layer it was opened from. Global transitions: a sheet slides in and out however it is opened (inside another block, such as TrackMenu's
      {#if}, a local one would not play). -->
 <div class="root" use:portal>
-<div class="backdrop" role="presentation" onclick={onclose} transition:fade|global={{ duration: SHEET_OUT }}></div>
+<div class="backdrop" class:sided={side !== null} role="presentation" onclick={onclose} transition:fade|global={{ duration: SHEET_OUT }}>
+  {#if side}<div class="dim" style:left="{side.left}px" style:width="{side.width}px"></div>{/if}
+</div>
 <div
   class="sheet"
   role="dialog"
@@ -115,6 +138,8 @@
   aria-label={label}
   tabindex="-1"
   style:--art-accent={accent ?? 'var(--accent)'}
+  style:--side-w={side ? `${side.width}px` : null}
+  style:left={side ? `${side.left + side.width / 2}px` : null}
   style:transform={dy ? `translateY(${dy}px)` : null}
   class:dragging={dy > 0}
   bind:this={sheet}
@@ -183,7 +208,19 @@
     background: rgb(0 0 0 / 0.54);
   }
 
-  /* Finamp's sheet: at most 500 px wide, centred, top corners 20 px. */
+  /* A sheet of one side: only that side dims; a tap anywhere else still closes it. */
+  .backdrop.sided {
+    background: none;
+  }
+
+  .dim {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgb(0 0 0 / 0.54);
+  }
+
+  /* Finamp's sheet: at most 500 px wide, centred (in its side, or the window), top corners 20 px. */
   .sheet {
     position: fixed;
     left: 50%;
@@ -192,9 +229,9 @@
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    width: min(500px, 100vw);
+    width: min(500px, var(--side-w, 100vw));
     max-height: 92dvh;
-    margin-left: calc(min(500px, 100vw) / -2);
+    margin-left: calc(min(500px, var(--side-w, 100vw)) / -2);
     padding-bottom: calc(16px + env(safe-area-inset-bottom));
     overflow: hidden;
     border-radius: 20px 20px 0 0;
