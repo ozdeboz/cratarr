@@ -583,6 +583,8 @@ mod tests {
         let first = t.elapsed();
         assert!(!lib.refresh_from(&cat, &Rules::default()).unwrap(), "nothing changed");
         println!("read and built {:?}, checked again {:?}, (songs, albums, artists) {:?}", first, t.elapsed() - first, lib.counts().unwrap());
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        println!("memory: {}", status.lines().filter(|l| l.starts_with("VmHWM") || l.starts_with("VmRSS")).collect::<Vec<_>>().join(", "));
         let db = lib.db();
         let per_folder: Vec<(i64, i64)> =
             db.prepare("SELECT folder, count(*) FROM albums GROUP BY folder").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();

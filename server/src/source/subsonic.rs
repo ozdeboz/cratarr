@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 
 use super::{Choice, Field, FieldKind, Fut, Kind, Library, Playing, PlaylistEvent, Source, Status, Track, Values, text};
 
-pub const KIND: Kind = Kind { id: "subsonic", label: "Subsonic (Navidrome)", fields, connect };
+pub const KIND: Kind = Kind { id: "subsonic", label: "Subsonic", fields, connect };
 
 /// The client name the server sees; Navidrome keeps its player settings (Report Real Path) under it.
 const CLIENT: &str = "cratarr";

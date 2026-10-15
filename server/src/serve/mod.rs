@@ -22,6 +22,8 @@ use crate::userdata::UserData;
 
 /// How often the library is checked against the catalogue (a cheap check; it is built again only when files changed).
 const CHECK_EVERY: Duration = Duration::from_secs(60);
+/// The first check after Cratarr starts.
+const FIRST_AFTER: Duration = Duration::from_secs(90);
 
 pub struct Serve {
     pub library: Arc<library::Library>,
@@ -74,10 +76,12 @@ impl Serve {
         Ok(built)
     }
 
-    /// Keeps the library in step with the catalogue, in the background.
+    /// Keeps the library in step with the catalogue, in the background. The first build waits a little, so it does not
+    /// add to the work Cratarr does as it starts (the playlist sync reads every playlist then).
     pub fn follow(self: &Arc<Self>) {
         let me = self.clone();
         tokio::spawn(async move {
+            tokio::time::sleep(FIRST_AFTER).await;
             loop {
                 let s = me.clone();
                 match tokio::task::spawn_blocking(move || s.refresh()).await {

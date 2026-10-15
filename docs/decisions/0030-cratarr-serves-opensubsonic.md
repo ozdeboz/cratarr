@@ -7,8 +7,7 @@
 ## Context
 
 Cratarr manages playlists alongside a media server (Jellyfin, then Navidrome in a spike). The owner wants no separate
-music server: Cratarr serves the library itself, through the OpenSubsonic API, so any Subsonic app (and Music
-Assistant) can use it. Cratarr already has most of what a server needs: the catalogue (every file, its tags, stable
+music server: Cratarr serves the library itself, through the OpenSubsonic API, so any Subsonic app can use it. Cratarr already has most of what a server needs: the catalogue (every file, its tags, stable
 track ids that survive moves), original-file streaming and folder covers. The owner asked to copy proven code and
 patterns as far as possible rather than reinvent; with the AGPL (0029) the copyleft servers can be used.
 
@@ -73,11 +72,12 @@ follow.
 ## Plan
 
 1. The library and user databases, and a one-time import of plays and favourites from Jellyfin.
-2. Reading endpoints, login, streaming and covers; tried with Symfonium, Feishin, Music Assistant and Cratarr's own
-   Subsonic source.
+2. Reading endpoints, login, streaming and covers; tried with Symfonium, Feishin and Cratarr's own Subsonic source.
 3. Writing endpoints: stars, scrobbles, playlists, play queue.
 4. Cratarr's own pages use its own data instead of a media server's.
-5. Switch over: the tablet plays Cratarr (the APK), Home Assistant through Music Assistant.
+5. Switch over: the tablet plays Cratarr (the APK). Home Assistant calls Cratarr's own API: Music Assistant was
+   removed on 2026-10-15 (ha-infra 743e395); what Home Assistant needs beyond Subsonic (pushed player state, commands
+   per player, album tags, incoming, health) is mapped in ha-infra `docs/plans/music-on-cratarr.md`.
 
 ## Consequences
 

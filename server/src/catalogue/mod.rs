@@ -204,7 +204,7 @@ pub struct ServedRow {
 }
 
 impl ServedRow {
-    pub const TAGS: [&'static str; 22] = [
+    pub const TAGS: [&'static str; 20] = [
         "title",
         "artist",
         "artists",
@@ -219,14 +219,12 @@ impl ServedRow {
         "genre",
         "bpm",
         "compilation",
-        "comment",
         "musicbrainz_trackid",
         "musicbrainz_releasetrackid",
         "musicbrainz_albumid",
         "musicbrainz_artistid",
         "musicbrainz_albumartistid",
         "musicbrainz_releasegroupid",
-        "albumartistsort",
     ];
 
     /// The first value of a tag, trimmed; `None` when missing or blank.
