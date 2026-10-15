@@ -1,0 +1,17 @@
+<!-- Cratarr's mark in notifications (two: 36 px, two rings). The record (radius 24 of the 108 canvas) at radius 10 of 24 dp.
+     Made by tools/brand/record.py; change it there. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:scaleX="0.416667"
+        android:scaleY="0.416667"
+        android:translateX="-10.5"
+        android:translateY="-10.5">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M54.0000,54.0000L56.5981,55.5000A3,3 0,1,1 56.5981,52.5000ZM65.0851,60.4000A12.8,12.8 0,1,1 65.0851,47.6000L60.9282,50.0000A8,8 0,1,0 60.9282,58.0000ZM69.8483,63.1500A18.3,18.3 0,1,1 69.8483,44.8500L67.1636,46.4000A15.2,15.2 0,1,0 67.1636,61.6000ZM74.7846,66.0000A24,24 0,1,1 74.7846,42.0000L71.9267,43.6500A20.7,20.7 0,1,0 71.9267,64.3500ZM67.1636,46.4000A15.2,15.2 0,0,1 67.1636,61.6000L65.0851,60.4000A12.8,12.8 0,0,0 65.0851,47.6000ZM71.9267,43.6500A20.7,20.7 0,0,1 71.9267,64.3500L69.8483,63.1500A18.3,18.3 0,0,0 69.8483,44.8500Z" />
+    </group>
+</vector>
