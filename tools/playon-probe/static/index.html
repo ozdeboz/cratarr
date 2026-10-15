@@ -37,6 +37,9 @@ function report(what) {
 }
 addEventListener('pointerdown', () => { if (!tapped) { tapped = true; report('first tap'); } });
 document.addEventListener('visibilitychange', () => report('visibility ' + document.visibilityState));
+// Chromium's page lifecycle: a hidden page can be frozen (no timers, no network events) and resumed later.
+document.addEventListener('freeze', () => lines.push(`${new Date().toLocaleTimeString()} frozen`));
+document.addEventListener('resume', () => report('resumed (' + (lines.filter((l) => l.endsWith('frozen')).pop() || 'not frozen before') + ')'));
 a.addEventListener('ended', () => report('ended'));
 async function run(cmd) {
   report('got ' + cmd);
