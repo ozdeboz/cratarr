@@ -86,3 +86,50 @@ follow.
 - Client quirks become Cratarr's to handle; each release is tried against the clients above.
 - Not taken: nghe's PostgreSQL layer, scanner and ffmpeg transcoder; Navidrome's multi-library tables, separate
   scanner process and artwork store; a file watcher.
+
+## Amendment (2026-10-15): importing from a server
+
+Plan step 1's one-time import becomes a lasting feature, decided with the owner: anyone can copy an account's listening
+history from a connected server (Jellyfin, or any Subsonic server such as Navidrome) into a Cratarr account, and do so
+again whenever they like, later perhaps every few minutes while both servers are in use.
+
+- **What:** plays and last played, favourite tracks, albums and artists, ratings (tracks), and when albums were added.
+  Each can be ticked off.
+- **Sources:** three optional reads on the `Source` trait (decision 0005), "this server cannot" by default:
+  `track_data` (a page of one account's tracks with plays, last played, favourite and rating; every track played or
+  favoured is listed at least once), `favorite_groups` (the account's favourite albums, by one of their tracks or their
+  folder, and artists, by name) and `albums_added` (a page of albums with their added date); `imports` says a source has
+  them. Jellyfin lists the played tracks, then the favourites (it cannot list "either"), with the account's user data,
+  and albums with `DateCreated`; Subsonic lists every song (`search3`, an empty query) and keeps the played, starred or
+  rated ones, and reads `getStarred2` and `getAlbumList2`. A Subsonic source reads only its own login's data.
+- **Finding them:** a track through the catalogue's link (server id to Cratarr track, then `tr-<id>`); an album through
+  one of its tracks, else its folder (the album sharing the most trailing folders with the server's path, all of its
+  own at least; none on a tie); an artist by name (`ids::artist`). What the library does not have is counted and left.
+- **Accounts:** the page chooses the server account (default: the one chosen last time, else the server's "your
+  account") and the Cratarr account.
+- **Safe to repeat:** per Cratarr account, source, server account and item, the server's values from the last import
+  are kept (`imported` in `userdata.db`, following songs to new ids as their annotations do). Each import then:
+  - adds to a song's plays the server's count minus the count imported last time, when more (a count reset on the
+    server adds nothing, and later plays count from it), and counts them on its album and artists as a play is counted;
+    last played is the later one;
+  - sets a favourite or a rating only when the server's differs from the one imported last time, so a change made in
+    Cratarr stays until the server's changes. Nothing imported yet reads as "no favourite, no rating": a first import
+    brings favourites and ratings in and takes none away;
+  - takes away a favourite an earlier import brought in once the server's complete listing no longer has it, unless
+    that would take away more than 20 and more than a tenth of them at once (a server that lost track): then they stay
+    and the page says so;
+  - keeps the earlier added date (the `added` table, as before).
+
+  The max-merge `UserData::import` this replaces is gone; the annotation table keeps Navidrome's shape.
+- **Running:** one import at a time, in the background, one page after the other with a 2 s pause between pages (a
+  Jellyfin page holds one of Cratarr's four turns, `MAX_IN_FLIGHT`, for its few seconds), a failed page asked again
+  after 15 s and 60 s. Preview runs the same import and changes nothing. `GET /api/subsonic/import/sources`,
+  `GET` and `POST /api/subsonic/import`; the Settings page's Subsonic section has, per server that can import, the two
+  accounts, the four ticks, Preview, Import, the progress and a line of counts.
+- **Measured** on the owner's Jellyfin 10.11 (2026-10-15), account `jellyfin`: 5,204 played and 4,789 favourite tracks,
+  356 favourite albums, 118 favourite artists, 2,738 albums, no ratings. A page of 250 tracks with their user data took
+  9 to 12 s, and an hour later a page of 200 (what the import asks) 4.4 to 5.8 s; 250 albums 5 to 7 s. A whole import
+  reads about 10,000 tracks in some 52 pages and 2,738 albums in 11: about seven minutes with the pauses.
+- **Not yet:** an import that reads only what changed since the last one (Jellyfin can list the played tracks newest
+  first, not the favourites changed since a moment), so running it every few minutes would read everything each time;
+  albums' added dates are kept but not yet served (`newest` still orders by the files' age).
