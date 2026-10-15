@@ -240,8 +240,9 @@ struct Entry {
     seen: SystemTime,
     /// When it was last heard from, for the lease.
     heard: Instant,
-    /// Cratarr's ids of the track at `report.index`, looked up when the track changes.
-    ids: TrackIds,
+    /// Cratarr's ids of the track that plays, looked up when it changes, with that track (`source`, `id`): shown only
+    /// while it is still the one that plays, as a queue changed here first moves on before the player reports.
+    ids: (Option<(String, String)>, TrackIds),
     /// Album ids from the tracks' own sources, for tracks queued without one (`source\nid` → album id).
     album_ids: HashMap<String, String>,
     report: Report,
@@ -259,7 +260,7 @@ impl Entry {
             connection: None,
             seen: SystemTime::now(),
             heard: Instant::now(),
-            ids: TrackIds::default(),
+            ids: (None, TrackIds::default()),
             album_ids: HashMap::new(),
             report: Report { index: -1, volume: 100, ..Report::default() },
             queue: Queue::default(),
@@ -317,7 +318,7 @@ impl Entry {
             title: track.as_ref().map(|t| t.name.clone()),
             artist: track.as_ref().and_then(|t| t.artist.clone()),
             album: track.as_ref().and_then(|t| t.album.clone()),
-            ids: self.ids.clone(),
+            ids: if self.ids.0 == key(track.as_ref()) { self.ids.1.clone() } else { TrackIds::default() },
             current_entry_id: track.as_ref().map(|t| t.entry.clone()).filter(|e| !e.is_empty()),
             track,
             queue: with_queue.then(|| self.queue.tracks.clone()),
@@ -579,7 +580,7 @@ impl PlayOn {
             e.at = Instant::now();
         }
         let track = e.view(name, false).track;
-        let new_track = track != before.track;
+        let new_track = key(track.as_ref()) != e.ids.0;
         drop(entries);
         if let Some(c) = give_back {
             tracing::info!("player {name:?} came back without its queue: given back");
@@ -590,7 +591,7 @@ impl PlayOn {
         if new_track {
             let ids = self.ids_of(track.as_ref());
             if let Some(e) = self.entries().get_mut(name) {
-                e.ids = ids;
+                e.ids = (key(track.as_ref()), ids);
             }
             if let Some(t) = track.as_ref().filter(|t| t.album_id.is_none()) {
                 self.find_album_id(name, t.clone());
@@ -810,6 +811,11 @@ impl Drop for Commands {
     }
 }
 
+/// A track as its source knows it, to tell whether two are the same track.
+fn key(t: Option<&QueueTrack>) -> Option<(String, String)> {
+    t.map(|t| (t.source.clone(), t.id.clone()))
+}
+
 fn valid_name(name: &str) -> Result<(), ToggleError> {
     if name.trim().is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
         return Err(ToggleError::BadSettings("a player's name is 1 to 64 characters, no control characters".into()));
@@ -905,6 +911,23 @@ mod tests {
         let to_player = Command::play(vec![], 2, 5);
         assert_eq!(serde_json::to_string(&to_player).unwrap(), r#"{"command":"play","tracks":[],"index":2,"position_ms":5}"#);
         assert_eq!(serde_json::to_string(&Command::Seek { position_ms: Some(9), percent: None }).unwrap(), r#"{"command":"seek","position_ms":9}"#);
+    }
+
+    #[test]
+    fn a_track_shows_its_own_ids_only() {
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let mut e = Entry::new();
+        e.queue.edit(Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).unwrap();
+        e.report.index = 0;
+        let ids = TrackIds { track_id: Some("tr-1".into()), album_id: Some("al-one".into()), album_artist: None };
+        e.ids = (key(e.queue.tracks.first()), ids.clone());
+        assert_eq!(e.view("p", false).ids, ids);
+        // Another queue played: Cratarr's copy changes before the player reports, at the same place.
+        e.queue.edit(Command::play(vec![t("tr-9")], 0, 0)).unwrap();
+        let v = e.view("p", false);
+        assert_eq!(v.track.map(|t| t.id).as_deref(), Some("tr-9"));
+        assert_eq!(v.ids, TrackIds::default(), "never the last album's ids beside this track");
+        assert_ne!(key(e.queue.tracks.first()), e.ids.0, "a new track to look up when the player reports");
     }
 
     #[test]
