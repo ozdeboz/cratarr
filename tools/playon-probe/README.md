@@ -35,5 +35,10 @@ holding a wake lock and a Wi-Fi lock, Stay ready on):
 
 The page logs Chromium's `freeze` and `resume` events (shown once it resumes).
 
+Result 2026-10-15, the app playing natively (Media3, 0031 amended; not through this probe: Chill sent to the app's
+player over the bridge, its state read from Android's media session): played from 1:55 of track 1, the screen locked,
+went on to track 2 by itself, paused by a media button; 8 min 19 s later, the screen dozing, a media button resumed it
+at once. The page being frozen meanwhile no longer matters.
+
 So a browser cannot be a Play On target: the app needs autoplay allowed in its WebView, and a foreground service with
 a wake lock that also holds while idle.
