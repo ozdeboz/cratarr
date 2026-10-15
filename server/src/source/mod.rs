@@ -12,6 +12,7 @@
 //!   decides whether a track may be added, and tells the source when playlist files change.
 //! - Optional extras have default implementations (see [`Source::album_details`]).
 
+pub mod cratarr;
 pub mod jellyfin;
 pub mod subsonic;
 
@@ -556,7 +557,7 @@ pub struct Kind {
     pub connect: fn(&Values, partial: bool) -> Result<Box<dyn Source>>,
 }
 
-pub static KINDS: &[Kind] = &[jellyfin::KIND, subsonic::KIND];
+pub static KINDS: &[Kind] = &[cratarr::KIND, jellyfin::KIND, subsonic::KIND];
 
 pub fn kind(id: &str) -> Option<&'static Kind> {
     KINDS.iter().find(|k| k.id == id)
@@ -601,9 +602,11 @@ mod tests {
                     assert!(keys.contains(b), "{}: {} is bound to unknown field {b}", k.id, f.key);
                 }
             }
-            // With nothing filled in, connecting must fail cleanly rather than panic.
-            assert!((k.connect)(&Values::new(), false).is_err());
-            assert!((k.connect)(&Values::new(), true).is_err());
+            // With nothing filled in, a plugin that needs settings must refuse cleanly rather than panic.
+            if fields.iter().any(|f| f.required) {
+                assert!((k.connect)(&Values::new(), false).is_err());
+                assert!((k.connect)(&Values::new(), true).is_err());
+            }
         }
     }
 

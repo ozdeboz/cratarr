@@ -367,6 +367,37 @@ impl Library {
         Ok(albums)
     }
 
+    /// The albums of one catalogue folder, newest first, at most `limit`, with what a source's album listing needs:
+    /// (album, its folder relative to the catalogue folder, format, lowest bitrate).
+    pub fn albums_in(&self, folder: i64, limit: usize) -> Result<Vec<(Album, String, Option<String>, Option<u32>)>> {
+        let db = self.db();
+        let ns = numbers(&db, "SELECT n FROM albums WHERE folder = ?1 ORDER BY created DESC, n LIMIT ?2", &[&folder, &(limit as i64)])?;
+        let mut albums = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?;
+        self.album_artists(&db, &mut albums)?;
+        let mut st = db.prepare_cached("SELECT dir, format, min_kbps FROM albums WHERE id = ?1")?;
+        let mut out = Vec::with_capacity(albums.len());
+        for a in albums {
+            let (dir, format, kbps) = st.query_row([&a.id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<u32>>(2)?)))?;
+            out.push((a, dir, format, kbps));
+        }
+        Ok(out)
+    }
+
+    /// One album's format and lowest bitrate: (songs, format, lowest bitrate).
+    pub fn album_facts(&self, album: &str) -> Result<Option<(u32, Option<String>, Option<u32>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT song_count, format, min_kbps FROM albums WHERE id = ?1")?;
+        Ok(st.query_map([album], |r| Ok((r.get::<_, i64>(0)?.max(0) as u32, r.get(1)?, r.get(2)?)))?.next().transpose()?)
+    }
+
+    /// A page of one catalogue folder's songs: (song id, path), in a stable order.
+    pub fn song_paths(&self, folder: i64, start: usize, limit: usize) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, path FROM songs WHERE folder = ?1 ORDER BY n LIMIT ?2 OFFSET ?3")?;
+        let rows = st.query_map(params_from_iter([folder, limit as i64, start as i64]), |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The albums outside the Music folder (waiting in Incoming), newest first.
     pub fn incoming_albums(&self) -> Result<Vec<Album>> {
         let db = self.db();

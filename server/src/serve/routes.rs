@@ -162,11 +162,11 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             "username": user.name, "adminRole": user.admin, "settingsRole": user.admin, "streamRole": true,
             "downloadRole": true, "playlistRole": true, "coverArtRole": true, "commentRole": false, "podcastRole": false,
             "shareRole": false, "jukeboxRole": false, "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
-            "folder": (0..serve.catalogue.folders().len()).map(|i| i + 1).collect::<Vec<_>>(),
+            "folder": (0..serve.catalogue().folders().len()).map(|i| i + 1).collect::<Vec<_>>(),
         } }))),
         "getMusicFolders" => {
             let folders: Vec<Value> = serve
-                .catalogue
+                .catalogue()
                 .folders()
                 .iter()
                 .enumerate()
@@ -174,9 +174,9 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 .collect();
             Ok(Answer::Json(json!({ "musicFolders": { "musicFolder": folders } })))
         }
-        "getScanStatus" => Ok(Answer::Json(json!({ "scanStatus": { "scanning": serve.catalogue.doing().is_some() } }))),
+        "getScanStatus" => Ok(Answer::Json(json!({ "scanStatus": { "scanning": serve.catalogue().doing().is_some() } }))),
         "startScan" => {
-            serve.catalogue.poke();
+            serve.catalogue().poke();
             Ok(Answer::Json(json!({ "scanStatus": { "scanning": true } })))
         }
         "getArtists" | "getIndexes" => {
@@ -493,14 +493,14 @@ fn toggle_failed(e: crate::app::ToggleError) -> Failed {
 
 /// Which of a playlist's lines are songs the library has (the others are not shown).
 async fn shown_flags(serve: &Arc<Serve>, lines: &[String]) -> Result<Vec<bool>, Failed> {
-    let cat = serve.catalogue.clone();
+    let cat = serve.catalogue().clone();
     let lines = lines.to_vec();
     blocking(move || Ok(lines.iter().map(|l| super::playlists::song_of_line(&cat, l).is_some()).collect())).await
 }
 
 /// A playlist's songs in order: its lines the library has.
 async fn shown_songs(serve: &Arc<Serve>, lines: &[String]) -> Result<Vec<Song>, Failed> {
-    let (cat, lib) = (serve.catalogue.clone(), serve.library.clone());
+    let (cat, lib) = (serve.catalogue().clone(), serve.library.clone());
     let lines = lines.to_vec();
     blocking(move || {
         let ids: Vec<String> = lines.iter().filter_map(|l| super::playlists::song_of_line(&cat, l)).collect();
@@ -511,7 +511,7 @@ async fn shown_songs(serve: &Arc<Serve>, lines: &[String]) -> Result<Vec<Song>, 
 
 /// The playlist lines of songs a client named; songs the library does not know are left out.
 async fn lines_of_songs(serve: &Arc<Serve>, songs: &[String]) -> Result<Vec<String>, Failed> {
-    let cat = serve.catalogue.clone();
+    let cat = serve.catalogue().clone();
     let songs = songs.to_vec();
     blocking(move || Ok(songs.iter().filter_map(|s| super::playlists::line_of_song(&cat, s)).collect())).await
 }
@@ -600,7 +600,8 @@ mod tests {
 
     fn server() -> (Arc<Serve>, User) {
         let cat = Arc::new(Catalogue::open(None, vec!["/music".into()]).unwrap());
-        let serve = Serve::open(None, cat, Rules::default(), &|_| None).unwrap();
+        let serve = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(cat);
         let t = |n: i64, title: &str| {
             row(n, &format!("Björk/Homogenic (1997)/0{n} {title}.flac"), &[
                 ("title", title),

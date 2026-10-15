@@ -202,7 +202,8 @@ mod tests {
 
     fn server() -> Arc<Serve> {
         let cat = Arc::new(Catalogue::open(None, vec!["/music".into()]).unwrap());
-        let serve = Serve::open(None, cat, Rules::default(), &|_| None).unwrap();
+        let serve = Serve::open(None, Rules::default(), &|_| None).unwrap();
+        serve.attach_catalogue(cat);
         let row = |n: i64| ServedRow {
             rel: format!("A/X (2001)/0{n} t.flac"),
             track: Some(n),
