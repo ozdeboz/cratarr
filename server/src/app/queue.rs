@@ -15,6 +15,20 @@ use super::playon::{Command, QueueTrack, shuffled};
 pub struct Queue {
     pub version: u64,
     pub tracks: Vec<QueueTrack>,
+    /// Repeat (decision 0033, amended): a setting of the queue; the player that plays applies it when a track ends.
+    #[serde(default)]
+    pub repeat: Repeat,
+}
+
+/// Off: the queue ends. One: the playing track starts again. All: after the last track the album or playlist starts
+/// again (what was added by hand plays once).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Repeat {
+    #[default]
+    Off,
+    One,
+    All,
 }
 
 /// An entry id no queue has had before: a version 4 UUID.
@@ -120,6 +134,10 @@ impl Queue {
                 let at = (index + 1).min(tracks.len());
                 tracks.splice(at..at, ahead);
                 self.tracks = tracks;
+                // Something new turns repeat one off; repeat all stays (decision 0033, amended, rule 4).
+                if self.repeat == Repeat::One {
+                    self.repeat = Repeat::Off;
+                }
                 Command::Play { from, tracks: Some(self.tracks.clone()), index, position_ms, shuffle, paused }
             }
             Command::Add { tracks, at, after, how } => {
@@ -163,12 +181,12 @@ impl Queue {
                 Command::Move { from: Some(from), to: Some(to), entry: Some(entry), after: Some(self.anchor(to)) }
             }
             // Everything after the playing track, replaced; the playing track plays on.
-            Command::Upcoming { tracks } => {
+            Command::Upcoming { tracks, shuffled } => {
                 let keep = current.map_or(0, |c| c + 1).min(self.tracks.len());
                 let tracks = with_entries(tracks);
                 self.tracks.truncate(keep);
                 self.tracks.extend(tracks.iter().cloned());
-                Command::Upcoming { tracks }
+                Command::Upcoming { tracks, shuffled }
             }
             // Shuffle on or off (0033's second order): what comes of the album or playlist mixed, or back in its own order
             // from the playing track on; what was added by hand stays ahead. Told as the new upcoming tracks.
@@ -184,12 +202,17 @@ impl Queue {
                 let upcoming: Vec<QueueTrack> = ahead.into_iter().chain(rest).collect();
                 self.tracks.truncate(c + 1);
                 self.tracks.extend(upcoming.iter().cloned());
-                Command::Upcoming { tracks: upcoming }
+                Command::Upcoming { tracks: upcoming, shuffled: Some(on) }
             }
             Command::Remove { index, entry } => {
                 let i = self.place(entry.as_deref(), index)?;
                 let gone = self.tracks.remove(i);
                 Command::Remove { index: Some(i), entry: Some(gone.entry) }
+            }
+            // A setting, not a change of the tracks: the queue's version stays.
+            Command::Repeat { mode } => {
+                self.repeat = mode;
+                return Ok(Command::Repeat { mode });
             }
             // Not an edit: the entry that plays is the player's to say.
             Command::Jump { index, entry } => {
@@ -334,7 +357,8 @@ mod tests {
         q.edit(Command::play(tracks, 0, 0)).unwrap();
         // Playing t0, one added by hand ahead.
         q.edit_at(Command::Add { tracks: vec![track("x")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
-        let Command::Upcoming { tracks: told } = q.edit_at(Command::Shuffle { on: true }, Some(0)).unwrap() else { panic!() };
+        let Command::Upcoming { tracks: told, shuffled } = q.edit_at(Command::Shuffle { on: true }, Some(0)).unwrap() else { panic!() };
+        assert_eq!(shuffled, Some(true), "the player is told, for repeat all's next rounds");
         assert_eq!(told.len(), 12, "every track still there");
         assert_eq!(told[0].id, "x", "what was added by hand stays ahead");
         let mut ns: Vec<u32> = told[1..].iter().filter_map(|t| t.n).collect();
@@ -344,13 +368,28 @@ mod tests {
         // On to the fourth track of the shuffled order; shuffle off: the album goes on from that track's place.
         let at = 4;
         let here = q.tracks[at].n.unwrap();
-        let Command::Upcoming { tracks: told } = q.edit_at(Command::Shuffle { on: false }, Some(at)).unwrap() else { panic!() };
+        let Command::Upcoming { tracks: told, .. } = q.edit_at(Command::Shuffle { on: false }, Some(at)).unwrap() else { panic!() };
         let order: Vec<u32> = told.iter().filter_map(|t| t.n).collect();
         let mut want: Vec<u32> = q.tracks[at + 1..].iter().filter_map(|t| t.n).collect();
         want.sort();
         let (after, before): (Vec<u32>, Vec<u32>) = want.into_iter().partition(|n| *n > here);
         assert_eq!(order, [after, before].concat(), "from the playing track's place on, the earlier ones last");
         assert!(q.edit_at(Command::Shuffle { on: true }, None).is_err(), "nothing plays");
+    }
+
+    #[test]
+    fn repeat_is_the_queues_and_something_new_turns_repeat_one_off() {
+        let mut q = played(&["a", "b"]);
+        let v = q.version;
+        assert_eq!(q.edit(Command::Repeat { mode: Repeat::One }).unwrap(), Command::Repeat { mode: Repeat::One });
+        assert_eq!((q.repeat, q.version), (Repeat::One, v), "a setting: the tracks' version stays");
+        q.edit(Command::play(vec![track("c")], 0, 0)).unwrap();
+        assert_eq!(q.repeat, Repeat::Off, "a new play turns repeat one off");
+        q.edit(Command::Repeat { mode: Repeat::All }).unwrap();
+        q.edit(Command::play(vec![track("d")], 0, 0)).unwrap();
+        assert_eq!(q.repeat, Repeat::All, "repeat all stays");
+        let c: Command = serde_json::from_str(r#"{"command":"repeat","mode":"one"}"#).unwrap();
+        assert_eq!(c, Command::Repeat { mode: Repeat::One });
     }
 
     #[test]

@@ -34,6 +34,8 @@ export type LocalTrack = {
   addable?: boolean;
 };
 
+export type Repeat = 'off' | 'one' | 'all';
+
 /** One appended track: its queue index, where its sample 0 sits in the stream (s), its length (s; null while
  *  unknown), and the length the server read from the file (s), shown while the exact one is unknown. */
 type Segment = { index: number; start: number; length: number | null; told: number | null };
@@ -51,6 +53,8 @@ export const local = $state({
   error: null as string | null,
   /** What comes of the album or playlist plays shuffled (the player's shuffle switch). */
   shuffled: false,
+  /** Repeat (decision 0033, amended): off, one (the playing track), all (the album or playlist). */
+  repeat: 'off' as Repeat,
   /** What the queue was started from ("Chill", an album), for the queue sheet's "Playing from"; null when unknown. */
   from: null as string | null,
 });
@@ -421,7 +425,13 @@ function tick() {
   local.paused = audio.paused;
   const w = where();
   if (w) {
-    if (w.seg.index !== local.index) local.index = w.seg.index;
+    if (w.seg.index !== local.index) {
+      // Repeat one: the stream went on to the next track by itself; back to the start of this one. (Next and previous
+      // set the index themselves, so they still move on.)
+      if (local.repeat === 'one' && w.seg.index === local.index + 1) return jump(local.index);
+      local.index = w.seg.index;
+      nextRound();
+    }
     local.position = Math.max(0, w.offset);
     local.duration = w.seg.length ?? w.seg.told;
   }
@@ -487,7 +497,8 @@ const sameQueue = (a: LocalTrack[], b: LocalTrack[]) =>
   a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id && t.entry === b[i].entry);
 
 /** The player that plays: what it plays now (`queue` only when it changed). */
-export function reportedBy(m: { queue?: unknown; index?: unknown; positionMs?: unknown; durationMs?: unknown; paused?: unknown; error?: unknown }) {
+export function reportedBy(m: { queue?: unknown; index?: unknown; positionMs?: unknown; durationMs?: unknown; paused?: unknown; error?: unknown; repeat?: unknown }) {
+  if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) {
     // A queue the player changed (moved, added to) keeps the names this page already knows of its tracks.
     const known = new Map(local.queue.filter((t) => t.name).map((t) => [`${t.source}/${t.id}`, t]));
@@ -582,10 +593,37 @@ export function setShuffle(on: boolean) {
   replaceUpcoming([...ahead, ...(on ? shuffledCopy(rest) : inOrder(rest, reached(local.queue, local.index)))]);
 }
 
+/** Repeat off, one or all: the player that plays applies it (here, the app, or Cratarr's player). */
+export function setRepeat(mode: Repeat) {
+  local.repeat = mode;
+  if (handed()) return hand('repeat', { mode });
+  nextRound();
+}
+
+/** Under repeat all, while the last track plays here: the next round of the album or playlist after it (decision 0033,
+ *  amended: those added by hand play once; shuffled anew when the queue plays shuffled, not starting with the track
+ *  that just played). The stream then goes on into it without a gap. */
+function nextRound() {
+  if (local.repeat !== 'all' || local.index < 0 || local.index !== local.queue.length - 1) return;
+  const byPlace = new Map<number, LocalTrack>();
+  for (const t of local.queue) if (!t.lane && t.n !== undefined) byPlace.set(t.n, t);
+  let round = byPlace.size
+    ? [...byPlace.entries()].sort((a, b) => a[0] - b[0]).map(([, t]) => t)
+    : local.queue.filter((t, i, all) => !t.lane && all.findIndex((x) => x.source === t.source && x.id === t.id) === i);
+  if (!round.length) return;
+  if (local.shuffled) {
+    round = shuffledCopy(round);
+    const last = local.queue[local.index];
+    if (round.length > 1 && round[0].source === last.source && round[0].id === last.id) round.push(round.shift()!);
+  }
+  // New entries for the new round's tracks; their places stay.
+  local.queue = [...local.queue, ...round.map(({ entry: _, ...t }) => t)];
+}
+
 /** Everything after the playing track, replaced; the playing track plays on. */
 function replaceUpcoming(upcoming: LocalTrack[]) {
   local.queue = [...local.queue.slice(0, local.index + 1), ...upcoming];
-  if (handed()) return hand('upcoming', { tracks: upcoming });
+  if (handed()) return hand('upcoming', { tracks: upcoming, shuffled: local.shuffled });
   cutFrom(local.index + 1);
 }
 
@@ -597,6 +635,8 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   if (shuffle) [tracks, index, position] = [shuffledCopy(tracks), 0, 0];
   // A queue moved here whole keeps its shuffle.
   local.shuffled = shuffle || looksShuffled(tracks, index);
+  // Something new turns repeat one off; repeat all stays (decision 0033, amended).
+  if (local.repeat === 'one') local.repeat = 'off';
   // Those the new queue holds already (a queue moved here whole) are not added twice.
   const holds = (t: LocalTrack) => tracks.some((x) => x === t || (!!t.entry && x.entry === t.entry));
   const ahead = local.index < 0 ? [] : addedAhead(local.queue, local.index).filter((t) => !holds(t));
@@ -606,7 +646,7 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   if (handed()) {
     Object.assign(local, { index, position, paused: false, error: null });
     reported = { positionMs: position * 1000, at: performance.now() };
-    return hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true });
+    return hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true, shuffled: local.shuffled });
   }
   fresh(index, position);
 }
@@ -711,6 +751,8 @@ export const next = () => jump(local.index + 1);
 
 export function previous() {
   if (handed()) return hand('previous');
+  // Repeat all: previous on the first track goes to the last.
+  if (local.repeat === 'all' && local.index === 0 && local.position <= RESTART_AFTER && local.queue.length > 1) return jump(local.queue.length - 1);
   if (local.position > RESTART_AFTER) seek(0);
   else jump(Math.max(0, local.index - 1));
 }

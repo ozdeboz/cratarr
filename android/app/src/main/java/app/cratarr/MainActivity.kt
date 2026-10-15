@@ -111,7 +111,7 @@ class MainActivity : AppCompatActivity() {
         controllerFuture = MediaController.Builder(this, SessionToken(this, ComponentName(this, PlayerService::class.java))).buildAsync()
         controllerFuture.addListener(
             {
-                val connected = PagePlayer(controllerFuture.get()) { message -> page?.postMessage(message) }
+                val connected = PagePlayer(this, controllerFuture.get()) { message -> page?.postMessage(message) }
                 player = connected
                 waiting.forEach(connected::handle)
                 waiting.clear()

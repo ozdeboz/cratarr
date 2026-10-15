@@ -15,7 +15,7 @@
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
-  import { local, setShuffle } from './localPlayer.svelte';
+  import { local, setRepeat, setShuffle } from './localPlayer.svelte';
   import { keepViewed, panel } from './panel.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
@@ -345,8 +345,8 @@
             </div>
           {/if}
           <div class="transport" role="group" aria-label="Player controls">
-            <!-- Finamp's shuffle, left of previous; a space of its size right of next keeps play in the middle. Only
-                 where the page holds the queue (here, the app, a Cratarr player). -->
+            <!-- Finamp's shuffle, left of previous; only where the page holds the queue (here, the app, a Cratarr
+                 player). -->
             {#if isLocal()}
               <button class="shuffle" class:on={local.shuffled} aria-label="Shuffle" aria-pressed={local.shuffled} onclick={() => setShuffle(!local.shuffled)}
                 ><Icon name="shuffle" size={22} /></button
@@ -357,7 +357,17 @@
               ><Icon name={paused() ? 'play' : 'pause'} size={32} /></button
             >
             <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={24} /></button>
-            {#if isLocal()}<span class="slot" aria-hidden="true"></span>{/if}
+            {#if isLocal()}
+              <!-- Finamp's repeat, right of next: off, all, one. -->
+              <button
+                class="shuffle"
+                class:on={local.repeat !== 'off'}
+                aria-label={local.repeat === 'one' ? 'Repeat one' : local.repeat === 'all' ? 'Repeat all' : 'Repeat'}
+                aria-pressed={local.repeat !== 'off'}
+                onclick={() => setRepeat(local.repeat === 'off' ? 'all' : local.repeat === 'all' ? 'one' : 'off')}
+                ><Icon name={local.repeat === 'one' ? 'repeatOne' : 'repeat'} size={22} /></button
+              >
+            {/if}
           </div>
         </div>
         <i class="sp c"></i>
@@ -682,18 +692,13 @@
     cursor: pointer;
   }
 
-  /* Shuffle shows its state by colour, as Finamp's. */
+  /* Shuffle and repeat show their state by colour, as Finamp's. */
   .transport button.shuffle {
     color: var(--muted);
   }
 
   .transport button.shuffle.on {
     color: var(--art-accent, var(--accent));
-  }
-
-  .transport .slot {
-    width: 48px;
-    height: 48px;
   }
 
   /* Play/pause in Finamp's shape: a rounded square (a quarter of its size as radius), tinted with the text colour,

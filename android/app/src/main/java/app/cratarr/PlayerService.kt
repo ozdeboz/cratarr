@@ -24,6 +24,7 @@ import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -65,13 +66,21 @@ class PlayerService : MediaSessionService() {
             .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playback(this)))
             .build()
         player.addListener(Keeper(player))
+        Repeat.apply(this, player)
+        // Previous from the lock screen, the notification and the page goes through here too: under repeat all, the
+        // first track's previous is the last one.
+        val sessionPlayer = object : ForwardingPlayer(player) {
+            override fun seekToPrevious() {
+                if (!Repeat.previous(this@PlayerService, player)) super.seekToPrevious()
+            }
+        }
         val open = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        session = MediaSession.Builder(this, player)
+        session = MediaSession.Builder(this, sessionPlayer)
             .setSessionActivity(open)
             .setCallback(Callback())
             .build()
@@ -168,6 +177,8 @@ class PlayerService : MediaSessionService() {
                 // Changes close together (a queue being built) as one.
                 main.removeCallbacks(keep)
                 main.postDelayed(keep, 1_000)
+                // Repeat all: the last track plays, the next round goes after it.
+                Repeat.extend(this@PlayerService, player, ::located)
             }
             // Each time a track is reached it can count again (a repeat, a jump back).
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) counted = false

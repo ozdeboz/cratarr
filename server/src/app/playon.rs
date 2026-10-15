@@ -19,7 +19,7 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
-use super::queue::Queue;
+use super::queue::{Queue, Repeat};
 use super::{PlaylistService, ToggleError};
 
 /// A player not heard from (a report, the 30 s heartbeat) for this long is offline, even if its connection still looks
@@ -66,6 +66,9 @@ pub struct Report {
     /// reached it is not taken (that edit is on its way). Apps from before it leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<u64>,
+    /// Its repeat mode, as it applies it (it may change it itself: a new play turns repeat one off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<Repeat>,
     pub position_ms: u64,
     #[serde(default)]
     pub duration_ms: Option<u64>,
@@ -122,7 +125,8 @@ pub enum Command {
         index: usize,
         #[serde(default)]
         position_ms: u64,
-        #[serde(default, skip_serializing)]
+        /// Asked: shuffle first. Told: the tracks come shuffled (repeat all shuffles each new round).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         shuffle: bool,
         /// Loaded, not started: a queue given back, paused, to a player that came back without one.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -151,9 +155,16 @@ pub enum Command {
         after: Option<String>,
     },
     /// Everything after the playing track replaced by these; the playing track plays on.
-    Upcoming { tracks: Vec<QueueTrack> },
+    Upcoming {
+        tracks: Vec<QueueTrack>,
+        /// Whether they come shuffled now, when that changed (the shuffle switch).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shuffled: Option<bool>,
+    },
     /// Shuffle on or off (decision 0033's second order); a player is told the new upcoming tracks.
     Shuffle { on: bool },
+    /// Repeat off, one (the playing track) or all (the album or playlist), decision 0033 amended.
+    Repeat { mode: Repeat },
     /// Entry `entry` (or the one at place `index`) out.
     Remove {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -225,6 +236,10 @@ pub struct PlayerView {
     pub volume: u8,
     pub ducked: bool,
     pub queue_length: usize,
+    /// Off, one or all (decision 0033, amended).
+    pub repeat: Repeat,
+    /// What comes of the album or playlist plays out of its own order.
+    pub shuffled: bool,
     /// Goes up whenever the queue changes: ask for the player by name to see the new one.
     pub queue_version: u64,
     /// The track at `index`.
@@ -333,6 +348,8 @@ impl Entry {
             volume: r.volume,
             ducked: r.ducked,
             queue_length: self.queue.tracks.len(),
+            repeat: self.queue.repeat,
+            shuffled: shuffled_order(&self.queue.tracks, index),
             queue_version: self.queue.version,
             title: track.as_ref().map(|t| t.name.clone()),
             artist: track.as_ref().and_then(|t| t.artist.clone()),
@@ -597,10 +614,13 @@ impl PlayOn {
         } else {
             // Taken as the player holds it, unless it was made before Cratarr's latest edit reached the player: that edit
             // is on its way, and the player reports again once it has it (no flip back and forth).
-            if let Some(q) = report.queue.clone()
-                && report.version.is_none_or(|v| v >= e.told)
-            {
-                e.queue.adopt(q);
+            if report.version.is_none_or(|v| v >= e.told) {
+                if let Some(q) = report.queue.clone() {
+                    e.queue.adopt(q);
+                }
+                if let Some(r) = report.repeat {
+                    e.queue.repeat = r;
+                }
             }
             e.report = Report { queue: None, ..report };
             e.at = Instant::now();
@@ -663,7 +683,7 @@ impl PlayOn {
                     tracks.truncate(n.max(1));
                 }
                 let tracks = Some(self.named(tracks).await);
-                Command::Play { from: PlayFrom::default(), tracks, index, position_ms, shuffle: false, paused }
+                Command::Play { from: PlayFrom::default(), tracks, index, position_ms, shuffle, paused }
             }
             Command::Add { tracks, at, after, how } => Command::Add { tracks: self.named(tracks).await, at, after, how },
             Command::Seek { position_ms: None, percent: Some(p) } => {
@@ -726,7 +746,10 @@ impl PlayOn {
         if tracks.is_empty() {
             return Err(ToggleError::Refused(format!("{from} has nothing to hand over.")));
         }
+        let repeat = self.entries().get(from).map(|e| e.queue.repeat).unwrap_or_default();
         Box::pin(self.command(to, Command::play(tracks, index, position_ms))).await?;
+        // Repeat moves with the queue (decision 0033, amended), repeat one too.
+        let _ = Box::pin(self.command(to, Command::Repeat { mode: repeat })).await;
         // The music is on its way there; this one stopping is no reason to fail the handover.
         let _ = Box::pin(self.command(from, Command::Stop)).await;
         Ok(())
@@ -860,6 +883,14 @@ impl Drop for Commands {
     fn drop(&mut self) {
         self.play_on.disconnected(&self.name, self.id);
     }
+}
+
+/// Whether what comes of the album or playlist after place `index` is out of its own order: more than the one turn
+/// back that starting partway in gives (as the page tells it, lib/localPlayer.svelte.ts).
+fn shuffled_order(tracks: &[QueueTrack], index: i64) -> bool {
+    let from = usize::try_from(index + 1).unwrap_or(0);
+    let ns: Vec<u32> = tracks.iter().skip(from).filter(|t| t.lane.is_none()).filter_map(|t| t.n).collect();
+    ns.windows(2).filter(|w| w[1] < w[0]).count() > 1
 }
 
 /// A track as its source knows it, to tell whether two are the same track.

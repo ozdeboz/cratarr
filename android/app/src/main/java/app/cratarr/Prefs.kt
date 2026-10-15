@@ -44,7 +44,23 @@ class Prefs(context: Context) {
             p.edit().putBoolean(DOWNLOAD_MOBILE, value).apply()
         }
 
+    /** Repeat: off, one or all (Repeat). */
+    var repeat: String
+        get() = p.getString(REPEAT, Repeat.OFF) ?: Repeat.OFF
+        set(value) {
+            p.edit().putString(REPEAT, value).apply()
+        }
+
+    /** The queue plays shuffled: repeat all shuffles each new round. */
+    var shuffled: Boolean
+        get() = p.getBoolean(SHUFFLED, false)
+        set(value) {
+            p.edit().putBoolean(SHUFFLED, value).apply()
+        }
+
     companion object {
+        const val REPEAT = "repeat"
+        const val SHUFFLED = "shuffled"
         const val SERVER_URL = "server_url"
         const val PLAYER_NAME = "player_name"
         const val STAY_READY = "stay_ready"

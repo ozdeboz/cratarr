@@ -152,6 +152,9 @@ export type PlayOnPlayer = {
   queue_length: number;
   /** Goes up when the queue changes: read the player by name for the new one. */
   queue_version: number;
+  /** Off, one or all (decision 0033, amended). */
+  repeat?: 'off' | 'one' | 'all';
+  shuffled?: boolean;
   track: QueueTrack | null;
   queue?: QueueTrack[];
 };

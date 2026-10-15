@@ -180,6 +180,9 @@ class PlayOnLink(
                 if (items.isEmpty()) return
                 p.setMediaItems(items, m.optInt("index", 0).coerceIn(0, items.size - 1), m.optLong("position_ms", 0))
                 p.prepare()
+                // A new play turns repeat one off; whether it comes shuffled counts for repeat all's next rounds.
+                Repeat.newPlay(service, p)
+                Prefs(service).shuffled = m.optBoolean("shuffle")
                 // A queue given back after the app came back without one waits for a play.
                 if (m.optBoolean("paused")) p.pause() else p.play()
             }
@@ -206,6 +209,7 @@ class PlayOnLink(
             "remove" -> placed(m, "entry", "index").takeIf { it in 0 until p.mediaItemCount }?.let(p::removeMediaItem)
             // Everything after the playing track replaced (a shuffle turned on or off); the playing track plays on.
             "upcoming" -> {
+                if (m.has("shuffled")) Prefs(service).shuffled = m.optBoolean("shuffled")
                 val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
                 val from = (p.currentMediaItemIndex + 1).coerceAtMost(p.mediaItemCount)
                 p.replaceMediaItems(from, p.mediaItemCount, items)
@@ -222,7 +226,8 @@ class PlayOnLink(
                 p.clearMediaItems()
             }
             "next" -> p.seekToNextMediaItem()
-            "previous" -> p.seekToPrevious()
+            "previous" -> if (!Repeat.previous(service, p)) p.seekToPrevious()
+            "repeat" -> Repeat.set(service, p, m.optString("mode"), service::located)
             "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))
             "volume" -> {
                 val v = m.optInt("level", 100).coerceIn(0, 100) / 100f
@@ -286,6 +291,7 @@ class PlayOnLink(
             .put("index", if (p.mediaItemCount == 0) -1 else p.currentMediaItemIndex)
             .put("entry", p.currentMediaItem?.let(::entryOf) ?: JSONObject.NULL)
             .put("version", if (version >= 0) version else JSONObject.NULL)
+            .put("repeat", Repeat.mode(service))
             .put("position_ms", p.currentPosition.coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)

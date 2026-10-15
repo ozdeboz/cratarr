@@ -1,5 +1,7 @@
 package app.cratarr
 
+import android.content.Context
+
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -13,7 +15,7 @@ import org.json.JSONObject
  * artist, album, album_id), kept with each media item, so a queue the player changed itself (Play On) reaches the page
  * as it is.
  */
-class PagePlayer(private val controller: MediaController, private val send: (String) -> Unit) : Player.Listener {
+class PagePlayer(private val context: Context, private val controller: MediaController, private val send: (String) -> Unit) : Player.Listener {
 
     init {
         controller.addListener(this)
@@ -25,6 +27,9 @@ class PagePlayer(private val controller: MediaController, private val send: (Str
         val c = controller
         when (m.optString("op")) {
             "queue" -> {
+                // A new play turns repeat one off; whether it comes shuffled counts for repeat all's next rounds.
+                Repeat.newPlay(context, c)
+                Prefs(context).shuffled = m.optBoolean("shuffled")
                 c.setMediaItems(mediaItems(m.optJSONArray("tracks")), m.optInt("index", 0), m.optLong("positionMs", 0))
                 c.prepare()
                 c.playWhenReady = m.optBoolean("play", true)
@@ -34,6 +39,7 @@ class PagePlayer(private val controller: MediaController, private val send: (Str
             "remove" -> c.removeMediaItem(m.optInt("index"))
             // Everything after the playing track replaced (the shuffle switch); the playing track plays on.
             "upcoming" -> {
+                if (m.has("shuffled")) Prefs(context).shuffled = m.optBoolean("shuffled")
                 val from = (c.currentMediaItemIndex + 1).coerceAtMost(c.mediaItemCount)
                 c.replaceMediaItems(from, c.mediaItemCount, mediaItems(m.optJSONArray("tracks")))
             }
@@ -43,6 +49,8 @@ class PagePlayer(private val controller: MediaController, private val send: (Str
             }
             "next" -> c.seekToNextMediaItem()
             "previous" -> c.seekToPrevious()
+            // Its items are located by the service when they reach it.
+            "repeat" -> Repeat.set(context, c, m.optString("mode")) { it }
             "seek" -> c.seekTo(m.optLong("positionMs"))
             "play" -> play()
             "pause" -> c.pause()
@@ -71,6 +79,7 @@ class PagePlayer(private val controller: MediaController, private val send: (Str
             .put("durationMs", if (c.duration == C.TIME_UNSET) -1 else c.duration)
             .put("paused", !c.playWhenReady || c.playbackState == Player.STATE_ENDED)
             .put("error", c.playerError?.let(::describe) ?: JSONObject.NULL)
+            .put("repeat", Repeat.mode(context))
         if (withQueue) out.put("queue", queueOf(c))
         send(out.toString())
     }
