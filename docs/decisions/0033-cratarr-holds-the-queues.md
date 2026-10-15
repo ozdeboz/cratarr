@@ -1,0 +1,98 @@
+# 0033: Cratarr holds the queues
+
+- Status: accepted
+- Date: 2026-10-15
+
+## Context
+
+Since 0031 each player holds its own queue: the app's player (or a page) has the tracks, Cratarr keeps a copy of what
+the player reports, and commands name places in the queue (`move {from, to}`, `remove {index}`, `jump {index}`). That
+has shown its limits within a day:
+
+- A place is right only for the queue it was read from. Moving a track on the phone while the tablet changed its own
+  queue broke the tablet's player; Home Assistant's "remove 3" hits whatever is third when it arrives.
+- The same track twice in a queue cannot be told apart.
+- The queue lives on the device: updating the tablet's app lost it (it was saved and played back by hand).
+- Nothing plays when the phone has no connection to Cratarr, and nothing could be put back together afterwards.
+- Other Subsonic apps cannot see what plays where.
+
+The design below was worked out with the owner on 2026-10-15, from how others solve it (Jellyfin SyncPlay, Lyrion,
+MPD, Spotify Connect, OpenSubsonic's saved queue, Pocket Casts' Up Next, AntennaPod, Audiobookshelf, Finamp; leases
+with fencing tokens). Finamp has nothing to copy here: it never uploads what it played offline.
+
+## Decision
+
+**One owner per queue.** Each player's queue is held by Cratarr. The app holds its queue itself only while it cannot
+reach Cratarr (no switch to throw: it happens when the connection is gone) and gives it back when it reconnects. A page
+in a browser never holds a queue: it plays one Cratarr holds, and is a Play On target only while it is open.
+
+**Entries, not places.**
+
+- Each entry in a queue has an id of its own (a UUID, which the app can make offline too), never reused and apart from
+  the track's id, so a track can be in a queue twice.
+- Edits name entries: insert after entry X, remove X, move X after Y, jump to X. A place sent by Home Assistant
+  (`remove {index}`) is turned into the entry there when the command arrives; the player only ever sees entries.
+- Each queue has a version, one up on every change. The push tells "queue Q is now at version N" (as `queue_version`
+  does today); the queue itself is read when wanted.
+- A queue is saved after every change and kept when its device goes away, so an app update or a crash loses nothing.
+
+**Two lanes.** The context (the album or playlist that was played) and the entries added by hand ("play next", "add to
+end"). Play next puts the newest batch first, right after what plays; add to end keeps the order given. A batch stays
+together. Playing something new replaces the context, not what was added by hand.
+
+**Shuffle** is a second order over the same entries (or its seed), so turning it off brings the first order back, and
+another device can rebuild it.
+
+**Handing over** (0031) is one action at Cratarr: the queue, the entry that plays, its position and when that position
+was read. The new player works the position out from that; the old one is told to stop, not to pause.
+
+**Plays are not queue edits.** Each play is an event with an id of its own (device, track, start) and its own time,
+counted once however often it is sent. The position belongs to the player that makes the sound; a late, older report
+never moves it back, and small differences are ignored.
+
+**Back online.** The app keeps a log of its offline edits (`op_id`, its own sequence number, the version it started
+from, the edit). Cratarr remembers per device the last sequence number it applied, in the same write as the edits, so
+an edit sent twice counts once.
+
+1. If Cratarr's queue is still at the version the app started from, the app's queue is taken as it is.
+2. Otherwise Cratarr makes the app's edits again, in order, on its own queue: removing an entry that is gone does
+   nothing, moving one is dropped, inserting after one goes after the nearest earlier entry still there (else at the
+   end). Removed and played entries are kept as gone until the device has seen that, so nothing comes back. Each edit
+   gets its own outcome; one failing never stops the rest. The app takes the result and makes again whatever it did
+   meanwhile.
+3. If the whole queue was replaced in the meantime, nothing is made again: the queue that is playing wins and the other
+   is kept as a snapshot that can be played back, and that expires by itself. No question to the owner.
+4. After more than 24 hours offline the app's queue is not made again either: it is kept as such a snapshot. Its plays
+   are still counted.
+5. The entry that plays is never disturbed.
+
+Everything is ordered by Cratarr's own counter, never by a device's clock.
+
+**Leases.** The 75 s lease of 0031 stays for being online. Holding a queue (the app, offline) is a lease with a number
+(an epoch) that goes up each time the queue changes hands: Cratarr takes it back only when someone else wants to edit
+it after the lease ran out, or on an explicit "take over" elsewhere. An app coming back with an old number goes through
+the steps above, never straight over Cratarr's queue. The app times its lease on its own clock since boot and lets it
+end a little early.
+
+**Other Subsonic apps** see the queues (saved queue, now playing) but do not change them.
+
+## Steps
+
+1. The queues at Cratarr: entries with ids, versions, saved per player; commands turned into entry edits; the app's
+   player plays Cratarr's queue and reports the entry that plays (`current_entry_id`) and its position, no longer its
+   whole queue.
+2. The page's own player (in a browser) plays a queue Cratarr holds.
+3. The two lanes; shuffle as a second order.
+4. Offline: downloads in the app (as Finamp's) and a cache of what comes next, the edit log, the steps back online,
+   the lease numbers, the 24-hour rule, plays as events.
+5. Other Subsonic apps see the queues.
+
+## Consequences
+
+- Home Assistant's commands stay as they are; places are still accepted. A player's view gains `current_entry_id`,
+  and its queue's entries their ids.
+- The app is no longer the judge of its queue while online: an edit made on it goes to Cratarr first, so it needs the
+  connection (or works offline under step 4).
+- A device gone for long, or a queue replaced while it was away, can no longer bring an old queue back.
+- Removing a track from the library while a device is offline is not covered here: it belongs with the library's own
+  sync, on the same reconnect.
