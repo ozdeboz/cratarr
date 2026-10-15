@@ -23,7 +23,7 @@ import {
 } from './api';
 import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
-import { canPlayHere, local, playQueue, enqueue, stop, type LocalTrack } from './localPlayer.svelte';
+import { canPlayHere, local, playQueue, enqueue, stop, togglePlay, type LocalTrack } from './localPlayer.svelte';
 import { drivenName, follow } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -319,6 +319,29 @@ export async function moveTo(output: typeof prefs.output) {
     return;
   }
   playQueue(was.tracks, was.index, null, was.position > 1 ? was.position : 0);
+}
+
+/** Whether music plays (or waits, paused) where the music plays now: what a move would take along. */
+export const hasMusic = () => current() !== null;
+
+/** Plays on `output` from now on without moving anything there: what plays there plays on, and what played here pauses
+ *  (the owner chose not to take that player over). */
+export async function joinTo(output: typeof prefs.output) {
+  if (output === prefs.output) return;
+  if (isLocal()) {
+    if (local.index >= 0 && !local.paused) togglePlay();
+  } else {
+    const np = live.view?.now_playing ?? null;
+    if (np && !np.progress?.paused) {
+      try {
+        await transport('play-pause', np.source);
+      } catch {
+        /* it may have stopped already */
+      }
+    }
+  }
+  prefs.output = output;
+  follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
 }
 
 /** Moves the music here. */
