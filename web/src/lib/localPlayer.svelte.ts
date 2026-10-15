@@ -16,7 +16,7 @@ export type LocalTrack = {
   artist: string | null;
   album: string | null;
   album_id: string | null;
-  /** False for a track outside the Music library (Incoming): it cannot go in a playlist. */
+  /** False for a track no playlist line can name (outside every library Cratarr sees). */
   addable?: boolean;
 };
 

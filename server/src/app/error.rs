@@ -7,7 +7,7 @@ use crate::settings::ChangeError;
 pub enum ToggleError {
     #[error("nothing is playing")]
     NothingPlaying,
-    #[error("the playing track is not in a library in use, so it cannot be added to a playlist")]
+    #[error("the track is not in a library Cratarr can see, so it cannot be added to a playlist")]
     NotInLibrary,
     #[error("unknown playlist")]
     UnknownPlaylist,

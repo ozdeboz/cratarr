@@ -472,6 +472,19 @@ impl Catalogue {
             .collect()
     }
 
+    /// The server's id of the file each playlist line names (`place_of_line`), in order. Blocking.
+    pub fn line_track_ids(&self, source: &str, lines: &[String]) -> Result<Vec<Option<String>>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT track_id FROM source_ids WHERE source = ?1 AND folder = ?2 AND rel = ?3 LIMIT 1")?;
+        lines
+            .iter()
+            .map(|l| match self.place_of_line(l) {
+                Some((folder, rel)) => Ok(st.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?),
+                None => Ok(None),
+            })
+            .collect()
+    }
+
     /// The files present in a folder, newest first (when the catalogue first saw the track; a moved file keeps its time),
     /// for the crates (decision 0024). Blocking.
     pub fn files_newest_first(&self, folder: i64) -> Result<Vec<String>> {
@@ -543,17 +556,56 @@ impl Catalogue {
         Ok(out)
     }
 
-    /// What the catalogue knows of each of these files of a folder, in order: a playlist's rows (decision 0023). Files
-    /// it has not read leave the facts empty. Blocking.
+    /// Where a playlist line points: (folder, rel). Lines are relative to the Music folder (folder 0); a line for a file
+    /// in another folder climbs out of it ("../lidarr-music/X/01.flac", an Incoming track). None for a line that lands
+    /// in no folder of the catalogue.
+    pub fn place_of_line(&self, line: &str) -> Option<(i64, String)> {
+        if !line.starts_with("../") {
+            return Some((0, line.to_string()));
+        }
+        let folders = self.folders();
+        let mut target = folders.first()?.clone();
+        for part in line.split('/') {
+            match part {
+                ".." => {
+                    if !target.pop() {
+                        return None;
+                    }
+                }
+                "" | "." => {}
+                p => target.push(p),
+            }
+        }
+        folders.iter().enumerate().skip(1).find_map(|(i, f)| {
+            let rel = target.strip_prefix(f).ok()?.to_string_lossy().replace('\\', "/");
+            (!rel.is_empty()).then_some((i as i64, rel))
+        })
+    }
+
+    /// What the catalogue knows of the file each playlist line names, in order: a playlist's rows (decision 0023).
+    /// Lines are relative to the Music folder (`place_of_line`). Files it has not read leave the facts empty. Blocking.
+    pub fn line_rows(&self, source: &str, lines: &[String]) -> Result<Vec<FileRow>> {
+        let places: Vec<Option<(i64, String)>> = lines.iter().map(|l| self.place_of_line(l)).collect();
+        self.rows_at(source, &places)
+    }
+
+    /// What the catalogue knows of each of these files of a folder, in order. Blocking.
     pub fn file_rows(&self, source: &str, folder: i64, rels: &[String]) -> Result<Vec<FileRow>> {
+        let places: Vec<Option<(i64, String)>> = rels.iter().map(|r| Some((folder, r.clone()))).collect();
+        self.rows_at(source, &places)
+    }
+
+    fn rows_at(&self, source: &str, places: &[Option<(i64, String)>]) -> Result<Vec<FileRow>> {
         let db = self.db();
         let mut file = db.prepare_cached(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"))?;
         let mut tags = db.prepare_cached(
             "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IN ('title', 'artist', 'album') ORDER BY n",
         )?;
         let mut ids = db.prepare_cached("SELECT track_id FROM source_ids WHERE source = ?1 AND folder = ?2 AND rel = ?3 LIMIT 1")?;
-        rels.iter()
-            .map(|rel| {
+        places
+            .iter()
+            .map(|place| {
+                let Some((folder, rel)) = place else { return Ok(FileRow::default()) };
                 let mut row = FileRow { duration_ms: file.query_row(params![folder, rel], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten(), ..FileRow::default() };
                 let found = tags.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
                 for t in found {
@@ -1383,6 +1435,29 @@ mod tests {
         assert_eq!(cat.file_of(one), Some(old));
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
+    }
+
+    #[test]
+    fn a_playlist_line_names_a_file_in_music_or_beside_it() {
+        let root = music();
+        let (m, inc) = (root.join("Music"), root.join("lidarr-music"));
+        std::fs::create_dir_all(m.join("A")).unwrap();
+        std::fs::create_dir_all(inc.join("X/New")).unwrap();
+        std::fs::write(m.join("A/01.mp3"), "a").unwrap();
+        std::fs::write(inc.join("X/New/01.flac"), "x").unwrap();
+        let cat = Catalogue::open(None, vec![m.clone(), inc.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        assert_eq!(cat.place_of_line("A/01.mp3"), Some((0, "A/01.mp3".to_string())));
+        assert_eq!(cat.place_of_line("../lidarr-music/X/New/01.flac"), Some((1, "X/New/01.flac".to_string())));
+        assert_eq!(cat.place_of_line("../elsewhere/01.flac"), None, "in no folder");
+        assert_eq!(cat.place_of_line("../../../../../../../../x"), None);
+        cat.record_links("jf", "lib", &[("i1".to_string(), 1, "X/New/01.flac".to_string())], 1).unwrap();
+        let lines = ["../lidarr-music/X/New/01.flac".to_string(), "../elsewhere/01.flac".to_string()];
+        assert_eq!(cat.line_track_ids("jf", &lines).unwrap(), vec![Some("i1".to_string()), None]);
+        assert_eq!(cat.line_rows("jf", &lines).unwrap()[0].track_id.as_deref(), Some("i1"));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

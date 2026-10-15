@@ -689,7 +689,7 @@ impl PlaylistService {
     async fn rows_of(&self, entries: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
         let (c, sid, music) = (self.lib.catalogue(), source.to_string(), self.lib.music());
         let rows = tokio::task::spawn_blocking(move || -> Result<Vec<PlaylistRow>> {
-            let facts = c.file_rows(&sid, 0, &entries)?;
+            let facts = c.line_rows(&sid, &entries)?;
             let dir = music.map(std::path::PathBuf::from);
             Ok(entries
                 .into_iter()
@@ -723,7 +723,7 @@ impl PlaylistService {
         let c = self.lib.catalogue();
         let plan = tokio::task::spawn_blocking(move || {
             crate::export::plan(std::path::Path::new(&music), lists, |rels| {
-                Ok(c.file_rows("", 0, rels)?.into_iter().map(|f| (f.artist, f.title)).collect())
+                Ok(c.line_rows("", rels)?.into_iter().map(|f| (f.artist, f.title)).collect())
             })
         })
         .await
@@ -953,7 +953,7 @@ impl PlaylistService {
             .cloned()
             .ok_or_else(|| ToggleError::CannotPlay("no server is connected".into()))?;
         let (c, sid) = (self.lib.catalogue(), active.cfg.id.clone());
-        let found = tokio::task::spawn_blocking(move || c.track_ids(&sid, 0, &entries))
+        let found = tokio::task::spawn_blocking(move || c.line_track_ids(&sid, &entries))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))??;
         let unknown = found.iter().filter(|f| f.is_none()).count();

@@ -112,6 +112,20 @@ impl Active {
     pub(super) fn entry(&self, music: Option<&str>, track: &source::Track) -> Option<String> {
         self.placement.entry(music?, track.path.as_deref())
     }
+
+    /// A track's playlist line, for any track Cratarr can see: its path in the Music folder, or for one in an Incoming
+    /// folder its path from there ("../lidarr-music/X/01.flac"). Keep and Replace move such a line along with the file,
+    /// and Delete takes it out (decision 0011 §6).
+    pub(super) fn line(&self, folders: &crate::settings::Folders, track: &source::Track) -> Option<String> {
+        let music = folders.music.as_deref()?;
+        if let Some(e) = self.placement.entry(music, track.path.as_deref()) {
+            return Some(e);
+        }
+        folders.incoming.iter().find_map(|f| {
+            let rel = self.placement.entry(f, track.path.as_deref())?;
+            crate::playlists::relative_to(std::path::Path::new(music), &std::path::Path::new(f).join(rel))
+        })
+    }
 }
 
 pub struct Library {

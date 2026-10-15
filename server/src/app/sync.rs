@@ -439,7 +439,13 @@ struct Translate {
 
 impl Translate {
     fn items(&self, lines: &[String]) -> Vec<Item> {
-        lines.iter().map(|l| self.cat.track_of(0, l).map_or_else(|| Item::Missing(l.clone()), Item::Track)).collect()
+        lines
+            .iter()
+            .map(|l| {
+                let track = self.cat.place_of_line(l).and_then(|(folder, rel)| self.cat.track_of(folder, &rel));
+                track.map_or_else(|| Item::Missing(l.clone()), Item::Track)
+            })
+            .collect()
     }
 
     /// A track's playlist line: its path relative to the Music folder.
@@ -1425,6 +1431,34 @@ mod tests {
         assert_eq!(file.iter().filter(|l| l.starts_with("A/")).cloned().collect::<Vec<_>>(), lines(&["A/03.mp3", "A/02.mp3", "A/01.mp3", "A/04.mp3"]));
         assert!(file.contains(&"gone/x.mp3".to_string()), "the addition here stays");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn an_incoming_track_stays_in_a_synced_playlist() {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let root = std::env::temp_dir().join(format!("cratarr-sync-inc-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        let (m, inc) = (root.join("Music"), root.join("lidarr-music"));
+        std::fs::create_dir_all(m.join("A")).unwrap();
+        std::fs::create_dir_all(inc.join("X")).unwrap();
+        std::fs::write(m.join("A/01.mp3"), "a").unwrap();
+        std::fs::write(inc.join("X/01.flac"), "x").unwrap();
+        let cat = Arc::new(Catalogue::open(None, vec![m.clone(), inc.clone()]).unwrap());
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        cat.record_links("srv", "lib", &[("s1".to_string(), 0, "A/01.mp3".to_string()), ("i1".to_string(), 1, "X/01.flac".to_string())], 1)
+            .unwrap();
+        let store = Store::new(&m);
+        let (srv, state) = (Fake::default(), SyncState::open(None).unwrap());
+        // Made in Finamp with an Incoming track: it comes in as a line beside Music, and stays on both sides.
+        srv.create_playlist("me", "Mix", &lines(&["s1", "i1"])).await.unwrap();
+        state.put_target(&Target { playlist: "Other".into(), kind: me(), copy: None }).unwrap();
+        for _ in 0..3 {
+            sync_server(&store, cat.clone(), &srv, &state, "srv", "me", true).await.unwrap();
+        }
+        assert_eq!(store.entries("Mix").await.unwrap(), lines(&["A/01.mp3", "../lidarr-music/X/01.flac"]));
+        assert_eq!(srv.items("Mix"), lines(&["s1", "i1"]));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

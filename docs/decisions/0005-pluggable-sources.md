@@ -25,7 +25,7 @@ read `.m3u` files is a separate feature and is not decided here.
   source sees it. The core finds the playlist folder's place on each source by stripping leading folders off sample
   track paths until the rest is a file in the playlist folder (`placement.rs`). No path is configured.
 - Library roles per source: `music` (chosen ids, or empty for every library inside the playlist folder) and an
-  optional `incoming`. Incoming tracks never go in playlists, even if the library lies inside the folder. A library
+  optional `incoming`. Incoming tracks never go in playlists, even if the library lies inside the folder (no longer so: see the amendment of 2026-10-15). A library
   cannot have both roles. `GET /api/status` says whether any source has an incoming library, so the page can show
   incoming-music features only then.
 - Several sources may be on. The page sends `?source=` (chosen per browser in the source picker), or none:
@@ -58,3 +58,16 @@ read `.m3u` files is a separate feature and is not decided here.
 - Once saved from the page, the environment no longer configures sources; deleting `settings.json` brings it back.
 - Every Settings page load asks each source for its status, choices and library samples (about 0.3 s with one
   Jellyfin source).
+
+## Amendment (2026-10-15): Incoming tracks go in playlists too
+
+The owner decided that a track in Incoming can be added to a playlist like any other. A playlist made in Finamp could
+already bring Incoming tracks in through the sync (decision 0014), while Cratarr's own menus refused them; now both
+work the same way.
+
+- An Incoming track's line is its path from the Music folder ("../lidarr-music/X/01.flac"), the form the sync and the
+  album actions already used. The catalogue resolves such lines (`Catalogue::place_of_line`): a playlist's rows, its
+  play, and its sync all see the track.
+- Keep and Replace move the line along with the file into Music; Delete takes it out of every playlist, and Undo puts
+  it back (decision 0011 §6, unchanged).
+- A Shared copy holds such a line as it is; the media server finds the file as long as it can see that folder.
