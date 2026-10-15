@@ -66,6 +66,8 @@ export type Upcoming = {
   album_id: string | null;
   addable: boolean;
   duration_secs: number | null;
+  /** `next`: added by hand, ahead of the album or playlist (decision 0033's two lanes). */
+  lane?: 'next';
 };
 
 export type Progress = {

@@ -69,6 +69,7 @@ export function localNowPlaying(): NowPlaying | null {
       album_id: u.album_id,
       addable: u.addable ?? true,
       duration_secs: null,
+      lane: u.lane,
     })),
   };
 }

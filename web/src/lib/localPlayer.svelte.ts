@@ -19,6 +19,9 @@ import { playerCommand } from './api';
 export type LocalTrack = {
   /** Its entry in a player's queue (decision 0033), once Cratarr or the app has given it one. */
   entry?: string;
+  /** `next`: added by hand (Play next, Add to queue), not part of the album or playlist that plays (decision 0033's
+   *  two lanes). */
+  lane?: 'next';
   source: string;
   id: string;
   name: string;
@@ -519,8 +522,20 @@ if (typeof window !== 'undefined') {
 
 // --- what the player and the lock screen ask of it ---
 
-/** Plays `tracks` from `index`, `position` seconds into it. */
+/** The tracks added by hand still to come: the run of them right after the playing track (decision 0033). */
+export function addedAhead(queue: LocalTrack[], index: number): LocalTrack[] {
+  const run: LocalTrack[] = [];
+  for (let i = index + 1; i < queue.length && queue[i].lane === 'next'; i++) run.push(queue[i]);
+  return run;
+}
+
+/** Plays `tracks` from `index`, `position` seconds into it. Something new replaces the album or playlist that played,
+ *  not what was added by hand: those come right after its first track, as before (decision 0033's two lanes). */
 export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null, position = 0) {
+  // Those the new queue holds already (a queue moved here whole) are not added twice.
+  const holds = (t: LocalTrack) => tracks.some((x) => x === t || (!!t.entry && x.entry === t.entry));
+  const ahead = local.index < 0 ? [] : addedAhead(local.queue, local.index).filter((t) => !holds(t));
+  if (ahead.length) tracks = [...tracks.slice(0, index + 1), ...ahead, ...tracks.slice(index + 1)];
   local.queue = tracks;
   local.from = from;
   if (handed()) {
@@ -531,10 +546,12 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   fresh(index, position);
 }
 
-/** Adds tracks after the playing one (`next`) or at the end (`last`). */
+/** Adds tracks by hand (decision 0033's two lanes): right after the playing one (`next`, so the newest come first), or
+ *  after those added before (`last`), ahead of the rest of the album or playlist either way. */
 export function enqueue(tracks: LocalTrack[], how: 'next' | 'last') {
+  tracks = tracks.map((t) => ({ ...t, lane: 'next' as const }));
   if (local.index < 0) return playQueue(tracks);
-  const at = how === 'next' ? local.index + 1 : local.queue.length;
+  const at = local.index + 1 + (how === 'next' ? 0 : addedAhead(local.queue, local.index).length);
   const after = at === 0 ? '' : local.queue[at - 1].entry;
   local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
   if (handed()) return hand('add', { at, tracks, ...(after === undefined ? {} : { after }) });

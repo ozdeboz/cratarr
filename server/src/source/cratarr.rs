@@ -272,11 +272,11 @@ impl Source for CratarrSource {
         Box::pin(async move {
             let (on, name) = followed()?;
             let tracks = queue_tracks(ids);
-            let at = on.followed().filter(|p| p.name == name).map_or(0, |p| usize::try_from(p.index + 1).unwrap_or(0));
+            // Next and Last are added by hand: Play On places them (decision 0033's lanes).
             let c = match how {
                 super::PlayHow::Now => Command::play(tracks, 0, 0),
-                super::PlayHow::Next => Command::Add { tracks, at: Some(at), after: None },
-                super::PlayHow::Last => Command::Add { tracks, at: None, after: None },
+                super::PlayHow::Next => Command::Add { tracks, at: None, after: None, how: Some("next".into()) },
+                super::PlayHow::Last => Command::Add { tracks, at: None, after: None, how: Some("last".into()) },
             };
             on.command(&name, c).await.map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(name)

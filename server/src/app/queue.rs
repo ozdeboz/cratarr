@@ -49,6 +49,9 @@ fn with_entries(tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
         .collect()
 }
 
+/// The lane of tracks added by hand (`QueueTrack::lane`).
+const LANE_NEXT: &str = "next";
+
 fn missing() -> ToggleError {
     ToggleError::Refused("That entry is not in the queue.".into())
 }
@@ -78,24 +81,55 @@ impl Queue {
         p.checked_sub(1).and_then(|i| self.tracks.get(i)).map(|t| t.entry.clone()).unwrap_or_default()
     }
 
-    /// Makes an edit, and returns it as the player is told: by entry, and by place too, for apps before decision 0033.
-    /// Commands that do not touch the queue come back as they were.
+    /// The tracks added by hand still to come: the run of them right after the playing one, `current` (0033's lanes).
+    fn added_ahead(&self, current: Option<usize>) -> Vec<QueueTrack> {
+        let Some(c) = current else { return Vec::new() };
+        self.tracks.iter().skip(c + 1).take_while(|t| t.lane.as_deref() == Some(LANE_NEXT)).cloned().collect()
+    }
+
+    /// `edit_at` with no track playing.
+    #[cfg(test)]
     pub fn edit(&mut self, command: Command) -> Result<Command, ToggleError> {
+        self.edit_at(command, None)
+    }
+
+    /// Makes an edit, and returns it as the player is told: by entry, and by place too, for apps before decision 0033.
+    /// Commands that do not touch the queue come back as they were. `current`: the place of the track that plays.
+    pub fn edit_at(&mut self, command: Command, current: Option<usize>) -> Result<Command, ToggleError> {
         let told = match command {
+            // Something new replaces the album or playlist, not what was added by hand: that comes right after its first
+            // track (0033's lanes). What the new queue holds already (a queue moved whole) is not added twice.
             Command::Play { from, tracks: Some(tracks), index, position_ms, shuffle, paused } => {
-                self.tracks = with_entries(tracks);
+                let mut tracks = with_entries(tracks);
+                let ahead: Vec<QueueTrack> =
+                    self.added_ahead(current).into_iter().filter(|t| !tracks.iter().any(|x| x.entry == t.entry)).collect();
+                let at = (index + 1).min(tracks.len());
+                tracks.splice(at..at, ahead);
+                self.tracks = tracks;
                 Command::Play { from, tracks: Some(self.tracks.clone()), index, position_ms, shuffle, paused }
             }
-            Command::Add { tracks, at, after } => {
-                let tracks = with_entries(tracks);
-                let p = match after.as_deref() {
-                    Some("") => 0,
-                    Some(a) => self.at(a).ok_or_else(missing)? + 1,
-                    None => at.unwrap_or(self.tracks.len()).min(self.tracks.len()),
+            Command::Add { tracks, at, after, how } => {
+                let mut tracks = with_entries(tracks);
+                let end = self.tracks.len();
+                // Added by hand: right after the playing track (`next`, the newest first), or after those added before
+                // (`last`), ahead of the album or playlist either way.
+                let by_hand = match how.as_deref() {
+                    Some("next") => Some(current.map_or(end, |c| c + 1)),
+                    Some("last") => Some(current.map_or(end, |c| c + 1 + self.added_ahead(Some(c)).len())),
+                    _ => None,
+                };
+                if by_hand.is_some() {
+                    tracks.iter_mut().for_each(|t| t.lane = Some(LANE_NEXT.into()));
+                }
+                let p = match (by_hand, after.as_deref()) {
+                    (Some(p), _) => p.min(end),
+                    (None, Some("")) => 0,
+                    (None, Some(a)) => self.at(a).ok_or_else(missing)? + 1,
+                    (None, None) => at.unwrap_or(end).min(end),
                 };
                 let after = self.anchor(p);
                 self.tracks.splice(p..p, tracks.iter().cloned());
-                Command::Add { tracks, at: Some(p), after: Some(after) }
+                Command::Add { tracks, at: Some(p), after: Some(after), how: None }
             }
             Command::Move { from, to, entry, after } => {
                 let from = self.place(entry.as_deref(), from)?;
@@ -218,15 +252,41 @@ mod tests {
     fn added_tracks_go_after_their_anchor_together() {
         let mut q = played(&["a", "b"]);
         let a = q.tracks[0].entry.clone();
-        let told = q.edit(Command::Add { tracks: vec![track("x"), track("y")], at: None, after: Some(a.clone()) }).unwrap();
+        let told = q.edit(Command::Add { tracks: vec![track("x"), track("y")], at: None, after: Some(a.clone()), how: None }).unwrap();
         assert_eq!(ids(&q), "a x y b");
-        let Command::Add { tracks, at, after } = told else { panic!() };
+        let Command::Add { tracks, at, after, .. } = told else { panic!() };
         assert_eq!((at, after), (Some(1), Some(a)));
         assert!(tracks.iter().all(|t| !t.entry.is_empty()), "the player is told their entries");
-        q.edit(Command::Add { tracks: vec![track("z")], at: None, after: None }).unwrap();
+        q.edit(Command::Add { tracks: vec![track("z")], at: None, after: None, how: None }).unwrap();
         assert_eq!(ids(&q), "a x y b z", "at the end");
-        let Command::Add { after, .. } = q.edit(Command::Add { tracks: vec![track("w")], at: Some(0), after: None }).unwrap() else { panic!() };
+        let Command::Add { after, .. } = q.edit(Command::Add { tracks: vec![track("w")], at: Some(0), after: None, how: None }).unwrap() else { panic!() };
         assert_eq!((ids(&q).as_str(), after), ("w a x y b z", Some(String::new())));
+    }
+
+    #[test]
+    fn tracks_added_by_hand_stay_ahead_of_the_album_and_outlive_a_new_one() {
+        let mut q = played(&["a", "b", "c"]);
+        let add = |q: &mut Queue, ids: &[&str], how: &str| {
+            q.edit_at(Command::Add { tracks: ids.iter().map(|i| track(i)).collect(), at: None, after: None, how: Some(how.into()) }, Some(0)).unwrap()
+        };
+        // Playing a: "add to queue" goes after a, ahead of b and c; the next one after it; "play next" before both.
+        add(&mut q, &["x"], "last");
+        add(&mut q, &["y"], "last");
+        assert_eq!(ids(&q), "a x y b c");
+        let Command::Add { at, .. } = add(&mut q, &["n1", "n2"], "next") else { panic!() };
+        assert_eq!((ids(&q).as_str(), at), ("a n1 n2 x y b c", Some(1)), "the newest batch first, kept together");
+        assert!(q.tracks[1..5].iter().all(|t| t.lane.as_deref() == Some("next")) && q.tracks[5].lane.is_none());
+        // Something new played: the album is replaced, what was added by hand comes right after its first track.
+        q.edit_at(Command::play(vec![track("p"), track("q")], 0, 0), Some(0)).unwrap();
+        assert_eq!(ids(&q), "p n1 n2 x y q");
+        // A queue moved here whole, holding them already: not twice.
+        let whole = q.tracks.clone();
+        q.edit_at(Command::play(whole, 0, 0), Some(0)).unwrap();
+        assert_eq!(ids(&q), "p n1 n2 x y q");
+        // Nothing playing: added at the end.
+        let mut empty = Queue::default();
+        empty.edit_at(Command::Add { tracks: vec![track("z")], at: None, after: None, how: Some("last".into()) }, None).unwrap();
+        assert_eq!(ids(&empty), "z");
     }
 
     #[test]

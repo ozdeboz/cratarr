@@ -36,6 +36,9 @@ pub struct QueueTrack {
     /// Its entry in the queue (decision 0033): an id of its own, never reused, apart from the track's.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub entry: String,
+    /// `next`: added by hand (Play next, Add to queue), not part of the album or playlist that plays (0033's lanes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
     pub source: String,
     pub id: String,
     #[serde(default)]
@@ -119,13 +122,15 @@ pub enum Command {
         paused: bool,
     },
     /// Tracks into the queue after entry `after` ("" for first), else at place `at`, else at the end. A player is told
-    /// both (decision 0033).
+    /// both (decision 0033). With `how` (`next`, `last`) they are added by hand, placed as decision 0033's lanes say.
     Add {
         tracks: Vec<QueueTrack>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         after: Option<String>,
+        #[serde(default, skip_serializing)]
+        how: Option<String>,
     },
     /// Entry `entry` (or the one at place `from`) to after entry `after` ("" for first), or to place `to`.
     Move {
@@ -638,7 +643,7 @@ impl PlayOn {
                 let tracks = Some(self.named(tracks).await);
                 Command::Play { from: PlayFrom::default(), tracks, index, position_ms, shuffle: false, paused }
             }
-            Command::Add { tracks, at, after } => Command::Add { tracks: self.named(tracks).await, at, after },
+            Command::Add { tracks, at, after, how } => Command::Add { tracks: self.named(tracks).await, at, after, how },
             Command::Seek { position_ms: None, percent: Some(p) } => {
                 let duration = self.entries().get(name).and_then(|e| e.report.duration_ms);
                 let Some(d) = duration else { return Err(ToggleError::Refused("The track's length is not known yet.".into())) };
@@ -654,7 +659,7 @@ impl PlayOn {
             return Err(ToggleError::Refused(format!("{name} is not connected.")));
         }
         let mut queue = e.queue.clone();
-        let told = queue.edit(command)?;
+        let told = queue.edit_at(command, usize::try_from(e.index()).ok())?;
         Self::tell(e, name, &told, queue.version)?;
         let edited = queue != e.queue;
         e.queue = queue;

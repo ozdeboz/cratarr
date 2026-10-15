@@ -204,7 +204,12 @@
       {#if np.upcoming.length}
         <ol class="rows" class:dragging={!!drag}>
           {#each np.upcoming as t, i (t.id + ':' + i)}
-            <li class:lifted={drag?.from === i} style:transform={drag ? `translateY(${reorder.offset(i)}px)` : null}>
+            <!-- A line where the tracks added by hand end and the album or playlist goes on (decision 0033). -->
+            <li
+              class:lifted={drag?.from === i}
+              class:lane-end={i > 0 && np.upcoming[i - 1].lane === 'next' && t.lane !== 'next'}
+              style:transform={drag ? `translateY(${reorder.offset(i)}px)` : null}
+            >
               <button
                 class="row"
                 onclick={() => play(i)}
@@ -498,11 +503,22 @@
   }
 
   .rows li {
+    position: relative;
     display: flex;
     align-items: center;
     height: 70px;
     padding: 6px 8px 0;
     box-sizing: border-box;
+  }
+
+  /* Takes no room, so dragging counts rows as before. */
+  .rows li.lane-end::before {
+    content: '';
+    position: absolute;
+    top: 1px;
+    left: 16px;
+    right: 16px;
+    border-top: 1px solid var(--border);
   }
 
   .rows.dragging li {
