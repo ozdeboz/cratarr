@@ -47,6 +47,8 @@ class PlayOnLink(
     /** The volume before a duck (0 to 1); null when not ducked. */
     private var unducked: Float? = null
     private var queueSent = false
+    /** The queue's version in the last command from Cratarr: reports say it, so Cratarr knows what they have seen. */
+    private var version = -1L
     private var reportPending = false
 
     fun start() {
@@ -171,6 +173,7 @@ class PlayOnLink(
             return
         }
         val p = player
+        m.optLong("version", -1L).takeIf { it >= 0 }?.let { version = it }
         when (m.optString("command")) {
             "play" -> {
                 val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
@@ -282,6 +285,7 @@ class PlayOnLink(
         val out = JSONObject()
             .put("index", if (p.mediaItemCount == 0) -1 else p.currentMediaItemIndex)
             .put("entry", p.currentMediaItem?.let(::entryOf) ?: JSONObject.NULL)
+            .put("version", if (version >= 0) version else JSONObject.NULL)
             .put("position_ms", p.currentPosition.coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)

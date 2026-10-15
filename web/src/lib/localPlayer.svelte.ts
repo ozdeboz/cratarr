@@ -575,6 +575,8 @@ function looksShuffled(queue: LocalTrack[], index: number): boolean {
 export function setShuffle(on: boolean) {
   local.shuffled = on;
   if (local.index < 0) return;
+  // A player of Cratarr's: Cratarr orders its queue (it holds it, decision 0033), not this page from what it last saw.
+  if (driven !== null) return hand('shuffle', { on });
   const ahead = addedAhead(local.queue, local.index);
   const rest = local.queue.slice(local.index + 1 + ahead.length);
   replaceUpcoming([...ahead, ...(on ? shuffledCopy(rest) : inOrder(rest, reached(local.queue, local.index)))]);

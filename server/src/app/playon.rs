@@ -62,6 +62,10 @@ pub struct Report {
     /// The entry that plays (decision 0033); apps from before it say only `index`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
+    /// The queue's version in the last command the player took: a queue it reports from before Cratarr's latest edit
+    /// reached it is not taken (that edit is on its way). Apps from before it leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
     pub position_ms: u64,
     #[serde(default)]
     pub duration_ms: Option<u64>,
@@ -264,6 +268,8 @@ struct Entry {
     at: Instant,
     /// Connected and not yet heard from: its first report says whether it came back without its queue.
     fresh: bool,
+    /// The queue's version in the last edit told to the player: what a report must have seen to be taken.
+    told: u64,
 }
 
 impl Entry {
@@ -278,6 +284,7 @@ impl Entry {
             queue: Queue::default(),
             at: Instant::now(),
             fresh: false,
+            told: 0,
         }
     }
 
@@ -588,7 +595,11 @@ impl PlayOn {
         if give_back.is_some() {
             e.at = Instant::now();
         } else {
-            if let Some(q) = report.queue.clone() {
+            // Taken as the player holds it, unless it was made before Cratarr's latest edit reached the player: that edit
+            // is on its way, and the player reports again once it has it (no flip back and forth).
+            if let Some(q) = report.queue.clone()
+                && report.version.is_none_or(|v| v >= e.told)
+            {
                 e.queue.adopt(q);
             }
             e.report = Report { queue: None, ..report };
@@ -673,6 +684,9 @@ impl PlayOn {
         let told = queue.edit_at(command, usize::try_from(e.index()).ok())?;
         Self::tell(e, name, &told, queue.version)?;
         let edited = queue != e.queue;
+        if edited {
+            e.told = queue.version;
+        }
         e.queue = queue;
         drop(entries);
         if edited {
@@ -686,6 +700,10 @@ impl PlayOn {
         let mut entries = self.entries();
         let Some(e) = entries.get_mut(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
         let version = e.queue.version;
+        // A queue given back replaces the player's: what it reports from before does not count.
+        if matches!(command, Command::Play { .. }) {
+            e.told = version;
+        }
         Self::tell(e, name, command, version)
     }
 
