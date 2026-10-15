@@ -77,6 +77,9 @@ pub struct FolderRows {
 
 pub struct Library {
     db: Mutex<Connection>,
+    /// When albums were added, where known better than the catalogue's first sight of their files (imported from a
+    /// media server): an album's `created` is the earlier of the two.
+    added: Mutex<HashMap<String, i64>>,
 }
 
 /// A number at the start of a tag ("3/12" is 3).
@@ -182,7 +185,18 @@ impl Library {
         }
         conn.execute_batch(SCHEMA).context("creating the library tables")?;
         conn.execute_batch(&format!("PRAGMA user_version = {LAYOUT}"))?;
-        Ok(Self { db: Mutex::new(conn) })
+        Ok(Self { db: Mutex::new(conn), added: Mutex::default() })
+    }
+
+    /// The added dates known better than the catalogue's (by album id); a change builds the library again.
+    pub fn set_added(&self, added: HashMap<String, i64>) {
+        *self.added.lock().unwrap_or_else(|p| p.into_inner()) = added;
+    }
+
+    /// A summary of the added dates, part of what the library was built from.
+    fn added_print(&self) -> String {
+        let added = self.added.lock().unwrap_or_else(|p| p.into_inner());
+        format!("{}/{}", added.len(), added.values().fold(0i64, |a, v| a.wrapping_add(*v)))
     }
 
     pub(crate) fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -208,9 +222,10 @@ impl Library {
         let reader = cat.reader();
         let count = cat.folders().len() as i64;
         let print = format!(
-            "catalogue {} {} {}",
+            "catalogue {} {} {} added {}",
             cat.generation(),
             count,
+            self.added_print(),
             match &reader {
                 Some(c) => crate::catalogue::served_fingerprint(c)?,
                 None => cat.served_fingerprint()?,
@@ -243,6 +258,7 @@ impl Library {
     }
 
     fn build(&self, folders: &[FolderRows], rules: &Rules) -> Result<()> {
+        let added = self.added.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let mut songs: Vec<Song> =
             folders.iter().flat_map(|f| f.rows.iter().filter(|r| r.track.is_some()).map(move |r| (f.folder, r))).map(|(folder, r)| song(r, folder, rules)).collect();
         one_album_per_folder(&mut songs);
@@ -349,7 +365,7 @@ impl Library {
                     songs.iter().filter_map(|s| s.row.duration_ms).sum::<u64>() as i64,
                     songs.iter().map(|s| s.row.size).sum::<u64>() as i64,
                     discs,
-                    songs.iter().filter_map(|s| s.row.born).min(),
+                    songs.iter().filter_map(|s| s.row.born).chain(added.get(album_id).copied()).min(),
                     first.row.first("musicbrainz_albumid"),
                     first.folder,
                     dir,
@@ -548,6 +564,21 @@ mod tests {
         assert_eq!(lib.counts().unwrap().1, 1);
         let year: i64 = lib.db().query_row("SELECT year FROM albums", [], |r| r.get(0)).unwrap();
         assert_eq!(year, 2015, "the album's aggregates still count every song");
+    }
+
+    #[test]
+    fn an_imported_added_date_comes_first_when_earlier() {
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        let id: String = lib.db().query_row("SELECT id FROM albums WHERE name = 'Homogenic'", [], |r| r.get(0)).unwrap();
+        lib.set_added([(id.clone(), 5)].into());
+        lib.build(&sample(), &Rules::default()).unwrap();
+        let created: i64 = lib.db().query_row("SELECT created FROM albums WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
+        assert_eq!(created, 5);
+        lib.set_added([(id.clone(), 9_999_999_999)].into());
+        lib.build(&sample(), &Rules::default()).unwrap();
+        let created: i64 = lib.db().query_row("SELECT created FROM albums WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
+        assert_eq!(created, 1_700_000_001, "a later one does not move it");
     }
 
     #[test]

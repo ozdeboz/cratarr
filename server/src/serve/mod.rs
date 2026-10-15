@@ -99,6 +99,7 @@ impl Serve {
     /// songs to their new ids. Blocking.
     pub fn refresh(&self) -> Result<bool> {
         let rules = self.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
+        self.library.set_added(self.userdata.added()?);
         let built = self.library.refresh_from(&self.catalogue, &rules)?;
         if built {
             *self.built_at.write().unwrap_or_else(|p| p.into_inner()) = now();
