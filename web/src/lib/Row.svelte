@@ -359,9 +359,12 @@
     min-width: 0;
   }
 
-  .large button.main:hover:not(:disabled),
-  .large label.main:hover {
-    background: color-mix(in srgb, var(--text) 7%, transparent);
+  /* Under a pointer the whole row lights, its action included; not on touch, where a hover stays after the tap. */
+  @media (hover: hover) {
+    .large:has(> button.main:hover:not(:disabled)),
+    .large:has(> label.main:hover) {
+      background: color-mix(in srgb, var(--text) 7%, var(--row-bg, transparent));
+    }
   }
 
   .large .title {

@@ -62,6 +62,7 @@
   import PlaylistMenu from './PlaylistMenu.svelte';
   import PanelPlace from './PanelPlace.svelte';
   import TopPill from './TopPill.svelte';
+  import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs } from './prefs.svelte';
   import { clockText, paused, playing } from './remote.svelte';
@@ -944,13 +945,7 @@
   </div>
 
   {#if selecting}
-    <!-- Symfonium's select bar, floating over the list's end: how many are ticked, ✕, and what to do with them. -->
-    <div class="selbar" role="toolbar" aria-label="Selected tracks">
-      <div class="selhead">
-        <span class="selcount">{selecting.size}/{shown?.length ?? 0}</span>
-        <button class="icon" aria-label="Stop selecting" onclick={() => (selecting = null)}><Icon name="close" size={22} /></button>
-      </div>
-      <div class="selacts">
+    <SelectBar label="Selected tracks" count="{selecting.size}/{shown?.length ?? 0}" onclose={() => (selecting = null)}>
         <button class="icon" aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => actOnTicked('play')}><Icon name="play" size={24} /></button>
         <button class="icon" aria-label="Play next" title="Play next" disabled={!ticked.length} onclick={() => actOnTicked('next')}><Icon name="playNext" size={24} /></button>
         <button class="icon" aria-label="Add to queue" title="Add to queue" disabled={!ticked.length} onclick={() => actOnTicked('last')}><Icon name="listAdd" size={24} /></button>
@@ -969,8 +964,7 @@
             }}><Icon name="arrowDownToLine" size={24} /></button
           >
         {/if}
-      </div>
-    </div>
+    </SelectBar>
   {/if}
 </section>
 
@@ -1013,7 +1007,7 @@
 {#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[], i: number | null = null)}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
-  <li class:now={here}>
+  <li class:now={here} class:ticked={!!selecting && i !== null && selecting.has(i)}>
     <span class="behind" aria-hidden="true"><Icon name="playNext" size={40} /><span>Play next</span></span>
     <Row
       size="large"
@@ -1055,7 +1049,7 @@
 {#snippet albumRow(r: PlaylistRow, i: number, list: PlaylistRow[])}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
-  <li class:now={here}>
+  <li class:now={here} class:ticked={!!selecting && selecting.has(i)}>
     <span class="behind" aria-hidden="true"><Icon name="playNext" size={40} /><span>Play next</span></span>
     <Row
       size="large"
@@ -1487,6 +1481,11 @@
     --row-bg: color-mix(in srgb, var(--art-accent, var(--accent)) 32%, var(--surface));
   }
 
+  /* A ticked track: the whole row lighter, its tick included (edge to edge as the row is). */
+  .rows li.ticked {
+    --row-bg: color-mix(in srgb, var(--text) 10%, var(--surface));
+  }
+
   /* Finamp's track line under the title: the artist, then the album lighter. */
   .rows :global(.row .sub) {
     color: inherit;
@@ -1785,36 +1784,6 @@
   }
 
   /* The select bar: floating over the list's end, above the mini-player, in the cover's colour. */
-  .selbar {
-    position: absolute;
-    right: 16px;
-    bottom: calc(16px + var(--mini-h, 0px) + env(safe-area-inset-bottom));
-    z-index: 4;
-    width: min(300px, calc(100% - 32px));
-    border-radius: 16px;
-    background: color-mix(in srgb, var(--art-accent, var(--accent)) 30%, var(--surface));
-    box-shadow: 0 4px 16px rgb(0 0 0 / 0.35);
-  }
-
-  .selhead {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    align-items: center;
-    padding: 0 4px 0 48px;
-    border-bottom: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
-  }
-
-  .selcount {
-    text-align: center;
-    font-size: 15px;
-  }
-
-  .selacts {
-    display: flex;
-    justify-content: space-evenly;
-    padding: 4px;
-  }
-
   /* While ticking, the list scrolls clear of the bar. */
   .rows.selecting {
     padding-bottom: 96px;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import ListHead from './lib/ListHead.svelte';
   import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, usePageAction } from './lib/pageView.svelte';
-  import { createPlaylist, type Playlist } from './lib/api';
+  import { createPlaylist, type Playlist, type PlayMode } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap, refresh } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
@@ -9,17 +9,18 @@
   import { withUndo } from './lib/undo.svelte';
   import { followCreate, followDelete } from './lib/follow.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
+  import SelectBar from './lib/SelectBar.svelte';
   import NameSheet from './lib/NameSheet.svelte';
   import Icon from './lib/Icon.svelte';
   import Seg from './lib/Seg.svelte';
   import SizeControl from './lib/SizeControl.svelte';
-  import { isLocal, setPlayingMember, shownPlaylists } from './lib/output.svelte';
+  import { isLocal, setPlayingMember, shownPlaylists, startPlaylists } from './lib/output.svelte';
   import { pending, playing } from './lib/remote.svelte';
   import { longpress } from './lib/longpress';
   import { fromAction } from 'svelte/attachments';
   import PlaylistItem from './lib/PlaylistItem.svelte';
   import { viewPlaylist, panel } from './lib/panel.svelte';
-  import { isPlaylistFavorite, loadPlaylistFavorites } from './lib/favourites.svelte';
+  import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './lib/favourites.svelte';
   import { endSelect, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
@@ -121,24 +122,35 @@
     }
   }
 
-  // The pill's last button (lib/TopPill): New playlist, or with playlists ticked their menu (⋮, decision 0025).
-  usePageAction(() =>
-    select.on && select.picked.length
-      ? { icon: 'moreVert', label: 'Menu of the ticked playlists', run: () => (menu = { kind: 'selection' }) }
-      : { icon: 'plus', label: 'New playlist', run: () => (menu = { kind: 'new' }) },
-  );
+  // The pill's last button (lib/TopPill): New playlist. What is ticked has the select bar.
+  usePageAction(() => ({ icon: 'plus', label: 'New playlist', run: () => (menu = { kind: 'new' }) }));
+
+  // The select bar's actions on the ticked playlists (one after another, each track once), as the panel's on its
+  // ticked tracks: Select ends after each.
+  const ticked = $derived(select.picked.filter((id) => shownPlaylists().some((x) => x.id === id)));
+  const tickedFav = $derived(ticked.length > 0 && ticked.every((id) => isPlaylistFavorite(id)));
+  async function playTicked(mode: PlayMode) {
+    const ids = [...ticked];
+    if (!ids.length) return;
+    navigator.vibrate?.(8);
+    endSelect();
+    try {
+      await startPlaylists(ids, mode);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    }
+  }
+  function favouriteTicked() {
+    navigator.vibrate?.(8);
+    setPlaylistFavorites([...ticked], !tickedFav);
+    endSelect();
+  }
 
 </script>
 
 <main>
-  <!-- View N while ticking (the ticked ones in the panel). The search, size, favourites-only, New playlist and the
-       ticked ones' menu are the pill's (lib/TopPill), the order the list's header (decided 2026-10-15). -->
-  {#if select.on && select.picked.length && !showsPicked()}
-    {@const viewLabel = select.picked.length === 1 ? 'View 1 playlist' : `View ${select.picked.length} playlists`}
-    <div class="tools">
-      <button class="new primary view-picked" aria-label={viewLabel} title={viewLabel} onclick={viewPicked}><Icon name="playlists" size={22} /></button>
-    </div>
-  {/if}
+  <!-- The search, size, favourites-only and New playlist are the pill's (lib/TopPill), the order the list's header,
+       what is ticked the select bar's (decided 2026-10-15/16). -->
   {#if error}
     <Notice text={error} />
   {/if}
@@ -147,7 +159,7 @@
     <p class="empty">Loading…</p>
   {:else}
     <!-- The list's header (lib/ListHead): its order, how many, and Select (decision 0025: on, a chip's name ticks it; the
-         ticked ones' menu is the ⋮ at the pill's end; on a phone they are viewed in the panel with View N). -->
+         ticked ones are the select bar's: played, favoured, viewed in the panel, their menu). -->
     <ListHead
       fields={PLAYLIST_ORDERS}
       bind:value={prefs.playlistOrder}
@@ -191,6 +203,25 @@
     </ul>
     {#if view && items.length === 0}<p class="empty">No playlists match.</p>{/if}
   {/if}
+  {#if select.on}
+    <!-- The panel's select bar (lib/SelectBar): play, put next, queue or favour the ticked playlists, view them in the
+         panel (unless it shows them), their menu. -->
+    {@const viewLabel = ticked.length === 1 ? 'View 1 playlist' : `View ${ticked.length} playlists`}
+    <SelectBar label="Selected playlists" count="{ticked.length}/{items.length}" onclose={endSelect} place="page">
+      <button aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => playTicked('play')}><Icon name="play" size={24} /></button>
+      <button aria-label="Play next" title="Play next" disabled={!ticked.length} onclick={() => playTicked('next')}><Icon name="playNext" size={24} /></button>
+      <button aria-label="Add to queue" title="Add to queue" disabled={!ticked.length} onclick={() => playTicked('last')}><Icon name="listAdd" size={24} /></button>
+      <button class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
+        ><Icon name="heart" size={24} /></button
+      >
+      {#if !showsPicked()}
+        <button aria-label={viewLabel} title={viewLabel} disabled={!ticked.length} onclick={viewPicked}><Icon name="squareArrowOutUpRight" size={24} /></button>
+      {/if}
+      <button aria-label="Menu of the ticked playlists" title="More" disabled={!ticked.length} onclick={() => (menu = { kind: 'selection' })}
+        ><Icon name="moreVert" size={24} /></button
+      >
+    </SelectBar>
+  {/if}
 </main>
 
 {#if menu?.kind === 'new'}
@@ -206,40 +237,6 @@
     position: relative;
     padding: 14px clamp(12px, 2vw, 32px) 48px;
     container-type: inline-size;
-  }
-
-  .tools {
-    display: flex;
-    margin: 0 0 14px;
-  }
-
-  button.new {
-    min-height: 44px;
-    padding: 0 16px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    cursor: pointer;
-  }
-
-  .view-picked {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    margin-left: auto;
-    padding: 0;
-  }
-
-  button.new.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
-  }
-
-  button.new:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
 
   .grid {
