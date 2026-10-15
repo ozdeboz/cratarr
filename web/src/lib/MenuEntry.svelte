@@ -1,7 +1,8 @@
 <script lang="ts">
   // One entry in a menu sheet (decision 0021), as Finamp's: a 56 px row, a 24 px icon in the accent colour, the label
   // at 16 px. Destructive entries stay Cratarr's way: red (and last in the list). `checked` makes it one of Finamp's
-  // toggle cards (the playlists for a track): filled with the accent, stronger when on, a mark at the right.
+  // toggle cards (the playlists for a track): filled with the accent, stronger when on, a mark at the right. `busy`:
+  // its action is under way (an album going into a playlist track by track), the spinner in place of its label.
   import Icon, { type IconName } from './Icon.svelte';
 
   let {
@@ -11,6 +12,7 @@
     disabled = false,
     danger = false,
     checked = null,
+    busy = false,
   }: {
     icon?: IconName | null;
     label: string;
@@ -18,15 +20,16 @@
     disabled?: boolean;
     danger?: boolean;
     checked?: boolean | null;
+    busy?: boolean;
   } = $props();
 </script>
 
 {#if checked === null}
-  <button class="entry" class:danger role="menuitem" {disabled} {onclick}>
+  <button class="entry" class:danger role="menuitem" disabled={disabled || busy} aria-busy={busy} {onclick}>
     {#if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span>
   </button>
 {:else}
-  <button class="toggle" class:on={checked} role="menuitemcheckbox" aria-checked={checked} {disabled} {onclick}>
+  <button class="toggle" class:on={checked} role="menuitemcheckbox" aria-checked={checked} disabled={disabled || busy} aria-busy={busy} {onclick}>
     <span>{label}</span><i aria-hidden="true"></i><Icon name={checked ? 'check' : 'plus'} size={22} />
   </button>
 {/if}
@@ -117,5 +120,15 @@
   .toggle:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  /* Under way: app.css's spinner alone in its place, at full strength (the icons keep their own colour, so they hide). */
+  .toggle[aria-busy='true'] {
+    opacity: 1;
+  }
+
+  [aria-busy='true'] :global(svg),
+  [aria-busy='true'] i {
+    visibility: hidden;
   }
 </style>
