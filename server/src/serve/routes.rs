@@ -208,6 +208,34 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             annotate_artists(serve, &me, std::slice::from_mut(&mut artist))?;
             Ok(Answer::Json(json!({ "artist": artist })))
         }
+        // What online services know (biography, pictures, similar artists and songs, top songs). Navidrome asks Last.fm
+        // and Spotify when they are set up and answers empty without them; Cratarr has none, so it answers so too.
+        "getArtistInfo" | "getArtistInfo2" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
+            let artist = blocking(move || s.library.artist(&id)).await?.ok_or_else(|| not_found("Artist"))?;
+            let mut info = json!({ "similarArtist": [] });
+            if let Some(mbid) = artist.music_brainz_id {
+                info["musicBrainzId"] = mbid.into();
+            }
+            let mut out = json!({});
+            out[if method == "getArtistInfo" { "artistInfo" } else { "artistInfo2" }] = info;
+            Ok(Answer::Json(out))
+        }
+        "getAlbumInfo" | "getAlbumInfo2" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
+            let album = blocking(move || s.library.album(&id)).await?.ok_or_else(|| not_found("Album"))?;
+            let mut info = json!({});
+            if let Some(mbid) = album.music_brainz_id {
+                info["musicBrainzId"] = mbid.into();
+            }
+            Ok(Answer::Json(json!({ "albumInfo": info })))
+        }
+        "getTopSongs" => Ok(Answer::Json(json!({ "topSongs": { "song": [] } }))),
+        "getSimilarSongs" | "getSimilarSongs2" => {
+            let mut out = json!({});
+            out[if method == "getSimilarSongs" { "similarSongs" } else { "similarSongs2" }] = json!({ "song": [] });
+            Ok(Answer::Json(out))
+        }
         "getAlbum" => {
             let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
             let mut album = blocking(move || s.library.album(&id)).await?.ok_or_else(|| not_found("Album"))?;
@@ -752,6 +780,19 @@ mod tests {
         assert_eq!(q["playQueue"]["entry"][0]["id"], song.as_str());
         call(&s, &me, "unstar", &format!("id={song}")).await;
         assert!(call(&s, &me, "getStarred2", "").await["starred2"]["song"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn what_online_services_would_know_is_answered_empty() {
+        let (s, me) = server();
+        let artist = call(&s, &me, "getArtists", "").await["artists"]["index"][0]["artist"][0]["id"].as_str().unwrap().to_string();
+        let info = call(&s, &me, "getArtistInfo2", &format!("id={artist}&count=20")).await;
+        assert_eq!(info["artistInfo2"]["similarArtist"], json!([]));
+        assert_eq!(call(&s, &me, "getArtistInfo2", "id=ar-nothing").await["error"], 70);
+        let album = call(&s, &me, "getAlbumList2", "type=newest").await["albumList2"]["album"][0]["id"].as_str().unwrap().to_string();
+        assert!(call(&s, &me, "getAlbumInfo2", &format!("id={album}")).await["albumInfo"].is_object());
+        assert_eq!(call(&s, &me, "getSimilarSongs2", "id=tr-1").await, json!({ "similarSongs2": { "song": [] } }));
+        assert_eq!(call(&s, &me, "getTopSongs", "artist=Björk").await, json!({ "topSongs": { "song": [] } }));
     }
 
     #[tokio::test]
