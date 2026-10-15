@@ -180,6 +180,8 @@ struct Entry {
     heard: Instant,
     /// Cratarr's ids of the track at `report.index`, looked up when the track changes.
     ids: TrackIds,
+    /// Album ids from the tracks' own sources, for tracks queued without one (`source\nid` → album id).
+    album_ids: HashMap<String, String>,
     report: Report,
     queue: Vec<QueueTrack>,
     queue_version: u64,
@@ -194,6 +196,7 @@ impl Entry {
             seen: SystemTime::now(),
             heard: Instant::now(),
             ids: TrackIds::default(),
+            album_ids: HashMap::new(),
             report: Report { index: -1, volume: 100, ..Report::default() },
             queue: Vec::new(),
             queue_version: 0,
@@ -214,7 +217,12 @@ impl Entry {
                 position_ms = position_ms.min(d);
             }
         }
-        let track = usize::try_from(r.index).ok().and_then(|i| self.queue.get(i)).cloned();
+        let track = usize::try_from(r.index).ok().and_then(|i| self.queue.get(i)).cloned().map(|mut t| {
+            if t.album_id.is_none() {
+                t.album_id = self.album_ids.get(&format!("{}\n{}", t.source, t.id)).cloned();
+            }
+            t
+        });
         PlayerView {
             name: name.to_string(),
             online: self.online(),
@@ -319,6 +327,20 @@ impl PlayOn {
         }
     }
 
+    /// Asks the track's own source for its album's id, and tells of the change once it is known.
+    fn find_album_id(self: &Arc<Self>, name: &str, t: QueueTrack) {
+        let Some(source) = self.lib.connected_sources().into_iter().find(|(id, _)| *id == t.source).map(|(_, s)| s) else { return };
+        let (me, name) = (Arc::downgrade(self), name.to_string());
+        tokio::spawn(async move {
+            let Ok(found) = source.track(&t.id).await else { return };
+            let (Some(album), Some(me)) = (found.album_id, me.upgrade()) else { return };
+            if let Some(e) = me.entries().get_mut(&name) {
+                e.album_ids.insert(format!("{}\n{}", t.source, t.id), album);
+            }
+            me.changed();
+        });
+    }
+
     /// A player whose lease runs out goes offline without a word from it: looked at every 15 s.
     fn watch_leases(self: Arc<Self>) {
         let me = Arc::downgrade(&self);
@@ -392,7 +414,7 @@ impl PlayOn {
     }
 
     /// What a player says it plays.
-    pub fn report(&self, name: &str, report: Report) -> Result<(), ToggleError> {
+    pub fn report(self: &Arc<Self>, name: &str, report: Report) -> Result<(), ToggleError> {
         valid_name(name)?;
         let mut entries = self.entries();
         let e = entries.entry(name.to_string()).or_insert_with(Entry::new);
@@ -410,11 +432,15 @@ impl PlayOn {
         let track = e.view(name, false).track;
         let new_track = track != before.track;
         drop(entries);
-        // A new track: its ids, looked up outside the lock.
+        // A new track: its ids, looked up outside the lock; its album's id from its own source when it came without one
+        // (queued by a page, handed over): Home Assistant finds "this album" by it.
         if new_track {
             let ids = self.ids_of(track.as_ref());
             if let Some(e) = self.entries().get_mut(name) {
                 e.ids = ids;
+            }
+            if let Some(t) = track.as_ref().filter(|t| t.album_id.is_none()) {
+                self.find_album_id(name, t.clone());
             }
         }
         let after = match self.entries().get(name) {
