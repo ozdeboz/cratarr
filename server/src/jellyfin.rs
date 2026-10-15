@@ -369,7 +369,8 @@ impl Jellyfin {
         self.get_within(path, None).await
     }
 
-    /// `get` for an answer a busy server takes long over (a long playlist's entries): `LONG_READ` instead of 20 s.
+    /// `get` for an answer a busy server takes long over (a long playlist's entries, a page of a library's albums or tracks:
+/// 22 to 29 s for 250 albums while Jellyfin was near its memory limit, 2026-10-15): `LONG_READ` instead of 20 s.
     async fn get_long<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T> {
         self.get_within(path, Some(LONG_READ)).await
     }
@@ -659,7 +660,7 @@ impl Jellyfin {
         if let Some(t) = since {
             q.push_str(&format!("&MinDateLastSaved={}", iso(t)));
         }
-        let page: Page = self.get(&q).await?;
+        let page: Page = self.get_long(&q).await?;
         let total = page.total_record_count.unwrap_or(start + page.items.len());
         Ok((page.items.into_iter().filter_map(|r| r.path.map(|p| (r.id, p))).collect(), total))
     }
@@ -700,7 +701,7 @@ impl Jellyfin {
         while heads.len() < limit {
             let want = PAGE.min(limit - heads.len());
             let page: ItemsPage<ListedAlbumItem> = self
-                .get(&format!(
+                .get_long(&format!(
                     "/Items?ParentId={library_id}&IncludeItemTypes=MusicAlbum&Recursive=true&SortBy=DateCreated,SortName&SortOrder=Descending&EnableImages=false&EnableUserData=false&Fields=Path,Tags,DateCreated,DateLastSaved&StartIndex={}&Limit={want}",
                     heads.len()
                 ))
