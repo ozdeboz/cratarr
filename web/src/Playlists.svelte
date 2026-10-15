@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { PLAYLIST_WIDTHS, pageView } from './lib/pageView.svelte';
+  import ListHead from './lib/ListHead.svelte';
+  import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView } from './lib/pageView.svelte';
   import { tick as settled } from 'svelte';
   import { createPlaylist, type Playlist } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
@@ -51,7 +52,7 @@
 
   // The open menu (a sheet, decision 0021): a playlist's (lib/PlaylistMenu), the "New playlist" one, or the ticked
   // playlists' (Select's ⋮, decision 0025).
-  type Menu = { kind: 'playlist'; p: Playlist; anchor: DOMRect } | { kind: 'new'; anchor: DOMRect } | { kind: 'selection' };
+  type Menu = { kind: 'new'; anchor: DOMRect } | { kind: 'selection' };
   let menu = $state<Menu | null>(null);
   let working = $state(false);
 
@@ -64,16 +65,23 @@
     });
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
     if (pageView.favouritesOnly) list = list.filter((p) => isPlaylistFavorite(p.id));
-    // Pinned ones first, in the order pinned; "✓ first" applies within the pinned and within the rest.
+    // Pinned ones first, in the order pinned; the rest in the list's order (its header, or View), either way round.
     const pin = (id: string) => {
       const i = prefs.pinned.indexOf(id);
       return i < 0 ? Infinity : i;
     };
+    const byName = (a: Playlist, b: Playlist) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+    const by = (a: Playlist & { member: boolean }, b: Playlist & { member: boolean }) =>
+      prefs.playlistOrder === 'tracks'
+        ? a.count - b.count || byName(a, b)
+        : prefs.playlistOrder === 'playing'
+          ? Number(b.member) - Number(a.member) || byName(a, b)
+          : byName(a, b);
+    const turn = prefs.playlistDown ? -1 : 1;
     return [...list].sort((a, b) => {
       const [pa, pb] = [pin(a.id), pin(b.id)];
       if ((pa === Infinity) !== (pb === Infinity)) return pa === Infinity ? 1 : -1;
-      if (prefs.membersFirst && a.member !== b.member) return Number(b.member) - Number(a.member);
-      return pa === Infinity ? 0 : pa - pb;
+      return pa === Infinity ? turn * by(a, b) : pa - pb;
     });
   });
 
@@ -141,19 +149,10 @@
     <NewButton label="New playlist" onclick={openNew} />
   {/if}
 
-  <!-- The page's controls: Select, the search, and View N while ticking. Its order, size and favourites-only are in
-       the pill's View and Filter (lib/TopPill, decided 2026-10-15). -->
+  <!-- The page's controls: the search, and View N while ticking. Its order is the list's header; its size and
+       favourites-only are in the pill's View and Filter (lib/TopPill, decided 2026-10-15). -->
   <div class="tools">
     <div class="row">
-    <!-- Select (decision 0025): on, it is highlighted, a chip's name ticks it, and a tap on it again ends it. The ticked
-         ones' menu is the ⋮ in the page's top right corner; on a phone they are viewed in the panel with View N. -->
-    <button
-      class="new toggle select"
-      aria-pressed={select.on}
-      aria-label="Select"
-      title="Select"
-      onclick={() => (select.on ? endSelect() : startSelect())}><Icon name="copyCheck" size={22} /></button
-    >
     <button class="new toggle magnifier" class:active={filter.trim() !== ''} aria-label="Filter playlists" aria-expanded={searching} onclick={openSearch}
       ><Icon name="search" size={22} /></button
     >
@@ -193,6 +192,16 @@
   {#if !view && !error}
     <p class="empty">Loading…</p>
   {:else}
+    <!-- The list's header (lib/ListHead): its order, how many, and Select (decision 0025: on, a chip's name ticks it; the
+         ticked ones' menu is the ⋮ in the page's top right corner; on a phone they are viewed in the panel with View N). -->
+    <ListHead
+      fields={PLAYLIST_ORDERS}
+      bind:value={prefs.playlistOrder}
+      bind:down={prefs.playlistDown}
+      count={howMany(items.length, 'playlist')}
+      selecting={select.on}
+      onselect={() => (select.on ? endSelect() : startSelect())}
+    />
     <ul class="grid" class:pending={pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
       {#each items as p (p.id)}
         <li>
@@ -208,7 +217,10 @@
             active={select.on ? select.picked.includes(p.id) : panel.selection.includes(p.id)}
             label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `View ${p.name}`}
             onclick={() => (select.on ? tick(p.id) : viewPlaylist(p.id))}
-            attach={fromAction(longpress, () => (anchor: DOMRect) => (menu = { kind: 'playlist', p, anchor }))}
+            attach={fromAction(longpress, () => () => {
+              if (!select.on) startSelect();
+              if (!select.picked.includes(p.id)) tick(p.id);
+            })}
           >
             {#snippet action()}
               <button
@@ -229,10 +241,8 @@
 
 {#if menu?.kind === 'new'}
   <NameSheet title="New playlist" what="playlist" action="Create playlist" onsubmit={create} onclose={() => (menu = null)} />
-{:else if menu?.kind === 'playlist'}
-  <PlaylistMenu playlists={[menu.p]} onclose={() => (menu = null)} />
 {:else if menu?.kind === 'selection'}
-  <!-- The same menu as a long-press, for what is ticked. -->
+  <!-- The menu of what is ticked (a long-press ticks). -->
   <PlaylistMenu playlists={select.picked.flatMap((id) => shownPlaylists().filter((x) => x.id === id))} onclose={() => (menu = null)} />
 {/if}
 
@@ -280,12 +290,6 @@
     color: inherit;
   }
 
-  /* Select: on, in the accent. */
-  button.new.select[aria-pressed='true'] {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--accent-text);
-  }
 
   /* Folded away while a filter applies: the button says so, since chips are missing. */
   button.new.toggle.active {

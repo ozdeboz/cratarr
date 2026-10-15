@@ -103,7 +103,7 @@
   {:else if sources.length === 0}
     <p class="empty">No server with an Incoming library is connected.</p>
   {:else}
-    <AlbumShelf {sources} empty="Nothing incoming." onmenu={openMenu}>
+    <AlbumShelf {sources} empty="Nothing incoming." onmenu={openMenu} bind:order={prefs.incomingOrder} bind:down={prefs.incomingDown}>
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}
           {@const job = jobs.of(s.id, a.id)!}

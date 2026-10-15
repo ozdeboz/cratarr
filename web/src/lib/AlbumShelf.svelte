@@ -15,21 +15,24 @@
   import { prefs, type AlbumLayout, type CollectionOrder } from './prefs.svelte';
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
-  import { ALBUM_WIDTHS, pageView } from './pageView.svelte';
+  import ListHead from './ListHead.svelte';
+  import { ALBUM_ORDERS, ALBUM_WIDTHS, howMany, pageView } from './pageView.svelte';
   import Tile from './Tile.svelte';
 
   let {
     sources,
     empty,
-    order,
+    order = $bindable(),
+    down = $bindable(false),
     extra,
     onmenu,
   }: {
     sources: ShelfSource[];
     /** Said for a server without albums. */
     empty: string;
-    /** The order the viewer chose; without one, the lists stay as the server sends them (newest first). */
-    order?: CollectionOrder;
+    /** The order the viewer chose (the list's header, or View), and turned round. */
+    order: CollectionOrder;
+    down?: boolean;
     /** More lines about an album, the page's own (Incoming: its conversion, how it relates to Music). */
     extra?: Snippet<[ShelfSource, ListedAlbum]>;
     /** The page's own menu for an album, at `anchor`. */
@@ -59,13 +62,14 @@
   const COMPARE: Record<CollectionOrder, (x: ListedAlbum, y: ListedAlbum) => number> = {
     artist: (x, y) => byArtist(x, y) || byTitle(x, y),
     title: (x, y) => byTitle(x, y) || byArtist(x, y),
-    year: (x, y) => (y.year ?? -1) - (x.year ?? -1) || byArtist(x, y) || byTitle(x, y),
-    added: (x, y) => (y.added ?? 0) - (x.added ?? 0),
+    // Ascending as named (oldest first); the header's arrow turns it round.
+    year: (x, y) => (x.year ?? -1) - (y.year ?? -1) || byArtist(x, y) || byTitle(x, y),
+    added: (x, y) => (x.added ?? 0) - (y.added ?? 0),
   };
   const shown = $derived(
     sources.map((s) => {
-      const albums = s.albums.filter(matches);
-      return { s, albums: order ? albums.sort(COMPARE[order]) : albums };
+      const albums = s.albums.filter(matches).sort(COMPARE[order]);
+      return { s, albums: down ? albums.reverse() : albums };
     }),
   );
 
@@ -88,7 +92,7 @@
     {:else if s.albums.length === 0}
       <p class="empty">{empty}</p>
     {:else}
-      <p class="count">{s.albums.length} {s.albums.length === 1 ? 'album' : 'albums'}{order ? '.' : ', newest first.'}</p>
+      <ListHead fields={ALBUM_ORDERS} bind:value={order} bind:down count={howMany(albums.length, 'album')} />
       <ul class={prefs.albumLayout} style:--min="{ALBUM_WIDTHS[prefs.albumLayout][prefs.albumZoom]}px">
         {#each albums as a (a.id)}
           {@const here = playing?.album_id === a.id}
@@ -208,10 +212,6 @@
   }
 
   .empty,
-  .count {
-    color: var(--muted);
-    font-size: 0.9rem;
-  }
 
   .error {
     color: var(--danger);

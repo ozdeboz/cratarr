@@ -3,6 +3,9 @@
   // Unlisted, and one's own), each a medium row (lib/Row.svelte) with its live count, as the playlists; a tap views it in the panel
   // (decision 0023), where it plays and is sorted like a playlist, and can be saved as one. Where a favourite playlist's
   // chip has its small heart, a crate's shows its favourites setting (the panel's toggle sets it).
+  import { prefs } from './lib/prefs.svelte';
+  import ListHead from './lib/ListHead.svelte';
+  import { CRATE_ORDERS, howMany } from './lib/pageView.svelte';
   import { crates, CRATE, EDIT_CRATE, FAVOURITES, favouritesOf, loadCrates, startCrate } from './lib/crates.svelte';
   import Icon from './lib/Icon.svelte';
   import Row from './lib/Row.svelte';
@@ -21,6 +24,12 @@
 
   // New crate: named in the same sheet as a new playlist, then built in the panel.
   let naming = $state(false);
+  // The list's order (its header, or View): as made, or by name; either way round.
+  const sorted = $derived.by(() => {
+    const list = [...(crates.list ?? [])];
+    if (prefs.crateOrder === 'name') list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+    return prefs.crateDown ? list.reverse() : list;
+  });
 </script>
 
 <main>
@@ -31,8 +40,9 @@
   {:else}
     <!-- The page's top right corner: New crate, as New playlist on Playlists. -->
     <div class="toolbar"><NewButton label="New crate" onclick={() => (naming = true)} /></div>
+    <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(sorted.length, 'crate')} />
     <ul class="grid">
-      {#each crates.list as c (c.id)}
+      {#each sorted as c (c.id)}
         {@const fav = FAVOURITES[favouritesOf(c.id)]}
         {@const n = c.counts[favouritesOf(c.id)]}
         <li>

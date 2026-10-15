@@ -1,9 +1,8 @@
 <script lang="ts">
-  // The page's View (lib/TopPill's view button, decided 2026-10-15): how its list shows, as the page had it in its own
-  // toolbar. Playlists: the order (A–Z, or those with the playing track first) and the size; Collection: the order, rows
-  // or covers, and the size; Incoming: rows or covers, and the size.
+  // The page's View (lib/TopPill's view button, decided 2026-10-15): how its list shows. Its order and direction (the
+  // same as its list header's), then for playlists the size, for albums rows or covers and the size.
   import MenuSheet from './MenuSheet.svelte';
-  import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
+  import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, CRATE_ORDERS, DIRECTIONS, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
   import { prefs } from './prefs.svelte';
   import Seg from './Seg.svelte';
   import SizeControl from './SizeControl.svelte';
@@ -14,39 +13,31 @@
 <MenuSheet label="View" icon="sliders" title="View" {onclose}>
   <div class="parts">
     {#if page === 'playlists'}
-      <div class="part">
-        <span>Order</span>
-        <Seg
-          label="Order"
-          options={[
-            { value: false, label: 'A–Z' },
-            { value: true, label: '✓ first', title: 'Playlists with the playing track first' },
-          ]}
-          bind:value={prefs.membersFirst}
-        />
-      </div>
-      <div class="part">
-        <span>Size</span>
-        <SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} />
-      </div>
+      <div class="part"><span>Order</span><Seg label="Order" options={PLAYLIST_ORDERS} bind:value={prefs.playlistOrder} /></div>
+      <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.playlistDown} /></div>
+      <div class="part"><span>Size</span><SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} /></div>
+    {:else if page === 'crates'}
+      <div class="part"><span>Order</span><Seg label="Order" options={CRATE_ORDERS} bind:value={prefs.crateOrder} /></div>
+      <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.crateDown} /></div>
+    {:else if page === 'collection'}
+      <div class="part"><span>Order</span><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.collectionOrder} /></div>
+      <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.collectionDown} /></div>
+      {@render albums()}
     {:else}
-      {#if page === 'collection'}
-        <div class="part">
-          <span>Order</span>
-          <Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.collectionOrder} />
-        </div>
-      {/if}
-      <div class="part">
-        <span>Layout</span>
-        <Seg label="Layout" options={ALBUM_LAYOUTS} bind:value={prefs.albumLayout} />
-      </div>
-      <div class="part">
-        <span>Size</span>
-        <SizeControl widths={ALBUM_WIDTHS[prefs.albumLayout]} width={pageView.width} bind:value={prefs.albumZoom} />
-      </div>
+      <div class="part"><span>Order</span><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.incomingOrder} /></div>
+      <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.incomingDown} /></div>
+      {@render albums()}
     {/if}
   </div>
 </MenuSheet>
+
+{#snippet albums()}
+  <div class="part"><span>Layout</span><Seg label="Layout" options={ALBUM_LAYOUTS} bind:value={prefs.albumLayout} /></div>
+  <div class="part">
+    <span>Size</span>
+    <SizeControl widths={ALBUM_WIDTHS[prefs.albumLayout]} width={pageView.width} bind:value={prefs.albumZoom} />
+  </div>
+{/snippet}
 
 <style>
   /* Each setting a row: its name, the control at the end (the filter sheet's cards). */

@@ -43,8 +43,7 @@
   import { isFavorite, isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import AlbumMenu, { type AlbumIncoming } from './AlbumMenu.svelte';
-  import MenuEntry from './MenuEntry.svelte';
-  import MenuSheet from './MenuSheet.svelte';
+  import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, type LocalTrack } from './localPlayer.svelte';
@@ -247,14 +246,13 @@
   let sortKey = $state<SortKey>('own');
   let sortDown = $state(false);
   let sortOpen = $state(false);
-  const sortFields = $derived<{ key: SortKey; label: string }[]>([
-    { key: 'own', label: album ? 'Track number' : crate ? 'Newest first' : 'Playlist order' },
-    { key: 'title', label: 'Title' },
-    { key: 'artist', label: 'Artist' },
-    ...(album ? [] : [{ key: 'album' as SortKey, label: 'Album' }]),
-    { key: 'length', label: 'Length' },
+  const sortFields = $derived<{ value: SortKey; label: string }[]>([
+    { value: 'own', label: album ? 'Track number' : crate ? 'Newest first' : 'Playlist order' },
+    { value: 'title', label: 'Title' },
+    { value: 'artist', label: 'Artist' },
+    ...(album ? [] : [{ value: 'album' as SortKey, label: 'Album' }]),
+    { value: 'length', label: 'Length' },
   ]);
-  const sortLabel = $derived(sortFields.find((f) => f.key === sortKey)?.label ?? sortFields[0].label);
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
@@ -934,17 +932,15 @@
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
     {:else if rows && shown}
-      <div class="listhead">
-        <button class="sortby" onclick={() => (sortOpen = true)}>{sortLabel}</button>
-        <button class="icon dir" aria-label={sortDown ? 'Descending' : 'Ascending'} title={sortDown ? 'Descending' : 'Ascending'} onclick={() => (sortDown = !sortDown)}
-          ><Icon name={sortDown ? 'arrowDown' : 'arrowUp'} size={20} /></button
-        >
-        <span class="grow"></span>
-        <span class="count">{plural(crate ? total : rows.length, 'track')}</span>
-        <button class="icon" class:on={!!selecting} aria-pressed={!!selecting} aria-label="Start multi-select" title="Start multi-select" onclick={() => (selecting ? (selecting = null) : startSelect())}
-          ><Icon name="listChecks" size={22} /></button
-        >
-      </div>
+      <ListHead
+        fields={sortFields}
+        bind:value={sortKey}
+        bind:down={sortDown}
+        bind:open={sortOpen}
+        count={plural(crate ? total : rows.length, 'track')}
+        selecting={!!selecting}
+        onselect={() => (selecting ? (selecting = null) : startSelect())}
+      />
       <ol class="rows" class:numbered={!!album} class:selecting={!!selecting}>
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
       </ol>
@@ -1107,20 +1103,6 @@
     forgetResume={resumeAt ? forgetResume : null}
     onclose={() => (albumMenuOpen = false)}
   />
-{/if}
-{#if sortOpen}
-  <MenuSheet label="Order" title="Order" onclose={() => (sortOpen = false)}>
-    {#each sortFields as f (f.key)}
-      <MenuEntry
-        icon={f.key === sortKey ? 'circleCheck' : 'circle'}
-        label={f.label}
-        onclick={() => {
-          sortKey = f.key;
-          sortOpen = false;
-        }}
-      />
-    {/each}
-  </MenuSheet>
 {/if}
 
 <style>
@@ -1815,38 +1797,6 @@
     .dots i {
       animation: none;
     }
-  }
-
-  /* Symfonium's header over the tracks: the order (a tap on it chooses, the arrow turns it round), how many, select. */
-  .listhead {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 4px 8px 4px 16px;
-    color: var(--muted);
-    font-size: 15px;
-  }
-
-  .sortby {
-    padding: 8px 0;
-    border: 0;
-    background: none;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .listhead .icon {
-    width: 40px;
-    height: 40px;
-  }
-
-  .listhead .count {
-    padding-right: 4px;
-  }
-
-  .listhead .icon.on {
-    color: var(--art-accent, var(--accent));
   }
 
   /* A row's tick in select mode: an empty circle, filled with its check once ticked. */

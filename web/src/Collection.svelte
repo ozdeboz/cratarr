@@ -62,7 +62,7 @@
   {:else if sources.length === 0}
     <p class="empty">No server with a Music library is connected.</p>
   {:else}
-    <AlbumShelf {sources} empty="No albums." order={prefs.collectionOrder} />
+    <AlbumShelf {sources} empty="No albums." bind:order={prefs.collectionOrder} bind:down={prefs.collectionDown} />
   {/if}
 </main>
 

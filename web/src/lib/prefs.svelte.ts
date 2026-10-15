@@ -8,7 +8,6 @@ export type Prefs = {
   /** Index into the playlist chip widths (Playlists.svelte). */
   zoom: number;
   /** Playlists the track is in come first. */
-  membersFirst: boolean;
   showProgress: boolean;
   /** Source this browser follows when several are active; '' = whichever started playing most recently. */
   source: string;
@@ -34,19 +33,28 @@ export type Prefs = {
   albumZoom: number;
   /** Collection's order. */
   collectionOrder: CollectionOrder;
+  /** Each page list's order turned round (descending), and Incoming's, Playlists' and Crates' own order. */
+  collectionDown: boolean;
+  incomingOrder: CollectionOrder;
+  incomingDown: boolean;
+  playlistOrder: PlaylistOrder;
+  playlistDown: boolean;
+  crateOrder: CrateOrder;
+  crateDown: boolean;
   /** The panel's source filter: tracks whose file is missing are left out of an album or a playlist. */
   hideMissing: boolean;
 };
 
 export type AlbumLayout = 'rows' | 'grid';
 export type CollectionOrder = 'artist' | 'title' | 'year' | 'added';
+export type PlaylistOrder = 'name' | 'tracks' | 'playing';
+export type CrateOrder = 'own' | 'name';
 
 const KEY = 'cratarr-prefs';
 export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
   zoom: 2,
-  membersFirst: false,
   showProgress: true,
   source: '',
   insightsTab: 'statistics',
@@ -60,6 +68,14 @@ export const DEFAULTS: Prefs = {
   albumLayout: 'rows',
   albumZoom: 2,
   collectionOrder: 'artist',
+  collectionDown: false,
+  // Incoming newest first, as it always showed.
+  incomingOrder: 'added',
+  incomingDown: true,
+  playlistOrder: 'name',
+  playlistDown: false,
+  crateOrder: 'own',
+  crateDown: false,
   hideMissing: false,
 };
 
@@ -70,12 +86,19 @@ function read(): Prefs {
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
-      if (typeof saved.membersFirst === 'boolean') p.membersFirst = saved.membersFirst;
       if (typeof saved.filterOpen === 'boolean') p.filterOpen = saved.filterOpen;
       if (typeof saved.relatedFilterOpen === 'boolean') p.relatedFilterOpen = saved.relatedFilterOpen;
       if (saved.albumLayout === 'rows' || saved.albumLayout === 'grid') p.albumLayout = saved.albumLayout;
       if (Number.isInteger(saved.albumZoom) && saved.albumZoom >= 0 && saved.albumZoom < ZOOM_STEPS) p.albumZoom = saved.albumZoom;
       if (['artist', 'title', 'year', 'added'].includes(saved.collectionOrder)) p.collectionOrder = saved.collectionOrder;
+      if (['artist', 'title', 'year', 'added'].includes(saved.incomingOrder)) p.incomingOrder = saved.incomingOrder;
+      if (['name', 'tracks', 'playing'].includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
+      // Before the list header: "✓ first" was the playlists' only other order.
+      else if (saved.membersFirst === true) p.playlistOrder = 'playing';
+      if (['own', 'name'].includes(saved.crateOrder)) p.crateOrder = saved.crateOrder;
+      for (const k of ['collectionDown', 'incomingDown', 'playlistDown', 'crateDown'] as const) {
+        if (typeof saved[k] === 'boolean') p[k] = saved[k];
+      }
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
       if (typeof saved.hideMissing === 'boolean') p.hideMissing = saved.hideMissing;
       if (typeof saved.source === 'string') p.source = saved.source;
