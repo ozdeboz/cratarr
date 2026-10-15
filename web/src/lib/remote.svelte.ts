@@ -5,6 +5,7 @@ import { ApiError, coverUrl, albumCoverUrl, setFavorite, setTrackFavorite, trans
 import { expect, expectFailed, live, refresh } from './live.svelte';
 import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek } from './localPlayer.svelte';
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
+import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { toast } from './toast.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
@@ -189,6 +190,20 @@ export function favorite(): boolean {
   const np = playing();
   return np && fav.wanted?.id === np.id ? fav.wanted.on : (np?.favorite ?? false);
 }
+// The lists' rows show the playing track's heart as the player does (a change from the player, its menu or elsewhere).
+// Only when it changes: a row's own flip is not undone by a player that has not heard of it yet.
+let mirrored = '';
+$effect.root(() => {
+  $effect(() => {
+    const np = playing();
+    if (!np || np.favorite === null) return;
+    const on = favorite();
+    const now = `${np.source}/${np.id}/${on}`;
+    if (now === mirrored) return;
+    mirrored = now;
+    setRowFavorite(np.source, np.id, on);
+  });
+});
 export async function toggleFavorite() {
   const np = playing();
   if (!np || np.favorite === null || pending()) return;

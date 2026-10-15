@@ -291,6 +291,15 @@ impl Library {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).0.music.clone()
     }
 
+    /// The name of the library the Music folder belongs to, as its server calls it: what Keep and Replace say they
+    /// put albums in. None while no server says (or Cratarr does not see its files).
+    pub(super) fn music_name(&self) -> Option<String> {
+        let music = self.music()?;
+        self.connected().iter().find_map(|(a, _)| {
+            a.placement.libraries.iter().find(|l| a.cfg.libraries.music.contains(&l.id) && l.folders.contains(&music)).map(|l| l.name.clone())
+        })
+    }
+
     /// The Music folder's playlists, if one is set.
     pub(super) fn store_opt(&self) -> Option<Arc<Store>> {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).1.clone()

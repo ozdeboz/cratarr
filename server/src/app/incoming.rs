@@ -154,6 +154,8 @@ pub struct IncomingView {
     pub sources: Vec<IncomingSourceView>,
     /// How long a deleted album stays in the trash.
     pub trash_days: u32,
+    /// The name of the library Keep and Replace put albums in (the Music library's, as its server calls it).
+    pub music: Option<String>,
 }
 
 /// Lidarr on the Settings page. The key is never sent.
@@ -378,7 +380,7 @@ impl IncomingService {
                 view.deletable = deletable;
             }
         }
-        IncomingView { sources, trash_days: self.trash_days() }
+        IncomingView { sources, trash_days: self.trash_days(), music: self.lib.music_name() }
     }
 
     /// Whether Cratarr can write in `folder`, tested at most every `WRITE_TEST_SECS`.

@@ -417,6 +417,15 @@ impl PlayingService {
         s.favorites(ids).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
+    /// Makes an album a favourite or not (the album panel's heart). Its tracks keep their own hearts.
+    pub async fn album_favorite(&self, source_id: &str, album_id: &str, on: bool) -> Result<bool, ToggleError> {
+        if !crate::covers::valid_item_id(album_id) {
+            return Err(ToggleError::Refused("That is not an album.".into()));
+        }
+        let (_, s) = self.source(source_id)?;
+        s.set_favorite(album_id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
     /// An album of a connected server, for its view in the panel.
     pub async fn album_view(&self, source_id: &str, album_id: &str) -> Result<AlbumView, ToggleError> {
         if !crate::covers::valid_item_id(album_id) {

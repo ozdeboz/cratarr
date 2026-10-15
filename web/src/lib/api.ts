@@ -581,13 +581,16 @@ export type IncomingSource = ShelfSource & {
 
 /** `fresh` asks past the service worker's copy (which answers at once, see sw.js) for the server's latest. */
 export const getIncoming = (source?: string, fresh = false) =>
-  quietly<{ sources: IncomingSource[]; trash_days: number }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
+  quietly<{ sources: IncomingSource[]; trash_days: number; music: string | null }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
 /** The albums of each server's Music library, newest first. */
 export const getCollection = (source?: string, fresh = false) =>
   quietly<{ sources: ShelfSource[] }>(`/api/collection${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
 /** Play an album of a connected server on the followed player; answers with the player's label. */
 export const playAlbum = (source: string, album: string) =>
   request<{ player: string }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/play`, { method: 'POST' });
+/** Make an album a favourite or not (the album panel's heart). */
+export const setAlbumFavorite = (source: string, album: string, on: boolean) =>
+  request<{ favorite: boolean }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/favorite?on=${on}`, { method: 'POST' });
 export const albumCoverUrl = (source: string, album: string) =>
   `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
 

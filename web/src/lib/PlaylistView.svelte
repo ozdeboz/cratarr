@@ -26,13 +26,18 @@
     playlistRows,
     queueTrack,
     queueTracks,
+    getIncoming,
+    setAlbumFavorite,
+    type IncomingSource,
+    type ListedAlbum,
     type PlaylistRow,
   } from './api';
+  import IncomingSheet, { offerOf } from './IncomingSheet.svelte';
   import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, FAVOURITES, favouritesOf, favouritesSaved, loadCrates } from './crates.svelte';
   import { Reorder } from './reorder.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { undos, withUndo } from './undo.svelte';
-  import { isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, setPlaylistFavorites } from './favourites.svelte';
+  import { isFavorite, isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
@@ -101,6 +106,49 @@
   // changes.
   let incomingChanged = $state(0);
   $effect(() => on<{ area: string }>('changed', ({ area }) => area === 'incoming' && album && incomingChanged++));
+
+  // An Incoming album: what Incoming offers for it (Keep, Replace, Delete in the top bar), as its list says; null for
+  // any other album (the Collection's, a track's).
+  let incoming = $state<{ source: IncomingSource; a: ListedAlbum; trashDays: number; music: string } | null>(null);
+  let incomingAsk = $state<'keep' | 'replace' | 'delete' | null>(null);
+  const offer = $derived(incoming ? offerOf(incoming.source, incoming.a.id) : null);
+  let incomingFor = '';
+  $effect(() => {
+    const a = album;
+    void incomingChanged;
+    const key = a ? `${a.source}/${a.id}` : '';
+    if (key !== incomingFor) {
+      incoming = null;
+      incomingFor = key;
+    }
+    if (!a) return;
+    loadFavorites(a.source, [a.id]);
+    getIncoming(prefs.source || undefined, true).then(
+      (r) => {
+        if (incomingFor !== key) return;
+        const s = r.sources.find((x) => x.id === a.source);
+        const listed = s?.albums.find((x) => x.id === a.id);
+        incoming = s && listed ? { source: s, a: listed, trashDays: r.trash_days, music: r.music ?? 'Music' } : null;
+      },
+      () => {},
+    );
+  });
+
+  // The album's heart: shows the change at once, back as it was when the server refuses.
+  const albumFav = $derived(album ? isFavorite(album.source, album.id) : false);
+  async function toggleAlbumFavorite() {
+    if (!album) return;
+    const { source: s, id: a } = album;
+    const on = !albumFav;
+    setFavorite(s, a, on);
+    navigator.vibrate?.(8);
+    try {
+      await setAlbumFavorite(s, a, on);
+    } catch (e) {
+      setFavorite(s, a, !on);
+      toast.fail(e, "The favourite didn't change");
+    }
+  }
 
   // The rows: asked for when the playlist is viewed and again when it changes (its counts, from the shell's state).
   let rows = $state<PlaylistRow[] | null>(null);
@@ -490,7 +538,21 @@
       </span>
     {:else if album}
       <button class="icon" aria-label="Close the album" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
-      <span class="end"><PanelPlace /></span>
+      <span class="end">
+        {#if incoming && offer}
+          {#if offer.keepable && offer.job === null}
+            <button class="icon" aria-label={`Keep in ${incoming.music}`} title={`Keep in ${incoming.music}`} onclick={() => (incomingAsk = 'keep')}><Icon name="check" size={22} /></button>
+          {/if}
+          {#if offer.replaceable}
+            <button class="icon" aria-label={`Replace in ${incoming.music}`} title={`Replace in ${incoming.music}`} onclick={() => (incomingAsk = 'replace')}><Icon name="swap" size={22} /></button>
+          {/if}
+          {#if offer.deletable && offer.job === null}
+            <button class="icon" aria-label="Delete album" title="Delete album" onclick={() => (incomingAsk = 'delete')}><Icon name="trash" size={22} /></button>
+          {/if}
+        {/if}
+        <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
+        <PanelPlace />
+      </span>
     {:else}
       <button class="icon" aria-label={multi ? 'Close the playlists' : 'Close the playlist'} onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
       <span class="end">
@@ -754,6 +816,17 @@
   <TrackCover src={album ? albumCoverUrl(album.source, album.id) : r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
 {/snippet}
 
+{#if incomingAsk && incoming && offer}
+  <IncomingSheet
+    source={incoming.source.id}
+    album={incoming.a}
+    {offer}
+    trashDays={incoming.trashDays}
+    music={incoming.music}
+    start={incomingAsk}
+    onclose={() => (incomingAsk = null)}
+  />
+{/if}
 {#if menuOpen && selected.length}
   <PlaylistMenu playlists={selected} onclose={() => (menuOpen = false)} />
 {/if}
