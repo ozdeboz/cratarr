@@ -485,6 +485,33 @@ export const createSubsonicAccount = (username: string, password: string) =>
 export const changeSubsonicPassword = (username: string, current: string, password: string) =>
   post<SubsonicAccounts>('/api/subsonic/password', { username, current, password });
 
+/** Importing an account's plays, favourites, ratings and added dates from a server into a Subsonic account. */
+export type ImportWhat = { plays: boolean; favorites: boolean; ratings: boolean; added: boolean };
+/** A server that can import: its accounts (`id` is the server's), and the choices made last time. */
+export type ImportSource = {
+  id: string;
+  users: { id: string; name: string }[];
+  user?: string | null;
+  account?: string | null;
+  what?: ImportWhat;
+  error?: string;
+};
+export type ImportSources = { accounts: string[]; sources: ImportSource[] };
+export type ImportRequest = { source: string; user: string; account: string; what: ImportWhat; preview: boolean };
+export type ImportCounts = { plays: number; songs: number; starred: number; unstarred: number; rated: number; added: number; skipped: number };
+export type ImportJob = ImportRequest & {
+  started: number;
+  finished: number | null;
+  step: { name: 'tracks' | 'groups' | 'added'; read: number; total: number | null } | null;
+  counts: ImportCounts;
+  error: string | null;
+  note: string | null;
+};
+export const getImportSources = () => quietly<ImportSources>('/api/subsonic/import/sources');
+/** The import running now, or the last one. */
+export const getImport = () => quietly<{ job: ImportJob | null }>('/api/subsonic/import');
+export const startImport = (r: ImportRequest) => post<{ job: ImportJob }>('/api/subsonic/import', r);
+
 /** Lidarr on the Settings page; the key is never sent. */
 export type LidarrView = { url: string; key_set: boolean; version: string | null; error: string | null };
 
