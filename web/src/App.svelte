@@ -351,10 +351,6 @@
     <div class="page-row" class:beside={sidebar} style:--player-w="{playerWidth}px">
       {#if navAt > 0}
         <span class="navpill"><button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button></span>
-      {:else if phone}
-        <!-- Nowhere to go back to yet: the mark, which goes home (Incoming, until there is a dashboard). Beside the page
-             the sidebar shows the mark already. -->
-        <a class="home" href={keepViewed(INCOMING.href)} aria-label="Home" title="Home"><Mark size={48} /></a>
       {:else}
         <span></span>
       {/if}
@@ -459,18 +455,6 @@
 
   .page.under-row {
     padding-top: 60px;
-  }
-
-  /* The mark in back's place: the record, round as back is, as tall as the pill. */
-  /* The mark alone, a circle (no tile behind it), on the floating controls' surface. */
-  .home {
-    display: grid;
-    border-radius: 50%;
-    background: var(--float-bg);
-    -webkit-backdrop-filter: var(--float-blur);
-    backdrop-filter: var(--float-blur);
-    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
-    -webkit-touch-callout: none;
   }
 
   /* Back, round as the pill (lib/TopPill). */
