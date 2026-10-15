@@ -251,6 +251,7 @@ dependencies = [
  "axum",
  "flacenc",
  "lofty",
+ "md-5",
  "reqwest",
  "rubato",
  "rusqlite",

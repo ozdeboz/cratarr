@@ -13,6 +13,7 @@
 //! - Optional extras have default implementations (see [`Source::album_details`]).
 
 pub mod jellyfin;
+pub mod subsonic;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -476,7 +477,7 @@ pub struct Kind {
     pub connect: fn(&Values, partial: bool) -> Result<Box<dyn Source>>,
 }
 
-pub static KINDS: &[Kind] = &[jellyfin::KIND];
+pub static KINDS: &[Kind] = &[jellyfin::KIND, subsonic::KIND];
 
 pub fn kind(id: &str) -> Option<&'static Kind> {
     KINDS.iter().find(|k| k.id == id)
