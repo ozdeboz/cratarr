@@ -184,6 +184,62 @@ impl TrackRow {
     }
 }
 
+/// One file as the OpenSubsonic library reads it (see `Catalogue::served_rows`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ServedRow {
+    /// Relative to its folder.
+    pub rel: String,
+    /// The Cratarr track id (decision 0011), once the file has one.
+    pub track: Option<i64>,
+    /// When the track was first seen, epoch seconds.
+    pub born: Option<i64>,
+    /// Upper case: "FLAC", "MP3".
+    pub format: Option<String>,
+    pub kbps: Option<u32>,
+    pub duration_ms: Option<u64>,
+    pub size: u64,
+    pub mtime: i64,
+    /// (name, raw value), only the names in `TAGS`, in the file's order.
+    pub tags: Vec<(String, String)>,
+}
+
+impl ServedRow {
+    pub const TAGS: [&'static str; 22] = [
+        "title",
+        "artist",
+        "artists",
+        "albumartist",
+        "albumartists",
+        "album",
+        "tracknumber",
+        "discnumber",
+        "date",
+        "originaldate",
+        "releasedate",
+        "genre",
+        "bpm",
+        "compilation",
+        "comment",
+        "musicbrainz_trackid",
+        "musicbrainz_releasetrackid",
+        "musicbrainz_albumid",
+        "musicbrainz_artistid",
+        "musicbrainz_albumartistid",
+        "musicbrainz_releasegroupid",
+        "albumartistsort",
+    ];
+
+    /// The first value of a tag, trimmed; `None` when missing or blank.
+    pub fn first(&self, name: &str) -> Option<&str> {
+        self.tags.iter().filter(|(n, _)| n == name).map(|(_, v)| v.trim()).find(|v| !v.is_empty())
+    }
+
+    /// Every raw value of a tag.
+    pub fn all<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.tags.iter().filter(move |(n, _)| n == name).map(|(_, v)| v.as_str())
+    }
+}
+
 pub struct Catalogue {
     db: Mutex<Connection>,
     /// Index = folder id; 0 is the playlist folder.
@@ -753,6 +809,52 @@ impl Catalogue {
             }
         }
         Ok(rows)
+    }
+
+    /// Every present file of `folder` with what the OpenSubsonic library is built from (decision 0030): its Cratarr track
+    /// id and when that was first seen, the file's facts, and the tags named in `ServedRow::TAGS` in the file's order.
+    /// Read-only; blocking.
+    pub fn served_rows(&self, folder: i64) -> Result<Vec<ServedRow>> {
+        let db = self.db();
+        let mut rows: Vec<ServedRow> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+        let mut st = db.prepare(&format!(
+            "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime
+             FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND f.state = ?2"
+        ))?;
+        let files = st.query_map(params![folder, READ], |r| {
+            Ok(ServedRow {
+                rel: r.get(0)?,
+                track: r.get(1)?,
+                born: r.get(2)?,
+                format: r.get::<_, Option<String>>(3)?.map(|f| f.to_uppercase()),
+                kbps: r.get::<_, Option<i64>>(4)?.filter(|k| *k > 0).map(|k| k as u32),
+                duration_ms: r.get::<_, Option<i64>>(5)?.filter(|d| *d > 0).map(|d| d as u64),
+                size: r.get::<_, i64>(6)?.max(0) as u64,
+                mtime: r.get(7)?,
+                tags: Vec::new(),
+            })
+        })?;
+        for f in files {
+            let f = f?;
+            index.insert(f.rel.clone(), rows.len());
+            rows.push(f);
+        }
+        let names = ServedRow::TAGS.map(|n| format!("'{n}'")).join(", ");
+        let mut st = db.prepare(&format!("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ({names}) ORDER BY rel, n"))?;
+        let tags = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        for t in tags {
+            let (rel, name, value) = t?;
+            if let Some(&i) = index.get(&rel) {
+                rows[i].tags.push((name, value));
+            }
+        }
+        Ok(rows)
+    }
+
+    /// Changes made through the catalogue since it was opened: a reader compares it to notice that anything changed.
+    pub fn change_count(&self) -> u64 {
+        self.db().total_changes()
     }
 
     /// Files with a problem, worst first ("broken", then damaged tags, …), at most `limit`. Blocking.
