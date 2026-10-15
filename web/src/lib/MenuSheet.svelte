@@ -19,6 +19,7 @@
     label,
     onclose,
     images = null,
+    icon = null,
     title,
     chips = [],
     heart = null,
@@ -32,6 +33,9 @@
     /** The item's image: one cover, or up to four for a playlist's mosaic (2 × 2); [] while it loads. Without (null,
      *  the default) the sheet has no image at all (the legend, a name to enter): the card is only its title and chips. */
     images?: string[] | null;
+    /** Before the title on a card without an image, as Symfonium heads a sheet that is not about one item (the
+     *  source filter's funnel). */
+    icon?: IconName | null;
     title: string;
     chips?: string[];
     heart?: { on: boolean; disabled?: boolean; toggle: () => void } | null;
@@ -127,7 +131,8 @@
 
   <div class="card" class:bare={images === null}>
     {#if images === null}
-      <!-- no image: the title and chips alone -->
+      <!-- no image: the title and chips alone, the icon before them when there is one -->
+      {#if icon}<span class="lead"><Icon name={icon} size={24} /></span>{/if}
     {:else if images.length >= 4}
       <div class="art mosaic">{#each images.slice(0, 4) as src, i (i)}<img {src} alt="" />{/each}</div>
     {:else if images[0]}
@@ -257,6 +262,13 @@
   .card.bare .info {
     gap: 8px;
     padding: 2px 16px 6px;
+  }
+
+  .lead {
+    display: grid;
+    flex: none;
+    place-items: center;
+    padding-left: 16px;
   }
 
   .art {

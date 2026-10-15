@@ -34,6 +34,8 @@ export type Prefs = {
   albumZoom: number;
   /** Collection's order. */
   collectionOrder: CollectionOrder;
+  /** The panel's source filter: tracks whose file is missing are left out of an album or a playlist. */
+  hideMissing: boolean;
 };
 
 export type AlbumLayout = 'rows' | 'grid';
@@ -58,6 +60,7 @@ export const DEFAULTS: Prefs = {
   albumLayout: 'rows',
   albumZoom: 2,
   collectionOrder: 'artist',
+  hideMissing: false,
 };
 
 function read(): Prefs {
@@ -74,6 +77,7 @@ function read(): Prefs {
       if (Number.isInteger(saved.albumZoom) && saved.albumZoom >= 0 && saved.albumZoom < ZOOM_STEPS) p.albumZoom = saved.albumZoom;
       if (['artist', 'title', 'year', 'added'].includes(saved.collectionOrder)) p.collectionOrder = saved.collectionOrder;
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
+      if (typeof saved.hideMissing === 'boolean') p.hideMissing = saved.hideMissing;
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;
