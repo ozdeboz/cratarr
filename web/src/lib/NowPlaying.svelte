@@ -99,9 +99,21 @@
 
   // The track menu (the menu button, or a right-click on the cover) and the queue (decision 0019).
   let menuAt = $state<DOMRect | null>(null);
+  // The menu's entries, or straight to its playlists (the top row's playlists button).
+  let menuStart = $state<'menu' | 'lists'>('menu');
   let queueOpen = $state(false);
   let outputOpen = $state(false);
-  const openMenu = (e: Event) => (menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect());
+  const openMenu = (e: Event, start: 'menu' | 'lists' = 'menu') => {
+    menuStart = start;
+    menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  };
+  // The top row's two counts, as small labels under their buttons (the row's only words).
+  const inPlaylists = $derived(memberCount === 0 ? 'In no playlist' : `In ${memberCount} ${memberCount === 1 ? 'playlist' : 'playlists'}`);
+  const queuePlace = $derived.by(() => {
+    if (isLocal()) return local.index < 0 ? '' : `${local.index + 1} of ${local.queue.length}`;
+    const np = playing();
+    return np ? `1 of ${np.upcoming.length + 1}` : '';
+  });
   // Closing: over the page the chevron, Esc and a swipe down close it; beside the page they fold it to the
   // mini-player until that is tapped (not remembered). Maximise puts it over the page, the sidebar button back beside
   // it; both are remembered (prefs.sidebar).
@@ -378,13 +390,13 @@
               ><Icon name="heart" size={26} /></button
             >
           {/if}
-          <div class="count" class:pending={moving()} aria-live="polite" aria-label="In {memberCount} {memberCount === 1 ? 'playlist' : 'playlists'}">
-            <span>in</span>
-            <strong>{moving() ? '–' : memberCount}</strong>
-            <span>{memberCount === 1 ? 'playlist' : 'playlists'}</span>
-          </div>
+          <button class="act labelled" aria-label="Add to playlist" aria-haspopup="menu" onclick={(e) => openMenu(e, 'lists')}
+            ><Icon name="listAdd" size={24} /><small aria-live="polite">{moving() ? '–' : inPlaylists}</small></button
+          >
           <button class="act" aria-label="Play on" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={24} /></button>
-          <button class="act" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}><Icon name="playlists" size={24} /></button>
+          <button class="act labelled" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
+            ><Icon name="playlists" size={24} /><small>{queuePlace}</small></button
+          >
         </div>
       {/if}
       <i class="sp d"></i>
@@ -397,7 +409,7 @@
 </div>
 
 {#if menuAt}
-  <TrackMenu onclose={() => (menuAt = null)} />
+  <TrackMenu start={menuStart} onclose={() => (menuAt = null)} />
 {/if}
 {#if outputOpen}
   <OutputSheet onclose={() => (outputOpen = false)} />
@@ -775,29 +787,24 @@
     fill: currentColor;
   }
 
-  /* A fixed width (room for "playlists" and two digits): the row's buttons never move as the count changes. */
-  .count {
-    flex: none;
-    width: 4rem;
-    text-align: center;
-    line-height: 1.1;
-    font-variant-numeric: tabular-nums;
+  /* A button with a small label under its icon (the playlists it is in, the place in the queue), as wide as its
+     longest label, so the row's buttons never move as the counts change. */
+  .act.labelled {
+    width: 5.5rem;
+    height: auto;
+    gap: 2px;
+    padding: 4px 0;
+    border-radius: 12px;
   }
 
-  .count strong {
-    display: block;
-    font-size: 1.8rem;
-    color: var(--art-accent);
-  }
-
-  .count span {
-    display: block;
+  .act.labelled small {
     color: var(--muted);
-    font-size: 0.75rem;
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
-  .fav:disabled,
-  .count.pending {
+  .fav:disabled {
     opacity: 0.5;
   }
 
