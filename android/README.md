@@ -11,27 +11,31 @@ AGPL-3.0-or-later. Every file taken from Jellyfin's app says at its top what was
 
 - Shows the Cratarr server's pages (the address is asked once; Settings change it). The pages come from the server;
   nothing of the web app is built into the app.
-- Keeps the page playing with the screen locked: a foreground service with the lock-screen and notification controls,
-  a wake lock and a Wi-Fi lock while music plays, audio focus, and a pause when headphones are unplugged.
-- **Stay ready** (Settings): the service and its locks stay while idle too, so a Play On command after a long pause
-  still arrives. For a device that is always on its charger.
+- Plays the music itself (Media3's ExoPlayer in a media session service): the page's player hands its queue over, and
+  the app fetches each track's original file (`/api/file/{source}/{id}`, with byte ranges) and plays it gapless. The
+  lock screen, the notification, headphone buttons, audio focus, pausing when headphones go, and a wake lock and a
+  Wi-Fi lock while music plays come with it. A page frozen out of view (Chromium freezes a hidden, silent page) does
+  not stop the music or its controls.
+- **Stay ready** (Settings): the service keeps the foreground while paused too, so Android does not put the app to
+  sleep. For a device that is always on its charger.
 - Settings: a long press on the app's icon.
 
 ## The page and the app
 
-On the server's pages only, the app adds `window.CratarrApp` (`postMessage` and `onmessage`, JSON strings):
+On the server's pages only, the app adds `window.CratarrApp` (`postMessage` and `onmessage`, JSON strings).
+`web/src/lib/app.svelte.ts` is the page's side; `PagePlayer.kt` the app's.
 
 | From the page | |
 |---|---|
-| `{"type": "hello"}` | The page uses the app; answered with `{"type": "app", "version", "player", "stayReady"}`. |
-| `{"type": "state", "id", "title", "artist", "album", "cover", "position", "duration", "paused", "canSeek"}` | What plays (times in ms). |
-| `{"type": "stopped"}` | Nothing plays any more. |
+| `{"type": "hello"}` | The page uses the app; answered with `{"type": "app", "version", "player", "stayReady"}` and a player report. |
+| `{"type": "player", "op": "queue", "tracks", "index", "positionMs", "play"}` | Play these tracks (the page's own: `source`, `id`, `name`, `artist`, `album`, `album_id`). |
+| `{"type": "player", "op": …}` | `add` (`at`, `tracks`), `move` (`from`, `to`), `remove` (`index`), `jump` (`index`), `next`, `previous`, `seek` (`positionMs`), `play`, `pause`, `toggle`, `stop`. |
 | `{"type": "settings"}` | Opens the app's settings. |
 | `{"type": "open", "url"}` | Opens a link outside the app. |
 
 | To the page | |
 |---|---|
-| `{"type": "command", "name", "value"}` | `play`, `pause`, `next`, `previous`, `stop`, `seek` (value: ms). From the lock screen, the notification, headphones and audio focus. |
+| `{"type": "player", "index", "positionMs", "durationMs", "paused", "error", "queue"?}` | What plays: on every change, once a second while the page is in view, with the queue when it changed (or the page said hello). |
 
 ## Building
 
