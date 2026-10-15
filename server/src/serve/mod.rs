@@ -132,6 +132,14 @@ impl Serve {
         self.playlists.get()
     }
 
+    /// A playlist was renamed (every rename goes through the playlist service, which tells this): its old ids keep
+    /// leading to it, as Subsonic clients keep a playlist's id across a rename.
+    pub fn playlist_renamed(&self, from: &str, to: &str) {
+        if let Err(e) = self.userdata.playlist_renamed(from, to) {
+            tracing::warn!("subsonic: the rename of {from} to {to} not kept: {e:#}");
+        }
+    }
+
     pub fn set_incoming(&self, service: Arc<crate::app::IncomingService>) {
         let _ = self.incoming.set(service);
     }

@@ -1119,6 +1119,10 @@ impl PlaylistService {
         // Through the sync, so the server copies keep following the playlist (decision 0012).
         self.sync.rename(from, to, store.rename(from, to)).await?;
         self.tell_sources(vec![(from.to_string(), PlaylistChange::Deleted), (to.to_string(), PlaylistChange::Created)]);
+        // Subsonic clients keep a playlist's id (`pl-` and its name) across a rename (decision 0030).
+        if let Some(serve) = crate::serve::instance() {
+            serve.playlist_renamed(from, to);
+        }
         Ok(())
     }
 

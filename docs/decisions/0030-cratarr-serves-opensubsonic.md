@@ -151,6 +151,10 @@ Plan steps 1 to 3 are built; step 4 is decision 0032 (Cratarr is its own source)
   2026-10-15); written one by one, that is two undos and a playlist empty for a moment on every synced server. So a
   call that takes every song out and adds none waits 5 s for the call that refills the playlist, and the two are
   written as one; nothing following, the emptying is written on its own. Meanwhile the playlist reads as emptied.
+  A rename changes the id, but clients keep a playlist's id across its rename (Symfonium asks for it again straight
+  after, and reported a failed sync on "not found"). So every rename made through Cratarr (Subsonic, its own pages, an
+  undo) is kept in `userdata.sqlite`, and an old id still finds the playlist, answered under the id asked for; the
+  next listing gives the new one. A playlist that has the name itself always comes first.
 - **Bookmarks** (a position kept in a song, which Symfonium sets while playing and deletes at the song's end) as
   Navidrome keeps them: one per user and song, in `userdata.sqlite`, following the song by its persistent id.
 - **Covers** as planned: the folder's cover file, else the picture embedded in the album's first track; resized with

@@ -434,12 +434,14 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             Ok(Answer::Json(json!({ "playlists": { "playlist": out } })))
         }
         "getPlaylist" => {
-            let name = playlist_name(p.get("id"))?;
             let service = playlist_service(serve)?;
-            let lines = serve.held.shown(&name, service.entries(&name).await.map_err(toggle_failed)?);
+            let (name, lines) = playlist_named(serve, &service, p.get("id")).await?;
+            let lines = serve.held.shown(&name, lines);
             let mut songs = shown_songs(serve, &lines).await?;
             annotate_songs(serve, &me, &mut songs)?;
             let mut body = playlist_json(serve, &me, &name, &lines, &songs)?;
+            // Asked by a name it had: answered under that id, the one the client keeps (its next listing has the new).
+            body["id"] = p.get("id").unwrap_or_default().into();
             body["entry"] = serde_json::to_value(&songs)?;
             Ok(Answer::Json(json!({ "playlist": body })))
         }
@@ -449,10 +451,9 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let name = match p.get("playlistId") {
                 // With an id: the playlist's songs become these (lines of missing files stay).
                 Some(id) => {
-                    let name = playlist_name(Some(id))?;
+                    let (name, lines) = playlist_named(serve, &service, Some(id)).await?;
                     // Its songs replaced: an emptying held for it comes to the same.
                     serve.held.take(&name);
-                    let lines = service.entries(&name).await.map_err(toggle_failed)?;
                     let shown = shown_flags(serve, &lines).await?;
                     let all: Vec<usize> = (0..shown.iter().filter(|s| **s).count()).collect();
                     let new = super::playlists::edited(&lines, &shown, &all, &add);
@@ -466,6 +467,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                     let taken: Vec<String> = service.snapshot().await.map_err(toggle_failed)?.into_iter().map(|(n, _, _)| n).collect();
                     let name = super::playlists::new_name(wanted, &taken);
                     service.create_with(&name, &add).await.map_err(toggle_failed)?;
+                    serve.userdata.playlist_made(&name)?;
                     name
                 }
             };
@@ -477,8 +479,8 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             Ok(Answer::Json(json!({ "playlist": body })))
         }
         "updatePlaylist" => {
-            let name = playlist_name(p.get("playlistId"))?;
             let service = playlist_service(serve)?;
+            let (name, _) = playlist_named(serve, &service, p.get("playlistId")).await?;
             let remove: Vec<usize> = p.all("songIndexToRemove").iter().filter_map(|i| i.trim().parse().ok()).collect();
             let add = lines_of_songs(serve, &p.all("songIdToAdd")).await?;
             let renamed = p.get("name").filter(|n| !n.trim().is_empty() && *n != name);
@@ -507,9 +509,11 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             Ok(Answer::Json(json!({})))
         }
         "deletePlaylist" => {
-            let name = playlist_name(p.get("id"))?;
+            let service = playlist_service(serve)?;
+            let (name, _) = playlist_named(serve, &service, p.get("id")).await?;
             serve.held.take(&name);
-            playlist_service(serve)?.delete(&name).await.map_err(toggle_failed)?;
+            service.delete(&name).await.map_err(toggle_failed)?;
+            serve.userdata.playlist_gone(&name)?;
             Ok(Answer::Json(json!({})))
         }
         _ => Err(Failed(501, format!("{method} is not implemented"))),
@@ -536,6 +540,20 @@ async fn write_held(service: &crate::app::PlaylistService, name: &str, held: Opt
         && let Err(err) = service.set_entries(name, &e.before, &e.after).await
     {
         tracing::warn!("subsonic: emptying {name} not written: {err}");
+    }
+}
+
+/// The playlist a client means by an id, with its lines: by its name, else by a name it had (clients keep a playlist's
+/// id across a rename).
+async fn playlist_named(serve: &Serve, service: &crate::app::PlaylistService, id: Option<&str>) -> Result<(String, Vec<String>), Failed> {
+    let name = playlist_name(id)?;
+    match service.entries(&name).await {
+        Err(crate::app::ToggleError::UnknownPlaylist) => {
+            let now = serve.userdata.playlist_alias(&name)?.ok_or_else(|| not_found("Playlist"))?;
+            let lines = service.entries(&now).await.map_err(toggle_failed)?;
+            Ok((now, lines))
+        }
+        found => Ok((name, found.map_err(toggle_failed)?)),
     }
 }
 
