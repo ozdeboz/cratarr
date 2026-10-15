@@ -24,6 +24,7 @@
     cover = null,
     tracks,
     incoming = null,
+    forgetResume = null,
     start = 'menu',
     onclose,
   }: {
@@ -37,6 +38,8 @@
     /** Its tracks' ids on `source`, in play order (the rows that have one). */
     tracks: string[];
     incoming?: AlbumIncoming | null;
+    /** Where it was left goes (Symfonium's Remove resume point); given only when there is one. */
+    forgetResume?: (() => void) | null;
     /** The step it opens on: the entries, or straight at the playlists. */
     start?: 'menu' | 'lists';
     onclose: () => void;
@@ -152,6 +155,16 @@
     <div class="cards" role="menu">
       <div class="group" role="group">
         <MenuEntry icon="heart" label={fav ? 'Remove from favourites' : 'Add to favourites'} onclick={toggleFavourite} />
+        {#if forgetResume}
+          <MenuEntry
+            icon="resume"
+            label="Remove resume point"
+            onclick={() => {
+              onclose();
+              forgetResume();
+            }}
+          />
+        {/if}
       </div>
       {#if addable}
         <div class="group" role="group">

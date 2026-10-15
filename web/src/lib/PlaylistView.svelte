@@ -18,6 +18,7 @@
   import {
     albumResume,
     albumView,
+    forgetAlbumResume,
     coverUrl,
     crateRows,
     crateToPlaylist,
@@ -41,6 +42,7 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
+  import AlbumMenu, { type AlbumIncoming } from './AlbumMenu.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { insights, plural } from './insights.svelte';
@@ -256,7 +258,7 @@
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
     if (!rows) return null;
-    const list = rows.map((r, i) => ({ r, i }));
+    const list = rows.map((r, i) => ({ r, i })).filter((x) => !prefs.hideMissing || (x.r.id && !x.r.missing));
     const text = (r: PlaylistRow) => (sortKey === 'title' ? (r.name ?? r.file) : sortKey === 'artist' ? (r.artist ?? '') : (r.album ?? ''));
     if (sortKey === 'length') list.sort((a, b) => (a.r.duration_secs ?? 0) - (b.r.duration_secs ?? 0));
     else if (sortKey !== 'own') list.sort((a, b) => ordered(text(a.r), text(b.r)));
@@ -441,6 +443,30 @@
       () => {},
     );
   });
+  // An album's menu (its ⋮ in the action bar).
+  let albumMenuOpen = $state(false);
+  /** What Incoming offers for the album, as the album menu's steps (each asks in IncomingSheet, as the bar did). */
+  const albumIncoming = $derived<AlbumIncoming | null>(
+    incoming && offer
+      ? {
+          music: incoming.music,
+          keep: offer.keepable && offer.job === null ? () => (incomingAsk = 'keep') : undefined,
+          replace: offer.replaceable ? () => (incomingAsk = 'replace') : undefined,
+          delete: offer.deletable && offer.job === null ? () => (incomingAsk = 'delete') : undefined,
+        }
+      : null,
+  );
+  async function forgetResume() {
+    const a = album;
+    if (!a) return;
+    try {
+      await forgetAlbumResume(a.id);
+      if (album?.id === a.id) resumeAt = null;
+    } catch (e) {
+      toast.fail(e, "The resume point wasn't removed");
+    }
+  }
+
   async function resumeAlbum() {
     const at = resumeAt;
     const i = at ? playable.findIndex((r) => r.id === at.track) : -1;
@@ -660,7 +686,7 @@
   // Esc closes it (when no sheet of its own is open; in edit mode Cancel is the way out).
   $effect(() => {
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || menuOpen || trackMenu || editing || making || sortOpen) return;
+      if (e.key !== 'Escape' || menuOpen || trackMenu || editing || making || sortOpen || albumMenuOpen) return;
       if (selecting) selecting = null;
       else closePlaylist();
     };
@@ -785,18 +811,8 @@
           {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => viewPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
           <button class="icon" aria-label="Make playlist" title="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
         {:else if album}
-          {#if incoming && offer}
-            {#if offer.keepable && offer.job === null}
-              <button class="icon" aria-label={`Keep in ${incoming.music}`} title={`Keep in ${incoming.music}`} onclick={() => (incomingAsk = 'keep')}><Icon name="check" size={22} /></button>
-            {/if}
-            {#if offer.replaceable}
-              <button class="icon" aria-label={`Replace in ${incoming.music}`} title={`Replace in ${incoming.music}`} onclick={() => (incomingAsk = 'replace')}><Icon name="swap" size={22} /></button>
-            {/if}
-            {#if offer.deletable && offer.job === null}
-              <button class="icon" aria-label="Delete album" title="Delete album" onclick={() => (incomingAsk = 'delete')}><Icon name="trash" size={22} /></button>
-            {/if}
-          {/if}
           <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
+          <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (albumMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {:else}
           {#if p && tab === 'tracks'}<button class="icon" aria-label={`Edit ${id}`} disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
           <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
@@ -1071,6 +1087,18 @@
 {/if}
 {#if trackMenu}
   <TrackMenu track={trackMenu.track} start={trackMenu.start} onclose={() => (trackMenu = null)} />
+{/if}
+{#if albumMenuOpen && album}
+  <AlbumMenu
+    source={album.source}
+    album={album.id}
+    {title}
+    artist={albumHead?.artist ?? null}
+    tracks={playable.map((r) => r.id!)}
+    incoming={albumIncoming}
+    forgetResume={resumeAt ? forgetResume : null}
+    onclose={() => (albumMenuOpen = false)}
+  />
 {/if}
 {#if sortOpen}
   <MenuSheet label="Order" title="Order" onclose={() => (sortOpen = false)}>

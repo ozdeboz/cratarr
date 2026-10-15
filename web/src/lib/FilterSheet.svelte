@@ -61,11 +61,11 @@
   }
 </script>
 
-<MenuSheet label="Source filter" icon="funnel" title="Source filter" {onclose}>
+<MenuSheet label="Filter" icon="funnel" title="Filter" {onclose}>
   <div class="cards">
     <div class="toggles">
       <button class="switch" role="switch" aria-checked={prefs.hideMissing} onclick={() => (prefs.hideMissing = !prefs.hideMissing)}>
-        <span>Hide missing files</span><i aria-hidden="true"></i>
+        <span>Hide missing tracks</span><i aria-hidden="true"></i>
       </button>
     </div>
 
