@@ -352,6 +352,10 @@ impl Catalogue {
                     tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1"), [id])?;
                 }
                 tx.execute("DELETE FROM folders WHERE id = ?1", [id])?;
+                // Its links to the servers' tracks went with it: every server lists all its tracks again on the next
+                // pass, also when the folder comes back as it was (Incoming lost its links that way when its source
+                // was switched off and on again, 2026-10-15: the folders then matched the last full listing's).
+                tx.execute("DELETE FROM meta WHERE key LIKE 'full-folders:%'", [])?;
             }
         }
         for (id, path) in &wanted {
@@ -1735,5 +1739,18 @@ mod tests {
         assert_eq!(cat.status().unwrap().files, 0, "different files: the rows go");
         std::fs::remove_dir_all(&moved).ok();
         std::fs::remove_dir_all(&empty).ok();
+    }
+
+    #[test]
+    fn a_folder_dropped_and_back_gets_its_links_listed_again() {
+        let (a, b) = (music(), music());
+        let cat = Catalogue::open(None, vec![a.clone(), b.clone()]).unwrap();
+        cat.set_meta("full-folders:jf", "as at the last full listing");
+        cat.set_folders(vec![a.clone(), b.clone()]).unwrap();
+        assert!(cat.meta("full-folders:jf").is_some(), "the same folders: nothing to list again");
+        cat.set_folders(vec![a.clone()]).unwrap();
+        assert_eq!(cat.meta("full-folders:jf"), None, "a folder went, its links with it: list everything again");
+        std::fs::remove_dir_all(&a).ok();
+        std::fs::remove_dir_all(&b).ok();
     }
 }
