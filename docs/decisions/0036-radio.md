@@ -104,6 +104,17 @@ candidates are left; then the excluded ones come back, least recently played fir
   do not apply.
 - **Random:** random tracks from the seed. When those run out, from the whole library.
 
+**Crates as the radio's input** (the owner, 2026-10-16: yes to both; no radio page). A crate's action bar has two more
+actions where the page holds the queue:
+
+- **Start radio:** the crate as the seed. Tracks like it, from the whole library, none of its own. Up to 300 of its
+  tracks make the seed.
+- **Play as radio:** the crate as the boundary (`radio.within` / the request's `within`: the crate's id). Only the
+  crate's tracks, as its favourites toggle is set, read from the crate on each refill. They are chosen the radio's
+  way: Similar follows the playing track, the 7 days and the spacing apply, the crate's own tracks may play. Once all
+  have been queued, a new round begins, those queued longest ago first and not the last few again.
+- **A new play** leaves the crate, as it clears the seed.
+
 **OpenSubsonic:** `getSimilarSongs`, `getSimilarSongs2` and the similar artists of `getArtistInfo2` answer from the same
 scorer (Similar, the item as the seed). Today they answer empty, so any Subsonic app gets radio from this too.
 

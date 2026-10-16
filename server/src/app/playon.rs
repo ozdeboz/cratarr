@@ -112,6 +112,9 @@ pub struct RadioState {
     pub mode: RadioMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub seed: Vec<String>,
+    /// The crate it plays inside, when it does ("Play as radio").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<String>,
 }
 
 /// What `play` plays when it is not given tracks; resolved here, so it never reaches the player.
@@ -200,6 +203,9 @@ pub enum Command {
         mode: Option<RadioMode>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seed: Option<Vec<String>>,
+        /// A crate to play inside (its id); "" plays outside any again; left out: as it was.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        within: Option<String>,
     },
     /// The sleep timer: pause at `at_ms` (epoch milliseconds) or when the playing track ends; neither clears it.
     Sleep {
@@ -671,7 +677,7 @@ impl PlayOn {
                     e.queue.repeat = r;
                 }
                 if let Some(r) = &report.radio {
-                    e.queue.radio = r.on.then(|| Radio { mode: r.mode, seed: r.seed.clone() });
+                    e.queue.radio = r.on.then(|| Radio { mode: r.mode, seed: r.seed.clone(), within: r.within.clone() });
                 }
             }
             e.report = Report { queue: None, ..report };
@@ -804,11 +810,11 @@ impl PlayOn {
         // Repeat moves with the queue (decision 0033, amended), repeat one too; a sleep timer moves with the music; the
         // radio too, with its seed (decision 0036). The radio after repeat: on turns repeat all off, and both came so.
         let _ = Box::pin(self.command(to, Command::Repeat { mode: repeat })).await;
-        let (on, mode, seed) = match radio {
-            Some(r) => (true, Some(r.mode), Some(r.seed)),
-            None => (false, None, None),
+        let (on, mode, seed, within) = match radio {
+            Some(r) => (true, Some(r.mode), Some(r.seed), Some(r.within.unwrap_or_default())),
+            None => (false, None, None, None),
         };
-        let _ = Box::pin(self.command(to, Command::Radio { on, mode, seed })).await;
+        let _ = Box::pin(self.command(to, Command::Radio { on, mode, seed, within })).await;
         if let Some(s) = sleep.filter(|s| s.at_ms.is_some() || s.end_of_track) {
             let _ = Box::pin(self.command(to, Command::Sleep { at_ms: s.at_ms, end_of_track: s.end_of_track })).await;
         }
