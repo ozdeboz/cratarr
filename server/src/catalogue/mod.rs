@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS source_ids (
 CREATE INDEX IF NOT EXISTS source_ids_by_file ON source_ids (folder, rel);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tracks (id INTEGER PRIMARY KEY AUTOINCREMENT, born INTEGER NOT NULL, retired_at INTEGER);
+CREATE TABLE IF NOT EXISTS analysis (
+  folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, version INTEGER NOT NULL,
+  duration_secs REAL, loudness_lufs REAL, track_gain_db REAL, track_peak REAL, bpm REAL, bpm_confidence REAL,
+  waveform BLOB, blocks TEXT, analysed_at INTEGER NOT NULL,
+  PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 ";
 
 /// A file the catalogue counts: neither gone (no longer where it was, waiting to be recognised elsewhere) nor in the
@@ -347,7 +352,7 @@ impl Catalogue {
             Ok(!rels.is_empty() && rels.iter().all(|rel| Path::new(at).join(rel).is_file()))
         };
         let rekey = |from: i64, to: i64| -> Result<()> {
-            for table in ["files", "tags", "source_ids"] {
+            for table in ["files", "tags", "source_ids", "analysis"] {
                 tx.execute(&format!("UPDATE {table} SET folder = ?2 WHERE folder = ?1"), params![from, to])?;
             }
             tx.execute("UPDATE folders SET id = ?2 WHERE id = ?1", params![from, to])?;
@@ -434,7 +439,7 @@ impl Catalogue {
                 "UPDATE tracks SET retired_at = ?2 WHERE id IN (SELECT track FROM files WHERE folder = ?1 AND track IS NOT NULL)",
                 params![p, now_s],
             )?;
-            for table in ["files", "tags", "source_ids"] {
+            for table in ["files", "tags", "source_ids", "analysis"] {
                 tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1"), [p])?;
             }
             tx.execute("DELETE FROM folders WHERE id = ?1", [p])?;
@@ -1068,7 +1073,7 @@ impl Catalogue {
                 "UPDATE tracks SET retired_at = ?3 WHERE id = (SELECT track FROM files WHERE folder = ?1 AND rel = ?2)",
                 params![folder, rel, now],
             )?;
-            for table in ["files", "tags", "source_ids"] {
+            for table in ["files", "tags", "source_ids", "analysis"] {
                 tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![folder, rel])?;
             }
         }
@@ -1110,7 +1115,7 @@ impl Catalogue {
         for rel in &rels {
             let new_rel = format!("{to}{}", &rel[from.len()..]);
             if (to_folder, new_rel.as_str()) != (from_folder, rel.as_str()) {
-                for table in ["files", "tags", "source_ids"] {
+                for table in ["files", "tags", "source_ids", "analysis"] {
                     tx.execute(&format!("DELETE FROM {table} WHERE folder = ?1 AND rel = ?2"), params![to_folder, new_rel])?;
                 }
             }
@@ -1120,6 +1125,7 @@ impl Catalogue {
                 params![from_folder, rel, to_folder, new_rel, trashed],
             )?;
             tx.execute("UPDATE tags SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
+            tx.execute("UPDATE analysis SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
         }
         tx.commit()?;
         Ok(rels.len())
@@ -1241,6 +1247,137 @@ impl Catalogue {
             .flatten()
             .filter(|d| *d > 0)
             .map(|d| d as u64)
+    }
+
+    // --- A file's analysis (decision 0035) ---
+    //
+    // Kept per file as it was when analysed (its size and mtime): a file changed since, or analysed by an older
+    // `analysis::VERSION`, waits to be analysed again (`unanalysed`). It follows its file through moves, a parked
+    // folder and the trash, as the tags do.
+
+    /// Keeps a file's analysis (the pass, or an import): replaces what it had. Blocking.
+    pub fn store_analysis(&self, folder: i64, rel: &str, size: u64, mtime: i64, a: &crate::analysis::Analysis) -> Result<()> {
+        store_analysis(&self.db(), folder, rel, size, mtime, a, now_secs())
+    }
+
+    /// Several at once, in one transaction (an import's batch). Blocking.
+    pub fn store_analyses(&self, items: &[(i64, String, u64, i64, crate::analysis::Analysis)]) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let now = now_secs();
+        for (folder, rel, size, mtime, a) in items {
+            store_analysis(&tx, *folder, rel, *size, *mtime, a, now)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A file's analysis, while the file is as it was then (same size and mtime); any version. Blocking.
+    pub fn analysis_of(&self, folder: i64, rel: &str) -> Option<crate::analysis::Analysis> {
+        let db = self.db();
+        db.query_row(
+            &format!(
+                "SELECT {ANALYSIS_COLS} FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+                 WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime"
+            ),
+            params![folder, rel],
+            analysis_row,
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    /// When a file's analysis was made, and its version (the waveform's ETag), while the file is as it was then.
+    pub fn analysis_stamp(&self, folder: i64, rel: &str) -> Option<(i64, u32)> {
+        self.db()
+            .query_row(
+                "SELECT a.analysed_at, a.version FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+                 WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime",
+                params![folder, rel],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// Present files that want an analysis: none yet, the file changed since (size or mtime), or an older version;
+    /// newest first (by when the track was first seen), at most `limit`: (folder, rel, path, size, mtime). Blocking.
+    pub fn unanalysed(&self, limit: usize) -> Result<Vec<(i64, String, PathBuf, u64, i64)>> {
+        let folders = self.folders();
+        let db = self.db();
+        let mut st = db.prepare(&format!(
+            "SELECT f.folder, f.rel, f.size, f.mtime FROM files f
+               LEFT JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel
+               LEFT JOIN tracks t ON t.id = f.track
+             WHERE {PRESENT_F} AND f.state = ?1
+               AND (a.rel IS NULL OR a.size != f.size OR a.mtime != f.mtime OR a.version < ?2)
+             ORDER BY t.born DESC, f.mtime DESC LIMIT ?3"
+        ))?;
+        let rows = st.query_map(params![READ, crate::analysis::VERSION, limit as i64], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?.max(0) as u64, r.get::<_, i64>(3)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (folder, rel, size, mtime) = row?;
+            let Some(root) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) else { continue };
+            out.push((folder, rel.clone(), root.join(&rel), size, mtime));
+        }
+        Ok(out)
+    }
+
+    /// How many present files have an analysis that is up to date, of how many (the pass's progress). Blocking.
+    pub fn analysis_counts(&self) -> Result<(u64, u64)> {
+        let db = self.db();
+        let (done, all): (i64, i64) = db.query_row(
+            &format!(
+                "SELECT count(a.rel), count(*) FROM files f LEFT JOIN analysis a
+                   ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime AND a.version >= ?2
+                 WHERE {PRESENT_F} AND f.state = ?1"
+            ),
+            params![READ, crate::analysis::VERSION],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok((done.max(0) as u64, all.max(0) as u64))
+    }
+
+    /// The albums' gain and peak in a folder, by album directory (an album is a folder of files, as the served library
+    /// counts it), from their tracks' analyses (`analysis::album_gain` over their loudness blocks): only where every
+    /// track of the directory has one, so a half-analysed album has none yet. Blocking.
+    pub fn album_gains(&self, folder: i64) -> Result<HashMap<String, (f32, f32)>> {
+        let db = self.db();
+        let mut st = db.prepare(&format!(
+            "SELECT f.rel, {ANALYSIS_COLS} FROM files f
+               LEFT JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
+             WHERE {PRESENT_F} AND f.folder = ?1 AND f.state = ?2"
+        ))?;
+        let mut dirs: HashMap<String, Option<Vec<crate::analysis::Analysis>>> = HashMap::new();
+        let rows = st.query_map(params![folder, READ], |r| {
+            let rel: String = r.get(0)?;
+            // The version: NULL where the file has no analysis (the LEFT JOIN).
+            let has: Option<i64> = r.get(1)?;
+            Ok((rel, if has.is_some() { Some(analysis_row_at(r, 1)?) } else { None }))
+        })?;
+        for row in rows {
+            let (rel, a) = row?;
+            let dir = rel.rsplit_once('/').map_or("", |(d, _)| d).to_string();
+            let entry = dirs.entry(dir).or_insert_with(|| Some(Vec::new()));
+            match (entry.as_mut(), a) {
+                (Some(list), Some(a)) => list.push(a),
+                // A track without one: the album waits.
+                (Some(_), None) => *entry = None,
+                (None, _) => {}
+            }
+        }
+        Ok(dirs
+            .into_iter()
+            .filter_map(|(dir, list)| {
+                let list = list?;
+                let refs: Vec<&crate::analysis::Analysis> = list.iter().collect();
+                crate::analysis::album_gain(&refs).map(|g| (dir, g))
+            })
+            .collect())
     }
 
     /// Where a track's file is, or was last seen while it is away (gone, not yet retired). Blocking.
@@ -1514,6 +1651,59 @@ pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
     Ok(rows)
 }
 
+// The analysis' columns as `analysis_row` reads them (the struct's order).
+const ANALYSIS_COLS: &str =
+    "a.version, a.duration_secs, a.loudness_lufs, a.track_gain_db, a.track_peak, a.blocks, a.bpm, a.bpm_confidence, a.waveform";
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64, a: &crate::analysis::Analysis, now: i64) -> Result<()> {
+    db.prepare_cached(
+        "INSERT OR REPLACE INTO analysis (folder, rel, size, mtime, version, duration_secs, loudness_lufs, track_gain_db,
+           track_peak, bpm, bpm_confidence, waveform, blocks, analysed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+    )?
+    .execute(params![
+        folder,
+        rel,
+        size as i64,
+        mtime,
+        a.version,
+        a.duration_secs,
+        a.loudness_lufs,
+        a.track_gain_db,
+        a.track_peak,
+        a.bpm,
+        a.bpm_confidence,
+        a.waveform,
+        serde_json::to_string(&a.blocks)?,
+        now
+    ])?;
+    Ok(())
+}
+
+fn analysis_row(r: &rusqlite::Row) -> rusqlite::Result<crate::analysis::Analysis> {
+    analysis_row_at(r, 0)
+}
+
+/// An analysis from `ANALYSIS_COLS` starting at column `at`. Blocks that do not parse read as none.
+fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::analysis::Analysis> {
+    let blocks: Option<String> = r.get(at + 5)?;
+    Ok(crate::analysis::Analysis {
+        version: r.get(at)?,
+        duration_secs: r.get::<_, Option<f64>>(at + 1)?.unwrap_or(0.0),
+        loudness_lufs: r.get::<_, Option<f64>>(at + 2)?.unwrap_or(0.0) as f32,
+        track_gain_db: r.get::<_, Option<f64>>(at + 3)?.unwrap_or(0.0) as f32,
+        track_peak: r.get::<_, Option<f64>>(at + 4)?.unwrap_or(0.0) as f32,
+        blocks: blocks.and_then(|b| serde_json::from_str(&b).ok()).unwrap_or_default(),
+        bpm: r.get::<_, Option<f64>>(at + 6)?.map(|b| b as f32),
+        bpm_confidence: r.get::<_, Option<f64>>(at + 7)?.unwrap_or(0.0) as f32,
+        waveform: r.get::<_, Option<Vec<u8>>>(at + 8)?.unwrap_or_default(),
+    })
+}
+
 /// See `Catalogue::served_fingerprint`; any connection to the catalogue's file.
 pub fn served_fingerprint(db: &Connection) -> Result<String> {
     let (n, size, mtime, tracks, folders): (i64, f64, f64, f64, f64) = db.query_row(
@@ -1564,6 +1754,52 @@ mod tests {
     /// Pretend the tags of every file waiting were read: a length (the test files are not audio).
     fn read_as_audio(cat: &Catalogue) {
         cat.db().execute("UPDATE files SET state = 1, duration_ms = 200000 WHERE state = 0", []).unwrap();
+    }
+
+    fn an_analysis(gain: f32, bin: u16) -> crate::analysis::Analysis {
+        crate::analysis::Analysis {
+            version: crate::analysis::VERSION,
+            duration_secs: 200.0,
+            loudness_lufs: -18.0 - gain,
+            track_gain_db: gain,
+            track_peak: 0.9,
+            blocks: crate::analysis::Loudness(vec![(bin, 40)]),
+            bpm: Some(120.0),
+            bpm_confidence: 0.9,
+            waveform: vec![7; crate::analysis::WAVEFORM_BINS],
+        }
+    }
+
+    #[test]
+    fn an_analysis_serves_while_its_file_is_as_it_was_and_follows_a_move() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let todo = cat.unanalysed(10).unwrap();
+        assert_eq!(todo.len(), 2);
+        let (folder, one, path, size, mtime) = todo.iter().find(|t| t.1.ends_with("One.mp3")).unwrap().clone();
+        assert_eq!(path, d.join(&one));
+        cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
+        let back = cat.analysis_of(folder, &one).unwrap();
+        assert_eq!((back.track_gain_db, back.bpm, back.waveform.len(), back.blocks.0.clone()), (-3.0, Some(120.0), 512, vec![(500, 40)]));
+        assert_eq!(cat.analysis_counts().unwrap(), (1, 2));
+        assert!(cat.album_gains(folder).unwrap().is_empty(), "the album waits for its last track");
+        let two = cat.unanalysed(10).unwrap().remove(0);
+        assert!(two.1.ends_with("Two.flac"));
+        cat.store_analysis(two.0, &two.1, two.3, two.4, &an_analysis(-5.0, 480)).unwrap();
+        assert!(cat.unanalysed(10).unwrap().is_empty());
+        assert!(cat.album_gains(folder).unwrap().contains_key("A - B (2020)"));
+        // A file changed since is analysed again, and its old analysis no longer serves.
+        std::fs::write(d.join(&one), b"changed, so analysed again").unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert!(cat.analysis_of(folder, &one).is_none());
+        assert_eq!(cat.unanalysed(10).unwrap().len(), 1);
+        // It follows its file.
+        cat.move_files(folder, "A - B (2020)", folder, "A - B (2020) moved").unwrap();
+        assert!(cat.analysis_of(folder, &two.1.replace("A - B (2020)", "A - B (2020) moved")).is_some());
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
