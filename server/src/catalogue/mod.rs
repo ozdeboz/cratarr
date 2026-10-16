@@ -719,7 +719,7 @@ impl Catalogue {
         // it was then. The tag comes first.
         let mut st = db.prepare(
             "SELECT a.rel, a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
-             WHERE a.folder = ?1 AND a.bpm IS NOT NULL AND a.size = f.size AND a.mtime = f.mtime",
+             WHERE a.folder = ?1 AND a.bpm IS NOT NULL AND a.size = f.size AND a.mtime = f.mtime AND a.complete IS NOT 0",
         )?;
         let analysed: HashMap<String, f64> =
             st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -813,7 +813,7 @@ impl Catalogue {
              AND name IN ('title', 'artist', 'album', 'albumartist', 'tracknumber', 'discnumber', 'originaldate', 'date', 'bpm') ORDER BY n",
         )?;
         let mut analysed = db.prepare_cached(
-            "SELECT a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+            "SELECT a.bpm, a.duration_secs, a.complete FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
              WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime",
         )?;
         // "3", "3/12": the number before a slash.
@@ -844,12 +844,22 @@ impl Catalogue {
                     }
                 }
                 row.year = original.or(date);
-                // As the crates' BPM axis and the served library read it.
-                let bpm = match bpm {
-                    Some(b) => Some(b),
-                    None => analysed.query_row(params![folder, rel], |r| r.get::<_, Option<f64>>(0)).optional()?.flatten(),
-                };
-                row.bpm = bpm.map(f64::round).filter(|b| *b > 0.0).map(|b| b as u32);
+                let (analysed_bpm, measured, complete) = analysed
+                    .query_row(params![folder, rel], |r| Ok((r.get::<_, Option<f64>>(0)?, r.get::<_, Option<f64>>(1)?, r.get::<_, Option<bool>>(2)?)))
+                    .optional()?
+                    .unwrap_or((None, None, None));
+                // As the served library reads them (a5's 243a89db): nothing from a decode that stopped early, and a whole
+                // decode's length where the file's header said otherwise by more than 1.5 s.
+                let trusted = complete != Some(false);
+                row.bpm = bpm.or(analysed_bpm.filter(|_| trusted)).map(f64::round).filter(|b| *b > 0.0).map(|b| b as u32);
+                if complete == Some(true)
+                    && let Some(secs) = measured.filter(|s| *s > 0.0)
+                {
+                    let ms = (secs * 1000.0).round() as i64;
+                    if row.duration_ms.is_none_or(|d| (d - ms).abs() > 1_500) {
+                        row.duration_ms = Some(ms);
+                    }
+                }
                 row.track_id = ids.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?;
                 Ok(row)
             })
@@ -2198,6 +2208,16 @@ mod tests {
         drop(db);
         let rows = cat.file_rows("jellyfin", 0, &[two.clone(), one.clone()]).unwrap();
         assert_eq!((rows[0].bpm, rows[1].bpm), (Some(93), Some(137)));
+        // A whole decode's length where the header said otherwise; an early-stopped decode gives nothing; old rows
+        // (complete unknown) keep the header's length.
+        let length = |complete: Option<bool>, secs: f64| {
+            cat.db().execute("UPDATE analysis SET duration_secs = ?2, complete = ?3 WHERE rel = ?1", params![one, secs, complete]).unwrap();
+            let r = cat.file_rows("jellyfin", 0, &[one.clone()]).unwrap().remove(0);
+            (r.duration_ms, r.bpm)
+        };
+        assert_eq!(length(Some(true), 408.2), (Some(408_200), Some(137)));
+        assert_eq!(length(Some(false), 7.2), (Some(61_500), None));
+        assert_eq!(length(None, 7.2), (Some(61_500), Some(137)));
         cat.db().execute("UPDATE analysis SET mtime = mtime + 1 WHERE rel = ?1", params![one]).unwrap();
         assert_eq!(cat.file_rows("jellyfin", 0, &[one.clone()]).unwrap()[0].bpm, None, "a file changed since its analysis");
         std::fs::remove_dir_all(&d).ok();
