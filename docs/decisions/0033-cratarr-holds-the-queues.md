@@ -126,3 +126,44 @@ work offline and without gaps.
 5. Previous on the first track under repeat all goes to the last.
 
 Every round counts its plays again. A player's view tells its repeat mode; `repeat {mode: off|one|all}` sets it.
+
+## Amendment (2026-10-16, proposed): queue history
+
+The owner asked for Symfonium's queue switcher: every play keeps its own named queue, and an earlier queue can be
+switched back to where it left off, renamed or deleted, with the playing one marked.
+
+**What a queue is.** A play of something new starts a new queue: an album, a playlist, a crate, a genre, a radio or
+"Start radio" (`Command::Play`). Edits (add, move, remove, shuffle, repeat, radio on/off) change the queue that plays
+and start nothing. The queue left behind is kept whole:
+
+- its tracks with their entries;
+- where it stood: the playing entry and the position;
+- its repeat, shuffle and radio.
+
+**Held where the queues are held.** Cratarr keeps each player's queues beside the one that plays (`queues.json`), the
+newest first.
+
+- **Name:** the play's own ("Chill", an album's title, "Radio: Trip Hop"), until renamed.
+- **How many:** at most 20 per player. The oldest unrenamed one goes first; a renamed one stays until deleted.
+- **A handover:** the queue moves on to the other player as its new queue. The player it left keeps it, as it stood.
+
+**Commands** (Play On, and the page's own calls when it drives a player):
+
+- `{command: "queue", id}`: the player switches to that queue and plays it from where it stood, playing if it played,
+  else paused there. The queue it left goes back into the list as it stood.
+- `{command: "queue_rename", id, name}`.
+- `{command: "queue_delete", id}`. Not the playing one: switch away first.
+
+**What the page sees.** A player's full view (`GET /api/players/{name}`) carries
+`queues: [{id, name, tracks, from, updated, playing}]`, newest first, with the playing one marked. The live channel
+says when the list changes, the way it already says when the queue does.
+
+**Offline.** The app holds one queue while it has no connection, as now. Switching needs Cratarr, and a queue played
+offline goes back to Cratarr as the playing one when the app reconnects (step 1).
+
+**Open for the owner:**
+
+1. The page's own stream (a browser playing itself) is not one of Cratarr's players. Does it keep a history of its own
+   in that browser, or none?
+2. On a switch, does a queue that was playing keep its place, or start the old queue from the track it was on?
+3. Is 20 the right number?
