@@ -1,7 +1,8 @@
 <script lang="ts">
   // Settings (decided 2026-10-16): a portal of cards, one per part of the settings, each saying in a line what it is set
   // to now. A tap opens the part in the panel (lib/SettingsPanel), as a playlist opens: beside the cards on a wide page,
-  // over them on a phone. The card whose part is open is bordered. This device's card only in the app.
+  // over them on a phone. The card whose part is open is bordered. This device's card only in the app. About is a sheet
+  // from the info button at the page's top right (App, lib/AboutSheet).
   import { getImport, getSettings, getSubsonicAccounts, type ImportJob, type Settings } from './lib/api';
   import { appInfo, downloads, inApp } from './lib/app.svelte';
   import Icon from './lib/Icon.svelte';
@@ -59,8 +60,6 @@
         return lastImport?.finished ? `Last ${new Date(lastImport.finished * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : 'Not yet';
       case 'display':
         return THEME[prefs.theme];
-      case 'about':
-        return s ? `Cratarr ${s.version}` : '';
     }
   }
 

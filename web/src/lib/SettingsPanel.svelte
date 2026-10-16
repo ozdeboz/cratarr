@@ -12,7 +12,6 @@
   import { closePlaylist } from './panel.svelte';
   import { SECTIONS, type SettingsSection } from './settingsSections.svelte';
   import { ed } from './settings/editor.svelte';
-  import AboutPart from './settings/AboutPart.svelte';
   import AuthPart from './settings/AuthPart.svelte';
   import ConnectionsPart from './settings/ConnectionsPart.svelte';
   import DevicePart from './settings/DevicePart.svelte';
@@ -56,8 +55,6 @@
       <AuthPart />
     {:else if section === 'import'}
       <ImportPart />
-    {:else if section === 'about'}
-      <AboutPart />
     {/if}
 
     {#if ed.dirty}

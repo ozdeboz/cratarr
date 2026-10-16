@@ -9,6 +9,7 @@
   import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
   import { inApp } from './lib/app.svelte';
   import Crates from './Crates.svelte';
+  import AboutSheet from './lib/AboutSheet.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import SheetArea from './lib/SheetArea.svelte';
@@ -141,7 +142,9 @@
     };
   });
   // On a phone the row always has something on its left (back, or the mark); beside the page only back or the pill.
-  const pageRow = $derived(!playlistLayer && !overlay && (phone || navAt > 0 || pagePill));
+  const pageRow = $derived(!playlistLayer && !overlay && (phone || navAt > 0 || pagePill || page === 'settings'));
+  // The settings page's info button (the owner, 2026-10-16): About in a sheet.
+  let aboutOpen = $state(false);
   $effect(() => {
     const root = document.documentElement.style;
     root.setProperty('--top-h', phone ? `${TOP_BAR}px` : '0px');
@@ -360,6 +363,9 @@
         <span></span>
       {/if}
       {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} /></SheetArea>{/if}
+      {#if page === 'settings'}
+        <span class="navpill"><button aria-label="About" title="About" onclick={() => (aboutOpen = true)}><Icon name="info" size={22} /></button></span>
+      {/if}
     </div>
   {/if}
   {#if overlay}
@@ -369,6 +375,8 @@
       <NowPlaying place="overlay" />
     </div>
   {/if}
+
+  {#if aboutOpen}<AboutSheet onclose={() => (aboutOpen = false)} />{/if}
 
   {#if moreOpen}
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>

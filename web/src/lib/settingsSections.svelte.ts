@@ -4,7 +4,7 @@
 import type { Settings } from './api';
 import type { IconName } from './Icon.svelte';
 
-export type SettingsSection = 'device' | 'connections' | 'libraries' | 'players' | 'auth' | 'import' | 'display' | 'about';
+export type SettingsSection = 'device' | 'connections' | 'libraries' | 'players' | 'auth' | 'import' | 'display';
 
 export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true }[] = [
   { id: 'device', title: 'This device', icon: 'speaker', app: true },
@@ -14,7 +14,6 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
   { id: 'auth', title: 'Authentication', icon: 'user' },
   { id: 'import', title: 'Import', icon: 'intoBox' },
   { id: 'display', title: 'Display', icon: 'swatch' },
-  { id: 'about', title: 'About', icon: 'info' },
 ];
 
 export const settingsSaved = $state({ n: 0 });
