@@ -4,7 +4,7 @@
 // same, the music plays there.
 
 import { getPlayer, getPlayers, playerCommand, type PlayOnPlayer } from './api';
-import { appInfo, inApp } from './app.svelte';
+import { appInfo, inApp, toApp } from './app.svelte';
 import { on } from './events.svelte';
 import { drive, reportedBy, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
@@ -16,6 +16,30 @@ export const drivenName = () => (prefs.output.startsWith('player:') ? prefs.outp
 
 /** The players that can be chosen: connected now, and not the app this page runs in (that one is "This device"). */
 export const choosable = () => playOn.players.filter((p) => p.online && !(inApp && p.name === appInfo.player));
+
+/** In the app, while this device follows a group (decision 0037): the group's leader. The device plays no queue of its
+ *  own then, so the page shows the leader's and its controls act there (the owner, 2026-10-16: the follower showed no
+ *  player at all). Null otherwise. */
+export const followedLeader = () => {
+  if (!inApp || prefs.output !== 'local' || !appInfo.player) return null;
+  const group = playOn.players.find((p) => p.name === appInfo.player)?.group;
+  return group && group !== appInfo.player ? group : null;
+};
+
+/** The player whose reports the page shows and drives: the one chosen, else the leader this device follows. */
+const shownName = () => drivenName() ?? followedLeader();
+/** What the local player was last told to drive. */
+let driving: string | null = null;
+function driveShown() {
+  const name = shownName();
+  if (name === driving) return;
+  const was = driving;
+  driving = name;
+  shownVersion = -1;
+  drive(name);
+  // Out of the group again: the app's own player says what it holds now.
+  if (!name && was && inApp) toApp({ type: 'hello' });
+}
 
 /** The one of Cratarr's players the page plays on: the one chosen, or the app this page runs in playing here. */
 export const head = () => drivenName() ?? (inApp && prefs.output === 'local' ? appInfo.player : null);
@@ -54,7 +78,8 @@ let shownVersion = -1;
 
 function take(players: PlayOnPlayer[]) {
   playOn.players = players;
-  const name = drivenName();
+  driveShown();
+  const name = shownName();
   const p = name ? players.find((x) => x.name === name) : undefined;
   if (!p) return;
   const sleep = p.sleep ? { atMs: p.sleep.at_ms, endOfTrack: p.sleep.end_of_track } : null;
@@ -76,7 +101,7 @@ function take(players: PlayOnPlayer[]) {
     const version = p.queue_version;
     getPlayer(p.name)
       .then((full) => {
-        if (drivenName() !== full.name) return;
+        if (shownName() !== full.name) return;
         shownVersion = version;
         reportedBy({
           queue: (full.queue ?? []) as LocalTrack[],
@@ -95,9 +120,10 @@ function take(players: PlayOnPlayer[]) {
 
 /** Plays on player `name` from now on (or here again: `null`), as the output says. */
 export function follow(name: string | null) {
+  driving = name;
   drive(name);
   shownVersion = -1;
-  if (name) take(playOn.players);
+  take(playOn.players);
 }
 
 if (typeof window !== 'undefined') {
@@ -108,6 +134,5 @@ if (typeof window !== 'undefined') {
       /* the live channel brings them */
     });
   // A page opened with a player chosen before: drive it from the start.
-  const name = drivenName();
-  if (name) drive(name);
+  driveShown();
 }
