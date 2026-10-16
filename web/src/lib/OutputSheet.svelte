@@ -120,7 +120,10 @@
           />
         </div>
       {/each}
-      <MenuEntry label={remoteName} checked={!here && drivenName() === null} onclick={() => pick('remote')} />
+      <!-- The server's own player; not when what plays there is one of Cratarr's players listed above (the same one twice). -->
+      {#if !playOn.players.some((p) => p.name === remoteName)}
+        <MenuEntry label={remoteName} checked={!here && drivenName() === null} onclick={() => pick('remote')} />
+      {/if}
       {#if group.length > 1}<GroupVolume names={group} />{/if}
     {/if}
   </div>

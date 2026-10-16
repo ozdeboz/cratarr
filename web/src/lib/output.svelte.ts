@@ -25,13 +25,31 @@ import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
 import { canPlayHere, local, playQueue, enqueue, stop, togglePlay, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
-import { drivenName, follow, outputName } from './playOn.svelte';
+import { drivenName, follow, outputName, playOn } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
 // Whether the page holds the queue: it plays here, or on one of Cratarr's players it drives. A browser that cannot play
 // here (no stream for audio) plays on a player, whatever was chosen elsewhere.
 export const isLocal = () => (prefs.output === 'local' && canPlayHere) || drivenName() !== null;
+
+// "The server's player" while one of Cratarr's own players plays: that player, driven. Cratarr's own source has no
+// server-side player; such a page only showed what that player played, without seek or queue edits, while its output
+// read like the player's (2026-10-16).
+if (typeof window !== 'undefined') {
+  $effect.root(() => {
+    $effect(() => {
+      if (prefs.output !== 'remote') return;
+      const name = live.view?.now_playing?.player;
+      if (name && playOn.players.some((p) => p.name === name && p.online)) {
+        untrack(() => {
+          prefs.output = `player:${name}`;
+          follow(name);
+        });
+      }
+    });
+  });
+}
 
 /** Whether the music plays in this page (its stream, or the app it runs in). */
 export const playsHere = () => prefs.output === 'local' && canPlayHere;

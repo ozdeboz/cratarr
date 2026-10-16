@@ -321,6 +321,9 @@ async function appendTrack(index: number, from: number, gen: number) {
       const mode: AppendMode = kind === MP4 ? 'segments' : 'sequence';
       if (sb.mode !== mode) sb.mode = mode;
       length = samples === null ? null : samples / rate;
+      // A header that disagrees with the length Cratarr knows (from decoding the file whole) is the wrong one: the next
+      // track would start that much later or earlier (one MP3 said 5:27 for 4:24).
+      if (length !== null && told !== null && Math.abs(length - told) > 1.5) length = told;
       sb.appendWindowEnd = Infinity;
       sb.appendWindowStart = Math.max(0, streamEnd);
       if (length !== null) sb.appendWindowEnd = start + length;
