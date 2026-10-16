@@ -615,6 +615,17 @@ impl Catalogue {
     }
 
     /// Whether a file is in the catalogue (used to find where a server's paths lie). Blocking.
+    /// A present file's size and mtime (what an analysis is checked against). Blocking.
+    pub fn file_stamp(&self, folder: i64, rel: &str) -> Option<(u64, i64)> {
+        self.db()
+            .prepare_cached(&format!("SELECT size, mtime FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"))
+            .ok()?
+            .query_row(params![folder, rel], |r| Ok((r.get::<_, i64>(0)?.max(0) as u64, r.get::<_, i64>(1)?)))
+            .optional()
+            .ok()
+            .flatten()
+    }
+
     pub fn has_file(&self, folder: i64, rel: &str) -> bool {
         self.db()
             .query_row(&format!("SELECT 1 FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |_| Ok(()))
