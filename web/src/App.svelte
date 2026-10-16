@@ -27,8 +27,6 @@
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
   import { closePlaylist, keepViewed, panel } from './lib/panel.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
-  import CrateBuilder from './lib/CrateBuilder.svelte';
-  import { builderOf } from './lib/crates.svelte';
   import { poll } from './lib/live.svelte';
   import { known, remember } from './lib/sources.svelte';
   import { getStatus, type Status } from './lib/api';
@@ -336,7 +334,7 @@
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
       <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if builderOf(panel.viewed)}<CrateBuilder id={builderOf(panel.viewed)!.id} />{:else}<PlaylistView />{/if}
+          {#if panelShowsPlayer()}<NowPlaying place="side" />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}
@@ -344,7 +342,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      {#if builderOf(panel.viewed)}<CrateBuilder id={builderOf(panel.viewed)!.id} />{:else}<PlaylistView />{/if}
+      <PlaylistView />
     </div>
   {/if}
   {#if mini}

@@ -2,10 +2,12 @@
   // A track's cover in front of its large row (lib/Row.svelte): 60 px, corners 8 (Finamp's track tile), an empty tile
   // without one, and Finamp's mini visualiser over a dark veil while it plays (still while paused).
   let { src, playing = false, paused = false }: { src: string | null; playing?: boolean; paused?: boolean } = $props();
+  // A track without a cover (the server says so): the empty tile, not the browser's broken image.
+  let failed = $state<string | null>(null);
 </script>
 
 <span class="cover">
-  {#if src}<img {src} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
+  {#if src && failed !== src}<img {src} alt="" loading="lazy" onerror={() => (failed = src)} />{:else}<span class="noimg"></span>{/if}
   {#if playing}<span class="eq" class:still={paused} aria-hidden="true"><i></i><i></i><i></i></span>{/if}
 </span>
 

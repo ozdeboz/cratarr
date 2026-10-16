@@ -1,6 +1,6 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
-import { getCrates, setCrateFavourites, type Crate, type CrateFavourites } from './api';
+import { getCrates, setCrateFavourites, type Condition, type Crate, type CrateFavourites } from './api';
 import { prefs } from './prefs.svelte';
 import { viewPlaylist } from './panel.svelte';
 import { toast } from './toast.svelte';
@@ -88,6 +88,33 @@ export const NEW_CRATE = 'crate-new';
 export const EDIT_CRATE = 'crate-edit:';
 export const builderOf = (viewed: string | null): { id: string | null } | null =>
   viewed === NEW_CRATE ? { id: null } : viewed?.startsWith(EDIT_CRATE) ? { id: viewed.slice(EDIT_CRATE.length) } : null;
+
+/** A crate being made or changed, kept in this browser under its own address until Save or Cancel (it survives the
+ *  player over it, a page change and a reload). */
+export type CrateDraft = { name: string; conditions: Condition[] };
+const draftKey = (id: string | null) => `cratarr-crate-draft:${id ?? 'new'}`;
+export function keptDraft(id: string | null): CrateDraft | null {
+  try {
+    const kept = JSON.parse(localStorage.getItem(draftKey(id)) ?? 'null');
+    return kept && Array.isArray(kept.conditions) ? kept : null;
+  } catch {
+    return null;
+  }
+}
+export function keepDraft(id: string | null, draft: CrateDraft) {
+  try {
+    localStorage.setItem(draftKey(id), JSON.stringify(draft));
+  } catch {
+    /* not kept */
+  }
+}
+export function forgetDraft(id: string | null) {
+  try {
+    localStorage.removeItem(draftKey(id));
+  } catch {
+    /* nothing kept */
+  }
+}
 export const crateName = (id: string) => crates.list?.find((c) => c.id === id)?.name ?? genreOf(id) ?? id;
 
 /** A genre in the panel: a crate of that one genre, made by the server when asked for (`crate:genre:<name>`), never
