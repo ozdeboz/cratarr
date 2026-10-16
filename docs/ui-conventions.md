@@ -45,8 +45,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     right corner where the page holds the queue: a pill saying what is on ("Radio · ∞ Same era", else "Off"), lit in
     the cover's accent while either is, opening its sheet (the player's radio button too): Radio, after each of the
     queue's own tracks (Off, Similar to the track, Same artist, Same era; how many after each on a slider, 1 to 10, set when the finger lifts), and Autoplay, when the queue ends (Stop, Similar, Same artist, Same era,
-    Random; Queue albums, Restart playlists), each a choice of one with round marks as View's order (decision 0036,
-    amended); the previous tracks folded under "Previous
+    Random; Queue albums, Restart playlists), and for both Ignore favourites (hearted tracks left out of their picks),
+    each a choice of one with round marks as View's order (decision 0036, amended); the previous tracks folded under "Previous
     Tracks" (this device only); the playing track as a card pinned at the top that fills in the cover's colour as it
     plays, with play/pause on its cover, the heart and the track menu; what it plays from as a chip that opens it (its
     album, playlist or crate), or "Playing on …" for the server's player, and "i of n · time left · until 05:09" (when

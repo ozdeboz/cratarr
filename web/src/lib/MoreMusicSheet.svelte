@@ -30,7 +30,7 @@
   import SettingRow from './SettingRow.svelte';
   import Switch from './Switch.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { RADIO_BYS, RADIO_MAX, setAutoplay, setRadio } from './localPlayer.svelte';
+  import { RADIO_BYS, RADIO_MAX, setAutoplay, setRadio, setSkipFavourites } from './localPlayer.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -94,6 +94,15 @@
         onchange={(on) => setAutoplay(now, { restart: on })}
       />
     </div>
+    <!-- For both: hearted tracks are left out of what Radio and Autoplay pick (the owner, 2026-10-16). -->
+    <Switch
+      card
+      label="Ignore favourites"
+      hint="Radio and Autoplay leave out your hearted tracks."
+      hintWhenOn
+      checked={local.skipFavourites}
+      onchange={setSkipFavourites}
+    />
   </div>
 </MenuSheet>
 
