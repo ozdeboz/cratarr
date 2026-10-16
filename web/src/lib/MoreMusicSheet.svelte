@@ -24,7 +24,7 @@
 
   const RADIO: { on: boolean; name: string }[] = [
     { on: false, name: 'Off' },
-    { on: true, name: 'Like the track' },
+    { on: true, name: 'Similar to the track' },
   ];
   const AUTOPLAY: { mode: AutoplayMode | 'stop'; name: string }[] = [
     { mode: 'stop', name: 'Stop' },
