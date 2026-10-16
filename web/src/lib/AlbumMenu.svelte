@@ -63,6 +63,7 @@
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import { player } from './live.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
+  import { isKept, setKept } from './kept.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -524,6 +525,11 @@
               download(list);
             }}
           />
+        {/if}
+        {#if inApp}
+          <!-- Kept on this device (decision 0038): stays in step offline; Download above is a one-time copy. -->
+          {@const on = isKept('album', source, a.id)}
+          <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
         {/if}
         {#if kept.length}
           {@const ids = kept.map((t) => t.download.id)}

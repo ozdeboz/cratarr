@@ -2,13 +2,14 @@
   // An artist's menu (the artist panel's ⋮, decided 2026-10-16, after Symfonium's): the artist at the top (their
   // heart there), the large actions (Play, Shuffle, Play next, Add to queue), then on rounded cards Start radio (their
   // Radio mix), Add to playlist (all their tracks, as an album's), Download and Share, and their picture on this device
-  // (one chosen here, or their newest album's cover again). No Instant mix (the owner: "a confusing thing"), no rating
+  // (one chosen here, or their newest album's cover again); in the app Keep on this device (decision 0038). No Instant mix (the owner: "a confusing thing"), no rating
   // (the server keeps none for artists).
   import { albumCoverUrl } from './api';
   import { download, downloads, inApp, removeDownloads } from './app.svelte';
   import { artistPictureId } from './albums.svelte';
   import { coverKey, localCovers, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
+  import { isKept, setKept } from './kept.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -146,6 +147,11 @@
               download(tracks);
             }}
           />
+        {/if}
+        {#if inApp}
+          <!-- Kept on this device (decision 0038): their tracks stay in step offline. -->
+          {@const on = isKept('artist', source, name)}
+          <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
         {/if}
         {#if kept.length}
           {@const keptIds = kept.map((t) => t.download.id)}

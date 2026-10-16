@@ -1510,6 +1510,7 @@
   <PlaylistMenu
     playlists={selected}
     ondownload={inApp && selected.length === 1 && playable.length ? () => download(tracksOf(playable)) : null}
+    keepFrom={inApp && selected.length === 1 && source ? source : null}
     start={menuStart}
     ondeleted={() => (editing = null)}
     onclose={() => {

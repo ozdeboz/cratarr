@@ -5,7 +5,9 @@
   // its action is under way (an album going into a playlist track by track), the spinner in place of its label. `badge`:
   // a small icon after a toggle's label (a group's leader: a crown), `badgeLabel` saying what it means. `onmark`: the
   // toggle's mark (+ or the tick) is a button of its own, `markLabel` saying what it does; the label keeps `onclick`.
+  // `switched`: an entry that turns something on or off (Keep on this device), its switch at the end.
   import Icon, { type IconName } from './Icon.svelte';
+  import SwitchTrack from './SwitchTrack.svelte';
 
   let {
     icon = null,
@@ -19,6 +21,7 @@
     badgeLabel = '',
     onmark = null,
     markLabel = '',
+    switched = null,
   }: {
     icon?: IconName | null;
     label: string;
@@ -31,10 +34,15 @@
     badgeLabel?: string;
     onmark?: (() => void) | null;
     markLabel?: string;
+    switched?: boolean | null;
   } = $props();
 </script>
 
-{#if checked === null}
+{#if switched !== null}
+  <button class="entry" role="menuitemcheckbox" aria-checked={switched} {disabled} {onclick}>
+    {#if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span><SwitchTrack on={switched} />
+  </button>
+{:else if checked === null}
   <button class="entry" class:danger role="menuitem" disabled={disabled || busy} aria-busy={busy} {onclick}>
     {#if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span>
   </button>
