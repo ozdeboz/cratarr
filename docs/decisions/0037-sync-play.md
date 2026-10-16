@@ -103,3 +103,31 @@ What it does differently:
 - the clock on the monotonic clock, and pinged more often;
 - each device's output delay measured once with a microphone (a click track recorded from both), where Jellyfin
   leaves it to a hand-set offset. Jellyfin's tolerances (60, 400 and 500 ms) are an order wider than the 20 ms here.
+
+## Measured (2026-10-16, step 1), and the choice made after the research
+
+The clock exchange on the two devices, with nothing played or changed (preview 29):
+
+| Device | Best round trip | Middle round trip | Offset spread (better half) |
+|---|---|---|---|
+| Salon tablet | 2.5 ms | 4 ms | 0.6 ms |
+| Phone | 4.6 ms | 19–21 ms | 3.5 ms |
+
+Both know Cratarr's clock well inside 20 ms. The phone's middle round trip shows Wi-Fi power saving, as the research
+warned. The NAS's own clock is about 1.1 s off the devices', which does not matter: everything is in Cratarr's time.
+
+**The owner chose Snapcast, folded in** (2026-10-16), after research into how the proven systems do it (Snapcast,
+AirPlay 2, Google Cast groups, Squeezebox, and the Android studies): one stream, decoded once and stamped with the
+time each chunk should sound, played out by each device with sample-level correction. This replaces "Keeping time" and
+"The same audio" above.
+
+- **Cratarr speaks Snapcast's server protocol** (port 1704; the documented binary protocol): the clock exchange,
+  hello, each device's settings (volume, speaker delay, buffer), the stream's format header, and the time-stamped
+  chunks. There is no separate snapserver.
+- **A group's queue is decoded once at Cratarr**, gapless, in one format, and sent to its players.
+- **The app plays a group with Snapcast's own player** (snapclient, as Snapdroid bundles it), unchanged. The part
+  that must be exact (each chunk played at its time, samples dropped or repeated) stays Snapcast's tested code.
+- **The cost:** a grouped device plays from the NAS live, with no offline playback, and a pause or skip is heard after
+  the buffer (about a second). Playing alone is unchanged.
+- **Kept from above:** groups at Cratarr, commands to the group, each device's speaker delay measured once with a
+  microphone, and Wi-Fi held in low-latency mode while grouped.
