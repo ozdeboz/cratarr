@@ -207,6 +207,11 @@
     if (order === 'rating') return u.rating ? '★'.repeat(u.rating) : null;
     return null;
   };
+  // A row ordered by how you used them says the value where it says when the album came (a tile's pill says it too).
+  const usedLine = (s: ShelfSource, a: ListedAlbum) => {
+    const v = USE_ORDERS.includes(order) ? axisOf(s, a) : null;
+    return v && order === 'played' ? `played ${v}` : v;
+  };
   const openMenu = (s: ShelfSource, a: ListedAlbum, anchor: DOMRect) => onmenu(s, a, anchor);
 
   // Select: the ticked albums by `source/id`; null while not selecting.
@@ -359,7 +364,7 @@
                   <span class="facts">
                     <span>{a.tracks} {a.tracks === 1 ? 'track' : 'tracks'}</span>
                     <span class:weak={weak(a)}>{quality(a)}</span>
-                    {#if a.added}<span>added {addedOn(a.added)}</span>{/if}
+                    {#if usedLine(s, a)}<span>{usedLine(s, a)}</span>{:else if a.added}<span>added {addedOn(a.added)}</span>{/if}
                     {#each a.tags as t (t)}<span class="tag">{t}</span>{/each}
                   </span>
                   {@render extra?.(s, a)}
