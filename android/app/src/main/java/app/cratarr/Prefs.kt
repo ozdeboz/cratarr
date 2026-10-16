@@ -71,7 +71,11 @@ class Prefs(context: Context) {
             try {
                 val o = org.json.JSONObject(it)
                 val seed = o.optJSONArray("seed")
-                Radio.State(o.optString("mode", "similar"), (0 until (seed?.length() ?: 0)).map { i -> seed!!.optString(i) })
+                Radio.State(
+                    o.optString("mode", "similar"),
+                    (0 until (seed?.length() ?: 0)).map { i -> seed!!.optString(i) },
+                    o.optString("within").takeIf { w -> w.isNotEmpty() && !o.isNull("within") },
+                )
             } catch (e: Exception) {
                 null
             }
@@ -79,7 +83,10 @@ class Prefs(context: Context) {
         set(value) {
             p.edit().apply {
                 if (value == null) remove(RADIO)
-                else putString(RADIO, org.json.JSONObject().put("mode", value.mode).put("seed", org.json.JSONArray(value.seed)).toString())
+                else putString(
+                    RADIO,
+                    org.json.JSONObject().put("mode", value.mode).put("seed", org.json.JSONArray(value.seed)).put("within", value.within ?: org.json.JSONObject.NULL).toString(),
+                )
             }.apply()
         }
 
