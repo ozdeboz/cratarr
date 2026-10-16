@@ -11,6 +11,8 @@ pub struct Config {
     pub playlist_dir: Option<String>,
     /// Where `settings.json` is kept; `None`: the Settings page can look but not save.
     pub data_dir: Option<String>,
+    /// Where Snapcast's clients connect for sync play (decision 0037), e.g. `0.0.0.0:1704`; empty: not served.
+    pub snapcast_bind: Option<String>,
 }
 
 /// Variables that are no longer read: `placement.rs` finds paths on its own, and no Jellyfin user is involved.
@@ -23,6 +25,10 @@ impl Config {
             bind: get("CRATARR_BIND").unwrap_or_else(|| "0.0.0.0:8080".into()),
             playlist_dir: get("CRATARR_PLAYLIST_DIR"),
             data_dir: get("CRATARR_DATA_DIR"),
+            snapcast_bind: match lookup("CRATARR_SNAPCAST_BIND") {
+                Some(b) => Some(b.trim().to_string()).filter(|b| !b.is_empty()),
+                None => Some("0.0.0.0:1704".into()),
+            },
         })
     }
 }
@@ -43,6 +49,8 @@ mod tests {
         assert_eq!(c.bind, "0.0.0.0:8080");
         assert_eq!(c.playlist_dir, None);
         assert_eq!(c.data_dir, None);
+        assert_eq!(c.snapcast_bind.as_deref(), Some("0.0.0.0:1704"));
+        assert_eq!(cfg(&[("CRATARR_SNAPCAST_BIND", "")]).unwrap().snapcast_bind, None, "set empty: not served");
         assert_eq!(cfg(&[("CRATARR_PLAYLIST_DIR", "/music")]).unwrap().playlist_dir.as_deref(), Some("/music"));
         assert_eq!(cfg(&[("CRATARR_PLAYLIST_DIR", "  ")]).unwrap().playlist_dir, None);
     }

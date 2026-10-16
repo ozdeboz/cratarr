@@ -284,6 +284,18 @@ pub enum Command {
     Handover { to: String },
     /// Sync play, step 1 (decision 0037): what it plays this moment, answered at once (`POST .../sample`).
     Sample { id: u64 },
+    /// Sync play (decision 0037): this player plays with `to`'s group, which `to` leads when it plays in none. Handled
+    /// here; never sent to a player.
+    Join { to: String },
+    /// Sync play: this player plays alone again; a leader's music goes on with the others. Handled here.
+    Leave,
+    /// Sync play, to a player: the group it plays in, by its leader (itself: it leads; none: it plays alone), and where
+    /// the group's sound is (Snapcast's port on Cratarr's host, and its buffer). Never taken from outside.
+    Group {
+        leader: Option<String>,
+        port: u16,
+        buffer_ms: u32,
+    },
 }
 
 impl Command {
@@ -351,6 +363,8 @@ pub struct PlayerView {
     pub ids: TrackIds,
     /// The queue entry that plays (decision 0033).
     pub current_entry_id: Option<String>,
+    /// The group it plays in, by its leader (decision 0037); a player of a group shows what the group plays.
+    pub group: Option<String>,
     /// The whole queue, for one player asked for by name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<Vec<QueueTrack>>,
@@ -384,6 +398,10 @@ struct Entry {
     fresh: bool,
     /// The queue's version in the last edit told to the player: what a report must have seen to be taken.
     told: u64,
+    /// The leader of the group it plays in (itself when it leads), decision 0037.
+    leader: Option<String>,
+    /// When it joined its group, counted: the longest-joined leads when the leader leaves.
+    joined: u64,
 }
 
 impl Entry {
@@ -399,6 +417,8 @@ impl Entry {
             at: Instant::now(),
             fresh: false,
             told: 0,
+            leader: None,
+            joined: 0,
         }
     }
 
@@ -458,10 +478,30 @@ impl Entry {
             album: track.as_ref().and_then(|t| t.album.clone()),
             ids: if self.ids.0 == key(track.as_ref()) { self.ids.1.clone() } else { TrackIds::default() },
             current_entry_id: track.as_ref().map(|t| t.entry.clone()).filter(|e| !e.is_empty()),
+            group: self.leader.clone(),
             track,
             queue: with_queue.then(|| self.queue.tracks.clone()),
         }
     }
+}
+
+/// A player as seen: a player of a group that does not lead it shows what the group plays, with its own name, reach
+/// and volume (decision 0037).
+fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Option<PlayerView> {
+    let e = entries.get(name)?;
+    let own = e.view(name, with_queue);
+    let leader = e.leader.as_deref().filter(|l| *l != name).and_then(|l| Some((l, entries.get(l)?)));
+    Some(match leader {
+        Some((l, le)) => PlayerView {
+            name: own.name,
+            online: own.online,
+            seen: own.seen,
+            volume: own.volume,
+            ducked: own.ducked,
+            ..le.view(l, with_queue)
+        },
+        None => own,
+    })
 }
 
 /// The one PlayOn, for the Cratarr source's players (decision 0032), which plugins cannot be handed.
@@ -482,6 +522,10 @@ pub struct PlayOn {
     playlists: Arc<PlaylistService>,
     /// Sync play's measurements, waiting for the players' samples (decision 0037, step 1).
     samples: super::together::Samples,
+    /// Where groups' sound is (Snapcast's port, its buffer), once Cratarr serves it (decision 0037).
+    sync_play: Mutex<Option<(u16, u32)>>,
+    /// Counts joins, for who joined longest ago.
+    joins: AtomicU64,
 }
 
 /// A player's queue as saved, with where it was in it and whether it played.
@@ -529,6 +573,8 @@ impl PlayOn {
             save: tokio::sync::Notify::new(),
             playlists,
             samples: super::together::Samples::default(),
+            sync_play: Mutex::new(None),
+            joins: AtomicU64::new(1),
         });
         me.clone().tell_webhooks();
         me.clone().watch_leases();
@@ -568,7 +614,7 @@ impl PlayOn {
             .filter(|(_, e)| e.index() >= 0)
             .max_by_key(|(_, e)| (e.report.playing, std::cmp::Reverse(e.at.elapsed())))
             .or_else(|| online.max_by_key(|(_, e)| std::cmp::Reverse(e.heard.elapsed())));
-        best.map(|(n, e)| e.view(n, true))
+        best.and_then(|(n, _)| view_in(&entries, n, true))
     }
 
     /// A short summary of what the players do (track, playing, queue), compared to notice a change cheaply.
@@ -619,6 +665,12 @@ impl PlayOn {
                     me.changed();
                 }
                 was = now;
+                // Gone (its lease over) leaves its group, which plays on; back, it does not join again by itself.
+                let gone: Vec<String> = me.entries().iter().filter(|(_, e)| e.leader.is_some() && e.heard.elapsed() >= LEASE).map(|(n, _)| n.clone()).collect();
+                for n in gone {
+                    tracing::info!("player {n:?} is gone: out of its group");
+                    let _ = me.leave(&n).await;
+                }
             }
         });
     }
@@ -675,14 +727,16 @@ impl PlayOn {
 
     /// Every player Cratarr has heard of since it started, by name.
     pub fn list(&self) -> Vec<PlayerView> {
-        let mut out: Vec<PlayerView> = self.entries().iter().map(|(n, e)| e.view(n, false)).collect();
+        let entries = self.entries();
+        let mut out: Vec<PlayerView> = entries.keys().filter_map(|n| view_in(&entries, n, false)).collect();
+        drop(entries);
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         out
     }
 
     /// One player, with its queue.
     pub fn get(&self, name: &str) -> Option<PlayerView> {
-        self.entries().get(name).map(|e| e.view(name, true))
+        view_in(&self.entries(), name, true)
     }
 
     /// A player connects: the commands for it come out of the returned stream, which closes the connection when it
@@ -699,6 +753,8 @@ impl PlayOn {
             e.heard = Instant::now();
             e.fresh = true;
         }
+        // Its group as Cratarr knows it (none, after it was gone): what it played with before it went is set straight.
+        self.tell_group(name);
         tracing::info!("player {name:?} connected");
         self.changed();
         Ok(Commands { rx, play_on: self.clone(), name: name.to_string(), id })
@@ -793,8 +849,19 @@ impl PlayOn {
 
     /// Asks player `name` to do something.
     pub async fn command(&self, name: &str, command: Command) -> Result<(), ToggleError> {
+        // A command to any player of a group is the group's, played by its leader; its volume stays its own.
+        let own = matches!(command, Command::Volume { .. } | Command::Duck | Command::Unduck | Command::Sample { .. } | Command::Join { .. } | Command::Leave);
+        let leader = if own { None } else { self.leader_of(name) };
+        let name = leader.as_deref().unwrap_or(name);
         let command = match command {
-            Command::Handover { to } => return self.handover(name, &to).await,
+            Command::Join { to } => return self.join(name, &to).await,
+            Command::Leave => return self.leave(name).await,
+            Command::Group { .. } => return Err(ToggleError::Refused("A group is made with join and leave.".into())),
+            // Played on one player: the group ends (decision 0037).
+            Command::Handover { to } => {
+                self.dissolve(name);
+                return self.handover(name, &to).await;
+            }
             Command::Play { from, tracks, mut index, mut position_ms, shuffle, paused } => {
                 let picked = match &from.playlist {
                     Some(p) => Some(self.playlist_tracks(p).await?),
@@ -909,6 +976,135 @@ impl PlayOn {
         // The music is on its way there; this one stopping is no reason to fail the handover.
         let _ = Box::pin(self.command(from, Command::Stop)).await;
         Ok(())
+    }
+
+    /// Cratarr serves groups' sound (decision 0037): on Snapcast's `port`, played `buffer_ms` after it is stamped.
+    pub fn serve_sync_play(&self, port: u16, buffer_ms: u32) {
+        *self.sync_play.lock().unwrap_or_else(|p| p.into_inner()) = Some((port, buffer_ms));
+    }
+
+    fn sync_play(&self) -> Option<(u16, u32)> {
+        *self.sync_play.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The leader of the group `name` plays in (itself when it leads); `None` when it plays alone.
+    pub fn leader_of(&self, name: &str) -> Option<String> {
+        self.entries().get(name).and_then(|e| e.leader.clone())
+    }
+
+    /// The players of `leader`'s group, the longest-joined first (the leader among them).
+    fn group(&self, leader: &str) -> Vec<String> {
+        let entries = self.entries();
+        let mut players: Vec<(u64, String)> =
+            entries.iter().filter(|(_, e)| e.leader.as_deref() == Some(leader)).map(|(n, e)| (e.joined, n.clone())).collect();
+        players.sort();
+        players.into_iter().map(|(_, n)| n).collect()
+    }
+
+    /// Tells a player the group it plays in (none: alone), as Cratarr knows it.
+    fn tell_group(&self, name: &str) {
+        let (port, buffer_ms) = self.sync_play().unwrap_or((crate::snapcast::PORT, crate::snapcast::BUFFER_MS));
+        let leader = self.leader_of(name);
+        let _ = self.send(name, &Command::Group { leader, port, buffer_ms });
+    }
+
+    /// `name` plays with `to`'s group, which `to` leads when it plays in none (decision 0037). Out of any group it
+    /// played in first.
+    async fn join(&self, name: &str, to: &str) -> Result<(), ToggleError> {
+        if self.sync_play().is_none() {
+            return Err(ToggleError::Refused("Sync play is not served here.".into()));
+        }
+        let leader = {
+            let entries = self.entries();
+            for n in [name, to] {
+                let Some(e) = entries.get(n) else { return Err(ToggleError::Refused(format!("No player is called {n}."))) };
+                if !e.online() {
+                    return Err(ToggleError::Refused(format!("{n} is not connected.")));
+                }
+            }
+            entries.get(to).and_then(|e| e.leader.clone()).unwrap_or_else(|| to.to_string())
+        };
+        if name == leader || self.leader_of(name).as_deref() == Some(leader.as_str()) {
+            return Ok(());
+        }
+        if self.leader_of(name).is_some() {
+            self.leave(name).await?;
+        }
+        let newly_leads = {
+            let mut entries = self.entries();
+            let n = self.joins.fetch_add(2, Ordering::Relaxed);
+            let newly = entries.get_mut(&leader).filter(|l| l.leader.is_none()).map(|l| {
+                l.leader = Some(leader.clone());
+                l.joined = n;
+            });
+            if let Some(e) = entries.get_mut(name) {
+                e.leader = Some(leader.clone());
+                e.joined = n + 1;
+            }
+            newly.is_some()
+        };
+        tracing::info!("player {name:?} plays with {leader:?}");
+        if newly_leads {
+            self.tell_group(&leader);
+        }
+        self.tell_group(name);
+        self.changed();
+        Ok(())
+    }
+
+    /// `name` plays alone again. A leader's music goes on with the others, the longest-joined leading (a handover, as
+    /// decision 0033's); the last one left plays alone.
+    async fn leave(&self, name: &str) -> Result<(), ToggleError> {
+        let Some(leader) = self.leader_of(name) else { return Ok(()) };
+        if let Some(e) = self.entries().get_mut(name) {
+            e.leader = None;
+        }
+        self.tell_group(name);
+        let rest = self.group(&leader);
+        tracing::info!("player {name:?} plays alone again");
+        if leader == name {
+            if let Some(next) = rest.first() {
+                let alone = rest.len() == 1;
+                {
+                    let mut entries = self.entries();
+                    for n in &rest {
+                        if let Some(e) = entries.get_mut(n) {
+                            e.leader = (!alone).then(|| next.clone());
+                        }
+                    }
+                }
+                for n in &rest {
+                    self.tell_group(n);
+                }
+                let _ = self.handover(name, next).await;
+            }
+        } else if rest.len() == 1 {
+            // Only the leader left: it plays alone.
+            if let Some(e) = self.entries().get_mut(&leader) {
+                e.leader = None;
+            }
+            self.tell_group(&leader);
+        }
+        self.changed();
+        Ok(())
+    }
+
+    /// The group `name` plays in ends: everyone in it plays alone (its music stays with the leader).
+    fn dissolve(&self, name: &str) {
+        let Some(leader) = self.leader_of(name) else { return };
+        let players = self.group(&leader);
+        {
+            let mut entries = self.entries();
+            for n in &players {
+                if let Some(e) = entries.get_mut(n) {
+                    e.leader = None;
+                }
+            }
+        }
+        for n in &players {
+            self.tell_group(n);
+        }
+        self.changed();
     }
 
     /// Tracks sent by their ids only (a page sends a playlist's ids and looks their names up later) get their title,
@@ -1026,6 +1222,23 @@ impl PlayOn {
         });
     }
 }
+
+/// What the Snapcast server asks of Play On (decision 0037).
+impl crate::snapcast::Groups for PlayOn {
+    fn leader_of(&self, player: &str) -> Option<String> {
+        PlayOn::leader_of(self, player)
+    }
+
+    fn volume_of(&self, player: &str) -> u8 {
+        self.entries().get(player).map_or(100, |e| {
+            let v = e.report.volume.min(100);
+            if e.report.ducked { (f32::from(v) * DUCKED) as u8 } else { v }
+        })
+    }
+}
+
+/// A ducked player plays at this part of its volume (as the app ducks: PlayOnLink's DUCKED).
+const DUCKED: f32 = 0.25;
 
 /// The commands for one connected player; dropping it (the connection closed) marks the player offline.
 pub struct Commands {
@@ -1205,6 +1418,92 @@ mod tests {
         s.sort();
         assert_eq!(s, (0..50).collect::<Vec<_>>());
         assert_ne!(v, s, "50 tracks in their own order after a shuffle: one chance in 50!");
+    }
+
+    /// Play On over an empty library, with no files kept.
+    async fn play_on() -> Arc<PlayOn> {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let d = std::env::temp_dir().join(format!("cratarr-playon-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
+        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), Vec::new(), Default::default(), None).await.unwrap();
+        let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
+        let state = crate::sync_state::SyncState::open(None).unwrap();
+        let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
+        PlayOn::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal)), None)
+    }
+
+    /// The commands a player was told since last asked.
+    fn told(c: &mut Commands) -> Vec<serde_json::Value> {
+        std::iter::from_fn(|| c.rx.try_recv().ok()).map(|m| serde_json::from_str(&m).unwrap()).collect()
+    }
+
+    fn said(c: &mut Commands) -> Vec<String> {
+        told(c).iter().map(|m| m["command"].as_str().unwrap().to_string()).collect()
+    }
+
+    fn group_of(c: &mut Commands) -> Vec<Option<String>> {
+        told(c).iter().filter(|m| m["command"] == "group").map(|m| m["leader"].as_str().map(str::to_string)).collect()
+    }
+
+    #[tokio::test]
+    async fn a_group_plays_as_one_and_goes_on_without_its_leader() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let (mut tablet, mut phone, mut kitchen) = (p.connect("tablet").unwrap(), p.connect("phone").unwrap(), p.connect("kitchen").unwrap());
+        // Each is told its group as it connects: none.
+        for c in [&mut tablet, &mut phone, &mut kitchen] {
+            assert_eq!(group_of(c), vec![None]);
+        }
+        assert!(matches!(p.command("phone", Command::Join { to: "tablet".into() }).await, Err(ToggleError::Refused(_))), "not served");
+        p.serve_sync_play(1704, 1000);
+        p.command("tablet", Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).await.unwrap();
+        p.report("tablet", Report { index: 0, playing: true, volume: 80, ..Report::default() }).unwrap();
+        told(&mut tablet);
+
+        p.command("phone", Command::Join { to: "tablet".into() }).await.unwrap();
+        assert_eq!(group_of(&mut tablet), vec![Some("tablet".to_string())]);
+        assert_eq!(group_of(&mut phone), vec![Some("tablet".to_string())]);
+        // The phone shows the group's music, with its own name and volume.
+        p.report("phone", Report { index: -1, volume: 30, ..Report::default() }).unwrap();
+        let v = p.get("phone").unwrap();
+        assert_eq!((v.name.as_str(), v.title.as_deref(), v.volume, v.group.as_deref()), ("phone", Some("tr-1"), 30, Some("tablet")));
+        // A command to the phone is the group's; its volume its own.
+        p.command("phone", Command::Next).await.unwrap();
+        p.command("phone", Command::Volume { level: 40 }).await.unwrap();
+        assert_eq!(said(&mut tablet), vec!["next"]);
+        assert_eq!(said(&mut phone), vec!["volume"]);
+
+        // Joining the phone is joining the tablet's group; the tablet already leads it.
+        p.command("kitchen", Command::Join { to: "phone".into() }).await.unwrap();
+        assert_eq!(group_of(&mut kitchen), vec![Some("tablet".to_string())]);
+        assert!(told(&mut tablet).is_empty());
+
+        // The tablet leaves: the phone, joined longest, leads with the tablet's music; the tablet stops.
+        p.command("tablet", Command::Leave).await.unwrap();
+        let to_tablet = said(&mut tablet);
+        assert_eq!((to_tablet.first().map(String::as_str), to_tablet.last().map(String::as_str)), (Some("group"), Some("stop")));
+        let to_phone = told(&mut phone);
+        assert_eq!(to_phone[0]["leader"], "phone");
+        assert_eq!(to_phone[1]["command"], "play");
+        assert_eq!(to_phone[1]["tracks"].as_array().unwrap().len(), 2);
+        assert_eq!(group_of(&mut kitchen), vec![Some("phone".to_string())]);
+
+        // The kitchen leaves: the phone, alone, plays on its own.
+        p.command("kitchen", Command::Leave).await.unwrap();
+        assert_eq!(group_of(&mut kitchen), vec![None]);
+        assert_eq!(group_of(&mut phone), vec![None]);
+        assert_eq!(p.get("phone").unwrap().group, None);
+
+        // Played on one player, a group ends: the music goes there and the others play alone.
+        p.command("kitchen", Command::Join { to: "phone".into() }).await.unwrap();
+        p.command("tablet", Command::Join { to: "phone".into() }).await.unwrap();
+        told(&mut kitchen);
+        told(&mut tablet);
+        told(&mut phone);
+        p.command("tablet", Command::Handover { to: "kitchen".into() }).await.unwrap();
+        assert!(p.list().iter().all(|v| v.group.is_none()));
+        assert_eq!(said(&mut kitchen).iter().filter(|c| *c == "play").count(), 1);
+        assert_eq!(said(&mut phone).last().map(String::as_str), Some("stop"));
     }
 
     #[test]

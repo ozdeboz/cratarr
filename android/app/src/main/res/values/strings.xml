@@ -9,5 +9,6 @@
     <string name="try_again">Try again</string>
     <string name="change_address">Change address</string>
     <string name="ready">Ready</string>
+    <string name="grouped">With %1$s</string>
     <string name="downloads">Downloads</string>
 </resources>

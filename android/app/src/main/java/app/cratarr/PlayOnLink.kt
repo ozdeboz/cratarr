@@ -28,6 +28,7 @@ class PlayOnLink(
     private val service: PlayerService,
     private val player: Player,
     private val prefs: Prefs,
+    private val sync: SyncPlay,
 ) : Player.Listener {
     private val main = Handler(Looper.getMainLooper())
     private val reports = Executors.newSingleThreadExecutor()
@@ -253,6 +254,8 @@ class PlayOnLink(
             "previous" -> if (!Repeat.previous(service, p)) p.seekToPrevious()
             "repeat" -> Repeat.set(service, p, m.optString("mode"), service::located)
             "sleep" -> Sleep.set(service, m, "at_ms", "end_of_track")
+            // Sync play (decision 0037): the group this player plays in, by its leader (none: alone).
+            "group" -> sync.group(if (m.isNull("leader")) null else m.optString("leader"), m.optInt("port", 1704), m.optLong("buffer_ms", 1000))
             "radio" -> Radio.command(service, p, m)
             "autoplay" -> Autoplay.command(service, p, m)
             "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))
@@ -371,7 +374,8 @@ class PlayOnLink(
             .put("sleep", Sleep.json(service, "at_ms", "end_of_track"))
             .put("radio", Radio.on(service))
             .put("autoplay", Autoplay.json(service))
-            .put("position_ms", p.currentPosition.coerceAtLeast(0))
+            // Leading a group, where it is heard: a buffer behind this player.
+            .put("position_ms", sync.heardPosition(p).coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
             .put("volume", ((unducked ?: p.volume) * 100).toInt())

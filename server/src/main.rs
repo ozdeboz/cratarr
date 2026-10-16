@@ -28,6 +28,7 @@ mod ports;
 mod playlists;
 mod serve;
 mod settings;
+mod snapcast;
 mod source;
 mod stream;
 mod sync_state;
@@ -114,7 +115,21 @@ async fn main() -> Result<()> {
     let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), tag_rules, &env)
         .context("cannot open the OpenSubsonic library")?;
     serve::set_instance(served.clone());
+    let snapcast_bind = cfg.snapcast_bind.clone();
     let app = app::App::new(cfg, saved, origin).await.context("cannot open the catalogue")?;
+    // Sync play (decision 0037): groups' sound on Snapcast's protocol; Cratarr runs on without it if the port is taken.
+    if let Some(bind) = snapcast_bind {
+        match tokio::net::TcpListener::bind(&bind).await {
+            Ok(listener) => {
+                let port = listener.local_addr().map(|a| a.port()).unwrap_or(snapcast::PORT);
+                let snap = snapcast::Snapcast::new(app.play_on.clone(), snapcast::BUFFER_MS);
+                app.play_on.serve_sync_play(port, snapcast::BUFFER_MS);
+                tokio::spawn(snap.serve(listener));
+                tracing::info!("sync play on {bind}");
+            }
+            Err(e) => tracing::warn!("sync play is off: cannot listen on {bind}: {e}"),
+        }
+    }
     let n = app.playlists.count().await.context("cannot read the playlist folder")?;
     tracing::info!("found {n} playlists");
     let status = app.status().await;

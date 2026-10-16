@@ -45,10 +45,14 @@ class PlayerService : MediaSessionService() {
     private lateinit var prefs: Prefs
     private lateinit var notifications: NotificationManager
     private lateinit var player: ExoPlayer
+    /** Sync play (decision 0037): this device in a group. */
+    private lateinit var sync: SyncPlay
 
     /** The server's address or the player's name changed: Play On connects again with them. A sleep timer set: kept. */
     private val prefsChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == Prefs.SERVER_URL || key == Prefs.PLAYER_NAME || key == Prefs.STAY_READY) link?.reconnect()
+        // Another server or name: Cratarr says the group again once connected.
+        if ((key == Prefs.SERVER_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, 0, sync.bufferMs)
         if (key == Prefs.SLEEP) {
             keepSleep()
             link?.sleepChanged()
@@ -70,7 +74,8 @@ class PlayerService : MediaSessionService() {
         prefs = Prefs(this)
         notifications = getSystemService(NotificationManager::class.java)
         val music = AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build()
-        player = ExoPlayer.Builder(this)
+        sync = SyncPlay(this, prefs)
+        player = ExoPlayer.Builder(this, sync.renderers(this))
             .setAudioAttributes(music, true)
             .setHandleAudioBecomingNoisy(true)
             // A wake lock and a Wi-Fi lock while it plays: the screen off stops neither the music nor its download.
@@ -81,6 +86,8 @@ class PlayerService : MediaSessionService() {
             .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playback(this)))
             .build()
         player.addListener(Keeper(player))
+        sync.attach(player)
+        sync.onChange = { main.post(::groupChanged) }
         Repeat.apply(this, player)
         prefs.migrate()
         // A sleep timer from before: its music is gone.
@@ -102,7 +109,7 @@ class PlayerService : MediaSessionService() {
             .setSessionActivity(open)
             .setCallback(Callback())
             .build()
-        link = PlayOnLink(this, player, prefs).also { it.start() }
+        link = PlayOnLink(this, player, prefs, sync).also { it.start() }
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(prefsChanged)
     }
 
@@ -128,6 +135,13 @@ class PlayerService : MediaSessionService() {
      * does not put the app to sleep and Play On still reaches it.
      */
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        // Following a group: its own notification, which keeps the app (and Snapcast's player in it) running.
+        if (sync.follows) {
+            showGroup()
+            notifications.cancel(DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID)
+            return
+        }
+        notifications.cancel(GROUP_NOTIFICATION)
         val stay = prefs.stayReady
         if (stay && session.player.mediaItemCount == 0) {
             showReady()
@@ -158,6 +172,34 @@ class PlayerService : MediaSessionService() {
         } catch (e: IllegalStateException) {
             // Android refuses a foreground start from the background; the next start from the app shows it.
             Log.w(TAG, "cannot stay ready from the background: ${e.message}")
+        }
+    }
+
+    /** Following a group began or ended. */
+    private fun groupChanged() {
+        if (sync.follows) showGroup() else session?.let { onUpdateNotification(it, false) }
+    }
+
+    private fun showGroup() {
+        notifications.createNotificationChannel(NotificationChannel(READY_CHANNEL, getString(R.string.ready), NotificationManager.IMPORTANCE_MIN))
+        val open = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val grouped = Notification.Builder(this, READY_CHANNEL)
+            .setSmallIcon(R.drawable.media3_notification_small_icon)
+            .setContentTitle(getString(R.string.grouped, sync.leader ?: ""))
+            .setContentText(prefs.playerName)
+            .setContentIntent(open)
+            .setOngoing(true)
+            .build()
+        try {
+            notifications.cancel(READY_NOTIFICATION)
+            startForeground(GROUP_NOTIFICATION, grouped, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "cannot stay in front while grouped: ${e.message}")
         }
     }
 
@@ -259,6 +301,7 @@ class PlayerService : MediaSessionService() {
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)
+        sync.release()
         link?.stop()
         link = null
         session?.run {
@@ -295,6 +338,7 @@ class PlayerService : MediaSessionService() {
         private const val COUNT_EVERY_MS = 5_000L
         private const val READY_CHANNEL = "ready"
         private const val READY_NOTIFICATION = 7
+        private const val GROUP_NOTIFICATION = 8
         private const val ACTION_READY = "cratarr.READY"
 
         /** Started (or let go) as Stay ready says. Called while the app is in front, where a foreground start is allowed. */
