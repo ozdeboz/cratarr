@@ -289,6 +289,10 @@ class PlayOnLink(
             .put("at_ms", at)
             .put("offset_ms", Clock.offsetMs)
             .put("rtt_ms", if (Clock.rttMs.isNaN()) 0.0 else Clock.rttMs)
+            .apply {
+                val (_, median, spread) = Clock.spread()
+                if (!median.isNaN()) put("rtt_median_ms", median).put("offset_spread_ms", spread)
+            }
             .toString()
         if (reports.isShutdown) return
         reports.execute { post("$base/sample", body) }

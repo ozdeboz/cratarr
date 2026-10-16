@@ -35,6 +35,11 @@ pub struct Sample {
     pub offset_ms: f64,
     #[serde(default)]
     pub rtt_ms: f64,
+    /// The middle round trip of its last pings, and how far the better half's offsets lie apart: how much to trust it.
+    #[serde(default)]
+    pub rtt_median_ms: f64,
+    #[serde(default)]
+    pub offset_spread_ms: f64,
 }
 
 /// A player's sample brought to the measurement's moment.
@@ -48,6 +53,8 @@ pub struct Measured {
     pub position_ms: f64,
     pub offset_ms: f64,
     pub rtt_ms: f64,
+    pub rtt_median_ms: f64,
+    pub offset_spread_ms: f64,
 }
 
 /// Two players on the same track: how far apart (`a` ahead when positive).
@@ -122,6 +129,8 @@ fn compare(got: Vec<(String, Sample)>, asked: &[String]) -> Measure {
             position_ms: if s.playing { s.position_ms + (at - s.at_ms) } else { s.position_ms },
             offset_ms: s.offset_ms,
             rtt_ms: s.rtt_ms,
+            rtt_median_ms: s.rtt_median_ms,
+            offset_spread_ms: s.offset_spread_ms,
         })
         .collect();
     let mut apart = Vec::new();
