@@ -214,12 +214,13 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         "getArtistInfo" | "getArtistInfo2" => {
             let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
             let count = p.size("count", 20, 100);
+            // An unknown artist answers so before the radio's scorer runs.
+            let (lib, wanted) = (s.library.clone(), id.clone());
+            let artist = blocking(move || lib.artist(&wanted)).await?.ok_or_else(|| not_found("Artist"))?;
             let similar = crate::app::radio::similar_artists(&id, count).await.unwrap_or_else(|e| {
                 tracing::warn!("similar artists of {id}: {e}");
                 Vec::new()
             });
-            let lib = s.library.clone();
-            let artist = blocking(move || lib.artist(&id)).await?.ok_or_else(|| not_found("Artist"))?;
             let lib = s.library.clone();
             let mut found = blocking(move || {
                 let mut out = Vec::new();
