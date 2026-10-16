@@ -65,7 +65,26 @@ class Prefs(context: Context) {
             p.edit().apply { if (value == null) remove(SLEEP) else putString(SLEEP, "${value.atMs ?: ""},${value.endOfTrack}") }.apply()
         }
 
+    /** The radio (Radio), as `{"mode", "seed"}`; null while it is off. */
+    var radio: Radio.State?
+        get() = p.getString(RADIO, null)?.let {
+            try {
+                val o = org.json.JSONObject(it)
+                val seed = o.optJSONArray("seed")
+                Radio.State(o.optString("mode", "similar"), (0 until (seed?.length() ?: 0)).map { i -> seed!!.optString(i) })
+            } catch (e: Exception) {
+                null
+            }
+        }
+        set(value) {
+            p.edit().apply {
+                if (value == null) remove(RADIO)
+                else putString(RADIO, org.json.JSONObject().put("mode", value.mode).put("seed", org.json.JSONArray(value.seed)).toString())
+            }.apply()
+        }
+
     companion object {
+        const val RADIO = "radio"
         const val SLEEP = "sleep"
         const val REPEAT = "repeat"
         const val SHUFFLED = "shuffled"

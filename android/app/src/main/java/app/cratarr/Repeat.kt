@@ -30,6 +30,11 @@ object Repeat {
         val m = if (mode == ONE || mode == ALL) mode else OFF
         Prefs(context).repeat = m
         player.repeatMode = if (m == ONE) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        // Repeat all turns the radio off (decision 0036): both say what comes after the queue.
+        if (m == ALL && Radio.get(context) != null) {
+            Prefs(context).radio = null
+            Radio.dropAhead(player)
+        }
         if (m == ALL) extend(context, player, locate)
     }
 
@@ -61,12 +66,14 @@ object Repeat {
         val tracks = (0 until count).mapNotNull { trackOf(player.getMediaItemAt(it)) }
         // The album or playlist: its tracks by their place in it (the last time each played), not those added by hand.
         val byPlace = sortedMapOf<Int, JSONObject>()
-        for (t in tracks) if (t.optString("lane") != "next" && t.has("n")) byPlace[t.optInt("n")] = t
+        // Neither the tracks added by hand nor the radio's (decision 0036) are the album's or playlist's own.
+        val own = { t: JSONObject -> t.optString("lane").let { it != "next" && it != Radio.LANE } }
+        for (t in tracks) if (own(t) && t.has("n")) byPlace[t.optInt("n")] = t
         val round = if (byPlace.isNotEmpty()) {
             byPlace.values.toMutableList()
         } else {
             // A queue without places (played before they were kept): its own tracks, once each, in their order.
-            tracks.filter { it.optString("lane") != "next" }.distinctBy { "${it.optString("source")}/${it.optString("id")}" }.toMutableList()
+            tracks.filter(own).distinctBy { "${it.optString("source")}/${it.optString("id")}" }.toMutableList()
         }
         if (round.isEmpty()) return
         if (Prefs(context).shuffled) {

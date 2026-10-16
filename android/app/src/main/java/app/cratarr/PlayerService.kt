@@ -53,6 +53,11 @@ class PlayerService : MediaSessionService() {
             keepSleep()
             link?.sleepChanged()
         }
+        // The radio set (here, by the page or by Cratarr): Cratarr is told, and its lane filled when it runs low.
+        if (key == Prefs.RADIO) {
+            link?.sleepChanged()
+            Radio.fill(this, player, prefs.serverUrl, ::located)
+        }
     }
 
     /** The sleep timer's time, looked at again when it should have come (the device may have slept meanwhile). */
@@ -209,6 +214,8 @@ class PlayerService : MediaSessionService() {
                 main.postDelayed(keep, 1_000)
                 // Repeat all: the last track plays, the next round goes after it.
                 Repeat.extend(this@PlayerService, player, ::located)
+                // The radio: fewer than three ahead, the next ones after them (decision 0036).
+                Radio.fill(this@PlayerService, player, prefs.serverUrl, ::located)
             }
             // Each time a track is reached it can count again (a repeat, a jump back).
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) counted = false

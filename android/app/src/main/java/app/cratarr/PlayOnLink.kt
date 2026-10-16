@@ -180,8 +180,10 @@ class PlayOnLink(
                 if (items.isEmpty()) return
                 p.setMediaItems(items, m.optInt("index", 0).coerceIn(0, items.size - 1), m.optLong("position_ms", 0))
                 p.prepare()
-                // A new play turns repeat one off; whether it comes shuffled counts for repeat all's next rounds.
+                // A new play turns repeat one off; whether it comes shuffled counts for repeat all's next rounds; the radio
+                // stays on, its seed the new queue (unless these are its own tracks).
                 Repeat.newPlay(service, p)
+                Radio.newPlay(service, m.optJSONArray("tracks"))
                 Prefs(service).shuffled = m.optBoolean("shuffle")
                 // A queue given back after the app came back without one waits for a play.
                 if (m.optBoolean("paused")) p.pause() else p.play()
@@ -229,6 +231,7 @@ class PlayOnLink(
             "previous" -> if (!Repeat.previous(service, p)) p.seekToPrevious()
             "repeat" -> Repeat.set(service, p, m.optString("mode"), service::located)
             "sleep" -> Sleep.set(service, m, "at_ms", "end_of_track")
+            "radio" -> Radio.set(service, p, m)
             "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))
             "volume" -> {
                 val v = m.optInt("level", 100).coerceIn(0, 100) / 100f
@@ -302,6 +305,7 @@ class PlayOnLink(
             .put("version", if (version >= 0) version else JSONObject.NULL)
             .put("repeat", Repeat.mode(service))
             .put("sleep", Sleep.json(service, "at_ms", "end_of_track"))
+            .put("radio", Radio.json(service))
             .put("position_ms", p.currentPosition.coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
