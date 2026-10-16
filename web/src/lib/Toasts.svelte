@@ -81,7 +81,8 @@
   .region {
     position: fixed;
     inset: auto 0 calc(var(--bottom-h, 0px) + env(safe-area-inset-bottom) + 8px);
-    z-index: 25;
+    /* Over the full player (30) and the sheets (40, 41) too: a failure or an Undo raised there must show there. */
+    z-index: 45;
     display: flex;
     justify-content: center;
     padding: 0 12px;

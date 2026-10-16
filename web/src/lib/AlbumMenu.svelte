@@ -132,7 +132,7 @@
         (read = {
           tracks: r.rows
             .filter((x) => x.id && !x.missing)
-            .map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: id })),
+            .map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: id, duration_secs: x.duration_secs })),
           genres: r.genres,
         }),
       () => {},

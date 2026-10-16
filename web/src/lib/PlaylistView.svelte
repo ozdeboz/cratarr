@@ -403,7 +403,7 @@
   }
   // An album's tracks carry its id: its cover, and the Incoming page's mark on what plays.
   const tracksOf = (list: PlaylistRow[], src = source): LocalTrack[] =>
-    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album?.id ?? null }));
+    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album?.id ?? null, duration_secs: x.duration_secs }));
 
   // Several playlists: each section's rows, asked for when it comes into view; a section folds.
   let sections = $state<Record<string, { rows: PlaylistRow[]; source: string } | { error: string }>>({});

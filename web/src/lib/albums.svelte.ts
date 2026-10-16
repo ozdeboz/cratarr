@@ -43,7 +43,7 @@ export async function tracksOfAlbums(list: { source: string; a: ListedAlbum }[])
   return views.flatMap(({ r, a }) =>
     r.rows
       .filter((x) => x.id && !x.missing)
-      .map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: a.id })),
+      .map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: a.id, duration_secs: x.duration_secs })),
   );
 }
 

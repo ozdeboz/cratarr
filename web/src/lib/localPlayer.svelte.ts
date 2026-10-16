@@ -32,6 +32,8 @@ export type LocalTrack = {
   album_id: string | null;
   /** False for a track no playlist line can name (outside every library Cratarr sees). */
   addable?: boolean;
+  /** Its length (s), where the list it came from said: the queue's lengths and when it ends. */
+  duration_secs?: number | null;
 };
 
 export type Repeat = 'off' | 'one' | 'all';
@@ -758,6 +760,17 @@ function replaceUpcoming(upcoming: LocalTrack[]) {
   if (handed()) return hand('upcoming', { tracks: upcoming, shuffled: local.shuffled });
   cutFrom(local.index + 1);
 }
+
+/** Takes out everything after the playing track (the queue sheet's clear button); returns it, for its Undo. The
+ *  radio, when on, fills again at once. */
+export function clearUpcoming(): LocalTrack[] {
+  const removed = local.queue.slice(local.index + 1);
+  if (removed.length) replaceUpcoming([]);
+  return removed;
+}
+
+/** Puts back what `clearUpcoming` took out (its Undo), in place of what came meanwhile (the radio's). */
+export const restoreUpcoming = (tracks: LocalTrack[]) => replaceUpcoming(tracks);
 
 /** Plays `tracks` from `index`, `position` seconds into it; `shuffle`: all of them mixed, from the first. Something new
  *  replaces the album or playlist that played, not what was added by hand: those come right after its first track, as

@@ -2,7 +2,10 @@
   // The queue (decisions 0019, 0022), as Finamp's queue sheet (lib/components/PlayerScreen/queue_list.dart): a sheet
   // over the player on the blurred cover, a grab handle and "Queue"; then the previous tracks (folded, this device
   // only: the server's player reports only what comes next), the playing track as a card that fills as it plays
-  // (pinned at the top), the "Playing from" header (pinned under it) and what comes next.
+  // (pinned at the top), the "Playing from" header (pinned under it) and what comes next. From Symfonium's queue
+  // (decided 2026-10-16): search, shuffle, repeat, the radio and Clear (what comes next goes, with Undo) in the head;
+  // when the queue ends on the clock; "Playing from" a chip that opens it; a row's album after its artist (not the
+  // album the queue plays), and its ⋮.
   // Gestures as Finamp's: drag the handle area down to close; a tap on a row plays it, a long-press (or right-click) is
   // its menu; a row's heart adds it to a playlist, a long-press on the heart makes it a favourite or not; on this device
   // a row's handle reorders and a swipe left removes it (the server's player takes neither command). Haptics as
@@ -18,9 +21,13 @@
   import { swipe } from './swipe';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
-  import { local, jump as localJump, moveUpcoming, removeUpcoming } from './localPlayer.svelte';
+  import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming, setRepeat, setShuffle } from './localPlayer.svelte';
+  import RadioSheet from './RadioSheet.svelte';
+  import { albumSubject, viewPlaylist } from './panel.svelte';
+  import { crates, CRATE } from './crates.svelte';
+  import { player } from './live.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
-  import { isLocal } from './output.svelte';
+  import { isLocal, shownPlaylists } from './output.svelte';
   import { clockText, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
   import { toast } from './toast.svelte';
 
@@ -47,8 +54,46 @@
     const i = here ? local.index + 1 : 1;
     const lengths = np.upcoming.map((u) => u.duration_secs);
     const left = dur && lengths.every((l) => l !== null) ? dur - pos + lengths.reduce((a: number, l) => a + (l ?? 0), 0) : null;
-    return `${i} / ${n}${left !== null ? `  (${clockText(left)})` : ''}`;
+    if (left === null) return `${i} of ${n}`;
+    const ends = new Date(Date.now() + left * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    return `${i} of ${n} · ${clockText(left)} · until ${ends}`;
   });
+
+  // "Playing from" opens what the queue came from, in the panel: its album when the queue's own tracks (not those
+  // added by hand or by the radio) are one album's, else the playlist or crate of that name.
+  const fromView = $derived.by(() => {
+    if (!from) return null;
+    const own = local.queue.filter((t) => !t.lane);
+    const first = own[0];
+    if (first?.album_id && own.every((t) => t.album_id === first.album_id)) return albumSubject(first.source, first.album_id);
+    if (shownPlaylists().some((p) => p.id === from)) return from;
+    const c = crates.list?.find((x) => x.name === from);
+    return c ? CRATE + c.id : null;
+  });
+  function openFrom() {
+    const v = fromView;
+    if (!v) return;
+    onclose();
+    player.full = false;
+    viewPlaylist(v);
+  }
+
+  // Search: what comes next, by title, artist or album; the rows that match show (no reordering meanwhile).
+  let searching = $state(false);
+  let query = $state('');
+  const q = $derived(searching ? query.trim().toLowerCase() : '');
+  const matches = (t: { name: string; artist: string | null; album: string | null }) =>
+    !q || [t.name, t.artist, t.album].some((x) => x?.toLowerCase().includes(q));
+
+  // The radio's sheet, from the head (as the player's radio button).
+  let radioOpen = $state(false);
+
+  // Clear: what comes next goes; the toast's Undo puts it back.
+  function clear() {
+    heavy();
+    const removed = clearUpcoming();
+    if (removed.length) toast.show({ text: 'Queue cleared.', tone: 'done', act: { label: 'Undo', run: () => restoreUpcoming(removed) } });
+  }
 
   let list = $state<HTMLElement>();
 
@@ -98,6 +143,7 @@
   let pull = $state(0);
   let pullFrom = $state<{ y: number; t: number } | null>(null);
   function pullDown(e: PointerEvent) {
+    if ((e.target as Element).closest('button, input')) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     pullFrom = { y: e.clientY, t: performance.now() };
   }
@@ -127,6 +173,16 @@
   };
 </script>
 
+<!-- A row's second line: the artist, then the album (as Symfonium's), unless it is the album the queue plays. -->
+{#snippet byline(t: { artist: string | null; album: string | null })}
+  {[t.artist, t.album === from ? null : t.album].filter(Boolean).join(' • ')}
+{/snippet}
+
+<!-- A row's ⋮: its menu, as a long-press on the row. -->
+{#snippet more(t: MenuTrack, place: QueuePlace)}
+  <button class="more" aria-label="Menu of {t.name}" onclick={() => rowMenu(t, place)}><Icon name="moreVert" size={22} /></button>
+{/snippet}
+
 <!-- Finamp's row heart (lib/RowHeart.svelte): a tap opens its playlists, a long-press makes it a favourite or not. -->
 {#snippet rowHeart(t: MenuTrack)}
   <RowHeart source={t.source} id={t.id} name={t.name} onopen={() => showMenu({ track: t, start: 'lists', queue: null })} />
@@ -149,7 +205,31 @@
 
     <div class="qhead" role="presentation" onpointerdown={pullDown} onpointermove={pullMove} onpointerup={pullUp} onpointercancel={pullUp}>
       <span class="handle"></span>
-      <span class="title">Queue</span>
+      <div class="bar">
+        <span class="title">Queue</span>
+        <span class="tools">
+          <button class:on={searching} aria-label="Search the queue" aria-pressed={searching} onclick={() => ((searching = !searching), (query = ''))}
+            ><Icon name="search" size={22} /></button
+          >
+          {#if here}
+            <button class:on={local.shuffled} aria-label="Shuffle" aria-pressed={local.shuffled} onclick={() => setShuffle(!local.shuffled)}><Icon name="shuffle" size={22} /></button>
+            <button
+              class:on={local.repeat !== 'off'}
+              aria-label={local.repeat === 'one' ? 'Repeat one' : local.repeat === 'all' ? 'Repeat all' : 'Repeat'}
+              aria-pressed={local.repeat !== 'off'}
+              onclick={() => setRepeat(local.repeat === 'off' ? 'all' : local.repeat === 'all' ? 'one' : 'off')}
+              ><Icon name={local.repeat === 'one' ? 'repeatOne' : 'repeat'} size={22} /></button
+            >
+            <button class:on={local.radio !== null} aria-label="Radio" aria-haspopup="dialog" aria-pressed={local.radio !== null} onclick={() => (radioOpen = true)}
+              ><Icon name="radio" size={22} /></button
+            >
+            <button aria-label="Clear the queue" disabled={!np.upcoming.length} onclick={clear}><Icon name="clearQueue" size={22} /></button>
+          {/if}
+        </span>
+      </div>
+      {#if searching}
+        <input class="find" type="search" placeholder="Title, artist or album" aria-label="Search the queue" bind:value={query} {@attach (el) => el.focus()} />
+      {/if}
     </div>
 
     <div class="list" bind:this={list}>
@@ -163,9 +243,10 @@
               <li>
                 <button class="row" onclick={() => (tick(), localJump(j))} use:longpress={() => rowMenu(asTrack(t, t.source), { list: 'previous', at: j })}>
                   {#if t.album_id}<img src={albumCoverUrl(t.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
-                  <div><strong>{t.name || '…'}</strong><span>{t.artist ?? ''}</span></div>
+                  <div><strong>{t.name || '…'}</strong><span>{@render byline(t)}</span></div>
                 </button>
                 {@render rowHeart(asTrack(t, t.source))}
+                {@render more(asTrack(t, t.source), { list: 'previous', at: j })}
               </li>
             {/each}
           </ol>
@@ -194,7 +275,8 @@
 
       <div class="sec qsec">
         <div class="from">
-          {#if from}<span class="light">Playing from&nbsp;</span><strong>{from}</strong>
+          {#if from && fromView}<button class="chip" onclick={openFrom}><Icon name={fromView.startsWith('album:') ? 'albums' : fromView.startsWith(CRATE) ? 'crates' : 'playlists'} size={18} /><span>{from}</span></button>
+          {:else if from}<span class="light">Playing from&nbsp;</span><strong>{from}</strong>
           {:else if !here && np.player}<span class="light">Playing on&nbsp;</span><strong>{np.player}</strong>
           {:else}<strong>Queue</strong>{/if}
         </div>
@@ -207,6 +289,7 @@
             <!-- A line where the tracks added by hand end and the album or playlist goes on (decision 0033), and where
                  the radio's begin (decision 0036). -->
             <li
+              hidden={!matches(t)}
               class:lifted={drag?.from === i}
               class:lane-end={i > 0 && np.upcoming[i - 1].lane !== t.lane && (np.upcoming[i - 1].lane === 'next' || t.lane === 'radio')}
               style:transform={drag ? `translateY(${reorder.offset(i)}px)` : null}
@@ -218,12 +301,12 @@
                 use:swipe={{ enabled: here && !drag, onswipe: () => removeSwiped(i) }}
               >
                 {#if t.album_id}<img src={albumCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
-                <div><strong>{t.name}</strong><span>{t.artist ?? ''}</span></div>
-                {#if t.lane === 'radio'}<span class="radio" title="Radio"><Icon name="radio" size={16} /></span>{/if}
+                <div><strong>{t.name}</strong><span>{#if t.lane === 'radio'}<i class="radio" title="Radio"><Icon name="radio" size={14} /></i>{/if}{@render byline(t)}</span></div>
                 {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
               </button>
               {@render rowHeart(asTrack(t, np.source))}
-              {#if here}
+              {@render more(asTrack(t, np.source), { list: 'upcoming', at: i })}
+              {#if here && !q}
                 <button
                   class="grip"
                   aria-label="Drag to reorder"
@@ -241,6 +324,10 @@
       {/if}
     </div>
   </div>
+{/if}
+
+{#if radioOpen}
+  <RadioSheet onclose={() => (radioOpen = false)} />
 {/if}
 
 {#if menuShown && menuFor}
@@ -316,9 +403,92 @@
     background: var(--muted);
   }
 
+  /* The head's row: "Queue", then its tools (Symfonium's: search, shuffle, repeat, the radio), lit while on. */
+  .bar {
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+    gap: 8px;
+    padding: 0 8px 0 18px;
+  }
+
   .title {
+    flex: 1;
     font-size: 18px;
     font-weight: 400;
+  }
+
+  .tools {
+    display: flex;
+  }
+
+  .tools button {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .tools button.on {
+    color: var(--art-accent);
+  }
+
+  .find {
+    align-self: stretch;
+    min-height: 40px;
+    margin: 8px 12px 0;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--bg) 60%, transparent);
+    color: inherit;
+    font: inherit;
+  }
+
+  /* "Playing from" as a chip that opens it. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+    min-height: 36px;
+    padding: 0 14px 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .more {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .tools button:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .list {
@@ -513,11 +683,15 @@
     box-sizing: border-box;
   }
 
-  /* The radio's tracks carry its mark (decision 0036). */
+  /* The radio's tracks carry its mark before the artist (decision 0036). */
   .row .radio {
-    flex: none;
-    display: grid;
-    color: var(--muted);
+    display: inline-block;
+    margin-right: 4px;
+    vertical-align: -2px;
+  }
+
+  .rows li[hidden] {
+    display: none;
   }
 
   /* Takes no room, so dragging counts rows as before. */

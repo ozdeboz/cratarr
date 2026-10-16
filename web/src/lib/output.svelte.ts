@@ -68,7 +68,7 @@ export function localNowPlaying(): NowPlaying | null {
       album: u.album,
       album_id: u.album_id,
       addable: u.addable ?? true,
-      duration_secs: null,
+      duration_secs: u.duration_secs ?? null,
       lane: u.lane,
     })),
   };
@@ -275,7 +275,7 @@ export async function playAlbumHere(source: string, album: string, title?: strin
   const r = await albumView(source, album);
   if (!r.rows.length) throw new Error('That album has no tracks.');
   playQueue(
-    r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album })),
+    r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, duration_secs: x.duration_secs })),
     0,
     title ?? r.title,
   );
