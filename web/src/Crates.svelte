@@ -9,7 +9,6 @@
   import { crates, CRATE, EDIT_CRATE, FAVOURITES, favouritesOf, loadCrates, startCrate } from './lib/crates.svelte';
   import Icon from './lib/Icon.svelte';
   import Row from './lib/Row.svelte';
-  import NameSheet from './lib/NameSheet.svelte';
   import { shownPlaylists } from './lib/output.svelte';
   import { viewPlaylist, panel } from './lib/panel.svelte';
   import Notice from './lib/Notice.svelte';
@@ -23,8 +22,8 @@
   });
 
   // New crate: named in the same sheet as a new playlist, then built in the panel.
-  let naming = $state(false);
-  usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => (naming = true) }));
+  // New crate: the panel's crate edit mode, empty, the caret in its name (as New playlist).
+  usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => startCrate('') }));
   // The list's order (its header, or View): as made, or by name; either way round.
   const sorted = $derived.by(() => {
     const list = [...(crates.list ?? [])];
@@ -63,18 +62,6 @@
   {/if}
 </main>
 
-{#if naming}
-  <NameSheet
-    title="New crate"
-    what="crate"
-    action="Create crate"
-    onsubmit={(name) => {
-      naming = false;
-      startCrate(name);
-    }}
-    onclose={() => (naming = false)}
-  />
-{/if}
 
 <style>
   /* The page answers to its own width (beside the player or not): a container, as Playlists. */

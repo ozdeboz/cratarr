@@ -1,16 +1,13 @@
 <script lang="ts">
   import ListHead from './lib/ListHead.svelte';
   import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, usePageAction } from './lib/pageView.svelte';
-  import { createPlaylist, type Playlist, type PlayMode } from './lib/api';
+  import type { Playlist, PlayMode } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
-  import { live, queueTap, refresh } from './lib/live.svelte';
+  import { live, queueTap } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
   import { toast } from './lib/toast.svelte';
-  import { withUndo } from './lib/undo.svelte';
-  import { followCreate, followDelete } from './lib/follow.svelte';
   import PlaylistMenu from './lib/PlaylistMenu.svelte';
   import SelectBar from './lib/SelectBar.svelte';
-  import NameSheet from './lib/NameSheet.svelte';
   import Icon from './lib/Icon.svelte';
   import Seg from './lib/Seg.svelte';
   import SizeControl from './lib/SizeControl.svelte';
@@ -20,7 +17,7 @@
   import { fromAction } from 'svelte/attachments';
   import PageLoading from './lib/PageLoading.svelte';
   import PlaylistItem from './lib/PlaylistItem.svelte';
-  import { viewPlaylist, panel } from './lib/panel.svelte';
+  import { NEW_PLAYLIST, viewPlaylist, panel } from './lib/panel.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './lib/favourites.svelte';
   import { endSelect, pickWhich, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
   import SelectSheet from './lib/SelectSheet.svelte';
@@ -43,9 +40,8 @@
 
   // The open menu (a sheet, decision 0021): a playlist's (lib/PlaylistMenu), the "New playlist" one, or the ticked
   // playlists' (Select's ⋮, decision 0025).
-  type Menu = { kind: 'new' } | { kind: 'selection' };
+  type Menu = { kind: 'selection' };
   let menu = $state<Menu | null>(null);
-  let working = $state(false);
 
   const np = $derived(playing());
   const items = $derived.by(() => {
@@ -109,23 +105,9 @@
 
   const missing = (n: number) => `${n} missing ${n === 1 ? 'track' : 'tracks'}`;
 
-  async function create(name: string) {
-    if (working) return;
-    working = true;
-    try {
-      const { undo } = await createPlaylist(name);
-      withUndo(`Created ${name}.`, [undo], { after: (undone) => (undone ? followDelete(name) : followCreate(name)) });
-      menu = null;
-    } catch (e) {
-      toast.fail(e, 'Something went wrong');
-    } finally {
-      working = false;
-      await refresh();
-    }
-  }
-
-  // The pill's last button (lib/TopPill): New playlist. What is ticked has the select bar.
-  usePageAction(() => ({ icon: 'plus', label: 'New playlist', run: () => (menu = { kind: 'new' }) }));
+  // The pill's last button (lib/TopPill): New playlist, the panel's edit mode with no playlist yet. What is ticked has
+  // the select bar.
+  usePageAction(() => ({ icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
 
   // The select bar's actions on the ticked playlists (one after another, each track once), as the panel's on its
   // ticked tracks: Select ends after each.
@@ -230,9 +212,7 @@
   {/if}
 </main>
 
-{#if menu?.kind === 'new'}
-  <NameSheet title="New playlist" what="playlist" action="Create playlist" onsubmit={create} onclose={() => (menu = null)} />
-{:else if menu?.kind === 'selection'}
+{#if menu?.kind === 'selection'}
   <!-- The menu of what is ticked (a long-press ticks). -->
   <PlaylistMenu playlists={select.picked.flatMap((id) => shownPlaylists().filter((x) => x.id === id))} onclose={() => (menu = null)} />
 {/if}

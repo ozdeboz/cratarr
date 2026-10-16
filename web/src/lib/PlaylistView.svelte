@@ -23,6 +23,7 @@
     crateRows,
     crateToPlaylist,
     createCrate,
+    createPlaylist,
     deleteCrate,
     getCrate,
     updateCrate,
@@ -74,7 +75,7 @@
   import { download, inApp } from './app.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
-  import { albumMoved, albumOf, backToTracks, closePlaylist, panelDepth, viewPlaylist, panel, TABS } from './panel.svelte';
+  import { albumMoved, albumOf, backToTracks, closePlaylist, NEW_PLAYLIST, panelDepth, viewPlaylist, panel, TABS } from './panel.svelte';
   import ExportTab from './ExportTab.svelte';
   import PlaylistItem from './PlaylistItem.svelte';
   import Row from './Row.svelte';
@@ -99,6 +100,8 @@
   import type { PlayMode } from './api';
 
   const id = $derived(panel.viewed ?? '');
+  /** New playlist: edit mode with no playlist yet (no tracks, no file); Save makes it. */
+  const creating = $derived(panel.viewed === NEW_PLAYLIST);
   /** A crate being made (`crate-new`) or one's own being changed (`crate-edit:<id>`): its edit mode, the editor where
    *  its tracks were (decision 0024). */
   const builder = $derived(builderOf(panel.viewed));
@@ -109,7 +112,7 @@
   /** The viewed album (an Incoming one, or a track's), when an album is viewed. */
   const album = $derived(albumOf(panel.viewed));
   /** A crate or an album: tracks without a playlist's file (no tabs, no editing, no statistics). */
-  const plain = $derived(!!crate || !!album || crateEditing);
+  const plain = $derived(!!crate || !!album || crateEditing || creating);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   let albumHead = $state<{ title: string; artist: string | null; year: number | null; format: string | null; kbps: number | null } | null>(null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
@@ -121,10 +124,20 @@
   // One of the playlists' other views (from their menu): a plain bar with back to the tracks, no cover.
   const other = $derived(tab !== 'tracks');
   const title = $derived(
-    crateEditing ? crateDraft?.name.trim() || 'New crate' : crate ? crateName(crate) : album ? (albumHead?.title ?? '') : multi ? `${ids.length} playlists` : id,
+    crateEditing
+      ? crateDraft?.name.trim() || 'New crate'
+      : creating
+        ? 'New playlist'
+        : crate
+          ? crateName(crate)
+          : album
+            ? (albumHead?.title ?? '')
+            : multi
+              ? `${ids.length} playlists`
+              : id,
   );
   /** The cover's place without covers: a genre's, a crate's or an album's icon. */
-  const heroIcon = $derived(crate && genreOf(crate) !== null ? 'music' : crate || crateEditing ? 'crates' : 'albums');
+  const heroIcon = $derived(creating ? 'playlists' : crate && genreOf(crate) !== null ? 'music' : crate || crateEditing ? 'crates' : 'albums');
   const isPermanentCrate = $derived(!!crate && (crates.list?.find((c) => c.id === crate)?.permanent ?? true));
   const p = $derived(plain || multi ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
   /** The selected playlists, in the order ticked (for the menu, the counts). */
@@ -203,7 +216,7 @@
     void undos.n;
     void listsKey;
     void incomingChanged;
-    if (!want || multi || builderOf(want)) return;
+    if (!want || multi || builderOf(want) || want === NEW_PLAYLIST) return;
     const c = crateOf(want);
     const a = albumOf(want);
     // As the toggle shows it (the server's saved setting until the crates are known).
@@ -248,7 +261,7 @@
   $effect(() => {
     const want = id;
     covers = [];
-    if (!want || crateOf(want) || builderOf(want)) return;
+    if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST) return;
     const a = albumOf(want);
     if (a) {
       covers = [albumCoverUrl(a.source, a.id)];
@@ -687,9 +700,13 @@
     // Another playlist viewed (or this one closed): the edit is dropped.
     if (editingFor !== null && editingFor !== id) editing = null;
   });
+  // New playlist: the same edit mode, empty (kept like any edit until Save or Cancel).
+  $effect(() => {
+    if (creating && !untrack(() => editing)) editing = { rows: [], removed: [], name: '', saving: false };
+  });
   const tracksChanged = $derived(!!editing && (editing.removed.length > 0 || editing.rows.some((x, i) => x.at !== i)));
   const newName = $derived(editing ? editing.name.trim() : '');
-  const nameChanged = $derived(!!editing && newName !== '' && newName !== id);
+  const nameChanged = $derived(!!editing && newName !== '' && newName !== id && !creating);
   // A crate's edit mode: the draft (kept, else the crate as saved, else empty; above), its size as the editor works it
   // out.
   let crateTotal = $state<number | null>(null);
@@ -778,6 +795,15 @@
     sel?.removeAllRanges();
     sel?.addRange(range);
   }
+  // A new playlist or crate: the caret in its name at once, as a tap on the name puts it there.
+  let named = '';
+  $effect(() => {
+    const key = creating ? 'playlist' : builder && !builder.id ? 'crate' : '';
+    const el = nameEl;
+    if (key === named || (key && !el)) return;
+    named = key;
+    if (key) editName();
+  });
   function startEdit() {
     if (!rows) return;
     navigator.vibrate?.(8);
@@ -809,7 +835,24 @@
     setTimeout(() => removeAt(i), 200);
     return 'away' as const;
   };
+  // New playlist's Save: made under its name (Undo deletes it again), and the panel shows it.
+  async function create() {
+    const name = newName;
+    if (!editing || !name || editing.saving) return;
+    editing.saving = true;
+    try {
+      const { undo } = await createPlaylist(name);
+      withUndo(`Created ${name}.`, [undo], { after: (undone) => (undone ? followDelete(name) : followCreate(name)) });
+      editing = null;
+      await refresh();
+      viewPlaylist(name);
+    } catch (e) {
+      toast.fail(e, "The playlist wasn't made");
+      if (editing) editing.saving = false;
+    }
+  }
   async function save() {
+    if (creating) return create();
     if (!editing || !rows) return;
     if (!tracksChanged && !nameChanged) return void (editing = null);
     editing.saving = true;
@@ -914,6 +957,13 @@
            something changed) in the pencil's place, the heart staying, Save in the menu's place. -->
       <div class="actbar" class:stuck bind:this={actbar} role="toolbar" aria-label="Edit">
         <span class="grow"></span>
+        {#if creating}
+          <!-- New playlist: nothing to delete or favour yet; Cancel leaves, Save makes it once it has a name. -->
+          <button class="icon" aria-label="Cancel" title="Cancel" onclick={() => closePlaylist()} disabled={editing.saving}><Icon name="reset" size={24} /></button>
+          <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving || !newName} aria-busy={editing.saving}
+            ><Icon name="arrowDownToLine" size={24} /></button
+          >
+        {:else}
         <button
           class="icon"
           aria-label={`Delete ${id}`}
@@ -931,6 +981,7 @@
           ><Icon name="heart" size={24} /></button
         >
         <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={24} /></button>
+        {/if}
       </div>
       {:else if crateEditing}
       <!-- A crate's edit bar, as a playlist's: Delete (one's own; a second tap confirms), Cancel in the pencil's place,
@@ -996,6 +1047,7 @@
           contenteditable="plaintext-only"
           class:saving={editing.saving}
           aria-label="Name"
+          data-placeholder="New playlist"
           spellcheck="false"
           bind:textContent={editing.name}
           onkeydown={(e) => {

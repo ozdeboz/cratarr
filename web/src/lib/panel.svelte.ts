@@ -25,8 +25,12 @@ export function albumOf(viewed: string | null): { source: string; id: string } |
 }
 
 /** A crate, its builder or an album: a subject of one, without tabs (decision 0025). */
+/** A playlist being made: the panel's edit mode, with no playlist yet (New playlist, as `crate-new` is New crate). */
+export const NEW_PLAYLIST = 'playlist-new';
+
 export const isSingleSubject = (viewed: string | null) =>
-  !!viewed && (viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed.startsWith(ALBUM));
+  !!viewed &&
+  (viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(ALBUM));
 
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */
