@@ -577,6 +577,8 @@ fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Op
             seen: own.seen,
             volume: own.volume,
             ducked: own.ducked,
+            // What the device is (a Kodi stays one, so it is never made a leader).
+            kind: own.kind,
             ..le.view(l, with_queue)
         },
         None => own,
@@ -1700,6 +1702,10 @@ mod tests {
         p.command("kitchen", Command::Join { to: "phone".into() }).await.unwrap();
         assert_eq!(group_of(&mut kitchen), vec![Some("tablet".to_string())]);
         assert!(told(&mut tablet).is_empty());
+        // A Kodi in a group shows as one, not as its leader's kind.
+        p.entries().get_mut("kitchen").unwrap().kind = PlayerKind::Kodi;
+        assert_eq!(p.get("kitchen").unwrap().kind, "kodi");
+        p.entries().get_mut("kitchen").unwrap().kind = PlayerKind::App;
 
         // The tablet leaves: the phone, joined longest, leads with the tablet's music; the tablet stops.
         p.command("tablet", Command::Leave).await.unwrap();

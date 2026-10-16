@@ -10,6 +10,10 @@
 //! long WAV from Cratarr (`snapcast::listen`), silenced at once at a break as the others are, and kept in line from
 //! its own time in the stream: Cratarr skips or pads a few milliseconds of what it sends.
 //!
+//! A long queue (a playlist of hundreds) takes Kodi a while to take in (it looks up every address): Kodi's playlist
+//! holds the queue's first tracks, as many as the playing one needs, at once; the rest follows a chunk at a time
+//! between the reads.
+//!
 //! Not on Kodi: Radio and Autoplay (the app's player inserts them).
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,6 +56,11 @@ const MISSES: u32 = 3;
 /// Following a group: out of line by more than this (µs), the next skip or pad is asked for, at most this often.
 const OUT_OF_LINE_US: i64 = 20_000;
 const CORRECT_EVERY: Duration = Duration::from_secs(4);
+/// A play waits for Kodi's playlist to hold its first track and this many after it; the rest is added this many at a
+/// time (a single Playlist.Add of 472 took a Pi 3 longer than the usual 6 s), each allowed this long.
+const AHEAD: usize = 3;
+const CHUNK: usize = 50;
+const FILL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Kodi's JSON-RPC.
 struct Rpc {
@@ -75,8 +84,16 @@ impl Rpc {
     }
 
     async fn call(&self, method: &str, params: Value) -> Result<Value> {
+        self.call_for(method, params, None).await
+    }
+
+    /// A call allowed longer than the usual 6 s.
+    async fn call_for(&self, method: &str, params: Value, timeout: Option<Duration>) -> Result<Value> {
         let id = self.id.fetch_add(1, Ordering::Relaxed);
         let mut req = self.http.post(&self.endpoint).json(&json!({ "jsonrpc": "2.0", "method": method, "params": params, "id": id }));
+        if let Some(t) = timeout {
+            req = req.timeout(t);
+        }
         if !self.user.is_empty() {
             req = req.basic_auth(&self.user, Some(&self.password));
         }
@@ -134,8 +151,11 @@ struct Driver {
     name: String,
     rpc: Rpc,
     stream_from: String,
-    /// The queue as Cratarr told it, as Kodi's playlist holds it.
+    /// The queue as Cratarr told it; Kodi's playlist holds its first `held` tracks (all, once filled).
     queue: Vec<QueueTrack>,
+    held: usize,
+    /// When the next chunk is added (later after a failure).
+    fill_at: tokio::time::Instant,
     /// The queue's version in the last command (reports say it).
     version: Option<u64>,
     /// The queue changed since a report took it.
@@ -161,7 +181,9 @@ impl Driver {
             name: cfg.name.clone(),
             rpc: Rpc::new(cfg),
             stream_from: cfg.stream_from.clone(),
+            held: queue.len(),
             queue,
+            fill_at: tokio::time::Instant::now(),
             version: None,
             queue_changed: false,
             unducked: None,
@@ -190,6 +212,7 @@ impl Driver {
         let _ = self.rpc.call("Player.Stop", json!({ "playerid": PLAYER })).await;
         self.rpc.call("Playlist.Clear", json!({ "playlistid": PLAYLIST })).await?;
         self.queue.clear();
+        self.held = 0;
         self.queue_changed = true;
         self.following = Some(leader.to_string());
         self.lags.clear();
@@ -239,6 +262,31 @@ impl Driver {
         Value::Array(tracks.iter().map(|t| json!({ "file": address(&self.stream_from, t) })).collect())
     }
 
+    /// Whether Kodi's playlist still lacks some of the queue.
+    fn filling(&self) -> bool {
+        self.held < self.queue.len()
+    }
+
+    /// The next chunk of the queue onto Kodi's playlist, no further than its first `n` tracks.
+    async fn fill_step(&mut self, n: usize) -> Result<()> {
+        let to = n.min(self.queue.len()).min(self.held + CHUNK);
+        if to <= self.held {
+            return Ok(());
+        }
+        let items = self.items(&self.queue[self.held..to]);
+        self.rpc.call_for("Playlist.Add", json!({ "playlistid": PLAYLIST, "item": items }), Some(FILL_TIMEOUT)).await?;
+        self.held = to;
+        Ok(())
+    }
+
+    /// Kodi's playlist holding at least the queue's first `n` tracks (all, if fewer): what a command needs there.
+    async fn fill_to(&mut self, n: usize) -> Result<()> {
+        while self.held < n.min(self.queue.len()) {
+            self.fill_step(n).await?;
+        }
+        Ok(())
+    }
+
     async fn pause(&self, play: Value) -> Result<()> {
         self.rpc.call("Player.PlayPause", json!({ "playerid": PLAYER, "play": play })).await.map(|_| ())
     }
@@ -247,11 +295,14 @@ impl Driver {
     async fn run(&mut self, c: Command) -> Result<()> {
         match c {
             Command::Play { tracks, index, position_ms, paused, .. } => {
-                let tracks = tracks.unwrap_or_default();
                 self.rpc.call("Playlist.Clear", json!({ "playlistid": PLAYLIST })).await?;
-                if !tracks.is_empty() {
-                    self.rpc.call("Playlist.Add", json!({ "playlistid": PLAYLIST, "item": self.items(&tracks) })).await?;
-                    let at = index.min(tracks.len() - 1);
+                self.queue = tracks.unwrap_or_default();
+                self.held = 0;
+                self.queue_changed = true;
+                if !self.queue.is_empty() {
+                    let at = index.min(self.queue.len() - 1);
+                    // It plays once its track and a few after it are in; the rest follows between the reads.
+                    self.fill_to(at + 1 + AHEAD).await?;
                     self.rpc.call("Player.Open", json!({ "item": { "playlistid": PLAYLIST, "position": at } })).await?;
                     if position_ms > 1000 {
                         // Kodi takes a seek once the track has started.
@@ -266,8 +317,6 @@ impl Driver {
                         self.pause(json!(false)).await?;
                     }
                 }
-                self.queue = tracks;
-                self.queue_changed = true;
             }
             Command::Add { tracks, at, after, .. } => {
                 let place = match after.as_deref() {
@@ -278,12 +327,12 @@ impl Driver {
                 .or(at)
                 .unwrap_or(self.queue.len())
                 .min(self.queue.len());
-                if place >= self.queue.len() {
-                    self.rpc.call("Playlist.Add", json!({ "playlistid": PLAYLIST, "item": self.items(&tracks) })).await?;
-                } else {
+                // Into what Kodi holds; at or past its end, the fill adds them in their turn.
+                if place < self.held {
                     for (i, t) in tracks.iter().enumerate() {
                         let item = json!({ "file": address(&self.stream_from, t) });
                         self.rpc.call("Playlist.Insert", json!({ "playlistid": PLAYLIST, "position": place + i, "item": item })).await?;
+                        self.held += 1;
                     }
                 }
                 self.queue.splice(place..place, tracks);
@@ -291,11 +340,15 @@ impl Driver {
             }
             Command::Remove { index, entry } => {
                 if let Some(p) = self.place_of(entry.as_deref(), index) {
-                    // Kodi keeps the playing track: past it first.
-                    if self.now.ours && self.now.index == p as i64 {
-                        let _ = self.rpc.call("Player.GoTo", json!({ "playerid": PLAYER, "to": "next" })).await;
+                    if p < self.held {
+                        // Kodi keeps the playing track: past it first.
+                        if self.now.ours && self.now.index == p as i64 {
+                            self.fill_to(p + 2).await?;
+                            let _ = self.rpc.call("Player.GoTo", json!({ "playerid": PLAYER, "to": "next" })).await;
+                        }
+                        self.rpc.call("Playlist.Remove", json!({ "playlistid": PLAYLIST, "position": p })).await?;
+                        self.held -= 1;
                     }
-                    self.rpc.call("Playlist.Remove", json!({ "playlistid": PLAYLIST, "position": p })).await?;
                     self.queue.remove(p);
                     self.queue_changed = true;
                 }
@@ -308,6 +361,7 @@ impl Driver {
                     None => to,
                 };
                 let Some(to) = to.filter(|t| *t < self.queue.len() && *t != from) else { return Ok(()) };
+                self.fill_to(from.max(to) + 1).await?;
                 // One place at a time (Kodi swaps; it does not move).
                 let (mut at, step): (usize, isize) = (from, if to > from { 1 } else { -1 });
                 while at != to {
@@ -320,16 +374,18 @@ impl Driver {
             }
             Command::Upcoming { tracks, .. } => {
                 let keep = if self.now.ours { (self.now.index + 1).max(0) as usize } else { 0 }.min(self.queue.len());
-                for p in (keep..self.queue.len()).rev() {
+                for p in (keep..self.held).rev() {
                     self.rpc.call("Playlist.Remove", json!({ "playlistid": PLAYLIST, "position": p })).await?;
+                    self.held = p;
                 }
-                self.rpc.call("Playlist.Add", json!({ "playlistid": PLAYLIST, "item": self.items(&tracks) })).await?;
+                // The new ones follow between the reads.
                 self.queue.truncate(keep);
                 self.queue.extend(tracks);
                 self.queue_changed = true;
             }
             Command::Jump { index, entry } => {
                 if let Some(p) = self.place_of(entry.as_deref(), index) {
+                    self.fill_to(p + 1 + AHEAD).await?;
                     if self.now.ours {
                         self.rpc.call("Player.GoTo", json!({ "playerid": PLAYER, "to": p })).await?;
                         self.pause(json!(true)).await?;
@@ -345,6 +401,7 @@ impl Driver {
                 } else if !self.queue.is_empty() {
                     // Stopped, or Kodi played something else meanwhile: the queue again, where it was.
                     let at = usize::try_from(self.now.index).unwrap_or(0).min(self.queue.len() - 1);
+                    self.fill_to(at + 1 + AHEAD).await?;
                     self.rpc.call("Player.Open", json!({ "item": { "playlistid": PLAYLIST, "position": at } })).await?;
                 }
             }
@@ -359,9 +416,13 @@ impl Driver {
                 let _ = self.rpc.call("Player.Stop", json!({ "playerid": PLAYER })).await;
                 self.rpc.call("Playlist.Clear", json!({ "playlistid": PLAYLIST })).await?;
                 self.queue.clear();
+                self.held = 0;
                 self.queue_changed = true;
             }
             Command::Next => {
+                if self.now.ours {
+                    self.fill_to(usize::try_from(self.now.index + 2).unwrap_or(0)).await?;
+                }
                 self.rpc.call("Player.GoTo", json!({ "playerid": PLAYER, "to": "next" })).await?;
             }
             Command::Previous => {
@@ -543,7 +604,8 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
         let mut d = Driver::new(&cfg, queue);
         tracing::info!("Kodi {:?} is a player", cfg.name);
         let mut misses = 0;
-        let mut wait = Duration::ZERO;
+        // The next read: a deadline of its own, so the fill's chunks (or anything else) do not put it off.
+        let mut read_at = tokio::time::Instant::now();
         let mut silence: Option<tokio::sync::watch::Receiver<bool>> = None;
         loop {
             // Following: the group's silence, kept to (its break silences Kodi as it silences the others).
@@ -576,9 +638,15 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
                         Err(e) => tracing::debug!("Kodi {:?}: a command it does not take: {e}", d.name),
                     }
                     // Read at once: what the command did is reported now.
-                    wait = Duration::from_millis(300);
+                    read_at = tokio::time::Instant::now() + Duration::from_millis(300);
                 }
-                _ = tokio::time::sleep(wait) => {
+                _ = tokio::time::sleep_until(d.fill_at), if d.filling() => {
+                    if let Err(e) = d.fill_step(usize::MAX).await {
+                        tracing::warn!("Kodi {:?}: adding the queue to its playlist: {e:#}", d.name);
+                        d.fill_at = tokio::time::Instant::now() + Duration::from_secs(10);
+                    }
+                }
+                _ = tokio::time::sleep_until(read_at) => {
                     match d.read().await {
                         Ok(now) => {
                             misses = 0;
@@ -604,7 +672,7 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
                             }
                         }
                     }
-                    wait = if d.now.playing || d.following.is_some() { POLL_PLAYING } else { POLL_IDLE };
+                    read_at = tokio::time::Instant::now() + if d.now.playing || d.following.is_some() { POLL_PLAYING } else { POLL_IDLE };
                 }
             }
         }
@@ -747,6 +815,38 @@ mod tests {
         assert!(k.playlist.is_empty());
         let open = k.calls.iter().rev().find(|(m, _)| m == "Player.Open").unwrap();
         assert_eq!(open.1["item"]["file"], "http://192.168.1.5:8081/api/groups/Salon%20tablet/listen.wav?player=Bedroom");
+    }
+
+    #[tokio::test]
+    async fn a_long_queue_plays_at_once_and_the_rest_follows() {
+        let (url, kodi) = fake().await;
+        let cfg = KodiConfig { name: "Bedroom".into(), url, stream_from: "http://192.168.1.5:8081".into(), ..KodiConfig::default() };
+        let mut d = Driver::new(&cfg, Vec::new());
+        d.run(Command::play((0..472).map(|i| t(&format!("tr-{i}"))).collect(), 100, 0)).await.unwrap();
+        {
+            // Up to a few past the track it starts with, in chunks, then it plays.
+            let k = kodi.lock().unwrap();
+            let adds: Vec<usize> = k.calls.iter().filter(|(m, _)| m == "Playlist.Add").map(|(_, p)| p["item"].as_array().unwrap().len()).collect();
+            assert_eq!((adds, k.playlist.len(), k.position), (vec![50, 50, 4], 104, 100));
+        }
+        d.now = d.read().await.unwrap();
+        assert_eq!((d.now.ours, d.now.index), (true, 100));
+        assert!(d.filling());
+
+        // Past what Kodi holds, an added track waits for the fill; new upcoming tracks replace what it held after the
+        // playing one.
+        d.run(Command::Add { tracks: vec![t("tr-new")], at: None, after: Some("e-tr-200".into()), how: None }).await.unwrap();
+        assert!(!kodi.lock().unwrap().calls.iter().any(|(m, _)| m == "Playlist.Insert"));
+        d.run(Command::Upcoming { tracks: (0..60).map(|i| t(&format!("up-{i}"))).collect(), shuffled: None }).await.unwrap();
+        assert_eq!((d.queue.len(), kodi.lock().unwrap().playlist.len()), (161, 101));
+
+        // The fill, a chunk at a time between the reads: Kodi's playlist is the queue.
+        while d.filling() {
+            d.fill_step(usize::MAX).await.unwrap();
+        }
+        let files: Vec<String> = kodi.lock().unwrap().playlist.iter().map(|f| f.rsplit('/').next().unwrap().to_string()).collect();
+        assert_eq!(files, d.queue.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+        assert_eq!(&files[99..102], ["tr-99", "tr-100", "up-0"]);
     }
 
     /// Against a real Kodi, muted throughout (`cargo test -- --ignored real_kodi`, with KODI_URL, KODI_USER, KODI_PASS,
