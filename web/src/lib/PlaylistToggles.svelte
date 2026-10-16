@@ -1,10 +1,11 @@
 <script lang="ts">
   // A menu's playlists as toggle cards (Add to playlist: a track's, an album's, an artist's) with the standard size
   // buttons (lib/SizeControl, decided 2026-10-16: "so that on mobile we can get two columns"): the cards in columns,
-  // as many as the size gives; a name wraps to two lines. The size is remembered (prefs.listZoom), apart from the
+  // as many as the size gives (LIST_WIDTHS: never three on a phone); a name wraps to two lines. A button that would
+  // change nothing is dimmed. The size is remembered (prefs.listZoom), apart from the
   // Playlists page's.
   import type { Snippet } from 'svelte';
-  import { PLAYLIST_WIDTHS } from './pageView.svelte';
+  import { LIST_WIDTHS } from './pageView.svelte';
   import { prefs } from './prefs.svelte';
   import SizeControl from './SizeControl.svelte';
 
@@ -14,9 +15,9 @@
 
 <div class="head">
   <span class="heading">{title}</span>
-  <SizeControl widths={PLAYLIST_WIDTHS} {width} bind:value={prefs.listZoom} />
+  <SizeControl plain widths={LIST_WIDTHS} {width} bind:value={prefs.listZoom} />
 </div>
-<div class="grid" role="group" aria-label="Playlists" bind:clientWidth={width} style:--least="{PLAYLIST_WIDTHS[prefs.listZoom]}px">
+<div class="grid" role="group" aria-label="Playlists" bind:clientWidth={width} style:--least="{LIST_WIDTHS[prefs.listZoom]}px">
   {@render children()}
 </div>
 
@@ -26,7 +27,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 0 12px 12px 16px;
+    padding: 0 8px 8px 16px;
   }
 
   .heading {

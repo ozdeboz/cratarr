@@ -133,8 +133,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   switch at its end) in the album's, the artist's and the panel playlist's menu, beside Download (a one-time copy);
   on a crate or a genre, an icon in its action bar, in the accent while kept.
 - **Add to playlist** (a track's, an album's, an artist's menu; `lib/PlaylistToggles`): the playlists as toggle cards
-  with the standard size buttons beside the heading (decided 2026-10-16), one column by default, two or three as
-  they are made smaller (a name wraps to two lines); the size is remembered apart from the Playlists page's.
+  with the size buttons beside the heading (decided 2026-10-16): two bare icons, dimmed when they would change
+  nothing; one column by default, two when smaller, never three on a phone (three only on a wider sheet; a name wraps
+  to two lines); the size is remembered apart from the Playlists page's.
 - **Share** (track, album, one playlist): the item in words ("Artist – Title") and its link here, through the
   phone's share sheet (the app's in the app), else copied.
 - **A favourite album's cover** carries a small heart in its upper right corner, in the Library's rows and tiles.

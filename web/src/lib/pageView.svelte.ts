@@ -12,6 +12,9 @@ export type PageAction = { icon: IconName; label: string; run: () => void; progr
 
 /** A playlist chip's least width per size step (prefs.zoom). */
 export const PLAYLIST_WIDTHS: readonly number[] = [110, 140, 170, 210, 260, 340];
+/** A menu's playlists' least width per size step (Add to playlist, lib/PlaylistToggles): on a phone one column or two,
+ *  never three (the owner: a toggle card narrower than that cannot show its name); three on a wider sheet. */
+export const LIST_WIDTHS: readonly number[] = [160, 220, 340];
 
 /** An album's least width per size step (prefs.albumZoom): rows need room for their lines, covers less. */
 export const ALBUM_WIDTHS: Record<AlbumLayout, readonly number[]> = {
