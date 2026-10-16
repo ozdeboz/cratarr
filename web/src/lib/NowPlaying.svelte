@@ -853,13 +853,13 @@
     fill: currentColor;
   }
 
-  /* A small label under a button's icon (the place in the queue), outside the button's box: the row's buttons stay
-     alike, so their icons line up whatever the labels say. */
   /* The radio, lit while on (as the heart). */
   .act.radio.on {
     color: var(--art-accent);
   }
 
+  /* A small label under a button's icon (the place in the queue), outside the button's box: the row's buttons stay
+     alike, so their icons line up whatever the labels say. */
   .act.labelled {
     position: relative;
   }
