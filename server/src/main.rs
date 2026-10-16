@@ -189,7 +189,8 @@ async fn main() -> Result<()> {
 
     let listener = tokio::net::TcpListener::bind(&bind).await.with_context(|| format!("cannot bind {bind}"))?;
     tracing::info!("listening on {bind}");
-    axum::serve(listener, api::router(app).merge(serve::routes::router(served)))
+    // With each connection's address: the sign-in page's throttle reads it where no proxy names the client.
+    axum::serve(listener, api::router(app).merge(serve::routes::router(served)).into_make_service_with_connect_info::<std::net::SocketAddr>())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

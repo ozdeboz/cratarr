@@ -47,8 +47,8 @@ self.addEventListener('message', (event) => {
         try {
           const r = await fetch(path);
           if (r.ok) await c.put(path, r);
-          // Out of reach: the next list tries again.
-          else if (r.status === 403) return;
+          // Out of reach, or signed out: the next list tries again.
+          else if (r.status === 403 || r.status === 401) return;
         } catch {
           return;
         }
@@ -91,14 +91,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (url.pathname.startsWith('/api/')) return;
+  // Cratarr's sign-in page (decision 0039) is the server's own, never the shell.
+  if (url.pathname === '/signin' || url.pathname === '/signout') return;
 
   if (req.mode === 'navigate') {
     // Hash routes all load "/", so one cached shell serves every page. Away from home the server's address may answer
     // with an error page (the proxy's 403 outside the LAN) rather than not at all: the shell then too, so the app's
-    // downloads still play (decision 0033, step 4).
+    // downloads still play (decision 0033, step 4). A redirect (to the sign-in page, without a session) is followed.
     event.respondWith(
       fetch(req)
-        .then((r) => (r.ok ? put('/', r) : caches.match('/').then((hit) => hit || r)))
+        .then((r) => {
+          if (r.type === 'opaqueredirect') return r;
+          if (r.ok) return url.pathname === '/' ? put('/', r) : r;
+          return caches.match('/').then((hit) => hit || r);
+        })
         .catch(() => caches.match('/')),
     );
     return;

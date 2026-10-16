@@ -71,7 +71,7 @@ object Downloads {
         return ResolvingDataSource.Factory(http) { spec ->
             val uri = Reach.rewrite(app, spec.uri)
             val signed = spec.withUri(uri)
-            Net.authorization(app, uri.toString())?.let { signed.withAdditionalHeaders(mapOf("Authorization" to it)) } ?: signed
+            Net.cookie(uri.toString())?.let { signed.withAdditionalHeaders(mapOf("Cookie" to it)) } ?: signed
         }
     }
 

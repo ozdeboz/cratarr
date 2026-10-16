@@ -16,6 +16,7 @@
 import { inApp, onApp, toApp } from './app.svelte';
 import { getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
+import { asksSignIn, toSignIn } from './reach.svelte';
 
 export type LocalTrack = {
   /** Its entry in a player's queue (decision 0033), once Cratarr or the app has given it one. */
@@ -277,6 +278,7 @@ async function appendTrack(index: number, from: number, gen: number) {
       signal: ctl.signal,
     });
     if (!res.ok) {
+      if (asksSignIn(res)) toSignIn();
       let text = '';
       try {
         text = (await res.json()).error ?? '';

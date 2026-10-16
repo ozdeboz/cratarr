@@ -10,7 +10,7 @@ import { inApp } from './app.svelte';
 import { canPlayHere, local, pageVolume, playOnCommand } from './localPlayer.svelte';
 import { playOn, drivenName } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
-import { refused, refusedFor } from './reach.svelte';
+import { asksSignIn, refused, refusedFor, toSignIn } from './reach.svelte';
 import { setOwnSleep, sleep } from './sleep.svelte';
 
 /** Every so often a report, even with nothing changed: the position, and that the page is still there. */
@@ -122,7 +122,8 @@ async function report(withQueue = false) {
       body: JSON.stringify(body),
     });
     if (res.ok && queue) sentQueue = key;
-    if (res.status === 403 || res.status === 401) refused();
+    if (asksSignIn(res)) toSignIn();
+    else if (res.status === 403 || res.status === 401) refused();
   } catch {
     /* the next report tries again */
   }

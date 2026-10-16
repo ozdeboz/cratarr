@@ -8,7 +8,6 @@ package app.cratarr
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.http.SslError
-import android.webkit.HttpAuthHandler
 import android.util.Log
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
@@ -26,12 +25,7 @@ class CratarrWebViewClient(
     private val onError: (String) -> Unit,
     /** The page's renderer is gone: the WebView must be made anew. */
     private val onGone: () -> Unit,
-    /** The proxy asks for a sign-in (away from home). */
-    private val onSignIn: (HttpAuthHandler) -> Unit,
 ) : WebViewClientCompat() {
-
-    override fun onReceivedHttpAuthRequest(view: WebView, handler: HttpAuthHandler, host: String, realm: String) = onSignIn(handler)
-
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (!request.isForMainFrame || Prefs.originOf(request.url.toString()) in origins) return false

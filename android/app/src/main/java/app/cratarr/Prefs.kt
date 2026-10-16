@@ -59,16 +59,12 @@ class Prefs(context: Context) {
         e.apply()
     }
 
-    /** The sign-in the public address asks for away from home (a Cratarr account, Settings → Network); null until set. */
-    var signInUser: String?
-        get() = p.getString(SIGN_IN_USER, null)?.takeIf { it.isNotEmpty() }
+    /** The session on the public address as last seen ([Net.sessionMark], never the cookie): when the page signs in
+     *  again, the app's own link to Cratarr connects again with it. */
+    var sessionMark: String
+        get() = p.getString(SESSION_MARK, "") ?: ""
         set(value) {
-            p.edit().putString(SIGN_IN_USER, value).apply()
-        }
-    var signInPassword: String?
-        get() = p.getString(SIGN_IN_PASSWORD, null)?.takeIf { it.isNotEmpty() }
-        set(value) {
-            p.edit().putString(SIGN_IN_PASSWORD, value).apply()
+            p.edit().putString(SESSION_MARK, value).apply()
         }
 
     /** The page's own settings (its `cratarr-prefs`), kept here so both addresses' pages share them. */
@@ -212,8 +208,11 @@ class Prefs(context: Context) {
             }.apply()
         }
 
-    /** The radio of before (decision 0036 as first built: one lane after everything, with modes) is Autoplay now. */
+    /** Settings of before. The sign-in kept for the proxy's login box goes: the app keeps no password since Cratarr has
+     *  its own sign-in page (decision 0039). The radio (decision 0036 as first built: one lane after everything, with
+     *  modes) is Autoplay now. */
     fun migrate() {
+        if (p.contains(OLD_SIGN_IN_USER) || p.contains(OLD_SIGN_IN_PASSWORD)) p.edit().remove(OLD_SIGN_IN_USER).remove(OLD_SIGN_IN_PASSWORD).apply()
         val old = p.getString(OLD_RADIO, null) ?: return
         try {
             val o = org.json.JSONObject(old)
@@ -247,8 +246,9 @@ class Prefs(context: Context) {
         const val SERVER_URL = "server_url"
         const val LOCAL_URL = "local_url"
         const val PREFER_LOCAL = "prefer_local"
-        const val SIGN_IN_USER = "sign_in_user"
-        const val SIGN_IN_PASSWORD = "sign_in_password"
+        private const val OLD_SIGN_IN_USER = "sign_in_user"
+        private const val OLD_SIGN_IN_PASSWORD = "sign_in_password"
+        const val SESSION_MARK = "session_mark"
         const val IN_USE = "address_in_use"
         const val PAGE_PREFS = "page_prefs"
         const val PLAYER_NAME = "player_name"

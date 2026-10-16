@@ -14,6 +14,8 @@ pub mod queues;
 pub mod read;
 pub mod review;
 pub mod routes;
+pub mod sessions;
+pub mod signin;
 pub mod users;
 
 use std::path::PathBuf;
@@ -58,6 +60,9 @@ pub struct Serve {
     pub library: Arc<library::Library>,
     pub userdata: Arc<UserData>,
     pub users: users::Users,
+    /// Signed-in devices (decision 0039), and the sign-in page's failed tries.
+    pub sessions: sessions::Sessions,
+    pub throttle: signin::Throttle,
     /// Attached once the app has opened it (`attach_catalogue`); the server opens before the app, so the built-in
     /// Cratarr source can answer while the app starts (decision 0032).
     catalogue_cell: std::sync::OnceLock<Arc<Catalogue>>,
@@ -96,6 +101,7 @@ impl Serve {
         let library = Arc::new(library::Library::open(data_dir.map(|d| d.join("library.sqlite")).as_deref())?);
         let userdata = Arc::new(UserData::open(data_dir.map(|d| d.join("userdata.sqlite")).as_deref())?);
         let users = users::Users::open(data_dir)?;
+        let sessions = sessions::Sessions::open(data_dir.map(|d| d.join("sessions.sqlite")).as_deref())?;
         if let (Some(u), Some(p)) = (env("CRATARR_SUBSONIC_USER"), env("CRATARR_SUBSONIC_PASSWORD"))
             && !u.trim().is_empty()
             && !p.is_empty()
@@ -107,6 +113,8 @@ impl Serve {
             library,
             userdata,
             users,
+            sessions,
+            throttle: Default::default(),
             catalogue_cell: Default::default(),
             import: import::Importer::default(),
             rules: RwLock::new(rules),
@@ -120,6 +128,12 @@ impl Serve {
             now_playing: Default::default(),
             incoming: Default::default(),
         }))
+    }
+
+    /// The account a user name and password sign in as on the sign-in page (decision 0039). The one place an account
+    /// is checked: a directory (LDAP) would be asked first here, Cratarr's own accounts staying the fallback.
+    pub fn sign_in(&self, name: &str, password: &str) -> Option<String> {
+        self.users.sign_in(name, password).map(|u| u.name)
     }
 
     pub fn attach_catalogue(&self, catalogue: Arc<Catalogue>) {

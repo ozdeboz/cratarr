@@ -40,8 +40,8 @@ object Reach {
     private var watching = false
 
     /** A health check's answer: the address that gave it, its status (null: none), and whether Cratarr gave it (its
-     *  `{"status": "ok", "playlists": n}`), or its proxy asking for the sign-in (a 401 with a Basic challenge, which
-     *  the app and the page can answer). */
+     *  `{"status": "ok", "playlists": n}`), or its proxy asking for a sign-in on Cratarr's sign-in page (decision 0039:
+     *  401 with Cratarr's `Cookie` challenge; the page then shows the sign-in page). */
     data class Health(val at: String, val code: Int?, val cratarr: Boolean)
 
     /** Cratarr's health check for [url] within [ms]: answered at [url], or at the address it is sent on to for good
@@ -56,6 +56,8 @@ object Reach {
         return try {
             // Android's own connection does not follow http to https; the WebView would, off Cratarr's addresses.
             c.instanceFollowRedirects = false
+            // Not a page load: refused, it is a 401 rather than the way to the sign-in page.
+            c.setRequestProperty("Accept", "application/json")
             c.connectTimeout = ms
             c.readTimeout = ms
             val code = Net.code(context, c)
@@ -64,7 +66,7 @@ object Reach {
             when {
                 to != null && to != base && moves > 0 -> reach(context, to, ms, anyway, moves - 1)
                 code == 200 -> Health(url, code, isCratarr(head(c)))
-                else -> Health(url, code, code == 401 && c.getHeaderField("WWW-Authenticate")?.trim()?.startsWith("Basic", ignoreCase = true) == true)
+                else -> Health(url, code, code == 401 && c.getHeaderField("WWW-Authenticate")?.let { it.trim().startsWith("Cookie", ignoreCase = true) && "realm=\"Cratarr\"" in it } == true)
             }
         } catch (e: Exception) {
             Health(url, null, false)

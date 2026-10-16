@@ -22,7 +22,7 @@ import android.provider.Settings
 import android.text.InputType
 import android.util.Log
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
-import android.webkit.HttpAuthHandler
+import android.webkit.CookieManager
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebView
@@ -221,8 +221,7 @@ class MainActivity : AppCompatActivity() {
         }
         // The page keeps its priority when not in view: it is the player.
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
-        signInTried = null
-        view.webViewClient = CratarrWebViewClient(origins, onError = { cannotReach(url, it) }, onGone = { show(url) }, onSignIn = ::signIn)
+        view.webViewClient = CratarrWebViewClient(origins, onError = { cannotReach(url, it) }, onGone = { show(url) })
         view.webChromeClient = CratarrWebChromeClient { intent, callback ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
@@ -262,6 +261,7 @@ class MainActivity : AppCompatActivity() {
                 page = reply
                 reply.postMessage(appMessage())
                 player?.report(withQueue = true)
+                followSession()
             }
             "player" -> player?.handle(message) ?: waiting.add(message)
             "device" -> reply.postMessage(appMessage())
@@ -273,7 +273,8 @@ class MainActivity : AppCompatActivity() {
                         .put("type", "network-test")
                         .put("local", if (hasLocal) local == 200 else JSONObject.NULL)
                         .put("public", if (prefs.publicAddress != null) public == 200 else JSONObject.NULL)
-                        .put("publicRefused", public == 401 || public == 403)
+                        // Cratarr asks this device to sign in (decision 0039): no session yet, or it ended.
+                        .put("signedOut", public == 401)
                         .toString(),
                 )
                 Reach.checkSoon(this@MainActivity)
@@ -300,13 +301,6 @@ class MainActivity : AppCompatActivity() {
                     prefs.syncBudgetGb = message.optLong("syncBudgetGb", 20L)
                     Kept.sync(this)
                 }
-                // The sign-in: a user name (empty: none, and no password), and a password only when one is typed.
-                if (message.has("signInUser")) {
-                    val user = message.optString("signInUser").trim()
-                    prefs.signInUser = user.takeIf { it.isNotEmpty() }
-                    if (user.isEmpty()) prefs.signInPassword = null
-                }
-                message.optString("signInPassword").takeIf { it.isNotEmpty() && message.has("signInPassword") }?.let { prefs.signInPassword = it }
                 // The addresses as typed (empty local: none), and whether the local one is preferred. Each is kept where
                 // Cratarr answers ([Reach.find]: `https://` first when no scheme is typed), so a stray edit does not take
                 // the app off Cratarr; a local network address where nothing answers too (away from home, it cannot).
@@ -402,9 +396,6 @@ class MainActivity : AppCompatActivity() {
         .put("public", prefs.publicAddress ?: "")
         .put("local", prefs.localAddress ?: "")
         .put("preferLocal", prefs.preferLocal)
-        // The sign-in's user name, and whether a password is kept (it is never shown).
-        .put("signInUser", prefs.signInUser ?: "")
-        .put("signInSet", prefs.signInPassword != null)
         .put("inUse", prefs.serverUrl ?: "")
         .put("batteryAllowed", getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
         .put("downloadQuality", prefs.downloadQuality)
@@ -459,58 +450,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** The sign-in given to this page (the proxy asks again when it was wrong). */
-    private var signInTried: String? = null
-
-    /** Away from home the proxy asks for a Cratarr account: the saved one, once; asked for when there is none, or when
-     *  it was refused. What is typed is kept (Settings → Network) for the app's own requests too. */
-    private fun signIn(handler: HttpAuthHandler) {
-        val user = prefs.signInUser
-        val password = prefs.signInPassword
-        val tried = "$user\n$password"
-        if (user != null && password != null && signInTried != tried) {
-            signInTried = tried
-            handler.proceed(user, password)
-            return
-        }
-        askSignIn(handler, refused = user != null && signInTried == tried)
-    }
-
-    private fun askSignIn(handler: HttpAuthHandler, refused: Boolean) {
-        if (isFinishing) return handler.cancel()
-        dialog?.dismiss()
-        val side = (24 * resources.displayMetrics.density).toInt()
-        val name = EditText(this).apply {
-            hint = getString(R.string.user_name)
-            setText(prefs.signInUser ?: "")
-            setSingleLine()
-        }
-        val password = EditText(this).apply {
-            hint = getString(R.string.password)
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setSingleLine()
-        }
-        val box = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(side, side / 2, side, 0)
-            addView(name)
-            addView(password)
-        }
-        dialog = AlertDialog.Builder(this)
-            .setTitle(R.string.sign_in)
-            .setMessage(if (refused) getString(R.string.sign_in_refused) else null)
-            .setView(box)
-            .setCancelable(false)
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                val u = name.text.toString().trim()
-                val p = password.text.toString()
-                prefs.signInUser = u
-                prefs.signInPassword = p
-                signInTried = "$u\n$p"
-                handler.proceed(u, p)
+    /** A page just loaded, perhaps right after the sign-in page (decision 0039): the session it holds now is noted, and
+     *  when it is another one, the app's own link to Cratarr connects again with it. The cookies go to disk as well. */
+    private fun followSession() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                CookieManager.getInstance().flush()
+            } catch (e: Exception) {
+                // no WebView: no session either
             }
-            .setNegativeButton(android.R.string.cancel) { _, _ -> handler.cancel() }
-            .show()
+            val mark = Net.sessionMark(this@MainActivity)
+            if (mark != prefs.sessionMark) prefs.sessionMark = mark
+        }
     }
 
     /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address. */

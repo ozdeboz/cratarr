@@ -129,6 +129,10 @@ and gives them to the page's WebView when the proxy asks; with none kept, or a r
 requests to the public address back for ten minutes or until the sign-in changes: polling on regardless got the
 owner's phone banned as a prober by the proxy's CrowdSec the first evening.
 
+**Replaced (2026-10-17) by decision 0039:** Cratarr's own sign-in page and sessions. The app keeps no password any
+more (Settings → Network's User name and Password, and the native dialog, are gone); its own requests carry the
+WebView's session cookie, and the refusal hold now lasts until the page signs in again.
+
 ## Amendment (2026-10-16): a page in a browser is a player while it is open
 
 The owner, with the tablet away from home playing in its browser: "It should" be a Play On target. Decision 0033 had

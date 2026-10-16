@@ -1,9 +1,9 @@
 <script lang="ts">
-  // Network (decided 2026-10-16, after Finamp's Network settings): how this device reaches Cratarr. The public address
-  // and the sign-in it asks for away from home (a Cratarr account), and the local network address, used while "Prefer
-  // local network" is on and it answers (at home, or over a VPN that carries only the local network); the app looks
-  // again at every change of network. The address in use, and a test of both. This device's own; it acts at once. Only
-  // in the app.
+  // Network (decided 2026-10-16, after Finamp's Network settings): how this device reaches Cratarr. The public address,
+  // and the local network address, used while "Prefer local network" is on and it answers (at home, or over a VPN that
+  // carries only the local network); the app looks again at every change of network. The address in use, and a test of
+  // both. Signing in away from home is Cratarr's sign-in page (decision 0039), not a setting here. This device's own; it
+  // acts at once. Only in the app.
   import SettingRow from '../SettingRow.svelte';
   import Switch from '../Switch.svelte';
   import { appInfo, inApp, networkTest, setDevice, testNetwork } from '../app.svelte';
@@ -21,14 +21,14 @@
     field.value = (which === 'public' ? appInfo.publicAddress : appInfo.localAddress) ?? '';
   }
 
-  // The test's answer, Finamp's way; only what failed is named (a refused sign-in as that).
+  // The test's answer, Finamp's way; only what failed is named (this device not signed in as that).
   const result = $derived.by(() => {
     if (!networkTest.done) return null;
-    const { local, public: pub, publicRefused } = networkTest;
-    const pubFailed = publicRefused ? 'Sign-in refused' : 'Public address not reachable';
-    if (local === null) return pub ? 'Reachable' : publicRefused ? 'Sign-in refused' : 'Not reachable';
+    const { local, public: pub, signedOut } = networkTest;
+    const pubFailed = signedOut ? 'Not signed in' : 'Public address not reachable';
+    if (local === null) return pub ? 'Reachable' : signedOut ? 'Not signed in' : 'Not reachable';
     if (local && pub) return 'Both reachable';
-    if (!local && !pub) return publicRefused ? 'Local network address not reachable · sign-in refused' : 'Neither reachable';
+    if (!local && !pub) return signedOut ? 'Local network address not reachable · not signed in' : 'Neither reachable';
     return local ? pubFailed : 'Local network address not reachable';
   });
 </script>
@@ -51,34 +51,6 @@
         onchange={(e) => changed(e, 'public')}
       />
     </label>
-    {#if appInfo.addresses}
-      <label class="pref">
-        <span class="l">User name</span>
-        <input
-          type="text"
-          value={appInfo.signInUser}
-          spellcheck="false"
-          autocapitalize="off"
-          autocomplete="username"
-          onchange={(e) => setDevice({ signInUser: e.currentTarget.value.trim() })}
-        />
-      </label>
-      <label class="pref">
-        <span class="l">Password</span>
-        <!-- Never shown: a typed one replaces the kept one; left empty, the kept one stays. -->
-        <input
-          type="password"
-          value=""
-          placeholder={appInfo.signInSet ? '••••••••' : ''}
-          autocomplete="current-password"
-          onchange={(e) => {
-            const typed = e.currentTarget.value;
-            if (typed) setDevice({ signInUser: appInfo.signInUser, signInPassword: typed });
-            e.currentTarget.value = '';
-          }}
-        />
-      </label>
-    {/if}
     {#if appInfo.addresses}
       <div class="pref">
         <Switch label="Prefer local network" checked={appInfo.preferLocal} onchange={(on) => setDevice({ preferLocal: on })} />

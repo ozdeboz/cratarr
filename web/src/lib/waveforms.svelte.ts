@@ -2,6 +2,8 @@
 // once per track (the browser keeps it a month, with an ETag) and kept here while the page is open. Undefined while it
 // loads, null where the track has none (not analysed yet, or its server is not Cratarr's own).
 
+import { asksSignIn, toSignIn } from './reach.svelte';
+
 const waves = $state<Record<string, Uint8Array | null>>({});
 const asked = new Set<string>();
 
@@ -11,7 +13,10 @@ export function loadWaveform(source: string, id: string) {
   if (!asked.has(key)) {
     asked.add(key);
     fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/waveform`)
-      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .then((r) => {
+        if (asksSignIn(r)) toSignIn();
+        return r.ok ? r.arrayBuffer() : null;
+      })
       .then(
         (b) => (waves[key] = b && b.byteLength ? new Uint8Array(b) : null),
         () => {

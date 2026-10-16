@@ -174,6 +174,19 @@ impl Users {
         Ok(())
     }
 
+    /// The account a user name and password sign in as on Cratarr's sign-in page (decision 0039): the password exactly
+    /// as typed. The same work whether or not the account exists, and the passwords compared as digests, so how long it
+    /// takes tells neither.
+    pub fn sign_in(&self, name: &str, password: &str) -> Option<User> {
+        use sha2::Sha256;
+        let users = self.users.read().unwrap_or_else(|p| p.into_inner());
+        let known = users.iter().find(|x| x.name == name);
+        let kept = Sha256::digest(known.map_or("", |x| x.password.as_str()).as_bytes());
+        let typed = Sha256::digest(password.as_bytes());
+        let ok = kept.iter().zip(typed.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0;
+        known.filter(|u| ok && !u.password.is_empty()).cloned()
+    }
+
     /// The user a request logs in as: `u` with `t` and `s`, or with `p`.
     pub fn check(&self, u: Option<&str>, t: Option<&str>, s: Option<&str>, p: Option<&str>) -> Result<User, Refused> {
         let u = u.filter(|u| !u.is_empty()).ok_or(Refused::Missing)?;
@@ -211,6 +224,18 @@ mod tests {
         assert_eq!(users.check(Some("nobody"), None, None, Some("sesame")), Err(Refused::Wrong));
         assert!(users.check(Some("sesame-user"), None, None, None).is_err());
         assert!(users.check(None, Some(t), Some("c19b2d"), None).is_err_and(|e| e == Refused::Missing));
+    }
+
+    #[test]
+    fn the_sign_in_page_takes_the_password_exactly_as_typed() {
+        let users = Users::open(None).unwrap();
+        assert!(users.sign_in("me", "").is_none(), "no account yet");
+        users.set("me", "enc:41").unwrap();
+        assert_eq!(users.sign_in("me", "enc:41").unwrap().name, "me");
+        assert!(users.sign_in("me", "A").is_none(), "not read as a Subsonic `enc:` password");
+        assert!(users.sign_in("me", "enc:4").is_none());
+        assert!(users.sign_in("Me", "enc:41").is_none());
+        assert!(users.sign_in("nobody", "").is_none());
     }
 
     #[test]

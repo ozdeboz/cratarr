@@ -82,6 +82,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/subsonic/import/sources", get(super::import::sources))
         .with_state(serve.clone())
         .merge(super::auth_check::router(serve.clone()))
+        .merge(super::signin::router(serve.clone()))
         .merge(super::library_api::router(serve))
 }
 
@@ -110,9 +111,16 @@ struct NewPassword {
     password: String,
 }
 
-async fn change_password(State(serve): State<Arc<Serve>>, axum::Json(p): axum::Json<NewPassword>) -> Response {
+async fn change_password(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json(p): axum::Json<NewPassword>) -> Response {
     match serve.users.change_password(&p.username, &p.current, &p.password) {
-        Ok(()) => axum::Json(json!({ "accounts": serve.users.names() })).into_response(),
+        Ok(()) => {
+            // The account's other signed-in devices sign in again with the new password (decision 0039).
+            let keep = super::signin::session_of(&serve, &headers).map(|s| s.id);
+            if let Err(e) = serve.sessions.revoke_user(&p.username, keep.as_deref()) {
+                tracing::warn!("sessions: {}'s not ended after the new password: {e:#}", p.username);
+            }
+            axum::Json(json!({ "accounts": serve.users.names() })).into_response()
+        }
         Err(why) => (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": why }))).into_response(),
     }
 }

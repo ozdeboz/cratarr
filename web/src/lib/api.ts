@@ -1,6 +1,6 @@
 import { track } from './progress.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
-import { notReached, reached, refused, refusedFor, unreached } from './reach.svelte';
+import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached } from './reach.svelte';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -123,6 +123,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     res = await fetch(path, init);
   } catch {
     unreached();
+    throw new ApiError(UNREACHED);
+  }
+  if (asksSignIn(res)) {
+    toSignIn();
     throw new ApiError(UNREACHED);
   }
   if (!res.ok) {
@@ -640,6 +644,11 @@ export const createSubsonicAccount = (username: string, password: string) =>
   post<SubsonicAccounts>('/api/subsonic/accounts', { username, password });
 export const changeSubsonicPassword = (username: string, current: string, password: string) =>
   post<SubsonicAccounts>('/api/subsonic/password', { username, current, password });
+/** A device signed in on Cratarr's sign-in page (decision 0039); `current`: the one this page runs on. */
+export type SignedIn = { id: string; user: string; device: string; created: number; last_used: number; current: boolean };
+export const getSignedIn = () => quietly<{ sessions: SignedIn[] }>('/api/auth/sessions');
+/** Signs that device out: its next request goes to the sign-in page. */
+export const signOutDevice = (id: string) => request<void>(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 /** Importing an account's plays, favourites, ratings and added dates from a server into a Subsonic account. */
 export type ImportWhat = { plays: boolean; favorites: boolean; ratings: boolean; added: boolean };
