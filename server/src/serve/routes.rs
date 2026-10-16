@@ -208,12 +208,32 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             annotate_artists(serve, &me, std::slice::from_mut(&mut artist))?;
             Ok(Answer::Json(json!({ "artist": artist })))
         }
-        // What online services know (biography, pictures, similar artists and songs, top songs). Navidrome asks Last.fm
-        // and Spotify when they are set up and answers empty without them; Cratarr has none, so it answers so too.
+        // What online services know (biography, pictures, top songs). Navidrome asks Last.fm and Spotify when they are
+        // set up and answers empty without them; Cratarr has none, so it answers so too. Similar artists come from the
+        // radio's choice over the owner's own library (decision 0036).
         "getArtistInfo" | "getArtistInfo2" => {
             let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
-            let artist = blocking(move || s.library.artist(&id)).await?.ok_or_else(|| not_found("Artist"))?;
-            let mut info = json!({ "similarArtist": [] });
+            let count = p.size("count", 20, 100);
+            let similar = crate::app::radio::similar_artists(&id, count).await.unwrap_or_else(|e| {
+                tracing::warn!("similar artists of {id}: {e}");
+                Vec::new()
+            });
+            let lib = s.library.clone();
+            let artist = blocking(move || lib.artist(&id)).await?.ok_or_else(|| not_found("Artist"))?;
+            let lib = s.library.clone();
+            let mut found = blocking(move || {
+                let mut out = Vec::new();
+                for a in &similar {
+                    out.extend(lib.artist(a)?);
+                }
+                Ok(out)
+            })
+            .await?;
+            for a in found.iter_mut() {
+                a.album = None;
+            }
+            annotate_artists(serve, &me, &mut found)?;
+            let mut info = json!({ "similarArtist": found });
             if let Some(mbid) = artist.music_brainz_id {
                 info["musicBrainzId"] = mbid.into();
             }
@@ -231,9 +251,18 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             Ok(Answer::Json(json!({ "albumInfo": info })))
         }
         "getTopSongs" => Ok(Answer::Json(json!({ "topSongs": { "song": [] } }))),
+        // Songs like a song, an album or an artist: the radio's Similar over the owner's own library (decision 0036).
         "getSimilarSongs" | "getSimilarSongs2" => {
+            let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
+            let count = p.size("count", 50, 50);
+            let ids = crate::app::radio::similar_songs(&id, count).await.unwrap_or_else(|e| {
+                tracing::warn!("songs similar to {id}: {e}");
+                Vec::new()
+            });
+            let mut songs = blocking(move || s.library.songs_by_id(&ids)).await?;
+            annotate_songs(serve, &me, &mut songs)?;
             let mut out = json!({});
-            out[if method == "getSimilarSongs" { "similarSongs" } else { "similarSongs2" }] = json!({ "song": [] });
+            out[if method == "getSimilarSongs" { "similarSongs" } else { "similarSongs2" }] = json!({ "song": songs });
             Ok(Answer::Json(out))
         }
         "getAlbum" => {

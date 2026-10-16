@@ -107,6 +107,8 @@ pub(crate) struct Index {
     by_id: HashMap<String, usize>,
     /// Each album's songs in their order.
     albums: HashMap<u32, Vec<usize>>,
+    /// The artists' ids (`ar-…`) by their number, for OpenSubsonic's similar artists.
+    artist_ids: Vec<String>,
 }
 
 impl Index {
@@ -116,7 +118,18 @@ impl Index {
         for (i, s) in songs.iter().enumerate() {
             albums.entry(s.album_n).or_default().push(i);
         }
-        Self { songs, by_id, albums }
+        Self { songs, by_id, albums, artist_ids: Vec::new() }
+    }
+
+    /// The songs an OpenSubsonic id stands for: a song, an album's songs, or an artist's.
+    fn of_item(&self, item: &str) -> Vec<usize> {
+        if let Some(&i) = self.by_id.get(item) {
+            return vec![i];
+        }
+        if let Some(a) = self.artist_ids.iter().position(|x| x == item) {
+            return (0..self.songs.len()).filter(|&i| self.songs[i].artists.contains(&(a as u32))).collect();
+        }
+        (0..self.songs.len()).filter(|&i| self.songs[i].album_id == item).collect()
     }
 
     fn find(&self, ids: &[String]) -> Vec<usize> {
@@ -230,10 +243,23 @@ pub(crate) fn choose(index: &Index, req: &NextRequest, recent: &HashMap<String, 
         let need = count - fresh.len();
         fresh.into_iter().chain(stale.into_iter().take(need)).collect()
     };
+    let picked = by_mode(index, req, &pool, &seed, &out, last, count, rng);
+    // Era and Artist can run dry (no year, artists with nothing more here): Similar fills up the rest.
+    if picked.len() < count && matches!(req.mode, Mode::Era | Mode::Artist) {
+        let rest: Vec<usize> = pool.iter().copied().filter(|i| !picked.contains(i)).collect();
+        let similar = NextRequest { mode: Mode::Similar, count: Some(count - picked.len()), ..req.clone() };
+        let more = by_mode(index, &similar, &rest, &seed, &out, picked.last().copied().or(last), count - picked.len(), rng);
+        return picked.into_iter().chain(more).collect();
+    }
+    picked
+}
+
+#[allow(clippy::too_many_arguments)]
+fn by_mode(index: &Index, req: &NextRequest, pool: &[usize], seed: &[usize], out: &HashSet<usize>, last: Option<usize>, count: usize, rng: &mut Rng) -> Vec<usize> {
     let artists_of = |i: usize| index.songs[i].artists.clone();
     match req.mode {
         Mode::Similar | Mode::Continuous => {
-            let base = if req.mode == Mode::Continuous { last.into_iter().collect() } else { seed.clone() };
+            let base = if req.mode == Mode::Continuous { last.into_iter().collect() } else { seed.to_vec() };
             let base = if base.is_empty() { last.into_iter().collect() } else { base };
             let profile = Profile::of(index, &base);
             let mut scored: Vec<(usize, f64)> = pool
@@ -247,9 +273,9 @@ pub(crate) fn choose(index: &Index, req: &NextRequest, recent: &HashMap<String, 
             scored.truncate(TOP.max(count * 3));
             pick_spaced(index, scored, count, last.map(artists_of), true, rng)
         }
-        Mode::AlbumMix => album_mix(index, &pool, &seed, &out, rng),
+        Mode::AlbumMix => album_mix(index, pool, seed, out, rng),
         Mode::Era => {
-            let center = last.and_then(|i| index.songs[i].year).or_else(|| Profile::of(index, &seed).year);
+            let center = last.and_then(|i| index.songs[i].year).or_else(|| Profile::of(index, seed).year);
             let near: Vec<(usize, f64)> = pool
                 .iter()
                 .filter(|&&i| match (center, index.songs[i].year) {
@@ -262,7 +288,7 @@ pub(crate) fn choose(index: &Index, req: &NextRequest, recent: &HashMap<String, 
         }
         Mode::Artist => {
             let mut wanted: HashSet<u32> = last.map(artists_of).unwrap_or_default().into_iter().collect();
-            let profile = Profile::of(index, &seed);
+            let profile = Profile::of(index, seed);
             let mut common: Vec<(u32, u32)> = profile.artists.into_iter().collect();
             common.sort_by(|a, b| b.1.cmp(&a.1));
             wanted.extend(common.into_iter().take(3).map(|(a, _)| a));
@@ -367,21 +393,8 @@ static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
 /// The next radio tracks for a player (decision 0036).
 pub async fn next(req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
-    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let dir = served.data_dir.clone().ok_or_else(|| ToggleError::Refused("Radio needs Cratarr's data folder.".into()))?;
-    let owner = served.users.owner();
-    let index = index(&served, &dir).await?;
-    let picked = tokio::task::spawn_blocking(move || -> Result<Vec<QueueTrack>> {
-        let recent = match &owner {
-            Some(o) => recent_plays(&dir.join("userdata.sqlite"), o)?,
-            None => HashMap::new(),
-        };
-        let chosen = choose(&index, &req, &recent, &mut Rng::new());
-        Ok(chosen.into_iter().map(|i| track(&index.songs[i])).collect())
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("{e}"))??;
-    Ok(picked)
+    let (index, recent) = ready().await?;
+    Ok(choose(&index, &req, &recent, &mut Rng::new()).into_iter().map(|i| track(&index.songs[i])).collect())
 }
 
 fn track(s: &Song) -> QueueTrack {
@@ -458,14 +471,29 @@ fn recent_plays(userdata: &Path, owner: &str) -> Result<HashMap<String, i64>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// Interns names as numbers.
+/// Interns names as numbers: genres and tags in any case, ids exactly.
 #[derive(Default)]
-struct Names(HashMap<String, u32>);
+struct Names {
+    of: HashMap<String, u32>,
+    exact: bool,
+}
 
 impl Names {
+    fn exact() -> Self {
+        Self { exact: true, ..Self::default() }
+    }
     fn of(&mut self, name: &str) -> u32 {
-        let n = self.0.len() as u32;
-        *self.0.entry(name.to_lowercase()).or_insert(n)
+        let n = self.of.len() as u32;
+        let key = if self.exact { name.to_string() } else { name.to_lowercase() };
+        *self.of.entry(key).or_insert(n)
+    }
+    /// The names in their numbers' order.
+    fn into_list(self) -> Vec<String> {
+        let mut list = vec![String::new(); self.of.len()];
+        for (name, n) in self.of {
+            list[n as usize] = name;
+        }
+        list
     }
 }
 
@@ -496,9 +524,12 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
             artists_of.entry(song).or_default().push(artist);
         }
     }
-    let (mut albums, mut artists, mut genres, mut tags) = (Names::default(), Names::default(), Names::default(), Names::default());
+    let (mut albums, mut artists, mut genres, mut tags) = (Names::exact(), Names::exact(), Names::default(), Names::default());
     let mut st = lib.prepare(
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.year, s.genre, a.genres, a.artist_id
+        // A compilation's album artist ("Various Artists") is no artist: it would make every compilation alike.
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.year, s.genre, a.genres,
+                CASE WHEN a.compilation = 1 OR lower(a.artist) IN ('various artists', 'various', 'va', 'verschiedene interpreten')
+                     THEN NULL ELSE a.artist_id END
          FROM songs s LEFT JOIN albums a ON a.id = s.album_id
          ORDER BY s.album_id, s.disc_no, s.track_no, s.rel",
     )?;
@@ -538,7 +569,54 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
             album_id,
         });
     }
-    Ok(Index::new(songs))
+    let mut index = Index::new(songs);
+    index.artist_ids = artists.into_list();
+    Ok(index)
+}
+
+// --- OpenSubsonic's similar songs and artists, from the same choice (decision 0036) ---
+
+/// Songs like an item (a song, an album or an artist): Similar with the item as its seed, its own songs left out.
+pub async fn similar_songs(item: &str, count: usize) -> Result<Vec<String>, ToggleError> {
+    let (index, recent) = ready().await?;
+    let seed: Vec<String> = index.of_item(item).into_iter().map(|i| index.songs[i].id.clone()).collect();
+    if seed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(count.min(MAX_COUNT)) };
+    Ok(choose(&index, &req, &recent, &mut Rng::new()).into_iter().map(|i| index.songs[i].id.clone()).collect())
+}
+
+/// Artists like an artist: the artists of the songs Similar finds for it, the most frequent first.
+pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, ToggleError> {
+    let (index, recent) = ready().await?;
+    let Some(own) = index.artist_ids.iter().position(|x| x == artist).map(|a| a as u32) else { return Ok(Vec::new()) };
+    let seed: Vec<String> = index.of_item(artist).into_iter().map(|i| index.songs[i].id.clone()).collect();
+    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(MAX_COUNT) };
+    let mut tally: HashMap<u32, u32> = HashMap::new();
+    for i in choose(&index, &req, &recent, &mut Rng::new()) {
+        for &a in unique(&index.songs[i].artists).collect::<Vec<_>>().iter().filter(|&&a| a != own) {
+            *tally.entry(a).or_default() += 1;
+        }
+    }
+    let mut ranked: Vec<(u32, u32)> = tally.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    Ok(ranked.into_iter().take(count).map(|(a, _)| index.artist_ids[a as usize].clone()).collect())
+}
+
+/// The index and the recent plays, for a choice made here.
+async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let dir = served.data_dir.clone().ok_or_else(|| ToggleError::Refused("Radio needs Cratarr's data folder.".into()))?;
+    let index = index(&served, &dir).await?;
+    let owner = served.users.owner();
+    let recent = tokio::task::spawn_blocking(move || match owner {
+        Some(o) => recent_plays(&dir.join("userdata.sqlite"), &o),
+        None => Ok(HashMap::new()),
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))??;
+    Ok((index, recent))
 }
 
 #[cfg(test)]
@@ -648,7 +726,52 @@ mod tests {
         let index = library();
         let req = NextRequest { mode: Mode::Artist, count: Some(5), ..ask(Mode::Artist) };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), &mut Rng::seeded(2)));
-        assert_eq!(picked, ["k1"], "only k1 shares artist 1; k2 is artist 2: {picked:?}");
+        assert_eq!(picked[0], "k1", "only k1 shares artist 1; k2 is artist 2: {picked:?}");
+        assert_eq!(picked.len(), 5, "the artists ran dry: Similar fills up the rest: {picked:?}");
+    }
+
+    /// Against copies of a real library and user data (RADIO_DATA: a folder with library.sqlite and userdata.sqlite):
+    /// `RADIO_DATA=… cargo test real_library -- --ignored --nocapture`. Prints what each mode picks for a few albums.
+    #[test]
+    #[ignore]
+    fn real_library() {
+        let dir = std::path::PathBuf::from(std::env::var("RADIO_DATA").expect("RADIO_DATA"));
+        let ud = read_only(&dir.join("userdata.sqlite")).unwrap();
+        let owner: Option<String> = ud.query_row("SELECT user FROM annotation GROUP BY user ORDER BY count(*) DESC LIMIT 1", [], |r| r.get(0)).ok();
+        let t = Instant::now();
+        let index = read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), owner.as_deref(), &HashMap::new()).unwrap();
+        let recent = owner.as_deref().map(|o| recent_plays(&dir.join("userdata.sqlite"), o).unwrap()).unwrap_or_default();
+        println!(
+            "index: {} songs, {} albums, {} artists, {} favourites, {} with genres, {} with a year, {} recent plays, in {:?}",
+            index.songs.len(),
+            index.albums.len(),
+            index.artist_ids.len(),
+            index.songs.iter().filter(|s| s.favourite).count(),
+            index.songs.iter().filter(|s| !s.genres.is_empty()).count(),
+            index.songs.iter().filter(|s| s.year.is_some()).count(),
+            recent.len(),
+            t.elapsed()
+        );
+        let mut rng = Rng::seeded(42);
+        let show = |i: usize| {
+            let s = &index.songs[i];
+            format!("{} - {} [{}] {}", s.artist.as_deref().unwrap_or("?"), s.title, s.album, s.year.map(|y| y.to_string()).unwrap_or_default())
+        };
+        let mut albums: Vec<&Vec<usize>> = index.albums.values().filter(|v| v.len() >= 6).collect();
+        albums.sort_by_key(|v| index.songs[v[0]].album_id.clone());
+        for album in albums.iter().step_by((albums.len() / 3).max(1)).take(3) {
+            let seed: Vec<String> = album.iter().map(|&i| index.songs[i].id.clone()).collect();
+            println!("\n== seed: {} ({} songs)", show(album[0]), album.len());
+            for mode in [Mode::Similar, Mode::Continuous, Mode::AlbumMix, Mode::Era, Mode::Artist, Mode::Random] {
+                let req = NextRequest { mode, seed: seed.clone(), exclude: seed.clone(), last: seed.last().cloned(), count: Some(5) };
+                let t = Instant::now();
+                let picked = choose(&index, &req, &recent, &mut rng);
+                println!("-- {mode:?} ({:?})", t.elapsed());
+                for i in picked {
+                    println!("   {}", show(i));
+                }
+            }
+        }
     }
 
     #[test]
