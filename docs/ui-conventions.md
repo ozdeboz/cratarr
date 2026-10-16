@@ -91,11 +91,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   playlist does, without the statistics and editing, with Play, Shuffle and its favourites toggle (No favourites,
   Only favourites, All tracks; decision 0024, amended) as its actions; its rows come in pages, newest first; the arrow-into-a-box icon
   (where a playlist has the pencil) makes a playlist of it, which is then viewed. "New crate" (and the pencil on one's own
-  crate) opens the **crate builder** in the panel: a name, then conditions as cards (the axis, an is/NOT toggle, its
-  values as chips, a range as two numbers, a yes/no axis as just its name; negated cards tinted red), "Add condition"
-  offering the server's axes, and below a live preview (the count and the first tracks). Cancel and Save in the bar;
-  Delete at the end for one's own crate (a second tap confirms). The draft is kept in the browser until Save or
-  Cancel.
+  crate) opens the crate's **edit mode** in its own panel, as a playlist's: the name editable in place (the pencil
+  beside it), the count under it, and the **crate editor** where the tracks were: conditions as cards (the axis, an
+  is/NOT toggle, its values as chips, a range as two numbers, a yes/no axis as just its name; negated cards tinted
+  red), "Add condition" offering the server's axes, and below the first tracks. The bar: Delete (one's own crate; a
+  second tap confirms), Cancel in the pencil's place, the favourites toggle, Save. The draft is kept in the browser
+  until Save or Cancel. A genre (a track's Go to genre, a genre on top of a list) opens as a crate of that one genre.
 - **Playlist chips** (the Playlists page, medium rows: see Rows) look like Finamp's add-to-playlist entries: tinted in the accent, 10 % when
   the playing track is not in the playlist and 30 % when it is; the name (two lines at most), its marks, the count, a
   divider and Finamp's plus circle or filled check circle. A tap on the circle adds or removes the playing track; a
