@@ -33,7 +33,15 @@
     track = null,
     start = 'menu',
     queue: place = null,
-  }: { onclose: () => void; track?: MenuTrack | null; start?: 'menu' | 'lists'; queue?: QueuePlace | null } = $props();
+    onplaylists = null,
+  }: {
+    onclose: () => void;
+    track?: MenuTrack | null;
+    start?: 'menu' | 'lists';
+    queue?: QueuePlace | null;
+    /** Opened from a component over the whole page (the full player): its playlists' step offers the Playlists page. */
+    onplaylists?: (() => void) | null;
+  } = $props();
 
   const np = $derived(playing());
   /** The menu is for what plays (no track given, or the given one plays). */
@@ -186,9 +194,20 @@
     title={t.name}
     chips={[t.artist, t.album].filter((c): c is string => !!c)}
     heart={heartKnown ? { on: heartOn, disabled: busy, toggle: heart } : null}
-    actions={step !== 'menu'
-      ? []
-      : place && !forPlaying
+    actions={step === 'lists' && onplaylists
+      ? [
+          {
+            icon: 'playlists',
+            label: 'Playlists',
+            onclick: () => {
+              onclose();
+              onplaylists();
+            },
+          },
+        ]
+      : step !== 'menu'
+        ? []
+        : place && !forPlaying
         ? [
             { icon: 'play', label: 'Play now', onclick: playNow, disabled: working },
             { icon: 'playNext', label: movesHere ? 'Play next' : 'Play again next', onclick: playNextFromQueue, disabled: working },

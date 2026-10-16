@@ -18,7 +18,7 @@
   import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
-  import { panel } from './panel.svelte';
+  import { keepViewed, panel } from './panel.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
@@ -149,6 +149,12 @@
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
   });
+
+  /** The Playlists page, from the player over the page (its playlists' sheet): the player closes. */
+  function toPlaylistsPage() {
+    player.full = false;
+    location.hash = keepViewed('#/');
+  }
 
   // Gestures, over the page and beside it. Anywhere: swipe down closes, swipe up opens the queue. On the cover: swipe left or right skips, a
   // tap plays or pauses, a double-tap toggles the favourite. A swipe never also counts as a tap.
@@ -427,7 +433,7 @@
 </div>
 
 {#if menuAt}
-  <TrackMenu start={menuStart} onclose={() => (menuAt = null)} />
+  <TrackMenu start={menuStart} onplaylists={place === 'overlay' ? toPlaylistsPage : null} onclose={() => (menuAt = null)} />
 {/if}
 {#if outputOpen}
   <OutputSheet onclose={() => (outputOpen = false)} />
