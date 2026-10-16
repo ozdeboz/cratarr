@@ -3,11 +3,14 @@
 //! - **Loudness**: EBU R128 integrated loudness, ReplayGain 2.0's track gain (-18 LUFS reference) and the sample peak;
 //!   the gating blocks (400 ms every 100 ms) kept as a histogram, so an album's gain is worked out exactly from its
 //!   tracks' without decoding them again (`album_gain`).
-//! - **Waveform**: 512 bins along the track, each its loudest sample, 0..=255 of full scale (the seekbar's bars).
+//! - **Waveform**: 512 bins along the track, each its RMS, 0..=255 of the track's loudest bin (the seekbar's bars).
 //! - **Tempo**: taktus over the mono sound, kept only when it is sure enough (the owner: no tempo is better than a
 //!   wrong one; beatless and ambient music gets none). Reggae, dub, roots and dancehall get the slow count (the owner):
-//!   an estimate above 110 is halved.
+//!   an estimate above 110 is halved. Dance music is counted between 90 and 180 (the owner): an estimate outside is
+//!   halved or doubled into it (on GiantSteps the exact tempo goes from 82 % to 88 % of the sure answers).
 //! Blocking and single-threaded: the pass runs several at once.
+
+pub mod batch;
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -41,6 +44,11 @@ const CATCH: f64 = 1.0;
 /// Genres counted slow (the owner): an estimate above `SLOW_ABOVE` is halved.
 const SLOW_GENRES: [&str; 6] = ["reggae", "dub", "roots", "roots reggae", "dub reggae", "dancehall"];
 const SLOW_ABOVE: f32 = 110.0;
+/// Words that make a genre tag dance music (whole words of the tag), counted between `DANCE_FROM` and twice it.
+const DANCE_WORDS: [&str; 16] =
+    ["house", "techno", "trance", "electro", "disco", "garage", "breakbeat", "breaks", "dnb", "jungle", "dubstep", "hardstyle", "edm", "dance", "idm-dance", "footwork"];
+const DANCE_PHRASES: [&str; 3] = ["drum and bass", "drum & bass", "drum'n'bass"];
+const DANCE_FROM: f32 = 90.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Analysis {
@@ -59,7 +67,7 @@ pub struct Analysis {
     pub bpm: Option<f32>,
     /// The estimator's own confidence (taktus's `sure`), 0..=1.
     pub bpm_confidence: f32,
-    /// `WAVEFORM_BINS` bins, each its loudest sample, 0..=255 of full scale.
+    /// `WAVEFORM_BINS` bins, each its stretch's RMS (linear), 0..=255 of the track's loudest bin.
     pub waveform: Vec<u8>,
 }
 
@@ -195,7 +203,27 @@ fn slow(genres: &[String]) -> bool {
     genres.iter().any(|g| SLOW_GENRES.contains(&g.trim().to_lowercase().as_str()))
 }
 
-/// The tempo the owner keeps: sure enough, halved for the slow genres.
+/// Whether a track of these genres is dance music (and not counted slow).
+fn dance(genres: &[String]) -> bool {
+    genres.iter().any(|g| {
+        let g = g.trim().to_lowercase();
+        DANCE_PHRASES.iter().any(|p| g.contains(p)) || g.split(|c: char| !c.is_alphanumeric() && c != '-').any(|w| DANCE_WORDS.contains(&w))
+    })
+}
+
+/// Into [from, 2 * from), by halving or doubling.
+fn fold(bpm: f32, from: f32) -> f32 {
+    let mut b = bpm;
+    while b < from {
+        b *= 2.0;
+    }
+    while b >= 2.0 * from {
+        b /= 2.0;
+    }
+    b
+}
+
+/// The tempo the owner keeps: sure enough; halved for the slow genres, folded into 90-180 for dance music.
 fn tempo(beat: Option<(f64, f64, f64)>, genres: &[String]) -> (Option<f32>, f32) {
     let Some((bpm, sure, catch)) = beat else { return (None, 0.0) };
     let confidence = sure.clamp(0.0, 1.0) as f32;
@@ -203,7 +231,14 @@ fn tempo(beat: Option<(f64, f64, f64)>, genres: &[String]) -> (Option<f32>, f32)
         return (None, confidence);
     }
     let bpm = bpm as f32;
-    (Some(if bpm > SLOW_ABOVE && slow(genres) { bpm / 2.0 } else { bpm }), confidence)
+    let bpm = if slow(genres) {
+        if bpm > SLOW_ABOVE { bpm / 2.0 } else { bpm }
+    } else if dance(genres) {
+        fold(bpm, DANCE_FROM)
+    } else {
+        bpm
+    };
+    (Some(bpm), confidence)
 }
 
 /// One track's analysis from its file. `genres`: its genre tags (for the slow count).
@@ -218,10 +253,10 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
     let mut pending: Vec<Vec<f32>> = vec![Vec::new(); ch];
     let mut hops = 0u64;
     let mut bins = vec![0u32; BINS];
-    // The waveform: the loudest sample per hundredth of a second, binned at the end.
+    // The waveform: the mean square per hundredth of a second, binned at the end.
     let centi = (o.rate / 100).max(1) as usize;
-    let mut peaks: Vec<f32> = Vec::new();
-    let (mut peak, mut in_centi) = (0f32, 0usize);
+    let mut squares: Vec<f32> = Vec::new();
+    let (mut square, mut in_centi) = (0f32, 0usize);
     // The tempo: taktus hears the mono sound.
     let mut ear = taktus::Ear::new(o.rate);
     let mut onsets: Vec<f32> = Vec::new();
@@ -278,26 +313,26 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
             p.truncate(n);
         }
         for i in 0..n {
-            let (mut sum, mut loud) = (0f32, 0f32);
+            let (mut sum, mut energy) = (0f32, 0f32);
             for p in &scratch {
                 sum += p[i];
-                loud = loud.max(p[i].abs());
+                energy += p[i] * p[i];
             }
             if let Some(onset) = ear.hear(sum / ch as f32) {
                 onsets.push(onset);
             }
-            peak = peak.max(loud);
+            square += energy / ch as f32;
             in_centi += 1;
             if in_centi == centi {
-                peaks.push(peak);
-                (peak, in_centi) = (0.0, 0);
+                squares.push(square / centi as f32);
+                (square, in_centi) = (0.0, 0);
             }
         }
         feed(&scratch, &mut r128, &mut pending)?;
         frames += n as u64;
     }
     if in_centi > 0 {
-        peaks.push(peak);
+        squares.push(square / in_centi as f32);
     }
     // What is left (under a hop) still counts for the integrated loudness and the peak, not for a block.
     if !pending[0].is_empty() {
@@ -310,7 +345,7 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
 
     let loudness = r128.loudness_global().ok().filter(|l| l.is_finite()).unwrap_or(LOWEST).max(LOWEST);
     let track_peak = (0..ch as u32).filter_map(|c| r128.sample_peak(c).ok()).fold(0.0, f64::max) as f32;
-    let waveform = bin_waveform(&peaks);
+    let waveform = bin_waveform(&squares);
     let beat = taktus::tempo_of(&onsets).map(|b| (b.bpm(), b.sure, b.catch));
     let (bpm, bpm_confidence) = tempo(beat, genres);
     Ok(Analysis {
@@ -326,19 +361,25 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
     })
 }
 
-/// The hundredths' peaks in `WAVEFORM_BINS` bins, each its loudest, as 0..=255 of full scale.
-fn bin_waveform(peaks: &[f32]) -> Vec<u8> {
-    if peaks.is_empty() {
+/// The hundredths' mean squares in `WAVEFORM_BINS` bins, each its RMS, as 0..=255 of the loudest bin's. RMS, not the
+/// peaks: a loud master's peaks are near full scale all through, so its waveform would be a flat block (decision 0035).
+/// Against the track's own loudest, so a quiet track keeps its detail in a byte (its loudness is kept apart).
+fn bin_waveform(squares: &[f32]) -> Vec<u8> {
+    if squares.is_empty() {
         return vec![0; WAVEFORM_BINS];
     }
-    (0..WAVEFORM_BINS)
+    let rms: Vec<f32> = (0..WAVEFORM_BINS)
         .map(|b| {
-            let from = b * peaks.len() / WAVEFORM_BINS;
-            let to = ((b + 1) * peaks.len() / WAVEFORM_BINS).max(from + 1).min(peaks.len());
-            let p = peaks[from.min(peaks.len() - 1)..to].iter().copied().fold(0.0, f32::max);
-            (p.min(1.0) * 255.0).round() as u8
+            let from = (b * squares.len() / WAVEFORM_BINS).min(squares.len() - 1);
+            let to = ((b + 1) * squares.len() / WAVEFORM_BINS).max(from + 1).min(squares.len());
+            (squares[from..to].iter().sum::<f32>() / (to - from) as f32).sqrt()
         })
-        .collect()
+        .collect();
+    let top = rms.iter().copied().fold(0.0, f32::max);
+    if top <= 0.0 {
+        return vec![0; WAVEFORM_BINS];
+    }
+    rms.iter().map(|r| (r / top * 255.0).round() as u8).collect()
 }
 
 #[cfg(test)]
@@ -346,7 +387,7 @@ mod tests {
     use super::*;
 
     /// A 16-bit stereo WAV of `secs` seconds at 44.1 kHz, each sample from `f(t)`.
-    fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> std::path::PathBuf {
+    pub(super) fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> std::path::PathBuf {
         let rate = 44_100u32;
         let n = (secs * f64::from(rate)) as usize;
         let mut data = Vec::with_capacity(n * 4);
@@ -386,12 +427,29 @@ mod tests {
         assert!((a.track_gain_db - (-18.0 - a.loudness_lufs)).abs() < 1e-4);
         assert!((a.track_peak - 0.1).abs() < 0.005, "{}", a.track_peak);
         assert_eq!(a.waveform.len(), WAVEFORM_BINS);
-        assert!(a.waveform.iter().all(|&w| (24..=27).contains(&w)), "{:?}", &a.waveform[..8]);
+        assert!(a.waveform.iter().all(|&w| w >= 253), "a steady tone is flat at the top: {:?}", &a.waveform[..8]);
         assert_eq!(a.bpm, None, "a steady tone has no beat");
         // The blocks give the same loudness as the whole (one track's album gain is its track gain).
         let (gain, peak) = album_gain(&[&a]).unwrap();
         assert!((gain - a.track_gain_db).abs() < 0.15, "{gain} against {}", a.track_gain_db);
         assert!((peak - a.track_peak).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_waveform_follows_the_loudness_not_the_peaks() {
+        // 3 s of a sine at 0.4, then 3 s of a square wave at 0.1: the square's peaks are a quarter of the sine's, its RMS
+        // a third of it (0.1 against 0.4 / sqrt 2), which the waveform shows.
+        let path = wav("steps", 6.0, |t| {
+            let s = (2.0 * std::f64::consts::PI * 440.0 * t).sin() as f32;
+            if t < 3.0 { 0.4 * s } else { 0.1 * s.signum() }
+        });
+        let a = analyse(&path, &[]).unwrap();
+        std::fs::remove_file(&path).ok();
+        let (first, second) = a.waveform.split_at(WAVEFORM_BINS / 2);
+        // A bin is not a whole number of the sine's periods: its RMS wobbles by about 1 %.
+        assert!(first[..250].iter().all(|&w| w >= 248), "{:?}", &first[..8]);
+        let want = (0.1 / (0.4 / 2f32.sqrt()) * 255.0) as u8;
+        assert!(second[6..].iter().all(|&w| w.abs_diff(want) <= 2), "{want}: {:?}", &second[6..14]);
     }
 
     #[test]
@@ -433,5 +491,19 @@ mod tests {
         assert_eq!(tempo(Some((140.0, 0.01, 3.0)), &[]), (None, 0.01), "not sure enough");
         assert_eq!(tempo(Some((140.0, 0.3, 0.5)), &[]).0, None, "no catch");
         assert_eq!(tempo(Some((100.0, 0.3, 2.0)), &["Reggae".into()]).0, Some(100.0), "at or under 110 stays");
+    }
+
+    #[test]
+    fn dance_music_is_counted_between_90_and_180() {
+        let t = |bpm: f64, genre: &str| tempo(Some((bpm, 0.3, 2.0)), &[genre.to_string()]).0.unwrap();
+        assert_eq!(t(62.0, "Deep House"), 124.0);
+        assert_eq!(t(248.0, "Techno"), 124.0);
+        assert_eq!(t(87.0, "Drum & Bass"), 174.0);
+        assert_eq!(t(70.0, "Dubstep"), 140.0);
+        assert_eq!(t(128.0, "Electro House"), 128.0, "already within");
+        assert_eq!(t(85.0, "Downtempo"), 85.0, "not dance");
+        assert_eq!(t(85.0, "Electronic"), 85.0, "too broad to fold");
+        assert_eq!(t(150.0, "Dancehall"), 75.0, "the slow count wins");
+        assert!(dance(&["Tech House".into()]) && dance(&["UK Garage".into()]) && dance(&["Nu Disco".into()]) && !dance(&["Ambient".into()]));
     }
 }

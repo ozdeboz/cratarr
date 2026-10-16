@@ -100,6 +100,13 @@ class Prefs(context: Context) {
             p.edit().putInt(RADIO_COUNT, value.coerceIn(1, Radio.MAX)).apply()
         }
 
+    /** Levelling (decision 0035): each track about as loud as the next, by its ReplayGain. On unless turned off. */
+    var levelling: Boolean
+        get() = p.getBoolean(LEVELLING, true)
+        set(value) {
+            p.edit().putBoolean(LEVELLING, value).apply()
+        }
+
     /** Ignore favourites (SkipFavourites): Radio's inserts and Autoplay's picks leave the hearted tracks out. */
     var skipFavourites: Boolean
         get() = p.getBoolean(SKIP_FAVOURITES, false)
@@ -165,6 +172,7 @@ class Prefs(context: Context) {
         const val RADIO_BY = "radio_by"
         const val RADIO_COUNT = "radio_count"
         const val SKIP_FAVOURITES = "skip_favourites"
+        const val LEVELLING = "levelling"
         const val AUTOPLAY = "autoplay"
         private const val OLD_RADIO = "radio"
         const val SLEEP = "sleep"

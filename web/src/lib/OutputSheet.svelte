@@ -32,7 +32,9 @@
   const shown = $derived(here || drivenName() !== null ? outputName() : remoteName);
   const group = $derived(groupOf(head()));
   // Holding groups: offered while one of Cratarr's players is played on (in the app, this device is one).
-  const groupable = (name: string | null) => name !== null && head() !== null && name !== head();
+  // A group's leader is one of the app's players: a Kodi follows, never leads.
+  const kindOf = (n: string | null) => playOn.players.find((p) => p.name === n)?.kind ?? 'app';
+  const groupable = (name: string | null) => name !== null && head() !== null && name !== head() && kindOf(group[0] ?? head()) === 'app';
   // The chosen player stays listed while it is away (offline), so what is chosen shows.
   const players = $derived.by(() => {
     const list = choosable().map((p) => p.name);

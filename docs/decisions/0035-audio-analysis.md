@@ -1,6 +1,6 @@
 # 0035: Audio analysis: waveform, tempo and loudness, worked out once on the server
 
-- Status: proposed
+- Status: accepted (the owner, 2026-10-16: it ships in preview 36)
 - Date: 2026-10-16
 - Builds on: 0013 (the converter's decode), 0030 (OpenSubsonic), 0032 (Cratarr is its own source)
 
@@ -40,7 +40,7 @@ and 353 of Incoming's 5,184. That is why the crate builder's BPM range finds alm
 Working this out in a browser would need the whole file downloaded beside the stream, and about 85 MB of decoded
 audio held in memory for a 4-minute track. On a phone that is not workable.
 
-## Decision (proposed)
+## Decision
 
 **One background analysis pass on the server**, in the catalogue.
 
@@ -62,20 +62,26 @@ audio held in memory for a 4-minute track. On a phone that is not workable.
 **What it keeps per track**, in a catalogue table of its own (`analysis`: the track, the algorithm's version, then the
 values below). It is never written into the files.
 
-- **Waveform:** 256 values, one byte each. Each value is the RMS loudness of its stretch of the track, mapped from
-  −60…0 dBFS to 0–255. RMS, not peaks: a loud modern master drawn from peaks is a flat block.
-  - That is about 8 MB for the whole library.
-  - A player reduces the 256 values to the bars it draws.
+- **Waveform:** 512 values, one byte each. Each value is the RMS of its stretch of the track, linear, as 0–255 of
+  the track's loudest stretch. Its loudness is kept apart (below), so the bytes go to its shape.
+  - RMS, not peaks: a loud modern master's peaks are near full scale all through, so it would be a flat block.
+  - Linear, not in dB: a dB scale squeezes the shape too. Measured on four of the library's tracks, drawn as the
+    seekbar draws them (120 bars against the loudest): for a loud master, the bars at 90 % or more of the top were
+    87 % of them from peaks, 89 % from RMS in dB, 15 % from linear RMS. For the three others, linear RMS gave the most
+    shape too (2–18 % at the top, against 4–36 % from peaks and 31–45 % in dB).
+  - That is about 15 MB for the whole library.
+  - A player reduces the 512 values to the bars it draws.
 - **Tempo:** a BPM with a confidence, or **no tempo**. Beatless and ambient tracks, a good part of this library,
   get no tempo rather than a guess.
-  - **A proven estimator is ported, not invented** (the owner's rule: copy, don't reinvent):
+  - **A proven estimator is taken, not invented** (the owner's rule: copy, don't reinvent). First proposed: librosa
+    or QM-DSP; taken: taktus, measured (the amendment and the measurements below). The first proposal was:
     - librosa's tempo (ISC licence);
     - or Mixxx's QM-DSP TempoTrackV2 (GPL-2.0-or-later, which AGPL allows).
   - It is chosen after both are measured on a sample of tracks whose tempo the owner knows. That measurement counts
     the half- and double-tempo mistakes every detector makes.
 - **Loudness**, for volume levelling the way ReplayGain does (the owner, 2026-10-16: "replay gain and waveform
-  analysis and BPM analysis will all be grouped"): integrated loudness and true peak (EBU R128), by the `ebur128` crate
-  (MIT), the reference implementation, in the same decode.
+  analysis and BPM analysis will all be grouped"): integrated loudness (EBU R128), by the `ebur128` crate (MIT), the
+  reference implementation, and the sample peak, in the same decode.
   - **Track gain and album gain.** Track gain levels shuffle and radio; album gain keeps an album's own dynamics (a
     quiet interlude stays quiet). A player uses album gain while an album plays in order, else track gain.
   - **Album gain is measured, not averaged.** The pass walks the library album by album and keeps each track's
@@ -83,7 +89,10 @@ values below). It is never written into the files.
     scanner does. An album with a changed track is measured again whole. A track worked out on demand gets its track
     gain at once; its album's waits for the pass.
   - **Target −18 LUFS** (ReplayGain 2.0's reference): gain = −18 − loudness. The peaks are kept beside the gains
-    (linear, as ReplayGain's tags), so a player never raises a track past its true peak.
+    (linear, as ReplayGain's tags; above 1.0 is possible from a lossy file), so a player never raises a track past
+    its peak.
+  - **The sample peak, not the true peak:** the largest decoded sample, as ReplayGain's peak tags have always held
+    and rsgain writes by default. A true peak would oversample every decode (BS.1770's 4×).
 - **Each value keeps where it came from:** this pass, the file's tags, or an import (below).
 
 **Tempo from three places, in this order:**
@@ -100,7 +109,7 @@ added). iTunes's `iTunNORM` is not read. The pass wins once it has a value, so e
 **Where it shows:**
 
 - `GET /api/track/{source}/{id}/waveform`, beside the other track routes (`/details`, `/playlists`) and resolved
-  through `track_of_source`, so Incoming's tracks have one too. It returns the 256 bytes, with an ETag and a long cache
+  through `track_of_source`, so Incoming's tracks have one too. It returns the 512 bytes, with an ETag and a long cache
   life.
   - The web player and the app draw the seekbar from it.
   - A Cratarr OpenSubsonic extension may offer it to Subsonic apps.
@@ -171,7 +180,52 @@ thirds:
 - **The slow count for dub and reggae:** a track whose genre tag is reggae, dub, roots or dancehall and whose estimate
   is above 110 BPM gets half of it. Checked on the library's reggae-tagged tracks: they should land between about 60
   and 95.
+- **Dance music between 90 and 180** (the owner, after the measurements below): a track whose genre tag holds a
+  dance word (house, techno, trance, drum and bass and the like) gets its estimate doubled or halved into 90–180. The
+  slow count wins when a track has both.
 
+
+## Measured: taktus on the public sets (2026-10-16)
+
+taktus 0.1.0, decoded as Cratarr decodes (symphonia), the whole excerpt (`tempo_of`); Acc1 within 4 %, Acc2 also
+half, double and thirds. Gated: `sure >= 0.05` and `catch >= 1.0`.
+
+| Set | Acc1 | Acc2 | Gated: answers | Gated Acc1 | Gated Acc2 | Time (this PC) |
+|---|---|---|---|---|---|---|
+| Ballroom, 698 (Krebs' corrected beats) | 77.4 % | 99.0 % | 93.4 % | 79.1 % | 99.2 % | 0.07 s per 30 s |
+| GiantSteps, 664 (corrected v2) | 80.9 % | 95.5 % | 94.3 % | 82.1 % | 97.3 % | 0.27 s per 2 min |
+
+- **Its own figures hold**, to the decimal on both sets. Against the original 2004 Ballroom values it scores 95.6 %
+  Acc2: those values have known errors, which Krebs' beat annotations correct.
+- **The gate:** stricter ones gain under a point and lose a lot (sure >= 0.15, catch >= 1.5: GiantSteps answers
+  62 %). The core uses 0.05 / 1.0.
+- **What it misses when sure:** on GiantSteps mostly 4:3 (127 read as 168), then 2:3; octave slips (half or double)
+  are 95 of 626 answers. Folding every estimate into 90–180 BPM would raise GiantSteps' gated Acc1 to 88 % but lower
+  Ballroom's to 70 % (its slow dances): only for dance genre tags, if at all (the owner's call).
+- **taktus is taken** (the core, `server/src/analysis`). The source was read: one file, no dependency,
+  `forbid(unsafe_code)`, no file or network access.
+
+## Measured: the two tempo rules on a real library (2026-10-16)
+
+taktus as above, then the two rules (dub and reggae counted slow; dance tags folded into 90–180), on 586 tracks of
+the owner's library on the NAS (0.6–0.9 s a track at the lowest priority, no file unreadable). The reference is the
+files' own BPM tags, of unknown origin and quality: worse than the public sets' annotations.
+
+| Sample | Tracks | Sure enough | Result without the rules | With the rules |
+|---|---|---|---|---|
+| BPM-tagged, any genre | 386 | 64 % | 71 % right (79 % any octave) | 71 % right |
+| Dub, reggae, dancehall | 60 | 62 % | 16 % in 60–95 | 65 % in 60–95 |
+| Dance tags | 80 | 81 % | 97 % in 90–180 | 100 % in 90–180 |
+| Ambient | 60 | 47 % | 53 % without a tempo | the same |
+
+- **The gate does the most:** on the tagged tracks, what it shows is 71 % right; what it holds back would have been
+  51 % right.
+- **The fold barely acts:** it moved 3 of the 247 tagged answers (one fixed, one broken: a track tagged "Breaks" at
+  75; one wrong either way) and 2 of 65 dance answers. It is kept: cheap, and right where it acts on dance sets.
+- **The slow count does what it is for:** it halves the dub read at 112–186. It leaves the ones at 95–104 (the
+  rule starts above 110); whether they are right is not known: no reference.
+- **Ambient:** about half gets no tempo; whether the shown half has a beat was not checked.
+- Neither rule changes how often a tempo is shown; only the gate does.
 
 ## Where the first pass runs (the owner, 2026-10-16)
 

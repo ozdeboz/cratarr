@@ -29,8 +29,9 @@ const MAX_PACKET: usize = 4000;
 const PAGE_PACKETS: usize = 50;
 const VENDOR: &str = concat!("Cratarr ", env!("CARGO_PKG_VERSION"), " (libopus)");
 
-/// Writes `input` to `out` as Ogg Opus. `false` (nothing written) when it is not a lossless file.
-pub fn copy(input: &Path, out: impl Write) -> Result<bool> {
+/// Writes `input` to `out` as Ogg Opus, with its ReplayGain (track and album gain in dB, decision 0035) as Opus's
+/// R128 gain tags when known. `false` (nothing written) when it is not a lossless file.
+pub fn copy(input: &Path, out: impl Write, gains: (Option<f64>, Option<f64>)) -> Result<bool> {
     let Some(mut source) = convert::Source::open(input)? else { return Ok(false) };
     let format = source.format.clone();
     // Opus's simple channel mapping holds one or two; a surround file keeps its front pair.
@@ -42,7 +43,7 @@ pub fn copy(input: &Path, out: impl Write) -> Result<bool> {
     let pre_skip = encoder.lookahead()?;
     let mut ogg = Ogg::new(out, serial(input));
     ogg.page(&[&opus_head(channels, pre_skip, format.sample_rate)], 0, BOS)?;
-    ogg.page(&[&opus_tags(input)], 0, 0)?;
+    ogg.page(&[&opus_tags(input, gains)], 0, 0)?;
 
     // Interleaved samples waiting for a whole frame; the frames' packets waiting for their page.
     let mut pcm: Vec<f32> = Vec::with_capacity(FRAME * channels * 2);
@@ -101,10 +102,21 @@ fn opus_head(channels: usize, pre_skip: u16, input_rate: u32) -> Vec<u8> {
     b
 }
 
+/// Opus's R128 gain tag from a ReplayGain gain: Q7.8 dB from EBU R128's −23 LUFS, not ReplayGain's −18 (RFC 7845 §5.2.1).
+fn r128(replay_gain_db: f64) -> String {
+    (((replay_gain_db - 5.0) * 256.0).round() as i32).clamp(i16::MIN as i32, i16::MAX as i32).to_string()
+}
+
 /// The comment header (RFC 7845 §5.2): the track's title, artist, album, album artist, number and year, so the copy
-/// names itself wherever it ends up.
-fn opus_tags(input: &Path) -> Vec<u8> {
+/// names itself wherever it ends up, and its gains, so a player levels it offline too.
+fn opus_tags(input: &Path, (track, album): (Option<f64>, Option<f64>)) -> Vec<u8> {
     let mut comments: Vec<String> = Vec::new();
+    if let Some(g) = track {
+        comments.push(format!("R128_TRACK_GAIN={}", r128(g)));
+    }
+    if let Some(g) = album {
+        comments.push(format!("R128_ALBUM_GAIN={}", r128(g)));
+    }
     let options = lofty::config::ParseOptions::new().read_properties(false);
     if let Ok(tagged) = lofty::probe::Probe::open(input).and_then(|p| p.options(options).read())
         && let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag())
@@ -331,7 +343,7 @@ mod tests {
         let input = dir.join("a.wav");
         wav(&input, 44_100, 3.0);
         let mut out = Vec::new();
-        assert!(copy(&input, &mut out).unwrap());
+        assert!(copy(&input, &mut out, (Some(-7.5), None)).unwrap());
         let pages = pages(&out);
         let (flags, granule, seq, head) = &pages[0];
         assert_eq!((*flags, *granule, *seq), (BOS, 0, 0));
@@ -340,6 +352,8 @@ mod tests {
         let pre_skip = u64::from(u16::from_le_bytes([head[0][10], head[0][11]]));
         assert_eq!(u32::from_le_bytes(head[0][12..16].try_into().unwrap()), 44_100, "the original rate, for information");
         assert_eq!(&pages[1].3[0][..8], b"OpusTags");
+        // ReplayGain's -7.5 dB from -18 LUFS is R128's -12.5 dB from -23: -3200 in Q7.8.
+        assert!(pages[1].3[0].windows(21).any(|w| w == b"R128_TRACK_GAIN=-3200"));
         let last = pages.last().unwrap();
         assert_eq!(last.0, EOS);
         assert_eq!(last.1, pre_skip + 3 * 48_000, "ends exactly where the music does");
@@ -357,7 +371,7 @@ mod tests {
     fn copy_a_file() {
         let (Some(input), Some(output)) = (std::env::var_os("CRATARR_OPUS_IN"), std::env::var_os("CRATARR_OPUS_OUT")) else { return };
         let out = std::io::BufWriter::new(std::fs::File::create(output).unwrap());
-        assert!(copy(Path::new(&input), out).unwrap(), "not a lossless file");
+        assert!(copy(Path::new(&input), out, (None, None)).unwrap(), "not a lossless file");
     }
 
     #[test]
@@ -370,7 +384,7 @@ mod tests {
         b.resize(4096, 0);
         std::fs::write(&input, b).unwrap();
         let mut out = Vec::new();
-        assert!(!copy(&input, &mut out).unwrap_or(false));
+        assert!(!copy(&input, &mut out, (None, None)).unwrap_or(false));
         assert!(out.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }

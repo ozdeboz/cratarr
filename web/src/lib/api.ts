@@ -182,12 +182,23 @@ export type PlayOnPlayer = {
   group?: string | null;
   /** How late its speaker sounds (ms): in a group it plays that much earlier. */
   delay_ms?: number;
+  /** `app` (the Android app) or `kodi` (a Kodi Cratarr drives: it follows a group, never leads one). */
+  kind?: 'app' | 'kodi';
   track: QueueTrack | null;
   queue?: QueueTrack[];
 };
 
 export const getPlayers = () => quietly<{ players: PlayOnPlayer[] }>('/api/players');
 export const getPlayer = (name: string) => quietly<PlayOnPlayer>(`/api/players/${encodeURIComponent(name)}`);
+/** A track's ReplayGain (decision 0035): gains in dB, peaks linear; what is not known is left out. */
+export type TrackGain = { trackGain?: number; albumGain?: number; trackPeak?: number; albumPeak?: number };
+export const getTrackGain = (source: string, id: string) => quietly<TrackGain>(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/gain`);
+/** A Kodi Cratarr plays on: its web server, its login (the password never comes back), Cratarr's address for it. */
+export type KodiSetting = { name: string; url: string; user: string; password?: string; password_set?: boolean; stream_from: string };
+export type PlayOnSettings = { webhooks: string[]; kodi: KodiSetting[]; stream_default: string | null };
+export const getPlayOnSettings = () => request<PlayOnSettings>('/api/players/settings');
+export const savePlayOnSettings = (s: { webhooks: string[]; kodi: KodiSetting[] }) =>
+  request<PlayOnSettings>('/api/players/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
 /** A player's speaker delay (sync play, decision 0037), 0 to 500 ms. */
 export const setPlayerDelay = (name: string, ms: number) =>
   request<{ ms: number }>(`/api/players/${encodeURIComponent(name)}/delay`, {

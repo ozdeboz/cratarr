@@ -45,8 +45,9 @@ class PlayOnLink(
     @Volatile private var connection: HttpURLConnection? = null
     private var thread: Thread? = null
 
-    /** The volume before a duck (0 to 1); null when not ducked. */
-    private var unducked: Float? = null
+    /** The volume as set (0 to 1), ducked or not; the player plays it times the duck, times the track's levelling. */
+    private var volume = 1f
+    private var ducked = false
     private var queueSent = false
     /** The queue's version in the last command from Cratarr: reports say it, so Cratarr knows what they have seen. */
     private var version = -1L
@@ -55,6 +56,7 @@ class PlayOnLink(
     fun start() {
         if (running) return
         running = true
+        volume = player.volume
         player.addListener(this)
         thread = Thread(::listen, "cratarr-play-on").apply { isDaemon = true; start() }
         main.post(heartbeat)
@@ -64,9 +66,12 @@ class PlayOnLink(
 
     private var clockThread: Thread? = null
 
-    /** Sync play (decision 0037): the clock's offset to Cratarr's, kept while running: quickly at first, then every 5 s. */
+    /** Sync play (decision 0037): the clock's offset to Cratarr's, kept while running: quickly at first, then every 5 s.
+     *  Unanswered (out of reach, or refused, as a proxy does off the home network), it waits longer each time, up to a
+     *  minute, and starts quickly again once answered. */
     private fun keepClock() {
         var pinged = 0
+        var failed = 0
         var server: String? = null
         while (running) {
             val now = prefs.serverUrl
@@ -74,9 +79,21 @@ class PlayOnLink(
                 Clock.forget()
                 server = now
                 pinged = 0
+                failed = 0
             }
-            if (now != null && Clock.ping(now)) pinged++
-            sleep(if (pinged < 10) 300 else 5_000)
+            if (now != null && Clock.ping(now)) {
+                pinged++
+                failed = 0
+            } else {
+                failed++
+            }
+            sleep(
+                when {
+                    failed > 0 -> (5_000L shl (failed - 1).coerceAtMost(4)).coerceAtMost(60_000L)
+                    pinged < 10 -> 300
+                    else -> 5_000
+                },
+            )
         }
     }
 
@@ -266,16 +283,16 @@ class PlayOnLink(
             "skip_favourites" -> SkipFavourites.set(service, p, m.optBoolean("on"))
             "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))
             "volume" -> {
-                val v = m.optInt("level", 100).coerceIn(0, 100) / 100f
-                if (unducked != null) unducked = v else p.volume = v
+                volume = m.optInt("level", 100).coerceIn(0, 100) / 100f
+                applyVolume()
             }
-            "duck" -> if (unducked == null) {
-                unducked = p.volume
-                p.volume = p.volume * DUCKED
+            "duck" -> {
+                ducked = true
+                applyVolume()
             }
-            "unduck" -> unducked?.let {
-                p.volume = it
-                unducked = null
+            "unduck" -> {
+                ducked = false
+                applyVolume()
             }
             else -> Log.w(TAG, "a command this app does not know: $json")
         }
@@ -346,8 +363,20 @@ class PlayOnLink(
         }
     }
 
+    /** The volume as set, ducked, levelled (decision 0035): what the player plays at. */
+    private fun applyVolume() {
+        player.volume = volume * (if (ducked) DUCKED else 1f) * Levelling.factor
+    }
+
+    /** The levelling setting changed: the playing track levelled again (or not). */
+    fun levellingChanged() = Levelling.follow(service, player, prefs.serverUrl, ::applyVolume)
+
     override fun onEvents(player: Player, events: Player.Events) {
         if (events.contains(Player.EVENT_TIMELINE_CHANGED)) queueSent = false
+        // Another track (or the queue around it): its levelling.
+        if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_TIMELINE_CHANGED)) {
+            Levelling.follow(service, player, prefs.serverUrl, ::applyVolume)
+        }
         if (events.containsAny(
                 Player.EVENT_MEDIA_ITEM_TRANSITION,
                 Player.EVENT_PLAY_WHEN_READY_CHANGED,
@@ -387,8 +416,8 @@ class PlayOnLink(
             .put("position_ms", sync.heardPosition(p).coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
-            .put("volume", ((unducked ?: p.volume) * 100).toInt())
-            .put("ducked", unducked != null)
+            .put("volume", (volume * 100).toInt())
+            .put("ducked", ducked)
         val withQueue = !queueSent
         if (withQueue) out.put("queue", queueOf(p))
         val body = out.toString()

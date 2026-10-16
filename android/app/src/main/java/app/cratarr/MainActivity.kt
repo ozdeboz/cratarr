@@ -255,6 +255,7 @@ class MainActivity : AppCompatActivity() {
                     PlayerService.ready(this)
                 }
                 message.optString("downloadQuality").takeIf { it.isNotEmpty() }?.let { prefs.downloadQuality = it }
+                if (message.has("levelling")) prefs.levelling = message.optBoolean("levelling")
                 if (message.has("downloadOverMobile") || message.has("syncOnlyCharging")) {
                     if (message.has("downloadOverMobile")) prefs.downloadOverMobile = message.optBoolean("downloadOverMobile")
                     if (message.has("syncOnlyCharging")) prefs.syncOnlyCharging = message.optBoolean("syncOnlyCharging")
@@ -337,6 +338,7 @@ class MainActivity : AppCompatActivity() {
         .put("downloadOverMobile", prefs.downloadOverMobile)
         .put("syncBudgetGb", prefs.syncBudgetGb)
         .put("syncOnlyCharging", prefs.syncOnlyCharging)
+        .put("levelling", prefs.levelling)
         .toString()
 
     /** The kept items' progress (decision 0038), read off the main thread, to the page; changes close together go as one. */

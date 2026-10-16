@@ -4,10 +4,14 @@
   // moves, as Snapweb and Iris set Snapcast's per-client latency. 0 to 500 ms in steps of 5.
   import { setPlayerDelay } from './api';
   import Icon from './Icon.svelte';
+  import KodiSettings from './KodiSettings.svelte';
   import { playOn } from './playOn.svelte';
   import { toast } from './toast.svelte';
 
   const MAX = 500;
+  /** A Kodi's delay is its own buffering too: up to the group's whole buffer. */
+  const KODI_MAX = 1000;
+  const maxOf = (name: string) => (playOn.players.find((p) => p.name === name)?.kind === 'kodi' ? KODI_MAX : MAX);
   const STEP = 5;
 
   const players = $derived([...playOn.players].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
@@ -22,7 +26,7 @@
 
   /** At most one save per player every 100 ms while it moves; the last always goes. */
   function set(name: string, ms: number) {
-    const v = Math.min(MAX, Math.max(0, Math.round(ms / STEP) * STEP));
+    const v = Math.min(maxOf(name), Math.max(0, Math.round(ms / STEP) * STEP));
     held[name] = v;
     wanted.set(name, v);
     clearTimeout(letGo.get(name));
@@ -57,13 +61,13 @@
         <input
           type="range"
           min="0"
-          max={MAX}
+          max={maxOf(p.name)}
           step={STEP}
           value={ms}
           aria-label="Speaker delay of {p.name}"
           oninput={(e) => set(p.name, Number(e.currentTarget.value))}
         />
-        <button aria-label="More" title="More" disabled={ms >= MAX} onclick={() => set(p.name, ms + STEP)}><Icon name="plus" size={20} /></button>
+        <button aria-label="More" title="More" disabled={ms >= maxOf(p.name)} onclick={() => set(p.name, ms + STEP)}><Icon name="plus" size={20} /></button>
         <output>{ms} ms</output>
       </div>
     </div>
@@ -71,6 +75,7 @@
     <p class="none">No players yet</p>
   {/each}
 </section>
+<KodiSettings />
 
 <style>
   section {

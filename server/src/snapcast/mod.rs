@@ -8,6 +8,7 @@
 //! buffer later. A break in the leader's sound (a seek, a jump, a pause) silences the group at once and drops what was
 //! still to come; the new sound plays a buffer after it starts.
 
+pub mod listen;
 pub mod proto;
 
 use std::collections::{HashMap, VecDeque};
@@ -176,15 +177,34 @@ pub struct Snapcast {
     streams: Mutex<HashMap<String, Arc<Stream>>>,
     sources: AtomicU64,
     buffer_ms: u32,
+    /// Players without Snapcast's player (a Kodi), listening to their group's sound as WAV (`listen`), by name.
+    listeners: Mutex<HashMap<String, Arc<listen::Listener>>>,
 }
+
+/// The one server, once it listens (a Kodi's driver finds its group's sound here).
+static INSTANCE: std::sync::OnceLock<Arc<Snapcast>> = std::sync::OnceLock::new();
 
 impl Snapcast {
     pub fn new(groups: Arc<dyn Groups>, buffer_ms: u32) -> Arc<Self> {
-        Arc::new(Self { epoch: Instant::now(), groups, streams: Mutex::default(), sources: AtomicU64::new(1), buffer_ms })
+        Arc::new(Self { epoch: Instant::now(), groups, streams: Mutex::default(), sources: AtomicU64::new(1), buffer_ms, listeners: Mutex::default() })
+    }
+
+    /// The server, once Cratarr serves sync play.
+    pub fn instance() -> Option<Arc<Self>> {
+        INSTANCE.get().cloned()
+    }
+
+    pub fn set_instance(me: Arc<Self>) {
+        let _ = INSTANCE.set(me);
+    }
+
+    /// From a chunk's stamp to its sound (ms).
+    pub fn buffer_ms(&self) -> u32 {
+        self.buffer_ms
     }
 
     /// Cratarr's steady clock (µs): what every stamp and every time exchange is in.
-    fn now(&self) -> i64 {
+    pub fn now(&self) -> i64 {
         CLOCK_BASE_US + self.epoch.elapsed().as_micros() as i64
     }
 

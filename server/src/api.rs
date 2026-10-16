@@ -24,6 +24,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/stream/{source}/{id}", get(stream))
         .route("/api/file/{source}/{id}", get(file))
+        .route("/api/track/{source}/{id}/gain", get(track_gain))
         .route("/api/players", get(players))
         .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
         .route("/api/players/{name}", get(player))
@@ -31,6 +32,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}/state", axum::routing::put(player_state))
         .route("/api/players/{name}/sample", post(player_sample))
         .route("/api/players/{name}/delay", axum::routing::put(player_delay))
+        .route("/api/groups/{leader}/listen.wav", get(group_listen))
         .route("/api/time", get(time_now))
         .route("/api/sync/measure", get(sync_measure))
         .route("/api/radio/next", post(radio_next))
@@ -180,6 +182,32 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
         )
             .into_response(),
     }
+}
+
+/// A track's ReplayGain (decision 0035): its track and album gains (dB) and peaks (linear), from its analysis, else
+/// its file's tags, as Cratarr's library serves it; `{}` where none is known. The players level by it.
+async fn track_gain(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Response {
+    let gain = replay_gain_of(&app, &source, &id).await;
+    // Short-lived: an analysis comes, and the gain with it.
+    let cache = (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=600"));
+    ([cache], Json(gain.map_or(json!({}), |g| serde_json::to_value(g).unwrap_or_default()))).into_response()
+}
+
+/// A track's ReplayGain as Cratarr's library serves it (its analysis, else its file's tags).
+async fn replay_gain_of(app: &App, source: &str, id: &str) -> Option<crate::serve::api::ReplayGain> {
+    let served = crate::serve::instance()?;
+    let (cat, source, id) = (app.library.catalogue(), source.to_string(), id.to_string());
+    tokio::task::spawn_blocking(move || {
+        let song = if source == crate::source::cratarr::KIND.id {
+            Some(id)
+        } else {
+            cat.track_of_source(&source, &id).and_then(|t| served.library.song_ids(t).ok().flatten()).map(|s| s.song_id)
+        }?;
+        served.library.songs_by_id(&[song]).ok()?.into_iter().next()?.replay_gain
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// A track's title, artist and album, for the local player's queue (decision 0022).
@@ -768,6 +796,21 @@ async fn player_sample(State(app): State<Arc<App>>, Path(name): Path<String>, Js
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct Listening {
+    player: String,
+}
+
+/// A group's sound as one long WAV, for a player without Snapcast's player (a Kodi, decision 0037 amended).
+async fn group_listen(State(app): State<Arc<App>>, Path(leader): Path<String>, Query(q): Query<Listening>) -> Response {
+    let Some(snap) = crate::snapcast::Snapcast::instance() else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "Sync play is not served here." }))).into_response();
+    };
+    let delay = u32::from(app.play_on.delay_of(&q.player));
+    let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(snap.listen(&leader, &q.player, delay)));
+    ([(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav")), (header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], body).into_response()
+}
+
 #[derive(serde::Deserialize)]
 struct DelayBody {
     ms: u16,
@@ -801,11 +844,11 @@ async fn player_connect(
     Ok(axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15))))
 }
 
-async fn play_on_settings(State(app): State<Arc<App>>) -> Json<crate::app::PlayOnSettings> {
-    Json(app.play_on.settings())
+async fn play_on_settings(State(app): State<Arc<App>>) -> Json<crate::app::PlayOnSettingsView> {
+    Json(app.play_on.settings_view())
 }
 
-async fn save_play_on_settings(State(app): State<Arc<App>>, Json(s): Json<crate::app::PlayOnSettings>) -> Result<Json<crate::app::PlayOnSettings>, ApiError> {
+async fn save_play_on_settings(State(app): State<Arc<App>>, Json(s): Json<crate::app::PlayOnSettings>) -> Result<Json<crate::app::PlayOnSettingsView>, ApiError> {
     Ok(Json(app.play_on.save_settings(s).await?))
 }
 
@@ -820,12 +863,13 @@ struct FileAs {
 /// seeks in the file itself and plays gapless from its own headers. With `?as=opus`, the downloads' smaller copy.
 async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<FileAs>, headers: HeaderMap) -> Response {
     let cat = app.library.catalogue();
+    let source_id = (source.clone(), id.clone());
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
     let Some((path, _, _)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
     if q.as_.as_deref() == Some("opus")
-        && let Some(copy) = opus_copy(path.clone()).await
+        && let Some(copy) = opus_copy(path.clone(), replay_gain_of(&app, &source_id.0, &source_id.1).await).await
     {
         return copy;
     }
@@ -837,7 +881,8 @@ static COPIES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 /// A lossless file as Ogg Opus, made as it is sent (no length, no ranges: downloads take it whole). `None` for a file
 /// that is not lossless.
-async fn opus_copy(path: std::path::PathBuf) -> Option<Response> {
+async fn opus_copy(path: std::path::PathBuf, gain: Option<crate::serve::api::ReplayGain>) -> Option<Response> {
+    let gains = gain.map_or((None, None), |g| (g.track_gain, g.album_gain));
     let probe = path.clone();
     let lossless = tokio::task::spawn_blocking(move || crate::convert::Source::open(&probe).ok().flatten().is_some()).await.ok()?;
     if !lossless {
@@ -848,7 +893,7 @@ async fn opus_copy(path: std::path::PathBuf) -> Option<Response> {
     tokio::task::spawn_blocking(move || {
         let failed = tx.clone();
         let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
-        if let Err(e) = crate::opus_copy::copy(&path, out) {
+        if let Err(e) = crate::opus_copy::copy(&path, out, gains) {
             let stopped = e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe);
             if !stopped {
                 tracing::warn!("Opus copy of {}: {e:#}", path.display());

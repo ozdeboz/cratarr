@@ -16,6 +16,8 @@ export type Prefs = {
   listDown: boolean;
   /** Playlists the track is in come first. */
   showProgress: boolean;
+  /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
+  levelling: boolean;
   /** View's Dates: an album's date added as how long ago ("3 days ago"), not the date. */
   relativeDates: boolean;
   /** Source this browser follows when several are active; '' = whichever started playing most recently. */
@@ -70,6 +72,7 @@ export const DEFAULTS: Prefs = {
   listOrder: 'playing',
   listDown: false,
   showProgress: true,
+  levelling: true,
   relativeDates: false,
   source: '',
   hiddenLibraries: [],
@@ -118,6 +121,7 @@ function read(): Prefs {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
+      if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
       if (typeof saved.relativeDates === 'boolean') p.relativeDates = saved.relativeDates;
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
