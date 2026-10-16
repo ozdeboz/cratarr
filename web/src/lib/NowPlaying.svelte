@@ -17,7 +17,8 @@
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
-  import { local, setRadio, setRepeat, setShuffle } from './localPlayer.svelte';
+  import { local, setRepeat, setShuffle } from './localPlayer.svelte';
+  import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { keepViewed, panel } from './panel.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
@@ -103,6 +104,8 @@
   let menuAt = $state<DOMRect | null>(null);
   // The menu's entries, or straight to its playlists (the top bar's playlists button).
   let menuStart = $state<'menu' | 'lists'>('menu');
+  // More music's sheet (Radio and Autoplay), from the radio button.
+  let moreOpen = $state(false);
   let queueOpen = $state(false);
   let outputOpen = $state(false);
   let sleepOpen = $state(false);
@@ -418,10 +421,16 @@
             aria-pressed={favorite()}
             onclick={toggleFavorite}><Icon name="heart" size={26} /></button
           >
-          <!-- Radio (decision 0036, amended), where the device button was; only where the page holds the queue. A tap switches it; lit while on. -->
+          <!-- More music (Radio and Autoplay, decision 0036, amended), where the device button was; only where the page holds the queue.
+               A tap opens its sheet; lit while either is on. -->
           {#if isLocal()}
-            <button class="act radio" class:on={local.radio} aria-label="Radio" aria-pressed={local.radio} onclick={() => setRadio(!local.radio)}
-              ><Icon name="radio" size={24} /></button
+            <button
+              class="act radio"
+              class:on={local.radio || local.autoplay !== null}
+              aria-label="More music"
+              aria-haspopup="dialog"
+              aria-pressed={local.radio || local.autoplay !== null}
+              onclick={() => (moreOpen = true)}><Icon name="radio" size={24} /></button
             >
           {/if}
           <button class="act labelled" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
@@ -446,6 +455,10 @@
 {/if}
 {#if sleepOpen}
   <SleepSheet onclose={() => (sleepOpen = false)} />
+{/if}
+
+{#if moreOpen}
+  <MoreMusicSheet onclose={() => (moreOpen = false)} />
 {/if}
 
 

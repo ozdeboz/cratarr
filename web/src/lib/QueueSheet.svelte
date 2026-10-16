@@ -3,8 +3,9 @@
   // over the player on the blurred cover, a grab handle and "Queue"; then the previous tracks (folded, this device
   // only: the server's player reports only what comes next), the playing track as a card that fills as it plays
   // (pinned at the top), the "Playing from" header (pinned under it) and what comes next. From Symfonium's queue
-  // (decided 2026-10-16): search, the radio, Autoplay and Clear (what comes next goes, with Undo) in the head (shuffle and
-  // repeat are the player's own: the same twice was one too many, the owner said);
+  // (decided 2026-10-16): search (in place, the row grown into a field) and Clear (what comes next goes, with Undo) in
+  // the head, shuffle and repeat being the player's; More music (Radio and Autoplay) a pill floating where the queue
+  // ends;
   // when the queue ends on the clock; "Playing from" a chip that opens it; a row's album after its artist (not the
   // album the queue plays), and its ⋮.
   // Gestures as Finamp's: drag the handle area down to close; a tap on a row plays it, a long-press (or right-click) is
@@ -22,8 +23,8 @@
   import { swipe } from './swipe';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
-  import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming, setRadio } from './localPlayer.svelte';
-  import AutoplaySheet from './AutoplaySheet.svelte';
+  import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming } from './localPlayer.svelte';
+  import MoreMusicSheet, { moreMusicLine } from './MoreMusicSheet.svelte';
   import { canPreview, endPreview, preview, startPreview } from './preview.svelte';
   import { hold } from './hold';
   import { albumSubject, viewPlaylist } from './panel.svelte';
@@ -82,8 +83,8 @@
   }
 
   // Search: what comes next, by title, artist or album; the rows that match show (no reordering meanwhile).
-  // Autoplay's sheet (decision 0036, amended), from the head's ∞.
-  let autoplayOpen = $state(false);
+  // More music's sheet (Radio and Autoplay; decision 0036, amended), from the floating pill.
+  let moreOpen = $state(false);
 
   let searching = $state(false);
   let query = $state('');
@@ -221,25 +222,32 @@
     <div class="qhead" role="presentation" onpointerdown={pullDown} onpointermove={pullMove} onpointerup={pullUp} onpointercancel={pullUp}>
       <span class="handle"></span>
       <div class="bar">
-        <span class="title">Queue</span>
-        <span class="tools">
-          <button class:on={searching} aria-label="Search the queue" aria-pressed={searching} onclick={() => ((searching = !searching), (query = ''))}
-            ><Icon name="search" size={22} /></button
-          >
-          {#if here}
-            <button class:on={local.radio} aria-label="Radio" aria-pressed={local.radio} onclick={() => setRadio(!local.radio)}
-              ><Icon name="radio" size={22} /></button
+        {#if searching}
+          <!-- The search in place, the row grown into a field, as the pages' search (lib/TopPill): Esc or leaving it
+               empty folds it, ✕ empties it. -->
+          <div class="find" role="search">
+            <span class="lead" aria-hidden="true"><Icon name="search" size={20} /></span>
+            <input
+              type="search"
+              placeholder="Title, artist or album"
+              aria-label="Search the queue"
+              bind:value={query}
+              {@attach (el) => el.focus()}
+              onkeydown={(e) => e.key === 'Escape' && ((searching = false), (query = ''))}
+              onblur={() => query.trim() === '' && (searching = false)}
+            />
+            <button aria-label="Clear the search" title="Clear" onmousedown={(e) => e.preventDefault()} onclick={() => ((query = ''), (searching = false))}
+              ><Icon name="close" size={20} /></button
             >
-            <button class:on={local.autoplay !== null} aria-label="Autoplay" aria-haspopup="dialog" aria-pressed={local.autoplay !== null} onclick={() => (autoplayOpen = true)}
-              ><Icon name="infinity" size={22} /></button
-            >
-            <button aria-label="Clear the queue" disabled={!np.upcoming.length} onclick={clear}><Icon name="clearQueue" size={22} /></button>
-          {/if}
-        </span>
+          </div>
+        {:else}
+          <span class="title">Queue</span>
+          <span class="tools">
+            <button aria-label="Search the queue" onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
+            {#if here}<button aria-label="Clear the queue" disabled={!np.upcoming.length} onclick={clear}><Icon name="clearQueue" size={22} /></button>{/if}
+          </span>
+        {/if}
       </div>
-      {#if searching}
-        <input class="find" type="search" placeholder="Title, artist or album" aria-label="Search the queue" bind:value={query} {@attach (el) => el.focus()} />
-      {/if}
     </div>
 
     <div class="list" bind:this={list}>
@@ -333,13 +341,19 @@
         <p class="empty">Nothing comes next.</p>
       {/if}
     </div>
+    {#if here}
+      <!-- More music (Radio and Autoplay), floating where the queue ends: what is on, a tap its sheet. -->
+      <button class="more-music" class:lit={local.radio || local.autoplay !== null} aria-haspopup="dialog" onclick={() => (moreOpen = true)}
+        ><Icon name="radio" size={20} /><span>{moreMusicLine()}</span></button
+      >
+    {/if}
   </div>
 {/if}
 
 
 
-{#if autoplayOpen}
-  <AutoplaySheet onclose={() => (autoplayOpen = false)} />
+{#if moreOpen}
+  <MoreMusicSheet onclose={() => (moreOpen = false)} />
 {/if}
 
 {#if menuShown && menuFor}
@@ -415,8 +429,7 @@
     background: var(--muted);
   }
 
-  /* The head's row: "Queue", then its tools (search, the radio, Autoplay, Clear), lit while
-     on. */
+  /* The head's row: "Queue", then its tools (search, Clear); searching, the field in their place. */
   .bar {
     display: flex;
     align-items: center;
@@ -448,20 +461,89 @@
     cursor: pointer;
   }
 
-  .tools button.on {
-    color: var(--art-accent);
-  }
 
   .find {
-    align-self: stretch;
-    min-height: 40px;
-    margin: 8px 12px 0;
-    padding: 0 12px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--bg) 60%, transparent);
+    flex: 1;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    height: 44px;
+    margin-left: -10px;
+    border-radius: 22px;
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .find .lead {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    color: var(--muted);
+  }
+
+  .find input {
+    flex: 1;
+    min-width: 0;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    background: none;
     color: inherit;
     font: inherit;
+    font-size: 16px;
+    outline: none;
+  }
+
+  .find input::-webkit-search-cancel-button {
+    display: none;
+  }
+
+  .find button {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  /* More music: a pill floating over the list's lower right corner, lit in the cover's accent while Radio or Autoplay
+     is on. */
+  .more-music {
+    position: absolute;
+    right: 16px;
+    bottom: calc(20px + env(safe-area-inset-bottom));
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: calc(100% - 32px);
+    height: 48px;
+    padding: 0 18px 0 14px;
+    border: 0;
+    border-radius: 24px;
+    background: var(--float-bg);
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+    color: var(--muted);
+    font: inherit;
+    font-size: 15px;
+    cursor: pointer;
+  }
+
+  .more-music span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .more-music.lit {
+    background: var(--art-accent);
+    color: var(--accent-text);
   }
 
   /* "Playing from" as a chip that opens it. */

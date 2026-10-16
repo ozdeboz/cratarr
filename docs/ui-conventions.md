@@ -39,10 +39,14 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     so does changing page. Maximise (beside the page) and back-beside-the-page (over it) are remembered.
   - **Queue** (`lib/QueueSheet.svelte`, as Finamp's queue sheet): a sheet over the player on the blurred cover, a grab
     handle and "Queue" (drag it down to close), and in its row the tools (decided 2026-10-16, as Symfonium's queue):
-    search (the rows whose title, artist or album match show), and where the page holds the queue Radio (a switch: about five tracks like each of the queue's own tracks, after it), Autoplay (∞, lit while on: its
-    sheet, what plays when the queue runs out, Stop, Similar, Same artist, Same era or Random, then Queue albums and
-    Restart playlists; decision 0036, amended) and Clear (what comes next goes; the toast's Undo puts it back); not
-    shuffle and repeat, which are the player's (the same twice was one too many); the previous tracks folded under "Previous
+    search (in place: the row grows into the field, as the pages' search; the rows whose title, artist or album match
+    show) and, where the page holds the queue, Clear (what comes next goes; the toast's Undo puts it back); not shuffle
+    and repeat, which are the player's (the same twice was one too many). **More music** floats over the list's lower
+    right corner where the page holds the queue: a pill saying what is on ("Radio · ∞ Same era", else "Off"), lit in
+    the cover's accent while either is, opening its sheet (the player's radio button too): Radio, after each of the
+    queue's own tracks (Off, Like the track), and Autoplay, when the queue ends (Stop, Similar, Same artist, Same era,
+    Random; Queue albums, Restart playlists), each a choice of one with round marks as View's order (decision 0036,
+    amended); the previous tracks folded under "Previous
     Tracks" (this device only); the playing track as a card pinned at the top that fills in the cover's colour as it
     plays, with play/pause on its cover, the heart and the track menu; what it plays from as a chip that opens it (its
     album, playlist or crate), or "Playing on …" for the server's player, and "i of n · time left · until 05:09" (when
