@@ -34,7 +34,7 @@ import { toast } from './toast.svelte';
 export const isLocal = () => (prefs.output === 'local' && canPlayHere) || drivenName() !== null;
 
 /** Whether the music plays in this page (its stream, or the app it runs in). */
-const playsHere = () => prefs.output === 'local' && canPlayHere;
+export const playsHere = () => prefs.output === 'local' && canPlayHere;
 
 // Leaving the page stops what plays in this browser, so a reload or closing the tab asks first (the browser's own
 // "Leave site?"), but only while this browser is playing.

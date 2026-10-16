@@ -48,7 +48,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     album, playlist or crate), or "Playing on …" for the server's player, and "i of n · time left · until 05:09" (when
     it ends on the clock) pinned under it; then what comes next, 70 px rows (60 px cover, title up to two lines, the
     artist and the album, not the album the queue plays, Radio's or Autoplay's mark before them; length, heart, ⋮). A tap plays
-    a row. Playing on this device a row's handle reorders and a swipe left past 65 % removes it,
+    a row; a row's cover held plays its track from a third of the way in until the finger lifts, over what plays,
+    which then goes on where it was (decided 2026-10-16; this browser's own stream for now). Playing on this device a row's handle reorders and a swipe left past 65 % removes it,
     with no undo, as Finamp; the server's player takes neither command. A long-press or right-click opens a menu, the
     same everywhere in the sheet: on the playing track's card (it has no ⋯) the playing track's own menu; on a row a
     menu about its place in the queue: Play now and Play next (moving it there on this device; "Play again next", a

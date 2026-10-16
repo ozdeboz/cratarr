@@ -24,6 +24,8 @@
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
   import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming, setRadio } from './localPlayer.svelte';
   import AutoplaySheet from './AutoplaySheet.svelte';
+  import { canPreview, endPreview, preview, startPreview } from './preview.svelte';
+  import { hold } from './hold';
   import { albumSubject, viewPlaylist } from './panel.svelte';
   import { crates, CRATE } from './crates.svelte';
   import { player } from './live.svelte';
@@ -175,6 +177,17 @@
   };
 </script>
 
+<!-- A row's cover; held, its track plays until the finger lifts (lib/preview.svelte.ts), ringed meanwhile. -->
+{#snippet heldCover(t: { source: string; id: string; album_id: string | null; duration_secs?: number | null })}
+  <span
+    class="cover"
+    class:hearing={preview.id === t.id}
+    use:hold={{ start: () => startPreview(t), end: endPreview, enabled: canPreview() }}
+  >
+    {#if t.album_id}<img src={albumCoverUrl(t.source, t.album_id)} alt="" loading="lazy" draggable="false" />{:else}<span class="noimg"></span>{/if}
+  </span>
+{/snippet}
+
 <!-- A row's second line: the artist, then the album (as Symfonium's), unless it is the album the queue plays. -->
 {#snippet byline(t: { artist: string | null; album: string | null })}
   {[t.artist, t.album === from ? null : t.album].filter(Boolean).join(' • ')}
@@ -239,7 +252,7 @@
             {#each previous as t, j (t.id + ':' + j)}
               <li>
                 <button class="row" onclick={() => (tick(), localJump(j))} use:longpress={() => rowMenu(asTrack(t, t.source), { list: 'previous', at: j })}>
-                  {#if t.album_id}<img src={albumCoverUrl(t.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
+                  {@render heldCover({ source: t.source, id: t.id, album_id: t.album_id, duration_secs: t.duration_secs })}
                   <div><strong>{t.name || '…'}</strong><span>{@render byline(t)}</span></div>
                 </button>
                 {@render rowHeart(asTrack(t, t.source))}
@@ -297,7 +310,7 @@
                 use:longpress={() => rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i })}
                 use:swipe={{ enabled: here && !drag, onswipe: () => removeSwiped(i) }}
               >
-                {#if t.album_id}<img src={albumCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
+                {@render heldCover({ source: np.source, id: t.id, album_id: t.album_id, duration_secs: t.duration_secs })}
                 <div><strong>{t.name}</strong><span>{#if t.lane === 'radio'}<i class="radio" title="Radio"><Icon name="radio" size={14} /></i>{:else if t.lane === 'autoplay'}<i class="radio" title="Autoplay"><Icon name="infinity" size={14} /></i>{/if}{@render byline(t)}</span></div>
                 {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
               </button>
@@ -734,6 +747,23 @@
   .row:hover,
   .row:focus-visible {
     background: color-mix(in srgb, var(--text) 7%, transparent);
+  }
+
+  /* A cover is its own press: held, it plays its track (ringed meanwhile); no image menu, no drag. */
+  .cover {
+    position: relative;
+    flex: none;
+    display: block;
+    width: 60px;
+    height: 60px;
+    border-radius: 8px;
+    -webkit-touch-callout: none;
+    user-select: none;
+    touch-action: pan-y;
+  }
+
+  .cover.hearing {
+    box-shadow: 0 0 0 3px var(--art-accent);
   }
 
   .row img,
