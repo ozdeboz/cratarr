@@ -15,7 +15,8 @@ export const playOn = $state({ players: [] as PlayOnPlayer[] });
 export const drivenName = () => (prefs.output.startsWith('player:') ? prefs.output.slice('player:'.length) : null);
 
 /** The players that can be chosen: connected now, and not the app this page runs in (that one is "This device"). */
-export const choosable = () => playOn.players.filter((p) => p.online && !(inApp && p.name === appInfo.player));
+export const choosable = () =>
+  playOn.players.filter((p) => p.online && !(inApp && p.name === appInfo.player) && !(!inApp && !!prefs.browserName && p.name === prefs.browserName));
 
 /** In the app, while this device follows a group (decision 0037): the group's leader. The device plays no queue of its
  *  own then, so the page shows the leader's and its controls act there (the owner, 2026-10-16: the follower showed no

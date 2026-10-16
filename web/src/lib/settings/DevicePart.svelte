@@ -3,6 +3,8 @@
   // (quality, mobile data, the budget) is under Sync (decision 0038), how it reaches Cratarr under Network.
   import Switch from '../Switch.svelte';
   import { allowBackground, appInfo, inApp, setDevice } from '../app.svelte';
+  import { prefs } from '../prefs.svelte';
+  import { defaultBrowserName } from '../playOnTarget.svelte';
 </script>
 
 {#if inApp}
@@ -20,5 +22,24 @@
       <span class="l">Background <small>{appInfo.batteryAllowed ? 'Allowed to run' : 'Android may stop Cratarr'}</small></span>
       {#if !appInfo.batteryAllowed}<button onclick={allowBackground}>Allow</button>{/if}
     </div>
+  </section>
+{:else}
+  <!-- A page in a browser is a Play On player while it plays here (lib/playOnTarget), under this name. -->
+  <section aria-labelledby="device-h" class="device">
+    <h2 id="device-h">{prefs.browserName || 'This browser'}</h2>
+    <p class="lede">This browser only.</p>
+    <label class="pref">
+      <span class="l">Player name</span>
+      <input
+        type="text"
+        value={prefs.browserName}
+        placeholder={defaultBrowserName()}
+        onchange={(e) => {
+          const name = e.currentTarget.value.trim();
+          if (name) prefs.browserName = name;
+          else e.currentTarget.value = prefs.browserName;
+        }}
+      />
+    </label>
   </section>
 {/if}

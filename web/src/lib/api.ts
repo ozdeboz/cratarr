@@ -184,8 +184,9 @@ export type PlayOnPlayer = {
   group?: string | null;
   /** How late its speaker sounds (ms): in a group it plays that much earlier. */
   delay_ms?: number;
-  /** `app` (the Android app) or `kodi` (a Kodi Cratarr drives: it follows a group, never leads one). */
-  kind?: 'app' | 'kodi';
+  /** `app` (the Android app), `kodi` (a Kodi Cratarr drives: it follows a group, never leads one) or `browser` (a page
+   *  that plays in a browser, a player while it is open: never in a group). */
+  kind?: 'app' | 'kodi' | 'browser';
   track: QueueTrack | null;
   queue?: QueueTrack[];
 };

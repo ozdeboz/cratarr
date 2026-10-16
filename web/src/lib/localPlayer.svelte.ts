@@ -1246,6 +1246,151 @@ export function stop(): { queue: LocalTrack[]; index: number; position: number }
   return was;
 }
 
+// --- Play On to this page (decision 0033: a page is a Play On target while it is open; 0031 amended) ---
+
+/** Its volume as Cratarr sets it (0 to 100), and whether it is ducked (an announcement): the element's, times a duck. */
+export const pageVolume = $state({ level: 100, ducked: false });
+const DUCKED = 0.25;
+function applyVolume() {
+  if (audio) audio.volume = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1);
+}
+
+/** Cratarr's track as this player keeps it. */
+function trackOf(t: Record<string, unknown>): LocalTrack | null {
+  if (typeof t.source !== 'string' || typeof t.id !== 'string') return null;
+  const lane = t.lane === 'next' || t.lane === 'radio' || t.lane === 'autoplay' ? t.lane : undefined;
+  return {
+    ...(typeof t.entry === 'string' ? { entry: t.entry } : {}),
+    ...(lane ? { lane } : {}),
+    source: t.source,
+    id: t.id,
+    name: typeof t.name === 'string' ? t.name : '',
+    artist: typeof t.artist === 'string' ? t.artist : null,
+    album: typeof t.album === 'string' ? t.album : null,
+    album_id: typeof t.album_id === 'string' ? t.album_id : null,
+  };
+}
+const tracksOf = (v: unknown) => (Array.isArray(v) ? v.map((t) => trackOf(t as Record<string, unknown>)).filter((t): t is LocalTrack => !!t) : []);
+
+/** A queue place by entry (decision 0033), else by number; -1 when neither is there. */
+function placeOf(m: Record<string, unknown>, entryKey: string, indexKey: string): number {
+  const e = m[entryKey];
+  if (typeof e === 'string') {
+    const at = local.queue.findIndex((t) => t.entry === e);
+    if (at >= 0) return at;
+  }
+  const i = m[indexKey];
+  return typeof i === 'number' && i >= 0 && i < local.queue.length ? i : -1;
+}
+
+/** One of Cratarr's commands, on this page's own player, as the app's player takes them (PlayOnLink.kt). What a page
+ *  cannot do is left: sync play (it joins no group), the measurements. Whether it wants sound from it (a play that a
+ *  browser may hold back until the page has been touched once). */
+export function playOnCommand(m: Record<string, unknown>): boolean {
+  if (!audio) return false;
+  switch (m.command) {
+    case 'play': {
+      const tracks = numbered(tracksOf(m.tracks));
+      if (!tracks.length) return false;
+      const index = Math.min(Math.max(0, typeof m.index === 'number' ? m.index : 0), tracks.length - 1);
+      // Cratarr's queue as it is (shuffled already, its hand-added ones in it): this page keeps none of its own.
+      local.queue = tracks;
+      local.shuffled = m.shuffle === true;
+      if (local.repeat === 'one') local.repeat = 'off';
+      local.from = null;
+      fresh(index, (typeof m.position_ms === 'number' ? m.position_ms : 0) / 1000, m.paused !== true);
+      fill();
+      return m.paused !== true;
+    }
+    case 'add': {
+      const tracks = tracksOf(m.tracks);
+      if (!tracks.length) return false;
+      const after = typeof m.after === 'string' ? (m.after === '' ? 0 : local.queue.findIndex((t) => t.entry === m.after) + 1 || -1) : -1;
+      const at = after >= 0 ? after : typeof m.at === 'number' ? Math.min(Math.max(0, m.at), local.queue.length) : local.queue.length;
+      local.queue = [...local.queue.slice(0, at), ...tracks, ...local.queue.slice(at)];
+      if (local.index < 0) fresh(0, 0, false);
+      else cutFrom(at);
+      return false;
+    }
+    case 'move': {
+      const from = placeOf(m, 'entry', 'from');
+      const afterAt = typeof m.after === 'string' ? (m.after === '' ? 0 : local.queue.findIndex((t) => t.entry === m.after)) : -1;
+      const to = afterAt < 0 ? (typeof m.to === 'number' ? m.to : -1) : m.after === '' ? 0 : afterAt > from ? afterAt : afterAt + 1;
+      move(from, to);
+      return false;
+    }
+    case 'remove':
+      remove(placeOf(m, 'entry', 'index'));
+      return false;
+    case 'upcoming': {
+      if (typeof m.shuffled === 'boolean') local.shuffled = m.shuffled;
+      const keep = local.index + 1;
+      local.queue = [...local.queue.slice(0, keep), ...tracksOf(m.tracks)];
+      cutFrom(keep);
+      return false;
+    }
+    case 'jump': {
+      const at = placeOf(m, 'entry', 'index');
+      if (at >= 0) jump(at);
+      return at >= 0;
+    }
+    case 'pause':
+      audio.pause();
+      return false;
+    case 'resume':
+      audio.play().catch(() => {});
+      return true;
+    case 'toggle':
+      togglePlay();
+      return !audio.paused;
+    case 'stop':
+      stop();
+      return false;
+    case 'next':
+      next();
+      return false;
+    case 'previous':
+      previous();
+      return false;
+    case 'seek':
+      if (typeof m.position_ms === 'number') seek(m.position_ms / 1000);
+      return false;
+    case 'repeat':
+      if (m.mode === 'off' || m.mode === 'one' || m.mode === 'all') setRepeat(m.mode);
+      return false;
+    case 'radio':
+      setRadio(m.on === true, {
+        ...(m.by === 'track' || m.by === 'artist' || m.by === 'era' ? { by: m.by as RadioBy } : {}),
+        ...(typeof m.count === 'number' ? { count: m.count } : {}),
+      });
+      return false;
+    case 'autoplay':
+      if (typeof m.mode === 'string')
+        setAutoplay(m.mode as AutoplayMode | 'stop', {
+          ...(typeof m.albums === 'boolean' ? { albums: m.albums } : {}),
+          ...(typeof m.restart === 'boolean' ? { restart: m.restart } : {}),
+          ...(Array.isArray(m.seed) ? { seed: m.seed as string[] } : {}),
+          ...(typeof m.within === 'string' || m.within === null ? { within: m.within as string | null } : {}),
+        });
+      return false;
+    case 'skip_favourites':
+      setSkipFavourites(m.on === true);
+      return false;
+    case 'volume':
+      pageVolume.level = Math.min(100, Math.max(0, typeof m.level === 'number' ? m.level : 100));
+      applyVolume();
+      return false;
+    case 'duck':
+    case 'unduck':
+      pageVolume.ducked = m.command === 'duck';
+      applyVolume();
+      return false;
+    default:
+      // The sleep timer is this page's own (lib/sleep); sync play and its measurements are not a page's.
+      return false;
+  }
+}
+
 if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
   const ms_ = navigator.mediaSession;
   ms_.setActionHandler('play', () => audio?.play());

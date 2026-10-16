@@ -13,6 +13,8 @@
   import Crates from './Crates.svelte';
   import AboutSheet from './lib/AboutSheet.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
+  import { target } from './lib/playOnTarget.svelte';
+  import { togglePlay } from './lib/localPlayer.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import SheetArea from './lib/SheetArea.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
@@ -374,6 +376,16 @@
   {#if mini}
     <div class="mini-dock"><MiniPlayer /></div>
   {/if}
+  <!-- Played on from elsewhere before this page was touched: the browser holds the sound back until a tap. -->
+  {#if target.tapToPlay}
+    <button
+      class="tap-to-play"
+      onclick={() => {
+        target.tapToPlay = false;
+        togglePlay();
+      }}><Icon name="play" size={20} />Tap to play</button
+    >
+  {/if}
   {#if pageRow}
     <div class="page-row" class:beside={sidebar} style:--player-w="{playerWidth}px">
       {#if navAt > 0}
@@ -445,6 +457,25 @@
 
   /* Layers, bottom to top (decision 0023): the page, its navigation (20), a viewed playlist (21), the mini-player
      (22), the player over everything (30). */
+  .tap-to-play {
+    position: fixed;
+    left: 50%;
+    bottom: calc(112px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    z-index: 30;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font: inherit;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+  }
+
   .mini-dock {
     position: fixed;
     inset: auto 12px calc(12px + env(safe-area-inset-bottom));

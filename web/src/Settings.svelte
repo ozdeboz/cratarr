@@ -40,6 +40,7 @@
   function line(id: SettingsSection): string {
     switch (id) {
       case 'device':
+        if (!inApp) return 'This browser';
         return [appInfo.player, appInfo.stayReady ? 'Stays ready' : null, downloads.known ? `${size(downloads.bytes)} downloaded` : null].filter(Boolean).join(' · ');
       case 'connections':
         if (!s) return '';
@@ -78,8 +79,8 @@
       <button class="card" class:open aria-pressed={open} onclick={() => viewPlaylist(SETTINGS + c.id)}>
         <Icon name={c.icon} size={28} />
         <span class="text">
-          <strong>{c.id === 'device' ? (appInfo.player ?? c.title) : c.title}</strong>
-          <small>{c.id === 'device' && appInfo.player ? c.title : line(c.id)}</small>
+          <strong>{c.id === 'device' ? ((inApp ? appInfo.player : prefs.browserName) || (inApp ? c.title : 'This browser')) : c.title}</strong>
+          <small>{c.id === 'device' && inApp && appInfo.player ? c.title : line(c.id)}</small>
         </span>
       </button>
     {/each}

@@ -129,3 +129,21 @@ and gives them to the page's WebView when the proxy asks; with none kept, or a r
 requests to the public address back for ten minutes or until the sign-in changes: polling on regardless got the
 owner's phone banned as a prober by the proxy's CrowdSec the first evening.
 
+## Amendment (2026-10-16): a page in a browser is a player while it is open
+
+The owner, with the tablet away from home playing in its browser: "It should" be a Play On target. Decision 0033 had
+it ("a Play On target only while it is open"); the line above ("Only apps are players") gives way to it. A page that
+plays here (its output is this browser) joins Play On as a player of kind `browser` (`/api/players/{name}/connect?kind=browser`,
+`lib/playOnTarget`), under this browser's name (Settings → This device, which a browser shows too: "Chrome on Android"
+until named; a second one of the same takes "… 2"). Cratarr's commands play on the page's own player, as the app's;
+it reports what plays on every change and every 5 s, and gets its queue back after a reload, as the app does. What a
+browser allows, kept to:
+
+- Sound starts only once the page has been touched (sticky per page, until it reloads): a play before that shows a
+  "Tap to play" bar.
+- A page paused behind a locked screen is frozen after a minute or so (measured on the tablet, the reason the app plays
+  natively): it shows offline then, and is a player again when looked at. Playing, it stays.
+- No sync play: a browser joins no group, and none joins it.
+- A connection refused is tried again after 5 s, doubling to a minute: never in a rush, as a proxy bans what keeps
+  knocking.
+

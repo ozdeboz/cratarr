@@ -10,6 +10,7 @@
   import PanelPlace from './PanelPlace.svelte';
   import { appInfo, askDevice, askDownloads, inApp } from './app.svelte';
   import { closePlaylist } from './panel.svelte';
+  import { prefs } from './prefs.svelte';
   import { SECTIONS, type SettingsSection } from './settingsSections.svelte';
   import { ed } from './settings/editor.svelte';
   import AuthPart from './settings/AuthPart.svelte';
@@ -23,7 +24,13 @@
   import PlayersSettings from './PlayersSettings.svelte';
 
   let { section }: { section: SettingsSection } = $props();
-  const title = $derived(section === 'device' ? (appInfo.player ?? 'This device') : (SECTIONS.find((x) => x.id === section)?.title ?? 'Settings'));
+  const title = $derived(
+    section === 'device'
+      ? inApp
+        ? (appInfo.player ?? 'This device')
+        : prefs.browserName || 'This browser'
+      : (SECTIONS.find((x) => x.id === section)?.title ?? 'Settings'),
+  );
 
   // Inside the Android app: its settings as they are now (Android's background permission may have changed meanwhile).
   if (inApp) {

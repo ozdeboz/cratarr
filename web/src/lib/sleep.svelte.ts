@@ -50,6 +50,12 @@ export function setSleep(to: { minutes: number } | 'endOfTrack' | null) {
   arm();
 }
 
+/** Cratarr's sleep command, for this page while it is a Play On target (lib/playOnTarget): its own timer. */
+export function setOwnSleep(s: Sleep | null) {
+  own.sleep = s;
+  arm();
+}
+
 function arm() {
   clearTimeout(timer);
   const at = own.sleep?.atMs;

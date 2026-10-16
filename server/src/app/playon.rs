@@ -462,12 +462,14 @@ struct Entry {
     kind: PlayerKind,
 }
 
-/// What a player is.
+/// What a player is: the app; a Kodi (driven by Cratarr, app::kodi); a page in a browser, a player while it is open
+/// (decision 0033; 0031 amended): it plays on its own, never in a group (no sync play there).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum PlayerKind {
     #[default]
     App,
     Kodi,
+    Browser,
 }
 
 impl PlayerKind {
@@ -475,6 +477,7 @@ impl PlayerKind {
         match self {
             PlayerKind::App => "app",
             PlayerKind::Kodi => "kodi",
+            PlayerKind::Browser => "browser",
         }
     }
 }
@@ -707,6 +710,15 @@ impl PlayOn {
         Ok(c)
     }
 
+    /// A page in a browser joins as a player while it is open (decision 0033; 0031 amended).
+    pub fn connect_browser(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
+        let c = self.connect(name)?;
+        if let Some(e) = self.entries().get_mut(name) {
+            e.kind = PlayerKind::Browser;
+        }
+        Ok(c)
+    }
+
     /// The Play On settings as the page sees them.
     pub fn settings_view(&self) -> PlayOnSettingsView {
         let s = self.settings();
@@ -924,7 +936,7 @@ impl PlayOn {
         e.heard = Instant::now();
         // Back without a queue (the app was updated, or killed): it gets its queue back where it was, playing on if it
         // played (the owner's wish, 2026-10-15), else paused.
-        let came_back_empty = std::mem::take(&mut e.fresh) && report.index < 0 && !e.queue.tracks.is_empty() && e.kind == PlayerKind::App;
+        let came_back_empty = std::mem::take(&mut e.fresh) && report.index < 0 && !e.queue.tracks.is_empty() && e.kind != PlayerKind::Kodi;
         let give_back = came_back_empty.then(|| {
             let (index, position_ms, paused) = (before.index.max(0) as usize, before.position_ms, !before.playing);
             Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused }
@@ -1179,6 +1191,10 @@ impl PlayOn {
                 let Some(e) = entries.get(n) else { return Err(ToggleError::Refused(format!("No player is called {n}."))) };
                 if !e.online() {
                     return Err(ToggleError::Refused(format!("{n} is not connected.")));
+                }
+                // A page in a browser has no sync play: it plays on its own.
+                if e.kind == PlayerKind::Browser {
+                    return Err(ToggleError::Refused(format!("{n} plays in a browser, which cannot play in a group.")));
                 }
             }
             let leader = entries.get(to).and_then(|e| e.leader.clone()).unwrap_or_else(|| to.to_string());
@@ -1670,6 +1686,31 @@ mod tests {
 
     fn group_of(c: &mut Commands) -> Vec<Option<String>> {
         told(c).iter().filter(|m| m["command"] == "group").map(|m| m["leader"].as_str().map(str::to_string)).collect()
+    }
+
+    #[tokio::test]
+    async fn a_browser_is_a_player_while_open_and_never_in_a_group() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        p.serve_sync_play(1704, 1000, None);
+        let mut page = p.connect_browser("Chrome on Android").unwrap();
+        let _tablet = p.connect("tablet").unwrap();
+        assert_eq!(p.get("Chrome on Android").unwrap().kind, "browser");
+        // Commands reach it as they reach the app.
+        p.command("Chrome on Android", Command::play(vec![t("tr-1"), t("tr-2")], 1, 0)).await.unwrap();
+        assert!(said(&mut page).contains(&"play".to_string()));
+        p.report("Chrome on Android", Report { index: 1, playing: true, ..Report::default() }).unwrap();
+        // No sync play in a browser: it joins no group, and none joins it.
+        assert!(matches!(p.command("Chrome on Android", Command::Join { to: "tablet".into() }).await, Err(ToggleError::Refused(_))));
+        assert!(matches!(p.command("tablet", Command::Join { to: "Chrome on Android".into() }).await, Err(ToggleError::Refused(_))));
+        // The page reloaded: it comes back without a queue and gets Cratarr's back.
+        drop(page);
+        let mut again = p.connect_browser("Chrome on Android").unwrap();
+        said(&mut again);
+        p.report("Chrome on Android", Report { index: -1, ..Report::default() }).unwrap();
+        let back = told(&mut again);
+        let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
+        assert_eq!((play["tracks"].as_array().unwrap().len(), play["index"].as_u64()), (2, Some(1)));
     }
 
     #[tokio::test]

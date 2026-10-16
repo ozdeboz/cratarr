@@ -7,7 +7,8 @@ import type { IconName } from './Icon.svelte';
 export type SettingsSection = 'device' | 'network' | 'sync' | 'connections' | 'libraries' | 'players' | 'auth' | 'import' | 'display';
 
 export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true }[] = [
-  { id: 'device', title: 'This device', icon: 'speaker', app: true },
+  // In a browser too: its name as a Play On player.
+  { id: 'device', title: 'This device', icon: 'speaker' },
   { id: 'network', title: 'Network', icon: 'wifi', app: true },
   { id: 'sync', title: 'Sync', icon: 'arrowDownToLine', app: true },
   { id: 'connections', title: 'Connections', icon: 'server' },
