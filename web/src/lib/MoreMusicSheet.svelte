@@ -4,7 +4,15 @@
   export const AUTOPLAY_NAMES: Record<AutoplayMode, string> = { similar: 'Similar', artist: 'Same artist', era: 'Same era', random: 'Random' };
   export const RADIO_NAMES: Record<RadioBy, string> = { track: 'Similar to the track', artist: 'Same artist', era: 'Same era' };
 
-  /** What is on, in a line: the queue's floating pill and the sheet's chip ("Radio · ∞ Similar", "Off"). */
+  /** What is on, part by part, each with its icon (the icon follows what is on, the owner said): the queue's pill. */
+  export function moreMusicParts(): { icon: 'radio' | 'infinity'; text: string }[] {
+    const parts: { icon: 'radio' | 'infinity'; text: string }[] = [];
+    if (local.radio) parts.push({ icon: 'radio', text: local.radioBy === 'track' ? 'Radio' : `Radio, ${RADIO_NAMES[local.radioBy].toLowerCase()}` });
+    if (local.autoplay) parts.push({ icon: 'infinity', text: `${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}` });
+    return parts;
+  }
+
+  /** What is on, in a line: the sheet's chip ("Radio · ∞ Similar", "Off"). */
   export function moreMusicLine() {
     const parts = [local.radio ? (local.radioBy === 'track' ? 'Radio' : `Radio, ${RADIO_NAMES[local.radioBy].toLowerCase()}`) : null, local.autoplay ? `∞ ${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}` : null];
     return parts.filter(Boolean).join(' · ') || 'Off';

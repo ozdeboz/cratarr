@@ -430,7 +430,11 @@
               aria-label="More music"
               aria-haspopup="dialog"
               aria-pressed={local.radio || local.autoplay !== null}
-              onclick={() => (moreOpen = true)}><Icon name="radio" size={24} /></button
+              onclick={() => (moreOpen = true)}
+              ><Icon name={local.autoplay !== null && !local.radio ? 'infinity' : 'radio'} size={24} />{#if local.radio && local.autoplay !== null}<span
+                  class="also"
+                  aria-hidden="true"><Icon name="infinity" size={12} /></span
+                >{/if}</button
             >
           {/if}
           <button class="act labelled" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
@@ -860,6 +864,23 @@
   /* The radio, lit while on (as the heart). */
   .act.radio.on {
     color: var(--art-accent);
+  }
+
+  /* Its icon follows what is on (the owner): the radio, ∞ for Autoplay alone, the radio with a small ∞ for both. */
+  .act.radio {
+    position: relative;
+  }
+
+  .act.radio .also {
+    position: absolute;
+    right: 4px;
+    bottom: 6px;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--bg);
   }
 
   /* A small label under a button's icon (the place in the queue), outside the button's box: the row's buttons stay

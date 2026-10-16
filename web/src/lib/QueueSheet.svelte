@@ -24,7 +24,7 @@
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
   import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming } from './localPlayer.svelte';
-  import MoreMusicSheet, { moreMusicLine } from './MoreMusicSheet.svelte';
+  import MoreMusicSheet, { moreMusicLine, moreMusicParts } from './MoreMusicSheet.svelte';
   import { canPreview, endPreview, preview, startPreview } from './preview.svelte';
   import { hold } from './hold';
   import { albumSubject, viewPlaylist } from './panel.svelte';
@@ -343,9 +343,12 @@
     </div>
     {#if here}
       <!-- More music (Radio and Autoplay), floating where the queue ends: what is on, a tap its sheet. -->
-      <button class="more-music" class:lit={local.radio || local.autoplay !== null} aria-haspopup="dialog" onclick={() => (moreOpen = true)}
-        ><Icon name="radio" size={20} /><span>{moreMusicLine()}</span></button
-      >
+      <button class="more-music" class:lit={local.radio || local.autoplay !== null} aria-haspopup="dialog" aria-label="More music: {moreMusicLine()}" onclick={() => (moreOpen = true)}>
+        {#each moreMusicParts() as p, i (p.icon)}{#if i}<span class="sep" aria-hidden="true">·</span>{/if}<Icon name={p.icon} size={20} /><span>{p.text}</span>{:else}<Icon
+            name="radio"
+            size={20}
+          /><span>Off</span>{/each}
+      </button>
     {/if}
   </div>
 {/if}
@@ -539,6 +542,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .more-music :global(svg) {
+    flex: none;
+  }
+
+  .more-music .sep {
+    margin: 0 2px;
   }
 
   .more-music.lit {
