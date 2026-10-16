@@ -5,6 +5,8 @@
   import Library from './Library.svelte';
   import Insights from './Insights.svelte';
   import Downloads from './Downloads.svelte';
+  import SettingsPanel from './lib/SettingsPanel.svelte';
+  import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
   import { inApp } from './lib/app.svelte';
   import Crates from './Crates.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
@@ -25,7 +27,7 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { closePlaylist, keepViewed, panel } from './lib/panel.svelte';
+  import { closePlaylist, keepViewed, panel, settingsOf } from './lib/panel.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
   import { known, remember } from './lib/sources.svelte';
@@ -107,6 +109,8 @@
   // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
   // page). The page starts under the row, so at rest nothing lies under it.
   const PLAYABLE = ['playlists', 'crates', 'library', 'downloads'];
+  // A part of the settings in the panel (lib/SettingsPanel), when the panel shows one.
+  const settingsShown = $derived(SECTIONS.find((x) => x.id === settingsOf(panel.viewed))?.id ?? (null as SettingsSection | null));
   const pagePill = $derived(PLAYABLE.includes(page));
   // An icon button's label on a long-press or right-click, everywhere (lib/labels).
   $effect(installLabels);
@@ -334,7 +338,7 @@
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
       <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if panelShowsPlayer()}<NowPlaying place="side" />{:else}<PlaylistView />{/if}
+          {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}
@@ -342,7 +346,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      <PlaylistView />
+      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else}<PlaylistView />{/if}
     </div>
   {/if}
   {#if mini}

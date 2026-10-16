@@ -28,9 +28,13 @@ export function albumOf(viewed: string | null): { source: string; id: string } |
 /** A playlist being made: the panel's edit mode, with no playlist yet (New playlist, as `crate-new` is New crate). */
 export const NEW_PLAYLIST = 'playlist-new';
 
+/** A part of the settings (`settings:libraries`), opened from the Settings page's cards (lib/SettingsPanel). */
+export const SETTINGS = 'settings:';
+export const settingsOf = (viewed: string | null) => (viewed?.startsWith(SETTINGS) ? viewed.slice(SETTINGS.length) : null);
+
 export const isSingleSubject = (viewed: string | null) =>
   !!viewed &&
-  (viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(ALBUM));
+  (viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM));
 
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */

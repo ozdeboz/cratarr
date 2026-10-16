@@ -180,11 +180,16 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   right, which views it in the shell's panel (`?view=`); while a playlist is viewed the graph's selection and the panel
   follow each other. The **Legend** button is always in the graph's bottom-right corner; it opens the legend as a sheet
   (lines, points, and the colour groups named by their most common genres).
-- **Settings** has four sections, in this order: Connections (servers: address, key, status; Lidarr the same way, shown
-  only when an Incoming library is set), Libraries (one row per
-  server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its files in, or a warning when
-  it can't; then the catalogue status and tag splitting), Display (theme, progress bar), About (version, port, file
-  locations). Technical details go to About or nowhere. A use is set only there (decision 0009).
+- **Settings** is a portal of cards (decided 2026-10-16): one card per part, its name and what it is set to in a
+  line, a tap opening the part in the panel (`?view=settings:<part>`, lib/SettingsPanel), as a playlist opens: beside
+  the cards on a wide page (the open card bordered), over them on a phone, ✕ back to them. The parts, in this order:
+  This device (in the app only), Connections (servers: address, key, status; Lidarr the same way, shown only when an
+  Incoming library is set), Libraries (one row per server library: its use, Music, Incoming or Not used, and the
+  folder Cratarr sees its files in, or a warning when it can't; then the names, the trash, the catalogue status and
+  tag splitting), Subsonic (accounts, imports), Display (theme, progress bar), About (version, port, file locations).
+  What a part edits is saved with the Save bar at its foot. A part opens on the settings last read (reading them
+  checks every connection, which takes seconds) and takes the fresh ones unless something was edited meanwhile.
+  Technical details go to About or nowhere. A use is set only there (decision 0009).
 
 ## Rows
 
