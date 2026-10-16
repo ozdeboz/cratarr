@@ -321,9 +321,10 @@ async function appendTrack(index: number, from: number, gen: number) {
       const mode: AppendMode = kind === MP4 ? 'segments' : 'sequence';
       if (sb.mode !== mode) sb.mode = mode;
       length = samples === null ? null : samples / rate;
-      // A header that disagrees with the length Cratarr knows (from decoding the file whole) is the wrong one: the next
-      // track would start that much later or earlier (one MP3 said 5:27 for 4:24).
-      if (length !== null && told !== null && Math.abs(length - told) > 1.5) length = told;
+      // An MP3 header that disagrees with the length Cratarr read is trusted no more than that length (one header said
+      // 5:27 for 4:24; an early-stopping decode once said 7 s for 7:48): the track's own audio, once in, says where it
+      // ends, so it is neither cut short nor followed by silence. FLAC's own sample count is exact.
+      if (kind !== MP4 && length !== null && told !== null && Math.abs(length - told) > 1.5) length = null;
       sb.appendWindowEnd = Infinity;
       sb.appendWindowStart = Math.max(0, streamEnd);
       if (length !== null) sb.appendWindowEnd = start + length;

@@ -241,18 +241,12 @@ pub enum Kind {
 
 /// A track's file on Cratarr's own mount and how it is streamed; `None` when the catalogue does not know the track
 /// or its file is gone. Blocking (the catalogue).
-/// Where a server's track is on disk, its kind (None: not one that plays here), and its length (milliseconds): the
-/// analysis's, from decoding it whole (decision 0035), else as the catalogue read it (an MP3's header can be wrong: one
-/// said 5:27 for 4:24, 2026-10-16).
+/// Where a server's track is on disk, its kind (None: not one that plays here), and its length as the catalogue read
+/// it (milliseconds). Not the analysis's: its decoder stopped early on a few files (7 s for a 7:48 FLAC).
 pub fn locate(cat: &crate::catalogue::Catalogue, source: &str, item: &str) -> Option<(std::path::PathBuf, Option<Kind>, Option<u64>)> {
     let track = cat.track_of_source(source, item)?;
     let (folder, rel) = cat.file_of(track)?;
-    let duration_ms = cat
-        .analysis_of(folder, &rel)
-        .map(|a| a.duration_secs)
-        .filter(|s| *s > 0.0)
-        .map(|s| (s * 1000.0).round() as u64)
-        .or_else(|| cat.duration_of(folder, &rel));
+    let duration_ms = cat.duration_of(folder, &rel);
     let path = cat.folders().get(folder as usize)?.join(rel);
     let kind = match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
         Some("flac") => Some(Kind::Flac),
