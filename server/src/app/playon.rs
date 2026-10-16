@@ -460,6 +460,8 @@ struct Entry {
     /// When it joined its group, counted: the longest-joined leads when the leader leaves.
     joined: u64,
     kind: PlayerKind,
+    /// A page's own id (one per browser tab), while a page is this player: another page may not take its name.
+    page: Option<String>,
 }
 
 /// What a player is: the app; a Kodi (driven by Cratarr, app::kodi); a page in a browser, a player while it is open
@@ -498,6 +500,7 @@ impl Entry {
             leader: None,
             joined: 0,
             kind: PlayerKind::App,
+            page: None,
         }
     }
 
@@ -711,10 +714,30 @@ impl PlayOn {
     }
 
     /// A page in a browser joins as a player while it is open (decision 0033; 0031 amended).
-    pub fn connect_browser(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
+    /// `page`: the page's own id (one per tab). A name held now by another page, or by the app or a Kodi, is refused:
+    /// two players under one name pushed each other off every few seconds (2026-10-16, two tabs both "Chrome on
+    /// Android"). The same page coming back (a reload, a new connection) takes its name back.
+    pub fn connect_browser(self: &Arc<Self>, name: &str, page: Option<&str>) -> Result<Commands, ToggleError> {
+        if let Some(e) = self.entries().get(name)
+            && e.online()
+            && (e.kind != PlayerKind::Browser || e.page.as_deref() != page)
+        {
+            return Err(ToggleError::Refused(format!("{name} is another player's name.")));
+        }
         let c = self.connect(name)?;
         if let Some(e) = self.entries().get_mut(name) {
             e.kind = PlayerKind::Browser;
+            e.page = page.map(str::to_string);
+        }
+        Ok(c)
+    }
+
+    /// The app joins as a player (a name a page used before is the app's again).
+    pub fn connect_app(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
+        let c = self.connect(name)?;
+        if let Some(e) = self.entries().get_mut(name) {
+            e.kind = PlayerKind::App;
+            e.page = None;
         }
         Ok(c)
     }
@@ -1693,7 +1716,7 @@ mod tests {
         let p = play_on().await;
         let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
         p.serve_sync_play(1704, 1000, None);
-        let mut page = p.connect_browser("Chrome on Android").unwrap();
+        let mut page = p.connect_browser("Chrome on Android", Some("tab-1")).unwrap();
         let _tablet = p.connect("tablet").unwrap();
         assert_eq!(p.get("Chrome on Android").unwrap().kind, "browser");
         // Commands reach it as they reach the app.
@@ -1705,7 +1728,10 @@ mod tests {
         assert!(matches!(p.command("tablet", Command::Join { to: "Chrome on Android".into() }).await, Err(ToggleError::Refused(_))));
         // The page reloaded: it comes back without a queue and gets Cratarr's back.
         drop(page);
-        let mut again = p.connect_browser("Chrome on Android").unwrap();
+        let mut again = p.connect_browser("Chrome on Android", Some("tab-1")).unwrap();
+        // Another tab may not take that name while this one holds it, nor a name the app holds.
+        assert!(matches!(p.connect_browser("Chrome on Android", Some("tab-2")), Err(ToggleError::Refused(_))));
+        assert!(matches!(p.connect_browser("tablet", Some("tab-2")), Err(ToggleError::Refused(_))));
         said(&mut again);
         p.report("Chrome on Android", Report { index: -1, ..Report::default() }).unwrap();
         let back = told(&mut again);

@@ -84,7 +84,9 @@ export const DEFAULTS: Prefs = {
   signals: { tracks: true, genre: true, artists: true },
   playerWidth: 400,
   sidebar: true,
-  output: 'remote',
+  // This browser (it falls back to a player where a browser cannot play): Cratarr's own source has no server-side
+  // player, which a page's first play went to, and failed (2026-10-16).
+  output: 'local',
   pinned: [],
   filterOpen: true,
   relatedFilterOpen: true,

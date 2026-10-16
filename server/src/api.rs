@@ -847,6 +847,9 @@ struct ConnectAs {
     /// `browser`: a page that plays here joins as a player while it is open (decision 0033; 0031 amended).
     #[serde(default)]
     kind: Option<String>,
+    /// The page's own id (one per tab): another page may not take a name one holds.
+    #[serde(default)]
+    page: Option<String>,
 }
 
 async fn player_connect(
@@ -855,7 +858,11 @@ async fn player_connect(
     Query(q): Query<ConnectAs>,
 ) -> Result<axum::response::sse::Sse<impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>, ApiError> {
     use tokio_stream::StreamExt;
-    let commands = if q.kind.as_deref() == Some("browser") { app.play_on.connect_browser(&name)? } else { app.play_on.connect(&name)? };
+    let commands = if q.kind.as_deref() == Some("browser") {
+        app.play_on.connect_browser(&name, q.page.as_deref())?
+    } else {
+        app.play_on.connect_app(&name)?
+    };
     let stream = commands.map(|c| Ok(axum::response::sse::Event::default().event("command").data(c)));
     Ok(axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15))))
 }

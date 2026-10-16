@@ -5,6 +5,7 @@
 // from the list (offline). A browser lets sound start only after the page was touched once: a play before that shows
 // "Tap to play". Behind a locked screen a paused page is frozen after a minute or so, and shows offline until it is
 // looked at again; playing, it stays. No sync play in a browser: it joins no group.
+import { getPlayers } from './api';
 import { inApp } from './app.svelte';
 import { canPlayHere, local, pageVolume, playOnCommand } from './localPlayer.svelte';
 import { playOn, drivenName } from './playOn.svelte';
@@ -27,15 +28,19 @@ export function defaultBrowserName(): string {
   return os ? `${browser} on ${os}` : browser;
 }
 
+/** The first of `base`, "`base` 2", … that none of `players` has. */
+function freeName(base: string, players: { name: string }[]): string {
+  const taken = new Set(players.map((p) => p.name));
+  let name = base;
+  for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
+  return name;
+}
+
 /** A name no other player has (a second Chrome on Android is "Chrome on Android 2"), kept from then on. */
 function nameToUse(): string {
   if (prefs.browserName) return prefs.browserName;
-  const base = defaultBrowserName();
-  const taken = new Set(playOn.players.map((p) => p.name));
-  let name = base;
-  for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
-  prefs.browserName = name;
-  return name;
+  prefs.browserName = freeName(defaultBrowserName(), playOn.players);
+  return prefs.browserName;
 }
 
 /** An entry id (decision 0033) for a track this page added itself; `crypto.randomUUID` needs a secure page. */
@@ -46,6 +51,19 @@ function uuid(): string {
   const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
+
+/** This page's own id (one per tab, kept over a reload): Cratarr lets no other page take its name while it holds it. */
+const PAGE = (() => {
+  try {
+    const kept = sessionStorage.getItem('cratarr-page');
+    if (kept) return kept;
+    const id = uuid();
+    sessionStorage.setItem('cratarr-page', id);
+    return id;
+  } catch {
+    return uuid();
+  }
+})();
 
 let source: EventSource | null = null;
 let name: string | null = null;
@@ -118,7 +136,7 @@ function reportSoon(withQueue = false) {
 function connect() {
   disconnect();
   name = nameToUse();
-  const es = new EventSource(`/api/players/${encodeURIComponent(name)}/connect?kind=browser`);
+  const es = new EventSource(`/api/players/${encodeURIComponent(name)}/connect?kind=browser&page=${PAGE}`);
   source = es;
   es.onopen = () => {
     target.connected = true;
@@ -150,8 +168,16 @@ function connect() {
     if (es.readyState === EventSource.CLOSED) {
       target.connected = false;
       clearTimeout(retryTimer);
-      retryTimer = setTimeout(() => want() && connect(), Math.max(retry, refusedFor()));
-      retry = Math.min(retry * 2, 60_000);
+      const later = () => {
+        retryTimer = setTimeout(() => want() && connect(), Math.max(retry, refusedFor()));
+        retry = Math.min(retry * 2, 60_000);
+      };
+      // Its name held by another page (another tab, another browser) or the app: the next free one ("… 2"), at once.
+      getPlayers().then((list) => {
+        const players = list?.players ?? [];
+        if (source === es && name && players.some((p) => p.name === name && p.online)) prefs.browserName = freeName(name, players);
+        else later();
+      }, later);
     }
   };
 }
