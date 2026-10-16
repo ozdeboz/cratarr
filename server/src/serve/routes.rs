@@ -81,6 +81,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/subsonic/import", get(super::import::status).post(super::import::start))
         .route("/api/subsonic/import/sources", get(super::import::sources))
         .with_state(serve.clone())
+        .merge(super::auth_check::router(serve.clone()))
         .merge(super::library_api::router(serve))
 }
 
