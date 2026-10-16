@@ -4,6 +4,7 @@
   // group); otherwise a plain row, as in Settings. `hintWhenOn`: the hint only while on, sliding open. `hideLabel`: the
   // switch alone (the label then names it for screen readers).
   import { slide } from 'svelte/transition';
+  import SwitchTrack from './SwitchTrack.svelte';
 
   let {
     checked,
@@ -42,7 +43,7 @@
       {#if hint && (!hintWhenOn || checked)}<small transition:slide={{ duration: hintWhenOn ? 150 : 0 }}>{hint}</small>{/if}
     </span>
   {/if}
-  <i aria-hidden="true"></i>
+  <SwitchTrack on={checked} />
 </button>
 
 <style>
@@ -102,49 +103,6 @@
   small {
     color: var(--muted);
     font-size: 0.8rem;
-  }
-
-  /* A 52 × 32 track, its thumb growing and moving over when on, the track then filled with the accent. */
-  i {
-    position: relative;
-    flex: none;
-    box-sizing: border-box;
-    width: 52px;
-    height: 32px;
-    border: 2px solid var(--muted);
-    border-radius: 16px;
-    transition:
-      background-color 150ms,
-      border-color 150ms;
-  }
-
-  i::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 6px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--muted);
-    transform: translateY(-50%);
-    transition:
-      left 150ms,
-      width 150ms,
-      height 150ms,
-      background-color 150ms;
-  }
-
-  .switch[aria-checked='true'] i {
-    border-color: var(--art-accent, var(--accent));
-    background: var(--art-accent, var(--accent));
-  }
-
-  .switch[aria-checked='true'] i::after {
-    left: 22px;
-    width: 24px;
-    height: 24px;
-    background: var(--accent-text);
   }
 
   .switch:focus-visible {
