@@ -15,6 +15,8 @@ import android.net.Network
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
+import org.json.JSONObject
+import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -37,14 +39,19 @@ object Reach {
     @Volatile private var checked = 0L
     private var watching = false
 
-    /** Where Cratarr's health check for [url] answers within [ms]: at [url], or at the address it is sent on to for good
-     *  (301, 308: `http://` typed where only `https://` is served, say); with its status (null: no answer). Blocking. */
-    fun reach(context: Context, url: String, ms: Int = PUBLIC_MS, anyway: Boolean = false, moves: Int = 2): Pair<String, Int?> {
+    /** A health check's answer: the address that gave it, its status (null: none), and whether Cratarr gave it (its
+     *  `{"status": "ok", "playlists": n}`), or its proxy asking for the sign-in (a 401 with a Basic challenge, which
+     *  the app and the page can answer). */
+    data class Health(val at: String, val code: Int?, val cratarr: Boolean)
+
+    /** Cratarr's health check for [url] within [ms]: answered at [url], or at the address it is sent on to for good
+     *  (301, 308: `http://` typed where only `https://` is served, say). Blocking. */
+    fun reach(context: Context, url: String, ms: Int = PUBLIC_MS, anyway: Boolean = false, moves: Int = 2): Health {
         val base = url.trimEnd('/')
         val c = try {
             Net.open(context, "$base/api/health", anyway)
         } catch (e: Exception) {
-            return url to null
+            return Health(url, null, false)
         }
         return try {
             // Android's own connection does not follow http to https; the WebView would, off Cratarr's addresses.
@@ -54,23 +61,58 @@ object Reach {
             val code = Net.code(context, c)
             val to = c.getHeaderField("Location")?.takeIf { code == 301 || code == 308 }
                 ?.let { URL(c.url, it).toString() }?.takeIf { it.endsWith("/api/health") }?.removeSuffix("/api/health")
-            if (to != null && to != base && moves > 0) reach(context, to, ms, anyway, moves - 1) else url to code
+            when {
+                to != null && to != base && moves > 0 -> reach(context, to, ms, anyway, moves - 1)
+                code == 200 -> Health(url, code, isCratarr(head(c)))
+                else -> Health(url, code, code == 401 && c.getHeaderField("WWW-Authenticate")?.trim()?.startsWith("Basic", ignoreCase = true) == true)
+            }
         } catch (e: Exception) {
-            url to null
+            Health(url, null, false)
         } finally {
             c.disconnect()
         }
     }
 
+    /** The start of an answer's body: enough for Cratarr's health check, never all of some other server's page. */
+    private fun head(c: HttpURLConnection): String = c.inputStream.use { s ->
+        val buf = ByteArray(4_096)
+        var n = 0
+        while (n < buf.size) {
+            val r = s.read(buf, n, buf.size - n)
+            if (r < 0) break
+            n += r
+        }
+        String(buf, 0, n)
+    }
+
+    private fun isCratarr(body: String) = try {
+        JSONObject(body).let { it.optString("status") == "ok" && it.has("playlists") }
+    } catch (e: Exception) {
+        false
+    }
+
     /** The status of Cratarr's health check at [url] within [ms]; null without an answer. An address of the app's that
      *  is sent on for good is kept as where it leads ([Prefs.moved]). Blocking. */
     fun status(context: Context, url: String, ms: Int = PUBLIC_MS, anyway: Boolean = false): Int? {
-        val (at, code) = reach(context, url, ms, anyway)
-        if (at != url && code != null) {
-            Log.i(TAG, "$url moved to $at")
-            Prefs(context).moved(url, at)
+        val h = reach(context, url, ms, anyway)
+        if (h.at != url && h.code != null) {
+            Log.i(TAG, "$url moved to ${h.at}")
+            Prefs(context).moved(url, h.at)
         }
-        return code
+        return h.code
+    }
+
+    /** Cratarr at an address as typed, as Finamp looks for its server: with the scheme typed, or else `https://` first
+     *  and then `http://`. The address where Cratarr answers (null: none), and whether anything answered at all. Blocking. */
+    fun find(context: Context, typed: String, ms: Int = PUBLIC_MS): Pair<String?, Boolean> {
+        val t = typed.trim().trimEnd('/')
+        var answered = false
+        for (url in if ("://" in t) listOf(t) else listOf("https://$t", "http://$t")) {
+            val h = reach(context, url, ms, anyway = true)
+            if (h.cratarr) return h.at to true
+            answered = answered || h.code != null
+        }
+        return null to answered
     }
 
     /** Whether a Cratarr answers at [url] (its health check) within [ms]. Blocking. */

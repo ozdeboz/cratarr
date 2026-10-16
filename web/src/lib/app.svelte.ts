@@ -21,6 +21,8 @@ export const appInfo = $state({
   preferLocal: false,
   inUse: null as string | null,
   addresses: false,
+  /** An address typed in Network where Cratarr does not answer (not kept); null after any other answer. */
+  refused: null as string | null,
   /** The sign-in the public address asks for away from home: its user name, and whether a password is kept. */
   signInUser: '',
   signInSet: false,
@@ -121,6 +123,7 @@ if (port) {
       appInfo.localAddress = typeof m.local === 'string' && m.local ? m.local : null;
       appInfo.preferLocal = m.preferLocal === true;
       appInfo.inUse = typeof m.inUse === 'string' && m.inUse ? m.inUse : appInfo.publicAddress;
+      appInfo.refused = typeof m.refused === 'string' && m.refused ? m.refused : null;
       appInfo.signInUser = typeof m.signInUser === 'string' ? m.signInUser : '';
       appInfo.signInSet = m.signInSet === true;
       appInfo.stayReady = m.stayReady === true;

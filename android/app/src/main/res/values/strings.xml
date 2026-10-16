@@ -7,6 +7,7 @@
     <string name="server_address_hint" translatable="false">http://cratarr.local:8081</string>
     <string name="cannot_reach">Cannot reach %1$s</string>
     <string name="sent_on">Sent on to %1$s</string>
+    <string name="not_cratarr">Cratarr does not answer at %1$s</string>
     <string name="try_again">Try again</string>
     <string name="change_address">Change address</string>
     <string name="sign_in">Sign in to Cratarr</string>

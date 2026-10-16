@@ -307,24 +307,39 @@ class MainActivity : AppCompatActivity() {
                     if (user.isEmpty()) prefs.signInPassword = null
                 }
                 message.optString("signInPassword").takeIf { it.isNotEmpty() && message.has("signInPassword") }?.let { prefs.signInPassword = it }
-                // The local network address: as typed (empty: none), and whether it is preferred.
-                val local = if (message.has("local")) message.optString("local").trim().takeIf { it.isNotEmpty() }?.let(Prefs::normalise) else prefs.localAddress
+                // The addresses as typed (empty local: none), and whether the local one is preferred. Each is kept where
+                // Cratarr answers ([Reach.find]: `https://` first when no scheme is typed), so a stray edit does not take
+                // the app off Cratarr; a local network address where nothing answers too (away from home, it cannot).
+                // One not kept is named back to the page, whose field shows the address kept again.
+                fun same(typed: String, kept: String?) = typed == kept || Prefs.normalise(typed) == kept
+                val local = if (message.has("local")) message.optString("local").trim().takeUnless { same(it, prefs.localAddress) } else null
                 val preferLocal = if (message.has("preferLocal")) message.optBoolean("preferLocal") else prefs.preferLocal
-                // Another public address (`server` from pages before there were two): kept once it answers, so a stray
-                // edit does not take the app off Cratarr (the field shows the address it has again).
+                // `server`: from pages before there were two.
                 val public = (if (message.has("public")) message.optString("public") else message.optString("server"))
-                    .trim().takeIf { it.isNotEmpty() }?.let(Prefs::normalise)
-                if (local != prefs.localAddress || preferLocal != prefs.preferLocal || (public != null && public != prefs.publicAddress)) {
+                    .trim().takeIf { it.isNotEmpty() && !same(it, prefs.publicAddress) }
+                if ((local != null && (local.isNotEmpty() || prefs.localAddress != null)) || preferLocal != prefs.preferLocal || public != null) {
                     lifecycleScope.launch {
-                        prefs.localAddress = local
+                        var refused: String? = null
+                        if (local != null) {
+                            if (local.isEmpty()) {
+                                prefs.localAddress = null
+                            } else {
+                                val (found, answered) = withContext(Dispatchers.IO) { Reach.find(this@MainActivity, local) }
+                                when {
+                                    found != null -> prefs.localAddress = found
+                                    !answered -> prefs.localAddress = Prefs.normalise(local)
+                                    else -> refused = local
+                                }
+                            }
+                        }
                         prefs.preferLocal = preferLocal
-                        if (public != null && public != prefs.publicAddress) {
-                            val (at, code) = withContext(Dispatchers.IO) { Reach.reach(this@MainActivity, public, anyway = true) }
-                            if (code != null) prefs.publicAddress = at
+                        if (public != null) {
+                            val (found, _) = withContext(Dispatchers.IO) { Reach.find(this@MainActivity, public) }
+                            if (found != null) prefs.publicAddress = found else refused = public
                         }
                         // Which of them answers now: the page comes from there.
                         withContext(Dispatchers.IO) { Reach.check(this@MainActivity) }
-                        reply.postMessage(appMessage())
+                        reply.postMessage(appMessage(refused))
                     }
                     return
                 }
@@ -375,8 +390,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** This device's settings, for the page's "This device" section. */
-    private fun appMessage(): String = JSONObject()
+    /** The app's settings for the page; with [refused], an address typed there where Cratarr does not answer. */
+    private fun appMessage(refused: String? = null): String = JSONObject()
         .put("type", "app")
+        .put("refused", refused ?: "")
         .put("version", BuildConfig.VERSION_NAME)
         .put("player", prefs.playerName)
         .put("stayReady", prefs.stayReady)
@@ -506,12 +523,13 @@ class MainActivity : AppCompatActivity() {
         pageScript = WebViewCompat.addDocumentStartJavaScript(view, "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}) } catch (e) {}", origins)
     }
 
-    private fun askForAddress() {
+    /** Cratarr's address, asked for: kept where Cratarr answers ([Reach.find]); else asked again, [refused] named. */
+    private fun askForAddress(refused: String? = null) {
         if (dialog?.isShowing == true) return
         val field = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             hint = getString(R.string.server_address_hint)
-            setText(prefs.publicAddress ?: "")
+            setText(refused ?: prefs.publicAddress ?: "")
             setSingleLine()
         }
         val box = FrameLayout(this).apply {
@@ -521,18 +539,22 @@ class MainActivity : AppCompatActivity() {
         }
         dialog = AlertDialog.Builder(this)
             .setTitle(R.string.server_address)
+            .setMessage(refused?.let { getString(R.string.not_cratarr, it) })
             .setView(box)
             .setCancelable(false)
             .setPositiveButton(android.R.string.ok) { _, _ ->
-                val typed = field.text.toString()
-                if (typed.isBlank()) {
+                val typed = field.text.toString().trim()
+                if (typed.isEmpty()) {
                     askForAddress()
                 } else {
-                    val url = Prefs.normalise(typed)
-                    prefs.publicAddress = url
-                    prefs.use(url)
-                    // Looked at first: an address that moved is kept as where it leads.
                     lifecycleScope.launch {
+                        val (found, _) = withContext(Dispatchers.IO) { Reach.find(this@MainActivity, typed) }
+                        if (found == null) {
+                            askForAddress(typed)
+                            return@launch
+                        }
+                        prefs.publicAddress = found
+                        prefs.use(found)
                         withContext(Dispatchers.IO) { Reach.check(this@MainActivity) }
                         prefs.serverUrl?.let(::show)
                     }

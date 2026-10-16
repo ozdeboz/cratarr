@@ -8,16 +8,17 @@
   import Switch from '../Switch.svelte';
   import { appInfo, inApp, networkTest, setDevice, testNetwork } from '../app.svelte';
 
-  /** An address field's change, sent as typed (the app adds the scheme when there is none). */
+  /** An address field's change, sent as typed (the app tries https:// and then http:// when no scheme is typed). */
   function changed(e: Event & { currentTarget: HTMLInputElement }, which: 'public' | 'local') {
-    const typed = e.currentTarget.value.trim();
-    if (which === 'public') {
-      // Never cleared: the app needs it. One that does not answer is not taken (the field shows the one kept again).
-      if (typed && typed !== appInfo.publicAddress) setDevice({ public: typed, server: typed });
-      else e.currentTarget.value = appInfo.publicAddress ?? '';
-    } else if (typed !== (appInfo.localAddress ?? '')) {
-      setDevice({ local: typed });
+    const field = e.currentTarget;
+    const typed = field.value.trim();
+    // The public address is never cleared: the app needs it.
+    if (which === 'public' ? typed && typed !== appInfo.publicAddress : typed !== (appInfo.localAddress ?? '')) {
+      setDevice(which === 'public' ? { public: typed, server: typed } : { local: typed });
     }
+    // The address kept, until the app answers with the one it took (where Cratarr answers); one it does not take
+    // leaves this one, and a line names it.
+    field.value = (which === 'public' ? appInfo.publicAddress : appInfo.localAddress) ?? '';
   }
 
   // The test's answer, Finamp's way; only what failed is named (a refused sign-in as that).
@@ -36,6 +37,9 @@
   <section aria-labelledby="network-h">
     <h2 id="network-h">Network</h2>
     <p class="lede">This device only.</p>
+    {#if appInfo.refused}
+      <p class="error" role="alert">Cratarr does not answer at {appInfo.refused}</p>
+    {/if}
     <label class="pref">
       <span class="l">Public address</span>
       <input
@@ -102,6 +106,10 @@
 {/if}
 
 <style>
+  .error {
+    color: var(--danger, #c33);
+  }
+
   .active {
     color: var(--muted);
     overflow-wrap: anywhere;
