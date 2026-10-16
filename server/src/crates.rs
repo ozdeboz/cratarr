@@ -45,6 +45,19 @@ pub struct CrateDef {
     pub conditions: Vec<Condition>,
 }
 
+/// A genre, viewed in the panel: a crate of one condition, made when asked for (`genre:<name>`), never saved. Its tracks
+/// are those whose genre tags hold the name (as the crate builder's genre axis matches).
+pub const GENRE: &str = "genre:";
+
+pub fn genre_crate(id: &str) -> Option<CrateDef> {
+    let name = id.strip_prefix(GENRE)?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let genre = Condition { axis: "genre".into(), not: false, value: Value::AnyOf { values: vec![name.to_string()] } };
+    Some(CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![genre] })
+}
+
 /// The permanent crates, in the same model (decision 0024). Favourites and Unlisted favourites went (amended
 /// 2026-10-14): any crate shows only its favourites, or none of them, with the panel's favourites toggle.
 pub fn permanent() -> Vec<CrateDef> {
@@ -418,6 +431,15 @@ pub fn bpm_of(raw: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_genre_is_a_crate_of_its_one_condition() {
+        let c = genre_crate("genre:Trip Hop").unwrap();
+        assert_eq!(c.name, "Trip Hop");
+        assert_eq!(c.conditions, vec![Condition { axis: "genre".into(), not: false, value: Value::AnyOf { values: vec!["Trip Hop".into()] } }]);
+        assert!(genre_crate("genre: ").is_none());
+        assert!(genre_crate("unlisted").is_none());
+    }
 
     fn f(rel: &str, genres: &[&str], year: Option<f64>, bpm: Option<f64>) -> Facts {
         Facts { rel: rel.into(), genres: genres.iter().map(|g| g.to_string()).collect(), year, bpm }

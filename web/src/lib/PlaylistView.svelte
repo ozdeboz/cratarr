@@ -36,7 +36,7 @@
     type PlaylistRow,
   } from './api';
   import IncomingSheet, { offerOf } from './IncomingSheet.svelte';
-  import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, FAVOURITES, favouritesOf, favouritesSaved, loadCrates } from './crates.svelte';
+  import { crateName, crateOf, crates, cycleFavourites, EDIT_CRATE, FAVOURITES, favouritesOf, favouritesSaved, genreOf, loadCrates, viewGenre } from './crates.svelte';
   import { Reorder } from './reorder.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { undos, withUndo } from './undo.svelte';
@@ -425,7 +425,8 @@
     if (!crate) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
     return list;
   });
-  const favState = $derived(crate ? FAVOURITES[favouritesOf(crate)] : null);
+  // A genre shows all its tracks: no favourites toggle.
+  const favState = $derived(crate && genreOf(crate) === null ? FAVOURITES[favouritesOf(crate)] : null);
   const closeLabel = $derived(crate ? 'Close the crate' : album ? 'Close the album' : multi ? 'Close the playlists' : 'Close the playlist');
 
   // Under the cover, as Symfonium's: the name large, then one line of what it is (an album: its length, year, format
@@ -777,7 +778,7 @@
       <header class="head">
         <div class="top">
         <div class="art" class:mosaic={covers.length === 4}>
-          {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? 'crates' : 'albums'} size={48} /></span>{/each}
+          {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? (genreOf(crate) !== null ? 'music' : 'crates') : 'albums'} size={48} /></span>{/each}
         </div>
           <div class="info fields">
             <label class="field">
@@ -790,7 +791,7 @@
       </header>
     {:else if !other}
       <div class="hero" class:mosaic={covers.length === 4} class:bare={!covers.length}>
-        {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? 'crates' : 'albums'} size={56} /></span>{/each}
+        {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? (genreOf(crate) !== null ? 'music' : 'crates') : 'albums'} size={56} /></span>{/each}
       </div>
       {#if editing}
       <!-- Edit mode's bar in the action bar's place, its buttons where the bar's were: Delete, then Cancel (in red once
@@ -876,7 +877,8 @@
         {#if album && albumHead?.artist}
           <span class="chip">{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{albumHead.artist}</span></span>
         {/if}
-        {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<span>{g}</span>{/each}</p>{/if}
+        <!-- A genre opens in the panel (its own crate). -->
+        {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
         {#if p?.dead || chosenDead}<p class="details dead">{p?.dead || chosenDead} missing</p>{/if}
       </header>
     {/if}
@@ -1460,12 +1462,16 @@
     line-height: 1.25;
   }
 
-  .genres span {
+  .genres button {
     flex: none;
     padding: 1px 8px;
+    border: 0;
     border-radius: 999px;
     background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: inherit;
+    font: inherit;
     font-size: 12px;
+    cursor: pointer;
   }
 
   .dead {

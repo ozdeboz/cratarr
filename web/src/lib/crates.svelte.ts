@@ -23,7 +23,7 @@ export async function loadCrates() {
 // shows no favourites. A tap shows at once; the setting follows to the server.
 const pending: Record<string, CrateFavourites> = {};
 let saving: Promise<unknown> = Promise.resolve();
-export const favouritesOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourites ?? 'none';
+export const favouritesOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourites ?? (genreOf(id) !== null ? 'all' : 'none');
 /** Resolves when every tap so far is on the server (Make playlist reads the setting there). */
 export const favouritesSaved = () => saving;
 /** How each setting shows, on the panel's toggle and the Crates page's rows: a variation on the heart. */
@@ -88,7 +88,13 @@ export const NEW_CRATE = 'crate-new';
 export const EDIT_CRATE = 'crate-edit:';
 export const builderOf = (viewed: string | null): { id: string | null } | null =>
   viewed === NEW_CRATE ? { id: null } : viewed?.startsWith(EDIT_CRATE) ? { id: viewed.slice(EDIT_CRATE.length) } : null;
-export const crateName = (id: string) => crates.list?.find((c) => c.id === id)?.name ?? id;
+export const crateName = (id: string) => crates.list?.find((c) => c.id === id)?.name ?? genreOf(id) ?? id;
+
+/** A genre in the panel: a crate of that one genre, made by the server when asked for (`crate:genre:<name>`), never
+ *  saved; reached from a track's menu and from the genres shown on top of a list. */
+export const GENRE = 'genre:';
+export const genreOf = (crate: string | null) => (crate?.startsWith(GENRE) ? crate.slice(GENRE.length) : null);
+export const viewGenre = (name: string) => viewPlaylist(CRATE + GENRE + name);
 
 /** A new crate, named in the name sheet (as a new playlist is): the builder opens on a fresh draft of that name, saved
  *  only with its Save (a crate without conditions would hold the whole library). */

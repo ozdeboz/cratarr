@@ -199,6 +199,8 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
             "size": meta.map(|m| m.len()),
             "modified": modified,
             "added": cat.born_of(track),
+            // As the crates' genre axis reads them: what a genre in the panel matches.
+            "genres": cat.genres_of_ids(&source, std::slice::from_ref(&id)).pop().unwrap_or_default(),
             "tags": tags,
         }))
     });

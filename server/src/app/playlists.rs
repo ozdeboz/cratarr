@@ -819,7 +819,7 @@ impl PlaylistService {
 
     /// A crate's definition: a permanent one, or one's own.
     pub async fn crate_def(&self, id: &str) -> Result<CrateDef, ToggleError> {
-        if let Some(c) = crates::permanent().into_iter().find(|c| c.id == id) {
+        if let Some(c) = crates::permanent().into_iter().find(|c| c.id == id).or_else(|| crates::genre_crate(id)) {
             return Ok(c);
         }
         self.crate_store.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
@@ -855,9 +855,18 @@ impl PlaylistService {
         let def = self.crate_def(id).await?;
         let fav = match fav {
             Some(f) => f,
-            None => self.crate_store.favourites(id).await?,
+            None => self.crate_favourites(id).await?,
         };
         self.crate_page(&fav.with(&def.conditions), want, offset, limit).await
+    }
+
+    /// A crate's favourites toggle as set; a genre not set shows all its tracks (a crate not set shows no favourites).
+    async fn crate_favourites(&self, id: &str) -> Result<crates::Favourites, ToggleError> {
+        match self.crate_store.all_favourites().await?.get(id) {
+            Some(f) => Ok(*f),
+            None if crates::genre_crate(id).is_some() => Ok(crates::Favourites::All),
+            None => Ok(self.crate_store.favourites(id).await?),
+        }
     }
 
     /// Sets a crate's favourites toggle (decision 0024, amended): one setting per crate, for every device. Not journaled:
@@ -888,7 +897,7 @@ impl PlaylistService {
     /// The crate as its favourites toggle is set. Returns how many tracks it got, and the undo token.
     pub async fn crate_to_playlist(&self, id: &str, want: Option<&str>, name: &str) -> Result<(usize, Option<String>), ToggleError> {
         let def = self.crate_def(id).await?;
-        let fav = self.crate_store.favourites(id).await?;
+        let fav = self.crate_favourites(id).await?;
         let (_, lines) = self.crate_lines_of(&fav.with(&def.conditions), want).await?;
         if lines.is_empty() {
             return Err(ToggleError::Refused("That crate is empty.".into()));

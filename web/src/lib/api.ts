@@ -715,6 +715,8 @@ export type TrackFile = {
   size: number | null;
   modified: number | null;
   added: number | null;
+  /** Its genres as a genre in the panel matches them. */
+  genres: string[];
   tags: { name: string; value: string }[];
 };
 export const trackFile = (source: string, id: string) => quietly<TrackFile>(`${trackPath(source, id)}/details`);

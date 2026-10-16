@@ -39,6 +39,7 @@
   import { withUndo } from './undo.svelte';
   import { followCreate, followDelete } from './follow.svelte';
   import { albumSubject, keepViewed, viewPlaylist } from './panel.svelte';
+  import { viewGenre } from './crates.svelte';
   import { download, inApp } from './app.svelte';
 
   let {
@@ -127,18 +128,31 @@
     onclose();
   }
 
-  // Details: the file as it is, read when the step opens.
+  // The file as it is, read as the menu opens: its genres for Go to genre, and Details.
   let details = $state<TrackFile | null>(null);
   let detailsFailed = $state(false);
-  function showDetails() {
+  $effect(() => {
     if (!t) return;
-    step = 'details';
+    const { source, id } = t;
     details = null;
     detailsFailed = false;
-    trackFile(t.source, t.id).then(
-      (d) => (details = d),
+    trackFile(source, id).then(
+      (d) => {
+        if (t?.source === source && t.id === id) details = d;
+      },
       () => (detailsFailed = true),
     );
+  });
+  function showDetails() {
+    step = 'details';
+  }
+  /** Go to genre: the track's first genres, each opening in the panel. */
+  const genres = $derived((details?.genres ?? []).slice(0, 2));
+  function goToGenre(name: string) {
+    onclose();
+    // From the full-screen player: it closes, or it would cover the genre.
+    player.full = false;
+    viewGenre(name);
   }
   const plays = $derived(forPlaying ? (np?.info?.play_count ?? null) : (other?.info?.play_count ?? null));
   const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -309,6 +323,9 @@
         {#if artistName}
           <MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />
         {/if}
+        {#each genres as g (g)}
+          <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
+        {/each}
         <MenuEntry icon="info" label="Details" onclick={showDetails} />
         <MenuEntry icon="search" label="Web search" onclick={webSearch} />
         {#if inApp && t}
