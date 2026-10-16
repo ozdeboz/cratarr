@@ -377,6 +377,8 @@ pub struct PlayerView {
     pub current_entry_id: Option<String>,
     /// The group it plays in, by its leader (decision 0037); a player of a group shows what the group plays.
     pub group: Option<String>,
+    /// Its speaker delay (ms), decision 0037.
+    pub delay_ms: u16,
     /// The whole queue, for one player asked for by name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<Vec<QueueTrack>>,
@@ -388,7 +390,14 @@ pub struct PlayOnSettings {
     /// Addresses the player list is POSTed to on every change (`{"players": [...]}`).
     #[serde(default)]
     pub webhooks: Vec<String>,
+    /// Each player's speaker delay (decision 0037): how late its speaker sounds, in ms; in a group it plays that much
+    /// earlier. Set with `PUT /api/players/{name}/delay`; kept when the webhooks are saved.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub delays: std::collections::BTreeMap<String, u16>,
 }
+
+/// The most a speaker delay can be (ms): well inside the group's buffer, which snapclient shortens by it.
+pub const MAX_DELAY_MS: u16 = 500;
 
 struct Entry {
     /// The open connection, as (its number, where its commands go).
@@ -493,6 +502,7 @@ impl Entry {
             ids: if self.ids.0 == key(track.as_ref()) { self.ids.1.clone() } else { TrackIds::default() },
             current_entry_id: track.as_ref().map(|t| t.entry.clone()).filter(|e| !e.is_empty()),
             group: self.leader.clone(),
+            delay_ms: 0,
             track,
             queue: with_queue.then(|| self.queue.tracks.clone()),
         }
@@ -744,13 +754,18 @@ impl PlayOn {
         let entries = self.entries();
         let mut out: Vec<PlayerView> = entries.keys().filter_map(|n| view_in(&entries, n, false)).collect();
         drop(entries);
+        let delays = self.settings().delays;
+        for v in &mut out {
+            v.delay_ms = delays.get(&v.name).copied().unwrap_or(0);
+        }
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         out
     }
 
     /// One player, with its queue.
     pub fn get(&self, name: &str) -> Option<PlayerView> {
-        view_in(&self.entries(), name, true)
+        let v = view_in(&self.entries(), name, true);
+        v.map(|v| PlayerView { delay_ms: self.delay_of(name), ..v })
     }
 
     /// A player connects: the commands for it come out of the returned stream, which closes the connection when it
@@ -1205,12 +1220,39 @@ impl PlayOn {
             }
             webhooks.push(w.to_string());
         }
-        let saved = PlayOnSettings { webhooks };
+        let saved = PlayOnSettings { webhooks, delays: self.settings().delays };
         let body = serde_json::to_string_pretty(&saved).map_err(anyhow::Error::from)?;
         tokio::task::spawn_blocking(move || write_private(&file, &body)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         *self.settings.lock().unwrap_or_else(|p| p.into_inner()) = saved.clone();
         self.changed();
         Ok(saved)
+    }
+
+    /// A player's speaker delay (ms).
+    pub fn delay_of(&self, name: &str) -> u16 {
+        self.settings.lock().unwrap_or_else(|p| p.into_inner()).delays.get(name).copied().unwrap_or(0)
+    }
+
+    /// Sets a player's speaker delay (0 to [`MAX_DELAY_MS`]); heard at once in a group. Saved in `players.json` when
+    /// there is one.
+    pub async fn set_delay(&self, name: &str, ms: u16) -> Result<u16, ToggleError> {
+        valid_name(name)?;
+        let ms = ms.min(MAX_DELAY_MS);
+        let saved = {
+            let mut settings = self.settings.lock().unwrap_or_else(|p| p.into_inner());
+            if ms == 0 {
+                settings.delays.remove(name);
+            } else {
+                settings.delays.insert(name.to_string(), ms);
+            }
+            settings.clone()
+        };
+        if let Some(file) = self.file.clone() {
+            let body = serde_json::to_string_pretty(&saved).map_err(anyhow::Error::from)?;
+            tokio::task::spawn_blocking(move || write_private(&file, &body)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        }
+        self.changed();
+        Ok(ms)
     }
 
     /// POSTs the player list to every webhook after each change (changes close together go out as one).
@@ -1249,6 +1291,10 @@ impl PlayOn {
 impl crate::snapcast::Groups for PlayOn {
     fn leader_of(&self, player: &str) -> Option<String> {
         PlayOn::leader_of(self, player)
+    }
+
+    fn latency_of(&self, player: &str) -> i32 {
+        i32::from(self.delay_of(player))
     }
 
     fn volume_of(&self, player: &str) -> u8 {
@@ -1509,6 +1555,14 @@ mod tests {
         assert_eq!(to_phone[1]["command"], "play");
         assert_eq!(to_phone[1]["tracks"].as_array().unwrap().len(), 2);
         assert_eq!(group_of(&mut kitchen), vec![Some("phone".to_string())]);
+
+        // A speaker delay: kept, shown, at most 500 ms.
+        assert_eq!(p.set_delay("kitchen", 120).await.unwrap(), 120);
+        assert_eq!(p.get("kitchen").unwrap().delay_ms, 120);
+        assert_eq!(p.set_delay("phone", 900).await.unwrap(), MAX_DELAY_MS);
+        assert_eq!(crate::snapcast::Groups::latency_of(p.as_ref(), "phone"), 500);
+        p.set_delay("phone", 0).await.unwrap();
+        assert!(p.settings().delays.get("phone").is_none());
 
         // The kitchen leaves: the phone, alone, plays on its own.
         p.command("kitchen", Command::Leave).await.unwrap();

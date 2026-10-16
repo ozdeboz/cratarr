@@ -167,12 +167,21 @@ export type PlayOnPlayer = {
   autoplay?: { mode: string; albums: boolean; restart: boolean } | null;
   /** The group it plays in, by its leader (decision 0037): a player of a group shows what the group plays. */
   group?: string | null;
+  /** How late its speaker sounds (ms): in a group it plays that much earlier. */
+  delay_ms?: number;
   track: QueueTrack | null;
   queue?: QueueTrack[];
 };
 
 export const getPlayers = () => quietly<{ players: PlayOnPlayer[] }>('/api/players');
 export const getPlayer = (name: string) => quietly<PlayOnPlayer>(`/api/players/${encodeURIComponent(name)}`);
+/** A player's speaker delay (sync play, decision 0037), 0 to 500 ms. */
+export const setPlayerDelay = (name: string, ms: number) =>
+  request<{ ms: number }>(`/api/players/${encodeURIComponent(name)}/delay`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ms }),
+  });
 /** A command for one of Cratarr's players (`{ command: 'play', tracks, index, position_ms }`, `{ command: 'pause' }`…). */
 export const playerCommand = (name: string, command: Record<string, unknown>) =>
   request<void>(`/api/players/${encodeURIComponent(name)}/command`, {

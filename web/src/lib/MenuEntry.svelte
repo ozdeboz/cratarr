@@ -3,7 +3,8 @@
   // at 16 px. Destructive entries stay Cratarr's way: red (and last in the list). `checked` makes it one of Finamp's
   // toggle cards (the playlists for a track): filled with the accent, stronger when on, a mark at the right. `busy`:
   // its action is under way (an album going into a playlist track by track), the spinner in place of its label. `badge`:
-  // a small icon after a toggle's label (a group's leader: a crown), `badgeLabel` saying what it means.
+  // a small icon after a toggle's label (a group's leader: a crown), `badgeLabel` saying what it means. `onmark`: the
+  // toggle's mark (+ or the tick) is a button of its own, `markLabel` saying what it does; the label keeps `onclick`.
   import Icon, { type IconName } from './Icon.svelte';
 
   let {
@@ -16,6 +17,8 @@
     busy = false,
     badge = null,
     badgeLabel = '',
+    onmark = null,
+    markLabel = '',
   }: {
     icon?: IconName | null;
     label: string;
@@ -26,6 +29,8 @@
     busy?: boolean;
     badge?: IconName | null;
     badgeLabel?: string;
+    onmark?: (() => void) | null;
+    markLabel?: string;
   } = $props();
 </script>
 
@@ -33,6 +38,16 @@
   <button class="entry" class:danger role="menuitem" disabled={disabled || busy} aria-busy={busy} {onclick}>
     {#if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span>
   </button>
+{:else if onmark}
+  <div class="toggle split" class:on={checked}>
+    <button class="name" role="menuitemradio" aria-checked={checked} disabled={disabled || busy} {onclick}>
+      <span class:badged={badge !== null}
+        >{#if badge}<em>{label}</em><b title={badgeLabel} aria-label={badgeLabel}><Icon name={badge} size={18} /></b>{:else}{label}{/if}</span
+      >
+    </button><i aria-hidden="true"></i><button class="mark" aria-label={markLabel} title={markLabel} disabled={disabled || busy} onclick={onmark}
+      ><Icon name={checked ? 'check' : 'plus'} size={22} /></button
+    >
+  </div>
 {:else}
   <button class="toggle" class:on={checked} role="menuitemcheckbox" aria-checked={checked} disabled={disabled || busy} aria-busy={busy} {onclick}>
     <span class:badged={badge !== null}
@@ -110,6 +125,38 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Two buttons in one card: the label's, and the mark's (a thumb's width). */
+  /* The divider and the mark where a single toggle has them (14 px in, 22 px icon, 12 px gap). */
+  .toggle.split {
+    gap: 0;
+    padding: 0;
+    cursor: default;
+  }
+
+  .toggle.split button {
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .toggle.split .name {
+    flex: 1;
+    min-width: 0;
+    padding: 0 12px 0 14px;
+  }
+
+  .toggle.split .mark {
+    flex: none;
+    justify-content: center;
+    width: 48px;
   }
 
   .toggle span.badged {

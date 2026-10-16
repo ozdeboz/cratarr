@@ -52,6 +52,9 @@
     check: '<path d="M20 6 9 17l-5-5"/>',
     swap: '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
     plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    minus: '<path d="M5 12h14"/>',
+    // Two speakers: the players (Settings → Players).
+    speakers: '<rect x="2" y="4" width="9" height="16" rx="2"/><circle cx="6.5" cy="14" r="2.5"/><path d="M6.5 8h.01"/><rect x="13" y="4" width="9" height="16" rx="2"/><circle cx="17.5" cy="14" r="2.5"/><path d="M17.5 8h.01"/>',
     squareArrowOutUpRight: '<path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/><path d="m21 3-9 9"/><path d="M15 3h6v6"/>',
     crates: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
     info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',

@@ -6,6 +6,7 @@
   import { appInfo, downloads, inApp } from './lib/app.svelte';
   import Icon from './lib/Icon.svelte';
   import { panel, SETTINGS, viewPlaylist } from './lib/panel.svelte';
+  import { playOn } from './lib/playOn.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
 
@@ -45,6 +46,8 @@
         );
         return names.join(' · ') || 'None in use';
       }
+      case 'players':
+        return playOn.players.map((p) => p.name).join(' · ') || 'None yet';
       case 'subsonic':
         return accounts === null ? '' : accounts.length ? accounts.join(' · ') : 'No account';
       case 'display':

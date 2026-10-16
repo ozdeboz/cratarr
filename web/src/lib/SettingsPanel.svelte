@@ -5,6 +5,7 @@
   import Switch from './Switch.svelte';
   import Icon from './Icon.svelte';
   import PanelPlace from './PanelPlace.svelte';
+  import PlayersSettings from './PlayersSettings.svelte';
   import { closePlaylist } from './panel.svelte';
   import { SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './settingsSections.svelte';
 
@@ -490,6 +491,8 @@
     {/if}
   {/if}
 
+  {#if section === 'players'}<PlayersSettings />{/if}
+
   {#if s}
     {@const many = drafts.length > 1}
     {#if section === 'connections'}
@@ -752,7 +755,7 @@
       </details>
     </section>
     {/if}
-  {:else if !loadError}
+  {:else if !loadError && section !== 'players'}
     <PageLoading />
   {/if}
 

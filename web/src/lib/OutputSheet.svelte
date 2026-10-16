@@ -3,10 +3,12 @@
   // (the Android app elsewhere: Play On), or the media server's player. Choosing another moves the music there (queue
   // and position) and stops the side that played; one of Cratarr's players that plays already is asked about first:
   // take it over (the music moves there), or not (it plays on, and what played here pauses).
-  // Sync play (decision 0037): while one of Cratarr's players is played on, holding another adds it to its group (or
-  // takes it out); the group's players show ticked. A tap plays on that one player alone: the group ends.
+  // Sync play (decision 0037): while one of Cratarr's players is played on, another's + adds it to its group and its
+  // tick takes it out (a long press on it too); the group's players show ticked, its leader crowned, and their volumes
+  // below. A tap on a name plays on that one player alone: the group ends.
   import { appInfo, inApp } from './app.svelte';
   import { coverUrl, type PlayOnPlayer } from './api';
+  import GroupVolume from './GroupVolume.svelte';
   import { hold } from './hold';
   import { live } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -95,6 +97,8 @@
             checked={here || (me !== null && group.includes(me))}
             badge={me !== null && group.length > 1 && group[0] === me ? 'crown' : null}
             badgeLabel="Leads the group"
+            onmark={groupable(me) ? () => me && held(me) : null}
+            markLabel={me !== null && group.includes(me) ? 'Take out of the group' : 'Add to the group'}
             onclick={() => pick('local')}
           />
         </div>
@@ -106,11 +110,14 @@
             checked={drivenName() === name || group.includes(name)}
             badge={group.length > 1 && group[0] === name ? 'crown' : null}
             badgeLabel="Leads the group"
+            onmark={groupable(name) ? () => held(name) : null}
+            markLabel={group.includes(name) ? 'Take out of the group' : 'Add to the group'}
             onclick={() => pick(`player:${name}`)}
           />
         </div>
       {/each}
       <MenuEntry label={remoteName} checked={!here && drivenName() === null} onclick={() => pick('remote')} />
+      {#if group.length > 1}<GroupVolume names={group} />{/if}
     {/if}
   </div>
 </MenuSheet>

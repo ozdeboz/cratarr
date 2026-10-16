@@ -30,6 +30,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}/command", post(player_command))
         .route("/api/players/{name}/state", axum::routing::put(player_state))
         .route("/api/players/{name}/sample", post(player_sample))
+        .route("/api/players/{name}/delay", axum::routing::put(player_delay))
         .route("/api/time", get(time_now))
         .route("/api/sync/measure", get(sync_measure))
         .route("/api/radio/next", post(radio_next))
@@ -608,6 +609,17 @@ async fn time_now() -> Json<serde_json::Value> {
 async fn player_sample(State(app): State<Arc<App>>, Path(name): Path<String>, Json(s): Json<crate::app::together::Sample>) -> Result<StatusCode, ApiError> {
     app.play_on.sample(&name, s)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(serde::Deserialize)]
+struct DelayBody {
+    ms: u16,
+}
+
+/// A player's speaker delay (sync play, decision 0037): heard at once in a group.
+async fn player_delay(State(app): State<Arc<App>>, Path(name): Path<String>, Json(b): Json<DelayBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    let ms = app.play_on.set_delay(&name, b.ms).await?;
+    Ok(Json(json!({ "ms": ms })))
 }
 
 /// Every online player's place at one moment, and how far apart those on the same track are (sync play, step 1).

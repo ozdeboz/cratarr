@@ -155,3 +155,20 @@ device; this keeps one player, the app's.
 - **The page:** the group's leader shows a crown in the device sheet (the owner).
 - **Port:** 1704 (`CRATARR_SNAPCAST_BIND`, empty to switch sync play off). Tested against snapclient 0.31: chunks played
   at age 0, silence on a break, heard again as the new sound began.
+
+## Amended (2026-10-16): how the group and its settings are shown, after looking at the others
+
+Read in their source (Snapweb, Snapdroid, Iris, Home Assistant, Music Assistant, Lyrion and Material Skin, Jellyfin
+SyncPlay, moOde, Volumio): grouping is a checklist started from the player played on; a group is named after its
+players; each device keeps its own volume, with a group slider (the average, moving each in proportion) once there are
+two; exactly one timing setting per device, in ms, in that device's settings, never on the group's; the buffer and
+drift correction are global and hidden. None measures with a microphone. The owner chose, from that:
+
+- **The device sheet's + and tick** add a player to the group or take it out (a long press too); a tap on its name
+  still plays there alone. The leader keeps its crown.
+- **Volumes in the sheet**, while grouped: a group slider (the average; moved, each device goes in proportion from
+  where it was, up toward 100 or down toward 0) and each device's own.
+- **Speaker delay**, in Settings → Players, for any player from any device: how late that speaker sounds, 0 to 500 ms
+  in steps of 5, heard at once while the finger moves. It is Snapcast's per-client latency: that device plays that
+  much earlier. Kept in `players.json`.
+- The buffer (1 s) and Snapcast's own drift correction stay out of sight.

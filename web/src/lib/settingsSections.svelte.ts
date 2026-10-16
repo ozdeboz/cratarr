@@ -4,12 +4,13 @@
 import type { Settings } from './api';
 import type { IconName } from './Icon.svelte';
 
-export type SettingsSection = 'device' | 'connections' | 'libraries' | 'subsonic' | 'display' | 'about';
+export type SettingsSection = 'device' | 'connections' | 'libraries' | 'players' | 'subsonic' | 'display' | 'about';
 
 export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true }[] = [
   { id: 'device', title: 'This device', icon: 'speaker', app: true },
   { id: 'connections', title: 'Connections', icon: 'server' },
   { id: 'libraries', title: 'Libraries', icon: 'library' },
+  { id: 'players', title: 'Players', icon: 'speakers' },
   { id: 'subsonic', title: 'Subsonic', icon: 'users' },
   { id: 'display', title: 'Display', icon: 'swatch' },
   { id: 'about', title: 'About', icon: 'info' },

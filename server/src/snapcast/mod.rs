@@ -38,6 +38,8 @@ pub trait Groups: Send + Sync + 'static {
     fn leader_of(&self, player: &str) -> Option<String>;
     /// Its volume for the group's sound, 0 to 100 (ducked included).
     fn volume_of(&self, player: &str) -> u8;
+    /// How late its speaker sounds (ms): its snapclient plays that much earlier.
+    fn latency_of(&self, player: &str) -> i32;
 }
 
 /// What a group's stream sends its devices.
@@ -301,13 +303,14 @@ impl Snapcast {
         });
         let mut leader = self.groups.leader_of(&name);
         let mut volume = self.groups.volume_of(&name);
+        let mut latency = self.groups.latency_of(&name);
         let mut stream = leader.as_deref().map(|l| self.stream(l));
         let mut sound = stream.as_ref().map(|s| s.out.subscribe());
         let mut muted = stream.as_ref().map(|s| s.muted.subscribe());
         let silent = |m: &Option<watch::Receiver<bool>>| m.as_ref().is_none_or(|m| *m.borrow());
-        let settings = |volume: u8, muted: bool| proto::server_settings(self.buffer_ms, 0, volume, muted);
-        let (mut said_muted, mut said_volume) = (silent(&muted), volume);
-        w.write_all(&proto::message(proto::SERVER_SETTINGS, 0, hello.id, self.now(), &settings(volume, said_muted))).await?;
+        let settings = |volume: u8, latency: i32, muted: bool| proto::server_settings(self.buffer_ms, latency, volume, muted);
+        let (mut said_muted, mut said_volume, mut said_latency) = (silent(&muted), volume, latency);
+        w.write_all(&proto::message(proto::SERVER_SETTINGS, 0, hello.id, self.now(), &settings(volume, latency, said_muted))).await?;
         if let Some(c) = stream.as_ref().and_then(|s| s.state().codec.clone()) {
             w.write_all(&proto::message(proto::CODEC_HEADER, 0, 0, self.now(), &c)).await?;
         }
@@ -339,13 +342,14 @@ impl Snapcast {
                         }
                     }
                     volume = self.groups.volume_of(&name);
+                    latency = self.groups.latency_of(&name);
                 }
             }
-            // Its settings when they changed: silenced or heard again, its volume.
+            // Its settings when they changed: silenced or heard again, its volume, its speaker's delay.
             let now_muted = silent(&muted);
-            if now_muted != said_muted || volume != said_volume {
-                (said_muted, said_volume) = (now_muted, volume);
-                w.write_all(&proto::message(proto::SERVER_SETTINGS, 0, 0, self.now(), &settings(volume, now_muted))).await?;
+            if now_muted != said_muted || volume != said_volume || latency != said_latency {
+                (said_muted, said_volume, said_latency) = (now_muted, volume, latency);
+                w.write_all(&proto::message(proto::SERVER_SETTINGS, 0, 0, self.now(), &settings(volume, latency, now_muted))).await?;
             }
         };
         reading.abort();
@@ -404,6 +408,9 @@ mod tests {
             }
             fn volume_of(&self, _: &str) -> u8 {
                 100
+            }
+            fn latency_of(&self, _: &str) -> i32 {
+                0
             }
         }
         let snap = Snapcast::new(Arc::new(One), 1000);
