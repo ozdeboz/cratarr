@@ -52,7 +52,7 @@ export function toApp(message: Message) {
 }
 
 /** Changes this device's settings; the app answers with all of them. */
-export const setDevice = (change: { player?: string; stayReady?: boolean; downloadQuality?: string; downloadOverMobile?: boolean }) =>
+export const setDevice = (change: { player?: string; server?: string; stayReady?: boolean; downloadQuality?: string; downloadOverMobile?: boolean }) =>
   toApp({ type: 'device-set', ...change });
 /** Keeps these tracks on the device, in the quality the settings say. */
 export const download = (tracks: { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null }[]) =>
@@ -63,8 +63,6 @@ export const askDownloads = () => toApp({ type: 'downloads' });
 export const removeDownloads = (ids: string[] | 'all') => toApp(ids === 'all' ? { type: 'download-remove', all: true } : { type: 'download-remove', ids });
 /** Opens Android's dialog that lets the app run in the background. */
 export const allowBackground = () => toApp({ type: 'battery' });
-/** Opens the app's prompt for the server's address. */
-export const changeAddress = () => toApp({ type: 'address' });
 /** Asks the app for its settings again. */
 export const askDevice = () => toApp({ type: 'device' });
 

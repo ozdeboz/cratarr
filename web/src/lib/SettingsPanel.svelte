@@ -41,7 +41,7 @@
     type NamingView,
   } from './api';
   import { prefs, type Theme } from './prefs.svelte';
-  import { allowBackground, appInfo, askDevice, askDownloads, changeAddress, downloads, inApp, setDevice } from './app.svelte';
+  import { allowBackground, appInfo, askDevice, askDownloads, downloads, inApp, setDevice } from './app.svelte';
 
   // Inside the Android app: its settings as they are now (Android's background permission may have changed meanwhile).
   if (inApp) {
@@ -462,10 +462,20 @@
         <span class="l">Background <small>{appInfo.batteryAllowed ? 'Allowed to run' : 'Android may stop Cratarr'}</small></span>
         {#if !appInfo.batteryAllowed}<button onclick={allowBackground}>Allow</button>{/if}
       </div>
-      <div class="pref">
-        <span class="l">Server <small>{appInfo.server ?? ''}</small></span>
-        <button onclick={changeAddress}>Change</button>
-      </div>
+      <label class="pref">
+        <span class="l">Server</span>
+        <input
+          type="url"
+          value={appInfo.server ?? ''}
+          spellcheck="false"
+          autocapitalize="off"
+          autocomplete="off"
+          onchange={(e) => {
+            const server = e.currentTarget.value.trim();
+            if (server && server !== appInfo.server) setDevice({ server });
+          }}
+        />
+      </label>
       <label class="pref">
         <span class="l">Downloads <small>{downloads.tracks.length} tracks · {downloadedSize(downloads.bytes)}</small></span>
         <select value={appInfo.downloadQuality} onchange={(e) => setDevice({ downloadQuality: e.currentTarget.value })}>
