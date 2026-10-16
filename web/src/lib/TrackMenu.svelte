@@ -8,8 +8,9 @@
 <script lang="ts">
   // A track's menu (decisions 0019, 0021, 0023): the playing track's (the menu button in the player, a right-click on
   // its cover) or any other's (a long-press on a row). A sheet as Finamp's track menu: the track on the card (with the
-  // heart), Play next and Add to queue as the large actions, then: Add to playlist (the playlists as toggle cards, a tap
-  // adds or removes), the favourite, and for the playing track a new playlist made of what plays and what comes next.
+  // heart), Play next, Add to queue and Start radio as the large actions, then in the album menu's order: View album,
+  // Go to its artist and genres, the favourite, Add to playlist (the playlists as toggle cards, a tap adds or removes),
+  // Download, Share, Details, Web search.
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
@@ -36,9 +37,9 @@
   import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
-  import { albumSubject, viewOver } from './panel.svelte';
+  import { albumSubject, artistOf, panel, viewOver } from './panel.svelte';
   import { linkTo, share } from './share';
-  import { viewGenre } from './crates.svelte';
+  import { crateOf, genreOf, viewGenre } from './crates.svelte';
   import { download, inApp } from './app.svelte';
 
   let {
@@ -57,8 +58,8 @@
   } = $props();
 
   const np = $derived(playing());
-  /** The menu is for what plays (no track given, or the given one plays). */
-  const forPlaying = $derived(!track || (!!np && np.source === track.source && np.id === track.id));
+  /** The menu is for what plays (no track given, or the given one plays); a queue row is always its own place. */
+  const forPlaying = $derived(!place && (!track || (!!np && np.source === track.source && np.id === track.id)));
   const t = $derived<MenuTrack | null>(forPlaying ? np : track);
 
   // Another track's playlists and heart, asked for when its menu opens.
@@ -78,6 +79,11 @@
   const addable = $derived(forPlaying ? !!np?.addable : !!other?.addable);
   /** The track's album, for View album: as the track came, else as the server says. */
   const albumId = $derived(t?.album_id ?? (forPlaying ? null : (other?.album_id ?? null)));
+  // Opened from a row of what the panel shows (a playlist's, an album's, a genre's, an artist's): what it shows already
+  // is not offered again (from the player or the queue it is: they cover the panel).
+  const fromPanel = $derived(!!track && !place && !forPlaying);
+  const viewedArtist = $derived(artistOf(panel.viewed));
+  const viewedGenre = $derived(genreOf(crateOf(panel.viewed)));
   function viewAlbum() {
     if (!t || !albumId) return;
     const subject = albumSubject(t.source, albumId);
@@ -101,9 +107,12 @@
   // main artist.
   const artistName = $derived(mainArtist(t?.artist));
   function goToArtist() {
-    if (!artistName) return;
+    // Read before closing, as every action here: the opener drops the menu's track on close.
+    const name = artistName;
+    const source = t?.source;
+    if (!name || !source) return;
     onclose();
-    showArtist(t!.source, artistName);
+    showArtist(source, name);
   }
 
   // Share: the track in words, and its album's link here (a track has no page of its own; lib/share.ts).
@@ -301,7 +310,7 @@
           ]
         : [
             { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },
-            { icon: 'playlists', label: 'Add to queue', onclick: () => queue('last'), disabled: working },
+            { icon: 'listAdd', label: 'Add to queue', onclick: () => queue('last'), disabled: working },
             ...(radioFrom ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
           ]}
     onback={step === 'menu' ? null : () => (step = 'menu')}
@@ -309,24 +318,21 @@
   >
     {#if step === 'menu'}
       <div role="menu">
-        {#if addable}
-          <MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />
+        {#if albumId && !(fromPanel && panel.viewed === albumSubject(t!.source, albumId))}
+          <MenuEntry icon="squareArrowOutUpRight" label="View album" onclick={viewAlbum} />
         {/if}
+        {#if artistName && !(fromPanel && viewedArtist?.source === t?.source && viewedArtist?.name === artistName)}
+          <MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />
+        {/if}
+        {#each genres.filter((g) => !(fromPanel && g === viewedGenre)) as g (g)}
+          <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
+        {/each}
         {#if heartKnown}
           <MenuEntry icon="heart" label={heartOn ? 'Remove from favourites' : 'Add to favourites'} disabled={busy} onclick={heart} />
         {/if}
-        {#if albumId}
-          <MenuEntry icon="squareArrowOutUpRight" label="View album" onclick={viewAlbum} />
+        {#if addable}
+          <MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />
         {/if}
-        {#if artistName}
-          <MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />
-        {/if}
-        {#each genres as g (g)}
-          <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
-        {/each}
-        <MenuEntry icon="info" label="Details" onclick={showDetails} />
-        <MenuEntry icon="share" label="Share" onclick={shareIt} />
-        <MenuEntry icon="search" label="Web search" onclick={webSearch} />
         {#if inApp && t}
           {@const one = t}
           <MenuEntry
@@ -338,6 +344,9 @@
             }}
           />
         {/if}
+        <MenuEntry icon="share" label="Share" onclick={shareIt} />
+        <MenuEntry icon="info" label="Details" onclick={showDetails} />
+        <MenuEntry icon="search" label="Web search" onclick={webSearch} />
         {#if movesHere && !forPlaying}
           <MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />
         {/if}

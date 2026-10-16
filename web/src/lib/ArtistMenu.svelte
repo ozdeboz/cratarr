@@ -63,6 +63,19 @@
       { icon: 'shuffle', label: 'Shuffle', disabled: none, onclick: act('shuffle') },
       { icon: 'playNext', label: 'Play next', disabled: none, onclick: act('next') },
       { icon: 'listAdd', label: 'Add to queue', disabled: none, onclick: act('last') },
+      ...(onradio
+        ? [
+            {
+              icon: 'radio' as const,
+              label: 'Start radio',
+              disabled: none,
+              onclick: () => {
+                onclose();
+                onradio?.();
+              },
+            },
+          ]
+        : []),
     ];
   });
 
@@ -123,21 +136,8 @@
 >
   {#if step === 'menu'}
     <MenuCards>
-      {#if onradio}
-        {@const radio = onradio}
-        <MenuGroup>
-          <MenuEntry
-            icon="radio"
-            label="Start radio"
-            onclick={() => {
-              onclose();
-              radio();
-            }}
-          />
-        </MenuGroup>
-      {/if}
       <MenuGroup>
-        {#if toList.addable}<MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+        {#if toList.addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
         {#if inApp && tracks.length && kept.length < tracks.length}
           <MenuEntry
             icon="arrowDownToLine"

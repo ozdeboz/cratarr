@@ -241,6 +241,17 @@
         {@const on = isKept('playlist', from, p.id)}
         <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('playlist', from, p.id, !on, p.name)} />
       {/if}
+      {#if one}
+        {@const name = one.id}
+        <MenuEntry
+          icon="share"
+          label="Share"
+          onclick={() => {
+            onclose();
+            share(name, name, linkTo('playlists', name));
+          }}
+        />
+      {/if}
       <!-- The panel's other views of them (back returns to their tracks). -->
       <MenuEntry icon="info" label="Info" onclick={() => viewTab('info')} />
       <MenuEntry icon="download" label="Export…" onclick={() => viewTab('export')} />
@@ -264,18 +275,7 @@
           }}
         />
       {/if}
-      {#if one}
-        {@const name = one.id}
-        <MenuEntry
-          icon="share"
-          label="Share"
-          onclick={() => {
-            onclose();
-            share(name, name, linkTo('playlists', name));
-          }}
-        />
-      {/if}
-      <MenuEntry icon="trash" label="Delete" danger onclick={() => (mode = 'delete')} />
+      <MenuEntry icon="trash" label={one ? 'Delete playlist' : `Delete ${ids.length} playlists`} danger onclick={() => (mode = 'delete')} />
     </div>
   {:else if mode === 'rename' && one}
     <form

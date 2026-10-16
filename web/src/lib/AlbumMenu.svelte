@@ -70,7 +70,7 @@
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { playPlaylistFrom } from './output.svelte';
-  import { albumGone, albumSubject, viewPlaylist } from './panel.svelte';
+  import { albumGone, albumSubject, panel, viewPlaylist } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo, share } from './share';
   import { toast } from './toast.svelte';
@@ -213,8 +213,10 @@
   // artist the album is credited to (as Symfonium's). Without the source's list, the credit with a "feat." left out.
   const artistNames = $derived(a.artists?.length ? a.artists : [mainArtist(a.artist) ?? ''].filter(Boolean));
   function goToArtist(name: string) {
+    // Read before closing: an opener may drop what it gave the menu on close.
+    const from = source;
     onclose();
-    showArtist(source, name);
+    showArtist(from, name);
   }
   function goToGenre(name: string) {
     onclose();
@@ -469,7 +471,7 @@
   {:else if step === 'menu'}
     <MenuCards>
       <MenuGroup>
-        {#if viewable}
+        {#if viewable && panel.viewed !== albumSubject(source, a.id)}
           <MenuEntry
             icon="squareArrowOutUpRight"
             label="View"
@@ -492,7 +494,7 @@
         </MenuGroup>
       {/if}
       <MenuGroup>
-        {#if addable}<MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+        {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
         {#if inApp && tracks?.length && kept.length < tracks.length}
           {@const list = tracks}
           <MenuEntry

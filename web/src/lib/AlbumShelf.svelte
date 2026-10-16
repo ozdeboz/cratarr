@@ -390,6 +390,7 @@
     <SelectBar label="Selected albums" count="{ticked.length}/{all.length}" onclose={() => (selecting = null)} place="page">
       {#if actions}
         {@render actions(ticked, () => (selecting = null))}
+        <button aria-label="Menu of the ticked album" title="More" disabled={ticked.length !== 1} onclick={menuOfTicked}><Icon name="moreVert" size={24} /></button>
       {:else}
       <button aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => playTicked('play')}><Icon name="play" size={24} /></button>
       <button aria-label="Play next" title="Play next" disabled={!ticked.length} onclick={() => playTicked('next')}><Icon name="playNext" size={24} /></button>

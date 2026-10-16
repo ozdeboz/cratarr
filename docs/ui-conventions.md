@@ -129,8 +129,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   picture kept in this browser, shown wherever the album's cover is) and Read the cover again (or Use the server's
   cover); Remove resume point, Web search, Genius search.
 - **An artist's menu** (`lib/ArtistMenu.svelte`, the artist panel's ⋮, decided 2026-10-16) as the album's: the artist
-  with their heart, the large actions, Start radio, Add to playlist (all their tracks), Download, Share, and their
-  picture on this device. No Instant mix (the owner) and no rating.
+  with their heart, the large actions (Start radio among them, as on a track's and a playlist's), Add to playlist (all
+  their tracks), Download, Share, and their picture on this device. No Instant mix (the owner) and no rating.
 - **Keep on this device** (decision 0038, in the app): a switch entry (`MenuEntry`'s `switched`: the entry with a
   switch at its end) in the album's, the artist's and the panel playlist's menu, beside Download (a one-time copy);
   on a crate or a genre, an icon in its action bar, in the accent while kept.
@@ -170,8 +170,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   tap on the label views the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
   label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone View N, an icon);
   the circle keeps adding or removing the playing track; with playlists ticked, a ⋮ at the pill's end (where
-  + New playlist is otherwise) is the playlist menu for them (the same menu as a long-press; for several without
-  Spoken as… and Rename). A ticked playlist has the border of the one viewed in the
+  + New playlist is otherwise) is the playlist menu for them (a long-press ticks a playlist, as select mode's; for
+  several without Spoken as…, Rename and Share). A ticked playlist has the border of the one viewed in the
   panel: one state, one look. A favourite playlist has a small red heart (Finamp's list mark)
   above the problems' dot, in the dot's place, so the chip gets no wider. The playlist viewed in the panel has a border
   in the accent and no extra fill: fill means "holds the playing track", the border "is shown in the panel". When the playing
@@ -297,10 +297,15 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   its top (its image: a cover, or a playlist's mosaic of its first four albums; its title; small chips; for a track
   the heart); its playback actions as a row of large icons with small labels; then the other entries as rows with an
   icon in the accent colour. The sheet takes its look from the item's image (blurred behind it, its accent).
-  For a playlist: Play, Shuffle, Play next, Add to queue; View, Info, Export…, Repair… and Sync… (the panel's views),
-  Spoken as…, Rename, Delete. For the playing track
-  (the player's menu button, or a right-click on its cover): Play next, Add to queue; Add to playlist, the favourite,
-  View album, New playlist from the queue. In the app (not a browser) a track's, an album's and a viewed playlist's
+  For a playlist: Play, Shuffle, Play next, Add to queue, Start radio; View, the favourite, Pin to top, Download, Keep
+  on this device, Share; Info, Export…, Repair… and Sync… (the panel's views), Spoken as…, Rename, Delete playlist. For
+  a track (the player's menu button, a right-click on its cover, a row's ⋮): Play next, Add to queue, Start radio; View
+  album, Go to its artist, Go to its genres, the favourite, Add to playlist, Download, Share, Details, Web search (a
+  queue row: Play now and Play next as the large actions, Remove from queue last). What a menu opened from the
+  panel's own rows would show again is left out (an album's track's View album, a genre's track's Go to it). The
+  entries come in the album menu's order: where the item leads, its state, Add to playlist, Download, Share, the rest.
+  **One icon per action** in every menu and bar: Add to queue a list with a plus, Add to playlist the playlists'. A new
+  playlist from the queue is the queue's own (its header). In the app (not a browser) a track's, an album's and a viewed playlist's
   menus also have **Download** (an arrow down to a line): its tracks onto the phone, shown on Downloads. **View** (the square with an arrow out of its corner) is every menu's entry
   that shows the item in the panel: a playlist, an album, a track's album (View album). A tap on the backdrop, Esc, Back or dragging the sheet down closes it. With a single
   other action, the long-press does that action directly.

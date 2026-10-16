@@ -291,7 +291,7 @@
     <div class="corners">
       {#if np}
         <button class="corner" class:on={memberCount > 0} aria-label="Add to playlist; {inPlaylists}" aria-haspopup="menu" onclick={(e) => openMenu(e, 'lists')}
-          ><Icon name="listAdd" size={22} /></button
+          ><Icon name="playlists" size={22} /></button
         >
       {/if}
       {#if np && isLocal()}
