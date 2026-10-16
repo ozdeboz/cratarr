@@ -290,7 +290,7 @@ const post = <T>(path: string, body: unknown) =>
 
 /** The radio's next tracks (decision 0036), already in the radio's lane: like `seed` (the radio's seed, or the queue's
  *  own album or playlist), none of `exclude` (the queue), after `last` (the playing track). */
-export const radioNext = (ask: { mode: string; seed: string[]; exclude: string[]; last: string | null; count: number }) =>
+export const radioNext = (ask: { mode: string; seed: string[]; exclude: string[]; last: string | null; count: number; within?: string | null }) =>
   post<{ tracks: QueueTrack[] }>('/api/radio/next', ask);
 
 /** Apply every safe repair, or only those of these playlists (the panel's Repair tab, decision 0025). */

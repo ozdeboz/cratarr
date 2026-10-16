@@ -39,9 +39,9 @@ export type Repeat = 'off' | 'one' | 'all';
 export type Sleep = { atMs: number | null; endOfTrack: boolean };
 /** How the radio chooses (decision 0036). */
 export type RadioMode = 'similar' | 'continuous' | 'album_mix' | 'era' | 'artist' | 'reshuffle' | 'random';
-/** The radio while it is on: its mode, and the tracks it stays close to when started from an item (else the queue's
- *  own album or playlist). */
-export type Radio = { mode: RadioMode; seed: string[] };
+/** The radio while it is on: its mode, the tracks it stays close to when started from an item (else the queue's own
+ *  album or playlist), and the crate it plays inside ("Play as radio": only the crate's tracks), when it does. */
+export type Radio = { mode: RadioMode; seed: string[]; within?: string | null };
 export const RADIO_MODES: readonly RadioMode[] = ['similar', 'continuous', 'album_mix', 'era', 'artist', 'reshuffle', 'random'];
 
 /** One appended track: its queue index, where its sample 0 sits in the stream (s), its length (s; null while
@@ -554,11 +554,12 @@ function sleepOf(s: unknown): Sleep | null {
 function radioOf(r: unknown): Radio | null {
   if (typeof r === 'string') return RADIO_MODES.includes(r as RadioMode) ? { mode: r as RadioMode, seed: [] } : null;
   if (!r || typeof r !== 'object') return null;
-  const { on, mode, seed } = r as Record<string, unknown>;
+  const { on, mode, seed, within } = r as Record<string, unknown>;
   if (on === false) return null;
   return {
     mode: RADIO_MODES.includes(mode as RadioMode) ? (mode as RadioMode) : 'similar',
     seed: Array.isArray(seed) ? seed.filter((s): s is string => typeof s === 'string') : [],
+    within: typeof within === 'string' && within ? within : null,
   };
 }
 
@@ -666,16 +667,17 @@ export function setRepeat(mode: Repeat) {
 /** The radio on (a mode; a seed of track ids when started from an item, else the queue's own) or off (its tracks to
  *  come go). The player that plays fills its lane: this page for its own stream, else the app or Cratarr's player. On
  *  turns repeat all off. */
-export function setRadio(on: boolean, mode?: RadioMode, seed?: string[]) {
+export function setRadio(on: boolean, mode?: RadioMode, seed?: string[], within?: string | null) {
   if (!on) {
     radioOff();
     if (handed()) hand('radio', { on: false });
     return;
   }
-  local.radio = { mode: mode ?? local.radio?.mode ?? 'similar', seed: seed ?? local.radio?.seed ?? [] };
+  const inside = within === undefined ? (local.radio?.within ?? null) : within;
+  local.radio = { mode: mode ?? local.radio?.mode ?? 'similar', seed: seed ?? local.radio?.seed ?? [], within: inside };
   if (local.repeat === 'all') local.repeat = 'off';
   // The seed only when given: the player keeps the one it has (a player's view does not show it here).
-  if (handed()) return hand('radio', { on: true, mode: local.radio.mode, ...(seed ? { seed } : {}) });
+  if (handed()) return hand('radio', { on: true, mode: local.radio.mode, ...(seed ? { seed } : {}), ...(within !== undefined ? { within: within ?? '' } : {}) });
   // Another mode: what it chose before makes way for what this one chooses.
   const kept = local.queue.slice(local.index + 1).filter((t) => t.lane !== 'radio');
   if (local.index >= 0 && kept.length !== local.queue.length - local.index - 1) replaceUpcoming(kept);
@@ -693,12 +695,13 @@ function radioOff() {
 }
 
 /** Radio from an item ("Start radio", decision 0036): tracks like `seed` (its own left out) play, and the radio goes
- *  on with that seed. `from`: its name, for the queue sheet. */
-export async function startRadio(seed: string[], from: string | null, mode: RadioMode = local.radio?.mode ?? 'similar') {
-  const { tracks } = await radioNext({ mode, seed, exclude: seed, last: null, count: RADIO_BATCH });
+ *  on with that seed. `within`: a crate's id, to play only the crate's tracks ("Play as radio"; its own then may play).
+ *  `from`: its name, for the queue sheet. */
+export async function startRadio(seed: string[], from: string | null, mode: RadioMode = local.radio?.mode ?? 'similar', within: string | null = null) {
+  const { tracks } = await radioNext({ mode, seed, exclude: within ? [] : seed, last: null, count: RADIO_BATCH, within });
   if (!tracks.length) throw new Error('The radio found nothing to play.');
   playQueue(tracks as LocalTrack[], 0, from);
-  setRadio(true, mode, seed);
+  setRadio(true, mode, seed, within);
 }
 
 /** How many radio tracks are asked for at a time, and how few may be left ahead before more are. */
@@ -717,6 +720,7 @@ function fillRadio() {
     exclude: local.queue.map((t) => t.id),
     last: local.queue[local.index]?.id ?? null,
     count: RADIO_BATCH,
+    within: radio.within ?? null,
   };
   filling = true;
   radioNext(ask)
@@ -767,7 +771,7 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   if (local.repeat === 'one') local.repeat = 'off';
   // The radio stays on, after the new album or playlist, which is its seed now; radio tracks only are a radio starting
   // from an item, which brings its own seed (decision 0036).
-  if (local.radio && !tracks.every((t) => t.lane === 'radio')) local.radio = { ...local.radio, seed: [] };
+  if (local.radio && !tracks.every((t) => t.lane === 'radio')) local.radio = { ...local.radio, seed: [], within: null };
   // Those the new queue holds already (a queue moved here whole) are not added twice.
   const holds = (t: LocalTrack) => tracks.some((x) => x === t || (!!t.entry && x.entry === t.entry));
   const ahead = local.index < 0 ? [] : addedAhead(local.queue, local.index).filter((t) => !holds(t));

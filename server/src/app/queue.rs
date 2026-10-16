@@ -161,6 +161,7 @@ impl Queue {
                     && !self.tracks.iter().all(|t| t.lane.as_deref() == Some(LANE_RADIO))
                 {
                     r.seed.clear();
+                    r.within = None;
                 }
                 Command::Play { from, tracks: Some(self.tracks.clone()), index, position_ms, shuffle, paused }
             }
@@ -246,21 +247,26 @@ impl Queue {
             }
             // The radio on (its mode and seed; what is not given stays) or off (its tracks to come go, an edit). On turns
             // repeat all off: both say what comes when the queue ends (decision 0036).
-            Command::Radio { on: true, mode, seed } => {
+            Command::Radio { on: true, mode, seed, within } => {
                 let was = self.radio.take().unwrap_or_default();
-                let radio = Radio { mode: mode.unwrap_or(was.mode), seed: seed.unwrap_or(was.seed) };
+                let within = match within {
+                    Some(w) if w.is_empty() => None,
+                    Some(w) => Some(w),
+                    None => was.within,
+                };
+                let radio = Radio { mode: mode.unwrap_or(was.mode), seed: seed.unwrap_or(was.seed), within };
                 self.radio = Some(radio.clone());
                 if self.repeat == Repeat::All {
                     self.repeat = Repeat::Off;
                 }
-                return Ok(Command::Radio { on: true, mode: Some(radio.mode), seed: Some(radio.seed) });
+                return Ok(Command::Radio { on: true, mode: Some(radio.mode), seed: Some(radio.seed), within: Some(radio.within.unwrap_or_default()) });
             }
             Command::Radio { on: false, .. } => {
                 self.radio = None;
                 if self.drop_radio_ahead(current) {
                     self.version += 1;
                 }
-                return Ok(Command::Radio { on: false, mode: None, seed: None });
+                return Ok(Command::Radio { on: false, mode: None, seed: None, within: None });
             }
             // Not an edit: the entry that plays is the player's to say.
             Command::Jump { index, entry } => {
@@ -435,18 +441,18 @@ mod tests {
         let mut q = played(&["a", "b"]);
         q.edit(Command::Repeat { mode: Repeat::All }).unwrap();
         let v = q.version;
-        let told = q.edit(Command::Radio { on: true, mode: None, seed: None }).unwrap();
-        assert_eq!(told, Command::Radio { on: true, mode: Some(Mode::Similar), seed: Some(vec![]) }, "Similar by default");
+        let told = q.edit(Command::Radio { on: true, mode: None, seed: None, within: None }).unwrap();
+        assert_eq!(told, Command::Radio { on: true, mode: Some(Mode::Similar), seed: Some(vec![]), within: Some(String::new()) }, "Similar by default");
         assert_eq!((q.repeat, q.version), (Repeat::Off, v), "radio on turns repeat all off; a setting, the version stays");
         // The player filled the radio's lane; playing b.
         q.edit_at(Command::Add { tracks: vec![radio_track("r1"), radio_track("r2")], at: None, after: None, how: None }, Some(1)).unwrap();
         let v = q.version;
-        q.edit_at(Command::Radio { on: true, mode: Some(Mode::Era), seed: None }, Some(1)).unwrap();
+        q.edit_at(Command::Radio { on: true, mode: Some(Mode::Era), seed: None, within: None }, Some(1)).unwrap();
         assert_eq!((q.radio.as_ref().map(|r| r.mode), q.version), (Some(Mode::Era), v), "the mode changes, the tracks stay");
-        q.edit_at(Command::Radio { on: false, mode: None, seed: None }, Some(1)).unwrap();
+        q.edit_at(Command::Radio { on: false, mode: None, seed: None, within: None }, Some(1)).unwrap();
         assert_eq!((ids(&q), q.radio.clone(), q.version), ("a b".to_string(), None, v + 1), "off: its tracks to come go, an edit");
         // Repeat all turns the radio off the same way; a radio track already played stays (it played).
-        q.edit(Command::Radio { on: true, mode: None, seed: None }).unwrap();
+        q.edit(Command::Radio { on: true, mode: None, seed: None, within: None }).unwrap();
         q.edit(Command::Add { tracks: vec![radio_track("r3"), radio_track("r4")], at: None, after: None, how: None }).unwrap();
         q.edit_at(Command::Repeat { mode: Repeat::All }, Some(2)).unwrap();
         assert_eq!((ids(&q), q.radio.is_none()), ("a b r3".to_string(), true));
@@ -457,7 +463,7 @@ mod tests {
         let tracks: Vec<QueueTrack> = (0..6u32).map(|i| QueueTrack { n: Some(i), ..track(&format!("t{i}")) }).collect();
         let mut q = Queue::default();
         q.edit(Command::play(tracks, 0, 0)).unwrap();
-        q.edit(Command::Radio { on: true, mode: None, seed: Some(vec!["s".into()]) }).unwrap();
+        q.edit(Command::Radio { on: true, mode: None, seed: Some(vec!["s".into()]), within: Some("c1".into()) }).unwrap();
         q.edit(Command::Add { tracks: vec![radio_track("r1"), radio_track("r2")], at: None, after: None, how: None }).unwrap();
         for on in [true, false] {
             let Command::Upcoming { tracks: told, .. } = q.edit_at(Command::Shuffle { on }, Some(0)).unwrap() else { panic!() };
@@ -469,9 +475,9 @@ mod tests {
         assert_eq!(q.radio.as_ref().map(|r| r.seed.clone()), Some(vec!["s".to_string()]), "a play of radio tracks keeps the seed");
         q.edit(Command::play(vec![track("new")], 0, 0)).unwrap();
         assert_eq!(ids(&q), "new", "the radio's old tracks went with the old queue");
-        assert_eq!(q.radio.as_ref().map(|r| r.seed.is_empty()), Some(true), "still on, the new album its seed");
+        assert_eq!(q.radio.as_ref().map(|r| (r.seed.is_empty(), r.within.is_none())), Some((true, true)), "still on, the new album its seed, out of the crate");
         let c: Command = serde_json::from_str(r#"{"command":"radio","on":true,"mode":"album_mix"}"#).unwrap();
-        assert_eq!(c, Command::Radio { on: true, mode: Some(super::super::radio::Mode::AlbumMix), seed: None });
+        assert_eq!(c, Command::Radio { on: true, mode: Some(super::super::radio::Mode::AlbumMix), seed: None, within: None });
     }
 
     #[test]

@@ -68,7 +68,7 @@
   import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
-  import { enqueue, type LocalTrack } from './localPlayer.svelte';
+  import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
   import { download, inApp } from './app.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
@@ -466,6 +466,11 @@
     if (album) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
     list.push(play('shuffle', 'shuffle', 'Shuffle'));
     if (!crate) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
+    // A crate as the radio's input (decision 0036): like it, from anywhere; or only its tracks, endlessly.
+    else if (isLocal()) {
+      list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: () => crateRadio(false), disabled: !canPlay });
+      list.push({ key: 'station', icon: 'radioTower', label: 'Play as radio', run: () => crateRadio(true), disabled: !canPlay });
+    }
     return list;
   });
   // A genre shows all its tracks: no favourites toggle.
@@ -578,6 +583,22 @@
       if (mode === 'next' || mode === 'last') toast.show({ text: mode === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
     } catch (e) {
       toast.fail(e, 'Could not start playing');
+    }
+  }
+
+  /** The crate as the radio's input (decision 0036). Start radio: tracks like the crate's, from the whole library (up
+   *  to 300 of its tracks as the seed). Play as radio: only the crate's tracks, as its favourites toggle is set, never
+   *  ending and never in the same order; Cratarr reads the crate itself on each refill. */
+  async function crateRadio(inside: boolean) {
+    const c = crate;
+    if (!c) return;
+    navigator.vibrate?.(8);
+    try {
+      if (inside) return await startRadio([], title, 'similar', c);
+      const ids = (await crateRows(c, 0, 1000, 'cratarr')).rows.flatMap((r) => (r.id ? [r.id] : []));
+      await startRadio(ids.length > 300 ? [...ids].sort(() => Math.random() - 0.5).slice(0, 300) : ids, title);
+    } catch (e) {
+      toast.fail(e, "The radio didn't start");
     }
   }
 
