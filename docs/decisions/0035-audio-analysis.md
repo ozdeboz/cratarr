@@ -193,6 +193,28 @@ half, double and thirds. Gated: `sure >= 0.05` and `catch >= 1.0`.
 - **taktus is taken** (the core, `server/src/analysis`). The source was read: one file, no dependency,
   `forbid(unsafe_code)`, no file or network access.
 
+## Measured: the two tempo rules on a real library (2026-10-16)
+
+taktus as above, then the two rules (dub and reggae counted slow; dance tags folded into 90–180), on 586 tracks of
+the owner's library on the NAS (0.6–0.9 s a track at the lowest priority, no file unreadable). The reference is the
+files' own BPM tags, of unknown origin and quality: worse than the public sets' annotations.
+
+| Sample | Tracks | Sure enough | Result without the rules | With the rules |
+|---|---|---|---|---|
+| BPM-tagged, any genre | 386 | 64 % | 71 % right (79 % any octave) | 71 % right |
+| Dub, reggae, dancehall | 60 | 62 % | 16 % in 60–95 | 65 % in 60–95 |
+| Dance tags | 80 | 81 % | 97 % in 90–180 | 100 % in 90–180 |
+| Ambient | 60 | 47 % | 53 % without a tempo | the same |
+
+- **The gate does the most:** on the tagged tracks, what it shows is 71 % right; what it holds back would have been
+  51 % right.
+- **The fold barely acts:** it moved 3 of the 247 tagged answers (one fixed, one broken: a track tagged "Breaks" at
+  75; one wrong either way) and 2 of 65 dance answers. It is kept: cheap, and right where it acts on dance sets.
+- **The slow count does what it is for:** it halves the dub read at 112–186. It leaves the ones at 95–104 (the
+  rule starts above 110); whether they are right is not known: no reference.
+- **Ambient:** about half gets no tempo; whether the shown half has a beat was not checked.
+- Neither rule changes how often a tempo is shown; only the gate does.
+
 ## Where the first pass runs (the owner, 2026-10-16)
 
 **The one-time pass over the whole library runs on the ThinkBook**; the NAS then keeps up with new and replaced files.
