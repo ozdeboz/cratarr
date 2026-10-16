@@ -258,6 +258,18 @@ class MainActivity : AppCompatActivity() {
             "battery" -> askToRunInBackground()
             "address" -> askForAddress()
             "open" -> message.optString("url").takeIf { it.isNotEmpty() }?.let { openOutside(it) }
+            // Share (a menu's): Android's share sheet, as the WebView has no navigator.share. `text` holds the link.
+            "share" -> {
+                val send = Intent(Intent.ACTION_SEND)
+                    .setType("text/plain")
+                    .putExtra(Intent.EXTRA_SUBJECT, message.optString("title"))
+                    .putExtra(Intent.EXTRA_TEXT, message.optString("text"))
+                try {
+                    startActivity(Intent.createChooser(send, null))
+                } catch (e: ActivityNotFoundException) {
+                    Log.w(TAG, "nothing shares text")
+                }
+            }
         }
     }
 
