@@ -128,3 +128,47 @@ meet 0035's analysis. The proposal is in the owner's hand-off notes of 2026-10-1
 - Until 0035 or AudioMuse, similarity is only as good as the tags and playlists. The playlists signal makes up for thin
   genre tags.
 - The scorer keeps an index of the library in memory (about 30,000 tracks), rebuilt when the library is rebuilt.
+
+## Amendment (2026-10-16): Radio and Autoplay, apart (as Symfonium's)
+
+Comparing Symfonium's queue, the owner chose two ways for the music to go on, apart from each other. What this
+decision built so far is the second kind, renamed **Autoplay** (the owner's choice of name over "Smart queue": the
+word Apple Music and Spotify use for exactly this).
+
+**Radio inserts.** It is an on/off switch with no modes.
+- While it is on, each of the queue's own tracks (no lane) that starts playing gets about 5 tracks like it right
+  after it, before the queue's next own track. They go in the `radio` lane, marked as now. A radio track gets none of
+  its own, so there are no chains.
+- "Like it": Similar with that track as the only seed, its artist weighed double. Symfonium's inserts are mostly the
+  same artist.
+- Turning it off removes the radio tracks not yet played.
+- Command: `{command: "radio", on}`.
+- Its button: the player's radio button and one in the queue's head. A tap switches it, and it is lit while on. The
+  radio sheet goes.
+
+**Autoplay appends** when the queue runs out. This is the lane described above, under its own name: `lane:
+"autoplay"`, marked with its icon.
+- Command: `{command: "autoplay", mode, albums?, restart?}`.
+  - `mode`: `stop` (off), `similar`, `artist`, `era` or `random`.
+  - `albums`: whole albums instead of tracks while albums were playing. This was Album mix.
+  - `restart`: a playlist that ends starts again, shuffled if it played shuffled, instead of the mode. This was
+    Reshuffle.
+- Continuous goes: Radio does that now.
+- Its button: ∞ in the queue's head, lit while on, opening its sheet. The sheet lists Stop, Similar, Same artist,
+  Same era and Random as a choice, then the two switches Queue albums and Restart playlists.
+- "Start radio" (the track and playlist menus) and a crate's "Start radio" and "Play as radio" keep their names and
+  what they do. They set Autoplay with the item as its seed or bound, since they go on past the queue's end.
+- Repeat-all and Autoplay exclude each other, as before. Radio lives with both. Repeat-all's next round still skips
+  radio tracks, and they come again as each own track plays.
+- Reports: `radio: bool` and `autoplay: {mode, albums, restart, seed, within}` (null while off).
+
+**Home Assistant.** Its music starts set Autoplay (`similar`), so the music goes on at the end as now, and is not
+interleaved with radio tracks. Voice follows the split: "radio on" and "radio off" go to Radio, the mode phrases to
+Autoplay, and "album mix" sets `albums`. During the change-over Cratarr accepts the old command:
+- a `radio` command with `mode`, `seed` or `within` is the old shape and maps to Autoplay (Album mix maps to
+  `similar` with `albums`, Reshuffle to `restart`);
+- one with only `on` is the new Radio;
+- a bare `radio {on: false}` switches off both, so "radio off" still stops what Home Assistant started.
+
+**Work:** the lane rule (queue.rs) and the page's fill (localPlayer) are the radio's builders' (the HA session's);
+the app's fill is claude-5f's; the buttons and Autoplay's sheet are claude-a5's.
