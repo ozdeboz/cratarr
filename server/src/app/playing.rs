@@ -574,7 +574,7 @@ impl PlayingService {
             ToggleError::Refused("The server could not read this artist.".into())
         })?;
         let w = works.ok_or_else(|| ToggleError::Refused("This server cannot show artists.".into()))?;
-        let rows = w
+        let mut rows: Vec<super::playlists::PlaylistRow> = w
             .tracks
             .into_iter()
             .map(|a| {
@@ -598,6 +598,13 @@ impl PlayingService {
                 }
             })
             .collect();
+        // Their tempo (decision 0035), as a playlist's rows have it: the catalogue's (the BPM tag, else the analysis').
+        let (c, sid, ids) = (self.lib.catalogue(), source_id.to_string(), rows.iter().filter_map(|r| r.id.clone()).collect::<Vec<_>>());
+        if let Ok(Ok(facts)) = tokio::task::spawn_blocking(move || c.source_rows(&sid, &ids)).await {
+            for (row, f) in rows.iter_mut().filter(|r| r.id.is_some()).zip(facts) {
+                row.bpm = f.bpm;
+            }
+        }
         Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums: w.albums, appears_on: w.appears_on, rows, favorite: w.favorite })
     }
 
