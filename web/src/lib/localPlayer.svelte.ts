@@ -81,6 +81,8 @@ export const local = $state({
   radio: false,
   radioBy: 'track' as RadioBy,
   radioCount: 5,
+  /** Radio's and Autoplay's picks leave the owner's favourites out (the More music sheet's "Ignore favourites"). */
+  skipFavourites: false,
   /** Autoplay, null while off: the music goes on when the queue runs out, chosen from the library. */
   autoplay: null as Autoplay | null,
   /** What the queue was started from ("Chill", an album), for the queue sheet's "Playing from"; null when unknown. */
@@ -540,6 +542,7 @@ export function reportedBy(m: {
   radio?: unknown;
   radioBy?: unknown;
   radioCount?: unknown;
+  skipFavourites?: unknown;
   autoplay?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
@@ -550,6 +553,7 @@ export function reportedBy(m: {
   else if (m.radio && typeof m.radio === 'object') local.autoplay = autoplayOf(fromOld(m.radio as Record<string, unknown>));
   if (RADIO_BYS.includes(m.radioBy as RadioBy)) local.radioBy = m.radioBy as RadioBy;
   if (typeof m.radioCount === 'number' && m.radioCount > 0) local.radioCount = m.radioCount;
+  if (typeof m.skipFavourites === 'boolean') local.skipFavourites = m.skipFavourites;
   if (m.autoplay !== undefined) local.autoplay = autoplayOf(m.autoplay);
   if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) {
     // A queue the player changed (moved, added to) keeps the names this page already knows of its tracks.
@@ -721,6 +725,19 @@ export function setRadio(on: boolean, opts: { by?: RadioBy; count?: number } = {
   if (on) insertRadio();
 }
 
+/** Radio's and Autoplay's picks leave the owner's favourites out, or not (decision 0036, amended). A change takes their
+ *  picks still to come out, and the player that plays picks anew: Radio for the playing track, Autoplay when the queue
+ *  runs low. */
+export function setSkipFavourites(on: boolean) {
+  if (on === local.skipFavourites) return;
+  local.skipFavourites = on;
+  dropAhead('radio');
+  dropAhead('autoplay');
+  if (handed()) return hand('skip_favourites', { on });
+  insertedFor.clear();
+  fill();
+}
+
 /** Autoplay in a mode, or 'stop' (decision 0036, amended): the player that plays appends its tracks when the queue runs
  *  out. What is not given stays as it was; another mode, albums or crate lets its earlier picks make way. On turns
  *  repeat all off. */
@@ -770,7 +787,8 @@ function dropAhead(lane: 'radio' | 'autoplay') {
 export async function startRadio(seed: string[], from: string | null, within: string | null = null) {
   const mode = local.autoplay?.mode ?? 'similar';
   const albums = local.autoplay?.albums ?? false;
-  const { tracks } = await radioNext({ mode, albums, seed, exclude: within ? [] : seed, last: null, count: BATCH, within });
+  const skip_favourites = local.skipFavourites;
+  const { tracks } = await radioNext({ mode, albums, seed, exclude: within ? [] : seed, last: null, count: BATCH, within, skip_favourites });
   if (!tracks.length) throw new Error('Nothing like it was found.');
   // Set before the play: a play of Autoplay's tracks only keeps its seed.
   local.autoplay = { mode, albums, restart: false, seed, within };
@@ -802,11 +820,11 @@ function insertRadio() {
   const at = local.index + 1 + addedAhead(local.queue, local.index).length;
   if (insertedFor.has(key) || local.queue[at]?.lane === 'radio') return;
   insertedFor.add(key);
-  const { radioBy: by, radioCount: count } = local;
-  radioNext({ mode: 'radio', by, seed: [cur.id], exclude: local.queue.map((t) => t.id), last: cur.id, count, within: null })
+  const { radioBy: by, radioCount: count, skipFavourites: skip_favourites } = local;
+  radioNext({ mode: 'radio', by, seed: [cur.id], exclude: local.queue.map((t) => t.id), last: cur.id, count, within: null, skip_favourites })
     .then(({ tracks }) => {
       // Still on as asked, still that track, nothing inserted meanwhile: right after it and its hand-added run.
-      if (!local.radio || local.radioBy !== by || local.radioCount !== count) return;
+      if (!local.radio || local.radioBy !== by || local.radioCount !== count || local.skipFavourites !== skip_favourites) return;
       if (handed() || !tracks.length || local.queue[local.index] !== cur) return;
       const here = local.index + 1 + addedAhead(local.queue, local.index).length;
       if (local.queue[here]?.lane === 'radio') return;
@@ -837,12 +855,14 @@ function fillAutoplay() {
     last: local.queue[local.index]?.id ?? null,
     count: BATCH,
     within: auto.within,
+    skip_favourites: local.skipFavourites,
   };
   filling = true;
   radioNext(ask)
     .then(({ tracks }) => {
-      // Still on, still here: appended after everything, so the stream goes on into them.
-      if (local.autoplay && !handed() && tracks.length) local.queue = [...local.queue, ...(tracks as LocalTrack[])];
+      // Still on as asked, still here: appended after everything, so the stream goes on into them.
+      if (!local.autoplay || handed() || !tracks.length || local.skipFavourites !== ask.skip_favourites) return;
+      local.queue = [...local.queue, ...(tracks as LocalTrack[])];
     })
     .catch((e) => (local.error = e instanceof Error ? e.message : String(e)))
     .finally(() => (filling = false));

@@ -69,6 +69,7 @@ function take(players: PlayOnPlayer[]) {
     radio: p.radio ?? false,
     radioBy: p.radio_by,
     radioCount: p.radio_count,
+    skipFavourites: p.skip_favourites,
     autoplay: p.autoplay ?? null,
   });
   if (p.queue_version !== shownVersion) {

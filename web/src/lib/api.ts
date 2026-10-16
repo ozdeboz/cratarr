@@ -163,6 +163,8 @@ export type PlayOnPlayer = {
   radio?: boolean;
   radio_by?: 'track' | 'artist' | 'era';
   radio_count?: number;
+  /** Radio's and Autoplay's picks leave the owner's favourites out. */
+  skip_favourites?: boolean;
   /** Autoplay while on: its mode and switches. */
   autoplay?: { mode: string; albums: boolean; restart: boolean } | null;
   /** The group it plays in, by its leader (decision 0037): a player of a group shows what the group plays. */
@@ -316,6 +318,8 @@ export const radioNext = (ask: {
   albums?: boolean;
   /** Radio's inserts: what they are like (the track, its artist, its era). */
   by?: string;
+  /** Leave the owner's favourites out. */
+  skip_favourites?: boolean;
 }) =>
   post<{ tracks: QueueTrack[] }>('/api/radio/next', ask);
 

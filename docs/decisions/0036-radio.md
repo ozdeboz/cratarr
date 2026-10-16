@@ -191,3 +191,14 @@ the queue and from the player's radio button.
   the radio lane, whatever `by` is.
 - The queue keeps them as `radio_by` and `radio_count` (left out while the defaults). The player view carries
   `radio`, `radio_by` and `radio_count`; reports may carry `radio_by` and `radio_count` beside `radio: bool`.
+
+### Ignore favourites (2026-10-16, the owner)
+
+A switch in the More music sheet, "Ignore favourites", for discovery: Radio's inserts and Autoplay's picks both leave
+out every track the owner has hearted. One switch covers both, like the sheet's other switches.
+- Command: `{command: "skip_favourites", on}`. A change takes Radio's and Autoplay's picks still to come out; the
+  player picks anew (Radio for the playing track, Autoplay when the queue runs low).
+- The request: `skip_favourites: true` on `POST /api/radio/next`. The scorer drops favourites from its pool before it
+  chooses. A heart set in the last ten minutes may still slip through, because the index is cached that long.
+- The queue keeps `skip_favourites` (left out while off); the player view carries it; reports may carry it
+  (`skip_favourites` in Play On reports, `skipFavourites` over the app's bridge); a handover passes it on.

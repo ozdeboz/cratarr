@@ -30,6 +30,9 @@ pub struct Queue {
     /// How many follow each own track (unset: `RADIO_COUNT`), on or off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radio_count: Option<u8>,
+    /// Radio and Autoplay leave the owner's favourites out (the More music sheet's "Ignore favourites").
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skip_favourites: bool,
     /// Autoplay: on while there is one; the player that plays appends its tracks when the queue runs out. Excludes
     /// repeat all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -343,6 +346,19 @@ impl Queue {
                 }
                 return Ok(Command::Radio { on, mode: None, seed: None, within: None, by: Some(self.radio_by), count: Some(self.radio_count()) });
             }
+            // Favourites in or out of Radio's and Autoplay's picks: a change takes their picks still to come out, and the
+            // player picks anew (Radio for the playing track, Autoplay when the queue runs low).
+            Command::SkipFavourites { on } => {
+                if on != self.skip_favourites {
+                    self.skip_favourites = on;
+                    let radio = self.drop_lane_ahead(current, LANE_RADIO);
+                    let auto = self.drop_lane_ahead(current, LANE_AUTOPLAY);
+                    if radio || auto {
+                        self.version += 1;
+                    }
+                }
+                return Ok(Command::SkipFavourites { on });
+            }
             Command::Autoplay { mode, albums, restart, seed, within } => {
                 return Ok(self.set_autoplay(mode, albums, restart, seed, within, current));
             }
@@ -585,6 +601,24 @@ mod tests {
         let back: Queue = serde_json::from_str(&saved).unwrap();
         assert_eq!((back.radio, back.radio_by, back.radio_count()), (true, RadioBy::Era, 3));
         assert!(!serde_json::to_string(&played(&["a"])).unwrap().contains("radio"));
+    }
+
+    #[test]
+    fn skipping_favourites_takes_the_picks_to_come_out_once() {
+        let mut q = played(&["a", "b"]);
+        q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { tracks: vec![in_lane("p1", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
+        assert_eq!(ids(&q), "a r1 b p1");
+        let v = q.version;
+        assert_eq!(q.edit_at(Command::SkipFavourites { on: true }, Some(0)).unwrap(), Command::SkipFavourites { on: true });
+        assert_eq!((ids(&q), q.version, q.skip_favourites), ("a b".to_string(), v + 1, true), "both lanes' picks to come go");
+        q.edit_at(Command::Add { tracks: vec![in_lane("r2", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
+        let v = q.version;
+        q.edit_at(Command::SkipFavourites { on: true }, Some(0)).unwrap();
+        assert_eq!((ids(&q), q.version), ("a r2 b".to_string(), v), "the same again: nothing changes");
+        assert!(serde_json::to_string(&q).unwrap().contains(r#""skip_favourites":true"#));
+        let c: Command = serde_json::from_str(r#"{"command":"skip_favourites","on":false}"#).unwrap();
+        assert_eq!(c, Command::SkipFavourites { on: false });
     }
 
     #[test]
