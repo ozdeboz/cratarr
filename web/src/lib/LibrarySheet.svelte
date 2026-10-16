@@ -1,37 +1,67 @@
 <script lang="ts" module>
-  import type { IncomingSource } from './api';
+  import type { AlbumsSource, IncomingSource, LibraryInfo, ListedAlbum } from './api';
   import { jobs } from './jobs.svelte';
 
-  /** What Incoming offers for one album: Keep for one not in Music yet (no verdict), Replace for an upgrade, both and
-   *  Delete only when Cratarr can write the album's folder; with a job in the conversion queue only Cancel. */
-  export type IncomingOffer = { deletable: boolean; keepable: boolean; replaceable: boolean; job: number | null };
+  /** What an album's sheet offers (decision 0034): moves into the server's other used libraries, Replace for an
+   *  upgrade, Delete; each only when Cratarr can write the album's folder, and with a job in the conversion queue only
+   *  Cancel. */
+  export type AlbumOffer = {
+    /** The album's library, when known. */
+    from: LibraryInfo | null;
+    /** The libraries it can move into. */
+    targets: LibraryInfo[];
+    /** Into Music the old way (Keep), where the libraries are not known (the panel's Incoming album). */
+    keepable: boolean;
+    replaceable: boolean;
+    deletable: boolean;
+    job: number | null;
+  };
 
-  /** What Incoming offers for album `id` of a server's list. */
-  export function offerOf(s: IncomingSource, id: string): IncomingOffer {
+  /** For an album of the Library's list. One already in Music (an upgrade or a duplicate) does not move there again:
+   *  an upgrade replaces. */
+  export function offerIn(s: AlbumsSource, a: ListedAlbum): AlbumOffer {
+    const deletable = s.deletable.includes(a.id);
+    const verdict = s.verdicts[a.id];
+    return {
+      from: s.library_info.find((l) => l.id === a.library) ?? null,
+      targets: deletable ? s.library_info.filter((l) => l.id !== a.library && !(verdict && l.use === 'music')) : [],
+      keepable: false,
+      replaceable: deletable && verdict?.kind === 'upgrade',
+      deletable,
+      job: jobs.of(s.id, a.id)?.id ?? null,
+    };
+  }
+
+  /** For an Incoming album (the panel's): Keep for one not in Music yet (no verdict), Replace for an upgrade. */
+  export function offerOf(s: IncomingSource, id: string): AlbumOffer {
     const deletable = s.deletable.includes(id);
     return {
-      deletable,
+      from: null,
+      targets: [],
       keepable: deletable && !s.verdicts?.[id],
       replaceable: deletable && s.verdicts?.[id]?.kind === 'upgrade',
+      deletable,
       job: jobs.of(s.id, id)?.id ?? null,
     };
   }
 </script>
 
 <script lang="ts">
-  // An Incoming album's sheet (decision 0021): the Incoming page's menu (Play, View, Keep or Replace in Music, Delete),
-  // or straight at one of its questions from the album panel's top bar. Each question is asked in place.
+  // An album's sheet (decision 0021) for what its library allows (0034): the Library's menu (Play, View, Move to
+  // another library, Replace in Music, Delete), or straight at one of its questions from the album panel's top bar.
+  // Each question is asked in place. Deleting from the primary library (Music) asks once more.
   import {
     albumCoverUrl,
     cancelJob,
-    deleteIncoming,
+    deleteAlbum,
     keepIncoming,
     keepPreview,
+    moveAlbum,
+    movePreview,
     replaceIncoming,
     replacePreview,
     type AlbumMoved,
     type KeepPreview,
-    type ListedAlbum,
     type ReplacePreview,
   } from './api';
   import MenuEntry from './MenuEntry.svelte';
@@ -55,28 +85,36 @@
   }: {
     source: string;
     album: Pick<ListedAlbum, 'id' | 'title' | 'artist'> & Partial<ListedAlbum>;
-    offer: IncomingOffer;
+    offer: AlbumOffer;
     trashDays: number;
-    /** The library Keep and Replace put albums in, by its own name. */
+    /** The primary library (Music), by its own name: Keep and Replace put albums in it. */
     music: string;
     /** The menu, or one question straight away (then there is no menu to go back to). */
     start?: 'menu' | Ask;
     onclose: () => void;
-    /** The album left Incoming (kept, replaced or deleted; not when queued to convert first). */
+    /** The album left its library (moved, replaced or deleted; not when queued to convert first). */
     ongone?: () => void;
     /** Its Undo went through. */
     onundone?: () => void;
   } = $props();
 
-  // Said in the Keep and Replace questions when no Lidarr is set to be told to stop fetching the album.
+  // Said in the question when the album leaves Incoming and no Lidarr is set to be told to stop fetching it.
   const NO_LIDARR = "Lidarr isn't set up in Settings, so it may fetch this album again.";
+  /** Where the album is, for the Undo's words, and whether that is the primary library (Music). */
+  // svelte-ignore state_referenced_locally
+  const fromName = offer.from?.name ?? 'Incoming';
+  // svelte-ignore state_referenced_locally
+  const primary = offer.from?.use === 'music';
 
   // svelte-ignore state_referenced_locally
-  let ask = $state<false | Ask>(start === 'menu' ? false : start);
+  let ask = $state<false | Ask | 'move' | 'really'>(start === 'menu' ? false : start);
+  /** The move's library; none for Keep (into Music, the old way). */
+  let to = $state<LibraryInfo | null>(null);
   let keep = $state<KeepPreview | null>(null);
   let swap = $state<ReplacePreview | null>(null);
   let year = $state('');
   let working = $state(false);
+  const into = $derived(to?.name ?? music);
 
   async function askReplace() {
     ask = 'replace';
@@ -90,12 +128,14 @@
     }
   }
 
-  async function askKeep() {
-    ask = 'keep';
+  const preview = (y?: string) => (to ? movePreview(source, a.id, to.id, y) : keepPreview(source, a.id, y));
+  async function askMove(target: LibraryInfo | null) {
+    ask = target ? 'move' : 'keep';
+    to = target;
     keep = null;
     year = '';
     try {
-      keep = await keepPreview(source, a.id);
+      keep = await preview();
     } catch (e) {
       toast.fail(e, 'Could not work out the names');
       onclose();
@@ -104,7 +144,7 @@
 
   // Opened at a question: its preview is asked for at once.
   // svelte-ignore state_referenced_locally
-  if (start === 'keep') askKeep();
+  if (start === 'keep') askMove(null);
   // svelte-ignore state_referenced_locally
   else if (start === 'replace') askReplace();
 
@@ -113,7 +153,7 @@
     if (!/^\d{4}$/.test(year.trim())) return;
     try {
       if (ask === 'replace') swap = await replacePreview(source, a.id, year.trim());
-      else keep = await keepPreview(source, a.id, year.trim());
+      else keep = await preview(year.trim());
     } catch {
       /* keep the question open */
     }
@@ -132,28 +172,37 @@
     }
   }
 
-  // Done: the album leaves Incoming. Queued (hi-res files to convert first): its row shows the progress instead, and
-  // the queue says when it is done.
-  function moved(r: AlbumMoved, verb: string) {
+  // Done: the album leaves its library. Queued (hi-res files to convert first): its row shows the progress instead,
+  // and the queue says when it is done.
+  function moved(r: AlbumMoved, words: string) {
     if (r.queued) {
       jobs.poke();
       return;
     }
     gone();
-    withUndo(`${verb} ${r.title} in ${music}.`, [r.undo], { undone: `${r.title} is back in Incoming.`, after: onundone });
+    withUndo(words, [r.undo], { undone: `${r.title} is back in ${fromName}.`, after: onundone });
   }
   function gone() {
     ongone?.();
     albumGone(source, a.id);
   }
 
-  const keepIt = () => act(async () => moved(await keepIncoming(source, a.id, year.trim() || undefined), 'Kept'), 'Could not keep the album');
-  const replaceIt = () => act(async () => moved(await replaceIncoming(source, a.id, year.trim() || undefined), 'Replaced'), 'Could not replace the album');
+  const moveIt = () =>
+    act(async () => {
+      const y = year.trim() || undefined;
+      const r = to ? await moveAlbum(source, a.id, to.id, y) : await keepIncoming(source, a.id, y);
+      moved(r, `Moved ${r.title} to ${into}.`);
+    }, 'Could not move the album');
+  const replaceIt = () =>
+    act(async () => {
+      const r = await replaceIncoming(source, a.id, year.trim() || undefined);
+      moved(r, `Replaced ${r.title} in ${music}.`);
+    }, 'Could not replace the album');
   const remove = () =>
     act(async () => {
-      const { undo, title } = await deleteIncoming(source, a.id);
+      const { undo, title } = await deleteAlbum(source, a.id);
       gone();
-      withUndo(`Deleted ${title}.`, [undo], { undone: `${title} is back in Incoming.`, after: onundone });
+      withUndo(`Deleted ${title}.`, [undo], { undone: `${title} is back in ${fromName}.`, after: onundone });
     }, 'Could not delete the album');
 
   async function cancel(id: number) {
@@ -202,8 +251,13 @@
       {#if offer.job !== null}
         {@const id = offer.job}
         <MenuEntry icon="close" label="Cancel conversion" danger onclick={() => cancel(id)} />
-      {:else if offer.keepable}
-        <MenuEntry icon="check" label={`Keep in ${music}`} onclick={askKeep} />
+      {:else}
+        {#if offer.keepable}
+          <MenuEntry icon="intoBox" label={`Move to ${music}`} onclick={() => askMove(null)} />
+        {/if}
+        {#each offer.targets as t (t.id)}
+          <MenuEntry icon="intoBox" label={`Move to ${t.name}`} onclick={() => askMove(t)} />
+        {/each}
       {/if}
       {#if offer.replaceable}
         <MenuEntry icon="swap" label={`Replace in ${music}`} onclick={askReplace} />
@@ -212,7 +266,7 @@
         <MenuEntry icon="trash" label="Delete album" danger onclick={() => (ask = 'delete')} />
       {/if}
     </div>
-  {:else if ask === 'keep'}
+  {:else if ask === 'keep' || ask === 'move'}
     <div class="form">
       {#if !keep}
         <p class="ask">Working out the names…</p>
@@ -220,17 +274,17 @@
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
       {:else if keep.refused}
-        <p class="ask">Can't keep {a.title}: {keep.refused.detail}</p>
+        <p class="ask">Can't move {a.title}: {keep.refused.detail}</p>
       {:else}
         <p class="ask">
-          Move {a.title} into {music} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
-            {` ${keep.convert} hi-res ${keep.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}{#if !keep.acquisition}
+          Move {a.title} into {into} as <strong>{keep.folder}</strong> ({keep.files} {keep.files === 1 ? 'file' : 'files'})?{#if keep.convert}
+            {` ${keep.convert} hi-res ${keep.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}{#if !keep.acquisition && !primary}
             {` ${NO_LIDARR}`}{/if}
         </p>
       {/if}
       <div class="actions">
         {#if keep && (!keep.refused || keep.refused.kind === 'needs_year')}
-          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={keepIt}>Keep in {music}</button>
+          <button class="primary" disabled={working || !!keep.refused} aria-busy={working} onclick={moveIt}>Move to {into}</button>
         {/if}
         <button onclick={onclose}>Cancel</button>
       </div>
@@ -263,11 +317,20 @@
         <button onclick={onclose}>Cancel</button>
       </div>
     </div>
-  {:else}
+  {:else if ask === 'delete'}
     <div class="form">
       <p class="ask">Delete {a.title}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
       <div class="actions">
-        <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>Delete album</button>
+        <button class="danger solid" disabled={working} aria-busy={working} onclick={() => (primary ? (ask = 'really') : remove())}>Delete album</button>
+        <button onclick={onclose}>Cancel</button>
+      </div>
+    </div>
+  {:else}
+    <!-- The primary library's extra step (decision 0034). -->
+    <div class="form">
+      <p class="ask">{a.title} is in {music}, your main library. Delete it from there?</p>
+      <div class="actions">
+        <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>Delete from {music}</button>
         <button onclick={onclose}>Cancel</button>
       </div>
     </div>

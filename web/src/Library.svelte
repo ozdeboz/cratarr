@@ -1,14 +1,13 @@
 <script lang="ts">
   // Library (decision 0034): every album of the followed server's used libraries, Music and Incoming, as one list
-  // (lib/AlbumShelf). Which libraries show is the filter's library switches. An album's facts show with it: an Incoming
-  // album's conversion, or how it relates to Music (an upgrade, a duplicate). Until the server lists every library at
-  // once (GET /api/albums), the page reads Incoming's and Collection's lists and puts each server's together; the
-  // album's own `library` says which it is in. An Incoming album's menu is Incoming's sheet (Keep, Replace, Delete);
-  // a Music album's is the list's own until moves come.
-  import { ApiError, getCollection, getIncoming, type IncomingSource, type ListedAlbum, type ShelfSource } from './lib/api';
+  // (lib/AlbumShelf), read at once (GET /api/albums). Which libraries show is the filter's library switches. An album's
+  // facts show with it: its library as a dot in that library's colour (none for Music, and only while more than one
+  // shows), an Incoming album's conversion, or how it relates to Music (an upgrade, a duplicate). Its menu
+  // (lib/LibrarySheet) moves it into another library, replaces the album in Music it upgrades, or deletes it.
+  import { ApiError, getAlbums, type AlbumsSource, type AlbumsView, type ListedAlbum, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
-  import IncomingSheet, { offerOf, type IncomingOffer } from './lib/IncomingSheet.svelte';
+  import LibrarySheet, { offerIn, type AlbumOffer } from './lib/LibrarySheet.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
@@ -18,45 +17,19 @@
   import { pageView } from './lib/pageView.svelte';
   import { untrack } from 'svelte';
 
-  let incoming = $state<IncomingSource[] | null>(null);
-  let collection = $state<ShelfSource[] | null>(null);
-  let trashDays = $state(14);
-  /** The library Keep and Replace put albums in, by its own name. */
-  let music = $state<string | null>(null);
+  let view = $state<AlbumsView | null>(null);
   let error = $state<string | null>(null);
+  const sources = $derived<AlbumsSource[] | null>(view?.sources ?? null);
+  const trashDays = $derived(view?.trash_days ?? 14);
+  /** The primary library, by its own name. */
+  const music = $derived(view?.music ?? 'Music');
 
-  // Each server's albums of both lists as one source.
-  const sources = $derived.by<ShelfSource[] | null>(() => {
-    if (incoming === null && collection === null) return null;
-    const ids = [...new Set([...(collection ?? []).map((s) => s.id), ...(incoming ?? []).map((s) => s.id)])];
-    return ids.map((id) => {
-      const c = collection?.find((s) => s.id === id);
-      const i = incoming?.find((s) => s.id === id);
-      const any = (c ?? i)!;
-      return {
-        id,
-        label: any.label,
-        supported: !!(c?.supported || i?.supported),
-        albums: [...(c?.albums ?? []), ...(i?.albums ?? [])],
-        error: c?.error ?? i?.error ?? null,
-        as_of: Math.max(c?.as_of ?? 0, i?.as_of ?? 0),
-        libraries: [...(c?.libraries ?? []), ...(i?.libraries ?? [])],
-      };
-    });
-  });
+  // The long-pressed album's sheet (Play, View, Move, Replace, Delete).
+  let menu = $state<{ source: string; a: ListedAlbum; offer: AlbumOffer } | null>(null);
 
-  // The Incoming list an album is in, if it is in one.
-  const incomingOf = (sourceId: string, a: ListedAlbum) => {
-    const s = incoming?.find((x) => x.id === sourceId);
-    return s && s.albums.some((x) => x.id === a.id) ? s : null;
-  };
-
-  // The long-pressed album's sheet (Play, View, Keep or Replace, Delete).
-  let menu = $state<{ source: string; a: ListedAlbum; offer: IncomingOffer } | null>(null);
-
-  // The album left Incoming (kept, replaced, deleted): gone at once, before the lists are read again.
+  // The album left its library (moved, replaced, deleted): gone at once, before the list is read again.
   function gone(source: string, id: string) {
-    incoming = (incoming ?? []).map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== id) } : s));
+    if (view) view.sources = view.sources.map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== id) } : s));
   }
 
   // A server's list could not be read while albums are shown (they stay): one toast says so, not a line that comes and
@@ -69,26 +42,28 @@
     readError = now;
   }
 
-  async function readIncoming(fresh: boolean) {
-    ({ sources: incoming, trash_days: trashDays, music } = await getIncoming(prefs.source || undefined, fresh));
-  }
-  async function readCollection(fresh: boolean) {
-    ({ sources: collection } = await getCollection(prefs.source || undefined, fresh));
-  }
   async function load(fresh: boolean) {
-    const [i, c] = await Promise.allSettled([readIncoming(fresh), readCollection(fresh)]);
-    const failed = [i, c].find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
-    if (failed && sources === null) error = failed.reason instanceof ApiError ? failed.reason.message : 'Unexpected error';
-    else error = null;
+    try {
+      view = await getAlbums(prefs.source || undefined, fresh);
+      error = null;
+    } catch (e) {
+      if (view === null) error = e instanceof ApiError ? e.message : 'Unexpected error';
+    }
     tellReadError();
   }
-  const reload = () => load(true).catch(() => {});
+  // One read for several changes told at once (an action changes Incoming's list and Music's).
+  let soon: ReturnType<typeof setTimeout> | null = null;
+  const reload = () => {
+    soon ??= setTimeout(() => {
+      soon = null;
+      load(true);
+    }, 50);
+  };
 
   // The live channel says when a list changed (albums came, or an action or its Undo went through): read it again.
   $effect(() =>
     on<{ area: string }>('changed', ({ area }) => {
-      if (area === 'incoming') readIncoming(true).then(tellReadError, () => {});
-      if (area === 'collection') readCollection(true).then(tellReadError, () => {});
+      if (area === 'incoming' || area === 'collection') reload();
     }),
   );
   // Back after it was down: what changed meanwhile was not told.
@@ -125,15 +100,14 @@
     };
   });
 
-  // An Incoming album's sheet: what it offers depends on its server's Incoming list. A Music album's menu is the
-  // list's own (false: not handled here).
+  // An album's sheet: what it offers depends on its library and what Cratarr may do there.
   function openMenu(shelf: ShelfSource, a: ListedAlbum) {
-    const s = incomingOf(shelf.id, a);
+    const s = sources?.find((x) => x.id === shelf.id);
     if (!s) return false;
-    menu = { source: s.id, a, offer: offerOf(s, a.id) };
+    menu = { source: s.id, a, offer: offerIn(s, a) };
     return true;
   }
-  const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => incomingOf(shelf.id, a)?.verdicts?.[a.id];
+  const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
 
   // The filter's own switches, Favourites only and Upgrades waiting: the list's, so off again when the page goes.
   $effect(() => () => {
@@ -173,7 +147,7 @@
         {:else if verdictOf(s, a)}
           {@const v = verdictOf(s, a)!}
           <span class="verdict" class:upgrade={v.kind === 'upgrade'} title={v.library}>
-            <span class="badge">{v.kind === 'upgrade' ? 'Upgrade' : `In ${music ?? 'Music'}`}</span>
+            <span class="badge">{v.kind === 'upgrade' ? 'Upgrade' : `In ${music}`}</span>
             {v.why}
           </span>
         {/if}
@@ -184,12 +158,12 @@
 
 {#if menu}
   {@const m = menu}
-  <IncomingSheet
+  <LibrarySheet
     source={m.source}
     album={m.a}
     offer={m.offer}
     {trashDays}
-    music={music ?? 'Music'}
+    {music}
     onclose={() => (menu = null)}
     ongone={() => gone(m.source, m.a.id)}
     onundone={reload}

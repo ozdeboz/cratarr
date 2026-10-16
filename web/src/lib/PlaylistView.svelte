@@ -39,7 +39,7 @@
     type ListedAlbum,
     type PlaylistRow,
   } from './api';
-  import IncomingSheet, { offerOf } from './IncomingSheet.svelte';
+  import LibrarySheet, { offerOf } from './LibrarySheet.svelte';
   import {
     builderOf,
     CRATE,
@@ -529,7 +529,7 @@
   });
   // An album's menu (its ⋮ in the action bar).
   let albumMenuOpen = $state(false);
-  /** What Incoming offers for the album, as the album menu's steps (each asks in IncomingSheet, as the bar did). */
+  /** What Incoming offers for the album, as the album menu's steps (each asks in LibrarySheet, as the bar did). */
   const albumIncoming = $derived<AlbumIncoming | null>(
     incoming && offer
       ? {
@@ -1292,7 +1292,7 @@
 {/snippet}
 
 {#if incomingAsk && incoming && offer}
-  <IncomingSheet
+  <LibrarySheet
     source={incoming.source.id}
     album={incoming.a}
     {offer}

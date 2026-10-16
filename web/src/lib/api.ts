@@ -668,18 +668,39 @@ export type ShelfSource = {
   as_of: number;
   /** The libraries it was read from (the filter's library switches). */
   libraries?: string[];
+  /** Those libraries' names, uses, colours and formats (the Library's list, decision 0034). */
+  library_info?: LibraryInfo[];
 };
+
+/** A used library of a server (decision 0034): the dot on its albums (none for the primary, Music), and what a move
+ *  into it does to the files. */
+export type LibraryInfo = { id: string; name: string; use: 'music' | 'incoming'; colour: string | null; format: 'cd' | 'as_is' };
+
+/** An album of a library other than Music, as it stands to Music: an upgrade of an album there, or a duplicate. */
+export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string };
 
 export type IncomingSource = ShelfSource & {
   /** Per album id, when it is already in Music: an upgrade of it, or a duplicate. New albums are absent. */
-  verdicts: Record<string, { kind: 'upgrade' | 'duplicate'; library: string; why: string }>;
+  verdicts: Record<string, Verdict>;
   /** The albums Cratarr can delete (it sees their folder and can write there). */
   deletable: string[];
 };
 
+/** A server's albums of every used library in one list (decision 0034), with what holds between them. */
+export type AlbumsSource = ShelfSource & {
+  library_info: LibraryInfo[];
+  verdicts: Record<string, Verdict>;
+  /** Per Music album: an album of another library that upgrades or duplicates it. */
+  waiting: Record<string, { kind: 'upgrade' | 'duplicate'; album: string }>;
+  deletable: string[];
+};
+export type AlbumsView = { sources: AlbumsSource[]; trash_days: number; music: string | null };
+
 /** `fresh` asks past the service worker's copy (which answers at once, see sw.js) for the server's latest. */
 export const getIncoming = (source?: string, fresh = false) =>
   quietly<{ sources: IncomingSource[]; trash_days: number; music: string | null }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
+/** Every album of each server's used libraries (the Library page), as the lists above, `fresh` the same. */
+export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>(`/api/albums${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
 /** The albums of each server's Music library, newest first. */
 export const getCollection = (source?: string, fresh = false) =>
   quietly<{ sources: ShelfSource[] }>(`/api/collection${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
@@ -807,6 +828,20 @@ export type KeepPreview = {
 };
 /** What Keep or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
 export type AlbumMoved = { undo: string | null; title: string; folder: string; queued: boolean };
+const albumPath = (source: string, album: string) => `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
+/** What moving an album into library `to` would do (decision 0034): its folder there, or why it can't. */
+export const movePreview = (source: string, album: string, to: string, year?: string) =>
+  request<KeepPreview>(`${albumPath(source, album)}/move?to=${encodeURIComponent(to)}${year ? `&year=${encodeURIComponent(year)}` : ''}`);
+/** Move an album into another used library of its server, named and converted that library's way (Undo brings it
+ *  back); into a library of CD format with hi-res files it is queued. */
+export const moveAlbum = (source: string, album: string, to: string, year?: string) =>
+  request<AlbumMoved>(`${albumPath(source, album)}/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(year ? { to, year } : { to }),
+  });
+/** Delete an album of any library, into that library's trash (Undo brings it back). */
+export const deleteAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, { method: 'POST' });
 const keepPath = (source: string, album: string) => `/api/incoming/keep/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
 export const keepPreview = (source: string, album: string, year?: string) =>
   request<KeepPreview>(`${keepPath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);

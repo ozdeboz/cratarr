@@ -65,6 +65,14 @@
   const minPx = $derived(ALBUM_WIDTHS[prefs.albumLayout][prefs.albumZoom]);
   const cols = $derived(Math.max(1, Math.floor((width + GAP) / (minPx + GAP))));
   const perBlock = $derived(cols * ROWS_PER_BLOCK);
+  // An album's library as a dot in its colour (decision 0034): none for the primary (Music), and none while only one
+  // of the server's libraries shows (every album would carry the same).
+  const dotOf = (s: ShelfSource, a: ListedAlbum) => {
+    const info = s.library_info;
+    if (!info || !a.library || info.filter((l) => libraryShown(s.id, l.id)).length < 2) return null;
+    const l = info.find((x) => x.id === a.library);
+    return l?.colour ? { colour: l.colour, name: l.name } : null;
+  };
   const blocksOf = (albums: ListedAlbum[]) => {
     const out: ListedAlbum[][] = [];
     for (let i = 0; i < albums.length; i += perBlock) out.push(albums.slice(i, i + perBlock));
@@ -294,6 +302,7 @@
             {#if prefs.albumLayout === 'grid'}
               <Tile
                 title={a.title}
+                dot={dotOf(s, a)}
                 tag={axisOf(a)}
                 label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.title}` : `View ${a.title}`}
                 active={viewed || on}
@@ -319,6 +328,8 @@
               >
                 {#snippet front()}{@render playCover(s, a)}{/snippet}
                 {#snippet badges()}
+                  {@const dot = dotOf(s, a)}
+                  {#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}
                   {#if a.year}<span class="released">{a.year}</span>{/if}
                 {/snippet}
                 {#snippet sub()}
@@ -472,6 +483,13 @@
   }
 
   /* A block of whole grid rows (made while near, else an empty box its height); the grid's gap between blocks too. */
+  .dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
   .block + .block {
     margin-top: 10px;
   }

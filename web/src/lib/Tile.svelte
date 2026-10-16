@@ -9,6 +9,7 @@
 
   let {
     title,
+    dot = null,
     sub,
     image,
     action,
@@ -20,6 +21,8 @@
     attach,
   }: {
     title: string;
+    /** Its library, as a dot in that library's colour before the title (decision 0034). */
+    dot?: { colour: string; name: string } | null;
     /** Under the title: muted lines. */
     sub?: string | Snippet;
     /** The square picture; it fills the tile's width. */
@@ -52,7 +55,7 @@
 
 {#snippet inside()}
   <span class="image">{@render image()}</span>
-  <span class="title">{title}</span>
+  <span class="title">{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{title}</span>
   {#if typeof sub === 'string'}<span class="sub">{sub}</span>{:else if sub}<span class="sub">{@render sub()}</span>{/if}
 {/snippet}
 
@@ -105,6 +108,15 @@
     white-space: nowrap;
     font-size: 15px;
     font-weight: 600;
+  }
+
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 6px;
+    border-radius: 50%;
+    vertical-align: 2px;
   }
 
   .sub {

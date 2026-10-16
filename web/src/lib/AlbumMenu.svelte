@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  /** What Incoming offers for the album, each a step the album panel asks in its own sheet (IncomingSheet): only those
+  /** What Incoming offers for the album, each a step the album panel asks in its own sheet (LibrarySheet): only those
    *  given are listed. `music`: the library Keep and Replace put it in, by its own name. */
   export type AlbumIncoming = { music?: string; keep?: () => void; replace?: () => void; delete?: () => void };
 </script>
