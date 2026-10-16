@@ -57,9 +57,21 @@
   const playing = $derived(nowPlaying());
   let menu = $state<{ source: ShelfSource; a: ListedAlbum; anchor: DOMRect } | null>(null);
 
+  /** An album artist's credits, lower case: "A & B, C feat. D" is a, b, c and d. */
+  const credits = (artist: string | null) =>
+    (artist ?? '')
+      .toLowerCase()
+      .split(/\s*(?:,|;|\/|&|\band\b|\bx\b|\bfeat\.?|\bft\.|\bfeaturing\b|\bvs\.?|\bwith\b)\s*/)
+      .map((c) => c.trim())
+      .filter(Boolean)
+      .concat((artist ?? '').toLowerCase().trim());
   const matches = (a: ListedAlbum) => {
     const q = pageView.query.trim().toLowerCase();
-    return !q || `${a.artist ?? ''} ${a.title}`.toLowerCase().includes(q);
+    if (!q) return true;
+    // Go to artist: that artist's albums only (the name as one of the album's credits, not part of another name),
+    // while the search still says the name.
+    if (q === pageView.artist.trim().toLowerCase()) return credits(a.artist).includes(q);
+    return `${a.artist ?? ''} ${a.title}`.toLowerCase().includes(q);
   };
   // The libraries switched off in the filter leave their albums out; the pill's funnel says so while one is.
   $effect(() => {

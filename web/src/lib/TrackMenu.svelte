@@ -13,7 +13,20 @@
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
-  import { coverUrl, albumCoverUrl, playlistFromQueue, queueTrack, setTrackFavorite, setTrackMember, trackState, type TrackState } from './api';
+  import {
+    coverUrl,
+    albumCoverUrl,
+    playlistFromQueue,
+    queueTrack,
+    setTrackFavorite,
+    setTrackMember,
+    trackFile,
+    trackState,
+    type TrackFile,
+    type TrackState,
+  } from './api';
+  import MarkLoader from './MarkLoader.svelte';
+  import { pageView } from './pageView.svelte';
   import { player, refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -25,7 +38,7 @@
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
   import { followCreate, followDelete } from './follow.svelte';
-  import { albumSubject, viewPlaylist } from './panel.svelte';
+  import { albumSubject, keepViewed, viewPlaylist } from './panel.svelte';
   import { download, inApp } from './app.svelte';
 
   let {
@@ -85,7 +98,64 @@
 
   // The step it opens on; later steps are the sheet's own.
   // svelte-ignore state_referenced_locally
-  let step = $state<'menu' | 'lists' | 'new'>(start);
+  let step = $state<'menu' | 'lists' | 'new' | 'details'>(start);
+
+  // Go to artist: the Library page with that artist's albums (the search says the name). A "feat." credit is left out:
+  // the albums are under the main artist.
+  const artistName = $derived(t?.artist?.split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim() || null);
+  function goToArtist() {
+    if (!artistName) return;
+    pageView.artist = artistName;
+    pageView.next = artistName;
+    pageView.query = artistName;
+    onclose();
+    if (player.full) player.full = false;
+    location.hash = keepViewed('#/library');
+  }
+
+  // Web search: the track's artist and title, in a new tab (the app opens it outside).
+  function webSearch() {
+    if (!t) return;
+    const words = [t.artist, t.name].filter(Boolean).join(' ');
+    window.open(`https://duckduckgo.com/?q=${encodeURIComponent(words)}`, '_blank', 'noopener');
+    onclose();
+  }
+
+  // Details: the file as it is, read when the step opens.
+  let details = $state<TrackFile | null>(null);
+  let detailsFailed = $state(false);
+  function showDetails() {
+    if (!t) return;
+    step = 'details';
+    details = null;
+    detailsFailed = false;
+    trackFile(t.source, t.id).then(
+      (d) => (details = d),
+      () => (detailsFailed = true),
+    );
+  }
+  const plays = $derived(forPlaying ? (np?.info?.play_count ?? null) : (other?.info?.play_count ?? null));
+  const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const day = (s: number) => new Date(s * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  function facts(d: TrackFile): [string, string][] {
+    const channels = d.channels === 1 ? 'mono' : d.channels === 2 ? 'stereo' : d.channels ? `${d.channels} channels` : null;
+    const audio = [
+      d.format,
+      d.bit_depth ? `${d.bit_depth}-bit` : null,
+      d.sample_rate_hz ? `${+(d.sample_rate_hz / 1000).toFixed(1)} kHz` : null,
+      d.bitrate_kbps ? `${d.bitrate_kbps} kbps` : null,
+      channels,
+    ].filter(Boolean);
+    const out: [string, string][] = [];
+    if (audio.length) out.push(['Audio', audio.join(' · ')]);
+    if (d.duration_ms) out.push(['Length', clock(d.duration_ms / 1000)]);
+    if (d.size) out.push(['Size', `${(d.size / 1e6).toFixed(1)} MB`]);
+    if (plays !== null) out.push(['Plays', String(plays)]);
+    if (d.added) out.push(['Added', day(d.added)]);
+    out.push(['File', d.folder ? `${d.folder}/${d.path}` : d.path]);
+    for (const tag of d.tags) out.push([tag.name, tag.value]);
+    return out;
+  }
   let working = $state(false);
   let nameField = $state('');
 
@@ -230,6 +300,11 @@
         {#if albumId}
           <MenuEntry icon="squareArrowOutUpRight" label="View album" onclick={viewAlbum} />
         {/if}
+        {#if artistName}
+          <MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />
+        {/if}
+        <MenuEntry icon="info" label="Details" onclick={showDetails} />
+        <MenuEntry icon="search" label="Web search" onclick={webSearch} />
         {#if inApp && t}
           {@const one = t}
           <MenuEntry
@@ -262,6 +337,19 @@
           <MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />
         {/each}
       </div>
+    {:else if step === 'details'}
+      {#if details}
+        <dl class="facts">
+          {#each facts(details) as [name, value], i (i)}
+            <dt>{name}</dt>
+            <dd>{value}</dd>
+          {/each}
+        </dl>
+      {:else if detailsFailed}
+        <p class="failed">The file can't be read.</p>
+      {:else}
+        <div class="loading"><MarkLoader size={40} /></div>
+      {/if}
     {:else}
       <form
         class="form"
@@ -279,6 +367,36 @@
 {/if}
 
 <style>
+  /* Details: name and value per line, the names muted; a long value (a path, a list) wraps. */
+  .facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 16px;
+    margin: 0;
+    padding: 0 16px 12px;
+    font-size: 0.9rem;
+  }
+
+  .facts dt {
+    color: var(--muted);
+  }
+
+  .facts dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .failed {
+    padding: 0 16px 12px;
+    color: var(--danger, var(--muted));
+  }
+
+  .loading {
+    display: grid;
+    place-items: center;
+    padding: 16px 0;
+  }
+
   .heading {
     padding: 0 16px 12px;
     font-size: 18px;

@@ -32,6 +32,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}/connect", get(player_connect))
         .route("/api/track/{source}/{id}", get(track_info))
         .route("/api/track/{source}/{id}/playlists", get(track_state))
+        .route("/api/track/{source}/{id}/details", get(track_details))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
         .route("/api/track/{source}/{id}/favorite", post(track_favorite))
         .route("/api/track/{source}/{id}/played", post(track_played))
@@ -168,6 +169,40 @@ async fn track_info(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
         Ok(t) => Json(json!({ "id": t.id, "name": t.title, "artist": t.artist, "album": t.album, "album_id": t.album_id }))
             .into_response(),
         Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+    }
+}
+
+/// A track's file as it is (the track menu's Details): where it lies, its audio, size and dates, and every tag, in the
+/// file's order (a tag Cratarr knows by its Picard name, any other by its own key).
+async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Response {
+    let cat = app.library.catalogue();
+    let read = tokio::task::spawn_blocking(move || -> Option<serde_json::Value> {
+        let track = cat.track_of_source(&source, &id)?;
+        let (folder, rel) = cat.file_of(track)?;
+        let root = cat.folders().get(folder as usize)?.clone();
+        let path = root.join(&rel);
+        let meta = std::fs::metadata(&path).ok();
+        let modified = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
+        let (file, _) = crate::catalogue::tags::read(&path).ok()?;
+        let tags: Vec<serde_json::Value> = file.items.iter().map(|(raw, name, value)| json!({ "name": name.unwrap_or(raw), "value": value })).collect();
+        Some(json!({
+            "path": rel,
+            "folder": root.file_name().map(|n| n.to_string_lossy().into_owned()),
+            "format": file.format,
+            "bitrate_kbps": file.bitrate_kbps,
+            "sample_rate_hz": file.sample_rate_hz,
+            "bit_depth": file.bit_depth,
+            "channels": file.channels,
+            "duration_ms": file.duration_ms,
+            "size": meta.map(|m| m.len()),
+            "modified": modified,
+            "added": cat.born_of(track),
+            "tags": tags,
+        }))
+    });
+    match read.await.ok().flatten() {
+        Some(details) => Json(details).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "That track's file cannot be read." }))).into_response(),
     }
 }
 

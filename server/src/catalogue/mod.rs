@@ -10,7 +10,7 @@
 mod id3;
 pub mod identity;
 pub mod normalise;
-mod tags;
+pub mod tags;
 mod walk;
 
 use std::collections::{BTreeMap, HashMap};
@@ -1234,6 +1234,11 @@ impl Catalogue {
             .optional()
             .ok()
             .flatten()
+    }
+
+    /// When a track was first seen, epoch seconds: when it came into the library.
+    pub fn born_of(&self, track: i64) -> Option<i64> {
+        self.db().query_row("SELECT born FROM tracks WHERE id = ?1", [track], |r| r.get(0)).optional().ok().flatten()
     }
 
     pub fn file_of(&self, track: i64) -> Option<(i64, String)> {

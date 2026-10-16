@@ -682,6 +682,24 @@ export type TrackState = { addable: boolean; album_id: string | null; favorite: 
 
 export const trackState = (source: string, id: string) => quietly<TrackState>(`${trackPath(source, id)}/playlists`);
 
+/** A track's file as it is (the track menu's Details): where it lies (`path` within `folder`), its audio, its size,
+ *  when it was changed and came in (epoch s), and every tag in the file's order. */
+export type TrackFile = {
+  path: string;
+  folder: string | null;
+  format: string | null;
+  bitrate_kbps: number | null;
+  sample_rate_hz: number | null;
+  bit_depth: number | null;
+  channels: number | null;
+  duration_ms: number | null;
+  size: number | null;
+  modified: number | null;
+  added: number | null;
+  tags: { name: string; value: string }[];
+};
+export const trackFile = (source: string, id: string) => quietly<TrackFile>(`${trackPath(source, id)}/details`);
+
 /** Put the track in the playlist or take it out (the state wanted, as `setMember`). */
 export const setTrackMember = (source: string, id: string, playlistId: string, member: boolean) =>
   quietly<TrackState>(`${trackPath(source, id)}/playlists/${encodeURIComponent(playlistId)}?member=${member}`, { method: 'POST' });

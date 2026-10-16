@@ -60,6 +60,10 @@ export const pageView = $state({
   favouritesOnly: false,
   /** The page's search (the pill's field): what its list is filtered by; empty again on another page. */
   query: '',
+  /** The search the next page starts with (the track menu's Go to artist), instead of an empty one. */
+  next: '',
+  /** Go to artist's name: while the search says it, the album lists match it against the albums' artist only. */
+  artist: '',
   /** A library of the page's list is switched off (lib/AlbumShelf): the pill's funnel is lit. */
   narrowed: false,
   /** The page's own button at the pill's end (usePageAction), while it shows. */

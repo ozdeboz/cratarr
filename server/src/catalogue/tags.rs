@@ -40,6 +40,9 @@ pub struct FileTags {
     pub format: Option<String>,
     pub bitrate_kbps: Option<u32>,
     pub duration_ms: Option<u64>,
+    pub sample_rate_hz: Option<u32>,
+    pub bit_depth: Option<u8>,
+    pub channels: Option<u8>,
     /// (raw key, normalised name if known, value), in the file's order.
     pub items: Vec<(String, Option<&'static str>, String)>,
 }
@@ -124,6 +127,9 @@ fn read_audio_only(path: &Path) -> Result<FileTags> {
         format: Some(format!("{:?}", file.file_type()).to_uppercase()).map(|f| if f == "MPEG" { "MP3".into() } else { f }),
         bitrate_kbps: props.audio_bitrate().or(props.overall_bitrate()),
         duration_ms: Some(props.duration().as_millis() as u64).filter(|d| *d > 0),
+        sample_rate_hz: props.sample_rate(),
+        bit_depth: props.bit_depth(),
+        channels: props.channels(),
         items: Vec::new(),
     })
 }
@@ -152,6 +158,9 @@ fn read_with(path: &Path, mode: ParsingMode) -> Result<FileTags> {
         format: Some(format!("{:?}", file.file_type()).to_uppercase()).map(|f| if f == "MPEG" { "MP3".into() } else { f }),
         bitrate_kbps: props.audio_bitrate().or(props.overall_bitrate()),
         duration_ms: Some(props.duration().as_millis() as u64).filter(|d| *d > 0),
+        sample_rate_hz: props.sample_rate(),
+        bit_depth: props.bit_depth(),
+        channels: props.channels(),
         items: Vec::new(),
     };
     for tag in file.tags() {
