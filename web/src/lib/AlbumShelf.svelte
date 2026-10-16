@@ -11,7 +11,7 @@
   import { albumCoverUrl, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
   import { addedOn, albumPlay, playAlbums, playListedAlbum, quality, tracksOfAlbums, weak } from './albums.svelte';
   import { download, inApp } from './app.svelte';
-  import { isFavorite, loadFavorites, setFavorite } from './favourites.svelte';
+  import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import SelectBar from './SelectBar.svelte';
   import { toast } from './toast.svelte';
   import Icon from './Icon.svelte';
@@ -196,12 +196,13 @@
   const all = $derived(shown.flatMap(({ s, albums }) => albums.map((a) => ({ s, a }))));
   const ticked = $derived(selecting ? all.filter((x) => selecting!.has(keyOf(x.s, x.a))) : []);
   const tickedFav = $derived(ticked.length > 0 && ticked.every((x) => isFavorite(x.s.id, x.a.id)));
-  // The ticked albums' hearts, for the bar's.
+  // The albums' hearts (the bar's, the Library's Favourites only): each server's list, asked for when the list shows
+  // and again when a selection starts.
+  const sourceIds = $derived(sources.map((s) => s.id).join('\n'));
+  const choosing = $derived(selecting !== null);
   $effect(() => {
-    for (const s of sources) {
-      const ids = ticked.filter((x) => x.s.id === s.id).map((x) => x.a.id);
-      if (ids.length) loadFavorites(s.id, ids);
-    }
+    void choosing;
+    for (const id of sourceIds.split('\n')) if (id) loadAlbumFavorites(id);
   });
   // Esc ends it (while no menu of its own is open).
   $effect(() => {

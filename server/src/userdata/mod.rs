@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS playlist_entry (
   PRIMARY KEY (playlist, entry, n)) WITHOUT ROWID;
 ";
 
+/// Until 2026-10-16 the album panel's heart starred the album's id as a song's, where no Subsonic app looked; it is the
+/// album's star now. Moves those (the album ids, `al-`) over, keeping the first star's time. Safe to repeat.
+const ALBUM_HEARTS: &str = "
+INSERT INTO annotation (user, item, kind, starred, starred_at)
+  SELECT user, item, 'album', 1, starred_at FROM annotation WHERE kind = 'song' AND item LIKE 'al-%' AND starred = 1
+  ON CONFLICT (user, item, kind) DO UPDATE SET starred = 1, starred_at = coalesce(annotation.starred_at, excluded.starred_at);
+DELETE FROM annotation WHERE kind = 'song' AND item LIKE 'al-%';
+";
+
 /// What an annotation is about.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -204,6 +213,7 @@ impl UserData {
         conn.busy_timeout(Duration::from_secs(15))?;
         conn.execute_batch(SCHEMA).context("creating the user data tables")?;
         conn.execute_batch(tags::SCHEMA).context("creating the album tag table")?;
+        conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         Ok(Self { db: Mutex::new(conn) })
     }
 
@@ -764,6 +774,26 @@ mod tests {
         assert_eq!((song.play_count, song.play_date), (2, Some(100)), "the latest play stays the last played");
         assert_eq!(u.get("me", Kind::Album, &["al-x".into()]).unwrap()["al-x"].play_count, 2);
         assert_eq!(u.get("me", Kind::Artist, &["ar-a".into()]).unwrap()["ar-a"].play_count, 2);
+    }
+
+    #[test]
+    fn the_panels_album_hearts_become_album_stars() {
+        let dir = std::env::temp_dir().join(format!("cratarr-hearts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("u.db");
+        let _ = std::fs::remove_file(&file);
+        let u = UserData::open(Some(&file)).unwrap();
+        u.set_starred("me", Kind::Song, &["al-x".into(), "tr-1".into()], true).unwrap();
+        u.set_starred("me", Kind::Song, &["al-y".into()], true).unwrap();
+        u.set_starred("me", Kind::Album, &["al-y".into()], true).unwrap();
+        drop(u);
+        let u = UserData::open(Some(&file)).unwrap();
+        let mut albums = u.starred("me", Kind::Album).unwrap();
+        albums.sort();
+        assert_eq!(albums, ["al-x", "al-y"]);
+        assert_eq!(u.starred("me", Kind::Song).unwrap(), ["tr-1"]);
+        drop(u);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

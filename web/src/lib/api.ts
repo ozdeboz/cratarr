@@ -737,6 +737,9 @@ export const getFavorites = (source: string, ids: string[]) =>
     body: JSON.stringify({ ids }),
   });
 
+/** The favourite albums of a server (their ids): the Library's Favourites only and the albums' hearts. */
+export const getFavoriteAlbums = (source: string) => quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/albums`);
+
 /** Which playlists (by name) are favourites, as Finamp's playlist hearts (decision 0023). */
 export const getPlaylistFavorites = (source?: string) => quietly<Record<string, boolean>>(`/api/playlists/favorites${follow(source)}`);
 

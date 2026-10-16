@@ -63,7 +63,7 @@
   import { Reorder } from './reorder.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { undos, withUndo } from './undo.svelte';
-  import { isFavorite, isPlaylistFavorite, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
+  import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import AlbumMenu, { type AlbumIncoming } from './AlbumMenu.svelte';
   import ListHead from './ListHead.svelte';
@@ -159,7 +159,7 @@
       incomingFor = key;
     }
     if (!a) return;
-    loadFavorites(a.source, [a.id]);
+    loadAlbumFavorites(a.source, [a.id]);
     getIncoming(prefs.source || undefined, true).then(
       (r) => {
         if (incomingFor !== key) return;

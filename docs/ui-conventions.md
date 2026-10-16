@@ -131,8 +131,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   the Library, every used one (elsewhere a chip only shows a library's use), so a library is switched where its effect
   shows; the last one on stays on, so a page never filters down to nothing; and
   while one is off the funnel is lit (as the magnifier is while a search applies), the remembered filter's only trace. Every other filter lasts only for the list it was set on and is not remembered, first in the
-  sheet: Playlists' Favourites only (off again on leaving the page), the panel's Hide missing tracks (off again when
-  the panel shows something else), and any still to come (a tag, a genre).
+  sheet: Playlists' Favourites only and the Library's Favourites only and Upgrades waiting (Incoming's albums that
+  would upgrade one in Music) (each off again on leaving the page), the panel's Hide missing tracks (off again when
+  the panel shows something else), and any still to come (a tag, a genre). While any is on, the funnel is lit too.
 - **Icon buttons carry no text**, on any width (decided 2026-10-16): no label that shows only when there is room. A
   long-press (touch) or right-click (desktop) on one shows its label in a small tip beside it (`lib/labels.svelte.ts`,
   one listener for the whole page: any button or link whose only content is an icon, named by its title or

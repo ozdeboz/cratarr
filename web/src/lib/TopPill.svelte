@@ -43,7 +43,7 @@
   });
   // A filter leaves something out of what shows: a library switched off (remembered, so it is said here), Playlists'
   // Favourites only, the panel's Hide missing tracks.
-  const filtering = $derived(page ? pageView.narrowed || (page === 'playlists' && pageView.favouritesOnly) : panel.hideMissing);
+  const filtering = $derived(page ? pageView.narrowed || pageView.favouritesOnly || pageView.upgradesOnly : panel.hideMissing);
   function clear() {
     pageView.query = '';
     searching = false;

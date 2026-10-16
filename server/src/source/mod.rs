@@ -443,6 +443,17 @@ pub trait Source: Send + Sync {
         Box::pin(async { Ok(Vec::new()) })
     }
 
+    /// Optional: every album the account the source plays for has as a favourite (its ids): the Library's Favourites
+    /// only, and the album panel's heart. A server that cannot list them says so.
+    fn favorite_albums(&self) -> Fut<'_, Vec<String>> {
+        Box::pin(async { anyhow::bail!("this server cannot list favourite albums") })
+    }
+
+    /// Makes an album a favourite or not (the album panel's heart): by default as any of the server's items is.
+    fn set_album_favorite<'a>(&'a self, album: &'a str, on: bool) -> Fut<'a, bool> {
+        self.set_favorite(album, on)
+    }
+
     /// Optional: which playlists (by name) are favourites of the account the source plays for (decision 0023, as
     /// Finamp's playlist hearts). A Cratarr playlist can be there more than once (imported, and an account's own copy):
     /// it is a favourite when any of them is.

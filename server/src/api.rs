@@ -38,6 +38,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/played", post(track_played))
         .route("/api/plays", post(plays))
         .route("/api/favorites/{source}", post(favorites))
+        .route("/api/favorites/{source}/albums", get(favorite_albums))
         .route("/api/queue/add", post(queue_add))
         .route("/api/queue/jump", post(queue_jump))
         .route("/api/queue/playlist", post(queue_playlist))
@@ -261,6 +262,11 @@ async fn album_favorite(
     Query(f): Query<Favorite>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "favorite": app.playing.album_favorite(&source, &album, f.on).await? })))
+}
+
+/// The favourite albums of a connected server (their ids): the Library's Favourites only and the album panel's heart.
+async fn favorite_albums(State(app): State<Arc<App>>, Path(source): Path<String>) -> Result<Json<Vec<String>>, ApiError> {
+    Ok(Json(app.playing.favorite_albums(&source).await?))
 }
 
 /// Which of these tracks (ids on that server) are favourites: the hearts on a list's rows (decision 0023).
