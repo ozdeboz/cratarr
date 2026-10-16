@@ -104,6 +104,27 @@ pub fn from_old(mode: Option<Mode>) -> (AutoMode, bool, bool) {
     }
 }
 
+/// What Radio's inserts are like (decision 0036, amended): the track (its artist weighed double), its artist (as
+/// Autoplay's Artist, seeded by the track) or its era (as Autoplay's Era).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadioBy {
+    #[default]
+    Track,
+    Artist,
+    Era,
+}
+
+impl RadioBy {
+    pub fn is_track(&self) -> bool {
+        *self == Self::Track
+    }
+}
+
+/// How many tracks Radio inserts after each own track, unless set; and the most it inserts.
+pub const RADIO_COUNT: u8 = 5;
+pub const RADIO_MAX: u8 = 10;
+
 /// Autoplay as the queue keeps it (`Queue::autoplay`): on while there is one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Autoplay {
@@ -147,6 +168,9 @@ pub struct NextRequest {
     /// Whole albums instead of tracks (Autoplay's `albums`).
     #[serde(default)]
     pub albums: bool,
+    /// Radio's inserts: what they are like; left out, the track.
+    #[serde(default)]
+    pub by: RadioBy,
 }
 
 const DEFAULT_COUNT: usize = 5;
@@ -318,6 +342,14 @@ fn unique(items: &[u32]) -> impl Iterator<Item = u32> + '_ {
 /// The radio's choice for one request: songs of the index, in the order they should play. `recent`: songs played
 /// within seven days, with when (epoch seconds). `within`: the crate's songs when it plays inside one.
 pub(crate) fn choose(index: &Index, req: &NextRequest, recent: &HashMap<String, i64>, within: Option<&[usize]>, rng: &mut Rng) -> Vec<usize> {
+    // Radio by artist or era: Autoplay's Artist or Era, seeded by the one track (decision 0036, amended).
+    let as_mode = |mode| NextRequest { mode, by: RadioBy::Track, ..req.clone() };
+    let changed = match (req.mode, req.by) {
+        (Mode::Radio, RadioBy::Artist) => Some(as_mode(Mode::Artist)),
+        (Mode::Radio, RadioBy::Era) => Some(as_mode(Mode::Era)),
+        _ => None,
+    };
+    let req = changed.as_ref().unwrap_or(req);
     let count = req.count.unwrap_or(DEFAULT_COUNT).clamp(1, MAX_COUNT);
     let seed = index.find(&req.seed);
     let last = req.last.as_ref().and_then(|id| index.by_id.get(id).copied());
@@ -746,7 +778,7 @@ pub async fn similar_songs(item: &str, count: usize) -> Result<Vec<String>, Togg
     if seed.is_empty() {
         return Ok(Vec::new());
     }
-    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(count.min(MAX_COUNT)), within: None, albums: false };
+    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(count.min(MAX_COUNT)), within: None, albums: false, by: RadioBy::Track };
     Ok(choose(&index, &req, &recent, None, &mut Rng::new()).into_iter().map(|i| index.songs[i].id.clone()).collect())
 }
 
@@ -755,7 +787,7 @@ pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, 
     let (index, recent) = ready().await?;
     let Some(own) = index.artist_ids.iter().position(|x| x == artist).map(|a| a as u32) else { return Ok(Vec::new()) };
     let seed: Vec<String> = index.of_item(artist).into_iter().map(|i| index.songs[i].id.clone()).collect();
-    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(MAX_COUNT), within: None, albums: false };
+    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(MAX_COUNT), within: None, albums: false, by: RadioBy::Track };
     let mut tally: HashMap<u32, u32> = HashMap::new();
     for i in choose(&index, &req, &recent, None, &mut Rng::new()) {
         for &a in unique(&index.songs[i].artists).collect::<Vec<_>>().iter().filter(|&&a| a != own) {
@@ -816,7 +848,7 @@ mod tests {
     }
 
     fn ask(mode: Mode) -> NextRequest {
-        NextRequest { mode, seed: vec!["s1".into(), "s2".into()], exclude: vec!["s1".into(), "s2".into()], last: Some("s2".into()), count: Some(2), within: None, albums: false }
+        NextRequest { mode, seed: vec!["s1".into(), "s2".into()], exclude: vec!["s1".into(), "s2".into()], last: Some("s2".into()), count: Some(2), within: None, albums: false, by: RadioBy::Track }
     }
 
     #[test]
@@ -865,7 +897,7 @@ mod tests {
         let index = Index::new((0..6).map(|n| song(&format!("s{n}"), 1, 1, 1, 1990, &[])).collect());
         let seed: Vec<String> = (0..6).map(|n| format!("s{n}")).collect();
         for n in 0..30 {
-            let req = NextRequest { mode: Mode::Reshuffle, seed: seed.clone(), exclude: seed.clone(), last: Some("s3".into()), count: None, within: None, albums: false };
+            let req = NextRequest { mode: Mode::Reshuffle, seed: seed.clone(), exclude: seed.clone(), last: Some("s3".into()), count: None, within: None, albums: false, by: RadioBy::Track };
             let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(n)));
             assert_eq!(picked.len(), 6);
             assert_ne!(picked[0], "s3");
@@ -878,7 +910,7 @@ mod tests {
         s.extend((0..10).map(|n| song(&format!("near{n}"), 10 + n, 2 + n, 1, 1986 + n, &[])));
         s.extend((0..10).map(|n| song(&format!("far{n}"), 30 + n, 2 + n, 1, 2010 + n, &[])));
         let index = Index::new(s);
-        let req = NextRequest { mode: Mode::Era, seed: vec![], exclude: vec!["now".into()], last: Some("now".into()), count: Some(5), within: None, albums: false };
+        let req = NextRequest { mode: Mode::Era, seed: vec![], exclude: vec!["now".into()], last: Some("now".into()), count: Some(5), within: None, albums: false, by: RadioBy::Track };
         let picked = choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(5));
         assert_eq!(picked.len(), 5);
         assert!(picked.iter().all(|&i| index.songs[i].year.unwrap().abs_diff(1990) <= 5));
@@ -898,13 +930,13 @@ mod tests {
         let index = library();
         // The crate: s1, s2 (the seed's own album: allowed inside a crate), k1 and three strangers.
         let crate_: Vec<usize> = ["s1", "s2", "k1", "x1", "x2", "x3"].iter().map(|id| index.by_id[*id]).collect();
-        let req = NextRequest { mode: Mode::Similar, seed: vec![], exclude: vec!["x1".into()], last: Some("x1".into()), count: Some(5), within: None, albums: false };
+        let req = NextRequest { mode: Mode::Similar, seed: vec![], exclude: vec!["x1".into()], last: Some("x1".into()), count: Some(5), within: None, albums: false, by: RadioBy::Track };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), Some(&crate_), &mut Rng::seeded(4)));
         assert_eq!(picked.len(), 5, "{picked:?}");
         assert!(picked.iter().all(|p| ["s1", "s2", "k1", "x2", "x3"].contains(&p.as_str())), "only the crate's: {picked:?}");
         // All of it queued: a new round, the longest ago first, not the last few again.
         let queued: Vec<String> = ["s1", "s2", "k1", "x2", "x3", "x1"].iter().map(|s| s.to_string()).collect();
-        let req = NextRequest { mode: Mode::Random, seed: vec![], exclude: queued, last: Some("x1".into()), count: Some(2), within: None, albums: false };
+        let req = NextRequest { mode: Mode::Random, seed: vec![], exclude: queued, last: Some("x1".into()), count: Some(2), within: None, albums: false, by: RadioBy::Track };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), Some(&crate_), &mut Rng::seeded(9)));
         assert_eq!(picked.len(), 2, "{picked:?}");
         assert!(picked.iter().all(|p| ["s1", "s2"].contains(&p.as_str())), "the round starts again from the oldest: {picked:?}");
@@ -944,13 +976,13 @@ mod tests {
             let seed: Vec<String> = album.iter().map(|&i| index.songs[i].id.clone()).collect();
             println!("\n== seed: {} ({} songs)", show(album[0]), album.len());
             let one = vec![seed[0].clone()];
-            let req = NextRequest { mode: Mode::Radio, seed: one.clone(), exclude: seed.clone(), last: Some(one[0].clone()), count: Some(5), within: None, albums: false };
+            let req = NextRequest { mode: Mode::Radio, seed: one.clone(), exclude: seed.clone(), last: Some(one[0].clone()), count: Some(5), within: None, albums: false, by: RadioBy::Track };
             println!("-- Radio's inserts after {}", show(album[0]));
             for i in choose(&index, &req, &recent, None, &mut rng) {
                 println!("   {}", show(i));
             }
             for mode in [Mode::Similar, Mode::Era, Mode::Artist, Mode::Random] {
-                let req = NextRequest { mode, seed: seed.clone(), exclude: seed.clone(), last: seed.last().cloned(), count: Some(5), within: None, albums: false };
+                let req = NextRequest { mode, seed: seed.clone(), exclude: seed.clone(), last: seed.last().cloned(), count: Some(5), within: None, albums: false, by: RadioBy::Track };
                 let t = Instant::now();
                 let picked = choose(&index, &req, &recent, None, &mut rng);
                 println!("-- {mode:?} ({:?})", t.elapsed());
@@ -968,7 +1000,7 @@ mod tests {
         let mut s = vec![song("own", 1, 7, 1, 2000, &[]), song("a1", 2, 7, 1, 1980, &[]), song("a2", 3, 7, 1, 1975, &[]), song("a3", 4, 7, 1, 2020, &[])];
         s.extend((0..20).map(|n| song(&format!("g{n}"), 10 + n, 20 + n, 1, 2000, &[])));
         let index = Index::new(s);
-        let req = NextRequest { mode: Mode::Radio, seed: vec!["own".into()], exclude: vec!["own".into()], last: Some("own".into()), count: Some(3), within: None, albums: false };
+        let req = NextRequest { mode: Mode::Radio, seed: vec!["own".into()], exclude: vec!["own".into()], last: Some("own".into()), count: Some(3), within: None, albums: false, by: RadioBy::Track };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(11)));
         assert_eq!(picked.len(), 3);
         assert!(!picked.contains(&"own".to_string()));
@@ -978,6 +1010,33 @@ mod tests {
             .map(|n| ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(n))).iter().filter(|p| p.starts_with('a')).count())
             .sum();
         assert!(theirs >= 40, "{theirs} of 60 picks by the track's artist");
+    }
+
+    #[test]
+    fn radio_by_era_or_artist_keeps_to_the_tracks_years_or_artist() {
+        // The track's artist and genre, far off in years; strangers of its years; the artist's other songs.
+        let mut s = vec![song("own", 1, 7, 1, 2000, &[])];
+        s.extend((0..6).map(|n| song(&format!("old{n}"), 2 + n, 8, 1, 1970, &[])));
+        s.extend((0..6).map(|n| song(&format!("near{n}"), 20 + n, 30 + n, 2, 2002, &[])));
+        s.extend((0..2).map(|n| song(&format!("own{n}"), 40 + n, 7, 3, 1985, &[])));
+        let index = Index::new(s);
+        let ask = |by| NextRequest {
+            mode: Mode::Radio,
+            seed: vec!["own".into()],
+            exclude: vec!["own".into()],
+            last: Some("own".into()),
+            count: Some(3),
+            within: None,
+            albums: false,
+            by,
+        };
+        let era = ids(&index, &choose(&index, &ask(RadioBy::Era), &HashMap::new(), None, &mut Rng::seeded(4)));
+        assert!(era.len() == 3 && era.iter().all(|p| p.starts_with("near")), "{era:?}");
+        let artist = ids(&index, &choose(&index, &ask(RadioBy::Artist), &HashMap::new(), None, &mut Rng::seeded(4)));
+        assert_eq!(artist.len(), 3);
+        assert!(artist[..2].iter().all(|p| p.starts_with("own")), "the artist's two first, then Similar fills up: {artist:?}");
+        let q: NextRequest = serde_json::from_str(r#"{"mode":"radio","by":"artist","count":10}"#).unwrap();
+        assert_eq!((q.by, q.count), (RadioBy::Artist, Some(10)));
     }
 
     #[test]
@@ -994,6 +1053,7 @@ mod tests {
             count: Some(5),
             within: None,
             albums: true,
+            by: RadioBy::Track,
         };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(2)));
         assert_eq!(picked, ["e1", "e2"], "the album in the era, whole, though album 3 shares the artist and genre");

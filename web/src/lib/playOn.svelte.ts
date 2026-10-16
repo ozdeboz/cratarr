@@ -35,6 +35,8 @@ function take(players: PlayOnPlayer[]) {
     repeat: p.repeat,
     sleep,
     radio: p.radio ?? false,
+    radioBy: p.radio_by,
+    radioCount: p.radio_count,
     autoplay: p.autoplay ?? null,
   });
   if (p.queue_version !== shownVersion) {
