@@ -124,10 +124,11 @@ export const genreOf = (crate: string | null) => (crate?.startsWith(GENRE) ? cra
 export const viewGenre = (name: string) => viewPlaylist(CRATE + GENRE + name);
 
 /** A new crate, named in the name sheet (as a new playlist is): the builder opens on a fresh draft of that name, saved
- *  only with its Save (a crate without conditions would hold the whole library). */
-export function startCrate(name: string) {
+ *  only with its Save (a crate without conditions would hold the whole library). `conditions`: what it starts from (a
+ *  genre's own, from the genre's view). */
+export function startCrate(name: string, conditions: Condition[] = []) {
   try {
-    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions: [] }));
+    localStorage.setItem(`cratarr-crate-draft:new`, JSON.stringify({ name, conditions }));
   } catch {
     /* the builder starts empty */
   }

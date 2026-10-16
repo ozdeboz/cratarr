@@ -21,6 +21,7 @@
   import { longpress } from './longpress';
   import RowHeart from './RowHeart.svelte';
   import { swipe } from './swipe';
+  import { sheetDrag } from './sheetDrag';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
   import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming } from './localPlayer.svelte';
@@ -142,26 +143,10 @@
     }
   }
 
-  // Closing by dragging the handle area down: past half the sheet or with a flick (Flutter's sheet thresholds), else it
-  // springs back.
+  // Dragged down from anywhere on it (the head, a row, the list at its top), it closes; a short drag springs back
+  // (lib/sheetDrag). A row's swipe, the reorder grip and a held cover keep their own gestures.
   let sheet = $state<HTMLElement>();
   let pull = $state(0);
-  let pullFrom = $state<{ y: number; t: number } | null>(null);
-  function pullDown(e: PointerEvent) {
-    if ((e.target as Element).closest('button, input')) return;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    pullFrom = { y: e.clientY, t: performance.now() };
-  }
-  function pullMove(e: PointerEvent) {
-    if (pullFrom) pull = Math.max(0, e.clientY - pullFrom.y);
-  }
-  function pullUp(e: PointerEvent) {
-    if (!pullFrom) return;
-    const v = pull / Math.max(1, performance.now() - pullFrom.t);
-    pullFrom = null;
-    if (pull > (sheet?.offsetHeight ?? 600) / 2 || (pull > 20 && v > 0.7)) onclose();
-    else pull = 0;
-  }
 
   // Reordering (this device; lib/reorder.svelte.ts): the queue changes on release.
   const reorder = new Reorder(
@@ -212,14 +197,15 @@
     aria-label="Queue"
     bind:this={sheet}
     style:transform={pull ? `translateY(${pull}px)` : null}
-    class:pulling={pullFrom !== null}
+    class:pulling={pull !== 0}
+    use:sheetDrag={{ onclose, ondrag: (d) => (pull = d) }}
     in:fly={{ y: 600, duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
     out:fly={{ y: 600, duration: reducedMotion() ? 0 : SHEET_OUT, easing: decelerate }}
   >
     {#if src}<img class="blur" {src} alt="" aria-hidden="true" />{/if}
     <div class="veil"></div>
 
-    <div class="qhead" role="presentation" onpointerdown={pullDown} onpointermove={pullMove} onpointerup={pullUp} onpointercancel={pullUp}>
+    <div class="qhead">
       <span class="handle"></span>
       <div class="bar">
         {#if searching}
@@ -328,6 +314,7 @@
                 <button
                   class="grip"
                   aria-label="Drag to reorder"
+                  data-sheet-drag="off"
                   onpointerdown={(e) => reorder.down(e, i)}
                   onpointermove={reorder.move}
                   onpointerup={reorder.end}
