@@ -235,19 +235,25 @@ async fn albums(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<cr
 /// A track's file as it is (the track menu's Details): where it lies, its audio, size and dates, and every tag, in the
 /// file's order (a tag Cratarr knows by its Picard name, any other by its own key).
 /// A track's waveform (decision 0035): its analysis' 512 bins, each its RMS (0..=255 of the track's loudest bin), as
-/// bytes; the seekbar draws it. 404 until the track is analysed (or while its file changed since). It changes only
+/// bytes; the seekbar draws it. 404 until the track is analysed (or while its file changed since, or when the decode
+/// stopped early). It changes only
 /// with a new analysis: an ETag of when that was made, and kept a long time.
 async fn track_waveform(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
     let cat = app.library.catalogue();
     let found = tokio::task::spawn_blocking(move || {
         let track = cat.track_of_source(&source, &id)?;
         let (folder, rel) = cat.file_of(track)?;
+        let analysis = cat.analysis_of(folder, &rel)?;
+        // None from a decode that stopped early: a few seconds' waveform stretched over the whole track (2026-10-16).
+        if analysis.complete == Some(false) {
+            return None;
+        }
         let (at, version) = cat.analysis_stamp(folder, &rel)?;
         let etag = format!("\"{version}-{at}\"");
         if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
             return Some((etag, None));
         }
-        Some((etag, Some(cat.analysis_of(folder, &rel)?.waveform)))
+        Some((etag, Some(analysis.waveform)))
     })
     .await
     .ok()
