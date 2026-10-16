@@ -164,6 +164,17 @@ pub struct Listed {
     pub stamp: Option<String>,
 }
 
+/// When an album came and how it has been played, for the account the source plays for: the album panel's About.
+/// Each `None` where the source cannot say.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlbumListening {
+    /// Epoch seconds.
+    pub added: Option<i64>,
+    /// Epoch seconds.
+    pub played: Option<i64>,
+    pub plays: Option<u32>,
+}
+
 /// An album's track count, format ("FLAC"; `None` when mixed or unknown) and lowest bitrate.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct AlbumDetails {
@@ -354,6 +365,11 @@ pub trait Source: Send + Sync {
     /// sources: Cratarr takes them from its own catalogue where it can, and keeps them (decision 0011).
     fn album_summary<'a>(&'a self, _album: &'a str) -> Fut<'a, Option<AlbumDetails>> {
         Box::pin(async { Ok(None) })
+    }
+
+    /// Optional: when an album came and how it has been played (the album panel's About), never kept: plays change.
+    fn album_listening<'a>(&'a self, _album: &'a str) -> Fut<'a, AlbumListening> {
+        Box::pin(async { Ok(AlbumListening::default()) })
     }
 
     /// Optional: play an album, from its first track, on the player this source follows. Returns a short label of

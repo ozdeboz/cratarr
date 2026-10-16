@@ -1,8 +1,10 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
 import { albumView, getAlbums, playAlbum, queueTracks, type AlbumsView, type ListedAlbum } from './api';
-import { refresh, untilNewTrack } from './live.svelte';
+import { inSidebar, player, refresh, untilNewTrack } from './live.svelte';
 import { enqueue, type LocalTrack } from './localPlayer.svelte';
 import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
+import { pageView } from './pageView.svelte';
+import { keepViewed } from './panel.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
@@ -63,6 +65,28 @@ export async function playAlbums(list: { source: string; a: ListedAlbum }[], mod
     );
     setTimeout(refresh, 700);
   }
+}
+
+/** An album artist's credits, lower case: "A & B, C feat. D" is a, b, c and d (and the credit whole). */
+export const artistCredits = (artist: string | null) =>
+  (artist ?? '')
+    .toLowerCase()
+    .split(/\s*(?:,|;|\/|&|\band\b|\bx\b|\bfeat\.?|\bft\.|\bfeaturing\b|\bvs\.?|\bwith\b)\s*/)
+    .map((c) => c.trim())
+    .filter(Boolean)
+    .concat((artist ?? '').toLowerCase().trim());
+
+/** Whom a credit is under: "A feat. B" is A's (the albums are under the main artist). */
+export const mainArtist = (artist: string | null | undefined) => artist?.split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim() || null;
+
+/** Go to artist: the Library page with that artist's albums (the search says the name, lib/AlbumShelf). What the panel
+ *  views stays beside the page; where the panel covers the page (a phone) it is left, back returns to it. */
+export function goToArtist(name: string) {
+  pageView.artist = name;
+  pageView.next = name;
+  pageView.query = name;
+  if (player.full) player.full = false;
+  location.hash = inSidebar() ? keepViewed('#/library') : '#/library';
 }
 
 export const lossless = (a: ListedAlbum) => a.format === 'FLAC';

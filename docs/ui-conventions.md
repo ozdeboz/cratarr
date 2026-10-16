@@ -88,7 +88,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   track number, play count, last played and when an entry was added, for entries added since 2026-10-16; a tap chooses, the arrow turns it
   round), how many, and **select mode** (a long-press on a track, or the icon: circles to tick, and a bar floating over
   the list's end plays, puts next, queues or favours the ticked tracks, and in the app downloads them). An album's rows have no cover: the number,
-  the playing one's dots instead; every track's row ends in ⋮ (its menu). In
+  the playing one's dots instead; every track's row ends in ⋮ (its menu). **An album ends** as Symfonium's (decided
+  2026-10-16): More from the artist (their other albums on that server, newest first, in a row that scrolls sideways;
+  a cover opens that album, the heading's › goes to the artist), then About: genres and year as chips, last played and
+  date added (date and time), and the media provider (the server and library, with the library's dot). Anything not
+  known is left out. Go to artist (here, or in a menu) keeps the panel beside the page; where the panel covers the
+  page it leaves it, and back returns to it. In
   edit mode the cover and the name stay where they are; the action bar's place holds Cancel (a reset arrow, red once
   something changed) against Save (an arrow down to a line on a filled accent round), and the pills keep ✕. Rows as the
   queue's; edit mode as Finamp's playlist edit screen: the title is editable where it is, looking the same (Spoken
@@ -194,8 +199,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   Incoming library is set), Libraries (one row per server library: its use, Music, Incoming or Not used, and the
   folder Cratarr sees its files in, or a warning when it can't; then the names, the trash, the catalogue status and
   tag splitting), Authentication (the account Subsonic apps sign in with; decided 2026-10-16, not "Subsonic"), Import
-  (plays, favourites, ratings and added dates from a server), Display (theme, progress bar), About (version, port,
-  file locations). Each part is its own file (lib/settings/*Part) over one editor (lib/settings/editor), so what is
+  (plays, favourites, ratings and added dates from a server), Display (theme, progress bar). About (version, port,
+  file locations) is not a part: it is a sheet opened from the info button at the page's top right, in the floating
+  row (lib/AboutSheet). Each part is its own file (lib/settings/*Part) over one editor (lib/settings/editor), so what is
   changed in one part shows the Save bar in all of them and survives going from one to another.
   What a part edits is saved with the Save bar at its foot. A part opens on the settings last read (reading them
   checks every connection, which takes seconds) and takes the fresh ones unless something was edited meanwhile.

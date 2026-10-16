@@ -9,7 +9,7 @@
   import type { Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
   import { albumCoverUrl, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
-  import { addedOn, albumPlay, playAlbums, playListedAlbum, quality, tracksOfAlbums, weak } from './albums.svelte';
+  import { addedOn, albumPlay, artistCredits, playAlbums, playListedAlbum, quality, tracksOfAlbums, weak } from './albums.svelte';
   import { download, inApp } from './app.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import SelectBar from './SelectBar.svelte';
@@ -146,20 +146,12 @@
   // What is playing (the shell polls it), so the album being listened to stands out.
   const playing = $derived(nowPlaying());
 
-  /** An album artist's credits, lower case: "A & B, C feat. D" is a, b, c and d. */
-  const credits = (artist: string | null) =>
-    (artist ?? '')
-      .toLowerCase()
-      .split(/\s*(?:,|;|\/|&|\band\b|\bx\b|\bfeat\.?|\bft\.|\bfeaturing\b|\bvs\.?|\bwith\b)\s*/)
-      .map((c) => c.trim())
-      .filter(Boolean)
-      .concat((artist ?? '').toLowerCase().trim());
   const matches = (a: ListedAlbum) => {
     const q = pageView.query.trim().toLowerCase();
     if (!q) return true;
     // Go to artist: that artist's albums only (the name as one of the album's credits, not part of another name),
     // while the search still says the name.
-    if (q === pageView.artist.trim().toLowerCase()) return credits(a.artist).includes(q);
+    if (q === pageView.artist.trim().toLowerCase()) return artistCredits(a.artist).includes(q);
     return `${a.artist ?? ''} ${a.title}`.toLowerCase().includes(q);
   };
   // The libraries switched off in the filter leave their albums out; the pill's funnel says so while one is.

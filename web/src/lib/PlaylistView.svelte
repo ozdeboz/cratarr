@@ -18,6 +18,7 @@
   import {
     albumResume,
     albumView,
+    type AlbumView,
     coverUrl,
     crateRows,
     crateToPlaylist,
@@ -65,7 +66,9 @@
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
-  import { library, readLibrary } from './albums.svelte';
+  import { library, mainArtist, readLibrary } from './albums.svelte';
+  import AlbumAbout from './AlbumAbout.svelte';
+  import AlbumMore from './AlbumMore.svelte';
   import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
@@ -112,7 +115,7 @@
   /** A crate or an album: tracks without a playlist's file (no tabs, no editing, no statistics). */
   const plain = $derived(!!crate || !!album || crateEditing || creating);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
-  let albumHead = $state<{ title: string; artist: string | null; year: number | null; format: string | null; kbps: number | null } | null>(null);
+  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays'> & { kbps: number | null } | null>(null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
   let listGenres = $state<string[] | null>(null);
   /** The selected playlists; several: Tracks shows a section per playlist (decision 0025). */
@@ -177,6 +180,13 @@
     return s && la ? { s, a: la } : null;
   });
 
+  // Where the album comes from (its About): the server, and its library as the Library's list names it.
+  const provider = $derived.by(() => {
+    const s = album ? library.view?.sources.find((x) => x.id === album.source) : undefined;
+    const l = listedHere?.a.library ? s?.library_info?.find((x) => x.id === listedHere.a.library) : undefined;
+    return { server: s?.label ?? album?.source ?? '', library: l?.name ?? null, colour: l?.colour ?? null };
+  });
+
   // The album's heart: shows the change at once, back as it was when the server refuses.
   const albumFav = $derived(album ? isFavorite(album.source, album.id) : false);
   async function toggleAlbumFavorite() {
@@ -227,7 +237,8 @@
       : a
         ? albumView(a.source, a.id).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
-            if (want === id) albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null };
+            if (want === id)
+              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays };
             return { ...r, total: r.rows.length };
           })
         : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length, genres: null }));
@@ -1210,6 +1221,12 @@
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
       </ol>
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
+      {#if album && albumHead}
+        <!-- As Symfonium's album: the artist's other albums, then About. -->
+        {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
+        {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
+        <AlbumAbout genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} />
+      {/if}
     {:else}
       <PageLoading />
     {/if}

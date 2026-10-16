@@ -405,6 +405,21 @@ impl Source for CratarrSource {
         })
     }
 
+    // Added: the library's (the earlier of the files' first sight and an import's date); played: the owner's plays of
+    // it, as Subsonic apps count them.
+    fn album_listening<'a>(&'a self, album: &'a str) -> Fut<'a, super::AlbumListening> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            let (lib, id) = (s.library.clone(), album.to_string());
+            let found = blocking(move || lib.albums_by_id(&[id])).await?;
+            let added = found.first().and_then(|a| a.created.as_deref()).and_then(crate::nowplaying::parse_iso_epoch);
+            let seen = s.userdata.get(&o, Item::Album, &[album.to_string()])?;
+            let a = seen.get(album);
+            Ok(super::AlbumListening { added, played: a.and_then(|a| a.play_date), plays: Some(a.map_or(0, |a| a.play_count)) })
+        })
+    }
+
     fn tracks_of_album<'a>(&'a self, album_id: &'a str) -> Fut<'a, Vec<AlbumTrack>> {
         Box::pin(async move {
             let s = server()?;
