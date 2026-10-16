@@ -1644,6 +1644,9 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
 }
 
 /// See `Catalogue::served_rows`; any connection to the catalogue's file.
+/// How far a file's header may be from the length a whole decode measured before the measured one is served.
+const LENGTH_SLACK_MS: u64 = 1_500;
+
 pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
     let mut rows: Vec<ServedRow> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -1673,15 +1676,39 @@ pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
     // Their analyses, while the files are as they were then, and their albums' gains (decision 0035).
     let albums = album_gains(db, folder)?;
     let mut st = db.prepare(
-        "SELECT a.rel, a.track_gain_db, a.track_peak, a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
-         WHERE a.folder = ?1 AND a.size = f.size AND a.mtime = f.mtime",
+        "SELECT a.rel, a.track_gain_db, a.track_peak, a.bpm, a.duration_secs, a.complete FROM analysis a
+         JOIN files f ON f.folder = a.folder AND f.rel = a.rel WHERE a.folder = ?1 AND a.size = f.size AND a.mtime = f.mtime",
     )?;
     let found = st.query_map(params![folder], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, Option<f64>>(1)?, r.get::<_, Option<f64>>(2)?, r.get::<_, Option<f64>>(3)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<f64>>(1)?,
+            r.get::<_, Option<f64>>(2)?,
+            r.get::<_, Option<f64>>(3)?,
+            r.get::<_, Option<f64>>(4)?,
+            r.get::<_, Option<bool>>(5)?,
+        ))
     })?;
     for a in found {
-        let (rel, gain, peak, bpm) = a?;
-        let (Some(&i), Some(gain), Some(peak)) = (index.get(&rel), gain, peak) else { continue };
+        let (rel, gain, peak, bpm, measured, complete) = a?;
+        let Some(&i) = index.get(&rel) else { continue };
+        match complete {
+            // A decode of the whole track: its length stands where the header says otherwise (Gerry Mulligan's Night
+            // Lights says ten times its length; 2026-10-16 ffmpeg check of the 52 that disagree).
+            Some(true) => {
+                if let Some(ms) = measured.filter(|s| *s > 0.0).map(|s| (s * 1000.0).round() as u64)
+                    && rows[i].duration_ms.is_none_or(|d| d.abs_diff(ms) > LENGTH_SLACK_MS)
+                {
+                    rows[i].duration_ms = Some(ms);
+                }
+            }
+            // The decoder stopped early (Symphonia on Jon Hopkins' Contact Note: 7 s of 468): its length, gain, peak
+            // and tempo describe a part of the track, so none of it is served.
+            Some(false) => continue,
+            // Analysed before this was known: served as before.
+            None => {}
+        }
+        let (Some(gain), Some(peak)) = (gain, peak) else { continue };
         let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
         rows[i].analysis = Some(RowAnalysis { track_gain_db: gain as f32, track_peak: peak as f32, bpm: bpm.map(|b| b as f32), album: albums.get(dir).copied() });
     }
@@ -1891,6 +1918,36 @@ mod tests {
         // It follows its file.
         cat.move_files(folder, "A - B (2020)", folder, "A - B (2020) moved").unwrap();
         assert!(cat.analysis_of(folder, &two.1.replace("A - B (2020)", "A - B (2020) moved")).is_some());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_measured_length_is_served_only_from_a_whole_decode() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let todo = cat.unanalysed(10).unwrap();
+        let (folder, one) = (todo[0].0, todo.iter().find(|t| t.1.ends_with("One.mp3")).unwrap().clone());
+        let two = todo.iter().find(|t| t.1.ends_with("Two.flac")).unwrap().clone();
+        let served = |end: &str| cat.served_rows(folder).unwrap().into_iter().find(|r| r.rel.ends_with(end)).unwrap();
+        // Night Lights: the header says ten times the length a whole decode found.
+        cat.db().execute("UPDATE files SET duration_ms = 2000000 WHERE rel = ?1", params![one.1]).unwrap();
+        let measured = |complete| crate::analysis::Analysis { duration_secs: 200.0, complete, ..an_analysis(-3.0, 500) };
+        cat.store_analysis(folder, &one.1, one.3, one.4, &measured(Some(true))).unwrap();
+        assert_eq!(served("One.mp3").duration_ms, Some(200_000), "a whole decode");
+        // Contact Note: the decoder stopped early. Neither its length nor its gain is served.
+        cat.store_analysis(folder, &one.1, one.3, one.4, &measured(Some(false))).unwrap();
+        let row = served("One.mp3");
+        assert_eq!((row.duration_ms, row.analysis.is_none()), (Some(2_000_000), true), "stopped early");
+        // From before it was known: as before, the header's length and the gain.
+        cat.store_analysis(folder, &one.1, one.3, one.4, &measured(None)).unwrap();
+        let row = served("One.mp3");
+        assert_eq!((row.duration_ms, row.analysis.is_some()), (Some(2_000_000), true), "not known");
+        // A second off is the header's to keep.
+        cat.db().execute("UPDATE files SET duration_ms = 201000 WHERE rel = ?1", params![two.1]).unwrap();
+        cat.store_analysis(folder, &two.1, two.3, two.4, &measured(Some(true))).unwrap();
+        assert_eq!(served("Two.flac").duration_ms, Some(201_000));
         std::fs::remove_dir_all(&d).ok();
     }
 
