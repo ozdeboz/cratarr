@@ -18,7 +18,6 @@
   import {
     albumResume,
     albumView,
-    forgetAlbumResume,
     coverUrl,
     crateRows,
     crateToPlaylist,
@@ -33,14 +32,11 @@
     playlistRows,
     queueTrack,
     queueTracks,
-    getIncoming,
     setTrackFavorite,
     setAlbumFavorite,
-    type IncomingSource,
     type ListedAlbum,
     type PlaylistRow,
   } from './api';
-  import LibrarySheet, { offerOf } from './LibrarySheet.svelte';
   import {
     builderOf,
     CRATE,
@@ -67,7 +63,8 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
-  import AlbumMenu, { type AlbumIncoming } from './AlbumMenu.svelte';
+  import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
+  import { library, readLibrary } from './albums.svelte';
   import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
@@ -156,33 +153,27 @@
   // An Incoming album changes as Lidarr adds to it (or it is kept or deleted elsewhere): asked for again when Incoming
   // changes.
   let incomingChanged = $state(0);
-  $effect(() => on<{ area: string }>('changed', ({ area }) => area === 'incoming' && album && incomingChanged++));
+  $effect(() => on<{ area: string }>('changed', ({ area }) => (area === 'incoming' || area === 'collection') && album && incomingChanged++));
 
-  // An Incoming album: what Incoming offers for it (Keep, Replace, Delete in the top bar), as its list says; null for
-  // any other album (the Collection's, a track's).
-  let incoming = $state<{ source: IncomingSource; a: ListedAlbum; trashDays: number; music: string } | null>(null);
-  let incomingAsk = $state<'keep' | 'replace' | 'delete' | null>(null);
-  const offer = $derived(incoming ? offerOf(incoming.source, incoming.a.id) : null);
-  let incomingFor = '';
+  // The album's place in the Library's list (lib/albums.svelte.ts): its library, and what Cratarr may do with it there,
+  // for its menu. Read when an album shows and the list is not known yet, and again when an album list changed (the
+  // Library page, while it shows, keeps it fresh itself).
+  let seenChange = 0;
   $effect(() => {
     const a = album;
-    void incomingChanged;
-    const key = a ? `${a.source}/${a.id}` : '';
-    if (key !== incomingFor) {
-      incoming = null;
-      incomingFor = key;
-    }
+    const n = incomingChanged;
     if (!a) return;
     loadAlbumFavorites(a.source, [a.id]);
-    getIncoming(prefs.source || undefined, true).then(
-      (r) => {
-        if (incomingFor !== key) return;
-        const s = r.sources.find((x) => x.id === a.source);
-        const listed = s?.albums.find((x) => x.id === a.id);
-        incoming = s && listed ? { source: s, a: listed, trashDays: r.trash_days, music: r.music ?? 'Music' } : null;
-      },
-      () => {},
-    );
+    if (untrack(() => library.view) === null || n !== seenChange) {
+      seenChange = n;
+      readLibrary(n > 0).catch(() => {});
+    }
+  });
+  const listedHere = $derived.by(() => {
+    const a = album;
+    const s = a ? library.view?.sources.find((x) => x.id === a.source) : undefined;
+    const la = s?.albums.find((x) => x.id === a!.id);
+    return s && la ? { s, a: la } : null;
   });
 
   // The album's heart: shows the change at once, back as it was when the server refuses.
@@ -542,28 +533,6 @@
   });
   // An album's menu (its ⋮ in the action bar).
   let albumMenuOpen = $state(false);
-  /** What Incoming offers for the album, as the album menu's steps (each asks in LibrarySheet, as the bar did). */
-  const albumIncoming = $derived<AlbumIncoming | null>(
-    incoming && offer
-      ? {
-          music: incoming.music,
-          keep: offer.keepable && offer.job === null ? () => (incomingAsk = 'keep') : undefined,
-          replace: offer.replaceable ? () => (incomingAsk = 'replace') : undefined,
-          delete: offer.deletable && offer.job === null ? () => (incomingAsk = 'delete') : undefined,
-        }
-      : null,
-  );
-  async function forgetResume() {
-    const a = album;
-    if (!a) return;
-    try {
-      await forgetAlbumResume(a.id);
-      if (album?.id === a.id) resumeAt = null;
-    } catch (e) {
-      toast.fail(e, "The resume point wasn't removed");
-    }
-  }
-
   async function resumeAlbum() {
     const at = resumeAt;
     const i = at ? playable.findIndex((r) => r.id === at.track) : -1;
@@ -1343,17 +1312,6 @@
   <TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
 {/snippet}
 
-{#if incomingAsk && incoming && offer}
-  <LibrarySheet
-    source={incoming.source.id}
-    album={incoming.a}
-    {offer}
-    trashDays={incoming.trashDays}
-    music={incoming.music}
-    start={incomingAsk}
-    onclose={() => (incomingAsk = null)}
-  />
-{/if}
 {#if menuOpen && selected.length}
   <PlaylistMenu
     playlists={selected}
@@ -1375,13 +1333,15 @@
 {#if albumMenuOpen && album}
   <AlbumMenu
     source={album.source}
-    album={album.id}
-    {title}
-    artist={albumHead?.artist ?? null}
-    tracks={playable.map((r) => r.id!)}
-    incoming={albumIncoming}
-    forgetResume={resumeAt ? forgetResume : null}
-    ondownload={inApp && playable.length ? () => download(tracksOf(playable)) : null}
+    album={listedHere?.a ?? { id: album.id, title, artist: albumHead?.artist ?? null }}
+    cover={covers[0] ?? null}
+    tracks={rows ? tracksOf(playable) : null}
+    genres={listGenres}
+    offer={listedHere ? offerIn(listedHere.s, listedHere.a) : null}
+    trashDays={library.view?.trash_days ?? 14}
+    music={library.view?.music ?? 'Music'}
+    viewable={false}
+    onresumegone={() => (resumeAt = null)}
     onclose={() => (albumMenuOpen = false)}
   />
 {/if}

@@ -1,10 +1,22 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
-import { albumView, playAlbum, queueTracks, type ListedAlbum } from './api';
+import { albumView, getAlbums, playAlbum, queueTracks, type AlbumsView, type ListedAlbum } from './api';
 import { refresh, untilNewTrack } from './live.svelte';
 import { enqueue, type LocalTrack } from './localPlayer.svelte';
 import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
+
+/** The Library's list (GET /api/albums) as last read: the page shows it, and the album panel's menu finds the album's
+ *  library there (what it may do with it). */
+export const library = $state({ view: null as AlbumsView | null });
+let reading: Promise<void> | null = null;
+/** Reads it (`fresh`: past the service worker's copy); one read at a time. */
+export function readLibrary(fresh: boolean): Promise<void> {
+  reading ??= getAlbums(prefs.source || undefined, fresh)
+    .then((v) => void (library.view = v))
+    .finally(() => (reading = null));
+  return reading;
+}
 
 /** The album being started (its Play buttons wait meanwhile). */
 export const albumPlay = $state({ starting: null as string | null });

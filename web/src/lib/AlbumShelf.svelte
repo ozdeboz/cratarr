@@ -2,7 +2,7 @@
   // An album list (Incoming, Collection), filtered by the pill's search: each server's albums in columns as the playlist chips are,
   // in the order, layout and size chosen in the pill's View (lib/ViewSheet, decided 2026-10-15). Rows are extra large rows (Row),
   // the grid is tiles (Tile). A tap views the album in the panel, its cover's play icon plays it, a row's ⋮ opens its
-  // menu (the page's own, `onmenu`, else View and Play). Select (decided 2026-10-16, as the panel's track lists and
+  // menu (lib/AlbumMenu, the page's: `onmenu`). Select (decided 2026-10-16, as the panel's track lists and
   // Playlists): the list header's icon or a long-press ticks albums, a tap then ticks too, and the select bar
   // (lib/SelectBar) plays, puts next, queues, favours or downloads the ticked ones, one album after another, or opens
   // the menu of one (a tile's menu is this way).
@@ -17,8 +17,6 @@
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import SelectSheet from './SelectSheet.svelte';
-  import MenuEntry from './MenuEntry.svelte';
-  import MenuSheet from './MenuSheet.svelte';
   import { albumSubject, panel, viewPlaylist } from './panel.svelte';
   import { prefs, type AlbumLayout, type CollectionOrder } from './prefs.svelte';
   import { playing as nowPlaying } from './remote.svelte';
@@ -44,8 +42,8 @@
     down?: boolean;
     /** More lines about an album, the page's own (Incoming: its conversion, how it relates to Music). */
     extra?: Snippet<[ShelfSource, ListedAlbum]>;
-    /** The page's own menu for an album, at `anchor`; true when it opened one (else the list's own opens). */
-    onmenu?: (source: ShelfSource, a: ListedAlbum, anchor: DOMRect) => boolean;
+    /** An album's menu (lib/AlbumMenu, the page's), from its ⋮ or the select bar's More. */
+    onmenu: (source: ShelfSource, a: ListedAlbum, anchor: DOMRect) => void;
   } = $props();
 
   let width = $state(0);
@@ -137,7 +135,6 @@
   });
   // What is playing (the shell polls it), so the album being listened to stands out.
   const playing = $derived(nowPlaying());
-  let menu = $state<{ source: ShelfSource; a: ListedAlbum; anchor: DOMRect } | null>(null);
 
   /** An album artist's credits, lower case: "A & B, C feat. D" is a, b, c and d. */
   const credits = (artist: string | null) =>
@@ -183,9 +180,7 @@
   // A tile shows its title and artist; the value the list is ordered by, when it is neither, is a pill over the cover's
   // upper left corner (decided 2026-10-16).
   const axisOf = (a: ListedAlbum) => (order === 'year' ? (a.year ? String(a.year) : null) : order === 'added' && a.added ? addedOn(a.added) : null);
-  const openMenu = (s: ShelfSource, a: ListedAlbum, anchor: DOMRect) => {
-    if (!onmenu?.(s, a, anchor)) menu = { source: s, a, anchor };
-  };
+  const openMenu = (s: ShelfSource, a: ListedAlbum, anchor: DOMRect) => onmenu(s, a, anchor);
 
   // Select: the ticked albums by `source/id`; null while not selecting.
   let selecting = $state<Set<string> | null>(null);
@@ -222,7 +217,7 @@
   // Esc ends it (while no menu of its own is open).
   $effect(() => {
     if (!selecting) return;
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !menu && (selecting = null);
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && !document.querySelector('[role="dialog"]') && (selecting = null);
     addEventListener('keydown', esc);
     return () => removeEventListener('keydown', esc);
   });
@@ -418,39 +413,6 @@
     onclick={() => playListedAlbum(s.id, a)}><Icon name="play" size={26} /></button
   >
 {/snippet}
-
-{#if menu}
-  {@const m = menu}
-  <!-- The album's menu: a sheet as every menu (decision 0021). -->
-  <MenuSheet
-    label={m.a.title}
-    onclose={() => (menu = null)}
-    images={[albumCoverUrl(m.source.id, m.a.id)]}
-    title={m.a.title}
-    chips={[m.a.artist ?? 'Unknown artist']}
-    actions={[
-      {
-        icon: 'play',
-        label: 'Play',
-        onclick: () => {
-          menu = null;
-          playListedAlbum(m.source.id, m.a);
-        },
-      },
-    ]}
-  >
-    <div role="menu">
-      <MenuEntry
-        icon="squareArrowOutUpRight"
-        label="View"
-        onclick={() => {
-          menu = null;
-          view(m.source.id, m.a);
-        }}
-      />
-    </div>
-  </MenuSheet>
-{/if}
 
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />

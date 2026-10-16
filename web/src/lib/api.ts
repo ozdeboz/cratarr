@@ -679,13 +679,6 @@ export type LibraryInfo = { id: string; name: string; use: 'music' | 'incoming';
 /** An album of a library other than Music, as it stands to Music: an upgrade of an album there, or a duplicate. */
 export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: string };
 
-export type IncomingSource = ShelfSource & {
-  /** Per album id, when it is already in Music: an upgrade of it, or a duplicate. New albums are absent. */
-  verdicts: Record<string, Verdict>;
-  /** The albums Cratarr can delete (it sees their folder and can write there). */
-  deletable: string[];
-};
-
 /** A server's albums of every used library in one list (decision 0034), with what holds between them. */
 export type AlbumsSource = ShelfSource & {
   library_info: LibraryInfo[];
@@ -696,14 +689,9 @@ export type AlbumsSource = ShelfSource & {
 };
 export type AlbumsView = { sources: AlbumsSource[]; trash_days: number; music: string | null };
 
-/** `fresh` asks past the service worker's copy (which answers at once, see sw.js) for the server's latest. */
-export const getIncoming = (source?: string, fresh = false) =>
-  quietly<{ sources: IncomingSource[]; trash_days: number; music: string | null }>(`/api/incoming${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
-/** Every album of each server's used libraries (the Library page), as the lists above, `fresh` the same. */
+/** Every album of each server's used libraries (the Library page). `fresh` asks past the service worker's copy (which
+ *  answers at once, see sw.js) for the server's latest. */
 export const getAlbums = (source?: string, fresh = false) => quietly<AlbumsView>(`/api/albums${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
-/** The albums of each server's Music library, newest first. */
-export const getCollection = (source?: string, fresh = false) =>
-  quietly<{ sources: ShelfSource[] }>(`/api/collection${follow(source)}`, fresh ? { cache: 'no-cache' } : undefined);
 /** Play an album of a connected server on the followed player; answers with the player's label. */
 export const playAlbum = (source: string, album: string) =>
   request<{ player: string }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/play`, { method: 'POST' });
@@ -809,24 +797,18 @@ export const handover = (ids: string[], index: number, positionSecs: number, sou
 export const transport = (command: Transport, source?: string) =>
   quietly<{ player: string }>(`/api/player/${command}${follow(source)}`, { method: 'POST' }); // shown at once
 
-/** Delete an Incoming album: it goes to the trash in its folder (Undo brings it back; emptied after the days set in Settings). */
-export const deleteIncoming = (source: string, album: string) =>
-  request<{ undo: string; title: string }>(`/api/incoming/delete/${encodeURIComponent(source)}/${encodeURIComponent(album)}`, {
-    method: 'POST',
-  });
-
-/** What Keep would do with an album: its new folder in Music, or why not (`needs_year`: ask for the year). */
+/** What a move would do with an album: its new folder in the library, or why not (`needs_year`: ask for the year). */
 export type KeepPreview = {
   title: string;
   folder: string | null;
   files: number;
   refused: { kind: 'needs_year' } | { kind: 'other'; detail: string } | null;
-  /** Hi-res files converted to 16-bit/44.1 kHz first (Keep then waits in the queue). */
+  /** Hi-res files converted to 16-bit/44.1 kHz first (the move then waits in the queue). */
   convert: number;
   /** Whether a Lidarr is set to be told to stop fetching it; without one it may fetch the album again. */
   acquisition: boolean;
 };
-/** What Keep or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
+/** What a move or Replace did: done (`undo`), or queued until its hi-res files are converted (`queued`). */
 export type AlbumMoved = { undo: string | null; title: string; folder: string; queued: boolean };
 const albumPath = (source: string, album: string) => `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
 /** What moving an album into library `to` would do (decision 0034): its folder there, or why it can't. */
@@ -842,16 +824,6 @@ export const moveAlbum = (source: string, album: string, to: string, year?: stri
   });
 /** Delete an album of any library, into that library's trash (Undo brings it back). */
 export const deleteAlbum = (source: string, album: string) => request<{ undo: string; title: string }>(`${albumPath(source, album)}/delete`, { method: 'POST' });
-const keepPath = (source: string, album: string) => `/api/incoming/keep/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
-export const keepPreview = (source: string, album: string, year?: string) =>
-  request<KeepPreview>(`${keepPath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);
-/** Keep an Incoming album: it moves into Music, named the library's way (Undo brings it back). */
-export const keepIncoming = (source: string, album: string, year?: string) =>
-  request<AlbumMoved>(keepPath(source, album), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(year ? { year } : {}),
-  });
 
 /** What Replace would do with an upgrade: the album in Music it replaces, how many of its tracks the new files take
  * over, new tracks, and where it goes; or why not (`unmatched`: old tracks without a match, by title). */

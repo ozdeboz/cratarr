@@ -69,7 +69,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   one, and ✕; the filter, View (the tracks' order and direction, as their header's), where it plays, and the panel's
   place; back and ✕ are rounds as tall as the pill), and at the cover's foot the **action bar**, icons only: Play, Resume (an album of Cratarr's own
   library: where it was left), Shuffle, Play next, Add to queue, then the subject's own (the heart; a playlist's pencil
-  on Tracks and menu; an album's menu with Incoming's Keep, Replace and Delete; a crate's favourites toggle, pencil
+  on Tracks and menu; an album's menu, the one every album has (below); a crate's favourites toggle, pencil
   and Make playlist). Scrolled up to the top the action bar stays there, and the pills float just under it, over the
   list. The pills are the panel's (not the pages'), so the player covers them once open. Under the cover the name large, one line of what it is (an album: length,
   year, format, bitrate; otherwise how many tracks and the length), an album's artist as a chip, the genres. Over the
@@ -83,9 +83,18 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   queue's; edit mode as Finamp's playlist edit screen: the title is editable where it is, looking the same (Spoken
   as… is in the playlist's menu); rows with handle and ✕, swipe to
   remove, "Removed tracks" to restore; all written once on Save, a rename last (the panel follows the new name).
-- **New playlist, New crate** ask for the name in the same sheet (`lib/NameSheet.svelte`), from the + at the end of the page's
-  pill (`lib/TopPill.svelte`, `pageView.usePageAction`); a new crate then opens
-  in the builder with that name, saved with its Save.
+- **New playlist, New crate** are the panel's edit mode with nothing made yet (decided 2026-10-16: "creating a playlist
+  should look like editing one, with regard to everything"), from the + at the end of the page's pill
+  (`lib/TopPill.svelte`, `pageView.usePageAction`): the name editable where it shows ("New playlist", "New crate" until
+  typed), the caret in it at once, Cancel and Save (once it has a name) in the action bar's place. A new playlist is
+  made by its Save (`?view=playlist-new`); a new crate is the builder, saved with its Save.
+- **One menu per album** (`lib/AlbumMenu.svelte`, decided 2026-10-16, after Symfonium's album sheet), wherever it is
+  opened (a Library row's ⋮, the select bar's More with one ticked, the album panel's ⋮): the album on the card with
+  its heart, the large actions (Play, Resume when it has a resume point, Shuffle, Play next, Add to queue), then
+  entries on rounded cards: View (not from the panel showing it), Go to its artist, Go to its genres (two at most);
+  Add to playlist, Download (in the app); what its library allows (decision 0034: Move to each other used library,
+  Replace in Music for an upgrade, Delete, a second step when it is in Music, Cancel conversion while queued), each
+  question asked in the sheet; Remove resume point, Web search.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as chips
   with their live counts, styled as the playlist chips (the viewed one bordered). A crate is viewed in the panel as a
   playlist does, without the statistics and editing, with Play, Shuffle and its favourites toggle (No favourites,
@@ -180,8 +189,9 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   followed server's Music and Incoming libraries as one list, the libraries switched in the filter; the order (Artist,
   Title, Year, Added; Added newest first at first), Rows or Covers, and Size, in columns as the playlist chips are.
   Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was added,
-  and an Incoming album's lines: its conversion and how it relates to Music); an Incoming album's menu is Incoming's
-  sheet (Keep, Replace, Delete), a Music album's View and Play until moves come (0034); Covers are tiles. A row's cover
+  and an Incoming album's lines: its conversion and how it relates to Music; an album of a library other than Music
+  has a dot in its library's colour after its title, while more than one library shows); its menu is the album's one
+  menu (above); Covers are tiles (the dot before the title). A row's cover
   plays the album (the rest of the row views it); a row ends in ⋮ (its menu): **wherever a cover plays, its play
   icon is in the cover's lower right corner**, as on a tile (decided 2026-10-16). **Select** as on every list: the
   header's icon or a long-press ticks albums (a row lighter edge to edge, a tile bordered, the tick at a row's end or

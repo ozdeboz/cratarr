@@ -4,10 +4,11 @@
   // facts show with it: its library as a dot in that library's colour (none for Music, and only while more than one
   // shows), an Incoming album's conversion, or how it relates to Music (an upgrade, a duplicate). Its menu
   // (lib/LibrarySheet) moves it into another library, replaces the album in Music it upgrades, or deletes it.
-  import { ApiError, getAlbums, type AlbumsSource, type AlbumsView, type ListedAlbum, type ShelfSource } from './lib/api';
+  import { ApiError, type AlbumsSource, type ListedAlbum, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
-  import LibrarySheet, { offerIn, type AlbumOffer } from './lib/LibrarySheet.svelte';
+  import AlbumMenu, { offerIn, type AlbumOffer } from './lib/AlbumMenu.svelte';
+  import { library, readLibrary } from './lib/albums.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
@@ -17,19 +18,19 @@
   import { pageView } from './lib/pageView.svelte';
   import { untrack } from 'svelte';
 
-  let view = $state<AlbumsView | null>(null);
   let error = $state<string | null>(null);
-  const sources = $derived<AlbumsSource[] | null>(view?.sources ?? null);
-  const trashDays = $derived(view?.trash_days ?? 14);
+  const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
+  const trashDays = $derived(library.view?.trash_days ?? 14);
   /** The primary library, by its own name. */
-  const music = $derived(view?.music ?? 'Music');
+  const music = $derived(library.view?.music ?? 'Music');
 
-  // The long-pressed album's sheet (Play, View, Move, Replace, Delete).
+  // An album's menu (lib/AlbumMenu), the same as everywhere.
   let menu = $state<{ source: string; a: ListedAlbum; offer: AlbumOffer } | null>(null);
 
   // The album left its library (moved, replaced, deleted): gone at once, before the list is read again.
   function gone(source: string, id: string) {
-    if (view) view.sources = view.sources.map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== id) } : s));
+    const v = library.view;
+    if (v) v.sources = v.sources.map((s) => (s.id === source ? { ...s, albums: s.albums.filter((x) => x.id !== id) } : s));
   }
 
   // A server's list could not be read while albums are shown (they stay): one toast says so, not a line that comes and
@@ -44,10 +45,10 @@
 
   async function load(fresh: boolean) {
     try {
-      view = await getAlbums(prefs.source || undefined, fresh);
+      await readLibrary(fresh);
       error = null;
     } catch (e) {
-      if (view === null) error = e instanceof ApiError ? e.message : 'Unexpected error';
+      if (library.view === null) error = e instanceof ApiError ? e.message : 'Unexpected error';
     }
     tellReadError();
   }
@@ -100,12 +101,10 @@
     };
   });
 
-  // An album's sheet: what it offers depends on its library and what Cratarr may do there.
+  // An album's menu: what its library allows depends on the library and what Cratarr may do there.
   function openMenu(shelf: ShelfSource, a: ListedAlbum) {
     const s = sources?.find((x) => x.id === shelf.id);
-    if (!s) return false;
-    menu = { source: s.id, a, offer: offerIn(s, a) };
-    return true;
+    if (s) menu = { source: s.id, a, offer: offerIn(s, a) };
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
 
@@ -158,7 +157,7 @@
 
 {#if menu}
   {@const m = menu}
-  <LibrarySheet
+  <AlbumMenu
     source={m.source}
     album={m.a}
     offer={m.offer}
