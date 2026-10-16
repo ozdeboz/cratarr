@@ -28,6 +28,7 @@
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import PlaylistToggles from './PlaylistToggles.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
   import { enqueue, jump as localJump, moveUpcoming, removeUpcoming, startRadio } from './localPlayer.svelte';
@@ -344,12 +345,11 @@
         {/if}
       </div>
     {:else if step === 'lists'}
-      <div class="heading">Add to / remove from playlists</div>
-      <div role="group" aria-label="Playlists">
+      <PlaylistToggles title="Add to / remove from playlists">
         {#each playlists as p (p.id)}
           <MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />
         {/each}
-      </div>
+      </PlaylistToggles>
     {:else if step === 'details'}
       {#if details}
         <dl class="facts">
@@ -397,11 +397,4 @@
     place-items: center;
     padding: 16px 0;
   }
-
-  .heading {
-    padding: 0 16px 12px;
-    font-size: 18px;
-    text-align: center;
-  }
-
 </style>

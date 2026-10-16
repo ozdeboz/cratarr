@@ -79,6 +79,7 @@
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
   import { download, inApp } from './app.svelte';
+  import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
@@ -1136,6 +1137,14 @@
         {/each}
         <span class="grow"></span>
         {#if crate}
+          {#if inApp && source}
+            <!-- Kept on this device (decision 0038): the device follows the crate as its rules change what it holds. -->
+            {@const c = crate}
+            {@const keepOn = isKept('crate', source, c)}
+            <button class="icon" class:on={keepOn} aria-pressed={keepOn} aria-label="Keep on this device" title="Keep on this device" onclick={() => setKept('crate', source, c, !keepOn, title)}
+              ><Icon name="download" size={22} /></button
+            >
+          {/if}
           {#if favState}
             <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
               ><Icon name={favState.icon} size={24} /></button
@@ -1622,6 +1631,11 @@
   /* Finamp's playlist heart: filled when it is a favourite; the pin filled when pinned. */
   .icon.fav :global(svg) {
     fill: currentColor;
+  }
+
+  /* An action that is on (a crate kept on this device): in the accent. */
+  .actbar .icon.on {
+    color: var(--accent);
   }
 
   /* The narrowest panel: the bar's icons a little closer, so ✕, the pencil, the pin, the heart, the menu and the

@@ -7,6 +7,8 @@ export type Prefs = {
   theme: Theme;
   /** Index into the playlist chip widths (Playlists.svelte). */
   zoom: number;
+  /** The same for a menu's playlists (Add to playlist, lib/PlaylistToggles): one column by default. */
+  listZoom: number;
   /** Playlists the track is in come first. */
   showProgress: boolean;
   /** View's Dates: an album's date added as how long ago ("3 days ago"), not the date. */
@@ -58,6 +60,7 @@ export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
   zoom: 2,
+  listZoom: ZOOM_STEPS - 1,
   showProgress: true,
   relativeDates: false,
   source: '',
@@ -90,6 +93,7 @@ function read(): Prefs {
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
+      if (Number.isInteger(saved.listZoom) && saved.listZoom >= 0 && saved.listZoom < ZOOM_STEPS) p.listZoom = saved.listZoom;
       if (typeof saved.filterOpen === 'boolean') p.filterOpen = saved.filterOpen;
       if (typeof saved.relatedFilterOpen === 'boolean') p.relatedFilterOpen = saved.relatedFilterOpen;
       if (saved.albumLayout === 'rows' || saved.albumLayout === 'grid') p.albumLayout = saved.albumLayout;
