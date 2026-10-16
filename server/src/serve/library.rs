@@ -441,10 +441,14 @@ impl Library {
     }
 
     /// Where each catalogue folder was at the last build: (folder, path).
-    /// The songs of one folder by their file: their id, album, length and when they came (the crates' cards).
+    /// The songs of one folder by their file: their id, album, length and when they came (the crates' cards). When a
+    /// song came is its album's when that is earlier: an album's date can be imported from a media server.
     pub fn songs_by_rel(&self, folder: i64) -> Result<HashMap<String, RelSong>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT rel, id, album_id, duration_ms, created FROM songs WHERE folder = ?1")?;
+        let mut st = db.prepare(
+            "SELECT s.rel, s.id, s.album_id, s.duration_ms, MIN(COALESCE(s.created, a.created), COALESCE(a.created, s.created))
+             FROM songs s LEFT JOIN albums a ON a.id = s.album_id WHERE s.folder = ?1",
+        )?;
         let rows = st.query_map(rusqlite::params![folder], |r| {
             Ok((
                 r.get::<_, String>(0)?,

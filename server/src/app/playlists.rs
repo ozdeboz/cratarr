@@ -122,6 +122,8 @@ fn crate_stats(
     now: i64,
 ) -> CrateStats {
     const WEEK: i64 = 7 * 86_400;
+    // What Cratarr's first look at the library found was there before it: not new, however young Cratarr is.
+    let first_look = songs.values().filter_map(|s| s.created).min().unwrap_or(0) + 86_400;
     let known: Vec<&crate::serve::library::RelSong> = lines.iter().filter_map(|l| songs.get(l)).collect();
     let mut genres: Vec<(String, usize)> = Vec::new();
     for f in lines.iter().filter_map(|l| facts.get(l.as_str())) {
@@ -150,7 +152,7 @@ fn crate_stats(
         tracks: lines.len(),
         seconds: known.iter().filter_map(|s| s.duration_ms).filter(|d| *d > 0).map(|d| d as u64).sum::<u64>() / 1000,
         unplayed: played.map(|p| known.iter().filter(|s| !p.contains(&s.song)).count()),
-        new_week: known.iter().filter(|s| s.created.is_some_and(|c| c >= now - WEEK)).count(),
+        new_week: known.iter().filter(|s| s.created.is_some_and(|c| c >= now - WEEK && c > first_look)).count(),
         genres: genres.into_iter().take(3).map(|(g, _)| g).collect(),
         covers: albums
             .into_iter()
@@ -265,6 +267,7 @@ mod card_tests {
         let by: HashMap<&str, &crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
         let song = |id: &str, album: &str, ms: i64, created: i64| RelSong { song: id.into(), album: album.into(), duration_ms: Some(ms), created: Some(created) };
         let songs: HashMap<String, RelSong> = [
+            ("old.flac".to_string(), song("tr-0", "al-z", 1_000, now - 300 * 86_400)),
             ("A/1.flac".to_string(), song("tr-1", "al-a", 200_000, now - 30 * 86_400)),
             ("A/2.flac".to_string(), song("tr-2", "al-a", 100_500, now - 30 * 86_400)),
             ("B/1.flac".to_string(), song("tr-3", "al-b", 60_000, now - 86_400)),
