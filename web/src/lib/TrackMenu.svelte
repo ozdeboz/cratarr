@@ -131,16 +131,22 @@
   // The file as it is, read as the menu opens: its genres for Go to genre, and Details.
   let details = $state<TrackFile | null>(null);
   let detailsFailed = $state(false);
+  // Read again only for another track: the playing track's view is made anew at every report of the player (its
+  // position), and reading on each made the genres' entries come and go (and asked the server again and again).
+  const fileOf = $derived(t ? `${t.source}\n${t.id}` : null);
   $effect(() => {
-    if (!t) return;
-    const { source, id } = t;
+    const key = fileOf;
     details = null;
     detailsFailed = false;
+    if (!key) return;
+    const [source, id] = key.split('\n');
     trackFile(source, id).then(
       (d) => {
-        if (t?.source === source && t.id === id) details = d;
+        if (fileOf === key) details = d;
       },
-      () => (detailsFailed = true),
+      () => {
+        if (fileOf === key) detailsFailed = true;
+      },
     );
   });
   function showDetails() {
