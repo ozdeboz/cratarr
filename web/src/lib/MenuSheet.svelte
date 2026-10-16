@@ -15,6 +15,7 @@
   import Icon from './Icon.svelte';
   import { accentOf } from './remote.svelte';
   import { sheetArea } from './SheetArea.svelte';
+  import { sheetDrag } from './sheetDrag';
 
   let {
     label,
@@ -76,23 +77,8 @@
   /** A press began on the backdrop (since the sheet opened). */
   let pressedHere = false;
 
-  // Dragging the sheet down past 80 px closes it (up, for one at the top); less springs back.
+  // Dragged down from anywhere on it, it closes (up, for one at the top); a short drag springs back (lib/sheetDrag).
   let dy = $state(0);
-  let from: { y: number; id: number } | null = null;
-  function down(e: PointerEvent) {
-    if ((e.target as Element).closest('button, input, select, textarea, a, .scroll')) return;
-    from = { y: e.clientY, id: e.pointerId };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  }
-  function move(e: PointerEvent) {
-    if (from && e.pointerId === from.id) dy = top ? Math.min(0, e.clientY - from.y) : Math.max(0, e.clientY - from.y);
-  }
-  function up() {
-    if (!from) return;
-    from = null;
-    if (Math.abs(dy) > 80) onclose();
-    dy = 0;
-  }
 
   // The content grows and shrinks smoothly between the entries and a step (Finamp's inline panels).
   let inner = $state<HTMLElement>();
@@ -159,10 +145,7 @@
   class:dragging={dy !== 0}
   class:top
   bind:this={sheet}
-  onpointerdown={down}
-  onpointermove={move}
-  onpointerup={up}
-  onpointercancel={up}
+  use:sheetDrag={{ onclose, top, ondrag: (d) => (dy = d) }}
   in:fly|global={{ y: top ? -400 : 400, duration: SHEET_IN, easing: decelerate }}
   out:fly|global={{ y: top ? -400 : 400, duration: SHEET_OUT, easing: decelerate }}
 >
