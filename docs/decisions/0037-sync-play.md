@@ -153,7 +153,9 @@ device; this keeps one player, the app's.
 - **Snapcast's player** is Snapdroid's build of snapclient (GPL-3.0), taken from Snapdroid's release at build time and
   checked against a pinned checksum, and run by the app as Snapdroid runs it; no binary is kept in this repository.
 - **The page:** the group's leader shows a crown in the device sheet (the owner).
-- **Port:** 1704 (`CRATARR_SNAPCAST_BIND`, empty to switch sync play off). Tested against snapclient 0.31: chunks played
+- **Port:** 1704 (`CRATARR_SNAPCAST_BIND`, empty to switch sync play off), on the host the player reaches Cratarr on,
+  or on `CRATARR_SNAPCAST_HOST` when that is another: a page on a public name (behind a reverse proxy) with the port
+  open on the local network only. Found on the first try: the phone, on the public name, could not reach 1704. Tested against snapclient 0.31: chunks played
   at age 0, silence on a break, heard again as the new sound began.
 
 ## Amended (2026-10-16): how the group and its settings are shown, after looking at the others
