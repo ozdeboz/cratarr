@@ -332,8 +332,11 @@
     font-size: 0.9rem;
   }
 
-  /* A switch: on as the chips are, off only outlined; the last one on cannot be switched off. */
+  /* A switch: on as the chips are, off only outlined; the last one on cannot be switched off. Above the card's own tap
+     area (.pick::after), which covers the whole card. */
   .lib {
+    position: relative;
+    z-index: 1;
     cursor: pointer;
   }
 
