@@ -146,6 +146,8 @@ pub struct FileRow {
     pub disc: Option<u32>,
     pub track: Option<u32>,
     pub year: Option<i32>,
+    /// Its tempo (decision 0035): the BPM tag, else the analysis' (while the file is as analysed); none without a beat.
+    pub bpm: Option<u32>,
 }
 
 /// One album directory as the catalogue knows it (see `Catalogue::album_facts`).
@@ -806,7 +808,11 @@ impl Catalogue {
         let mut file = db.prepare_cached(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"))?;
         let mut tags = db.prepare_cached(
             "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2
-             AND name IN ('title', 'artist', 'album', 'albumartist', 'tracknumber', 'discnumber', 'originaldate', 'date') ORDER BY n",
+             AND name IN ('title', 'artist', 'album', 'albumartist', 'tracknumber', 'discnumber', 'originaldate', 'date', 'bpm') ORDER BY n",
+        )?;
+        let mut analysed = db.prepare_cached(
+            "SELECT a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+             WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime",
         )?;
         // "3", "3/12": the number before a slash.
         let number = |v: &str| v.split('/').next().and_then(|n| n.trim().parse::<u32>().ok());
@@ -819,7 +825,7 @@ impl Catalogue {
                 let Some((folder, rel)) = place else { return Ok(FileRow::default()) };
                 let mut row = FileRow { duration_ms: file.query_row(params![folder, rel], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten(), ..FileRow::default() };
                 let found = tags.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-                let (mut original, mut date) = (None, None);
+                let (mut original, mut date, mut bpm) = (None, None, None);
                 for t in found {
                     let (name, value) = t?;
                     // The first value of each (a tag can hold several).
@@ -831,10 +837,17 @@ impl Catalogue {
                         "tracknumber" => row.track = row.track.or_else(|| number(&value)),
                         "discnumber" => row.disc = row.disc.or_else(|| number(&value)),
                         "originaldate" => original = original.or_else(|| year(&value)),
+                        "bpm" => bpm = bpm.or_else(|| crate::crates::bpm_of(&value)),
                         _ => date = date.or_else(|| year(&value)),
                     }
                 }
                 row.year = original.or(date);
+                // As the crates' BPM axis and the served library read it.
+                let bpm = match bpm {
+                    Some(b) => Some(b),
+                    None => analysed.query_row(params![folder, rel], |r| r.get::<_, Option<f64>>(0)).optional()?.flatten(),
+                };
+                row.bpm = bpm.map(f64::round).filter(|b| *b > 0.0).map(|b| b as u32);
                 row.track_id = ids.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?;
                 Ok(row)
             })
@@ -2108,6 +2121,19 @@ mod tests {
             "the first value of a tag that has several"
         );
         assert_eq!(rows[2], FileRow::default());
+        // Its tempo: the BPM tag, else the analysis' while the file is as analysed, rounded.
+        let db = cat.db();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'bpm', 'bpm', '92,5')", params![two]).unwrap();
+        db.execute(
+            "INSERT INTO analysis (folder, rel, size, mtime, version, bpm, analysed_at) SELECT folder, rel, size, mtime, 1, 136.97, 0 FROM files WHERE rel = ?1",
+            params![one],
+        )
+        .unwrap();
+        drop(db);
+        let rows = cat.file_rows("jellyfin", 0, &[two.clone(), one.clone()]).unwrap();
+        assert_eq!((rows[0].bpm, rows[1].bpm), (Some(93), Some(137)));
+        cat.db().execute("UPDATE analysis SET mtime = mtime + 1 WHERE rel = ?1", params![one]).unwrap();
+        assert_eq!(cat.file_rows("jellyfin", 0, &[one.clone()]).unwrap()[0].bpm, None, "a file changed since its analysis");
         std::fs::remove_dir_all(&d).ok();
     }
 

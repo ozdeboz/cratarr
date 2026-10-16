@@ -190,6 +190,9 @@ pub struct PlaylistRow {
     pub track: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub year: Option<i32>,
+    /// its tempo (the BPM tag, else the analysis', decision 0035),
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bpm: Option<u32>,
     /// the user's plays of the track and when it was last played,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub play_count: Option<u32>,
@@ -870,6 +873,7 @@ impl PlaylistService {
                     disc: f.disc,
                     track: f.track,
                     year: f.year,
+                    bpm: f.bpm,
                     play_count: None,
                     last_played: None,
                     added: None,

@@ -345,7 +345,7 @@
   // Symfonium's header over the tracks: their order (the subject's own, or by a field, either way round), how many, and
   // select mode. The list shows and plays in that order; an album's rows keep their track numbers. A crate's order is
   // of the pages it has shown.
-  type SortKey = 'own' | 'title' | 'artist' | 'album' | 'length' | 'albumArtist' | 'year' | 'track' | 'plays' | 'lastPlayed' | 'added';
+  type SortKey = 'own' | 'title' | 'artist' | 'album' | 'length' | 'tempo' | 'albumArtist' | 'year' | 'track' | 'plays' | 'lastPlayed' | 'added';
   let sortKey = $state<SortKey>('own');
   let sortDown = $state(false);
   let sortOpen = $state(false);
@@ -355,6 +355,9 @@
     { value: 'artist', label: 'Artist' },
     ...(album ? [] : [{ value: 'album' as SortKey, label: 'Album' }]),
     { value: 'length', label: 'Length' },
+    // Tempo (decision 0035): a crate's or a playlist's tracks slowest first (or fastest), as a set builds up. Not an
+    // album's, which plays in its own order.
+    ...(album ? [] : [{ value: 'tempo' as SortKey, label: 'Tempo' }]),
     // A playlist's: what its files and the plays say, and when an entry came (decision 0025, amended 2026-10-16: Orders).
     ...(plain && !artist
       ? []
@@ -387,6 +390,7 @@
     // A number to order by; none (a value the file or the plays do not have) comes first, in the playlist's order.
     const num = (r: PlaylistRow): number | null =>
       sortKey === 'length' ? (r.duration_secs ?? null)
+      : sortKey === 'tempo' ? (r.bpm ?? null)
       : sortKey === 'year' ? (r.year ?? null)
       : sortKey === 'track' ? (r.track == null ? null : (r.disc ?? 1) * 10_000 + r.track)
       : sortKey === 'plays' ? (r.play_count ?? 0)
@@ -397,7 +401,7 @@
     const way = sortDown ? -1 : 1;
     if (sortKey === 'own') {
       if (sortDown) list.reverse();
-    } else if (['length', 'year', 'track', 'plays', 'lastPlayed', 'added'].includes(sortKey)) list.sort((a, b) => way * byNumber(num(a.r), num(b.r)));
+    } else if (['length', 'tempo', 'year', 'track', 'plays', 'lastPlayed', 'added'].includes(sortKey)) list.sort((a, b) => way * byNumber(num(a.r), num(b.r)));
     else list.sort((a, b) => way * ordered(text(a.r), text(b.r)));
     return list;
   });
@@ -533,7 +537,7 @@
     // An artist as the radio's input (decision 0036), as a crate is: their tracks, and like them from anywhere.
     if (artist && isLocal() && source === 'cratarr') list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: artistRadio, disabled: !canPlay });
     // A crate as the radio's input (decision 0036): like it, from anywhere; or only its tracks, endlessly.
-    else if (isLocal()) {
+    else if (crate && isLocal()) {
       list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: () => crateRadio(false), disabled: !canPlay });
       list.push({ key: 'station', icon: 'radioTower', label: 'Play as radio', run: () => crateRadio(true), disabled: !canPlay });
     }

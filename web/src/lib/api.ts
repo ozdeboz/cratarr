@@ -415,6 +415,8 @@ export type PlaylistRow = {
   disc?: number;
   track?: number;
   year?: number;
+  /** its tempo (the BPM tag, else the analysis', decision 0035), */
+  bpm?: number;
   /** the user's plays of the track and when it was last played (epoch seconds), */
   play_count?: number;
   last_played?: number;
