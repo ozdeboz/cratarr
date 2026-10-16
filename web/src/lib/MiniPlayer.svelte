@@ -5,8 +5,11 @@
   // there is room, else over it). Swipe left or right: next or previous; the bar follows the finger and springs
   // back. Swipe down does nothing (Finamp stops and clears the queue; not on a remote across the room). The title does
   // not scroll (Finamp's default).
-  // With nothing to play (no track, no queue) it is a small button for where the music will play: it opens Play on.
+  // Where it plays sits on the bar, as Spotify's device button beside the heart (the owner, 2026-10-17): it opens the
+  // output's sheet, and is in the accent while the music plays on another player. The pills at the top give it up
+  // while the bar is there (lib/TopPill).
   import Icon from './Icon.svelte';
+  import OutputSheet from './OutputSheet.svelte';
   import { player } from './live.svelte';
   import { panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
@@ -17,6 +20,7 @@
   const pos = $derived(position());
   const dur = $derived(duration());
   const share = $derived(dur ? Math.min(1, pos / dur) : 0);
+  let outputOpen = $state(false);
 
   /** The full player: beside the page when the window has room and that is the chosen place, else over it. */
   // Tapping it brings the player: into the panel beside the page (over a viewed playlist there), or over everything.
@@ -39,7 +43,7 @@
   let el = $state<HTMLElement>();
 
   function down(e: PointerEvent) {
-    if ((e.target as Element).closest('.own')) return; // the play button and the heart act on their own
+    if ((e.target as Element).closest('.own')) return; // the play button, the device and the heart act on their own
     from = { x: e.clientX, y: e.clientY, id: e.pointerId, t: e.timeStamp };
     last = { x: e.clientX, t: e.timeStamp };
     speed = 0;
@@ -121,6 +125,10 @@
           {#if np.progress}<span class="time">{clockText(pos)} / {dur ? clockText(dur) : '–:––'}</span>{/if}
         </div>
       </div>
+      <button class="own device" class:elsewhere={!!np.player} aria-haspopup="dialog"
+        aria-label={np.player ? `Playing on ${np.player}; play on` : 'Where it plays'} onclick={() => (outputOpen = true)}
+        ><Icon name="speaker" size={24} /></button
+      >
       {#if np.favorite !== null}
         <button class="own fav" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
           ><Icon name="heart" size={28} /></button
@@ -128,6 +136,9 @@
       {/if}
     </div>
   </div>
+{/if}
+{#if outputOpen}
+  <OutputSheet onclose={() => (outputOpen = false)} />
 {/if}
 
 <style>
@@ -248,7 +259,8 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .fav {
+  .fav,
+  .device {
     position: relative;
     display: grid;
     flex: none;
@@ -260,6 +272,14 @@
     border: 0;
     color: var(--text);
     cursor: pointer;
+  }
+
+  .device {
+    width: 40px;
+  }
+
+  .device.elsewhere {
+    color: var(--accent);
   }
 
   .fav.on :global(svg) {

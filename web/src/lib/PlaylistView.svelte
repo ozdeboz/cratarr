@@ -1043,7 +1043,7 @@
         {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
         <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
       </span>
-      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} />{/if}<PanelPlace /></span>
+      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} />{/if}<PanelPlace /></span>
     </div>
   {/if}
 

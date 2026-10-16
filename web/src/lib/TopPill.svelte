@@ -2,7 +2,8 @@
   // Symfonium's floating pill (2026-10-15), at the top right of the panel (lib/PlaylistView) and of a page with something
   // to play (App.svelte): the page's search (it opens into a field over the row), the filter (lib/FilterSheet), View
   // (lib/ViewSheet: a page's order, layout and size, or the panel list's order), and where it plays (lib/OutputSheet)
-  // where nothing else leads to it (no mini-player, no player beside the page), and last the page's own button (a + to
+  // where nothing else leads to it (no mini-player, which has it beside the heart; no player beside the page; the panel's
+  // pill and the page's alike), and last the page's own button (a + to
   // make something, its ticked ones' ⋮; pageView.usePageAction). Google's Cast guidelines put the device button at the
   // top right of the screen that plays.
   import FilterSheet from './FilterSheet.svelte';
