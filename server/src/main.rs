@@ -1,4 +1,7 @@
 mod albums;
+// Decision 0035's core; the pass that uses it (claude-5f) comes next.
+#[allow(dead_code)]
+mod analysis;
 mod api;
 mod app;
 mod catalogue;
