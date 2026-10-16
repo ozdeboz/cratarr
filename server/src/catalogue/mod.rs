@@ -1642,6 +1642,9 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
 }
 
 /// See `Catalogue::served_rows`; any connection to the catalogue's file.
+/// How far a file's header may be from the length its decoding measured before the measured one is served.
+const LENGTH_SLACK_MS: u64 = 1_500;
+
 pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
     let mut rows: Vec<ServedRow> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -1671,15 +1674,30 @@ pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
     // Their analyses, while the files are as they were then, and their albums' gains (decision 0035).
     let albums = album_gains(db, folder)?;
     let mut st = db.prepare(
-        "SELECT a.rel, a.track_gain_db, a.track_peak, a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+        "SELECT a.rel, a.track_gain_db, a.track_peak, a.bpm, a.duration_secs FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
          WHERE a.folder = ?1 AND a.size = f.size AND a.mtime = f.mtime",
     )?;
     let found = st.query_map(params![folder], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, Option<f64>>(1)?, r.get::<_, Option<f64>>(2)?, r.get::<_, Option<f64>>(3)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<f64>>(1)?,
+            r.get::<_, Option<f64>>(2)?,
+            r.get::<_, Option<f64>>(3)?,
+            r.get::<_, Option<f64>>(4)?,
+        ))
     })?;
     for a in found {
-        let (rel, gain, peak, bpm) = a?;
-        let (Some(&i), Some(gain), Some(peak)) = (index.get(&rel), gain, peak) else { continue };
+        let (rel, gain, peak, bpm, measured) = a?;
+        let Some(&i) = index.get(&rel) else { continue };
+        // The length the decoding measured, where the file's header says otherwise (a VBR MP3 without a Xing header
+        // whose length was guessed from its bitrate, a FLAC without its total: 52 of 29,687 files on 2026-10-16, one
+        // album ten times too long).
+        if let Some(ms) = measured.filter(|s| *s > 0.0).map(|s| (s * 1000.0).round() as u64)
+            && rows[i].duration_ms.is_none_or(|d| d.abs_diff(ms) > LENGTH_SLACK_MS)
+        {
+            rows[i].duration_ms = Some(ms);
+        }
+        let (Some(gain), Some(peak)) = (gain, peak) else { continue };
         let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
         rows[i].analysis = Some(RowAnalysis { track_gain_db: gain as f32, track_peak: peak as f32, bpm: bpm.map(|b| b as f32), album: albums.get(dir).copied() });
     }
@@ -1882,6 +1900,25 @@ mod tests {
         // It follows its file.
         cat.move_files(folder, "A - B (2020)", folder, "A - B (2020) moved").unwrap();
         assert!(cat.analysis_of(folder, &two.1.replace("A - B (2020)", "A - B (2020) moved")).is_some());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn the_measured_length_is_served_where_the_header_lied() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let todo = cat.unanalysed(10).unwrap();
+        // One file's header says ten times its length; the other's is a second off, which stays.
+        cat.db().execute("UPDATE files SET duration_ms = 2000000 WHERE rel LIKE '%One.mp3'", []).unwrap();
+        cat.db().execute("UPDATE files SET duration_ms = 201000 WHERE rel LIKE '%Two.flac'", []).unwrap();
+        for (folder, rel, _, size, mtime) in &todo {
+            cat.store_analysis(*folder, rel, *size, *mtime, &an_analysis(-3.0, 500)).unwrap();
+        }
+        let rows = cat.served_rows(todo[0].0).unwrap();
+        let length = |end: &str| rows.iter().find(|r| r.rel.ends_with(end)).unwrap().duration_ms;
+        assert_eq!((length("One.mp3"), length("Two.flac")), (Some(200_000), Some(201_000)));
         std::fs::remove_dir_all(&d).ok();
     }
 
