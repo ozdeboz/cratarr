@@ -136,6 +136,11 @@ pub struct FileRow {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub duration_ms: Option<i64>,
+    /// The album artist, the disc and track number, and the (original) year: the panel's orders.
+    pub album_artist: Option<String>,
+    pub disc: Option<u32>,
+    pub track: Option<u32>,
+    pub year: Option<i32>,
 }
 
 /// One album directory as the catalogue knows it (see `Catalogue::album_facts`).
@@ -758,8 +763,13 @@ impl Catalogue {
         let db = self.db();
         let mut file = db.prepare_cached(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"))?;
         let mut tags = db.prepare_cached(
-            "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2 AND name IN ('title', 'artist', 'album') ORDER BY n",
+            "SELECT name, value FROM tags WHERE folder = ?1 AND rel = ?2
+             AND name IN ('title', 'artist', 'album', 'albumartist', 'tracknumber', 'discnumber', 'originaldate', 'date') ORDER BY n",
         )?;
+        // "3", "3/12": the number before a slash.
+        let number = |v: &str| v.split('/').next().and_then(|n| n.trim().parse::<u32>().ok());
+        // "1994", "1994-05-01": its first four digits.
+        let year = |v: &str| v.get(..4).and_then(|y| y.parse::<i32>().ok());
         let mut ids = db.prepare_cached("SELECT track_id FROM source_ids WHERE source = ?1 AND folder = ?2 AND rel = ?3 LIMIT 1")?;
         places
             .iter()
@@ -767,16 +777,22 @@ impl Catalogue {
                 let Some((folder, rel)) = place else { return Ok(FileRow::default()) };
                 let mut row = FileRow { duration_ms: file.query_row(params![folder, rel], |r| r.get::<_, Option<i64>>(0)).optional()?.flatten(), ..FileRow::default() };
                 let found = tags.query_map(params![folder, rel], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                let (mut original, mut date) = (None, None);
                 for t in found {
                     let (name, value) = t?;
-                    let slot = match name.as_str() {
-                        "title" => &mut row.title,
-                        "artist" => &mut row.artist,
-                        _ => &mut row.album,
-                    };
                     // The first value of each (a tag can hold several).
-                    slot.get_or_insert(value);
+                    match name.as_str() {
+                        "title" => drop(row.title.get_or_insert(value)),
+                        "artist" => drop(row.artist.get_or_insert(value)),
+                        "album" => drop(row.album.get_or_insert(value)),
+                        "albumartist" => drop(row.album_artist.get_or_insert(value)),
+                        "tracknumber" => row.track = row.track.or_else(|| number(&value)),
+                        "discnumber" => row.disc = row.disc.or_else(|| number(&value)),
+                        "originaldate" => original = original.or_else(|| year(&value)),
+                        _ => date = date.or_else(|| year(&value)),
+                    }
                 }
+                row.year = original.or(date);
                 row.track_id = ids.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?;
                 Ok(row)
             })
@@ -1780,7 +1796,8 @@ mod tests {
                 title: Some("One".into()),
                 artist: Some("A".into()),
                 album: Some("B".into()),
-                duration_ms: Some(61500)
+                duration_ms: Some(61500),
+                ..FileRow::default()
             },
             "the first value of a tag that has several"
         );

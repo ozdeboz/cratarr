@@ -104,3 +104,9 @@ option for the user", asked when it happens.
 - **A server that holds each track once (Jellyfin)** is synced on the first copies (`playlist_merge::merge_once`,
   `Source::playlists_keep_repeats`): the file's repeats are put back where they were and are never read as removed
   there; a track taken out on either side goes with all its copies. A server that keeps repeats is merged copy by copy.
+
+**Orders that come with it (2026-10-16):** a playlist's tracks also order by album artist, year and track number (the
+files' tags), play count and last played (the owner's plays), and **Added**: when each entry came. Every playlist
+write tells the user data what came and went (`playlists::on_write`), keyed as "the n-th copy of a line". Taking out
+an earlier copy of a repeated track hands the later copy its date: only repeats are touched by that, and the order is
+therefore not exact for them. Entries a playlist held before dates were kept have none and come first, in file order.

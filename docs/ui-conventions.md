@@ -73,7 +73,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   and Make playlist). Scrolled up to the top the action bar stays there, and the pills float just under it, over the
   list. The pills are the panel's (not the pages'), so the player covers them once open. Under the cover the name large, one line of what it is (an album: length,
   year, format, bitrate; otherwise how many tracks and the length), an album's artist as a chip, the genres. Over the
-  tracks **their order** (the subject's own, or by title, artist, album, length; a tap chooses, the arrow turns it
+  tracks **their order** (the subject's own, or by title, artist, album, length; a playlist's also by album artist, year,
+  track number, play count, last played and when an entry was added, for entries added since 2026-10-16; a tap chooses, the arrow turns it
   round), how many, and **select mode** (a long-press on a track, or the icon: circles to tick, and a bar floating over
   the list's end plays, puts next, queues or favours the ticked tracks, and in the app downloads them). An album's rows have no cover: the number,
   the playing one's dots instead; every track's row ends in ⋮ (its menu). In

@@ -328,6 +328,16 @@ export type PlaylistRow = {
   album: string | null;
   duration_secs: number | null;
   missing: boolean;
+  /** A playlist's rows, for the panel's orders: from the file's tags, */
+  album_artist?: string;
+  disc?: number;
+  track?: number;
+  year?: number;
+  /** the user's plays of the track and when it was last played (epoch seconds), */
+  play_count?: number;
+  last_played?: number;
+  /** and when the entry came (none for one held before Cratarr kept that). */
+  added?: number;
 };
 
 /** Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16). */

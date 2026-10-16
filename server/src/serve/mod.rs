@@ -36,6 +36,14 @@ static INSTANCE: std::sync::OnceLock<Arc<Serve>> = std::sync::OnceLock::new();
 
 pub fn set_instance(serve: Arc<Serve>) {
     let _ = INSTANCE.set(serve);
+    // Every playlist write: when its entries came is kept (the panel's Added order).
+    crate::playlists::on_write(Box::new(|id, before, after| {
+        if let Some(s) = instance()
+            && let Err(e) = s.userdata.entries_written(id, before, after)
+        {
+            tracing::warn!("playlist {id}: when its entries came not kept: {e:#}");
+        }
+    }));
 }
 
 pub fn instance() -> Option<Arc<Serve>> {

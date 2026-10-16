@@ -487,6 +487,7 @@ impl PlayingService {
                     album: t.album,
                     duration_secs: t.duration_secs,
                     missing: false,
+                    ..Default::default()
                 }
             })
             .collect();

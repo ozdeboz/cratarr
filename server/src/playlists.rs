@@ -264,6 +264,15 @@ fn valid_new_name(name: &str) -> bool {
 
 /// The nearest name `valid_new_name` takes, for a playlist named elsewhere (a server's): reserved characters become
 /// "-", leading dots and spaces and trailing dots and spaces go, long names are cut. "Playlist" when nothing is left.
+/// Told every playlist write: its name, and its entries before and after. Set once at start (the user data keeps when
+/// each entry came, for the panel's Added order).
+pub type OnWrite = Box<dyn Fn(&str, &[String], &[String]) + Send + Sync>;
+static ON_WRITE: std::sync::OnceLock<OnWrite> = std::sync::OnceLock::new();
+
+pub fn on_write(told: OnWrite) {
+    let _ = ON_WRITE.set(told);
+}
+
 pub fn usable_name(wanted: &str) -> String {
     let mut s: String = wanted.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '-' } else { c }).collect();
     s = s.trim_start_matches(['.', ' ']).to_string();
@@ -446,6 +455,10 @@ impl Store {
     /// into place. The caller must hold the write lock. Written as given, repeats included: a playlist holds a track
     /// twice when it was asked to (decision 0025, amended 2026-10-16). Returns the text as written.
     async fn commit(&self, id: &str, path: &Path, perms: std::fs::Permissions, new_text: &str) -> Result<String> {
+        let before: Vec<String> = match tokio::fs::read_to_string(path).await {
+            Ok(t) => m3u::entries(&t).map(|l| unprefixed(&l, &self.prefix)).collect(),
+            Err(_) => Vec::new(),
+        };
         self.backup(id, path).await?;
         let tmp = self.dir.join(format!(".{id}.m3u.cratarr-tmp"));
         tokio::fs::write(&tmp, new_text).await.with_context(|| format!("writing {}", tmp.display()))?;
@@ -459,6 +472,10 @@ impl Store {
                 .write()
                 .await
                 .insert(id.to_string(), Cached::parse((m.modified().unwrap_or(UNIX_EPOCH), m.len()), new_text, &self.prefix));
+        }
+        if let Some(told) = ON_WRITE.get() {
+            let after: Vec<String> = m3u::entries(new_text).map(|l| unprefixed(&l, &self.prefix)).collect();
+            told(id, &before, &after);
         }
         Ok(new_text.to_string())
     }

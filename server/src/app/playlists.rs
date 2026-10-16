@@ -85,7 +85,7 @@ pub struct CrateCounts {
 
 /// One line of a playlist as its view shows it (decision 0023). `entry` is the line as the `.m3u` has it (library-
 /// relative), `file` its file name; the rest is what the catalogue knows, `None` where it does not.
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Default, Serialize, PartialEq)]
 pub struct PlaylistRow {
     pub entry: String,
     pub file: String,
@@ -95,6 +95,23 @@ pub struct PlaylistRow {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub duration_secs: Option<f64>,
+    /// The panel's orders (decision 0025's 2026-10-16 amendment): from the file's tags,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disc: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    /// the user's plays of the track and when it was last played,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub play_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_played: Option<i64>,
+    /// and when the entry came into the playlist (none for one held before Cratarr kept that).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added: Option<i64>,
     /// No such file in the Music folder.
     pub missing: bool,
 }
@@ -681,7 +698,29 @@ impl PlaylistService {
             .or_else(|| sources.first())
             .map(|(a, _)| a.cfg.id.clone())
             .unwrap_or_default();
-        let rows = self.rows_of(entries, &source).await?;
+        let mut rows = self.rows_of(entries.clone(), &source).await?;
+        // The user's plays of each track and when each entry came, as the user data keeps them (the panel's orders).
+        if let Some(serve) = crate::serve::instance() {
+            let (id, rs) = (id.to_string(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
+            let facts = tokio::task::spawn_blocking(move || {
+                let plays = match serve.users.owner() {
+                    Some(me) => serve.userdata.play_stats(&me, &rs).unwrap_or_default(),
+                    None => Default::default(),
+                };
+                let added = serve.userdata.entries_added(&id, &entries).unwrap_or_default();
+                (plays, added)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let (plays, added) = facts;
+            for (i, row) in rows.iter_mut().enumerate() {
+                if let Some((count, last)) = row.id.as_ref().and_then(|t| plays.get(t)) {
+                    row.play_count = Some(*count);
+                    row.last_played = *last;
+                }
+                row.added = added.get(i).copied().flatten();
+            }
+        }
         Ok((source, rows))
     }
 
@@ -703,6 +742,13 @@ impl PlaylistService {
                     artist: f.artist,
                     album: f.album,
                     duration_secs: f.duration_ms.map(|ms| ms as f64 / 1000.0),
+                    album_artist: f.album_artist,
+                    disc: f.disc,
+                    track: f.track,
+                    year: f.year,
+                    play_count: None,
+                    last_played: None,
+                    added: None,
                 })
                 .collect())
         })

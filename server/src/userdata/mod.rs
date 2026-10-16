@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS bookmark (
   PRIMARY KEY (user, item)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS bookmark_pid ON bookmark (pid);
 CREATE TABLE IF NOT EXISTS playlist_alias (old TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS playlist_entry (
+  playlist TEXT NOT NULL, entry TEXT NOT NULL, n INTEGER NOT NULL, added INTEGER NOT NULL,
+  PRIMARY KEY (playlist, entry, n)) WITHOUT ROWID;
 ";
 
 /// What an annotation is about.
@@ -529,6 +532,8 @@ impl UserData {
         tx.execute("UPDATE playlist_alias SET name = ?2, at = ?3 WHERE name = ?1", params![from, to, at])?;
         tx.execute("INSERT OR REPLACE INTO playlist_alias (old, name, at) VALUES (?1, ?2, ?3)", params![from, to, at])?;
         tx.execute("DELETE FROM playlist_alias WHERE old = ?1", [to])?;
+        tx.execute("DELETE FROM playlist_entry WHERE playlist = ?1", [to])?;
+        tx.execute("UPDATE playlist_entry SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
         tx.commit()?;
         Ok(())
     }
@@ -547,7 +552,59 @@ impl UserData {
     /// A playlist is gone: none of its old names leads anywhere.
     pub fn playlist_gone(&self, name: &str) -> Result<()> {
         self.db().execute("DELETE FROM playlist_alias WHERE name = ?1 OR old = ?1", [name])?;
+        self.db().execute("DELETE FROM playlist_entry WHERE playlist = ?1", [name])?;
         Ok(())
+    }
+
+    /// A playlist was written (every write: the store tells it, `playlists::on_write`): an entry that came now dates
+    /// from now, one that went is forgotten. Entries are told apart as "the n-th copy of a line", so taking out an
+    /// earlier copy hands the later one its date: only repeats are touched by that. Entries a playlist held before
+    /// this was kept have no date (Added order puts them first, in file order).
+    pub fn entries_written(&self, playlist: &str, before: &[String], after: &[String]) -> Result<()> {
+        let (was, now_keys) = (occurrences(before), occurrences(after));
+        let at = now();
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        for (entry, n) in was.iter().filter(|k| !now_keys.contains(k)) {
+            tx.execute("DELETE FROM playlist_entry WHERE playlist = ?1 AND entry = ?2 AND n = ?3", params![playlist, entry, *n as i64])?;
+        }
+        for (entry, n) in now_keys.iter().filter(|k| !was.contains(k)) {
+            tx.execute(
+                "INSERT OR REPLACE INTO playlist_entry (playlist, entry, n, added) VALUES (?1, ?2, ?3, ?4)",
+                params![playlist, entry, *n as i64, at],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// When each of a playlist's entries came (epoch seconds), in order; `None` for one held before dates were kept.
+    pub fn entries_added(&self, playlist: &str, entries: &[String]) -> Result<Vec<Option<i64>>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT added FROM playlist_entry WHERE playlist = ?1 AND entry = ?2 AND n = ?3")?;
+        occurrences(entries)
+            .iter()
+            .map(|(entry, n)| Ok(st.query_row(params![playlist, entry, *n as i64], |r| r.get::<_, i64>(0)).optional()?))
+            .collect()
+    }
+
+    /// Each song's play count and when it was last played, for a user (the panel's orders).
+    pub fn play_stats(&self, user: &str, songs: &[String]) -> Result<std::collections::HashMap<String, (u32, Option<i64>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT play_count, play_date FROM annotation WHERE user = ?1 AND kind = ?2 AND item = ?3")?;
+        let mut out = std::collections::HashMap::new();
+        for song in songs {
+            if out.contains_key(song) {
+                continue;
+            }
+            if let Some(v) = st
+                .query_row(params![user, Kind::Song.as_str(), song], |r| Ok((r.get::<_, i64>(0)?.max(0) as u32, r.get::<_, Option<i64>>(1)?)))
+                .optional()?
+            {
+                out.insert(song.clone(), v);
+            }
+        }
+        Ok(out)
     }
 
     /// When a playlist was first seen and last seen changed (epoch seconds), given what it holds now (`print`): the
@@ -637,9 +694,51 @@ impl UserData {
     }
 }
 
+/// Each entry as "the n-th copy of this line" (from 0), in order.
+fn occurrences(entries: &[String]) -> Vec<(String, usize)> {
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    entries
+        .iter()
+        .map(|e| {
+            let n = seen.entry(e.as_str()).or_default();
+            *n += 1;
+            (e.clone(), *n - 1)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entries_date_from_the_write_that_brought_them() {
+        let u = UserData::open(None).unwrap();
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Held before dates were kept: no date.
+        assert_eq!(u.entries_added("p", &v(&["a", "b"])).unwrap(), vec![None, None]);
+        u.entries_written("p", &v(&["a", "b"]), &v(&["a", "b", "c", "a"])).unwrap();
+        let got = u.entries_added("p", &v(&["a", "b", "c", "a"])).unwrap();
+        assert_eq!((got[0], got[1]), (None, None), "a and b were there before");
+        assert!(got[2].is_some() && got[3].is_some(), "c and the second a came now");
+        // A copy taken out is forgotten; renamed, the dates go with the playlist; gone, they go.
+        u.entries_written("p", &v(&["a", "b", "c", "a"]), &v(&["a", "b", "c"])).unwrap();
+        assert_eq!(u.entries_added("p", &v(&["a", "a"])).unwrap()[1], None, "the second a is gone");
+        u.playlist_renamed("p", "q").unwrap();
+        assert!(u.entries_added("q", &v(&["c"])).unwrap()[0].is_some());
+        u.playlist_gone("q").unwrap();
+        assert_eq!(u.entries_added("q", &v(&["c"])).unwrap(), vec![None]);
+    }
+
+    #[test]
+    fn play_stats_are_a_users_count_and_last_play() {
+        let u = UserData::open(None).unwrap();
+        u.count_play("me", ("tr-1", "pid1"), "al-1", &[], 100).unwrap();
+        u.count_play("me", ("tr-1", "pid1"), "al-1", &[], 200).unwrap();
+        let s = u.play_stats("me", &["tr-1".to_string(), "tr-2".to_string()]).unwrap();
+        assert_eq!(s.get("tr-1"), Some(&(2, Some(200))));
+        assert!(!s.contains_key("tr-2"), "never played");
+    }
 
     #[test]
     fn stars_keep_their_first_time_and_go_on_unstar() {

@@ -247,7 +247,7 @@
   // Symfonium's header over the tracks: their order (the subject's own, or by a field, either way round), how many, and
   // select mode. The list shows and plays in that order; an album's rows keep their track numbers. A crate's order is
   // of the pages it has shown.
-  type SortKey = 'own' | 'title' | 'artist' | 'album' | 'length';
+  type SortKey = 'own' | 'title' | 'artist' | 'album' | 'length' | 'albumArtist' | 'year' | 'track' | 'plays' | 'lastPlayed' | 'added';
   let sortKey = $state<SortKey>('own');
   let sortDown = $state(false);
   let sortOpen = $state(false);
@@ -257,6 +257,17 @@
     { value: 'artist', label: 'Artist' },
     ...(album ? [] : [{ value: 'album' as SortKey, label: 'Album' }]),
     { value: 'length', label: 'Length' },
+    // A playlist's: what its files and the plays say, and when an entry came (decision 0025, amended 2026-10-16: Orders).
+    ...(plain
+      ? []
+      : ([
+          { value: 'albumArtist', label: 'Album artist' },
+          { value: 'year', label: 'Year' },
+          { value: 'track', label: 'Track number' },
+          { value: 'plays', label: 'Play count' },
+          { value: 'lastPlayed', label: 'Last played' },
+          { value: 'added', label: 'Added' },
+        ] as { value: SortKey; label: string }[])),
   ]);
   // The same order in the pill's View (lib/ViewSheet).
   const listOrder = $derived({
@@ -273,8 +284,18 @@
   const shown = $derived.by(() => {
     if (!rows) return null;
     const list = rows.map((r, i) => ({ r, i })).filter((x) => !panel.hideMissing || (x.r.id && !x.r.missing));
-    const text = (r: PlaylistRow) => (sortKey === 'title' ? (r.name ?? r.file) : sortKey === 'artist' ? (r.artist ?? '') : (r.album ?? ''));
-    if (sortKey === 'length') list.sort((a, b) => (a.r.duration_secs ?? 0) - (b.r.duration_secs ?? 0));
+    const text = (r: PlaylistRow) =>
+      sortKey === 'title' ? (r.name ?? r.file) : sortKey === 'artist' ? (r.artist ?? '') : sortKey === 'albumArtist' ? (r.album_artist ?? '') : (r.album ?? '');
+    // A number to order by; none (a value the file or the plays do not have) comes first, in the playlist's order.
+    const num = (r: PlaylistRow): number | null =>
+      sortKey === 'length' ? (r.duration_secs ?? null)
+      : sortKey === 'year' ? (r.year ?? null)
+      : sortKey === 'track' ? (r.track == null ? null : (r.disc ?? 1) * 10_000 + r.track)
+      : sortKey === 'plays' ? (r.play_count ?? 0)
+      : sortKey === 'lastPlayed' ? (r.last_played ?? null)
+      : (r.added ?? null);
+    const byNumber = (x: number | null, y: number | null) => (x === y ? 0 : x === null ? -1 : y === null ? 1 : x - y);
+    if (['length', 'year', 'track', 'plays', 'lastPlayed', 'added'].includes(sortKey)) list.sort((a, b) => byNumber(num(a.r), num(b.r)));
     else if (sortKey !== 'own') list.sort((a, b) => ordered(text(a.r), text(b.r)));
     if (sortDown) list.reverse();
     return list;
