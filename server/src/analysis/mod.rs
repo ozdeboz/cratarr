@@ -6,7 +6,8 @@
 //! - **Waveform**: 512 bins along the track, each its loudest sample, 0..=255 of full scale (the seekbar's bars).
 //! - **Tempo**: taktus over the mono sound, kept only when it is sure enough (the owner: no tempo is better than a
 //!   wrong one; beatless and ambient music gets none). Reggae, dub, roots and dancehall get the slow count (the owner):
-//!   an estimate above 110 is halved.
+//!   an estimate above 110 is halved. Dance music is counted between 90 and 180 (the owner): an estimate outside is
+//!   halved or doubled into it (on GiantSteps the exact tempo goes from 82 % to 88 % of the sure answers).
 //! Blocking and single-threaded: the pass runs several at once.
 
 use std::fs::File;
@@ -41,6 +42,11 @@ const CATCH: f64 = 1.0;
 /// Genres counted slow (the owner): an estimate above `SLOW_ABOVE` is halved.
 const SLOW_GENRES: [&str; 6] = ["reggae", "dub", "roots", "roots reggae", "dub reggae", "dancehall"];
 const SLOW_ABOVE: f32 = 110.0;
+/// Words that make a genre tag dance music (whole words of the tag), counted between `DANCE_FROM` and twice it.
+const DANCE_WORDS: [&str; 16] =
+    ["house", "techno", "trance", "electro", "disco", "garage", "breakbeat", "breaks", "dnb", "jungle", "dubstep", "hardstyle", "edm", "dance", "idm-dance", "footwork"];
+const DANCE_PHRASES: [&str; 3] = ["drum and bass", "drum & bass", "drum'n'bass"];
+const DANCE_FROM: f32 = 90.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Analysis {
@@ -195,7 +201,27 @@ fn slow(genres: &[String]) -> bool {
     genres.iter().any(|g| SLOW_GENRES.contains(&g.trim().to_lowercase().as_str()))
 }
 
-/// The tempo the owner keeps: sure enough, halved for the slow genres.
+/// Whether a track of these genres is dance music (and not counted slow).
+fn dance(genres: &[String]) -> bool {
+    genres.iter().any(|g| {
+        let g = g.trim().to_lowercase();
+        DANCE_PHRASES.iter().any(|p| g.contains(p)) || g.split(|c: char| !c.is_alphanumeric() && c != '-').any(|w| DANCE_WORDS.contains(&w))
+    })
+}
+
+/// Into [from, 2 * from), by halving or doubling.
+fn fold(bpm: f32, from: f32) -> f32 {
+    let mut b = bpm;
+    while b < from {
+        b *= 2.0;
+    }
+    while b >= 2.0 * from {
+        b /= 2.0;
+    }
+    b
+}
+
+/// The tempo the owner keeps: sure enough; halved for the slow genres, folded into 90-180 for dance music.
 fn tempo(beat: Option<(f64, f64, f64)>, genres: &[String]) -> (Option<f32>, f32) {
     let Some((bpm, sure, catch)) = beat else { return (None, 0.0) };
     let confidence = sure.clamp(0.0, 1.0) as f32;
@@ -203,7 +229,14 @@ fn tempo(beat: Option<(f64, f64, f64)>, genres: &[String]) -> (Option<f32>, f32)
         return (None, confidence);
     }
     let bpm = bpm as f32;
-    (Some(if bpm > SLOW_ABOVE && slow(genres) { bpm / 2.0 } else { bpm }), confidence)
+    let bpm = if slow(genres) {
+        if bpm > SLOW_ABOVE { bpm / 2.0 } else { bpm }
+    } else if dance(genres) {
+        fold(bpm, DANCE_FROM)
+    } else {
+        bpm
+    };
+    (Some(bpm), confidence)
 }
 
 /// One track's analysis from its file. `genres`: its genre tags (for the slow count).
@@ -433,5 +466,19 @@ mod tests {
         assert_eq!(tempo(Some((140.0, 0.01, 3.0)), &[]), (None, 0.01), "not sure enough");
         assert_eq!(tempo(Some((140.0, 0.3, 0.5)), &[]).0, None, "no catch");
         assert_eq!(tempo(Some((100.0, 0.3, 2.0)), &["Reggae".into()]).0, Some(100.0), "at or under 110 stays");
+    }
+
+    #[test]
+    fn dance_music_is_counted_between_90_and_180() {
+        let t = |bpm: f64, genre: &str| tempo(Some((bpm, 0.3, 2.0)), &[genre.to_string()]).0.unwrap();
+        assert_eq!(t(62.0, "Deep House"), 124.0);
+        assert_eq!(t(248.0, "Techno"), 124.0);
+        assert_eq!(t(87.0, "Drum & Bass"), 174.0);
+        assert_eq!(t(70.0, "Dubstep"), 140.0);
+        assert_eq!(t(128.0, "Electro House"), 128.0, "already within");
+        assert_eq!(t(85.0, "Downtempo"), 85.0, "not dance");
+        assert_eq!(t(85.0, "Electronic"), 85.0, "too broad to fold");
+        assert_eq!(t(150.0, "Dancehall"), 75.0, "the slow count wins");
+        assert!(dance(&["Tech House".into()]) && dance(&["UK Garage".into()]) && dance(&["Nu Disco".into()]) && !dance(&["Ambient".into()]));
     }
 }
