@@ -8,6 +8,10 @@
     <string name="cannot_reach">Cannot reach %1$s</string>
     <string name="try_again">Try again</string>
     <string name="change_address">Change address</string>
+    <string name="sign_in">Sign in to Cratarr</string>
+    <string name="user_name">User name</string>
+    <string name="password">Password</string>
+    <string name="sign_in_refused">Wrong user name or password</string>
     <string name="ready">Ready</string>
     <string name="grouped">With %1$s</string>
     <string name="downloads">Downloads</string>

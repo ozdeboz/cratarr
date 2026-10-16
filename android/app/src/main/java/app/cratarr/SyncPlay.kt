@@ -32,10 +32,8 @@ import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import org.json.JSONObject
 import java.io.BufferedOutputStream
 import java.io.IOException
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.LinkedBlockingQueue
@@ -155,14 +153,14 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
         group(null, null, 0, bufferMs)
         Thread {
             try {
-                val c = URL(url).openConnection() as HttpURLConnection
+                val c = Net.open(context, url)
                 c.requestMethod = "POST"
                 c.connectTimeout = 5_000
                 c.readTimeout = 5_000
                 c.doOutput = true
                 c.setRequestProperty("Content-Type", "application/json")
                 c.outputStream.use { it.write(JSONObject().put("command", "leave").toString().toByteArray()) }
-                c.responseCode
+                Net.code(context, c)
                 c.disconnect()
             } catch (e: IOException) {
                 Log.w(TAG, "leave: ${e.message}")

@@ -10,8 +10,6 @@ import android.content.Context
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -48,7 +46,7 @@ object Plays {
             val pending = synchronized(this) { load(app) }
             if (pending.isEmpty()) return@execute
             val done = try {
-                post("$server/api/plays", JSONObject().put("events", JSONArray(pending)).toString())
+                post(app, "$server/api/plays", JSONObject().put("events", JSONArray(pending)).toString())
             } catch (e: Exception) {
                 Log.i(TAG, "${pending.size} plays not told yet: ${e.message}")
                 return@execute
@@ -61,8 +59,8 @@ object Plays {
     }
 
     /** POSTs the plays; the ids Cratarr counted (now or before). */
-    private fun post(url: String, body: String): Set<String> {
-        val c = URL(url).openConnection() as HttpURLConnection
+    private fun post(app: Context, url: String, body: String): Set<String> {
+        val c = Net.open(app, url)
         try {
             c.requestMethod = "POST"
             c.connectTimeout = 10_000
@@ -70,7 +68,8 @@ object Plays {
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
             c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            if (c.responseCode !in 200..299) throw java.io.IOException("HTTP ${c.responseCode}")
+            val code = Net.code(app, c)
+            if (code !in 200..299) throw java.io.IOException("HTTP $code")
             val done = JSONObject(c.inputStream.bufferedReader().use { it.readText() }).optJSONArray("done") ?: JSONArray()
             return (0 until done.length()).map(done::optString).toSet()
         } finally {

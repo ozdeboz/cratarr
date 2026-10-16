@@ -32,8 +32,6 @@ import androidx.work.WorkerParameters
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -201,7 +199,7 @@ object Kept {
             val prefs = Prefs(app)
             val server = prefs.serverUrl?.trimEnd('/')
             val items = loadItems(app)
-            if (server != null && items.isNotEmpty()) ask(server, items)
+            if (server != null && items.isNotEmpty()) ask(app, server, items)
 
             // What is on the device now, and who holds it; a download without holders is the owner's.
             val downloads = mutableMapOf<String, Download>()
@@ -272,19 +270,20 @@ object Kept {
     }
 
     /** Asks Cratarr what each item holds now; an unchanged one keeps its tracks. Offline: all stay as they were. */
-    private fun ask(server: String, items: List<Item>) {
+    private fun ask(app: Context, server: String, items: List<Item>) {
         val body = JSONObject()
             .put("items", JSONArray(items.map { JSONObject().put("kind", it.kind).put("source", it.source).put("id", it.id) }))
             .put("versions", JSONObject().apply { for (i in items) i.version?.let { put(i.key, it) } })
         val answer = try {
-            val c = URL("$server/api/kept").openConnection() as HttpURLConnection
+            val c = Net.open(app, "$server/api/kept")
             c.connectTimeout = 10_000
             c.readTimeout = 60_000
             c.requestMethod = "POST"
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
             c.outputStream.use { it.write(body.toString().toByteArray()) }
-            if (c.responseCode != 200) throw IllegalStateException("Cratarr answered ${c.responseCode}")
+            val code = Net.code(app, c)
+            if (code != 200) throw IllegalStateException("Cratarr answered $code")
             JSONObject(c.inputStream.bufferedReader().readText())
         } catch (e: Exception) {
             Log.i(TAG, "asking Cratarr: ${e.message}")

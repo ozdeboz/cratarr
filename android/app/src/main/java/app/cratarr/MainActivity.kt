@@ -22,6 +22,7 @@ import android.provider.Settings
 import android.text.InputType
 import android.util.Log
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.webkit.HttpAuthHandler
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebView
@@ -220,7 +221,8 @@ class MainActivity : AppCompatActivity() {
         }
         // The page keeps its priority when not in view: it is the player.
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
-        view.webViewClient = CratarrWebViewClient(origins, onError = { cannotReach(url, it) }, onGone = { show(url) })
+        signInTried = null
+        view.webViewClient = CratarrWebViewClient(origins, onError = { cannotReach(url, it) }, onGone = { show(url) }, onSignIn = ::signIn)
         view.webChromeClient = CratarrWebChromeClient { intent, callback ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
@@ -265,8 +267,15 @@ class MainActivity : AppCompatActivity() {
             "device" -> reply.postMessage(appMessage())
             // Settings' "Test both connections".
             "network-test" -> lifecycleScope.launch {
-                val (local, public) = withContext(Dispatchers.IO) { Reach.test(this@MainActivity) }
-                reply.postMessage(JSONObject().put("type", "network-test").put("local", local ?: JSONObject.NULL).put("public", public ?: JSONObject.NULL).toString())
+                val (hasLocal, local, public) = withContext(Dispatchers.IO) { Reach.test(this@MainActivity) }
+                reply.postMessage(
+                    JSONObject()
+                        .put("type", "network-test")
+                        .put("local", if (hasLocal) local == 200 else JSONObject.NULL)
+                        .put("public", if (prefs.publicAddress != null) public == 200 else JSONObject.NULL)
+                        .put("publicRefused", public == 401 || public == 403)
+                        .toString(),
+                )
                 Reach.checkSoon(this@MainActivity)
             }
             "page-prefs" -> message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }?.let {
@@ -291,6 +300,13 @@ class MainActivity : AppCompatActivity() {
                     prefs.syncBudgetGb = message.optLong("syncBudgetGb", 20L)
                     Kept.sync(this)
                 }
+                // The sign-in: a user name (empty: none, and no password), and a password only when one is typed.
+                if (message.has("signInUser")) {
+                    val user = message.optString("signInUser").trim()
+                    prefs.signInUser = user.takeIf { it.isNotEmpty() }
+                    if (user.isEmpty()) prefs.signInPassword = null
+                }
+                message.optString("signInPassword").takeIf { it.isNotEmpty() && message.has("signInPassword") }?.let { prefs.signInPassword = it }
                 // The local network address: as typed (empty: none), and whether it is preferred.
                 val local = if (message.has("local")) message.optString("local").trim().takeIf { it.isNotEmpty() }?.let(Prefs::normalise) else prefs.localAddress
                 val preferLocal = if (message.has("preferLocal")) message.optBoolean("preferLocal") else prefs.preferLocal
@@ -302,7 +318,7 @@ class MainActivity : AppCompatActivity() {
                     lifecycleScope.launch {
                         prefs.localAddress = local
                         prefs.preferLocal = preferLocal
-                        if (public != null && public != prefs.publicAddress && withContext(Dispatchers.IO) { Reach.answers(public) }) {
+                        if (public != null && public != prefs.publicAddress && withContext(Dispatchers.IO) { Reach.status(this@MainActivity, public, anyway = true) != null }) {
                             prefs.publicAddress = public
                         }
                         // Which of them answers now: the page comes from there.
@@ -368,6 +384,9 @@ class MainActivity : AppCompatActivity() {
         .put("public", prefs.publicAddress ?: "")
         .put("local", prefs.localAddress ?: "")
         .put("preferLocal", prefs.preferLocal)
+        // The sign-in's user name, and whether a password is kept (it is never shown).
+        .put("signInUser", prefs.signInUser ?: "")
+        .put("signInSet", prefs.signInPassword != null)
         .put("inUse", prefs.serverUrl ?: "")
         .put("batteryAllowed", getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
         .put("downloadQuality", prefs.downloadQuality)
@@ -420,6 +439,60 @@ class MainActivity : AppCompatActivity() {
         } catch (e: ActivityNotFoundException) {
             Log.w(TAG, "nothing opens $url")
         }
+    }
+
+    /** The sign-in given to this page (the proxy asks again when it was wrong). */
+    private var signInTried: String? = null
+
+    /** Away from home the proxy asks for a Cratarr account: the saved one, once; asked for when there is none, or when
+     *  it was refused. What is typed is kept (Settings → Network) for the app's own requests too. */
+    private fun signIn(handler: HttpAuthHandler) {
+        val user = prefs.signInUser
+        val password = prefs.signInPassword
+        val tried = "$user\n$password"
+        if (user != null && password != null && signInTried != tried) {
+            signInTried = tried
+            handler.proceed(user, password)
+            return
+        }
+        askSignIn(handler, refused = user != null && signInTried == tried)
+    }
+
+    private fun askSignIn(handler: HttpAuthHandler, refused: Boolean) {
+        if (isFinishing) return handler.cancel()
+        dialog?.dismiss()
+        val side = (24 * resources.displayMetrics.density).toInt()
+        val name = EditText(this).apply {
+            hint = getString(R.string.user_name)
+            setText(prefs.signInUser ?: "")
+            setSingleLine()
+        }
+        val password = EditText(this).apply {
+            hint = getString(R.string.password)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setSingleLine()
+        }
+        val box = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(side, side / 2, side, 0)
+            addView(name)
+            addView(password)
+        }
+        dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.sign_in)
+            .setMessage(if (refused) getString(R.string.sign_in_refused) else null)
+            .setView(box)
+            .setCancelable(false)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val u = name.text.toString().trim()
+                val p = password.text.toString()
+                prefs.signInUser = u
+                prefs.signInPassword = p
+                signInTried = "$u\n$p"
+                handler.proceed(u, p)
+            }
+            .setNegativeButton(android.R.string.cancel) { _, _ -> handler.cancel() }
+            .show()
     }
 
     /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address. */

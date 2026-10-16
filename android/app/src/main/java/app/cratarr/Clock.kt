@@ -10,8 +10,6 @@ package app.cratarr
 import android.os.SystemClock
 import android.util.Log
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 object Clock {
     /** Cratarr's time minus this device's monotonic clock (ms); NaN until measured. */
@@ -43,13 +41,15 @@ object Clock {
     }
 
     /** One ping, blocking (a background thread). False when Cratarr did not answer. */
-    fun ping(server: String): Boolean = try {
-        val c = URL("${server.trimEnd('/')}/api/time").openConnection() as HttpURLConnection
+    fun ping(context: android.content.Context, server: String): Boolean = try {
+        val c = Net.open(context, "${server.trimEnd('/')}/api/time")
         c.connectTimeout = 3_000
         c.readTimeout = 3_000
         // A new connection's handshake before the clock starts; a kept one is reused at once.
         c.connect()
         val t0 = mono()
+        // The status within the timing, as the body was (it sends the request).
+        if (Net.code(context, c) !in 200..299) throw java.io.IOException("not answered")
         val text = c.inputStream.bufferedReader().use { it.readText() }
         val t1 = mono()
         // Read whole and closed (not disconnected): the connection goes back to the pool for the next ping.

@@ -50,9 +50,9 @@ class PlayerService : MediaSessionService() {
 
     /** The server's address or the player's name changed: Play On connects again with them. A sleep timer set: kept. */
     private val prefsChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == Prefs.IN_USE || key == Prefs.PLAYER_NAME || key == Prefs.STAY_READY) link?.reconnect()
+        if (key == Prefs.IN_USE || key == Prefs.PLAYER_NAME || key == Prefs.STAY_READY || key == Prefs.SIGN_IN_PASSWORD) link?.reconnect()
         // An address set: which of the two answers.
-        if (key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PREFER_LOCAL) Reach.checkSoon(this)
+        if (key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PREFER_LOCAL || key == Prefs.SIGN_IN_PASSWORD) Reach.checkSoon(this)
         // Another server or name: Cratarr says the group again once connected.
         if ((key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, null, 0, sync.bufferMs)
         if (key == Prefs.LEVELLING) link?.levellingChanged()

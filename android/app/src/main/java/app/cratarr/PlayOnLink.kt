@@ -14,7 +14,6 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.Executors
 
 /**
@@ -81,7 +80,7 @@ class PlayOnLink(
                 pinged = 0
                 failed = 0
             }
-            if (now != null && Clock.ping(now)) {
+            if (now != null && Clock.ping(service, now)) {
                 pinged++
                 failed = 0
             } else {
@@ -146,13 +145,14 @@ class PlayOnLink(
                 continue
             }
             try {
-                val c = URL("$base/connect").openConnection() as HttpURLConnection
+                val c = Net.open(service, "$base/connect")
                 connection = c
                 c.connectTimeout = 10_000
                 // Cratarr sends a keep-alive every 15 s: a minute of silence is a dead connection.
                 c.readTimeout = 60_000
                 c.setRequestProperty("Accept", "text/event-stream")
-                if (c.responseCode != 200) throw java.io.IOException("HTTP ${c.responseCode}")
+                val code = Net.code(service, c)
+                if (code != 200) throw java.io.IOException("HTTP $code")
                 Log.i(TAG, "connected as ${prefs.playerName}")
                 wait = 2_000L
                 // Back in reach: the plays made meanwhile (offline, say) are told now.
@@ -327,14 +327,14 @@ class PlayOnLink(
     }
 
     private fun post(url: String, body: String): Boolean = try {
-        val c = URL(url).openConnection() as HttpURLConnection
+        val c = Net.open(service, url)
         c.requestMethod = "POST"
         c.connectTimeout = 5_000
         c.readTimeout = 5_000
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
         c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-        val ok = c.responseCode in 200..299
+        val ok = Net.code(service, c) in 200..299
         c.disconnect()
         ok
     } catch (e: Exception) {
@@ -431,14 +431,14 @@ class PlayOnLink(
     }
 
     private fun put(url: String, body: String): Boolean = try {
-        val c = URL(url).openConnection() as HttpURLConnection
+        val c = Net.open(service, url)
         c.requestMethod = "PUT"
         c.connectTimeout = 10_000
         c.readTimeout = 10_000
         c.doOutput = true
         c.setRequestProperty("Content-Type", "application/json")
         c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-        val ok = c.responseCode in 200..299
+        val ok = Net.code(service, c) in 200..299
         c.disconnect()
         ok
     } catch (e: Exception) {

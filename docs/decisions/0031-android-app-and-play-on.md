@@ -120,3 +120,12 @@ On's connection, radio, levelling, plays told, and what was set up on the other 
 read from this one. The page's own settings (`cratarr-prefs`) live in the browser storage of its address, so the app
 keeps a copy (sent on each change) and puts it into the page's storage before the page starts, on either address.
 
+**Signed in away from home (2026-10-16, the owner):** the reverse proxy now asks for a Cratarr account (HTTP Basic, the
+Settings → Authentication accounts, through `/api/auth/check`) off the home network. Settings → Network gains User
+name and Password (the password never shown; a typed one replaces it). The app sends them with each of its own
+requests to the public address (`Net.kt`: the player's and the downloads' too; the local network address needs none),
+and gives them to the page's WebView when the proxy asks; with none kept, or a refused one, it asks in a native dialog
+(the page cannot load to show its settings), and keeps what is typed. A refusal (401, or a 403) holds the app's
+requests to the public address back for ten minutes or until the sign-in changes: polling on regardless got the
+owner's phone banned as a prober by the proxy's CrowdSec the first evening.
+

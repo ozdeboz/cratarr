@@ -15,8 +15,6 @@ import android.net.Network
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -38,17 +36,20 @@ object Reach {
     @Volatile private var checked = 0L
     private var watching = false
 
-    /** Whether a Cratarr answers at [url] (its health check) within [ms]. Blocking. */
-    fun answers(url: String, ms: Int = PUBLIC_MS): Boolean = try {
-        val c = URL("${url.trimEnd('/')}/api/health").openConnection() as HttpURLConnection
+    /** The status of Cratarr's health check at [url] within [ms]; null without an answer. Blocking. */
+    fun status(context: Context, url: String, ms: Int = PUBLIC_MS, anyway: Boolean = false): Int? = try {
+        val c = Net.open(context, "${url.trimEnd('/')}/api/health", anyway)
         c.connectTimeout = ms
         c.readTimeout = ms
-        val ok = c.responseCode == 200
+        val code = Net.code(context, c)
         c.disconnect()
-        ok
+        code
     } catch (e: Exception) {
-        false
+        null
     }
+
+    /** Whether a Cratarr answers at [url] (its health check) within [ms]. Blocking. */
+    fun answers(context: Context, url: String, ms: Int = PUBLIC_MS): Boolean = status(context, url, ms) == 200
 
     /** Looks again which address answers, and uses it; the address in use after. Blocking. */
     fun check(context: Context): String? {
@@ -59,8 +60,9 @@ object Reach {
             prefs.serverUrl
         } else {
             // Both at once: away, the local one's silence and the public one's answer take no longer than the first.
-            val l = asks.submit<Boolean> { answers(local, LOCAL_MS) }
-            val r = asks.submit<Boolean> { answers(public, PUBLIC_MS) }
+            val l = asks.submit<Boolean> { answers(context, local, LOCAL_MS) }
+            // The proxy's refusal is an answer too: there, the page asks for the sign-in.
+            val r = asks.submit<Boolean> { status(context, public, PUBLIC_MS) != null || Net.refused(context, public) }
             when {
                 l.get() -> local
                 r.get() -> public
@@ -76,12 +78,13 @@ object Reach {
         return pick
     }
 
-    /** Settings' "Test both connections": whether each address answers (null: not set). Blocking. */
-    fun test(context: Context): Pair<Boolean?, Boolean?> {
+    /** Settings' "Test both connections": each address's health check status (null: no answer), and whether each
+     *  is set. Blocking. */
+    fun test(context: Context): Triple<Boolean, Int?, Int?> {
         val prefs = Prefs(context)
-        val local = prefs.localAddress?.let { a -> asks.submit<Boolean> { answers(a, PUBLIC_MS) } }
-        val public = prefs.publicAddress?.let { a -> asks.submit<Boolean> { answers(a, PUBLIC_MS) } }
-        return local?.get() to public?.get()
+        val local = prefs.localAddress?.let { a -> asks.submit<Int?> { status(context, a, PUBLIC_MS, anyway = true) } }
+        val public = prefs.publicAddress?.let { a -> asks.submit<Int?> { status(context, a, PUBLIC_MS, anyway = true) } }
+        return Triple(local != null, local?.get(), public?.get())
     }
 
     /** Looks again in the background, after [delayMs]; a failure's call only every so often. */

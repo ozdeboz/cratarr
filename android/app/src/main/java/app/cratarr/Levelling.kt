@@ -15,8 +15,6 @@ import android.util.Log
 import android.util.LruCache
 import androidx.media3.common.Player
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.Executors
 import kotlin.math.min
 import kotlin.math.pow
@@ -61,7 +59,7 @@ object Levelling {
         }
         val base = server?.trimEnd('/') ?: return
         asks.execute {
-            val g = ask("$base/api/track/$key/gain")
+            val g = ask(context, "$base/api/track/$key/gain")
             main.post {
                 if (g != null) gains.put(key, g)
                 // Still that track.
@@ -92,11 +90,11 @@ object Levelling {
         return same(i - 1) || same(i + 1)
     }
 
-    private fun ask(url: String): JSONObject? = try {
-        val c = URL(url).openConnection() as HttpURLConnection
+    private fun ask(context: Context, url: String): JSONObject? = try {
+        val c = Net.open(context, url)
         c.connectTimeout = 4_000
         c.readTimeout = 4_000
-        val text = if (c.responseCode in 200..299) c.inputStream.bufferedReader().use { it.readText() } else null
+        val text = if (Net.code(context, c) in 200..299) c.inputStream.bufferedReader().use { it.readText() } else null
         c.disconnect()
         text?.let { JSONObject(it) }
     } catch (e: Exception) {

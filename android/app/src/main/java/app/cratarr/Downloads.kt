@@ -68,7 +68,11 @@ object Downloads {
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(60_000)
             .setAllowCrossProtocolRedirects(true)
-        return ResolvingDataSource.Factory(http) { spec -> spec.withUri(Reach.rewrite(app, spec.uri)) }
+        return ResolvingDataSource.Factory(http) { spec ->
+            val uri = Reach.rewrite(app, spec.uri)
+            val signed = spec.withUri(uri)
+            Net.authorization(app, uri.toString())?.let { signed.withAdditionalHeaders(mapOf("Authorization" to it)) } ?: signed
+        }
     }
 
     /** What the player reads tracks through: the store first, Cratarr for the rest. Streamed tracks are not stored. */

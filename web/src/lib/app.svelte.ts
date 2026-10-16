@@ -21,6 +21,9 @@ export const appInfo = $state({
   preferLocal: false,
   inUse: null as string | null,
   addresses: false,
+  /** The sign-in the public address asks for away from home: its user name, and whether a password is kept. */
+  signInUser: '',
+  signInSet: false,
   /** Kept awake and listening for Play On while idle. */
   stayReady: false,
   /** Android lets the app run in the background (left out of battery optimisation). */
@@ -62,7 +65,7 @@ export function toApp(message: Message) {
 }
 
 /** "Test both connections": whether each address answered (null: not set), once the app has tried. */
-export const networkTest = $state({ testing: false, local: null as boolean | null, public: null as boolean | null, done: false });
+export const networkTest = $state({ testing: false, local: null as boolean | null, public: null as boolean | null, publicRefused: false, done: false });
 
 /** Tries both addresses (the app answers with a `network-test`). */
 export function testNetwork() {
@@ -79,6 +82,9 @@ export const setDevice = (change: {
   server?: string;
   local?: string;
   preferLocal?: boolean;
+  /** The sign-in: a user name (empty clears it), a password only when one is typed. */
+  signInUser?: string;
+  signInPassword?: string;
   stayReady?: boolean;
   downloadQuality?: string;
   downloadOverMobile?: boolean;
@@ -115,6 +121,8 @@ if (port) {
       appInfo.localAddress = typeof m.local === 'string' && m.local ? m.local : null;
       appInfo.preferLocal = m.preferLocal === true;
       appInfo.inUse = typeof m.inUse === 'string' && m.inUse ? m.inUse : appInfo.publicAddress;
+      appInfo.signInUser = typeof m.signInUser === 'string' ? m.signInUser : '';
+      appInfo.signInSet = m.signInSet === true;
       appInfo.stayReady = m.stayReady === true;
       appInfo.batteryAllowed = m.batteryAllowed !== false;
       appInfo.downloadQuality = m.downloadQuality === 'smaller' ? 'smaller' : 'original';
@@ -126,6 +134,7 @@ if (port) {
     if (m.type === 'network-test') {
       networkTest.local = typeof m.local === 'boolean' ? m.local : null;
       networkTest.public = typeof m.public === 'boolean' ? m.public : null;
+      networkTest.publicRefused = m.publicRefused === true;
       networkTest.testing = false;
       networkTest.done = true;
     }
