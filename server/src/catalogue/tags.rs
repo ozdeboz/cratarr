@@ -69,6 +69,10 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
         ItemKey::Label => "label",
         ItemKey::CatalogNumber => "catalognumber",
         ItemKey::Bpm => "bpm",
+        ItemKey::ReplayGainTrackGain => "replaygain_track_gain",
+        ItemKey::ReplayGainTrackPeak => "replaygain_track_peak",
+        ItemKey::ReplayGainAlbumGain => "replaygain_album_gain",
+        ItemKey::ReplayGainAlbumPeak => "replaygain_album_peak",
         ItemKey::MusicBrainzRecordingId => "musicbrainz_trackid",
         ItemKey::MusicBrainzReleaseId => "musicbrainz_albumid",
         ItemKey::MusicBrainzReleaseGroupId => "musicbrainz_releasegroupid",
@@ -79,10 +83,20 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
 }
 
 /// Names for keys lofty has no item for, by the raw key's last part: Vorbis `ALBUMARTISTS`, MP4
-/// `----:com.apple.iTunes:ALBUMARTISTS` (Picard writes the album's artists apart there, decision 0016).
+/// `----:com.apple.iTunes:ALBUMARTISTS` (Picard writes the album's artists apart there, decision 0016); the gain tags
+/// where lofty does not map them (Opus's `R128_*`, a lower-case MP4 freeform), decision 0035.
 fn by_raw_key(raw: &str) -> Option<&'static str> {
     let last = raw.rsplit(':').next().unwrap_or(raw);
-    last.eq_ignore_ascii_case("albumartists").then_some("albumartists")
+    const NAMED: [&str; 7] = [
+        "albumartists",
+        "replaygain_track_gain",
+        "replaygain_track_peak",
+        "replaygain_album_gain",
+        "replaygain_album_peak",
+        "r128_track_gain",
+        "r128_album_gain",
+    ];
+    NAMED.into_iter().find(|n| last.eq_ignore_ascii_case(n))
 }
 
 /// Read a file and say what, if anything, is wrong with it. The normal mode is tried first; if it fails, the relaxed
@@ -182,6 +196,15 @@ fn read_with(path: &Path, mode: ParsingMode) -> Result<FileTags> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gain_tags_get_their_names_however_the_format_keys_them() {
+        assert_eq!(normalised(ItemKey::ReplayGainTrackGain), Some("replaygain_track_gain"));
+        assert_eq!(by_raw_key("R128_TRACK_GAIN"), Some("r128_track_gain"));
+        assert_eq!(by_raw_key("----:com.apple.iTunes:replaygain_album_peak"), Some("replaygain_album_peak"));
+        assert_eq!(by_raw_key("TXXX:REPLAYGAIN_TRACK_GAIN"), Some("replaygain_track_gain"));
+        assert_eq!(by_raw_key("COMMENT"), None);
+    }
 
     #[test]
     fn field_problems_are_cut_to_the_frame_and_reason() {

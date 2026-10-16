@@ -217,10 +217,22 @@ pub struct ServedRow {
     pub mtime: i64,
     /// (name, raw value), only the names in `TAGS`, in the file's order.
     pub tags: Vec<(String, String)>,
+    /// Its analysis (decision 0035), while the file is as it was then.
+    pub analysis: Option<RowAnalysis>,
+}
+
+/// What the served library takes from a file's analysis: its gain and peak, its tempo when confident, and its album's
+/// gain and peak once every track of the album has one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RowAnalysis {
+    pub track_gain_db: f32,
+    pub track_peak: f32,
+    pub bpm: Option<f32>,
+    pub album: Option<(f32, f32)>,
 }
 
 impl ServedRow {
-    pub const TAGS: [&'static str; 20] = [
+    pub const TAGS: [&'static str; 26] = [
         "title",
         "artist",
         "artists",
@@ -241,6 +253,12 @@ impl ServedRow {
         "musicbrainz_artistid",
         "musicbrainz_albumartistid",
         "musicbrainz_releasegroupid",
+        "replaygain_track_gain",
+        "replaygain_track_peak",
+        "replaygain_album_gain",
+        "replaygain_album_peak",
+        "r128_track_gain",
+        "r128_album_gain",
     ];
 
     /// The first value of a tag, trimmed; `None` when missing or blank.
@@ -1357,38 +1375,7 @@ impl Catalogue {
     /// counts it), from their tracks' analyses (`analysis::album_gain` over their loudness blocks): only where every
     /// track of the directory has one, so a half-analysed album has none yet. Blocking.
     pub fn album_gains(&self, folder: i64) -> Result<HashMap<String, (f32, f32)>> {
-        let db = self.db();
-        let mut st = db.prepare(&format!(
-            "SELECT f.rel, {ANALYSIS_COLS} FROM files f
-               LEFT JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
-             WHERE {PRESENT_F} AND f.folder = ?1 AND f.state = ?2"
-        ))?;
-        let mut dirs: HashMap<String, Option<Vec<crate::analysis::Analysis>>> = HashMap::new();
-        let rows = st.query_map(params![folder, READ], |r| {
-            let rel: String = r.get(0)?;
-            // The version: NULL where the file has no analysis (the LEFT JOIN).
-            let has: Option<i64> = r.get(1)?;
-            Ok((rel, if has.is_some() { Some(analysis_row_at(r, 1)?) } else { None }))
-        })?;
-        for row in rows {
-            let (rel, a) = row?;
-            let dir = rel.rsplit_once('/').map_or("", |(d, _)| d).to_string();
-            let entry = dirs.entry(dir).or_insert_with(|| Some(Vec::new()));
-            match (entry.as_mut(), a) {
-                (Some(list), Some(a)) => list.push(a),
-                // A track without one: the album waits.
-                (Some(_), None) => *entry = None,
-                (None, _) => {}
-            }
-        }
-        Ok(dirs
-            .into_iter()
-            .filter_map(|(dir, list)| {
-                let list = list?;
-                let refs: Vec<&crate::analysis::Analysis> = list.iter().collect();
-                crate::analysis::album_gain(&refs).map(|g| (dir, g))
-            })
-            .collect())
+        album_gains(&self.db(), folder)
     }
 
     /// Where a track's file is, or was last seen while it is away (gone, not yet retired). Blocking.
@@ -1643,12 +1630,28 @@ pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
             size: r.get::<_, i64>(6)?.max(0) as u64,
             mtime: r.get(7)?,
             tags: Vec::new(),
+            analysis: None,
         })
     })?;
     for f in files {
         let f = f?;
         index.insert(f.rel.clone(), rows.len());
         rows.push(f);
+    }
+    // Their analyses, while the files are as they were then, and their albums' gains (decision 0035).
+    let albums = album_gains(db, folder)?;
+    let mut st = db.prepare(
+        "SELECT a.rel, a.track_gain_db, a.track_peak, a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+         WHERE a.folder = ?1 AND a.size = f.size AND a.mtime = f.mtime",
+    )?;
+    let found = st.query_map(params![folder], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<f64>>(1)?, r.get::<_, Option<f64>>(2)?, r.get::<_, Option<f64>>(3)?))
+    })?;
+    for a in found {
+        let (rel, gain, peak, bpm) = a?;
+        let (Some(&i), Some(gain), Some(peak)) = (index.get(&rel), gain, peak) else { continue };
+        let dir = rel.rsplit_once('/').map_or("", |(d, _)| d);
+        rows[i].analysis = Some(RowAnalysis { track_gain_db: gain as f32, track_peak: peak as f32, bpm: bpm.map(|b| b as f32), album: albums.get(dir).copied() });
     }
     let names = ServedRow::TAGS.map(|n| format!("'{n}'")).join(", ");
     let mut st = db.prepare(&format!("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ({names}) ORDER BY rel, n"))?;
@@ -1715,6 +1718,41 @@ fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::anal
     })
 }
 
+/// See `Catalogue::album_gains`; any connection to the catalogue's file.
+pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32, f32)>> {
+    let mut st = db.prepare(&format!(
+        "SELECT f.rel, {ANALYSIS_COLS} FROM files f
+           LEFT JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
+         WHERE {PRESENT_F} AND f.folder = ?1 AND f.state = ?2"
+    ))?;
+    let mut dirs: HashMap<String, Option<Vec<crate::analysis::Analysis>>> = HashMap::new();
+    let rows = st.query_map(params![folder, READ], |r| {
+        let rel: String = r.get(0)?;
+        // The version: NULL where the file has no analysis (the LEFT JOIN).
+        let has: Option<i64> = r.get(1)?;
+        Ok((rel, if has.is_some() { Some(analysis_row_at(r, 1)?) } else { None }))
+    })?;
+    for row in rows {
+        let (rel, a) = row?;
+        let dir = rel.rsplit_once('/').map_or("", |(d, _)| d).to_string();
+        let entry = dirs.entry(dir).or_insert_with(|| Some(Vec::new()));
+        match (entry.as_mut(), a) {
+            (Some(list), Some(a)) => list.push(a),
+            // A track without one: the album waits.
+            (Some(_), None) => *entry = None,
+            (None, _) => {}
+        }
+    }
+    Ok(dirs
+        .into_iter()
+        .filter_map(|(dir, list)| {
+            let list = list?;
+            let refs: Vec<&crate::analysis::Analysis> = list.iter().collect();
+            crate::analysis::album_gain(&refs).map(|g| (dir, g))
+        })
+        .collect())
+}
+
 /// See `Catalogue::served_fingerprint`; any connection to the catalogue's file.
 pub fn served_fingerprint(db: &Connection) -> Result<String> {
     let (n, size, mtime, tracks, folders): (i64, f64, f64, f64, f64) = db.query_row(
@@ -1722,7 +1760,9 @@ pub fn served_fingerprint(db: &Connection) -> Result<String> {
         [READ],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
     )?;
-    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders}"))
+    // New analyses build the library again too (their gains and tempi are the songs').
+    let (analysed, at): (i64, f64) = db.query_row("SELECT count(*), total(analysed_at) FROM analysis", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders} analysis {analysed}/{at}"))
 }
 
 #[cfg(test)]

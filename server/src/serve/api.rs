@@ -86,6 +86,29 @@ pub struct GenreRef {
     pub name: String,
 }
 
+/// A song's ReplayGain (OpenSubsonic `replayGain`): gains in dB, peaks linear (1.0 = full scale).
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayGain {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_gain: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_gain: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_peak: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_peak: Option<f64>,
+}
+
+impl ReplayGain {
+    /// None when it knows nothing; values to two decimals.
+    pub fn of(track_gain: Option<f64>, track_peak: Option<f64>, album_gain: Option<f64>, album_peak: Option<f64>) -> Option<Self> {
+        let r = |v: Option<f64>| v.map(|x| (x * 100.0).round() / 100.0);
+        let g = ReplayGain { track_gain: r(track_gain), album_gain: r(album_gain), track_peak: track_peak.map(|x| (x * 10_000.0).round() / 10_000.0), album_peak: album_peak.map(|x| (x * 10_000.0).round() / 10_000.0) };
+        (g != ReplayGain::default()).then_some(g)
+    }
+}
+
 /// A song, as the API's `Child`.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -129,6 +152,9 @@ pub struct Song {
     pub user_rating: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bpm: Option<u32>,
+    /// OpenSubsonic's levelling (decision 0035): the analysis', else the file's own tags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_gain: Option<ReplayGain>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub music_brainz_id: Option<String>,
     pub artists: Vec<ArtistRef>,
