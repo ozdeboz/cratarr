@@ -999,6 +999,87 @@ mod tests {
         }
     }
 
+    /// Radio's choices against a real library (RADIO_DATA as above): `cargo test real_radio_choices -- --ignored
+    /// --nocapture`. For 300 tracks spread over the library: how often the inserts share the track's artist, how far
+    /// they are in years, how often they come short, and that "Ignore favourites" lets none through; then a few examples.
+    #[test]
+    #[ignore]
+    fn real_radio_choices() {
+        let dir = std::path::PathBuf::from(std::env::var("RADIO_DATA").expect("RADIO_DATA"));
+        let ud = read_only(&dir.join("userdata.sqlite")).unwrap();
+        let owner: Option<String> = ud.query_row("SELECT user FROM annotation GROUP BY user ORDER BY count(*) DESC LIMIT 1", [], |r| r.get(0)).ok();
+        let index = read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), owner.as_deref(), &HashMap::new()).unwrap();
+        let recent = owner.as_deref().map(|o| recent_plays(&dir.join("userdata.sqlite"), o).unwrap()).unwrap_or_default();
+        let favourites = index.songs.iter().filter(|s| s.favourite).count();
+        println!("index: {} songs, {} favourites, {} recent plays", index.songs.len(), favourites, recent.len());
+        let step = (index.songs.len() / 300).max(1);
+        let seeds: Vec<usize> = (0..index.songs.len()).step_by(step).take(300).collect();
+        let ask = |seed: usize, by: RadioBy, skip: bool| NextRequest {
+            mode: Mode::Radio,
+            seed: vec![index.songs[seed].id.clone()],
+            exclude: vec![index.songs[seed].id.clone()],
+            last: Some(index.songs[seed].id.clone()),
+            count: Some(5),
+            within: None,
+            albums: false,
+            by,
+            skip_favourites: skip,
+        };
+        let shares_artist = |a: usize, b: usize| index.songs[a].artists.iter().any(|x| index.songs[b].artists.contains(x));
+        let mut rng = Rng::seeded(7);
+        for by in [RadioBy::Track, RadioBy::Artist, RadioBy::Era] {
+            for skip in [false, true] {
+                let (mut picks, mut artist, mut short, mut favs, mut gaps, mut dated, mut albums_twice) = (0, 0, 0, 0, 0u32, 0, 0);
+                let t = Instant::now();
+                for &seed in &seeds {
+                    let picked = choose(&index, &ask(seed, by, skip), &recent, None, &mut rng);
+                    if picked.len() < 5 {
+                        short += 1;
+                    }
+                    let mut seen_albums = HashSet::new();
+                    for &i in &picked {
+                        picks += 1;
+                        artist += usize::from(shares_artist(seed, i));
+                        favs += usize::from(index.songs[i].favourite);
+                        if !seen_albums.insert(index.songs[i].album_id.clone()) {
+                            albums_twice += 1;
+                        }
+                        if let (Some(a), Some(b)) = (index.songs[seed].year, index.songs[i].year) {
+                            gaps += a.abs_diff(b);
+                            dated += 1;
+                        }
+                    }
+                }
+                println!(
+                    "{by:?}{}: {} picks for {} tracks in {:?}; same artist {:.0}%; mean year gap {:.1}; short {}; favourites {}; an album twice {}",
+                    if skip { " + ignore favourites" } else { "" },
+                    picks,
+                    seeds.len(),
+                    t.elapsed(),
+                    100.0 * artist as f64 / picks.max(1) as f64,
+                    f64::from(gaps) / f64::from(dated.max(1)),
+                    short,
+                    favs,
+                    albums_twice
+                );
+            }
+        }
+        let show = |i: usize| {
+            let s = &index.songs[i];
+            format!("{} - {} [{}] {}{}", s.artist.as_deref().unwrap_or("?"), s.title, s.album, s.year.map(|y| y.to_string()).unwrap_or_default(), if s.favourite { " ♥" } else { "" })
+        };
+        for &seed in seeds.iter().step_by(75) {
+            println!("
+== after {}", show(seed));
+            for by in [RadioBy::Track, RadioBy::Artist, RadioBy::Era] {
+                println!("-- {by:?}");
+                for i in choose(&index, &ask(seed, by, false), &recent, None, &mut rng) {
+                    println!("   {}", show(i));
+                }
+            }
+        }
+    }
+
     #[test]
     fn radio_inserts_keep_close_to_the_one_track_and_its_artist() {
         // The seed track's artist has three more songs on other albums, in its genre but other decades; strangers share
