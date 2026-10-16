@@ -2,7 +2,7 @@
   // Settings (decided 2026-10-16): a portal of cards, one per part of the settings, each saying in a line what it is set
   // to now. A tap opens the part in the panel (lib/SettingsPanel), as a playlist opens: beside the cards on a wide page,
   // over them on a phone. The card whose part is open is bordered. This device's card only in the app.
-  import { getSettings, getSubsonicAccounts, type Settings } from './lib/api';
+  import { getImport, getSettings, getSubsonicAccounts, type ImportJob, type Settings } from './lib/api';
   import { appInfo, downloads, inApp } from './lib/app.svelte';
   import Icon from './lib/Icon.svelte';
   import { panel, SETTINGS, viewPlaylist } from './lib/panel.svelte';
@@ -12,12 +12,17 @@
 
   // The last answer (kept for the panel too), read again here.
   const s = $derived<Settings | null>(settingsRead.s);
+  let lastImport = $state<ImportJob | null>(null);
   let accounts = $state<string[] | null>(null);
   // Read again after each save in the panel.
   $effect(() => {
     void settingsSaved.n;
     getSettings().then(
       (v) => (settingsRead.s = v),
+      () => {},
+    );
+    getImport().then(
+      (r) => (lastImport = r.job),
       () => {},
     );
     getSubsonicAccounts().then(
@@ -48,8 +53,10 @@
       }
       case 'players':
         return playOn.players.map((p) => p.name).join(' · ') || 'None yet';
-      case 'subsonic':
+      case 'auth':
         return accounts === null ? '' : accounts.length ? accounts.join(' · ') : 'No account';
+      case 'import':
+        return lastImport?.finished ? `Last ${new Date(lastImport.finished * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : 'Not yet';
       case 'display':
         return THEME[prefs.theme];
       case 'about':

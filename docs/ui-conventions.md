@@ -193,10 +193,17 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   This device (in the app only), Connections (servers: address, key, status; Lidarr the same way, shown only when an
   Incoming library is set), Libraries (one row per server library: its use, Music, Incoming or Not used, and the
   folder Cratarr sees its files in, or a warning when it can't; then the names, the trash, the catalogue status and
-  tag splitting), Subsonic (accounts, imports), Display (theme, progress bar), About (version, port, file locations).
+  tag splitting), Authentication (the account Subsonic apps sign in with; decided 2026-10-16, not "Subsonic"), Import
+  (plays, favourites, ratings and added dates from a server), Display (theme, progress bar), About (version, port,
+  file locations). Each part is its own file (lib/settings/*Part) over one editor (lib/settings/editor), so what is
+  changed in one part shows the Save bar in all of them and survives going from one to another.
   What a part edits is saved with the Save bar at its foot. A part opens on the settings last read (reading them
   checks every connection, which takes seconds) and takes the fresh ones unless something was edited meanwhile.
   Technical details go to About or nowhere. A use is set only there (decision 0009).
+
+- **Phone check** (`npm run check:phone`, decided 2026-10-16): every page, every part of the settings and an album in
+  the panel at 390 px must not scroll sideways (the page, or any box that scrolls up and down); run it after a layout
+  change.
 
 ## Rows
 
