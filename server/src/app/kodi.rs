@@ -13,7 +13,7 @@
 //! Not on Kodi: Radio and Autoplay (the app's player inserts them).
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::Weak;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
@@ -618,6 +618,7 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
 mod tests {
     use super::*;
     use axum::{Json, Router, routing::post};
+    use std::sync::Arc;
     use std::sync::Mutex;
 
     /// A Kodi that writes down what it is asked and answers as Kodi does, playing what it was told to.

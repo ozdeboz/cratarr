@@ -27,6 +27,8 @@ export const appInfo = $state({
   /** Kept on this device (decision 0038): the storage budget in GB, 0 for no limit; syncing only while charging. */
   syncBudgetGb: 20,
   syncOnlyCharging: false,
+  /** Levelling (decision 0035): the app's player plays every track about as loud as the next. */
+  levelling: true,
 });
 
 /** A track kept on the device: as the page described it when it was downloaded, and how far the download is. */
@@ -63,6 +65,7 @@ export const setDevice = (change: {
   downloadOverMobile?: boolean;
   syncBudgetGb?: number;
   syncOnlyCharging?: boolean;
+  levelling?: boolean;
 }) =>
   toApp({ type: 'device-set', ...change });
 /** Keeps these tracks on the device, in the quality the settings say. */
@@ -95,6 +98,7 @@ if (port) {
       appInfo.downloadOverMobile = m.downloadOverMobile === true;
       appInfo.syncBudgetGb = typeof m.syncBudgetGb === 'number' ? m.syncBudgetGb : 20;
       appInfo.syncOnlyCharging = m.syncOnlyCharging === true;
+      appInfo.levelling = m.levelling !== false;
     }
     if (m.type === 'downloads') {
       downloads.tracks = Array.isArray(m.tracks) ? (m.tracks as DownloadedTrack[]) : [];

@@ -3,6 +3,7 @@
   import Seg from '../Seg.svelte';
   import SettingRow from '../SettingRow.svelte';
   import Switch from '../Switch.svelte';
+  import { appInfo, inApp, setDevice } from '../app.svelte';
   import { prefs, type Theme } from '../prefs.svelte';
 
   const THEMES: { value: Theme; label: string }[] = [
@@ -20,5 +21,14 @@
 
     <div class="pref">
       <Switch label="Progress bar under the playing track" checked={prefs.showProgress} onchange={(on) => (prefs.showProgress = on)} />
+    </div>
+    <!-- Levelling (decision 0035): in the app its own player's, here this browser's. -->
+    <div class="pref">
+      <Switch
+        label="Level the volume"
+        hint="Every track about as loud as the next"
+        checked={inApp ? appInfo.levelling : prefs.levelling}
+        onchange={(on) => (inApp ? setDevice({ levelling: on }) : (prefs.levelling = on))}
+      />
     </div>
   </section>

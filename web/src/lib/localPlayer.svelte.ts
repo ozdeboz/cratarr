@@ -14,7 +14,8 @@
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
 import { inApp, onApp, toApp } from './app.svelte';
-import { playerCommand, radioNext } from './api';
+import { getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
+import { prefs } from './prefs.svelte';
 
 export type LocalTrack = {
   /** Its entry in a player's queue (decision 0033), once Cratarr or the app has given it one. */
@@ -484,6 +485,73 @@ function tick() {
     }
   }
 }
+// Levelling (decision 0035): this browser's player plays every track about as loud as the next, by its ReplayGain (the
+// album's while an album plays in its own order, else the track's), never past its peak nor above full volume, a
+// typical gain where none is known. Through a gain node, set as each track of the stream begins (the stream holds the
+// tracks one after the other). The node is made at the first play, which a press starts (a browser lets sound out
+// of an audio context only then).
+const UNKNOWN_DB = -6;
+const gains = new Map<string, TrackGain | null>();
+let level: { ctx: AudioContext; gain: GainNode } | null = null;
+
+function levelRoute() {
+  if (level || !audio || !prefs.levelling || typeof AudioContext === 'undefined') return;
+  try {
+    const ctx = new AudioContext();
+    const gain = ctx.createGain();
+    ctx.createMediaElementSource(audio).connect(gain).connect(ctx.destination);
+    level = { ctx, gain };
+  } catch {
+    level = null;
+  }
+}
+
+/** A queue place's level (0 to 1); null while its gain is being asked for. */
+function levelOf(index: number): number | null {
+  const t = local.queue[index];
+  if (!t || !prefs.levelling) return 1;
+  const key = `${t.source}/${t.id}`;
+  if (!gains.has(key)) {
+    gains.set(key, null);
+    getTrackGain(t.source, t.id)
+      .then((g) => gains.set(key, g), () => gains.set(key, {}))
+      .finally(levelSchedule);
+    return null;
+  }
+  const g = gains.get(key);
+  if (g === null) return null;
+  const sameAlbum = (j: number) => !!t.album_id && local.queue[j]?.album_id === t.album_id && !local.queue[j]?.lane;
+  const albumWise = !local.shuffled && (sameAlbum(index - 1) || sameAlbum(index + 1));
+  const gainDb = (albumWise ? g?.albumGain : undefined) ?? g?.trackGain ?? UNKNOWN_DB;
+  const peak = (albumWise ? g?.albumPeak : undefined) ?? g?.trackPeak ?? 1;
+  return Math.min(10 ** (gainDb / 20), peak > 0 ? 1 / peak : 1, 1);
+}
+
+/** The playing track's level now, the next one's from where it starts in the stream. */
+function levelSchedule() {
+  if (!level || !audio) return;
+  const { ctx, gain } = level;
+  const now = audio.currentTime;
+  const at = (s: Segment) => s.start <= now;
+  const cur = [...segments].reverse().find(at);
+  const next = segments.find((s) => s.start > now);
+  gain.gain.cancelScheduledValues(ctx.currentTime);
+  const f = cur ? levelOf(cur.index) : 1;
+  gain.gain.setValueAtTime(f ?? gain.gain.value, ctx.currentTime);
+  const nf = next ? levelOf(next.index) : null;
+  if (next && nf !== null && !audio.paused) gain.gain.setValueAtTime(nf, ctx.currentTime + (next.start - now));
+}
+
+if (audio) {
+  audio.addEventListener('play', () => {
+    levelRoute();
+    void level?.ctx.resume();
+    levelSchedule();
+  });
+  audio.addEventListener('seeked', levelSchedule);
+  audio.addEventListener('timeupdate', levelSchedule);
+}
+
 if (audio) {
   setInterval(tick, 250);
   audio.addEventListener('play', tick);

@@ -190,6 +190,9 @@ export type PlayOnPlayer = {
 
 export const getPlayers = () => quietly<{ players: PlayOnPlayer[] }>('/api/players');
 export const getPlayer = (name: string) => quietly<PlayOnPlayer>(`/api/players/${encodeURIComponent(name)}`);
+/** A track's ReplayGain (decision 0035): gains in dB, peaks linear; what is not known is left out. */
+export type TrackGain = { trackGain?: number; albumGain?: number; trackPeak?: number; albumPeak?: number };
+export const getTrackGain = (source: string, id: string) => quietly<TrackGain>(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/gain`);
 /** A Kodi Cratarr plays on: its web server, its login (the password never comes back), Cratarr's address for it. */
 export type KodiSetting = { name: string; url: string; user: string; password?: string; password_set?: boolean; stream_from: string };
 export type PlayOnSettings = { webhooks: string[]; kodi: KodiSetting[]; stream_default: string | null };
