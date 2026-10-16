@@ -75,6 +75,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/play", post(play_album))
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
         .route("/api/collection", get(collection))
+        .route("/api/albums", get(albums))
         .route("/api/albums/duplicates", get(album_duplicates))
         .route("/api/repairs", get(repairs))
         .route("/api/repairs/apply", post(apply_repairs))
@@ -172,6 +173,11 @@ async fn track_info(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
             .into_response(),
         Err(e) => (StatusCode::NOT_FOUND, Json(json!({ "error": format!("{e:#}") }))).into_response(),
     }
+}
+
+/// The Library page's one list (decision 0034): every album of the used libraries, with its library and facts.
+async fn albums(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::AlbumsView> {
+    Json(app.albums(f.source.as_deref()).await)
 }
 
 /// A track's file as it is (the track menu's Details): where it lies, its audio, size and dates, and every tag, in the

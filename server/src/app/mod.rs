@@ -11,6 +11,7 @@
 //! - `sync`: the user's own server playlists, kept in step with the files;
 //! - `settings`: the Settings page.
 
+mod albums;
 mod collection;
 mod error;
 mod events;
@@ -32,6 +33,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde::Serialize;
 
+pub use albums::AlbumsView;
 pub use collection::{CollectionService, CollectionView};
 pub use error::ToggleError;
 pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
