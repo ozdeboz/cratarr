@@ -11,7 +11,9 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
   { id: 'connections', title: 'Connections', icon: 'server' },
   { id: 'libraries', title: 'Libraries', icon: 'library' },
   { id: 'players', title: 'Players', icon: 'speakers' },
-  { id: 'display', title: 'Display', icon: 'swatch' },
+  { id: 'auth', title: 'Authentication', icon: 'user' },
+  { id: 'import', title: 'Import', icon: 'intoBox' },
+  { id: 'display', title: 'Display', icon: 'swatch' },
   { id: 'about', title: 'About', icon: 'info' },
 ];
 

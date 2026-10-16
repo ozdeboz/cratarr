@@ -1,6 +1,7 @@
 // Phone check (decided 2026-10-16): every page, every part of the settings and an album in the panel, at a phone's
 // width (390 px, as touch), must not scroll sideways: neither the page nor any box that scrolls up and down. A box
-// meant to scroll sideways (a row of chips) scrolls only that way, so it is not looked at.
+// meant to scroll sideways (a row of chips) scrolls only that way, so it is not looked at. A page that throws, or that
+// the dev server cannot build (its error overlay), fails too.
 //
 //   node scripts/check-phone.mjs [base]        base: the running page, http://localhost:5173 by default
 //
@@ -15,7 +16,7 @@ const base = (process.argv[2] ?? 'http://localhost:5173').replace(/\/$/, '');
 const browser =
   process.env.BROWSER ?? (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : 'chromium');
 const port = 9300 + Math.floor(Math.random() * 600);
-const SETTINGS = ['connections', 'libraries', 'auth', 'import', 'display', 'about'];
+const SETTINGS = ['connections', 'libraries', 'players', 'auth', 'import', 'display', 'about'];
 const PAGES = ['library', 'playlists', 'crates', 'insights', 'health', 'settings'];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -41,13 +42,17 @@ const send = (method, params = {}) =>
     waiting.set(n, r);
     ws.send(JSON.stringify({ id: n, method, params }));
   });
+/** What the page threw since it was last asked. */
+let thrown = [];
 ws.addEventListener('message', (e) => {
   const m = JSON.parse(e.data);
-  if (m.id && waiting.has(m.id)) waiting.get(m.id)(m);
+  if (m.id && waiting.has(m.id)) return waiting.get(m.id)(m);
+  if (m.method === 'Runtime.exceptionThrown') thrown.push((m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text).split('\n')[0]);
 });
 const js = async (expression) => (await send('Runtime.evaluate', { expression, returnByValue: true })).result.result.value;
 
 await send('Page.enable');
+await send('Runtime.enable');
 await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
 await send('Emulation.setTouchEmulationEnabled', { enabled: true });
 
@@ -70,9 +75,12 @@ const SIDEWAYS = `(() => {
 })()`;
 
 async function visit(hash, settle = 2500) {
+  thrown = [];
   await send('Page.navigate', { url: `${base}/#${hash}` });
   await sleep(settle);
-  return js(SIDEWAYS);
+  const found = await js(SIDEWAYS);
+  if (await js(`!!document.querySelector('vite-error-overlay')`)) found.push('the dev server could not build it (its error overlay)');
+  return [...found, ...thrown.map((t) => `threw: ${t}`)];
 }
 
 const views = PAGES.map((p) => `/${p}`);
