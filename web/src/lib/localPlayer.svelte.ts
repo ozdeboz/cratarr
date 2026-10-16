@@ -57,7 +57,8 @@ export type Autoplay = { mode: AutoplayMode; albums: boolean; restart: boolean; 
 
 /** One appended track: its queue index, where its sample 0 sits in the stream (s), its length (s; null while
  *  unknown), and the length the server read from the file (s), shown while the exact one is unknown. */
-type Segment = { index: number; start: number; length: number | null; told: number | null };
+/** `level`: the track's levelling, fixed once known (a queue change mid-track does not change it). */
+type Segment = { index: number; start: number; length: number | null; told: number | null; level?: number };
 
 export const local = $state({
   queue: [] as LocalTrack[],
@@ -265,6 +266,7 @@ async function evict(keep = BEHIND) {
 async function appendTrack(index: number, from: number, gen: number) {
   const t = local.queue[index];
   if (!t) return;
+  wantGain(index);
   appending = true;
   appendingIndex = index;
   const ctl = (fetching = new AbortController());
@@ -326,6 +328,8 @@ async function appendTrack(index: number, from: number, gen: number) {
       segment.length = length;
       segments.push(segment);
       placedSegment = segment;
+      // Its level from its first sample.
+      levelSchedule();
       placed = true;
     };
     if (kind === MP4) {
@@ -404,6 +408,8 @@ async function fresh(index: number, from = 0, play = true) {
   local.index = index;
   local.position = from;
   local.error = null;
+  wantGain(index);
+  wantGain(index + 1);
   ms = new Source!();
   const url = URL.createObjectURL(ms);
   audio.src = url;
@@ -487,59 +493,140 @@ function tick() {
 }
 // Levelling (decision 0035): this browser's player plays every track about as loud as the next, by its ReplayGain (the
 // album's while an album plays in its own order, else the track's), never past its peak nor above full volume, a
-// typical gain where none is known. Through a gain node, set as each track of the stream begins (the stream holds the
-// tracks one after the other). The node is made at the first play, which a press starts (a browser lets sound out
-// of an audio context only then).
+// typical gain where none is known (or not yet). Through a gain node, set as each track of the stream begins (the
+// stream holds the tracks one after the other) and then kept for that track; each track's gain is asked for as the
+// track is fetched, so it is there when the track begins. The node goes between the element and the speakers only
+// once its audio context runs (a browser starts one only after a press): an element routed into a context that cannot
+// start plays silence. Not in Safari (the managed stream's browser): WebKit suspends an audio context when the page
+// goes to the background or the screen locks, which would silence the element routed into it; it plays unlevelled.
 const UNKNOWN_DB = -6;
+const UNKNOWN = 10 ** (UNKNOWN_DB / 20);
+const canLevel = !!audio && !Managed && typeof AudioContext !== 'undefined';
 const gains = new Map<string, TrackGain | null>();
 let level: { ctx: AudioContext; gain: GainNode } | null = null;
+/** An audio context made, not yet running. */
+let starting: AudioContext | null = null;
 
 function levelRoute() {
-  if (level || !audio || !prefs.levelling || typeof AudioContext === 'undefined') return;
+  if (level || starting || !canLevel || !prefs.levelling) return;
+  let ctx: AudioContext;
   try {
-    const ctx = new AudioContext();
-    const gain = ctx.createGain();
-    ctx.createMediaElementSource(audio).connect(gain).connect(ctx.destination);
-    level = { ctx, gain };
+    ctx = new AudioContext();
   } catch {
-    level = null;
+    return;
   }
+  starting = ctx;
+  // resume() answers once the context runs: at once after a press, else at the next one.
+  ctx.resume().then(
+    () => {
+      starting = null;
+      if (level || ctx.state !== 'running' || !audio) return void ctx.close();
+      try {
+        const gain = ctx.createGain();
+        ctx.createMediaElementSource(audio).connect(gain).connect(ctx.destination);
+        level = { ctx, gain };
+      } catch {
+        return void ctx.close();
+      }
+      // Suspended by the browser while playing: the element would fall silent.
+      ctx.addEventListener('statechange', () => {
+        if (ctx.state === 'suspended' && audio && !audio.paused) void ctx.resume();
+      });
+      levelSchedule();
+    },
+    () => {
+      starting = null;
+      void ctx.close();
+    },
+  );
+}
+
+/** Asks for a queue place's gain, once per track. */
+function wantGain(index: number) {
+  const t = local.queue[index];
+  if (!t || !canLevel || !prefs.levelling) return;
+  const key = `${t.source}/${t.id}`;
+  if (gains.has(key)) return;
+  gains.set(key, null);
+  getTrackGain(t.source, t.id)
+    .then((g) => gains.set(key, g), () => gains.set(key, {}))
+    .finally(levelSchedule);
 }
 
 /** A queue place's level (0 to 1); null while its gain is being asked for. */
 function levelOf(index: number): number | null {
   const t = local.queue[index];
-  if (!t || !prefs.levelling) return 1;
-  const key = `${t.source}/${t.id}`;
-  if (!gains.has(key)) {
-    gains.set(key, null);
-    getTrackGain(t.source, t.id)
-      .then((g) => gains.set(key, g), () => gains.set(key, {}))
-      .finally(levelSchedule);
-    return null;
-  }
-  const g = gains.get(key);
-  if (g === null) return null;
+  if (!t) return 1;
+  wantGain(index);
+  const g = gains.get(`${t.source}/${t.id}`);
+  if (!g) return null;
   const sameAlbum = (j: number) => !!t.album_id && local.queue[j]?.album_id === t.album_id && !local.queue[j]?.lane;
   const albumWise = !local.shuffled && (sameAlbum(index - 1) || sameAlbum(index + 1));
-  const gainDb = (albumWise ? g?.albumGain : undefined) ?? g?.trackGain ?? UNKNOWN_DB;
-  const peak = (albumWise ? g?.albumPeak : undefined) ?? g?.trackPeak ?? 1;
+  const gainDb = (albumWise ? g.albumGain : undefined) ?? g.trackGain ?? UNKNOWN_DB;
+  const peak = (albumWise ? g.albumPeak : undefined) ?? g.trackPeak ?? 1;
   return Math.min(10 ** (gainDb / 20), peak > 0 ? 1 / peak : 1, 1);
 }
 
-/** The playing track's level now, the next one's from where it starts in the stream. */
+/** A segment's level: its track's, kept once known; the typical one until then. */
+function segmentLevel(s: Segment): number {
+  if (!prefs.levelling) return 1;
+  if (s.level === undefined) {
+    const l = levelOf(s.index);
+    if (l === null) return UNKNOWN;
+    s.level = l;
+  }
+  return s.level;
+}
+
+/** What the gain node was last told: the playing segment and its level, the next track's (null: none yet, or paused)
+ *  and when it starts (on the audio context's clock). */
+let told: { seg: Segment | undefined; level: number; next: number | null; at: number } | null = null;
+/** A change within a playing track glides (about 0.15 s): a step there could click. Elsewhere (a new track, a seek,
+ *  before any sound) the sound jumps anyway, and it is a step. */
+const GLIDE = 0.05;
+
+/** The playing track's level now, the next one's from where it starts in the stream. Only what changed is told
+ *  again: cancelling a glide under way would jump back. */
 function levelSchedule() {
   if (!level || !audio) return;
-  const { ctx, gain } = level;
+  const p = level.gain.gain;
+  const t = level.ctx.currentTime;
   const now = audio.currentTime;
-  const at = (s: Segment) => s.start <= now;
-  const cur = [...segments].reverse().find(at);
+  const cur = [...segments].reverse().find((s) => s.start <= now);
   const next = segments.find((s) => s.start > now);
-  gain.gain.cancelScheduledValues(ctx.currentTime);
-  const f = cur ? levelOf(cur.index) : 1;
-  gain.gain.setValueAtTime(f ?? gain.gain.value, ctx.currentTime);
-  const nf = next ? levelOf(next.index) : null;
-  if (next && nf !== null && !audio.paused) gain.gain.setValueAtTime(nf, ctx.currentTime + (next.start - now));
+  const f = cur ? segmentLevel(cur) : prefs.levelling ? UNKNOWN : 1;
+  // Paused: the stream's clock stands still while the context's runs on, so no next step is set.
+  const nf = next && !audio.paused ? segmentLevel(next) : null;
+  const at = next ? t + (next.start - now) : 0;
+  if (told?.level !== f || told.seg !== cur) {
+    // As when a track's gain comes late, or the switch is flipped.
+    const within = !!cur && !audio.paused && now > cur.start + 0.3 && (!told || told.seg === cur);
+    if (within) {
+      // From where it is now.
+      if (typeof p.cancelAndHoldAtTime === 'function') p.cancelAndHoldAtTime(t);
+      else {
+        p.cancelScheduledValues(t);
+        p.setValueAtTime(p.value, t);
+      }
+      p.setTargetAtTime(f, t, GLIDE);
+    } else {
+      p.cancelScheduledValues(t);
+      p.setValueAtTime(f, t);
+    }
+  } else if (told.next !== nf || (nf !== null && Math.abs(told.at - at) > 0.02)) {
+    // Only the next step moved (it comes, goes, or the clocks drifted apart): what lies ahead, again.
+    p.cancelScheduledValues(t + 0.001);
+  } else return;
+  if (nf !== null) p.setValueAtTime(nf, at);
+  told = { seg: cur, level: f, next: nf, at };
+}
+
+/** Levelling on or off for this browser's player, the playing track too. */
+export function setLevelling(on: boolean) {
+  prefs.levelling = on;
+  // The switch is a press: an audio context can start now.
+  if (audio && !audio.paused) levelRoute();
+  levelSchedule();
 }
 
 if (audio) {
@@ -549,6 +636,7 @@ if (audio) {
     levelSchedule();
   });
   audio.addEventListener('seeked', levelSchedule);
+  audio.addEventListener('pause', levelSchedule);
   audio.addEventListener('timeupdate', levelSchedule);
 }
 

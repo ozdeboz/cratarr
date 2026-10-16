@@ -4,6 +4,7 @@
   import SettingRow from '../SettingRow.svelte';
   import Switch from '../Switch.svelte';
   import { appInfo, inApp, setDevice } from '../app.svelte';
+  import { setLevelling } from '../localPlayer.svelte';
   import { prefs, type Theme } from '../prefs.svelte';
 
   const THEMES: { value: Theme; label: string }[] = [
@@ -28,7 +29,7 @@
         label="Level the volume"
         hint="Every track about as loud as the next"
         checked={inApp ? appInfo.levelling : prefs.levelling}
-        onchange={(on) => (inApp ? setDevice({ levelling: on }) : (prefs.levelling = on))}
+        onchange={(on) => (inApp ? setDevice({ levelling: on }) : setLevelling(on))}
       />
     </div>
   </section>
