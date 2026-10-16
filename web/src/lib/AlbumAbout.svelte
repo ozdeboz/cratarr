@@ -1,12 +1,17 @@
 <script lang="ts">
   // An album's About (as Symfonium's, decided 2026-10-16), at the end of its panel: its genres (a chip each, opening the
   // genre), year, when it was last played and added (date and time, as Symfonium writes them), and where it comes
-  // from: the server and its library. What is not known is left out; Last played says Never when it never was.
+  // from: the server and its library. What is not known is left out; Last played says Never when it never was. Its
+  // rating (decided 2026-10-16) as five stars, the same as its menu's: a tap rates, where its server keeps ratings.
+  import { albumRatings, loadAlbumRating, rateAlbum } from './albums.svelte';
   import { viewGenre } from './crates.svelte';
+  import RatingStars from './RatingStars.svelte';
   import Icon from './Icon.svelte';
   import SectionHead from './SectionHead.svelte';
 
   let {
+    source,
+    album,
     genres,
     year,
     added,
@@ -14,6 +19,8 @@
     plays,
     provider,
   }: {
+    source: string;
+    album: string;
     genres: string[];
     year: number | null;
     added?: number;
@@ -22,6 +29,9 @@
     /** The server's name, and the library's (with its dot) when known. */
     provider: { server: string; library: string | null; colour: string | null };
   } = $props();
+
+  $effect(() => loadAlbumRating(source, album));
+  const rating = $derived(albumRatings[`${source}/${album}`] ?? null);
 
   const two = (n: number) => String(n).padStart(2, '0');
   /** 2026-10-16 14:05:09, this device's time. */
@@ -43,6 +53,10 @@
   {#if year}
     <h3>Year</h3>
     <p class="chips"><span class="chip">{year}</span></p>
+  {/if}
+  {#if rating !== null}
+    <h3>Rating</h3>
+    <div class="stars"><RatingStars value={rating} onrate={(n) => rateAlbum(source, album, n)} /></div>
   {/if}
   {#if played || plays === 0}
     <h3>Last played</h3>
@@ -111,6 +125,11 @@
 
   button.chip {
     cursor: pointer;
+  }
+
+  /* The stars' own room makes their indent: the first one's left edge lines up with the chips'. */
+  .stars {
+    margin-left: -4px;
   }
 
   .sep {

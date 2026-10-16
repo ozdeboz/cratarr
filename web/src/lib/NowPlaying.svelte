@@ -16,6 +16,8 @@
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
+  import Waveform from './Waveform.svelte';
+  import { loadWaveform, waveformOf } from './waveforms.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
@@ -44,6 +46,11 @@
   // the finger and the player seeks only on release. Only on this device for now: seeking the server's player is
   // tried on it first.
   const canSeek = $derived(isLocal() && !!dur);
+  // The track's waveform (decision 0035), where it has one: the seek bar draws it instead of its line.
+  $effect(() => {
+    if (np) loadWaveform(np.source, np.id);
+  });
+  const wave = $derived(np ? waveformOf(np.source, np.id) : null);
   /** Where the handle is held (seconds), and after release until the player is there. */
   let held = $state<number | null>(null);
   let heldTimer: ReturnType<typeof setTimeout> | undefined;
@@ -377,8 +384,13 @@
                 onpointercancel={() => (held = null)}
                 onkeydown={seekKey}
               >
-                <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
-                {#if canSeek}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
+                {#if wave}
+                  <Waveform bins={wave} progress={dur ? pos / dur : 0} paused={np.progress.paused} />
+                {:else}
+                  <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
+                {/if}
+                <!-- Over a waveform the handle shows only while held (where it is going). -->
+                {#if canSeek && (!wave || held !== null)}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
               </div>
               <span class="t">{dur ? clockText(dur) : '–:––'}</span>
             </div>

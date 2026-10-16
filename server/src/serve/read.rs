@@ -7,11 +7,12 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rusqlite::{Connection, params_from_iter};
 
-use super::api::{Album, Artist, ArtistRef, GenreRef, Song, content_type, iso};
+use super::api::{Album, Artist, ArtistRef, GenreRef, ReplayGain, Song, content_type, iso};
 use super::library::{Library, fts_query};
 
 const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.artist, s.album, s.album_artist, s.track_no, s.disc_no,
-  s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover";
+  s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover,
+  s.rg_track_gain, s.rg_track_peak, s.rg_album_gain, s.rg_album_peak";
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
   a.created, a.mbid, a.compilation, a.cover";
 
@@ -65,6 +66,7 @@ fn song_of(r: &rusqlite::Row) -> rusqlite::Result<Song> {
         bpm: r.get(13)?,
         music_brainz_id: r.get(19)?,
         display_album_artist: r.get::<_, Option<String>>(8)?.unwrap_or_default(),
+        replay_gain: ReplayGain::of(r.get(21)?, r.get(22)?, r.get(23)?, r.get(24)?),
         suffix,
         kind: "music",
         media_type: "song",

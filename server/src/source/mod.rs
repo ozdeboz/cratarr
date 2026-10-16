@@ -175,6 +175,16 @@ pub struct AlbumListening {
     pub plays: Option<u32>,
 }
 
+/// How the account the source plays for used an album: its plays, when last played (epoch seconds), its rating (0:
+/// none). The Library's orders and filters (decided 2026-10-16).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct AlbumUse {
+    pub plays: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub played: Option<i64>,
+    pub rating: u8,
+}
+
 /// An album's track count, format ("FLAC"; `None` when mixed or unknown) and lowest bitrate.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct AlbumDetails {
@@ -397,6 +407,12 @@ pub trait Source: Send + Sync {
     /// Optional: makes an artist a favourite or not (the artist panel's heart).
     fn set_artist_favorite<'a>(&'a self, _name: &'a str, _on: bool) -> Fut<'a, bool> {
         Box::pin(async { Err(anyhow::anyhow!("This server keeps no favourite artists.")) })
+    }
+
+    /// Optional: every album played or rated, by id (the Library's orders and filters by plays and rating), never kept:
+    /// plays change. Empty where the source cannot say.
+    fn album_uses(&self) -> Fut<'_, BTreeMap<String, AlbumUse>> {
+        Box::pin(async { Ok(BTreeMap::new()) })
     }
 
     /// Optional: when an album came and how it has been played (the album panel's About), never kept: plays change.

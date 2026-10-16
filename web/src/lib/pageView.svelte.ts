@@ -27,13 +27,19 @@ export const ALBUM_LAYOUTS = [
   { value: 'grid' as const, label: 'Covers', icon: 'layoutGrid' as const },
 ];
 
-// Each order ascending as named (A–Z, oldest first, fewest first); a list's arrow turns it round.
+// Each order ascending as named (A–Z, oldest first, fewest first); a list's arrow turns it round. Plays, Last played
+// and Rating (how you used them, decided 2026-10-16) start the other way round: most first.
 export const ALBUM_ORDERS: { value: CollectionOrder; label: string }[] = [
   { value: 'artist', label: 'Artist' },
   { value: 'title', label: 'Title' },
   { value: 'year', label: 'Year' },
   { value: 'added', label: 'Added' },
+  { value: 'plays', label: 'Plays' },
+  { value: 'played', label: 'Last played' },
+  { value: 'rating', label: 'Rating' },
 ];
+/** The orders by how you used the albums (lib/albums albumUses): read when chosen, most first when chosen. */
+export const USE_ORDERS: readonly CollectionOrder[] = ['plays', 'played', 'rating'];
 
 export const PLAYLIST_ORDERS: { value: PlaylistOrder; label: string }[] = [
   { value: 'name', label: 'Name' },
@@ -77,6 +83,9 @@ export const pageView = $state({
   favouritesOnly: false,
   /** Library: only Incoming's albums that would upgrade one in Music; not remembered either. */
   upgradesOnly: false,
+  /** Library: only albums never played, and only those rated 4 stars or 5 (decided 2026-10-16); not remembered. */
+  unplayedOnly: false,
+  topRatedOnly: false,
   /** The page's search (the pill's field): what its list is filtered by; empty again on another page. */
   query: '',
   /** A library of the page's list is switched off (lib/AlbumShelf): the pill's funnel is lit. */

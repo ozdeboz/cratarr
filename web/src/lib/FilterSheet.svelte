@@ -79,6 +79,8 @@
         <Switch card label="Favourites only" checked={pageView.favouritesOnly} onchange={(on) => (pageView.favouritesOnly = on)} />
         {#if page === 'library'}
           <Switch card label="Upgrades waiting" checked={pageView.upgradesOnly} onchange={(on) => (pageView.upgradesOnly = on)} />
+          <Switch card label="Not played yet" checked={pageView.unplayedOnly} onchange={(on) => (pageView.unplayedOnly = on)} />
+          <Switch card label="4 stars and up" checked={pageView.topRatedOnly} onchange={(on) => (pageView.topRatedOnly = on)} />
         {/if}
       </div>
     {:else if page === null}

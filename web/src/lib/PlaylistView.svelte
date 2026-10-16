@@ -1378,7 +1378,7 @@
         <!-- As Symfonium's album: the artist's other albums, then About. -->
         {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
         {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
-        <AlbumAbout genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} />
+        <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} />
       {/if}
     {:else}
       <PageLoading />

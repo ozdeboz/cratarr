@@ -39,6 +39,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}", get(track_info))
         .route("/api/track/{source}/{id}/playlists", get(track_state))
         .route("/api/track/{source}/{id}/details", get(track_details))
+        .route("/api/track/{source}/{id}/waveform", get(track_waveform))
+        .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
         .route("/api/track/{source}/{id}/favorite", post(track_favorite))
         .route("/api/track/{source}/{id}/played", post(track_played))
@@ -81,6 +83,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/sync/targets", get(sync_targets))
         .route("/api/playlists/by-name", get(playlist_by_name))
         .route("/api/playlists/{id}/spoken", put(set_spoken))
+        .route("/api/album-uses/{source}", get(album_uses))
         .route("/api/artists/{source}", get(artist_view))
         .route("/api/artists/{source}/favorite", post(artist_favorite))
         .route("/api/albums/{source}/{album}", get(album_view))
@@ -199,6 +202,88 @@ async fn albums(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<cr
 
 /// A track's file as it is (the track menu's Details): where it lies, its audio, size and dates, and every tag, in the
 /// file's order (a tag Cratarr knows by its Picard name, any other by its own key).
+/// A track's waveform (decision 0035): its analysis' 512 bins, each its loudest sample (0..=255 of full scale), as
+/// bytes; the seekbar draws it. 404 until the track is analysed (or while its file changed since). It changes only
+/// with a new analysis: an ETag of when that was made, and kept a long time.
+async fn track_waveform(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+    let cat = app.library.catalogue();
+    let found = tokio::task::spawn_blocking(move || {
+        let track = cat.track_of_source(&source, &id)?;
+        let (folder, rel) = cat.file_of(track)?;
+        let (at, version) = cat.analysis_stamp(folder, &rel)?;
+        let etag = format!("\"{version}-{at}\"");
+        if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
+            return Some((etag, None));
+        }
+        Some((etag, Some(cat.analysis_of(folder, &rel)?.waveform)))
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some((etag, bins)) = found else { return StatusCode::NOT_FOUND.into_response() };
+    let mut res = match bins {
+        None => StatusCode::NOT_MODIFIED.into_response(),
+        Some(b) => ([(header::CONTENT_TYPE, "application/octet-stream")], b).into_response(),
+    };
+    let h = res.headers_mut();
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=2592000"));
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        h.insert(header::ETAG, v);
+    }
+    res
+}
+
+#[derive(Deserialize)]
+struct ImportTo {
+    /// The library folder as the server sees it (`/media/Music`).
+    folder: String,
+}
+
+/// Analyses made elsewhere (decision 0035: the ThinkBook's pass), as JSON lines for one library folder, read as they
+/// come (tens of MB): each taken while its file is as it was analysed. Answers with the counts.
+async fn analysis_import(
+    State(app): State<Arc<App>>,
+    Query(q): Query<ImportTo>,
+    body: axum::body::Body,
+) -> Result<Json<crate::app::analysis_import::ImportCounts>, ApiError> {
+    use crate::app::analysis_import::{ImportCounts, folder_of, import_batch};
+    use tokio_stream::StreamExt;
+    const BATCH: usize = 500;
+    let cat = app.library.catalogue();
+    let folder = folder_of(&cat, &q.folder).ok_or_else(|| ToggleError::Refused(format!("{} is not one of the library's folders.", q.folder)))?;
+    let flush = |lines: Vec<Vec<u8>>, counts: ImportCounts| {
+        let cat = cat.clone();
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let mut counts = counts;
+                import_batch(&cat, folder, &lines, &mut counts).map(|_| counts)
+            })
+            .await
+            .map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?
+            .map_err(ToggleError::from)
+        }
+    };
+    let mut counts = ImportCounts::default();
+    let (mut rest, mut lines): (Vec<u8>, Vec<Vec<u8>>) = (Vec::new(), Vec::new());
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| ToggleError::Refused(format!("The upload broke off: {e}")))?;
+        rest.extend_from_slice(&chunk);
+        while let Some(i) = rest.iter().position(|b| *b == b'\n') {
+            lines.push(rest.drain(..=i).collect());
+        }
+        if lines.len() >= BATCH {
+            counts = flush(std::mem::take(&mut lines), counts).await?;
+        }
+    }
+    if !rest.is_empty() {
+        lines.push(rest);
+    }
+    counts = flush(lines, counts).await?;
+    tracing::info!("analysis import into {}: {counts:?}", q.folder);
+    Ok(Json(counts))
+}
+
 async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Response {
     let cat = app.library.catalogue();
     let read = tokio::task::spawn_blocking(move || -> Option<serde_json::Value> {
@@ -299,6 +384,15 @@ async fn artist_favorite(
     Query(q): Query<ArtistName>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "favorite": app.playing.artist_favorite(&source, &q.name, q.on).await? })))
+}
+
+/// Every album the owner played or rated on a server, by id: plays, last played, rating (the Library's orders and
+/// filters, decided 2026-10-16).
+async fn album_uses(
+    State(app): State<Arc<App>>,
+    Path(source): Path<String>,
+) -> Result<Json<std::collections::BTreeMap<String, crate::source::AlbumUse>>, ApiError> {
+    Ok(Json(app.playing.album_uses(&source).await?))
 }
 
 /// The album panel's heart: an album a favourite or not.

@@ -56,7 +56,8 @@ export type Prefs = {
 };
 
 export type AlbumLayout = 'rows' | 'grid';
-export type CollectionOrder = 'artist' | 'title' | 'year' | 'added';
+export type CollectionOrder = 'artist' | 'title' | 'year' | 'added' | 'plays' | 'played' | 'rating';
+const COLLECTION_ORDERS: readonly CollectionOrder[] = ['artist', 'title', 'year', 'added', 'plays', 'played', 'rating'];
 export type PlaylistOrder = 'name' | 'tracks' | 'playing';
 export type CrateOrder = 'own' | 'name';
 
@@ -105,8 +106,8 @@ function read(): Prefs {
       if (typeof saved.relatedFilterOpen === 'boolean') p.relatedFilterOpen = saved.relatedFilterOpen;
       if (saved.albumLayout === 'rows' || saved.albumLayout === 'grid') p.albumLayout = saved.albumLayout;
       if (Number.isInteger(saved.albumZoom) && saved.albumZoom >= 0 && saved.albumZoom < ZOOM_STEPS) p.albumZoom = saved.albumZoom;
-      if (['artist', 'title', 'year', 'added'].includes(saved.libraryOrder)) p.libraryOrder = saved.libraryOrder;
-      if (['artist', 'title', 'year', 'added'].includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
+      if (COLLECTION_ORDERS.includes(saved.libraryOrder)) p.libraryOrder = saved.libraryOrder;
+      if (COLLECTION_ORDERS.includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
       if (['name', 'tracks', 'playing'].includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
       if (['name', 'tracks', 'playing'].includes(saved.listOrder)) p.listOrder = saved.listOrder;
       if (typeof saved.listDown === 'boolean') p.listDown = saved.listDown;

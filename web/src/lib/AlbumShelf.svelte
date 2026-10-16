@@ -6,10 +6,10 @@
   // Playlists): the list header's icon or a long-press ticks albums, a tap then ticks too, and the select bar
   // (lib/SelectBar) plays, puts next, queues, favours or downloads the ticked ones, one album after another, or opens
   // the menu of one (a tile's menu is this way).
-  import type { Snippet } from 'svelte';
+  import { untrack, type Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
   import { albumCoverUrl, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
-  import { addedOn, albumPlay, playAlbums, playListedAlbum, quality, tracksOfAlbums, weak } from './albums.svelte';
+  import { addedOn, albumPlay, loadAlbumUses, playAlbums, playListedAlbum, quality, tracksOfAlbums, useOf, weak } from './albums.svelte';
   import { download, inApp } from './app.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import SelectBar from './SelectBar.svelte';
@@ -22,7 +22,7 @@
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
-  import { ALBUM_ORDERS, ALBUM_WIDTHS, howMany, pageView } from './pageView.svelte';
+  import { ALBUM_ORDERS, ALBUM_WIDTHS, howMany, pageView, USE_ORDERS } from './pageView.svelte';
   import { libraryShown } from './sources.svelte';
   import Tile from './Tile.svelte';
 
@@ -161,24 +161,57 @@
   const name = (s: string | null) => (s ?? '').replace(/^the\s+/i, '');
   const byArtist = (x: ListedAlbum, y: ListedAlbum) => collator.compare(name(x.artist), name(y.artist)) || (x.year ?? 0) - (y.year ?? 0);
   const byTitle = (x: ListedAlbum, y: ListedAlbum) => collator.compare(x.title, y.title);
-  const COMPARE: Record<CollectionOrder, (x: ListedAlbum, y: ListedAlbum) => number> = {
-    artist: (x, y) => byArtist(x, y) || byTitle(x, y),
-    title: (x, y) => byTitle(x, y) || byArtist(x, y),
-    // Ascending as named (oldest first); the header's arrow turns it round.
-    year: (x, y) => (x.year ?? -1) - (y.year ?? -1) || byArtist(x, y) || byTitle(x, y),
-    added: (x, y) => (x.added ?? 0) - (y.added ?? 0),
+  // An order of one server's albums: how you used them (plays, last played, rating) is per server.
+  const compareIn = (source: string): Record<CollectionOrder, (x: ListedAlbum, y: ListedAlbum) => number> => {
+    const use = (a: ListedAlbum) => useOf(source, a.id);
+    return {
+      artist: (x, y) => byArtist(x, y) || byTitle(x, y),
+      title: (x, y) => byTitle(x, y) || byArtist(x, y),
+      // Ascending as named (oldest first); the header's arrow turns it round.
+      year: (x, y) => (x.year ?? -1) - (y.year ?? -1) || byArtist(x, y) || byTitle(x, y),
+      added: (x, y) => (x.added ?? 0) - (y.added ?? 0),
+      plays: (x, y) => use(x).plays - use(y).plays || (use(x).played ?? 0) - (use(y).played ?? 0),
+      played: (x, y) => (use(x).played ?? 0) - (use(y).played ?? 0),
+      rating: (x, y) => use(x).rating - use(y).rating || use(x).plays - use(y).plays,
+    };
   };
   const shown = $derived(
     sources.map((s) => {
-      const albums = s.albums.filter((a) => (!a.library || libraryShown(s.id, a.library)) && matches(a)).sort(COMPARE[order]);
+      const albums = s.albums.filter((a) => (!a.library || libraryShown(s.id, a.library)) && matches(a)).sort(compareIn(s.id)[order]);
       return { s, albums: down ? albums.reverse() : albums };
     }),
   );
+  // How you used them, read when such an order is chosen (and each time again: plays change).
+  $effect(() => {
+    if (!USE_ORDERS.includes(order)) return;
+    for (const s of untrack(() => sources)) loadAlbumUses(s.id);
+  });
+  // Plays, Last played and Rating start most first; the arrow still turns them round.
+  let orderWas = untrack(() => order);
+  $effect(() => {
+    const o = order;
+    if (o === orderWas) return;
+    orderWas = o;
+    if (USE_ORDERS.includes(o)) down = true;
+  });
 
   const view = (source: string, a: ListedAlbum) => viewPlaylist(albumSubject(source, a.id));
   // A tile shows its title and artist; the value the list is ordered by, when it is neither, is a pill over the cover's
   // upper left corner (decided 2026-10-16).
-  const axisOf = (a: ListedAlbum) => (order === 'year' ? (a.year ? String(a.year) : null) : order === 'added' && a.added ? addedOn(a.added) : null);
+  const axisOf = (s: ShelfSource, a: ListedAlbum) => {
+    if (order === 'year') return a.year ? String(a.year) : null;
+    if (order === 'added') return a.added ? addedOn(a.added) : null;
+    const u = useOf(s.id, a.id);
+    if (order === 'plays') return u.plays ? (u.plays === 1 ? '1 play' : `${u.plays} plays`) : null;
+    if (order === 'played') return u.played ? addedOn(u.played) : null;
+    if (order === 'rating') return u.rating ? '★'.repeat(u.rating) : null;
+    return null;
+  };
+  // A row ordered by how you used them says the value where it says when the album came (a tile's pill says it too).
+  const usedLine = (s: ShelfSource, a: ListedAlbum) => {
+    const v = USE_ORDERS.includes(order) ? axisOf(s, a) : null;
+    return v && order === 'played' ? `played ${v}` : v;
+  };
   const openMenu = (s: ShelfSource, a: ListedAlbum, anchor: DOMRect) => onmenu(s, a, anchor);
 
   // Select: the ticked albums by `source/id`; null while not selecting.
@@ -297,7 +330,7 @@
               <Tile
                 title={a.title}
                 dot={dotOf(s, a)}
-                tag={axisOf(a)}
+                tag={axisOf(s, a)}
                 label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.title}` : `View ${a.title}`}
                 active={viewed || on}
                 strong={here}
@@ -331,7 +364,7 @@
                   <span class="facts">
                     <span>{a.tracks} {a.tracks === 1 ? 'track' : 'tracks'}</span>
                     <span class:weak={weak(a)}>{quality(a)}</span>
-                    {#if a.added}<span>added {addedOn(a.added)}</span>{/if}
+                    {#if usedLine(s, a)}<span>{usedLine(s, a)}</span>{:else if a.added}<span>added {addedOn(a.added)}</span>{/if}
                     {#each a.tags as t (t)}<span class="tag">{t}</span>{/each}
                   </span>
                   {@render extra?.(s, a)}

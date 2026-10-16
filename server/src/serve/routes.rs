@@ -731,6 +731,7 @@ mod tests {
             size: 1000,
             mtime: 1,
             tags: tags.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
+            analysis: None,
         }
     }
 

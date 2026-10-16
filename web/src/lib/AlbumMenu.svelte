@@ -42,9 +42,7 @@
     albumCoverUrl,
     albumResume,
     albumView,
-    getAlbumRating,
     serverCoverUrl,
-    setAlbumRating,
     cancelJob,
     deleteAlbum,
     forgetAlbumResume,
@@ -57,7 +55,8 @@
     type KeepPreview,
     type ReplacePreview,
   } from './api';
-  import { albumPlay, goToArtist as showArtist, mainArtist, playAlbums, playListedAlbum } from './albums.svelte';
+  import { albumPlay, albumRatings, goToArtist as showArtist, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum } from './albums.svelte';
+  import RatingStars from './RatingStars.svelte';
   import { download, downloads, inApp, removeDownloads } from './app.svelte';
   import { viewGenre } from './crates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
@@ -74,7 +73,6 @@
   import { albumGone, albumSubject, viewPlaylist } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo, share } from './share';
-  import Icon from './Icon.svelte';
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
 
@@ -232,25 +230,9 @@
 
   // Its rating (Symfonium's "Change user rating"): the stars a Subsonic app gives it; a tap on the one it has takes it
   // off. Shown only when its server keeps ratings; the change shows at once, back as it was when refused.
-  let rating = $state<number | null>(null);
-  $effect(() => {
-    getAlbumRating(source, a.id).then(
-      (r) => (rating = r.rating),
-      () => {},
-    );
-  });
-  async function rate(stars: number) {
-    const was = rating;
-    const now = was === stars ? 0 : stars;
-    rating = now;
-    navigator.vibrate?.(8);
-    try {
-      await setAlbumRating(source, a.id, now);
-    } catch (e) {
-      rating = was;
-      toast.fail(e, "The rating didn't change");
-    }
-  }
+  // The same as its About's (lib/albums albumRatings).
+  $effect(() => loadAlbumRating(source, a.id));
+  const rating = $derived(albumRatings[`${source}/${a.id}`] ?? null);
 
   // Share: the album in words and its link here (lib/share.ts).
   function shareIt() {
@@ -503,13 +485,9 @@
       {#if rating !== null}
         {@const r = rating}
         <MenuGroup>
-          <div class="entry rating" role="group" aria-label="Rating">
+          <div class="entry rating">
             <span>Rating</span>
-            <span class="stars">
-              {#each [1, 2, 3, 4, 5] as n (n)}
-                <button class:on={n <= r} aria-label={n === 1 ? '1 star' : `${n} stars`} aria-pressed={n === r} onclick={() => rate(n)}><Icon name="star" size={24} /></button>
-              {/each}
-            </span>
+            <RatingStars value={r} onrate={(n) => rateAlbum(source, a.id, n)} />
           </div>
         </MenuGroup>
       {/if}
@@ -588,30 +566,6 @@
 
   .rating > span:first-child {
     flex: 1;
-  }
-
-  .stars {
-    display: flex;
-  }
-
-  .stars button {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 44px;
-    padding: 0;
-    background: none;
-    border: 0;
-    color: color-mix(in srgb, var(--text) 45%, transparent);
-    cursor: pointer;
-  }
-
-  .stars button.on {
-    color: var(--art-accent, var(--accent));
-  }
-
-  .stars button.on :global(svg) {
-    fill: currentColor;
   }
 
   .picker {

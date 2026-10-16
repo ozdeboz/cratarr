@@ -30,7 +30,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     larger cover; spare room spreads its three groups (track name; chips, progress and buttons; the actions row);
     when short of height the large gaps, the large play button, the small gaps, the info chips, the
     title's second line and the progress bar give way, in that order. Playing on this device the progress bar is a
-    slider (Finamp's): drag the handle and the time follows, the player seeks on release; arrow keys move 5 s. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
+    slider (Finamp's): drag the handle and the time follows, the player seeks on release; arrow keys move 5 s. Where
+    the track is analysed (decision 0035) the bar is its **waveform**: its loudness along it as bars (against its own
+    loudest), what has played in the accent; the handle shows only while held. Elsewhere the thin line. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
     cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere (over the page and beside it): swipe up opens the queue, swipe down closes.
   - **Where it shows:** with room for it (a content area of 800 × 500 px or more) the full player sits beside the page
     by itself while something plays, resizable at its edge (handle in the middle), the width remembered; its chevron
@@ -91,8 +93,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   the playing one's dots instead; every track's row ends in ⋮ (its menu). **An album ends** as Symfonium's (decided
   2026-10-16): More from the artist (their other albums on that server, newest first, in a row that scrolls sideways;
   a cover opens that album, the heading's › goes to the artist), then About: genres and year as chips, last played and
-  date added (date and time), and the media provider (the server and library, with the library's dot). Anything not
-  known is left out. The album's artist chip opens the artist too.
+  date added (date and time), and the media provider (the server and library, with the library's dot); after Year its
+  rating as five stars, the same as its menu's (a tap rates). Anything not known is left out. The album's artist chip opens the artist too.
   **An artist** (decided 2026-10-16, as Symfonium's; `?view=artist:<server>/<name>`, by name as the albums credit
   them) is a subject of the panel like an album: their newest album's cover (no artist photos yet), the action bar
   (Play, Shuffle, Play next, Add to queue: all their tracks, album by album, newest first; Start radio on Cratarr's own
@@ -196,8 +198,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   the Library, every used one (elsewhere a chip only shows a library's use), so a library is switched where its effect
   shows; the last one on stays on, so a page never filters down to nothing; and
   while one is off the funnel is lit (as the magnifier is while a search applies), the remembered filter's only trace. Every other filter lasts only for the list it was set on and is not remembered, first in the
-  sheet: Playlists' Favourites only and the Library's Favourites only and Upgrades waiting (Incoming's albums that
-  would upgrade one in Music) (each off again on leaving the page), the panel's Hide missing tracks (off again when
+  sheet: Playlists' Favourites only and the Library's Favourites only, Upgrades waiting (Incoming's albums that
+  would upgrade one in Music), Not played yet and 4 stars and up (decided 2026-10-16, by your plays and ratings)
+  (each off again on leaving the page), the panel's Hide missing tracks (off again when
   the panel shows something else), and any still to come (a tag, a genre). While any is on, the funnel is lit too.
 - **Icon buttons carry no text**, on any width (decided 2026-10-16): no label that shows only when there is room. A
   long-press (touch) or right-click (desktop) on one shows its label in a small tip beside it (`lib/labels.svelte.ts`,
@@ -262,7 +265,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   row never scrolls sideways.
 - **The Library** (decision 0034, `Library.svelte` over `lib/AlbumShelf.svelte`, decision 0028): every album of the
   followed server's Music and Incoming libraries as one list, the libraries switched in the filter; the order (Artist,
-  Title, Year, Added; Added newest first at first), Rows or Covers, and Size, in columns as the playlist chips are.
+  Title, Year, Added; Added newest first at first; and by how you used them, decided 2026-10-16: Plays, Last played,
+  Rating, most first when chosen, the value on a tile's corner pill), Rows or Covers, and Size, in columns as the playlist chips are.
   Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was added,
   and an Incoming album's lines: its conversion and how it relates to Music; an album of a library other than Music
   has a dot in its library's colour after its title, while more than one library shows); its menu is the album's one

@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS songs (
   n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, pid TEXT NOT NULL, folder INTEGER NOT NULL, rel TEXT NOT NULL, path TEXT NOT NULL,
   album_id TEXT NOT NULL, title TEXT NOT NULL, artist TEXT, album TEXT NOT NULL, album_artist TEXT,
   track_no INTEGER, disc_no INTEGER, year INTEGER, genre TEXT, bpm INTEGER, duration_ms INTEGER, size INTEGER NOT NULL,
-  suffix TEXT, kbps INTEGER, created INTEGER, mbid TEXT, order_title TEXT NOT NULL, cover TEXT);
+  suffix TEXT, kbps INTEGER, created INTEGER, mbid TEXT, order_title TEXT NOT NULL, cover TEXT,
+  rg_track_gain REAL, rg_track_peak REAL, rg_album_gain REAL, rg_album_peak REAL);
 CREATE INDEX IF NOT EXISTS songs_by_album ON songs (album_id, disc_no, track_no, rel);
 CREATE INDEX IF NOT EXISTS songs_by_title ON songs (order_title, n);
 CREATE INDEX IF NOT EXISTS songs_by_pid ON songs (pid);
@@ -64,7 +65,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(name, content='', cont
 ";
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 6;
+const LAYOUT: i64 = 7;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -85,6 +86,50 @@ pub struct Library {
 }
 
 /// A number at the start of a tag ("3/12" is 3).
+/// A song's ReplayGain (decision 0035): from its analysis once it has one (every track levelled the same way), else
+/// from the file's own tags (`REPLAYGAIN_*`; Opus's `R128_*`, which count from -23 LUFS in 1/256 dB, so 5 dB more for
+/// ReplayGain's -18). The album's from its tracks' analyses once all have one, else the same way from the tags.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(super) struct Gains {
+    pub track_gain: Option<f64>,
+    pub track_peak: Option<f64>,
+    pub album_gain: Option<f64>,
+    pub album_peak: Option<f64>,
+}
+
+/// "-6.53 dB", "+1.2 dB", "0.988": the number at the start.
+fn decibels(v: &str) -> Option<f64> {
+    let t = v.trim();
+    let end = t.find(|c: char| !(c.is_ascii_digit() || matches!(c, '-' | '+' | '.'))).unwrap_or(t.len());
+    t[..end].parse::<f64>().ok().filter(|x| x.is_finite())
+}
+
+fn r128(v: &str) -> Option<f64> {
+    v.trim().parse::<i32>().ok().map(|q| f64::from(q) / 256.0 + 5.0)
+}
+
+pub(super) fn gains(r: &ServedRow) -> Gains {
+    let tag_track = || r.first("replaygain_track_gain").and_then(decibels).or_else(|| r.first("r128_track_gain").and_then(r128));
+    let tag_album = || r.first("replaygain_album_gain").and_then(decibels).or_else(|| r.first("r128_album_gain").and_then(r128));
+    let peak = |name: &str| r.first(name).and_then(decibels).filter(|p| *p > 0.0);
+    let (track_gain, track_peak) = match &r.analysis {
+        Some(a) => (Some(f64::from(a.track_gain_db)), Some(f64::from(a.track_peak))),
+        None => (tag_track(), peak("replaygain_track_peak")),
+    };
+    let (album_gain, album_peak) = match r.analysis.as_ref().and_then(|a| a.album) {
+        Some((g, p)) => (Some(f64::from(g)), Some(f64::from(p))),
+        None => (tag_album(), peak("replaygain_album_peak")),
+    };
+    Gains { track_gain, track_peak, album_gain, album_peak }
+}
+
+/// A song's tempo (decision 0035): the file's own BPM tag, else its analysis' when that is sure enough.
+pub(super) fn bpm_of(r: &ServedRow) -> Option<u32> {
+    r.first("bpm")
+        .and_then(leading_number)
+        .or_else(|| r.analysis.as_ref().and_then(|a| a.bpm).map(|b| b.round()).filter(|b| *b > 0.0).map(|b| b as u32))
+}
+
 fn leading_number(v: &str) -> Option<u32> {
     let digits: String = v.trim().chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok().filter(|n| *n > 0)
@@ -294,8 +339,10 @@ impl Library {
         {
             let mut ins_song = tx.prepare(
                 "INSERT INTO songs (id, pid, folder, rel, album_id, title, artist, album, album_artist, track_no, disc_no, year,
-                   genre, bpm, duration_ms, size, suffix, kbps, created, mbid, order_title, path)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                   genre, bpm, duration_ms, size, suffix, kbps, created, mbid, order_title, path,
+                   rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
+                   ?23, ?24, ?25, ?26)",
             )?;
             let mut ins_fts = tx.prepare("INSERT INTO songs_fts (rowid, title, artist, album) VALUES (?1, ?2, ?3, ?4)")?;
             let mut ins_artist = tx.prepare("INSERT INTO song_artists (song_id, artist_id, name, position) VALUES (?1, ?2, ?3, ?4)")?;
@@ -303,6 +350,7 @@ impl Library {
                 let r = s.row;
                 let id = ids::song(r.track.unwrap_or_default());
                 let suffix = r.rel.rsplit_once('.').map(|(_, e)| e.to_lowercase());
+                let g = gains(r);
                 ins_song.execute(params![
                     id,
                     ids::song_pid(r, &s.album_artist),
@@ -317,7 +365,7 @@ impl Library {
                     r.first("discnumber").and_then(leading_number),
                     r.first("date").and_then(year_of),
                     s.genres.first(),
-                    r.first("bpm").and_then(leading_number),
+                    bpm_of(r),
                     r.duration_ms.map(|d| d as i64),
                     r.size as i64,
                     suffix,
@@ -326,6 +374,10 @@ impl Library {
                     r.first("musicbrainz_trackid"),
                     order_name(&s.title),
                     format!("{}/{}", roots.get(&s.folder).map_or("", |r| r.trim_end_matches('/')), r.rel),
+                    g.track_gain,
+                    g.track_peak,
+                    g.album_gain,
+                    g.album_peak,
                 ])?;
                 let n = tx.last_insert_rowid();
                 ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
@@ -557,6 +609,7 @@ mod tests {
             size: 20_000_000,
             mtime: 1,
             tags: tags.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
+            analysis: None,
         }
     }
 
@@ -606,6 +659,41 @@ mod tests {
         assert_eq!((track, disc), (1, 2));
         let order: String = db.query_row("SELECT order_name FROM artists WHERE name = 'The Orb'", [], |r| r.get(0)).unwrap();
         assert_eq!(order, "orb");
+    }
+
+    #[test]
+    fn gains_come_from_the_analysis_once_there_else_from_the_files_tags() {
+        let tagged = row(1, "A/X/01 t.flac", &[("replaygain_track_gain", "-6.53 dB"), ("replaygain_track_peak", "0.988123"), ("replaygain_album_gain", "-7 dB")]);
+        assert_eq!(gains(&tagged), Gains { track_gain: Some(-6.53), track_peak: Some(0.988123), album_gain: Some(-7.0), album_peak: None });
+        // Opus counts from -23 LUFS in 1/256 dB: 5 dB more for ReplayGain's -18.
+        let opus = row(2, "A/X/02 t.opus", &[("r128_track_gain", "-512")]);
+        assert_eq!(gains(&opus).track_gain, Some(3.0));
+        let mut analysed = tagged.clone();
+        analysed.analysis = Some(crate::catalogue::RowAnalysis { track_gain_db: -4.0, track_peak: 0.5, bpm: Some(127.6), album: None });
+        let g = gains(&analysed);
+        assert_eq!((g.track_gain, g.track_peak, g.album_gain), (Some(-4.0), Some(0.5), Some(-7.0)), "the album's waits for all its tracks");
+        analysed.analysis.as_mut().unwrap().album = Some((-5.0, 0.9));
+        assert_eq!((gains(&analysed).album_gain, gains(&analysed).album_peak), (Some(-5.0), Some(0.8999999761581421)));
+        // Tempo: the file's own tag first, then the analysis'.
+        assert_eq!(bpm_of(&analysed), Some(128));
+        let mut tagged_bpm = analysed.clone();
+        tagged_bpm.tags.push(("bpm".into(), "90".into()));
+        assert_eq!(bpm_of(&tagged_bpm), Some(90));
+    }
+
+    #[test]
+    fn a_song_carries_its_replay_gain() {
+        let lib = Library::open(None).unwrap();
+        let mut r = row(1, "A/X (2001)/01 t.flac", &[("title", "t"), ("artist", "A"), ("album", "X"), ("replaygain_track_gain", "-6.5 dB")]);
+        r.analysis = Some(crate::catalogue::RowAnalysis { track_gain_db: -4.25, track_peak: 0.75, bpm: Some(120.0), album: Some((-5.0, 0.9)) });
+        lib.refresh(&[FolderRows { folder: 0, root: "/music".into(), rows: vec![r] }], &Rules::default()).unwrap();
+        let id = crate::serve::ids::song(1);
+        let song = lib.songs_by_id(&[id]).unwrap().pop().unwrap();
+        let rg = song.replay_gain.unwrap();
+        assert_eq!((rg.track_gain, rg.track_peak, rg.album_gain), (Some(-4.25), Some(0.75), Some(-5.0)));
+        assert_eq!(song.bpm, Some(120));
+        let json = serde_json::to_value(lib.songs_by_id(&[crate::serve::ids::song(1)]).unwrap().pop().unwrap()).unwrap();
+        assert_eq!(json["replayGain"]["trackGain"], -4.25);
     }
 
     #[test]
