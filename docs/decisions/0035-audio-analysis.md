@@ -113,9 +113,25 @@ added). iTunes's `iTunNORM` is not read. The pass wins once it has a value, so e
   - The Opus copies (0033's downloads) carry it as `R128_TRACK_GAIN` and `R128_ALBUM_GAIN`, so offline playback
     levels too.
 
+## Measured: MP3 with Cratarr's decoder on the NAS (spike, 2026-10-16)
+
+A standalone build of symphonia =0.6.1 with the `mp3` feature added, doing per file what the pass does with the sound
+(decode it whole, a waveform's bins at 1/100 s, EBU R128 loudness with the sample peak), single-threaded at nice 19 /
+idle I/O on the N95, files read from the disks. 170 random Music files: 150 MP3, 20 FLAC.
+- **MP3: 0.78 s per track** (average track 5 min), about 360 times real time. **FLAC: 1.28 s per track.** The slowest,
+  a 40-minute track: 6.6 s. Decode errors: 4 bad packets in 150 files (skipped, the rest decodes).
+- **The whole of Music** (23,521 MP3, 982 FLAC): about **5.5 hours**; Incoming's 5,184 tracks about 1 more. An
+  overnight first pass holds, for decode and loudness. The tempo estimator's own cost is still to be measured.
+- **13 % of the MP3s (20 of 150) do not open** with symphonia's probe: "unsupported audio codec", once "no suitable
+  format reader". All 20 are ordinary MPEG-1 Layer III behind an ID3v2 tag (one of 2 MB, a large cover). Started
+  after the tag (its header's size, plus a footer when flagged), **all 20 decode** at the same speed with no bad
+  packets. The pass must do the same: on a probe failure, skip an ID3v2 tag and probe again (the spike reads the file
+  from the tag's end through a small `MediaSource` that hides the offset).
+
 ## Open questions for the owner
 
-1. **Tempo shown only when confident**, with "no tempo" otherwise, or always a number?
+1. **Tempo shown only when confident**, with "no tempo" otherwise, or always a number? **Answered (2026-10-16): only
+   when confident.**
 2. **Accuracy check before tempo is used:** the owner names about 20 tracks with a known tempo, a mix of styles, to
    measure against.
 
