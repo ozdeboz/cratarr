@@ -65,14 +65,23 @@ class Prefs(context: Context) {
             p.edit().apply { if (value == null) remove(SLEEP) else putString(SLEEP, "${value.atMs ?: ""},${value.endOfTrack}") }.apply()
         }
 
-    /** The radio (Radio), as `{"mode", "seed"}`; null while it is off. */
-    var radio: Radio.State?
-        get() = p.getString(RADIO, null)?.let {
+    /** Radio inserts (Radio): on or off. */
+    var radioOn: Boolean
+        get() = p.getBoolean(RADIO_ON, false)
+        set(value) {
+            p.edit().putBoolean(RADIO_ON, value).apply()
+        }
+
+    /** Autoplay (Autoplay), as `{"mode", "albums", "restart", "seed", "within"}`; null while it is off. */
+    var autoplay: Autoplay.State?
+        get() = p.getString(AUTOPLAY, null)?.let {
             try {
                 val o = org.json.JSONObject(it)
                 val seed = o.optJSONArray("seed")
-                Radio.State(
+                Autoplay.State(
                     o.optString("mode", "similar"),
+                    o.optBoolean("albums"),
+                    o.optBoolean("restart"),
                     (0 until (seed?.length() ?: 0)).map { i -> seed!!.optString(i) },
                     o.optString("within").takeIf { w -> w.isNotEmpty() && !o.isNull("within") },
                 )
@@ -82,16 +91,44 @@ class Prefs(context: Context) {
         }
         set(value) {
             p.edit().apply {
-                if (value == null) remove(RADIO)
+                if (value == null) remove(AUTOPLAY)
                 else putString(
-                    RADIO,
-                    org.json.JSONObject().put("mode", value.mode).put("seed", org.json.JSONArray(value.seed)).put("within", value.within ?: org.json.JSONObject.NULL).toString(),
+                    AUTOPLAY,
+                    org.json.JSONObject()
+                        .put("mode", value.mode)
+                        .put("albums", value.albums)
+                        .put("restart", value.restart)
+                        .put("seed", org.json.JSONArray(value.seed))
+                        .put("within", value.within ?: org.json.JSONObject.NULL)
+                        .toString(),
                 )
             }.apply()
         }
 
+    /** The radio of before (decision 0036 as first built: one lane after everything, with modes) is Autoplay now. */
+    fun migrate() {
+        val old = p.getString(OLD_RADIO, null) ?: return
+        try {
+            val o = org.json.JSONObject(old)
+            val mode = o.optString("mode", "similar")
+            val seed = o.optJSONArray("seed")
+            autoplay = Autoplay.State(
+                if (mode in listOf("continuous", "album_mix", "reshuffle")) "similar" else mode,
+                mode == "album_mix",
+                mode == "reshuffle",
+                (0 until (seed?.length() ?: 0)).map { seed!!.optString(it) },
+                o.optString("within").takeIf { it.isNotEmpty() && !o.isNull("within") },
+            )
+        } catch (e: Exception) {
+            // nothing usable: off
+        }
+        p.edit().remove(OLD_RADIO).apply()
+    }
+
     companion object {
-        const val RADIO = "radio"
+        const val RADIO_ON = "radio_on"
+        const val AUTOPLAY = "autoplay"
+        private const val OLD_RADIO = "radio"
         const val SLEEP = "sleep"
         const val REPEAT = "repeat"
         const val SHUFFLED = "shuffled"

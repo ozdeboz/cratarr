@@ -53,10 +53,12 @@ class PlayerService : MediaSessionService() {
             keepSleep()
             link?.sleepChanged()
         }
-        // The radio set (here, by the page or by Cratarr): Cratarr is told, and its lane filled when it runs low.
-        if (key == Prefs.RADIO) {
+        // Radio or Autoplay set (here, by the page or by Cratarr): Cratarr is told; the playing track gets its inserts,
+        // the queue its next ones when it runs low.
+        if (key == Prefs.RADIO_ON || key == Prefs.AUTOPLAY) {
             link?.sleepChanged()
-            Radio.fill(this, player, prefs.serverUrl, ::located)
+            Radio.insert(this, player, prefs.serverUrl, ::located)
+            Autoplay.fill(this, player, prefs.serverUrl, ::located)
         }
     }
 
@@ -80,6 +82,7 @@ class PlayerService : MediaSessionService() {
             .build()
         player.addListener(Keeper(player))
         Repeat.apply(this, player)
+        prefs.migrate()
         // A sleep timer from before: its music is gone.
         Sleep.clear(this)
         // Previous from the lock screen, the notification and the page goes through here too: under repeat all, the
@@ -214,8 +217,9 @@ class PlayerService : MediaSessionService() {
                 main.postDelayed(keep, 1_000)
                 // Repeat all: the last track plays, the next round goes after it.
                 Repeat.extend(this@PlayerService, player, ::located)
-                // The radio: fewer than three ahead, the next ones after them (decision 0036).
-                Radio.fill(this@PlayerService, player, prefs.serverUrl, ::located)
+                // Radio: the playing own track's inserts; Autoplay: fewer than three ahead, the next ones (decision 0036).
+                Radio.insert(this@PlayerService, player, prefs.serverUrl, ::located)
+                Autoplay.fill(this@PlayerService, player, prefs.serverUrl, ::located)
             }
             // Each time a track is reached it can count again (a repeat, a jump back).
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) counted = false

@@ -19,7 +19,9 @@ import org.json.JSONObject
 class PagePlayer(private val context: Context, private val controller: MediaController, private val send: (String) -> Unit) : Player.Listener {
 
     /** The sleep timer changed (set, or done): the page is told. Held here, as Android keeps listeners only weakly. */
-    private val sleepChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key -> if (key == Prefs.SLEEP || key == Prefs.RADIO) report() }
+    private val sleepChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == Prefs.SLEEP || key == Prefs.RADIO_ON || key == Prefs.AUTOPLAY) report()
+    }
 
     init {
         controller.addListener(this)
@@ -37,7 +39,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             "queue" -> {
                 // A new play turns repeat one off; whether it comes shuffled counts for repeat all's next rounds.
                 Repeat.newPlay(context, c)
-                Radio.newPlay(context, m.optJSONArray("tracks"))
+                Autoplay.newPlay(context, m.optJSONArray("tracks"))
                 Prefs(context).shuffled = m.optBoolean("shuffled")
                 c.setMediaItems(mediaItems(m.optJSONArray("tracks")), m.optInt("index", 0), m.optLong("positionMs", 0))
                 c.prepare()
@@ -63,7 +65,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             // Kept by the service (Sleep); the change reaches the page as a report.
             "sleep" -> Sleep.set(context, m, "atMs", "endOfTrack")
             // Kept and filled by the service (Radio); the change reaches the page as a report.
-            "radio" -> Radio.set(context, c, m)
+            "radio" -> Radio.command(context, c, m)
+            "autoplay" -> Autoplay.command(context, c, m)
             "seek" -> c.seekTo(m.optLong("positionMs"))
             "play" -> play()
             "pause" -> c.pause()
@@ -94,7 +97,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("error", c.playerError?.let(::describe) ?: JSONObject.NULL)
             .put("repeat", Repeat.mode(context))
             .put("sleep", Sleep.json(context, "atMs", "endOfTrack"))
-            .put("radio", Radio.json(context))
+            .put("radio", Radio.on(context))
+            .put("autoplay", Autoplay.json(context))
         if (withQueue) out.put("queue", queueOf(c))
         send(out.toString())
     }
