@@ -7,6 +7,7 @@
   // stays on, so the page never filters down to nothing; elsewhere a chip only shows the library's use. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
   // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
   // has no per-library visibility, and a use is set only in Settings (decision 0009).
+  import Switch from './Switch.svelte';
   import { pageView } from './pageView.svelte';
   import { panel } from './panel.svelte';
   import { getSettings, getStatus, type LibraryUse, type Settings } from './api';
@@ -75,20 +76,14 @@
   <div class="cards">
     {#if page === 'playlists' || page === 'library'}
       <div class="toggles">
-        <button class="switch" role="switch" aria-checked={pageView.favouritesOnly} onclick={() => (pageView.favouritesOnly = !pageView.favouritesOnly)}>
-          <span>Favourites only</span><i aria-hidden="true"></i>
-        </button>
+        <Switch card label="Favourites only" checked={pageView.favouritesOnly} onchange={(on) => (pageView.favouritesOnly = on)} />
         {#if page === 'library'}
-          <button class="switch" role="switch" aria-checked={pageView.upgradesOnly} onclick={() => (pageView.upgradesOnly = !pageView.upgradesOnly)}>
-            <span>Upgrades waiting</span><i aria-hidden="true"></i>
-          </button>
+          <Switch card label="Upgrades waiting" checked={pageView.upgradesOnly} onchange={(on) => (pageView.upgradesOnly = on)} />
         {/if}
       </div>
     {:else if page === null}
       <div class="toggles">
-        <button class="switch" role="switch" aria-checked={panel.hideMissing} onclick={() => (panel.hideMissing = !panel.hideMissing)}>
-          <span>Hide missing tracks</span><i aria-hidden="true"></i>
-        </button>
+        <Switch card label="Hide missing tracks" checked={panel.hideMissing} onchange={(on) => (panel.hideMissing = on)} />
       </div>
     {/if}
 
@@ -148,85 +143,14 @@
     gap: 3px;
   }
 
-  .switch {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    width: 100%;
-    min-height: 64px;
-    padding: 0 16px 0 20px;
-    border: 0;
-    border-radius: 6px;
-    background: var(--card);
-    color: var(--text);
-    font: inherit;
-    font-size: 16px;
-    text-align: left;
-    cursor: pointer;
-  }
 
-  .switch:first-child {
-    border-top-left-radius: 20px;
-    border-top-right-radius: 20px;
-  }
 
-  .switch:last-child {
-    border-bottom-left-radius: 20px;
-    border-bottom-right-radius: 20px;
-  }
 
-  .switch:hover {
-    background: var(--card-hover);
-  }
 
-  .switch span {
-    flex: 1;
-    min-width: 0;
-  }
 
-  /* Material 3's switch, as Symfonium's: a 52 × 32 track, its thumb growing and moving over when on, the track then
-     filled with the accent. */
-  .switch i {
-    position: relative;
-    flex: none;
-    box-sizing: border-box;
-    width: 52px;
-    height: 32px;
-    border: 2px solid var(--muted);
-    border-radius: 16px;
-    transition:
-      background-color 150ms,
-      border-color 150ms;
-  }
 
-  .switch i::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 6px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--muted);
-    transform: translateY(-50%);
-    transition:
-      left 150ms,
-      width 150ms,
-      height 150ms,
-      background-color 150ms;
-  }
 
-  .switch[aria-checked='true'] i {
-    border-color: var(--art-accent, var(--accent));
-    background: var(--art-accent, var(--accent));
-  }
 
-  .switch[aria-checked='true'] i::after {
-    left: 22px;
-    width: 24px;
-    height: 24px;
-    background: var(--accent-text);
-  }
 
   /* A server's card: the followed one bordered in the accent (the row's "ticked" state) and checked. */
   .server {

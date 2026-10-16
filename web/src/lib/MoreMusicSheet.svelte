@@ -25,8 +25,8 @@
   // it. Autoplay, at the end: what plays when the queue runs out, then its switches (whole albums while albums were
   // playing; a playlist starting again instead), each saying what it does while it is on. Each a choice of one, as View's order (a round mark); the sheet stays
   // open while it is set. From the queue's floating pill and the player's radio button.
-  import { slide } from 'svelte/transition';
   import Icon from './Icon.svelte';
+  import Switch from './Switch.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { RADIO_BYS, RADIO_MAX, setAutoplay, setRadio } from './localPlayer.svelte';
 
@@ -82,16 +82,24 @@
       {/each}
     </div>
     <div class="toggles">
-      <button class="switch" role="switch" aria-checked={albums} disabled={now === 'stop'} onclick={() => setAutoplay(now, { albums: !albums })}>
-        <span>Queue albums{#if albums}<small transition:slide={{ duration: 200 }}>While albums play, whole albums instead of single tracks.</small>{/if}</span><i
-          aria-hidden="true"
-        ></i>
-      </button>
-      <button class="switch" role="switch" aria-checked={restart} disabled={now === 'stop'} onclick={() => setAutoplay(now, { restart: !restart })}>
-        <span>Restart playlists{#if restart}<small transition:slide={{ duration: 200 }}>A playlist that ends starts again (shuffled if it played shuffled).</small>{/if}</span><i
-          aria-hidden="true"
-        ></i>
-      </button>
+      <Switch
+        card
+        label="Queue albums"
+        hint="While albums play, whole albums instead of single tracks."
+        hintWhenOn
+        checked={albums}
+        disabled={now === 'stop'}
+        onchange={(on) => setAutoplay(now, { albums: on })}
+      />
+      <Switch
+        card
+        label="Restart playlists"
+        hint="A playlist that ends starts again (shuffled if it played shuffled)."
+        hintWhenOn
+        checked={restart}
+        disabled={now === 'stop'}
+        onchange={(on) => setAutoplay(now, { restart: on })}
+      />
     </div>
   </div>
 </MenuSheet>
@@ -180,97 +188,14 @@
     gap: 3px;
   }
 
-  /* As the filter sheet's switches (Material 3's, as Symfonium's). */
-  .switch {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    width: 100%;
-    min-height: 56px;
-    padding: 0 12px 0 16px;
-    border: 0;
-    border-radius: 4px;
-    background: var(--card);
-    color: var(--text);
-    font: inherit;
-    font-size: 15px;
-    text-align: left;
-    cursor: pointer;
-  }
 
-  .switch:first-child {
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-  }
 
-  .switch:last-child {
-    border-bottom-left-radius: 12px;
-    border-bottom-right-radius: 12px;
-  }
 
-  .switch:hover {
-    background: var(--card-hover);
-  }
 
-  .switch:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
 
-  .switch span {
-    flex: 1;
-    min-width: 0;
-    padding: 8px 0;
-  }
 
-  /* While it is on, what it does, under its name (the owner: it expands with the explanation). */
-  .switch small {
-    display: block;
-    margin-top: 3px;
-    color: var(--muted);
-    font-size: 13px;
-    line-height: 1.35;
-  }
 
-  .switch i {
-    position: relative;
-    flex: none;
-    box-sizing: border-box;
-    width: 52px;
-    height: 32px;
-    border: 2px solid var(--muted);
-    border-radius: 16px;
-    transition:
-      background-color 150ms,
-      border-color 150ms;
-  }
 
-  .switch i::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 6px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--muted);
-    transform: translateY(-50%);
-    transition:
-      left 150ms,
-      width 150ms,
-      height 150ms,
-      background-color 150ms;
-  }
 
-  .switch[aria-checked='true'] i {
-    border-color: var(--art-accent, var(--accent));
-    background: var(--art-accent, var(--accent));
-  }
 
-  .switch[aria-checked='true'] i::after {
-    left: 22px;
-    width: 24px;
-    height: 24px;
-    background: var(--accent-text);
-  }
 </style>
