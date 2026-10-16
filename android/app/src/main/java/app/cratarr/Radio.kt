@@ -84,8 +84,8 @@ object Radio {
         if (!on) Scorer.dropAhead(player, LANE)
     }
 
-    /** A `radio` op or command. One with a mode, seed or bound is the older shape: Autoplay (decision 0036, amended); a
-     *  bare off switches off both, so "radio off" still stops what Home Assistant started. */
+    /** A `radio` op or command. One with a mode, seed or bound is the older shape: Autoplay (decision 0036, amended);
+     *  else Radio alone (off leaves Autoplay be). */
     fun command(context: Context, player: Player, m: JSONObject) {
         if (m.has("mode") || m.has("seed") || m.has("within")) {
             val old = m.optString("mode")
@@ -99,9 +99,7 @@ object Radio {
             Autoplay.command(context, player, fields)
             return
         }
-        val on = m.optBoolean("on")
-        set(context, player, on)
-        if (!on) Autoplay.set(context, player, null)
+        set(context, player, m.optBoolean("on"))
     }
 
     /** With radio on, the playing track one of the queue's own: tracks like it after it and its hand-added run, unless
