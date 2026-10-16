@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod art;
+pub mod auth_check;
 pub mod files;
 pub mod ids;
 pub mod import;
