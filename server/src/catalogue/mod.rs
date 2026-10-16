@@ -711,6 +711,14 @@ impl Catalogue {
             let (rel, name, value) = row?;
             by.entry(rel).or_default().push((name, value));
         }
+        // The tempo where the file has no BPM tag: its analysis' when sure enough (decision 0035), while the file is as
+        // it was then. The tag comes first.
+        let mut st = db.prepare(
+            "SELECT a.rel, a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+             WHERE a.folder = ?1 AND a.bpm IS NOT NULL AND a.size = f.size AND a.mtime = f.mtime",
+        )?;
+        let analysed: HashMap<String, f64> =
+            st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?.collect::<rusqlite::Result<_>>()?;
         Ok(rels
             .into_iter()
             .map(|rel| {
@@ -725,7 +733,7 @@ impl Catalogue {
                 }
                 crate::crates::Facts {
                     year: crate::crates::year_of(&first),
-                    bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)),
+                    bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)).or_else(|| analysed.get(&rel).map(|b| b.round())),
                     genres,
                     rel,
                 }
@@ -1835,6 +1843,8 @@ mod tests {
         let back = cat.analysis_of(folder, &one).unwrap();
         assert_eq!((back.track_gain_db, back.bpm, back.waveform.len(), back.blocks.0.clone()), (-3.0, Some(120.0), 512, vec![(500, 40)]));
         assert_eq!(cat.analysis_counts().unwrap(), (1, 2));
+        // The crates' BPM range finds it by its analysis (the file has no BPM tag).
+        assert_eq!(cat.crate_facts(folder).unwrap().iter().find(|f| f.rel == one).unwrap().bpm, Some(120.0));
         assert!(cat.album_gains(folder).unwrap().is_empty(), "the album waits for its last track");
         let two = cat.unanalysed(10).unwrap().remove(0);
         assert!(two.1.ends_with("Two.flac"));
