@@ -1,6 +1,6 @@
 # 0035: Audio analysis: waveform, tempo and loudness, worked out once on the server
 
-- Status: proposed
+- Status: accepted (the owner, 2026-10-16: it ships in preview 36)
 - Date: 2026-10-16
 - Builds on: 0013 (the converter's decode), 0030 (OpenSubsonic), 0032 (Cratarr is its own source)
 
@@ -40,7 +40,7 @@ and 353 of Incoming's 5,184. That is why the crate builder's BPM range finds alm
 Working this out in a browser would need the whole file downloaded beside the stream, and about 85 MB of decoded
 audio held in memory for a 4-minute track. On a phone that is not workable.
 
-## Decision (proposed)
+## Decision
 
 **One background analysis pass on the server**, in the catalogue.
 
@@ -68,14 +68,15 @@ values below). It is never written into the files.
   - A player reduces the 256 values to the bars it draws.
 - **Tempo:** a BPM with a confidence, or **no tempo**. Beatless and ambient tracks, a good part of this library,
   get no tempo rather than a guess.
-  - **A proven estimator is ported, not invented** (the owner's rule: copy, don't reinvent):
+  - **A proven estimator is taken, not invented** (the owner's rule: copy, don't reinvent). First proposed: librosa
+    or QM-DSP; taken: taktus, measured (the amendment and the measurements below). The first proposal was:
     - librosa's tempo (ISC licence);
     - or Mixxx's QM-DSP TempoTrackV2 (GPL-2.0-or-later, which AGPL allows).
   - It is chosen after both are measured on a sample of tracks whose tempo the owner knows. That measurement counts
     the half- and double-tempo mistakes every detector makes.
 - **Loudness**, for volume levelling the way ReplayGain does (the owner, 2026-10-16: "replay gain and waveform
-  analysis and BPM analysis will all be grouped"): integrated loudness and true peak (EBU R128), by the `ebur128` crate
-  (MIT), the reference implementation, in the same decode.
+  analysis and BPM analysis will all be grouped"): integrated loudness (EBU R128), by the `ebur128` crate (MIT), the
+  reference implementation, and the sample peak, in the same decode.
   - **Track gain and album gain.** Track gain levels shuffle and radio; album gain keeps an album's own dynamics (a
     quiet interlude stays quiet). A player uses album gain while an album plays in order, else track gain.
   - **Album gain is measured, not averaged.** The pass walks the library album by album and keeps each track's
@@ -83,7 +84,10 @@ values below). It is never written into the files.
     scanner does. An album with a changed track is measured again whole. A track worked out on demand gets its track
     gain at once; its album's waits for the pass.
   - **Target −18 LUFS** (ReplayGain 2.0's reference): gain = −18 − loudness. The peaks are kept beside the gains
-    (linear, as ReplayGain's tags), so a player never raises a track past its true peak.
+    (linear, as ReplayGain's tags; above 1.0 is possible from a lossy file), so a player never raises a track past
+    its peak.
+  - **The sample peak, not the true peak:** the largest decoded sample, as ReplayGain's peak tags have always held
+    and rsgain writes by default. A true peak would oversample every decode (BS.1770's 4×).
 - **Each value keeps where it came from:** this pass, the file's tags, or an import (below).
 
 **Tempo from three places, in this order:**
@@ -171,6 +175,9 @@ thirds:
 - **The slow count for dub and reggae:** a track whose genre tag is reggae, dub, roots or dancehall and whose estimate
   is above 110 BPM gets half of it. Checked on the library's reggae-tagged tracks: they should land between about 60
   and 95.
+- **Dance music between 90 and 180** (the owner, after the measurements below): a track whose genre tag holds a
+  dance word (house, techno, trance, drum and bass and the like) gets its estimate doubled or halved into 90–180. The
+  slow count wins when a track has both.
 
 
 ## Measured: taktus on the public sets (2026-10-16)
