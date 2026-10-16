@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
 use super::playon::{Command, QueueTrack, shuffled};
-use super::radio::{Autoplay, AutoplayMode, LANE_AUTOPLAY, LANE_RADIO, from_old};
+use super::radio::{Autoplay, AutoplayMode, LANE_AUTOPLAY, LANE_RADIO, RADIO_COUNT, RADIO_MAX, RadioBy, from_old};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Queue {
@@ -24,6 +24,12 @@ pub struct Queue {
     /// object before the amendment.)
     #[serde(default, rename = "radio_on", skip_serializing_if = "std::ops::Not::not")]
     pub radio: bool,
+    /// What Radio's inserts are like, on or off.
+    #[serde(default, skip_serializing_if = "RadioBy::is_track")]
+    pub radio_by: RadioBy,
+    /// How many follow each own track (unset: `RADIO_COUNT`), on or off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radio_count: Option<u8>,
     /// Autoplay: on while there is one; the player that plays appends its tracks when the queue runs out. Excludes
     /// repeat all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -126,6 +132,11 @@ impl Queue {
     }
 
     /// A lane's tracks still to come, out (Radio or Autoplay going off, repeat all coming on): `true` when there were any.
+    /// How many tracks Radio inserts after each own track.
+    pub fn radio_count(&self) -> u8 {
+        self.radio_count.unwrap_or(RADIO_COUNT)
+    }
+
     fn drop_lane_ahead(&mut self, current: Option<usize>, lane: &str) -> bool {
         let keep = current.map_or(0, |c| c + 1).min(self.tracks.len());
         let before = self.tracks.len();
@@ -308,23 +319,29 @@ impl Queue {
             }
             // Radio from before the amendment (with a mode, seed or bound) is Autoplay now: taken as such during the
             // change-over (decision 0036, amended).
-            Command::Radio { on, mode, seed, within } if mode.is_some() || seed.is_some() || within.is_some() => {
+            Command::Radio { on, mode, seed, within, .. } if mode.is_some() || seed.is_some() || within.is_some() => {
                 let (auto, albums, restart) = from_old(mode);
                 let mode = if on { AutoplayMode::of(Some(auto)) } else { AutoplayMode::Stop };
                 return Ok(self.set_autoplay(mode, Some(albums), Some(restart), seed, within, current));
             }
-            // Radio on: the player inserts as each own track starts. Off: its inserts still to come go. Autoplay is not
-            // touched: the player's radio switch must not stop it (Home Assistant moves to `autoplay` itself).
-            Command::Radio { on: true, .. } => {
-                self.radio = true;
-                return Ok(Command::Radio { on: true, mode: None, seed: None, within: None });
-            }
-            Command::Radio { on: false, .. } => {
-                self.radio = false;
-                if self.drop_lane_ahead(current, LANE_RADIO) {
+            // Radio on: the player inserts as each own track starts. Off: its inserts still to come go; so do they when
+            // what they are like, or how many, changes while on (the player inserts anew for the playing track). What
+            // is left out stays. Autoplay is not touched: the player's radio switch must not stop it (Home Assistant
+            // moves to `autoplay` itself). Told in full.
+            Command::Radio { on, by, count, .. } => {
+                let was = (self.radio, self.radio_by, self.radio_count());
+                if let Some(b) = by {
+                    self.radio_by = b;
+                }
+                if let Some(n) = count {
+                    self.radio_count = Some(n.clamp(1, RADIO_MAX));
+                }
+                self.radio = on;
+                let other = (was.1, was.2) != (self.radio_by, self.radio_count());
+                if (!on || (was.0 && other)) && self.drop_lane_ahead(current, LANE_RADIO) {
                     self.version += 1;
                 }
-                return Ok(Command::Radio { on: false, mode: None, seed: None, within: None });
+                return Ok(Command::Radio { on, mode: None, seed: None, within: None, by: Some(self.radio_by), count: Some(self.radio_count()) });
             }
             Command::Autoplay { mode, albums, restart, seed, within } => {
                 return Ok(self.set_autoplay(mode, albums, restart, seed, within, current));
@@ -532,33 +549,60 @@ mod tests {
     #[test]
     fn radio_is_a_switch_and_its_off_takes_only_its_inserts_out() {
         let mut q = played(&["a", "b", "c"]);
-        q.edit(Command::Radio { on: true, mode: None, seed: None, within: None }).unwrap();
+        q.edit(Command::Radio { on: true, mode: None, seed: None, within: None, by: None, count: None }).unwrap();
         q.edit(auto(AutoplayMode::Similar)).unwrap();
         assert!(q.radio && q.autoplay.is_some(), "Radio lives with Autoplay");
         // Playing a: its inserts after it; Autoplay's tail at the end.
         q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO), in_lane("r2", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
         q.edit_at(Command::Add { tracks: vec![in_lane("p1", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
         assert_eq!(ids(&q), "a r1 r2 b c p1");
-        q.edit_at(Command::Radio { on: false, mode: None, seed: None, within: None }, Some(0)).unwrap();
+        q.edit_at(Command::Radio { on: false, mode: None, seed: None, within: None, by: None, count: None }, Some(0)).unwrap();
         assert_eq!((ids(&q), q.radio, q.autoplay.is_some()), ("a b c p1".to_string(), false, true), "off: its inserts out; Autoplay stays");
+    }
+
+    fn radio(on: bool, by: Option<RadioBy>, count: Option<u8>) -> Command {
+        Command::Radio { on, mode: None, seed: None, within: None, by, count }
+    }
+
+    #[test]
+    fn radio_keeps_its_choice_and_count_and_another_while_on_takes_the_inserts_out() {
+        let mut q = played(&["a", "b"]);
+        assert_eq!(q.edit(radio(true, None, None)).unwrap(), radio(true, Some(RadioBy::Track), Some(5)), "told in full");
+        q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
+        let v = q.version;
+        q.edit_at(radio(true, Some(RadioBy::Track), Some(5)), Some(0)).unwrap();
+        assert_eq!((ids(&q), q.version), ("a r1 b".to_string(), v), "the same again: the inserts stay");
+        let told = q.edit_at(radio(true, Some(RadioBy::Era), Some(30)), Some(0)).unwrap();
+        assert_eq!(told, radio(true, Some(RadioBy::Era), Some(10)), "at most ten");
+        assert_eq!((ids(&q), q.version), ("a b".to_string(), v + 1), "another choice while on: the inserts make way");
+        // Off and on again keep the choice; set while off, it changes nothing in the queue.
+        q.edit_at(radio(false, None, None), Some(0)).unwrap();
+        q.edit_at(radio(false, None, Some(3)), Some(0)).unwrap();
+        assert_eq!(q.edit_at(radio(true, None, None), Some(0)).unwrap(), radio(true, Some(RadioBy::Era), Some(3)));
+        // Saved with the queue; the defaults are left out.
+        let saved = serde_json::to_string(&q).unwrap();
+        assert!(saved.contains(r#""radio_by":"era","radio_count":3"#), "{saved}");
+        let back: Queue = serde_json::from_str(&saved).unwrap();
+        assert_eq!((back.radio, back.radio_by, back.radio_count()), (true, RadioBy::Era, 3));
+        assert!(!serde_json::to_string(&played(&["a"])).unwrap().contains("radio"));
     }
 
     #[test]
     fn the_radio_command_from_before_the_amendment_is_autoplay() {
         use super::super::radio::{AutoMode, Mode};
         let mut q = played(&["a"]);
-        let told = q.edit(Command::Radio { on: true, mode: Some(Mode::AlbumMix), seed: Some(vec!["s".into()]), within: None }).unwrap();
+        let told = q.edit(Command::Radio { on: true, mode: Some(Mode::AlbumMix), seed: Some(vec!["s".into()]), within: None, by: None, count: None }).unwrap();
         assert!(matches!(told, Command::Autoplay { mode: AutoplayMode::Similar, albums: Some(true), .. }), "{told:?}");
         assert_eq!(q.autoplay.as_ref().map(|a| (a.mode, a.albums, a.seed.clone())), Some((AutoMode::Similar, true, vec!["s".to_string()])));
         assert!(!q.radio, "not the new Radio");
-        q.edit(Command::Radio { on: true, mode: Some(Mode::Reshuffle), seed: None, within: None }).unwrap();
+        q.edit(Command::Radio { on: true, mode: Some(Mode::Reshuffle), seed: None, within: None, by: None, count: None }).unwrap();
         assert_eq!(q.autoplay.as_ref().map(|a| (a.restart, a.albums)), Some((true, false)), "Reshuffle is restart");
-        q.edit(Command::Radio { on: false, mode: Some(Mode::Similar), seed: None, within: None }).unwrap();
+        q.edit(Command::Radio { on: false, mode: Some(Mode::Similar), seed: None, within: None, by: None, count: None }).unwrap();
         assert!(q.autoplay.is_none());
         let c: Command = serde_json::from_str(r#"{"command":"autoplay","mode":"stop"}"#).unwrap();
         assert_eq!(c, auto(AutoplayMode::Stop));
         let c: Command = serde_json::from_str(r#"{"command":"radio","on":true}"#).unwrap();
-        assert_eq!(c, Command::Radio { on: true, mode: None, seed: None, within: None });
+        assert_eq!(c, Command::Radio { on: true, mode: None, seed: None, within: None, by: None, count: None });
     }
 
     #[test]
@@ -566,7 +610,7 @@ mod tests {
         let tracks: Vec<QueueTrack> = (0..6u32).map(|i| QueueTrack { n: Some(i), ..track(&format!("t{i}")) }).collect();
         let mut q = Queue::default();
         q.edit(Command::play(tracks, 0, 0)).unwrap();
-        q.edit(Command::Radio { on: true, mode: None, seed: None, within: None }).unwrap();
+        q.edit(Command::Radio { on: true, mode: None, seed: None, within: None, by: None, count: None }).unwrap();
         q.edit(Command::Autoplay { mode: AutoplayMode::Similar, albums: None, restart: None, seed: Some(vec!["s".into()]), within: Some("c1".into()) }).unwrap();
         q.edit_at(Command::Add { tracks: vec![in_lane("x", "next")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
         q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO), in_lane("r2", LANE_RADIO)], at: Some(2), after: None, how: None }, Some(0)).unwrap();

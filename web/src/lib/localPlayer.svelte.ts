@@ -43,6 +43,12 @@ export type Sleep = { atMs: number | null; endOfTrack: boolean };
 /** Autoplay's modes (decision 0036, amended); off is null. */
 export type AutoplayMode = 'similar' | 'artist' | 'era' | 'random';
 export const AUTOPLAY_MODES: readonly AutoplayMode[] = ['similar', 'artist', 'era', 'random'];
+/** What Radio's inserts are like (decision 0036, amended): the track (its artist weighed double), its artist, its era. */
+export type RadioBy = 'track' | 'artist' | 'era';
+export const RADIO_BYS: readonly RadioBy[] = ['track', 'artist', 'era'];
+/** How many Radio inserts after each own track: the choices offered, and the most the server keeps. */
+export const RADIO_COUNTS: readonly number[] = [3, 5, 10];
+export const RADIO_MAX = 10;
 /** Autoplay while on: its mode; whole albums (`albums`); a playlist that ends starts again instead (`restart`); the
  *  tracks it stays close to when started from an item, else the queue's own (`seed`); the crate it plays inside
  *  ("Play as radio": only the crate's tracks), when it does. */
@@ -70,9 +76,11 @@ export const local = $state({
   /** The sleep timer of the player that plays elsewhere (the app, Cratarr's player), as it reports it; null when none
    *  is set or it fired. */
   sleep: null as Sleep | null,
-  /** Radio (decision 0036, amended): while on, about five tracks like each of the queue's own tracks play right after
-   *  it. */
+  /** Radio (decision 0036, amended): while on, `radioCount` tracks like each of the queue's own tracks (`radioBy`: the
+   *  track, its artist or its era) play right after it. Choice and count stay while off. */
   radio: false,
+  radioBy: 'track' as RadioBy,
+  radioCount: 5,
   /** Autoplay, null while off: the music goes on when the queue runs out, chosen from the library. */
   autoplay: null as Autoplay | null,
   /** What the queue was started from ("Chill", an album), for the queue sheet's "Playing from"; null when unknown. */
@@ -530,6 +538,8 @@ export function reportedBy(m: {
   repeat?: unknown;
   sleep?: unknown;
   radio?: unknown;
+  radioBy?: unknown;
+  radioCount?: unknown;
   autoplay?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
@@ -538,6 +548,8 @@ export function reportedBy(m: {
   if (typeof m.radio === 'boolean') local.radio = m.radio;
   // An app from before the amendment reports its Autoplay as `radio`, an object.
   else if (m.radio && typeof m.radio === 'object') local.autoplay = autoplayOf(fromOld(m.radio as Record<string, unknown>));
+  if (RADIO_BYS.includes(m.radioBy as RadioBy)) local.radioBy = m.radioBy as RadioBy;
+  if (typeof m.radioCount === 'number' && m.radioCount > 0) local.radioCount = m.radioCount;
   if (m.autoplay !== undefined) local.autoplay = autoplayOf(m.autoplay);
   if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) {
     // A queue the player changed (moved, added to) keeps the names this page already knows of its tracks.
@@ -690,13 +702,22 @@ export function setRepeat(mode: Repeat) {
   nextRound();
 }
 
-/** Radio on or off (decision 0036, amended). While on, the player that plays inserts about five tracks like each of the
- *  queue's own tracks right after it as it starts (this page for its own stream, else the app or Cratarr's player); off
- *  takes the inserts still to come out. */
-export function setRadio(on: boolean) {
+/** Radio on or off (decision 0036, amended). While on, the player that plays inserts `count` tracks like each of the
+ *  queue's own tracks (`by` the track, its artist or its era) right after it as it starts (this page for its own
+ *  stream, else the app or Cratarr's player). Off, or another choice or count while on, takes the inserts still to come
+ *  out; on, the playing track gets them anew. What is not given stays. */
+export function setRadio(on: boolean, opts: { by?: RadioBy; count?: number } = {}) {
+  const count = opts.count === undefined ? undefined : Math.min(Math.max(Math.round(opts.count), 1), RADIO_MAX);
+  const other = (opts.by !== undefined && opts.by !== local.radioBy) || (count !== undefined && count !== local.radioCount);
+  const anew = local.radio && on && other;
+  if (opts.by !== undefined) local.radioBy = opts.by;
+  if (count !== undefined) local.radioCount = count;
   local.radio = on;
-  if (!on) dropAhead('radio');
-  if (handed()) return hand('radio', { on });
+  if (!on || anew) dropAhead('radio');
+  if (handed()) {
+    return hand('radio', { on, ...(opts.by !== undefined ? { by: opts.by } : {}), ...(count !== undefined ? { count } : {}) });
+  }
+  if (anew) insertedFor.clear();
   if (on) insertRadio();
 }
 
@@ -781,10 +802,12 @@ function insertRadio() {
   const at = local.index + 1 + addedAhead(local.queue, local.index).length;
   if (insertedFor.has(key) || local.queue[at]?.lane === 'radio') return;
   insertedFor.add(key);
-  radioNext({ mode: 'radio', seed: [cur.id], exclude: local.queue.map((t) => t.id), last: cur.id, count: BATCH, within: null })
+  const { radioBy: by, radioCount: count } = local;
+  radioNext({ mode: 'radio', by, seed: [cur.id], exclude: local.queue.map((t) => t.id), last: cur.id, count, within: null })
     .then(({ tracks }) => {
-      // Still on, still that track, nothing inserted meanwhile: right after it and its hand-added run.
-      if (!local.radio || handed() || !tracks.length || local.queue[local.index] !== cur) return;
+      // Still on as asked, still that track, nothing inserted meanwhile: right after it and its hand-added run.
+      if (!local.radio || local.radioBy !== by || local.radioCount !== count) return;
+      if (handed() || !tracks.length || local.queue[local.index] !== cur) return;
       const here = local.index + 1 + addedAhead(local.queue, local.index).length;
       if (local.queue[here]?.lane === 'radio') return;
       local.queue = [...local.queue.slice(0, here), ...(tracks as LocalTrack[]), ...local.queue.slice(here)];

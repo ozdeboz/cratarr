@@ -174,3 +174,20 @@ Autoplay, and "album mix" sets `albums`. During the change-over Cratarr accepts 
 
 **Work:** the lane rule (queue.rs) and the page's fill (localPlayer) are the radio's builders' (the HA session's);
 the app's fill is claude-5f's; the buttons and Autoplay's sheet are claude-a5's.
+
+### Radio's choice and count (2026-10-16, the owner)
+
+Radio gets choices after all. One sheet holds both: Radio on top, Autoplay below. It opens from a floating pill in
+the queue and from the player's radio button.
+- **Like what:** Like the track (as above: Similar seeded by the track, its artist weighed double), Same artist
+  (Autoplay's Artist seeded by the track) or Same era (Autoplay's Era, within five years of it). Off is the switch.
+- **How many** after each own track: 3, 5 (the default) or 10. The server keeps 1 to 10.
+- Command: `{command: "radio", on, by?, count?}`, `by` being `track`, `artist` or `era`. What is left out stays as it
+  was. Not `mode`: during the change-over a `mode` marks the old command. Cratarr tells the player the command in
+  full.
+- Another choice or count while on takes the inserts still to come out, and the playing own track gets them anew.
+  Set while off, it is kept for the next on.
+- The insert request: `POST /api/radio/next {mode: "radio", by, seed: [track], count, …}`. The tracks still come in
+  the radio lane, whatever `by` is.
+- The queue keeps them as `radio_by` and `radio_count` (left out while the defaults). The player view carries
+  `radio`, `radio_by` and `radio_count`; reports may carry `radio_by` and `radio_count` beside `radio: bool`.

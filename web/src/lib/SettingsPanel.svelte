@@ -2,6 +2,7 @@
   // A part of the settings in the panel (decided 2026-10-16: "the settings page should really be a portal with cards that
   // open settings-specific panels"): the Settings page's card opens it, as a playlist opens. What is edited here is
   // saved with the Save bar at its foot; Subsonic's accounts, this device's settings and Display act at once.
+  import Switch from './Switch.svelte';
   import Icon from './Icon.svelte';
   import PanelPlace from './PanelPlace.svelte';
   import { closePlaylist } from './panel.svelte';
@@ -454,10 +455,9 @@
         <span class="l">Player name</span>
         <input type="text" value={appInfo.player ?? ''} onchange={(e) => e.currentTarget.value.trim() && setDevice({ player: e.currentTarget.value.trim() })} />
       </label>
-      <label class="pref check">
-        <span class="l">Stay ready <small>Keeps listening for Play On while idle</small></span>
-        <input type="checkbox" checked={appInfo.stayReady} onchange={(e) => setDevice({ stayReady: e.currentTarget.checked })} />
-      </label>
+      <div class="pref">
+        <Switch label="Stay ready" hint="Keeps listening for Play On while idle" checked={appInfo.stayReady} onchange={(on) => setDevice({ stayReady: on })} />
+      </div>
       <div class="pref">
         <span class="l">Background <small>{appInfo.batteryAllowed ? 'Allowed to run' : 'Android may stop Cratarr'}</small></span>
         {#if !appInfo.batteryAllowed}<button onclick={allowBackground}>Allow</button>{/if}
@@ -473,10 +473,9 @@
           <option value="smaller">Smaller copies</option>
         </select>
       </label>
-      <label class="pref check">
-        <span class="l">Download over mobile data</span>
-        <input type="checkbox" checked={appInfo.downloadOverMobile} onchange={(e) => setDevice({ downloadOverMobile: e.currentTarget.checked })} />
-      </label>
+      <div class="pref">
+        <Switch label="Download over mobile data" checked={appInfo.downloadOverMobile} onchange={(on) => setDevice({ downloadOverMobile: on })} />
+      </div>
     </section>
     {/if}
   {/if}
@@ -497,7 +496,7 @@
         <article class="server" class:off={!d.enabled}>
           <header>
             <h3>{k?.label ?? d.kind}{#if many}<small>{d.id}</small>{/if}</h3>
-            <label class="switch"><input type="checkbox" bind:checked={d.enabled} /> On</label>
+            <Switch label={`Use ${k?.label ?? d.kind}`} hideLabel checked={d.enabled} onchange={(on) => (d.enabled = on)} />
             {#if removing === d.id}
               <span class="ask">Remove this server?</span>
               <button class="danger" onclick={() => ((drafts = drafts.filter((x) => x !== d)), (removing = null))}>Remove</button>
@@ -535,14 +534,11 @@
                   {@const chosen = Array.isArray(d.values[f.key]) ? (d.values[f.key] as string[]) : []}
                   <span class="checks">
                     {#each choicesFor(d, f) as c (c.value)}
-                      <label class="check">
-                        <input
-                          type="checkbox"
-                          checked={chosen.includes(c.value)}
-                          onchange={(e) =>
-                            (d.values[f.key] = e.currentTarget.checked ? [...chosen, c.value] : chosen.filter((x) => x !== c.value))}
-                        />{c.label}
-                      </label>
+                      <Switch
+                        label={c.label}
+                        checked={chosen.includes(c.value)}
+                        onchange={(on) => (d.values[f.key] = on ? [...chosen, c.value] : chosen.filter((x) => x !== c.value))}
+                      />
                     {/each}
                   </span>
                 {:else}
@@ -811,9 +807,9 @@
                   </select>
                 </label>
               </div>
-              <div class="ticks">
+              <div class="checks">
                 {#each IMPORT_WHAT as w (w.key)}
-                  <label class="check"><input type="checkbox" bind:checked={c.what[w.key]} />{w.label}</label>
+                  <Switch label={w.label} checked={c.what[w.key]} onchange={(on) => (c.what[w.key] = on)} />
                 {/each}
               </div>
               <div class="row">
@@ -855,10 +851,9 @@
         </div>
       </div>
 
-      <label class="pref check">
-        <span class="l">Progress bar under the playing track</span>
-        <input type="checkbox" bind:checked={prefs.showProgress} />
-      </label>
+      <div class="pref">
+        <Switch label="Progress bar under the playing track" checked={prefs.showProgress} onchange={(on) => (prefs.showProgress = on)} />
+      </div>
     </section>
     {/if}
   {/if}
@@ -1210,24 +1205,15 @@
 
   .checks {
     display: grid;
-    gap: 6px;
   }
 
-  label.check,
-  label.switch {
-    display: flex;
-    align-items: center;
-    gap: 10px;
+  .pref :global(.switch .label) {
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+
+  .checks :global(.switch .label) {
     font-size: 0.92rem;
-    cursor: pointer;
-  }
-
-  label.check input,
-  label.switch input {
-    width: 20px;
-    height: 20px;
-    margin: 0;
-    accent-color: var(--accent);
   }
 
   input[type='url'],
@@ -1302,17 +1288,6 @@
     border-bottom: 0;
   }
 
-  .pref.check {
-    display: flex;
-    cursor: pointer;
-  }
-
-  .pref.check input {
-    width: 22px;
-    height: 22px;
-    accent-color: var(--accent);
-  }
-
   .seg {
     display: flex;
     align-items: center;
@@ -1382,12 +1357,6 @@
     .fields.pair {
       grid-template-columns: 1fr 1fr;
     }
-  }
-
-  .ticks {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px 22px;
   }
 
   .days input {
