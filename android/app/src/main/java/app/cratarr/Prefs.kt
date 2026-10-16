@@ -50,6 +50,15 @@ class Prefs(context: Context) {
         p.edit().putString(IN_USE, address).apply()
     }
 
+    /** [from], one of the two addresses, sends everything on to [to] for good: [to] is that address now (in use too). */
+    fun moved(from: String, to: String) {
+        val e = p.edit()
+        if (publicAddress == from) e.putString(SERVER_URL, to)
+        if (localAddress == from) e.putString(LOCAL_URL, to)
+        if (inUse == from) e.putString(IN_USE, to)
+        e.apply()
+    }
+
     /** The sign-in the public address asks for away from home (a Cratarr account, Settings → Network); null until set. */
     var signInUser: String?
         get() = p.getString(SIGN_IN_USER, null)?.takeIf { it.isNotEmpty() }

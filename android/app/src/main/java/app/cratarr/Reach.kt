@@ -15,6 +15,7 @@ import android.net.Network
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
+import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -36,16 +37,40 @@ object Reach {
     @Volatile private var checked = 0L
     private var watching = false
 
-    /** The status of Cratarr's health check at [url] within [ms]; null without an answer. Blocking. */
-    fun status(context: Context, url: String, ms: Int = PUBLIC_MS, anyway: Boolean = false): Int? = try {
-        val c = Net.open(context, "${url.trimEnd('/')}/api/health", anyway)
-        c.connectTimeout = ms
-        c.readTimeout = ms
-        val code = Net.code(context, c)
-        c.disconnect()
-        code
-    } catch (e: Exception) {
-        null
+    /** Where Cratarr's health check for [url] answers within [ms]: at [url], or at the address it is sent on to for good
+     *  (301, 308: `http://` typed where only `https://` is served, say); with its status (null: no answer). Blocking. */
+    fun reach(context: Context, url: String, ms: Int = PUBLIC_MS, anyway: Boolean = false, moves: Int = 2): Pair<String, Int?> {
+        val base = url.trimEnd('/')
+        val c = try {
+            Net.open(context, "$base/api/health", anyway)
+        } catch (e: Exception) {
+            return url to null
+        }
+        return try {
+            // Android's own connection does not follow http to https; the WebView would, off Cratarr's addresses.
+            c.instanceFollowRedirects = false
+            c.connectTimeout = ms
+            c.readTimeout = ms
+            val code = Net.code(context, c)
+            val to = c.getHeaderField("Location")?.takeIf { code == 301 || code == 308 }
+                ?.let { URL(c.url, it).toString() }?.takeIf { it.endsWith("/api/health") }?.removeSuffix("/api/health")
+            if (to != null && to != base && moves > 0) reach(context, to, ms, anyway, moves - 1) else url to code
+        } catch (e: Exception) {
+            url to null
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    /** The status of Cratarr's health check at [url] within [ms]; null without an answer. An address of the app's that
+     *  is sent on for good is kept as where it leads ([Prefs.moved]). Blocking. */
+    fun status(context: Context, url: String, ms: Int = PUBLIC_MS, anyway: Boolean = false): Int? {
+        val (at, code) = reach(context, url, ms, anyway)
+        if (at != url && code != null) {
+            Log.i(TAG, "$url moved to $at")
+            Prefs(context).moved(url, at)
+        }
+        return code
     }
 
     /** Whether a Cratarr answers at [url] (its health check) within [ms]. Blocking. */
@@ -56,7 +81,9 @@ object Reach {
         val prefs = Prefs(context)
         val local = prefs.preferredLocal
         val public = prefs.publicAddress
+        // The addresses as they are after asking: one that moved is kept as where it leads.
         val pick = if (local == null || public == null || local == public) {
+            prefs.serverUrl?.let { status(context, it) }
             prefs.serverUrl
         } else {
             // Both at once: away, the local one's silence and the public one's answer take no longer than the first.
@@ -64,8 +91,8 @@ object Reach {
             // The proxy's refusal is an answer too: there, the page asks for the sign-in.
             val r = asks.submit<Boolean> { status(context, public, PUBLIC_MS) != null || Net.refused(context, public) }
             when {
-                l.get() -> local
-                r.get() -> public
+                l.get() -> prefs.preferredLocal
+                r.get() -> prefs.publicAddress
                 else -> prefs.serverUrl
             }
         }

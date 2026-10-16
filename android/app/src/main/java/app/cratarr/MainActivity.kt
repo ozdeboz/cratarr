@@ -318,8 +318,9 @@ class MainActivity : AppCompatActivity() {
                     lifecycleScope.launch {
                         prefs.localAddress = local
                         prefs.preferLocal = preferLocal
-                        if (public != null && public != prefs.publicAddress && withContext(Dispatchers.IO) { Reach.status(this@MainActivity, public, anyway = true) != null }) {
-                            prefs.publicAddress = public
+                        if (public != null && public != prefs.publicAddress) {
+                            val (at, code) = withContext(Dispatchers.IO) { Reach.reach(this@MainActivity, public, anyway = true) }
+                            if (code != null) prefs.publicAddress = at
                         }
                         // Which of them answers now: the page comes from there.
                         withContext(Dispatchers.IO) { Reach.check(this@MainActivity) }
@@ -530,7 +531,11 @@ class MainActivity : AppCompatActivity() {
                     val url = Prefs.normalise(typed)
                     prefs.publicAddress = url
                     prefs.use(url)
-                    show(url)
+                    // Looked at first: an address that moved is kept as where it leads.
+                    lifecycleScope.launch {
+                        withContext(Dispatchers.IO) { Reach.check(this@MainActivity) }
+                        prefs.serverUrl?.let(::show)
+                    }
                 }
             }
             .show()
@@ -541,8 +546,8 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             // The other address may answer (off the local network, say): its page then, without a word.
             val now = withContext(Dispatchers.IO) { Reach.check(this@MainActivity) }
-            if (now != null && now != shown) {
-                show(now)
+            if (now != null && now != url) {
+                if (now != shown) show(now)
                 return@launch
             }
             if (dialog?.isShowing == true || isFinishing) return@launch

@@ -35,6 +35,13 @@ class CratarrWebViewClient(
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (!request.isForMainFrame || Prefs.originOf(request.url.toString()) in origins) return false
+        // Cratarr's page sent on elsewhere (its address moved, `http://` to `https://` say): not a link to open outside,
+        // which would leave the app blank. The app looks again where Cratarr is.
+        if (request.isRedirect) {
+            Log.w(TAG, "sent on to ${request.url}")
+            onError(view.context.getString(R.string.sent_on, request.url.toString()))
+            return true
+        }
         try {
             view.context.startActivity(Intent(Intent.ACTION_VIEW, request.url))
         } catch (e: ActivityNotFoundException) {
