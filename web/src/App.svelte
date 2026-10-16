@@ -106,7 +106,7 @@
   // has a step before this one; on the right, on a page with something to play, the pill (lib/TopPill): the filter
   // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
   // page). The page starts under the row, so at rest nothing lies under it.
-  const PLAYABLE = ['playlists', 'crates', 'library'];
+  const PLAYABLE = ['playlists', 'crates', 'library', 'downloads'];
   const pagePill = $derived(PLAYABLE.includes(page));
   // An icon button's label on a long-press or right-click, everywhere (lib/labels).
   $effect(installLabels);

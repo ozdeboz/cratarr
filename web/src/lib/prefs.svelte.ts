@@ -39,6 +39,9 @@ export type Prefs = {
    *  Crates' own order. */
   libraryOrder: CollectionOrder;
   libraryDown: boolean;
+  /** Downloads' order (the Library's orders), and turned round. */
+  downloadsOrder: CollectionOrder;
+  downloadsDown: boolean;
   playlistOrder: PlaylistOrder;
   playlistDown: boolean;
   crateOrder: CrateOrder;
@@ -72,6 +75,8 @@ export const DEFAULTS: Prefs = {
   // Newest first, as Incoming always showed, so a new arrival is on top.
   libraryOrder: 'added',
   libraryDown: true,
+  downloadsOrder: 'artist',
+  downloadsDown: false,
   playlistOrder: 'name',
   playlistDown: false,
   crateOrder: 'own',
@@ -90,11 +95,12 @@ function read(): Prefs {
       if (saved.albumLayout === 'rows' || saved.albumLayout === 'grid') p.albumLayout = saved.albumLayout;
       if (Number.isInteger(saved.albumZoom) && saved.albumZoom >= 0 && saved.albumZoom < ZOOM_STEPS) p.albumZoom = saved.albumZoom;
       if (['artist', 'title', 'year', 'added'].includes(saved.libraryOrder)) p.libraryOrder = saved.libraryOrder;
+      if (['artist', 'title', 'year', 'added'].includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
       if (['name', 'tracks', 'playing'].includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
       // Before the list header: "✓ first" was the playlists' only other order.
       else if (saved.membersFirst === true) p.playlistOrder = 'playing';
       if (['own', 'name'].includes(saved.crateOrder)) p.crateOrder = saved.crateOrder;
-      for (const k of ['libraryDown', 'playlistDown', 'crateDown'] as const) {
+      for (const k of ['libraryDown', 'downloadsDown', 'playlistDown', 'crateDown'] as const) {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;

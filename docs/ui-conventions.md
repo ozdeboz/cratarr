@@ -109,6 +109,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Share** (track, album, one playlist): the item in words ("Artist – Title") and its link here, through the
   phone's share sheet (the app's in the app), else copied.
 - **A favourite album's cover** carries a small heart in its upper right corner, in the Library's rows and tiles.
+- **Downloads** (in the app) is the Library's list of what is on this device (decided 2026-10-16: "a special case of
+  the library page"): the same rows or covers, order, size, search and select, each album as the Library lists it
+  (else as its download says), the count with the space they take ("3 albums · 225 MB"). A cover plays what is on the
+  device, so the page plays without a connection; an album still coming shows how far ("Downloading 6 of 10"), one
+  partly here "3 of 8 on this device". The select bar plays or removes; the menu is the album's one menu, with Remove
+  from this device (and Download for the rest), as everywhere an album is downloaded.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as chips
   with their live counts, styled as the playlist chips (the viewed one bordered). A crate is viewed in the panel as a
   playlist does, without the statistics and editing, with Play, Shuffle and its favourites toggle (No favourites,

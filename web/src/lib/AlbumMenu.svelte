@@ -63,7 +63,7 @@
     type TrackState,
   } from './api';
   import { albumPlay, playAlbums, playListedAlbum } from './albums.svelte';
-  import { download, inApp } from './app.svelte';
+  import { download, downloads, inApp, removeDownloads } from './app.svelte';
   import { viewGenre } from './crates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import { player, refresh } from './live.svelte';
@@ -139,6 +139,8 @@
     );
   });
   const tracks = $derived(givenTracks ?? read?.tracks ?? null);
+  /** Its tracks kept on this device (the app's downloads): Remove from this device. */
+  const kept = $derived(inApp ? downloads.tracks.filter((t) => t.source === source && t.album_id === a.id) : []);
   const ids = $derived(tracks?.map((t) => t.id) ?? []);
   const genres = $derived((givenGenres ?? read?.genres ?? []).slice(0, 2));
 
@@ -601,7 +603,7 @@
       {/if}
       <div class="group" role="group">
         {#if addable}<MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
-        {#if inApp && tracks?.length}
+        {#if inApp && tracks?.length && kept.length < tracks.length}
           {@const list = tracks}
           <MenuEntry
             icon="arrowDownToLine"
@@ -609,6 +611,17 @@
             onclick={() => {
               onclose();
               download(list);
+            }}
+          />
+        {/if}
+        {#if kept.length}
+          {@const ids = kept.map((t) => t.download.id)}
+          <MenuEntry
+            icon="trash"
+            label="Remove from this device"
+            onclick={() => {
+              onclose();
+              removeDownloads(ids);
             }}
           />
         {/if}

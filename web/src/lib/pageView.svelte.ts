@@ -86,10 +86,10 @@ export function usePageAction(get: () => PageAction | null) {
 
 /** The pill's search field's words on a page that has one. */
 export const searchFor = (page: string) =>
-  page === 'playlists' ? 'Filter playlists' : page === 'library' ? 'Filter albums' : null;
+  page === 'playlists' ? 'Filter playlists' : page === 'library' || page === 'downloads' ? 'Filter albums' : null;
 
 /** The pages whose view settings the View sheet holds. */
-export const hasView = (page: string) => ['playlists', 'library', 'crates'].includes(page);
+export const hasView = (page: string) => ['playlists', 'library', 'crates', 'downloads'].includes(page);
 
 /** How many, in words. */
 export const howMany = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;

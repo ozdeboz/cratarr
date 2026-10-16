@@ -46,6 +46,10 @@
     {:else if page === 'crates'}
       <div class="part"><span>Order</span><Seg label="Order" options={CRATE_ORDERS} bind:value={prefs.crateOrder} /></div>
       <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.crateDown} /></div>
+    {:else if page === 'downloads'}
+      <div class="part"><span>Order</span><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.downloadsOrder} /></div>
+      <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.downloadsDown} /></div>
+      {@render albums()}
     {:else}
       <div class="part"><span>Order</span><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.libraryOrder} /></div>
       <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.libraryDown} /></div>

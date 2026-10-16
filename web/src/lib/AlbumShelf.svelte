@@ -33,6 +33,9 @@
     down = $bindable(false),
     extra,
     onmenu,
+    onplay,
+    actions,
+    countMore,
   }: {
     sources: ShelfSource[];
     /** Said for a server without albums. */
@@ -44,7 +47,14 @@
     extra?: Snippet<[ShelfSource, ListedAlbum]>;
     /** An album's menu (lib/AlbumMenu, the page's), from its ⋮ or the select bar's More. */
     onmenu: (source: ShelfSource, a: ListedAlbum, anchor: DOMRect) => void;
+    /** A cover's Play, the page's own (Downloads: from the device); else the album plays as the Library's do. */
+    onplay?: (source: ShelfSource, a: ListedAlbum) => void;
+    /** The select bar's buttons, the page's own: the ticked albums, and the end of selecting. */
+    actions?: Snippet<[{ s: ShelfSource; a: ListedAlbum }[], () => void]>;
+    /** After the list header's count ("12 albums · 1.2 GB"). */
+    countMore?: string;
   } = $props();
+  const playOf = (s: ShelfSource, a: ListedAlbum) => (onplay ? onplay(s, a) : playListedAlbum(s.id, a));
 
   let width = $state(0);
   // View's size steps depend on the width the lists have.
@@ -279,7 +289,7 @@
         fields={ALBUM_ORDERS}
         bind:value={order}
         bind:down
-        count={howMany(albums.length, 'album')}
+        count={`${howMany(albums.length, 'album')}${countMore ? ` · ${countMore}` : ''}`}
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
       />
@@ -356,6 +366,9 @@
   {/each}
   {#if selecting}
     <SelectBar label="Selected albums" count="{ticked.length}/{all.length}" onclose={() => (selecting = null)} place="page">
+      {#if actions}
+        {@render actions(ticked, () => (selecting = null))}
+      {:else}
       <button aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => playTicked('play')}><Icon name="play" size={24} /></button>
       <button aria-label="Play next" title="Play next" disabled={!ticked.length} onclick={() => playTicked('next')}><Icon name="playNext" size={24} /></button>
       <button aria-label="Add to queue" title="Add to queue" disabled={!ticked.length} onclick={() => playTicked('last')}><Icon name="listAdd" size={24} /></button>
@@ -366,6 +379,7 @@
         <button aria-label="Download" title="Download" disabled={!ticked.length} onclick={downloadTicked}><Icon name="arrowDownToLine" size={24} /></button>
       {/if}
       <button aria-label="Menu of the ticked album" title="More" disabled={ticked.length !== 1} onclick={menuOfTicked}><Icon name="moreVert" size={24} /></button>
+      {/if}
     </SelectBar>
   {/if}
 </div>
@@ -402,7 +416,7 @@
       title="Play"
       disabled={albumPlay.starting !== null}
       aria-busy={albumPlay.starting === a.id}
-      onclick={() => playListedAlbum(s.id, a)}
+      onclick={() => playOf(s, a)}
       >{@render cover(s, a)}<span class="corner" aria-hidden="true"><Icon name="play" size={14} /></span></button
     >
   {/if}
@@ -414,7 +428,7 @@
     aria-label="Play {a.title}"
     disabled={albumPlay.starting !== null}
     aria-busy={albumPlay.starting === a.id}
-    onclick={() => playListedAlbum(s.id, a)}><Icon name="play" size={26} /></button
+    onclick={() => playOf(s, a)}><Icon name="play" size={26} /></button
   >
 {/snippet}
 
