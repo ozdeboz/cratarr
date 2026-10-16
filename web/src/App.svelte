@@ -7,7 +7,9 @@
   import Downloads from './Downloads.svelte';
   import SettingsPanel from './lib/SettingsPanel.svelte';
   import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
-  import { inApp } from './lib/app.svelte';
+  import { askDownloads, downloads, inApp } from './lib/app.svelte';
+  import { reach } from './lib/reach.svelte';
+  import { keepCoversAway } from './lib/coversAway.svelte';
   import Crates from './Crates.svelte';
   import AboutSheet from './lib/AboutSheet.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
@@ -220,6 +222,22 @@
     addEventListener('keydown', esc);
     return () => removeEventListener('keydown', esc);
   });
+
+  // In the app, Cratarr out of reach before it ever answered (away from home, say): it opens on what plays without it,
+  // its downloads (decision 0033, step 4), unless it was opened on a page or a view of its own.
+  let openedAway = false;
+  $effect(() => {
+    if (!inApp || openedAway || reach.answered || !reach.away) return;
+    if (!downloads.known) return askDownloads();
+    openedAway = true;
+    if (downloads.tracks.length && page === PLAYLISTS.id && !location.hash.replace(/^#\/?/, '')) {
+      history.replaceState(history.state, '', DOWNLOADS.href);
+      page = DOWNLOADS.id;
+    }
+  });
+
+  // In the app: the downloaded albums' covers, kept for away from home (lib/coversAway).
+  $effect(keepCoversAway);
 
   // What is playing, for the header above every page; restarts when the followed source changes.
   $effect(() => {

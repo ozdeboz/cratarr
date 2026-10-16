@@ -1,5 +1,9 @@
 import { track } from './progress.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
+import { notReached, reached, unreached } from './reach.svelte';
+
+/** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
+export const UNREACHED = 'Cannot reach the Cratarr server';
 export type Playlist = {
   id: string;
   name: string;
@@ -114,7 +118,8 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(path, init);
   } catch {
-    throw new ApiError('Cannot reach the Cratarr server');
+    unreached();
+    throw new ApiError(UNREACHED);
   }
   if (!res.ok) {
     let message: string | null = null;
@@ -124,8 +129,14 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* no words from the server */
     }
+    if (!message && notReached(res.status)) {
+      unreached();
+      throw new ApiError(UNREACHED);
+    }
+    reached();
     throw message ? new ApiError(message) : new ApiError(`Server returned ${res.status}`, true);
   }
+  reached();
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
