@@ -100,6 +100,8 @@ pub(crate) struct Song {
     pub artists: Vec<u32>,
     pub genres: Vec<u32>,
     pub year: Option<u32>,
+    /// Its length in seconds, when the library knows it (the queue sheet shows it).
+    pub duration_secs: Option<f64>,
     pub playlists: Vec<u32>,
     /// Its album's tags.
     pub tags: Vec<u32>,
@@ -444,6 +446,7 @@ fn track(s: &Song) -> QueueTrack {
         artist: s.artist.clone(),
         album: Some(s.album.clone()).filter(|a| !a.is_empty()),
         album_id: Some(s.album_id.clone()),
+        duration_secs: s.duration_secs,
         ..QueueTrack::default()
     }
 }
@@ -565,7 +568,7 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
     let (mut albums, mut artists, mut genres, mut tags) = (Names::exact(), Names::exact(), Names::default(), Names::default());
     let mut st = lib.prepare(
         // A compilation's album artist ("Various Artists") is no artist: it would make every compilation alike.
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.year, s.genre, a.genres,
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.year, s.genre, a.genres, s.duration_ms,
                 CASE WHEN a.compilation = 1 OR lower(a.artist) IN ('various artists', 'various', 'va', 'verschiedene interpreten')
                      THEN NULL ELSE a.artist_id END
          FROM songs s LEFT JOIN albums a ON a.id = s.album_id
@@ -582,11 +585,12 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
             r.get::<_, Option<i64>>(5)?,
             r.get::<_, Option<String>>(6)?,
             r.get::<_, Option<String>>(7)?,
-            r.get::<_, Option<String>>(8)?,
+            r.get::<_, Option<i64>>(8)?,
+            r.get::<_, Option<String>>(9)?,
         ))
     })?;
     for r in rows {
-        let (id, title, artist, album, album_id, year, genre, album_genres, album_artist) = r?;
+        let (id, title, artist, album, album_id, year, genre, album_genres, duration_ms, album_artist) = r?;
         let mut a: Vec<u32> = artists_of.get(&id).map(|v| v.iter().map(|x| artists.of(x)).collect()).unwrap_or_default();
         a.extend(album_artist.as_deref().map(|x| artists.of(x)));
         let mut g: Vec<u32> = genre.as_deref().filter(|x| !x.is_empty()).map(|x| genres.of(x)).into_iter().collect();
@@ -600,6 +604,7 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
             genres: g,
             tags: t,
             year: year.and_then(|y| u32::try_from(y).ok()).filter(|y| *y > 0),
+            duration_secs: duration_ms.filter(|d| *d > 0).map(|d| d as f64 / 1000.0),
             id,
             title,
             artist,
@@ -797,13 +802,14 @@ mod tests {
         let index = read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), owner.as_deref(), &HashMap::new()).unwrap();
         let recent = owner.as_deref().map(|o| recent_plays(&dir.join("userdata.sqlite"), o).unwrap()).unwrap_or_default();
         println!(
-            "index: {} songs, {} albums, {} artists, {} favourites, {} with genres, {} with a year, {} recent plays, in {:?}",
+            "index: {} songs, {} albums, {} artists, {} favourites, {} with genres, {} with a year, {} with a length, {} recent plays, in {:?}",
             index.songs.len(),
             index.albums.len(),
             index.artist_ids.len(),
             index.songs.iter().filter(|s| s.favourite).count(),
             index.songs.iter().filter(|s| !s.genres.is_empty()).count(),
             index.songs.iter().filter(|s| s.year.is_some()).count(),
+            index.songs.iter().filter(|s| s.duration_secs.is_some()).count(),
             recent.len(),
             t.elapsed()
         );
