@@ -38,6 +38,60 @@ pub struct Roles {
     /// New music waiting to be heard. Version 2 files hold one id or none here.
     #[serde(default, deserialize_with = "one_or_many")]
     pub incoming: Vec<String>,
+    /// What each library does with albums moved into it, and its colour (decision 0034), by library id; a library
+    /// without an entry follows its use.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub policies: std::collections::BTreeMap<String, LibraryPolicy>,
+}
+
+/// A library's own settings (decision 0034).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LibraryPolicy {
+    /// What a move into it does to the files; none: as its use says (Music: CD format; Incoming: as they are).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<Format>,
+    /// Its albums' dot, "#rrggbb" (a library other than the primary); none: one from the palette.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour: Option<String>,
+}
+
+/// What a move into a library does to the files (decision 0034).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Format {
+    /// Lossless files above CD become 16-bit/44.1 kHz FLAC (decision 0013's Keep).
+    Cd,
+    /// The files move as they are.
+    AsIs,
+}
+
+/// The colours a library other than the primary gets until one is chosen, in turn.
+pub const PALETTE: [&str; 6] = ["#e0a23a", "#5b8def", "#d4567f", "#3fae9a", "#9a6fdc", "#c8743c"];
+
+impl Roles {
+    /// The format a move into `library` follows.
+    pub fn format_of(&self, library: &str) -> Format {
+        match self.policies.get(library).and_then(|p| p.format) {
+            Some(f) => f,
+            None if self.music.iter().any(|m| m == library) => Format::Cd,
+            None => Format::AsIs,
+        }
+    }
+
+    /// The dot of `library`'s albums: none for a Music library (the primary is the norm), else its own colour or the
+    /// palette's, in the order of the used libraries.
+    pub fn colour_of(&self, library: &str) -> Option<String> {
+        if self.music.iter().any(|m| m == library) {
+            return None;
+        }
+        let i = self.incoming.iter().position(|l| l == library)?;
+        Some(self.policies.get(library).and_then(|p| p.colour.clone()).unwrap_or_else(|| PALETTE[i % PALETTE.len()].to_string()))
+    }
+}
+
+/// "#rrggbb", lower case.
+pub fn valid_colour(c: &str) -> bool {
+    c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|x| x.is_ascii_hexdigit())
 }
 
 fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
@@ -280,6 +334,21 @@ pub fn merge(saved: &[SourceConfig], draft: Vec<SourceConfig>) -> Result<Vec<Sou
             return Err(ChangeError::Invalid(format!("{}: one library cannot be both Music and Incoming", d.id)));
         }
         let prev = saved.iter().find(|s| s.id == d.id && s.kind == d.kind);
+        // A page that sends no library settings keeps the saved ones.
+        if d.libraries.policies.is_empty()
+            && let Some(p) = prev
+        {
+            d.libraries.policies = p.libraries.policies.clone();
+        }
+        for (lib, p) in d.libraries.policies.iter_mut() {
+            if let Some(c) = &p.colour {
+                if !valid_colour(c) {
+                    return Err(ChangeError::Invalid(format!("{}: {lib}'s colour {c:?} is not #rrggbb", d.id)));
+                }
+                p.colour = Some(c.to_ascii_lowercase());
+            }
+        }
+        d.libraries.policies.retain(|_, p| p.format.is_some() || p.colour.is_some());
         for secret in fields.iter().filter(|f| f.kind == FieldKind::Secret) {
             if source::text(&d.values, secret.key).is_some() {
                 continue;
@@ -326,6 +395,36 @@ mod tests {
     fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         let m: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         move |k| m.get(k).cloned()
+    }
+
+    #[test]
+    fn a_library_follows_its_use_until_it_has_its_own_settings() {
+        let mut r = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()], ..Roles::default() };
+        assert_eq!(r.format_of("m"), Format::Cd);
+        assert_eq!(r.format_of("i1"), Format::AsIs);
+        assert_eq!(r.colour_of("m"), None);
+        assert_eq!(r.colour_of("i1").as_deref(), Some(PALETTE[0]));
+        assert_eq!(r.colour_of("i2").as_deref(), Some(PALETTE[1]));
+        assert_eq!(r.colour_of("unused"), None);
+        r.policies.insert("i1".into(), LibraryPolicy { format: Some(Format::Cd), colour: Some("#112233".into()) });
+        assert_eq!(r.format_of("i1"), Format::Cd);
+        assert_eq!(r.colour_of("i1").as_deref(), Some("#112233"));
+        // As saved: only what was set.
+        assert_eq!(serde_json::to_value(&r.policies).unwrap(), serde_json::json!({ "i1": { "format": "cd", "colour": "#112233" } }));
+    }
+
+    #[test]
+    fn library_settings_are_kept_when_the_page_sends_none_and_checked_when_it_does() {
+        let mut saved = jf("jf", "http://a", Some("k"));
+        saved.libraries.policies.insert("i".into(), LibraryPolicy { format: None, colour: Some("#aabbcc".into()) });
+        let out = merge(std::slice::from_ref(&saved), vec![jf("jf", "http://a", None)]).unwrap();
+        assert_eq!(out[0].libraries.policies, saved.libraries.policies);
+        let mut bad = jf("jf", "http://a", None);
+        bad.libraries.policies.insert("i".into(), LibraryPolicy { format: None, colour: Some("red".into()) });
+        assert!(merge(std::slice::from_ref(&saved), vec![bad]).is_err());
+        let mut upper = jf("jf", "http://a", None);
+        upper.libraries.policies.insert("i".into(), LibraryPolicy { format: Some(Format::AsIs), colour: Some("#AABBCC".into()) });
+        assert_eq!(merge(&[saved], vec![upper]).unwrap()[0].libraries.policies["i"].colour.as_deref(), Some("#aabbcc"));
     }
 
     fn jf(id: &str, url: &str, key: Option<&str>) -> SourceConfig {
@@ -393,9 +492,9 @@ mod tests {
     #[test]
     fn a_library_has_one_use() {
         let mut s = jf("a", "http://x", Some("k"));
-        s.libraries = Roles { music: vec!["l1".into(), "l1".into(), " ".into()], incoming: vec!["l2".into()] };
+        s.libraries = Roles { music: vec!["l1".into(), "l1".into(), " ".into()], incoming: vec!["l2".into()], ..Roles::default() };
         let out = merge(&[], vec![s.clone()]).unwrap();
-        assert_eq!(out[0].libraries, Roles { music: vec!["l1".into()], incoming: vec!["l2".into()] });
+        assert_eq!(out[0].libraries, Roles { music: vec!["l1".into()], incoming: vec!["l2".into()], ..Roles::default() });
         s.libraries.incoming.push("l1".into());
         assert!(merge(&[], vec![s]).is_err());
     }
@@ -440,7 +539,7 @@ mod tests {
         assert_eq!(load(&path, &none).unwrap(), None);
         let s = vec![jf("jellyfin", "http://jf:8096", Some("k"))];
         let mut s = s;
-        s[0].libraries = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()] };
+        s[0].libraries = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()], ..Roles::default() };
         let lidarr = Some(LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into() });
         let saved = Saved {
             sources: s,
@@ -471,7 +570,7 @@ mod tests {
         )
         .unwrap();
         let s = load(&path, &env_of(&[])).unwrap().unwrap();
-        assert_eq!(s.sources[0].libraries, Roles { music: vec!["a".into()], incoming: vec!["b".into()] });
+        assert_eq!(s.sources[0].libraries, Roles { music: vec!["a".into()], incoming: vec!["b".into()], ..Roles::default() });
         assert_eq!(s.sources[1].libraries, Roles::default());
         assert_eq!(s.music_folder, None);
         std::fs::remove_dir_all(&d).ok();
