@@ -60,6 +60,7 @@
     type CrateDraft,
   } from './crates.svelte';
   import CrateEditor from './CrateEditor.svelte';
+  import SelectSheet from './SelectSheet.svelte';
   import { Reorder } from './reorder.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { undos, withUndo } from './undo.svelte';
@@ -339,6 +340,12 @@
   // Select mode (Symfonium's): a long-press on a track or the header's icon starts it, a tap ticks a track, and a bar
   // over the list acts on the ticked ones. A tick is a row (its place), so a track that is there twice is ticked once.
   let selecting = $state<Set<number> | null>(null);
+  // In select mode a long-press asks what to tick among the tracks shown: all, none or the others (lib/SelectSheet).
+  let selectSheet = $state(false);
+  function selectWhich(which: 'all' | 'none' | 'others') {
+    const all = (shown ?? []).map((x) => x.i);
+    selecting = new Set(which === 'all' ? all : which === 'none' ? [] : all.filter((i) => !selecting?.has(i)));
+  }
   function startSelect(i?: number) {
     navigator.vibrate?.(8);
     selecting = new Set(i === undefined ? [] : [i]);
@@ -1230,7 +1237,7 @@
       attachMain={fromAction(longpress, () => () => {
         if (!ok) return;
         if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu' };
-        else if (selecting) tick(i);
+        else if (selecting) selectSheet = true;
         else startSelect(i);
       })}
     >
@@ -1270,7 +1277,7 @@
       disabled={!ok}
       onclick={() => (selecting ? tick(i) : playFrom(title, source, list, r))}
       attach={fromAction(swipe, () => ({ enabled: ok && !selecting, onswipe: () => playNext(r, source) }))}
-      attachMain={fromAction(longpress, () => () => ok && (selecting ? tick(i) : startSelect(i)))}
+      attachMain={fromAction(longpress, () => () => ok && (selecting ? (selectSheet = true) : startSelect(i)))}
     >
       {#snippet lead()}
         <span class="num">{#if here}<span class="dots" class:still={paused()} aria-label="Playing"><i></i><i></i><i></i><i></i></span>{:else}{i + 1}{/if}</span>
@@ -1306,6 +1313,9 @@
       menuStart = 'menu';
     }}
   />
+{/if}
+{#if selectSheet}
+  <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
 {#if trackMenu}
   <TrackMenu track={trackMenu.track} start={trackMenu.start} onclose={() => (trackMenu = null)} />

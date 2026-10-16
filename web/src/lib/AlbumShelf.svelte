@@ -16,6 +16,7 @@
   import { toast } from './toast.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
+  import SelectSheet from './SelectSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { albumSubject, panel, viewPlaylist } from './panel.svelte';
@@ -194,6 +195,12 @@
     selecting = next;
   }
   const all = $derived(shown.flatMap(({ s, albums }) => albums.map((a) => ({ s, a }))));
+  // In select mode a long-press asks what to tick: all, none or the others (lib/SelectSheet).
+  let selectSheet = $state(false);
+  function selectWhich(which: 'all' | 'none' | 'others') {
+    const keys = all.map((x) => keyOf(x.s, x.a));
+    selecting = new Set(which === 'all' ? keys : which === 'none' ? [] : keys.filter((k) => !selecting?.has(k)));
+  }
   const ticked = $derived(selecting ? all.filter((x) => selecting!.has(keyOf(x.s, x.a))) : []);
   const tickedFav = $derived(ticked.length > 0 && ticked.every((x) => isFavorite(x.s.id, x.a.id)));
   // The albums' hearts (the bar's, the Library's Favourites only): each server's list, asked for when the list shows
@@ -211,7 +218,7 @@
     addEventListener('keydown', esc);
     return () => removeEventListener('keydown', esc);
   });
-  const longPress = (s: ShelfSource, a: ListedAlbum) => fromAction(longpress, () => () => (selecting ? tick(s, a) : startSelect(s, a)));
+  const longPress = (s: ShelfSource, a: ListedAlbum) => fromAction(longpress, () => () => (selecting ? (selectSheet = true) : startSelect(s, a)));
 
   const listOf = () => ticked.map((x) => ({ source: x.s.id, a: x.a }));
   async function playTicked(mode: 'play' | 'next' | 'last') {
@@ -432,6 +439,10 @@
       />
     </div>
   </MenuSheet>
+{/if}
+
+{#if selectSheet}
+  <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
 
 <style>

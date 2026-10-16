@@ -73,6 +73,9 @@
     return () => removeEventListener('keydown', key, true);
   });
 
+  /** A press began on the backdrop (since the sheet opened). */
+  let pressedHere = false;
+
   // Dragging the sheet down past 80 px closes it (up, for one at the top); less springs back.
   let dy = $state(0);
   let from: { y: number; id: number } | null = null;
@@ -131,7 +134,16 @@
 <!-- At the end of the page (lib/portal.ts): over every layer it was opened from. Global transitions: a sheet slides in and out however it is opened (inside another block, such as TrackMenu's
      {#if}, a local one would not play). -->
 <div class="root" use:portal>
-<div class="backdrop" class:sided={side !== null} role="presentation" onclick={onclose} transition:fade|global={{ duration: SHEET_OUT }}>
+<!-- Closes on a press that began on it: not on the lift of the long-press that opened the sheet (lib/longpress), which
+     lands here once the sheet is up. -->
+<div
+  class="backdrop"
+  class:sided={side !== null}
+  role="presentation"
+  onpointerdown={() => (pressedHere = true)}
+  onclick={() => pressedHere && onclose()}
+  transition:fade|global={{ duration: SHEET_OUT }}
+>
   {#if side}<div class="dim" style:left="{side.left}px" style:width="{side.width}px"></div>{/if}
 </div>
 <div

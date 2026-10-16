@@ -30,6 +30,12 @@ export function tick(id: string) {
   if (sidePanel()) viewPicked();
 }
 
+/** The select sheet's choice (lib/SelectSheet) among these playlists (all shown): all, none, or the others. */
+export function pickWhich(ids: string[], which: 'all' | 'none' | 'others') {
+  select.picked = which === 'all' ? [...ids] : which === 'none' ? [] : ids.filter((id) => !select.picked.includes(id));
+  if (sidePanel()) viewPicked();
+}
+
 /** Views what is ticked in the panel (a phone's "View N playlists"). */
 export function viewPicked() {
   if (!select.picked.length) return void (panel.selection.length && closePlaylist());

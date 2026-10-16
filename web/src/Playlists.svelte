@@ -22,7 +22,8 @@
   import PlaylistItem from './lib/PlaylistItem.svelte';
   import { viewPlaylist, panel } from './lib/panel.svelte';
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './lib/favourites.svelte';
-  import { endSelect, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
+  import { endSelect, pickWhich, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
+  import SelectSheet from './lib/SelectSheet.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
   const view = $derived(live.view);
@@ -129,6 +130,8 @@
   // The select bar's actions on the ticked playlists (one after another, each track once), as the panel's on its
   // ticked tracks: Select ends after each.
   const ticked = $derived(select.picked.filter((id) => shownPlaylists().some((x) => x.id === id)));
+  // In Select a long-press asks what to tick: all, none or the others.
+  let selectSheet = $state(false);
   const tickedFav = $derived(ticked.length > 0 && ticked.every((id) => isPlaylistFavorite(id)));
   async function playTicked(mode: PlayMode) {
     const ids = [...ticked];
@@ -185,7 +188,9 @@
             label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `View ${p.name}`}
             onclick={() => (select.on ? tick(p.id) : viewPlaylist(p.id))}
             attach={fromAction(longpress, () => () => {
-              if (!select.on) startSelect();
+              // In Select it asks what to tick (lib/SelectSheet).
+              if (select.on) return void (selectSheet = true);
+              startSelect();
               if (!select.picked.includes(p.id)) tick(p.id);
             })}
           >
@@ -230,6 +235,15 @@
 {:else if menu?.kind === 'selection'}
   <!-- The menu of what is ticked (a long-press ticks). -->
   <PlaylistMenu playlists={select.picked.flatMap((id) => shownPlaylists().filter((x) => x.id === id))} onclose={() => (menu = null)} />
+{/if}
+
+{#if selectSheet}
+  <SelectSheet
+    onall={() => pickWhich(items.map((p) => p.id), 'all')}
+    onnone={() => pickWhich(items.map((p) => p.id), 'none')}
+    onothers={() => pickWhich(items.map((p) => p.id), 'others')}
+    onclose={() => (selectSheet = false)}
+  />
 {/if}
 
 <style>
