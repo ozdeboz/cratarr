@@ -29,6 +29,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}", get(player))
         .route("/api/players/{name}/command", post(player_command))
         .route("/api/players/{name}/state", axum::routing::put(player_state))
+        .route("/api/players/{name}/sample", post(player_sample))
+        .route("/api/time", get(time_now))
+        .route("/api/sync/measure", get(sync_measure))
         .route("/api/radio/next", post(radio_next))
         .route("/api/players/{name}/connect", get(player_connect))
         .route("/api/track/{source}/{id}", get(track_info))
@@ -594,6 +597,22 @@ async fn player_command(State(app): State<Arc<App>>, Path(name): Path<String>, J
 async fn player_state(State(app): State<Arc<App>>, Path(name): Path<String>, Json(r): Json<crate::app::PlayerReport>) -> Result<StatusCode, ApiError> {
     app.play_on.report(&name, r)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Cratarr's time, for the players' clock exchange (sync play, decision 0037): epoch ms, to the microsecond.
+async fn time_now() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "now_ms": crate::app::together::now_ms() }))
+}
+
+/// A player's answer to a measurement (sync play, step 1).
+async fn player_sample(State(app): State<Arc<App>>, Path(name): Path<String>, Json(s): Json<crate::app::together::Sample>) -> Result<StatusCode, ApiError> {
+    app.play_on.sample(&name, s)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Every online player's place at one moment, and how far apart those on the same track are (sync play, step 1).
+async fn sync_measure(State(app): State<Arc<App>>) -> Json<crate::app::together::Measure> {
+    Json(app.play_on.measure().await)
 }
 
 /// The radio's next tracks for the player that plays (decision 0036): already in the radio lane.

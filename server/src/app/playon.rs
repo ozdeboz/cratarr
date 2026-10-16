@@ -251,6 +251,8 @@ pub enum Command {
     Unduck,
     /// The queue and position move to player `to`, and this one stops. Handled here; never sent to a player.
     Handover { to: String },
+    /// Sync play, step 1 (decision 0037): what it plays this moment, answered at once (`POST .../sample`).
+    Sample { id: u64 },
 }
 
 impl Command {
@@ -436,6 +438,8 @@ pub struct PlayOn {
     queues_file: Option<PathBuf>,
     save: tokio::sync::Notify,
     playlists: Arc<PlaylistService>,
+    /// Sync play's measurements, waiting for the players' samples (decision 0037, step 1).
+    samples: super::together::Samples,
 }
 
 /// A player's queue as saved, with where it was in it and whether it played.
@@ -482,12 +486,29 @@ impl PlayOn {
             queues_file,
             save: tokio::sync::Notify::new(),
             playlists,
+            samples: super::together::Samples::default(),
         });
         me.clone().tell_webhooks();
         me.clone().watch_leases();
         me.clone().keep_queues();
         let _ = INSTANCE.set(me.clone());
         me
+    }
+
+    /// Sync play, step 1 (decision 0037): every online player asked what it plays this moment, and the answers
+    /// compared at one moment of Cratarr's time.
+    pub async fn measure(&self) -> super::together::Measure {
+        let id = self.samples.open();
+        let online: Vec<String> = self.entries().iter().filter(|(_, e)| e.online()).map(|(n, _)| n.clone()).collect();
+        let asked: Vec<String> = online.into_iter().filter(|n| self.send(n, &Command::Sample { id }).is_ok()).collect();
+        self.samples.wait(id, &asked).await
+    }
+
+    /// A player's answer to a measurement.
+    pub fn sample(&self, name: &str, s: super::together::Sample) -> Result<(), ToggleError> {
+        valid_name(name)?;
+        self.samples.answer(name, s);
+        Ok(())
     }
 
     /// The PlayOn of this Cratarr, once it is open.

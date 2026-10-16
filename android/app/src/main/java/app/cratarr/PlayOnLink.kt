@@ -57,11 +57,31 @@ class PlayOnLink(
         player.addListener(this)
         thread = Thread(::listen, "cratarr-play-on").apply { isDaemon = true; start() }
         main.post(heartbeat)
+        clockThread = Thread(::keepClock, "cratarr-clock").apply { isDaemon = true; start() }
         holdIfReady()
+    }
+
+    private var clockThread: Thread? = null
+
+    /** Sync play (decision 0037): the clock's offset to Cratarr's, kept while running: quickly at first, then every 5 s. */
+    private fun keepClock() {
+        var pinged = 0
+        var server: String? = null
+        while (running) {
+            val now = prefs.serverUrl
+            if (now != server) {
+                Clock.forget()
+                server = now
+                pinged = 0
+            }
+            if (now != null && Clock.ping(now)) pinged++
+            sleep(if (pinged < 10) 300 else 5_000)
+        }
     }
 
     fun stop() {
         running = false
+        clockThread?.interrupt()
         player.removeListener(this)
         main.removeCallbacks(heartbeat)
         connection?.disconnect()
@@ -173,6 +193,8 @@ class PlayOnLink(
             return
         }
         val p = player
+        // Sync play's measurement (decision 0037, step 1): what plays this moment, in Cratarr's time, at once.
+        if (m.optString("command") == "sample") return sample(m.optLong("id"))
         m.optLong("version", -1L).takeIf { it >= 0 }?.let { version = it }
         when (m.optString("command")) {
             "play" -> {
@@ -249,6 +271,43 @@ class PlayOnLink(
             else -> Log.w(TAG, "a command this app does not know: $json")
         }
         report()
+    }
+
+    /** Sync play, step 1: this player's place this moment, in Cratarr's time, to Cratarr. */
+    private fun sample(id: Long) {
+        val p = player
+        val position = p.currentPosition
+        val at = Clock.now()
+        val track = p.currentMediaItem?.let(::trackOf)
+        val base = base() ?: return
+        val body = JSONObject()
+            .put("id", id)
+            .put("entry", track?.optString("entry")?.ifEmpty { null } ?: JSONObject.NULL)
+            .put("track", track?.let { "${it.optString("source")}/${it.optString("id")}" } ?: JSONObject.NULL)
+            .put("playing", p.isPlaying)
+            .put("position_ms", position.toDouble())
+            .put("at_ms", at)
+            .put("offset_ms", Clock.offsetMs)
+            .put("rtt_ms", if (Clock.rttMs.isNaN()) 0.0 else Clock.rttMs)
+            .toString()
+        if (reports.isShutdown) return
+        reports.execute { post("$base/sample", body) }
+    }
+
+    private fun post(url: String, body: String): Boolean = try {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.connectTimeout = 5_000
+        c.readTimeout = 5_000
+        c.doOutput = true
+        c.setRequestProperty("Content-Type", "application/json")
+        c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+        val ok = c.responseCode in 200..299
+        c.disconnect()
+        ok
+    } catch (e: Exception) {
+        Log.w(TAG, "sample to Cratarr: ${e.message}")
+        false
     }
 
     /** The place of the entry a command names, else the place it gives. */

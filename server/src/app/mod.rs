@@ -28,6 +28,7 @@ pub mod radio;
 mod settings;
 mod shelf;
 mod sync;
+pub mod together;
 
 use std::sync::Arc;
 
