@@ -135,9 +135,20 @@ idle I/O on the N95, files read from the disks. 170 random Music files: 150 MP3,
 2. **Accuracy check before tempo is used:** the owner names about 20 tracks with a known tempo, a mix of styles, to
    measure against.
 
+## Where the first pass runs (the owner, 2026-10-16)
+
+**The one-time pass over the whole library runs on the ThinkBook**; the NAS then keeps up with new and replaced files.
+The NAS could do it alone overnight (about 6.5 h of work at the lowest priority, measured above), so the ThinkBook is
+a speed-up, and the NAS's own pass is the fallback when the ThinkBook is not at hand.
+
+- The same code as a mode of the server's binary (`cratarr-server --analyse <folder> --out <file>`), run on the
+  ThinkBook over the Music share (SMB), every core busy.
+- Its results are keyed by the file (its path in the library, its size and modification time) and imported into
+  Cratarr's table on the NAS, which analyses only what is not there or has changed since.
+
 ## Consequences
 
-- The NAS does a one-time overnight pass, then a little work per new track.
+- The ThinkBook does the one-time pass (the NAS overnight when it cannot), then the NAS a little work per new track.
 - The seekbar, a populated BPM axis in crates, and levelling come with no work on the phone.
 - **Offline:** the app fetches each download's waveform with it and keeps it in its store, or the seekbar would be
   blank in airplane mode (claude-5f).
