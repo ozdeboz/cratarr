@@ -15,7 +15,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, shownCover, duration, favorite, moving, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
   import { keepViewed, panel } from './panel.svelte';
@@ -101,7 +101,7 @@
 
   // The track menu (the menu button, or a right-click on the cover) and the queue (decision 0019).
   let menuAt = $state<DOMRect | null>(null);
-  // The menu's entries, or straight to its playlists (the top row's playlists button).
+  // The menu's entries, or straight to its playlists (the top bar's playlists button).
   let menuStart = $state<'menu' | 'lists'>('menu');
   let queueOpen = $state(false);
   let outputOpen = $state(false);
@@ -110,7 +110,8 @@
     menuStart = start;
     menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect();
   };
-  // The top row's two counts, as small labels under their buttons (the row's only words).
+  // The track's playlists (the top bar's button says it to a screen reader) and its place in the queue (the bottom row's
+  // one label).
   const inPlaylists = $derived(memberCount === 0 ? 'In no playlist' : `In ${memberCount} ${memberCount === 1 ? 'playlist' : 'playlists'}`);
   const queuePlace = $derived.by(() => {
     if (isLocal()) return local.index < 0 ? '' : `${local.index + 1} of ${local.queue.length}`;
@@ -275,24 +276,29 @@
     bind:this={head}
   >
     <button class="corner left" aria-label={place === 'side' ? 'Fold the player' : 'Close the player'} onclick={close}><Icon name="collapse" size={26} /></button>
-    {#if place === 'side'}
-      <button class="corner right" aria-label="Over the page" onclick={maximise}><Icon name="expand" size={20} /></button>
-    {:else if player.roomy}
-      <button class="corner right" aria-label="Beside the page" onclick={toSidebar}><Icon name="sidebar" size={22} /></button>
-    {/if}
-    <!-- The sleep timer, top right (left of the corner button where there is one); only where the page holds the queue.
-         Lit while one runs, what is left under it. -->
-    {#if np && isLocal()}
-      <button
-        class="corner sleep"
-        class:shifted={place === 'side' || player.roomy}
-        class:on={sleep() !== null}
-        aria-label={sleep() ? `Sleep timer, ${sleepLeft()}` : 'Sleep timer'}
-        aria-haspopup="dialog"
-        onclick={() => (sleepOpen = true)}
-        ><Icon name="moon" size={22} />{#if sleep()}<small>{sleepLeft()}</small>{/if}</button
-      >
-    {/if}
+    <!-- Top right, icons only (what is on shows lit): the track's playlists (lit while it is in one), the sleep timer
+         (only where the page holds the queue; lit while one runs), and where the player goes. -->
+    <div class="corners">
+      {#if np}
+        <button class="corner" class:on={memberCount > 0} aria-label="Add to playlist; {inPlaylists}" aria-haspopup="menu" onclick={(e) => openMenu(e, 'lists')}
+          ><Icon name="listAdd" size={22} /></button
+        >
+      {/if}
+      {#if np && isLocal()}
+        <button
+          class="corner sleep"
+          class:on={sleep() !== null}
+          aria-label={sleep() ? `Sleep timer, ${sleepLeft()}` : 'Sleep timer'}
+          aria-haspopup="dialog"
+          onclick={() => (sleepOpen = true)}><Icon name="moon" size={22} /></button
+        >
+      {/if}
+      {#if place === 'side'}
+        <button class="corner" aria-label="Over the page" onclick={maximise}><Icon name="expand" size={20} /></button>
+      {:else if player.roomy}
+        <button class="corner" aria-label="Beside the page" onclick={toSidebar}><Icon name="sidebar" size={22} /></button>
+      {/if}
+    </div>
     <!-- Finamp's layout: the cover's region, then the controls' box with three groups spread in it (track name,
          controls, actions); in landscape side by side. Sizes from lib/playerLayout.ts. -->
     <div class="album" style:width={layout ? `${layout.album.width}px` : null} style:height={layout ? `${layout.album.height}px` : null}>
@@ -401,13 +407,14 @@
         <i class="sp c"></i>
         <div class="side">
           <button class="act" aria-label="Track menu" aria-haspopup="menu" onclick={openMenu}><Icon name="menu" size={24} /></button>
-          {#if np.favorite !== null}
-            <button class="fav" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
-              ><Icon name="heart" size={26} /></button
-            >
-          {/if}
-          <button class="act labelled" aria-label="Add to playlist" aria-haspopup="menu" onclick={(e) => openMenu(e, 'lists')}
-            ><Icon name="listAdd" size={24} /><small aria-live="polite">{moving() ? '–' : inPlaylists}</small></button
+          <!-- Always there; until the server says whether it is a favourite, not to be pressed. -->
+          <button
+            class="fav"
+            class:on={favorite()}
+            disabled={pending() || np.favorite === null}
+            aria-label={favorite() ? 'Favourite' : 'Not a favourite'}
+            aria-pressed={favorite()}
+            onclick={toggleFavorite}><Icon name="heart" size={26} /></button
           >
           <button class="act" aria-label="Play on" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={24} /></button>
           <button class="act labelled" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
@@ -565,39 +572,25 @@
     left: 8px;
   }
 
-  .corner.right {
+  /* The top bar's right: its buttons in one row. */
+  .corners {
+    position: absolute;
+    top: 10px;
     right: 8px;
+    display: flex;
+    gap: 4px;
   }
 
-  /* The sleep timer: a corner button that grows down for its small label, as the top row's labelled buttons. */
-  .corner.sleep {
-    right: 8px;
-    width: auto;
-    min-width: 40px;
-    height: auto;
-    min-height: 40px;
-    gap: 1px;
-    padding: 4px;
-    border-radius: 12px;
+  .corners .corner {
+    position: static;
   }
 
-  .corner.sleep.shifted {
-    right: 52px;
-  }
-
-  .corner.sleep.on {
+  .corner.on {
     color: var(--art-accent);
   }
 
   .corner.sleep.on :global(svg) {
     fill: currentColor;
-  }
-
-  .corner.sleep small {
-    color: var(--muted);
-    font-size: 0.7rem;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
   }
 
   .cover-btn {
@@ -837,21 +830,22 @@
     fill: currentColor;
   }
 
-  /* A button with a small label under its icon (the playlists it is in, the place in the queue), as wide as its
-     longest label, so the row's buttons never move as the counts change. */
+  /* A small label under a button's icon (the place in the queue), outside the button's box: the row's buttons stay
+     alike, so their icons line up whatever the labels say. */
   .act.labelled {
-    width: 5.5rem;
-    height: auto;
-    gap: 2px;
-    padding: 4px 0;
-    border-radius: 12px;
+    position: relative;
   }
 
   .act.labelled small {
+    position: absolute;
+    top: calc(100% - 4px);
+    left: 50%;
+    transform: translateX(-50%);
     color: var(--muted);
     font-size: 0.7rem;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    pointer-events: none;
   }
 
   .fav:disabled {
