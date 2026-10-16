@@ -36,6 +36,7 @@
     background: var(--surface);
   }
 
+  /* A choice's words on one line: where they do not fit, the row puts the whole control under its name instead. */
   button {
     min-height: 44px;
     padding: 0 16px;
@@ -43,6 +44,7 @@
     border: 0;
     color: var(--text);
     font: inherit;
+    white-space: nowrap;
     cursor: pointer;
   }
 

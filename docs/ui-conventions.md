@@ -201,6 +201,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   checks every connection, which takes seconds) and takes the fresh ones unless something was edited meanwhile.
   Technical details go to About or nowhere. A use is set only there (decision 0009).
 
+- **Shared pieces, not each page's own layout** (decided 2026-10-16): a sheet's or a setting's card is `lib/Card`
+  (its title and a muted note, then what it holds); a setting's row is `lib/SettingRow` (its name at the start, its
+  control at the end; where both do not fit, the control goes under the name: the row wraps, no page rule decides it);
+  a choice of one as rows is `lib/ChoiceList` (round marks); a few choices in a row `lib/Seg` (its words never break:
+  the row takes the control under the name instead); on/off `lib/Switch`. View, More music, Settings' Display and
+  Libraries are made of them.
 - **Phone check** (`npm run check:phone`, decided 2026-10-16): every page, every part of the settings and an album in
   the panel at 390 px must not scroll sideways (the page, or any box that scrolls up and down); run it after a layout
   change.

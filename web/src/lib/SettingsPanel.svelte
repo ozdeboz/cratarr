@@ -265,27 +265,22 @@
     list-style: none;
   }
 
+  /* A server library: where it is beside its use, its own settings under both (a grid: nothing wraps into a column). */
   .scroll :global(.libs li) {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
     gap: 8px 16px;
-    flex-wrap: wrap;
     padding: 10px 0;
     border-bottom: 1px solid var(--border);
   }
 
-  .scroll :global(.libs li:last-child) {
-    border-bottom: 0;
+  .scroll :global(.policies) {
+    grid-column: 1 / -1;
   }
 
-  /* A used library's own settings, each a line of its own under it: its name, the control at the end. */
-  .scroll :global(.policy) {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-basis: 100%;
+  .scroll :global(.libs li:last-child) {
+    border-bottom: 0;
   }
 
   .scroll :global(.swatches) {
@@ -336,15 +331,8 @@
 
   /* Phones: every row the same, the name above and the choice full width below. */
   @media (max-width: 520px) {
-    /* In a column nothing wraps: a full-width line would else start a column of its own beside the others. */
     .scroll :global(.libs li) {
-      flex-direction: column;
-      flex-wrap: nowrap;
-      align-items: stretch;
-    }
-
-    .scroll :global(.policy) {
-      flex-basis: auto;
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .scroll :global(.libs .seg button) {

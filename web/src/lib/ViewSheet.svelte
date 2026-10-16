@@ -11,11 +11,13 @@
 <script lang="ts">
   // The page's View (lib/TopPill's view button, decided 2026-10-15): how its list shows. Its order and direction (the
   // same as its list header's), then for playlists the size, for albums rows or covers and the size.
-  import Icon from './Icon.svelte';
+  import Card from './Card.svelte';
+  import ChoiceList from './ChoiceList.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, CRATE_ORDERS, DATES, DIRECTIONS, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
   import { prefs } from './prefs.svelte';
   import Seg from './Seg.svelte';
+  import SettingRow from './SettingRow.svelte';
   import SizeControl from './SizeControl.svelte';
 
   // `order`: the panel list's own order instead of a page's (`page` null).
@@ -26,97 +28,43 @@
   <div class="parts">
     {#if order}
       <!-- One under another (the list header's Order sheet's): a track list has too many to fit in a row. -->
-      <div class="part choices" role="radiogroup" aria-label="Order">
-        <span>Order</span>
-        {#each order.fields as f (f.value)}
-          {@const on = f.value === order.value}
-          <button role="radio" aria-checked={on} class:on onclick={() => order.set(f.value, order.down)}
-            ><Icon name={on ? 'circleCheck' : 'circle'} size={22} />{f.label}</button
-          >
-        {/each}
-      </div>
-      <div class="part">
-        <span>Direction</span>
-        <Seg label="Direction" options={DIRECTIONS} bind:value={() => order.down, (d) => order.set(order.value, d)} />
-      </div>
+      {@const o = order}
+      <Card title="Order" label="Order">
+        <ChoiceList label="Order" options={o.fields} value={o.value} onchange={(v) => o.set(v, o.down)} />
+      </Card>
+      <SettingRow card label="Direction">
+        <Seg label="Direction" options={DIRECTIONS} bind:value={() => o.down, (d) => o.set(o.value, d)} />
+      </SettingRow>
     {:else if page === 'playlists'}
-      <div class="part"><span>Order</span><Seg label="Order" options={PLAYLIST_ORDERS} bind:value={prefs.playlistOrder} /></div>
-      <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.playlistDown} /></div>
-      <div class="part"><span>Size</span><SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} /></div>
+      <SettingRow card label="Order"><Seg label="Order" options={PLAYLIST_ORDERS} bind:value={prefs.playlistOrder} /></SettingRow>
+      <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.playlistDown} /></SettingRow>
+      <SettingRow card label="Size"><SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} /></SettingRow>
     {:else if page === 'crates'}
-      <div class="part"><span>Order</span><Seg label="Order" options={CRATE_ORDERS} bind:value={prefs.crateOrder} /></div>
-      <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.crateDown} /></div>
+      <SettingRow card label="Order"><Seg label="Order" options={CRATE_ORDERS} bind:value={prefs.crateOrder} /></SettingRow>
+      <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.crateDown} /></SettingRow>
     {:else if page === 'downloads'}
-      <div class="part"><span>Order</span><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.downloadsOrder} /></div>
-      <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.downloadsDown} /></div>
+      <SettingRow card label="Order"><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.downloadsOrder} /></SettingRow>
+      <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.downloadsDown} /></SettingRow>
       {@render albums()}
     {:else}
-      <div class="part"><span>Order</span><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.libraryOrder} /></div>
-      <div class="part"><span>Direction</span><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.libraryDown} /></div>
+      <SettingRow card label="Order"><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.libraryOrder} /></SettingRow>
+      <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.libraryDown} /></SettingRow>
       {@render albums()}
     {/if}
   </div>
 </MenuSheet>
 
 {#snippet albums()}
-  <div class="part"><span>Layout</span><Seg label="Layout" options={ALBUM_LAYOUTS} bind:value={prefs.albumLayout} /></div>
-  <div class="part">
-    <span>Size</span>
-    <SizeControl widths={ALBUM_WIDTHS[prefs.albumLayout]} width={pageView.width} bind:value={prefs.albumZoom} />
-  </div>
-  <div class="part"><span>Dates</span><Seg label="Dates" options={DATES} bind:value={prefs.relativeDates} /></div>
+  <SettingRow card label="Layout"><Seg label="Layout" options={ALBUM_LAYOUTS} bind:value={prefs.albumLayout} /></SettingRow>
+  <SettingRow card label="Size"><SizeControl widths={ALBUM_WIDTHS[prefs.albumLayout]} width={pageView.width} bind:value={prefs.albumZoom} /></SettingRow>
+  <SettingRow card label="Dates"><Seg label="Dates" options={DATES} bind:value={prefs.relativeDates} /></SettingRow>
 {/snippet}
 
 <style>
-  /* Each setting a row: its name, the control at the end (the filter sheet's cards). */
+  /* Each setting a row on a card of its own (lib/SettingRow, lib/Card). */
   .parts {
     display: grid;
     gap: 4px;
     padding: 4px 16px 16px;
-  }
-
-  .part {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-height: 56px;
-    padding: 0 12px 0 16px;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--text) 6%, transparent);
-  }
-
-  .part > span {
-    font-size: 15px;
-  }
-
-  .part.choices {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0;
-    padding: 6px 12px 6px 16px;
-  }
-
-  .choices > span {
-    padding: 10px 0 4px;
-  }
-
-  .choices button {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 44px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: inherit;
-    font: inherit;
-    font-size: 15px;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .choices button.on :global(svg) {
-    color: var(--accent);
   }
 </style>

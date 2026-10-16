@@ -4,6 +4,12 @@
   import { ed } from './editor.svelte';
   import { getCatalogue } from '../api';
   import { count, FORMATS, USES } from './editor.svelte';
+  import Seg from '../Seg.svelte';
+  import SettingRow from '../SettingRow.svelte';
+
+  // Seg's choices: a use, a format.
+  const USE_OPTIONS = USES.map((x) => ({ value: x.id, label: x.label }));
+  const FORMAT_OPTIONS = FORMATS.map((f) => ({ value: f.id, label: f.label }));
 
   const many = $derived(ed.drafts.length > 1);
 
@@ -61,24 +67,16 @@
                     </span>
                   {/if}
                 </div>
-                <div class="seg" role="group" aria-label={`Use of ${l.name}`}>
-                  {#each USES as x (x.id)}
-                    <button aria-pressed={u === x.id} onclick={() => ed.setUse(d, l.id, x.id)}>{x.label}</button>
-                  {/each}
-                </div>
+                <Seg label={`Use of ${l.name}`} options={USE_OPTIONS} bind:value={() => u, (v) => ed.setUse(d, l.id, v)} />
                 {#if u !== 'unused'}
                   {@const pol = ed.policyOf(d, l.id)}
-                  <div class="policy">
-                    <span class="hint">Albums moved in</span>
-                    <div class="seg" role="group" aria-label={`Albums moved into ${l.name}`}>
-                      {#each FORMATS as f (f.id)}
-                        <button aria-pressed={pol.format === f.id} onclick={() => ed.setPolicy(d, l.id, { format: f.id })}>{f.label}</button>
-                      {/each}
-                    </div>
-                  </div>
+                  <!-- Its own settings (decision 0034), a row each under it (lib/SettingRow). -->
+                  <div class="policies">
+                  <SettingRow label="Albums moved in">
+                    <Seg label={`Albums moved into ${l.name}`} options={FORMAT_OPTIONS} bind:value={() => pol.format, (v) => ed.setPolicy(d, l.id, { format: v })} />
+                  </SettingRow>
                   {#if u === 'incoming'}
-                    <div class="policy">
-                      <span class="hint">Dot</span>
+                    <SettingRow label="Dot">
                       <div class="swatches" role="radiogroup" aria-label={`Colour of ${l.name}`}>
                         {#each ed.palette as c (c)}
                           <button
@@ -95,8 +93,9 @@
                           <input type="color" value={pol.colour ?? ed.palette[0] ?? '#e0a23a'} onchange={(e) => ed.setPolicy(d, l.id, { colour: e.currentTarget.value })} />
                         </label>
                       </div>
-                    </div>
+                    </SettingRow>
                   {/if}
+                  </div>
                 {/if}
               </li>
             {:else}

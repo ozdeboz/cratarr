@@ -25,21 +25,23 @@
   // it. Autoplay, at the end: what plays when the queue runs out, then its switches (whole albums while albums were
   // playing; a playlist starting again instead), each saying what it does while it is on. Each a choice of one, as View's order (a round mark); the sheet stays
   // open while it is set. From the queue's floating pill and the player's radio button.
-  import Icon from './Icon.svelte';
+  import Card from './Card.svelte';
+  import ChoiceList from './ChoiceList.svelte';
+  import SettingRow from './SettingRow.svelte';
   import Switch from './Switch.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { RADIO_BYS, RADIO_MAX, setAutoplay, setRadio } from './localPlayer.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
-  const RADIO: { by: RadioBy | 'off'; name: string }[] = [{ by: 'off', name: 'Off' }, ...RADIO_BYS.map((by) => ({ by, name: RADIO_NAMES[by] }))];
+  const RADIO: { value: RadioBy | 'off'; label: string }[] = [{ value: 'off', label: 'Off' }, ...RADIO_BYS.map((by) => ({ value: by, label: RADIO_NAMES[by] }))];
   const radioNow = $derived<RadioBy | 'off'>(local.radio ? local.radioBy : 'off');
   // How many after each track: a slider (the owner), 1 to the player's most; the number follows the finger, and is set
   // when it lifts (each setting asks the server anew).
   let dragging = $state<number | null>(null);
-  const AUTOPLAY: { mode: AutoplayMode | 'stop'; name: string }[] = [
-    { mode: 'stop', name: 'Stop' },
-    ...(Object.entries(AUTOPLAY_NAMES) as [AutoplayMode, string][]).map(([mode, name]) => ({ mode, name })),
+  const AUTOPLAY: { value: AutoplayMode | 'stop'; label: string }[] = [
+    { value: 'stop', label: 'Stop' },
+    ...(Object.entries(AUTOPLAY_NAMES) as [AutoplayMode, string][]).map(([value, label]) => ({ value, label })),
   ];
   const now = $derived<AutoplayMode | 'stop'>(local.autoplay?.mode ?? 'stop');
   const albums = $derived(local.autoplay?.albums ?? false);
@@ -48,39 +50,30 @@
 
 <MenuSheet label="More music" icon="radio" title="More music" chips={[moreMusicLine()]} {onclose}>
   <div class="parts">
-    <div class="part choices" role="radiogroup" aria-label="Radio">
-      <span>Radio <small>after each of your tracks</small></span>
-      {#each RADIO as r (r.by)}
-        {@const on = radioNow === r.by}
-        <button role="radio" aria-checked={on} class:on onclick={() => (r.by === 'off' ? setRadio(false) : setRadio(true, { by: r.by }))}
-          ><Icon name={on ? 'circleCheck' : 'circle'} size={22} />{r.name}</button
-        >
-      {/each}
+    <Card title="Radio" note="after each of your tracks" label="Radio">
+      <ChoiceList label="Radio" options={RADIO} value={radioNow} onchange={(v) => (v === 'off' ? setRadio(false) : setRadio(true, { by: v }))} />
       <div class="count" class:off={!local.radio}>
-        <span>After each track</span>
-        <input
-          type="range"
-          min="1"
-          max={RADIO_MAX}
-          step="1"
-          value={dragging ?? local.radioCount}
-          aria-label="Tracks after each track"
-          oninput={(e) => (dragging = Number(e.currentTarget.value))}
-          onchange={(e) => {
-            setRadio(local.radio, { count: Number(e.currentTarget.value) });
-            dragging = null;
-          }}
-        />
-        <output>{dragging ?? local.radioCount}</output>
+        <SettingRow label="After each track">
+          <input
+            type="range"
+            min="1"
+            max={RADIO_MAX}
+            step="1"
+            value={dragging ?? local.radioCount}
+            aria-label="Tracks after each track"
+            oninput={(e) => (dragging = Number(e.currentTarget.value))}
+            onchange={(e) => {
+              setRadio(local.radio, { count: Number(e.currentTarget.value) });
+              dragging = null;
+            }}
+          />
+          <output>{dragging ?? local.radioCount}</output>
+        </SettingRow>
       </div>
-    </div>
-    <div class="part choices" role="radiogroup" aria-label="Autoplay">
-      <span>Autoplay <small>when the queue ends</small></span>
-      {#each AUTOPLAY as a (a.mode)}
-        {@const on = now === a.mode}
-        <button role="radio" aria-checked={on} class:on onclick={() => setAutoplay(a.mode)}><Icon name={on ? 'circleCheck' : 'circle'} size={22} />{a.name}</button>
-      {/each}
-    </div>
+    </Card>
+    <Card title="Autoplay" note="when the queue ends" label="Autoplay">
+      <ChoiceList label="Autoplay" options={AUTOPLAY} value={now} onchange={(v) => setAutoplay(v)} />
+    </Card>
     <div class="toggles">
       <Switch
         card
@@ -105,66 +98,18 @@
 </MenuSheet>
 
 <style>
-  /* As View's sheet: each part a rounded card, a choice of one as rows with a round mark. */
+  /* Its parts are cards (lib/Card), each a choice of one (lib/ChoiceList); the switches lib/Switch's. */
   .parts {
     --card: color-mix(in srgb, var(--text) 6%, transparent);
-    --card-hover: color-mix(in srgb, var(--text) 11%, transparent);
     display: grid;
     gap: 8px;
     padding: 4px 16px 16px;
   }
 
-  .part {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    padding: 6px 12px 6px 16px;
-    border-radius: 12px;
-    background: var(--card);
-  }
-
-  .part > span {
-    padding: 10px 0 4px;
-    font-size: 15px;
-    font-weight: 600;
-  }
-
-  .part > span small {
-    margin-left: 6px;
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 400;
-  }
-
-  .choices button {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 44px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: inherit;
-    font: inherit;
-    font-size: 15px;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .choices button.on :global(svg) {
-    color: var(--art-accent, var(--accent));
-  }
-
-  /* How many after each track: a slider at the part's foot, its number after it. */
+  /* How many after each track, at Radio's foot: a slider, its number after it; dimmed while Radio is off. */
   .count {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-height: 52px;
     margin-top: 4px;
     border-top: 1px solid var(--border);
-    font-size: 15px;
   }
 
   .count.off {
@@ -172,13 +117,14 @@
   }
 
   .count input {
-    flex: 1;
-    min-width: 0;
+    width: 11em;
+    max-width: 100%;
     accent-color: var(--art-accent, var(--accent));
   }
 
   .count output {
     width: 2ch;
+    margin-left: 8px;
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
@@ -187,15 +133,4 @@
     display: grid;
     gap: 3px;
   }
-
-
-
-
-
-
-
-
-
-
-
 </style>
