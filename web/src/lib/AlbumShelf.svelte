@@ -43,8 +43,8 @@
     down?: boolean;
     /** More lines about an album, the page's own (Incoming: its conversion, how it relates to Music). */
     extra?: Snippet<[ShelfSource, ListedAlbum]>;
-    /** The page's own menu for an album, at `anchor`. */
-    onmenu?: (source: ShelfSource, a: ListedAlbum, anchor: DOMRect) => void;
+    /** The page's own menu for an album, at `anchor`; true when it opened one (else the list's own opens). */
+    onmenu?: (source: ShelfSource, a: ListedAlbum, anchor: DOMRect) => boolean;
   } = $props();
 
   let width = $state(0);
@@ -89,7 +89,9 @@
   // A tile shows its title and artist; the value the list is ordered by, when it is neither, is a pill over the cover's
   // upper left corner (decided 2026-10-16).
   const axisOf = (a: ListedAlbum) => (order === 'year' ? (a.year ? String(a.year) : null) : order === 'added' && a.added ? addedOn(a.added) : null);
-  const openMenu = (s: ShelfSource, a: ListedAlbum, anchor: DOMRect) => (onmenu ? onmenu(s, a, anchor) : (menu = { source: s, a, anchor }));
+  const openMenu = (s: ShelfSource, a: ListedAlbum, anchor: DOMRect) => {
+    if (!onmenu?.(s, a, anchor)) menu = { source: s, a, anchor };
+  };
 
   // Select: the ticked albums by `source/id`; null while not selecting.
   let selecting = $state<Set<string> | null>(null);

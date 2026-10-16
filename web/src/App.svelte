@@ -2,8 +2,7 @@
   import Playlists from './Playlists.svelte';
   import Health from './Health.svelte';
   import Settings from './Settings.svelte';
-  import Incoming from './Incoming.svelte';
-  import Collection from './Collection.svelte';
+  import Library from './Library.svelte';
   import Insights from './Insights.svelte';
   import Downloads from './Downloads.svelte';
   import { inApp } from './lib/app.svelte';
@@ -40,11 +39,12 @@
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
   // 0025: Health beside Settings, Insights beside Health).
   const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
-  // Shown only when some source has an incoming library (see the status call below).
-  const INCOMING: Page = { id: 'incoming', href: '#/incoming', label: 'Incoming', icon: 'incoming' };
-  const COLLECTION: Page = { id: 'collection', href: '#/collection', label: 'Collection', icon: 'library' };
+  // Every used library's albums, Music and Incoming (decision 0034: one page; a dashboard will give the quick look).
+  const LIBRARY: Page = { id: 'library', href: '#/library', label: 'Library', icon: 'library' };
+  // Incoming's and Collection's addresses from before Library (decision 0034): they open Library.
+  const FORMER = ['#/incoming', '#/collection'];
   const INSIGHTS: Page = { id: 'insights', href: '#/insights', label: 'Insights', icon: 'insights' };
-  // The second step after Incoming (decision 0024).
+  // The second step after the Library (decision 0024).
   const CRATES: Page = { id: 'crates', href: '#/crates', label: 'Crates', icon: 'crates' };
   const HEALTH: Page = { id: 'health', href: '#/health', label: 'Health', icon: 'health' };
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
@@ -58,8 +58,12 @@
   // Repairs links land there (decision 0025). The page is the address before `?` (what is viewed rides along as
   // `?view=`, decision 0023).
   const fromHash = () => {
-    const h = location.hash.split('?')[0];
-    return [HEALTH, SETTINGS, INCOMING, COLLECTION, INSIGHTS, CRATES, DOWNLOADS].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
+    const [h, rest] = location.hash.split('?');
+    if (FORMER.includes(h)) {
+      history.replaceState(history.state, '', LIBRARY.href + (rest ? `?${rest}` : ''));
+      return LIBRARY.id;
+    }
+    return [HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DOWNLOADS].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
@@ -104,7 +108,7 @@
   // has a step before this one; on the right, on a page with something to play, the pill (lib/TopPill): the filter
   // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
   // page). The page starts under the row, so at rest nothing lies under it.
-  const PLAYABLE = ['playlists', 'crates', 'collection', 'incoming'];
+  const PLAYABLE = ['playlists', 'crates', 'library'];
   const pagePill = $derived(PLAYABLE.includes(page));
   // An icon button's label on a long-press or right-click, everywhere (lib/labels).
   $effect(installLabels);
@@ -259,7 +263,7 @@
             : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN = $derived<Page[]>(status?.incoming ? [INCOMING, COLLECTION, CRATES, PLAYLISTS] : [COLLECTION, CRATES, PLAYLISTS]);
+  const MAIN: Page[] = [LIBRARY, CRATES, PLAYLISTS];
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
   const APART: Page[] = inApp ? [DOWNLOADS, INSIGHTS, HEALTH, SETTINGS] : [INSIGHTS, HEALTH, SETTINGS];
   const ALL = $derived([...MAIN, ...APART]);
@@ -280,7 +284,7 @@
 
     <nav aria-label="Pages">
       {#each MAIN as p (p.id)}
-        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </nav>
 
@@ -301,12 +305,10 @@
       <Health />
     {:else if page === 'downloads' && inApp}
       <Downloads />
-    {:else if page === 'incoming' && status?.incoming}
-      <Incoming />
+    {:else if page === 'library'}
+      <Library />
     {:else if status && !status.music}
       <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
-    {:else if page === 'collection'}
-      <Collection />
     {:else if page === 'insights'}
       <Insights />
     {:else if page === 'crates'}
@@ -369,7 +371,7 @@
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
     <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages" onclickcapture={collapse}>
       {#each overflow as p (p.id)}
-        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </div>
   {/if}
@@ -381,7 +383,7 @@
   <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
     {#each bar as p (p.id)}
       <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}
-        ><span class="icon"><Icon name={p.icon} />{#if p.id === 'incoming' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
+        ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
       >
     {/each}
     {#if overflow.length}

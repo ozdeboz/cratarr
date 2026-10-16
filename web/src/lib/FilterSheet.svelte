@@ -3,8 +3,8 @@
   // the list it was opened on leaves out, for that list only (decided 2026-10-16: Playlists' Favourites only, the
   // panel's Hide missing tracks; not remembered), then, last, the one filter that is remembered and holds everywhere: a
   // card per server this browser can follow, with its kind and its libraries. On the followed server's card the
-  // libraries the page lists (Collection: Music, Incoming: its own) are switches, remembered as the server is; the
-  // last one on stays on, so a page never filters down to nothing; elsewhere a chip only shows the library's use. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
+  // libraries are switches on the Library (decision 0034), every used one, remembered as the server is; the last one on
+  // stays on, so the page never filters down to nothing; elsewhere a chip only shows the library's use. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
   // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
   // has no per-library visibility, and a use is set only in Settings (decision 0009).
   import { pageView } from './pageView.svelte';
@@ -62,8 +62,8 @@
     }),
   );
 
-  // The use of the libraries the page lists, whose chips are switches.
-  const pageUse = $derived<'music' | 'incoming' | null>(page === 'collection' ? 'music' : page === 'incoming' ? 'incoming' : null);
+  // On the Library (decision 0034) every used library's chip is a switch; elsewhere a chip only shows the use.
+  const switchable = (use: LibraryUse) => page === 'library' && use !== 'unused';
   const followedId = $derived(known.list.some((s) => s.id === prefs.source) ? prefs.source : noChoice());
 
   function follow(id: string) {
@@ -106,12 +106,12 @@
         {#if c.libraries.length}
           <ul class="libs">
             {#each c.libraries as l (l.id)}
-              {#if c.id === followedId && pageUse && l.use === pageUse}
+              {#if c.id === followedId && switchable(l.use) && l.use !== 'unused'}
                 {@const shown = libraryShown(c.id, l.id)}
-                {@const last = shown && c.libraries.filter((x) => x.use === pageUse && libraryShown(c.id, x.id)).length === 1}
+                {@const last = shown && c.libraries.filter((x) => switchable(x.use) && libraryShown(c.id, x.id)).length === 1}
                 <li>
                   <button class="lib" class:off={!shown} aria-pressed={shown} disabled={last} aria-label={`${l.name}, ${USE_WORD[l.use]}`} onclick={() => showLibrary(c.id, l.id, !shown)}
-                    ><Icon name={USE_ICON[pageUse]} size={16} /><span>{l.name}</span></button
+                    ><Icon name={USE_ICON[l.use]} size={16} /><span>{l.name}</span></button
                   >
                 </li>
               {:else}
