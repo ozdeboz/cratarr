@@ -378,12 +378,16 @@
   >
 {/snippet}
 
+<!-- An album's cover; a favourite's has a small heart in its upper right corner (as Symfonium's lists). -->
 {#snippet cover(s: ShelfSource, a: ListedAlbum)}
-  {#if noCover[a.id]}
-    <span class="none" aria-hidden="true"></span>
-  {:else}
-    <img src={albumCoverUrl(s.id, a.id)} alt="" loading="lazy" decoding="async" onerror={() => (noCover[a.id] = true)} />
-  {/if}
+  <span class="art">
+    {#if noCover[a.id]}
+      <span class="none" aria-hidden="true"></span>
+    {:else}
+      <img src={albumCoverUrl(s.id, a.id)} alt="" loading="lazy" decoding="async" onerror={() => (noCover[a.id] = true)} />
+    {/if}
+    {#if isFavorite(s.id, a.id)}<span class="fav" role="img" aria-label="Favourite"><Icon name="heart" size={12} /></span>{/if}
+  </span>
 {/snippet}
 
 <!-- A row's cover plays the album (decided 2026-10-16): wherever a cover plays, the play icon is in its lower right
@@ -528,6 +532,36 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+
+  .art {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .art > .none {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .fav {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgb(0 0 0 / 0.55);
+    color: var(--accent);
+  }
+
+  .fav :global(svg) {
+    fill: currentColor;
   }
 
   .none {

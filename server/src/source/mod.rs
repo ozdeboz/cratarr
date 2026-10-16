@@ -205,6 +205,9 @@ pub struct Album {
     /// The library it was listed from (the album pages' library switches filter by it); none outside a listing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library: Option<String>,
+    /// Its artists one by one, when the source credits several (the menu's Go to each); empty: `artist` alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artists: Vec<String>,
 }
 
 /// One of a user's own playlists on the server (decision 0012).
@@ -447,6 +450,17 @@ pub trait Source: Send + Sync {
     /// only, and the album panel's heart. A server that cannot list them says so.
     fn favorite_albums(&self) -> Fut<'_, Vec<String>> {
         Box::pin(async { anyhow::bail!("this server cannot list favourite albums") })
+    }
+
+    /// Optional: the account's rating of an album, 0 (none) to 5, as Subsonic apps give it; `None`: the server keeps no
+    /// ratings (the menu then offers none).
+    fn album_rating<'a>(&'a self, _album: &'a str) -> Fut<'a, Option<u8>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Optional: rates an album, 0 (none) to 5.
+    fn set_album_rating<'a>(&'a self, _album: &'a str, _stars: u8) -> Fut<'a, ()> {
+        Box::pin(async { anyhow::bail!("this server keeps no ratings") })
     }
 
     /// Makes an album a favourite or not (the album panel's heart): by default as any of the server's items is.

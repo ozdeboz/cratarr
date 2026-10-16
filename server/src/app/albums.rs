@@ -188,6 +188,7 @@ mod tests {
             bitrate_kbps: None,
             tags: Vec::new(),
             library: None,
+            artists: Vec::new(),
         }
     }
 

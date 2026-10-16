@@ -181,13 +181,11 @@
     {/if}
     <div class="info">
       <div class="title">{title}</div>
-      {#if chips.length}
-        <div class="chips scroll">{#each chips as c, i (i)}<span>{c}</span>{/each}</div>
-      {/if}
+      {#if chips.length}<div class="chips">{chips.join(' • ')}</div>{/if}
     </div>
     {#if heart}
       <button class="heart" class:on={heart.on} disabled={heart.disabled} aria-label={heart.on ? 'Favourite' : 'Not a favourite'} aria-pressed={heart.on} onclick={heart.toggle}
-        ><Icon name="heart" size={20} /></button
+        ><Icon name="heart" size={24} /></button
       >
     {/if}
   </div>
@@ -199,7 +197,7 @@
       {:else if actions.length}
         <div class="actions">
           {#each actions as a (a.label)}
-            <button disabled={a.disabled} onclick={a.onclick}><Icon name={a.icon} size={28} /><span>{a.label}</span></button>
+            <button class:play={a.icon === 'play'} aria-label={a.label} title={a.label} disabled={a.disabled} onclick={a.onclick}><Icon name={a.icon} size={28} /></button>
           {/each}
         </div>
       {/if}
@@ -303,56 +301,46 @@
     opacity: 0.6;
   }
 
-  /* The item on a card: image 140 × 140 on the left, the card rounding its corners. */
+  /* The item at the top, as Symfonium's sheet heads (decided 2026-10-16): a small cover, the title large beside it and
+     what it is under that in one muted line, on the sheet itself. */
   .card {
     position: relative;
     flex: none;
     display: flex;
-    height: 140px;
-    margin: 0 12px 10px;
-    overflow: hidden;
-    border-radius: 12px;
-    background: rgb(0 0 0 / 0.25);
+    align-items: center;
+    gap: 16px;
+    margin: 4px 16px 8px;
   }
 
-  :global([data-theme='light']) .card {
-    background: rgb(255 255 255 / 0.15);
-  }
-
-  /* No image: the card is just its title (and chips), the height they need, on the sheet itself. */
-  .card.bare,
-  :global([data-theme='light']) .card.bare {
-    height: auto;
-    background: none;
-  }
-
+  /* No image: the title and its line alone. */
   .card.bare .info {
-    gap: 8px;
-    padding: 2px 16px 6px;
+    gap: 6px;
+    padding: 2px 0 6px;
   }
 
   .lead {
     display: grid;
     flex: none;
     place-items: center;
-    padding-left: 16px;
   }
 
   .art {
     flex: none;
-    width: 140px;
-    height: 140px;
+    width: 64px;
+    height: 64px;
+    border-radius: 6px;
     object-fit: cover;
   }
 
   .mosaic {
     display: grid;
     grid-template-columns: 1fr 1fr;
+    overflow: hidden;
   }
 
   .mosaic img {
-    width: 70px;
-    height: 70px;
+    width: 32px;
+    height: 32px;
     object-fit: cover;
   }
 
@@ -360,9 +348,8 @@
     display: flex;
     flex: 1;
     flex-direction: column;
-    justify-content: space-evenly;
+    gap: 4px;
     min-width: 0;
-    padding: 0 26px 0 12px;
   }
 
   .title {
@@ -371,35 +358,26 @@
     -webkit-line-clamp: 2;
     line-clamp: 2;
     overflow: hidden;
-    font-size: 18px;
-    line-height: 1.1;
+    font-size: 21px;
+    line-height: 1.15;
     overflow-wrap: anywhere;
   }
 
   .chips {
-    display: flex;
-    gap: 4px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .chips span {
-    flex: none;
-    padding: 4px 6px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--text) 10%, transparent);
-    font-size: 0.8rem;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 14px;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .heart {
-    position: absolute;
-    right: 4px;
-    bottom: 4px;
+    flex: none;
     display: grid;
     place-items: center;
-    width: 36px;
-    height: 36px;
+    width: 44px;
+    height: 44px;
+    margin-right: -10px;
     padding: 0;
     background: none;
     border: 0;
@@ -420,34 +398,33 @@
     transition: height 500ms ease-in-out;
   }
 
-  /* Finamp's playback row: 96 px, the actions spread evenly, a 28 px icon over a small light label, no fill. */
+  /* Symfonium's playback row: the actions spread evenly, icons only (their words on a long-press, as every icon
+     button's), Play in a ring of the cover's accent. */
   .actions {
     display: flex;
     justify-content: space-evenly;
-    height: 96px;
+    align-items: center;
+    height: 76px;
     padding: 0 4px;
   }
 
   .actions button {
-    display: flex;
-    flex: 1 1 0;
-    flex-direction: column;
-    align-items: center;
-    gap: 9px;
-    padding: 10px 8px 12px;
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    padding: 0;
     background: none;
     border: 0;
-    border-radius: 12px;
+    border-radius: 50%;
     color: var(--text);
     font: inherit;
     cursor: pointer;
   }
 
-  .actions button span {
-    font-size: 12px;
-    font-weight: 300;
-    line-height: 1.4;
-    text-align: center;
+  .actions button.play {
+    box-shadow: inset 0 0 0 2px var(--art-accent);
+    color: var(--art-accent);
   }
 
   .actions button:hover,

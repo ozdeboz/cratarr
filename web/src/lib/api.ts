@@ -1,4 +1,5 @@
 import { track } from './progress.svelte';
+import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 export type Playlist = {
   id: string;
   name: string;
@@ -654,6 +655,8 @@ export type ListedAlbum = {
   tags: string[];
   /** The library it was listed from (the filter's library switches). */
   library?: string;
+  /** Its artists one by one, when the source credits several; absent: `artist` alone. */
+  artists?: string[];
 };
 
 /** One server's album list. */
@@ -698,8 +701,19 @@ export const playAlbum = (source: string, album: string) =>
 /** Make an album a favourite or not (the album panel's heart). */
 export const setAlbumFavorite = (source: string, album: string, on: boolean) =>
   request<{ favorite: boolean }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/favorite?on=${on}`, { method: 'POST' });
-export const albumCoverUrl = (source: string, album: string) =>
-  `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
+/** The album's cover as the server has it (no picture chosen on this device, no reading again). */
+export const serverCoverUrl = (source: string, album: string) => `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
+/** The album's cover as this device shows it: a picture chosen here, else the server's (read again: a new address). */
+export const albumCoverUrl = (source: string, album: string) => {
+  const key = coverKey(source, album);
+  const round = coverRounds[key];
+  return localCovers[key] ?? `${serverCoverUrl(source, album)}${round ? `?v=${round}` : ''}`;
+};
+/** An album's rating, 0 to 5; null when its server keeps none. */
+export const getAlbumRating = (source: string, album: string) =>
+  quietly<{ rating: number | null }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/rating`);
+export const setAlbumRating = (source: string, album: string, stars: number) =>
+  request<{ rating: number }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/rating?stars=${stars}`, { method: 'POST' });
 
 export type Transport = 'previous' | 'play-pause' | 'next' | 'stop';
 

@@ -1132,6 +1132,7 @@ fn album_head(a: ListedAlbumItem) -> (crate::source::Album, Option<String>) {
         path: a.path,
         tags: a.tags,
         library: None,
+        artists: Vec::new(),
         id: a.id,
         tracks: 0,
         format: None,

@@ -88,13 +88,23 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   (`lib/TopPill.svelte`, `pageView.usePageAction`): the name editable where it shows ("New playlist", "New crate" until
   typed), the caret in it at once, Cancel and Save (once it has a name) in the action bar's place. A new playlist is
   made by its Save (`?view=playlist-new`); a new crate is the builder, saved with its Save.
+- **A menu's head and actions** (`lib/MenuSheet.svelte`, decided 2026-10-16, as Symfonium's): a small cover (64 px),
+  the title large beside it and what it is under that in one muted line, on the sheet itself (no card); a track's,
+  an album's heart at the end. The large actions are icons only (their words on a long-press, as every icon
+  button's), Play in a ring of the cover's accent.
 - **One menu per album** (`lib/AlbumMenu.svelte`, decided 2026-10-16, after Symfonium's album sheet), wherever it is
-  opened (a Library row's ⋮, the select bar's More with one ticked, the album panel's ⋮): the album on the card with
+  opened (a Library row's ⋮, the select bar's More with one ticked, the album panel's ⋮): the album at the top with
   its heart, the large actions (Play, Resume when it has a resume point, Shuffle, Play next, Add to queue), then
-  entries on rounded cards: View (not from the panel showing it), Go to its artist, Go to its genres (two at most);
-  Add to playlist, Download (in the app); what its library allows (decision 0034: Move to each other used library,
-  Replace in Music for an upgrade, Delete, a second step when it is in Music, Cancel conversion while queued), each
-  question asked in the sheet; Remove resume point, Web search.
+  entries on rounded cards: View (not from the panel showing it), Go to each of its artists (the source's list of
+  them, else the credit), Go to its genres (two at most); its rating (five stars, when its server keeps ratings; a tap
+  on the rating it has takes it off); Add to playlist, Download (in the app), Share; what its library allows
+  (decision 0034: Move to each other used library, Replace in Music for an upgrade, Delete, a second step when it is
+  in Music, Cancel conversion while queued), each question asked in the sheet; Change cover on this device (a
+  picture kept in this browser, shown wherever the album's cover is) and Read the cover again (or Use the server's
+  cover); Remove resume point, Web search, Genius search.
+- **Share** (track, album, one playlist): the item in words ("Artist – Title") and its link here, through the
+  phone's share sheet (the app's in the app), else copied.
+- **A favourite album's cover** carries a small heart in its upper right corner, in the Library's rows and tiles.
 - **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as chips
   with their live counts, styled as the playlist chips (the viewed one bordered). A crate is viewed in the panel as a
   playlist does, without the statistics and editing, with Play, Shuffle and its favourites toggle (No favourites,

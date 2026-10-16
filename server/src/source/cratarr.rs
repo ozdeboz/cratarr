@@ -384,6 +384,7 @@ impl Source for CratarrSource {
                             bitrate_kbps: kbps,
                             tags: ud.tags_of(&base)?,
                             library: None,
+                            artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
                             id: a.id,
                         },
                         stamp: Some(stamp),
@@ -495,6 +496,23 @@ impl Source for CratarrSource {
             let s = server()?;
             let o = owner(&s)?;
             s.userdata.starred(&o, Item::Album)
+        })
+    }
+
+    // An album's rating is the one a Subsonic app gives it (`setRating`).
+    fn album_rating<'a>(&'a self, album: &'a str) -> Fut<'a, Option<u8>> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            Ok(Some(s.userdata.get(&o, Item::Album, &[album.to_string()])?.get(album).map_or(0, |a| a.rating)))
+        })
+    }
+
+    fn set_album_rating<'a>(&'a self, album: &'a str, stars: u8) -> Fut<'a, ()> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            s.userdata.set_rating(&o, Item::Album, album, stars.min(5))
         })
     }
 

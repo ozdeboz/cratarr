@@ -76,6 +76,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/cover", get(album_cover))
         .route("/api/albums/{source}/{album}/play", post(play_album))
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
+        .route("/api/albums/{source}/{album}/rating", get(album_rating).post(set_album_rating))
         .route("/api/collection", get(collection))
         .route("/api/albums", get(albums))
         .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
@@ -265,6 +266,25 @@ async fn album_favorite(
     Query(f): Query<Favorite>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "favorite": app.playing.album_favorite(&source, &album, f.on).await? })))
+}
+
+/// An album's rating, 0 to 5 (`null`: the server keeps none): the album menu's stars.
+async fn album_rating(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "rating": app.playing.album_rating(&source, &album).await? })))
+}
+
+#[derive(Deserialize)]
+struct Stars {
+    stars: u8,
+}
+
+/// Rates an album, 0 (none) to 5.
+async fn set_album_rating(
+    State(app): State<Arc<App>>,
+    Path((source, album)): Path<(String, String)>,
+    Query(q): Query<Stars>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "rating": app.playing.set_album_rating(&source, &album, q.stars).await? })))
 }
 
 /// The favourite albums of a connected server (their ids): the Library's Favourites only and the album panel's heart.
