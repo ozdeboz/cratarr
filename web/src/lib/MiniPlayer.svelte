@@ -77,6 +77,8 @@
     if (dragging && (Math.abs(mx) > width * 0.4 || flick)) send(mx < 0 ? 'next' : 'previous');
     else if ((!dragging && my < -64 * 0.15 && -my > Math.abs(mx)) || !moved) {
       swallowTheTapsClick();
+      // Opened by a finger or the mouse, it keeps no focus: none to show when the player closes again.
+      el?.blur();
       openPlayer();
     }
     dragging = false;
@@ -142,6 +144,16 @@
     touch-action: pan-y;
     user-select: none;
     transition: transform 200ms linear, --art-accent 1s linear;
+  }
+
+  /* Focus shows only from the keyboard, as a ring in the cover's colour (never the browser's black one). */
+  .mini:focus {
+    outline: none;
+  }
+
+  .mini:focus-visible {
+    outline: 2px solid var(--art-accent, var(--accent));
+    outline-offset: 2px;
   }
 
   .mini.dragging {
