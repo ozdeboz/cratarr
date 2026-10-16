@@ -3,12 +3,14 @@
 //! - **Loudness**: EBU R128 integrated loudness, ReplayGain 2.0's track gain (-18 LUFS reference) and the sample peak;
 //!   the gating blocks (400 ms every 100 ms) kept as a histogram, so an album's gain is worked out exactly from its
 //!   tracks' without decoding them again (`album_gain`).
-//! - **Waveform**: 512 bins along the track, each its loudest sample, 0..=255 of full scale (the seekbar's bars).
+//! - **Waveform**: 512 bins along the track, each its RMS, 0..=255 of the track's loudest bin (the seekbar's bars).
 //! - **Tempo**: taktus over the mono sound, kept only when it is sure enough (the owner: no tempo is better than a
 //!   wrong one; beatless and ambient music gets none). Reggae, dub, roots and dancehall get the slow count (the owner):
 //!   an estimate above 110 is halved. Dance music is counted between 90 and 180 (the owner): an estimate outside is
 //!   halved or doubled into it (on GiantSteps the exact tempo goes from 82 % to 88 % of the sure answers).
 //! Blocking and single-threaded: the pass runs several at once.
+
+pub mod batch;
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -385,7 +387,7 @@ mod tests {
     use super::*;
 
     /// A 16-bit stereo WAV of `secs` seconds at 44.1 kHz, each sample from `f(t)`.
-    fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> std::path::PathBuf {
+    pub(super) fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> std::path::PathBuf {
         let rate = 44_100u32;
         let n = (secs * f64::from(rate)) as usize;
         let mut data = Vec::with_capacity(n * 4);
