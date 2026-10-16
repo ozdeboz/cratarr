@@ -127,7 +127,7 @@ work offline and without gaps.
 
 Every round counts its plays again. A player's view tells its repeat mode; `repeat {mode: off|one|all}` sets it.
 
-## Amendment (2026-10-16, proposed): queue history
+## Amendment (2026-10-16, accepted): queue history
 
 The owner asked for Symfonium's queue switcher: every play keeps its own named queue, and an earlier queue can be
 switched back to where it left off, renamed or deleted, with the playing one marked.
@@ -161,9 +161,15 @@ says when the list changes, the way it already says when the queue does.
 **Offline.** The app holds one queue while it has no connection, as now. Switching needs Cratarr, and a queue played
 offline goes back to Cratarr as the playing one when the app reconnects (step 1).
 
-**Open for the owner:**
+**Settled with the owner (2026-10-16):**
 
-1. The page's own stream (a browser playing itself) is not one of Cratarr's players. Does it keep a history of its own
-   in that browser, or none?
-2. On a switch, does a queue that was playing keep its place, or start the old queue from the track it was on?
-3. Is 20 the right number?
+1. A browser playing itself keeps a history of its own, in that browser only (the same list and switch; another
+   browser or device does not see it).
+2. A switch takes the queue up where it was left: its track and position, playing if music played, else paused there.
+3. 20 queues per player.
+
+**How a player tells a new queue.** Each queue has an id. A player that starts something new (the page in the app
+playing an album, say) gives it a new id and its name, and reports them (`queue_id`, `queue_name`). Cratarr then keeps
+the queue that played before in the list, as it stood when last reported. A play Cratarr sends (Home Assistant, a page
+driving a player, a switch) carries the id and name it chose, so the player reports them back unchanged. An app from
+before this reports neither, and its queue simply plays on as one.
