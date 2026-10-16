@@ -18,6 +18,7 @@ mod events;
 mod follow;
 mod incoming;
 mod insights;
+pub mod kept;
 mod library;
 mod playing;
 mod playlists;

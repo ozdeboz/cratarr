@@ -45,7 +45,6 @@
     getAlbumRating,
     serverCoverUrl,
     setAlbumRating,
-    appendTracks,
     cancelJob,
     deleteAlbum,
     forgetAlbumResume,
@@ -54,21 +53,22 @@
     replaceIncoming,
     replacePreview,
     setAlbumFavorite,
-    setTrackMember,
-    trackState,
     type AlbumMoved,
     type KeepPreview,
-    type Playlist,
     type ReplacePreview,
-    type TrackState,
   } from './api';
   import { albumPlay, goToArtist as showArtist, mainArtist, playAlbums, playListedAlbum } from './albums.svelte';
   import { download, downloads, inApp, removeDownloads } from './app.svelte';
   import { viewGenre } from './crates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
-  import { player, refresh } from './live.svelte';
+  import { player } from './live.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
+  import { isKept, setKept } from './kept.svelte';
+  import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import MenuGroup from './MenuGroup.svelte';
+  import PlaylistsStep from './PlaylistsStep.svelte';
+  import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { playPlaylistFrom } from './output.svelte';
   import { albumGone, albumSubject, viewPlaylist } from './panel.svelte';
@@ -281,108 +281,27 @@
     }
   }
 
-  // Add to playlist. Each track's playlists, by track id: the first track's says whether the album is in Music (only
-  // then can it go in a playlist) and which playlists there are; the others' come when the playlists show, to tell
-  // which already hold the whole album. There is no call for several tracks at once.
-  let states = $state<Record<string, TrackState>>({});
-  // Asked for already (answered or on its way), outside the state, so an answer does not ask again for the others.
-  const asked = new Set<string>();
-  let failed = false;
-  function askStates(list: string[]) {
-    for (const id of list) {
-      if (asked.has(id)) continue;
-      asked.add(id);
-      trackState(source, id).then(
-        (v) => (states[id] = v),
-        (e) => {
-          // Asked again the next time the playlists show; one line for the lot, not one per track.
-          asked.delete(id);
-          if (failed) return;
-          failed = true;
-          toast.fail(e, "This album's playlists couldn't be loaded");
-        },
-      );
-    }
-  }
+  // Add to playlist (lib/tracksToPlaylist): all its tracks; the first track's state says whether the album is in Music
+  // (only then can it go in a playlist) and which playlists there are.
+  const toList = new TracksToPlaylist(
+    () => source,
+    () => ids,
+    'this album',
+  );
   $effect(() => {
-    if (ids[0]) askStates([ids[0]]);
+    if (ids[0]) toList.ask([ids[0]]);
   });
-  const first = $derived(ids[0] ? (states[ids[0]] ?? null) : null);
-  const addable = $derived(!!first?.addable);
+  const addable = $derived(toList.addable);
 
   // svelte-ignore state_referenced_locally
-  let step = $state<'menu' | 'lists' | 'again'>(start);
-  // A playlist that holds some of the album's tracks already: the sheet asks (decision 0025, amended 2026-10-16).
-  let again = $state<{ p: Playlist; already: number; of: number } | null>(null);
-  $effect(() => {
-    if (step === 'lists') askStates(ids);
-  });
+  let step = $state<ToPlaylistStep>(start);
   // Opened at the playlists for an album outside Music: there is nothing to add it to.
   $effect(() => {
-    if (step === 'lists' && first && !first.addable) {
+    if (step === 'lists' && toList.first && !toList.first.addable) {
       toast.fail(null, "This album isn't in Music, so it can't go in a playlist");
       onclose();
     }
   });
-  const playlists = $derived([...(first?.playlists ?? [])].sort((x, y) => x.name.localeCompare(y.name)));
-  /** Every track's state is known (until then no playlist is marked as holding the album). */
-  const known = $derived(ids.length > 0 && ids.every((id) => states[id]));
-  const member = (id: string, p: Playlist) => !!states[id]?.playlists.find((x) => x.id === p.id)?.member;
-  /** The playlist holds every track of the album that can go in one. */
-  const holds = (p: Playlist) => known && ids.every((id) => !states[id].addable || member(id, p));
-
-  // The playlist the album is going into: one at a time, its card spinning until the last track is in.
-  let adding = $state<string | null>(null);
-  async function add(p: Playlist) {
-    if (adding || !known) return;
-    const can = ids.filter((id) => states[id].addable);
-    const already = can.filter((id) => member(id, p)).length;
-    if (already > 0) {
-      again = { p, already, of: can.length };
-      step = 'again';
-      return;
-    }
-    await addOthers(p);
-  }
-  /** Every track again at the playlist's end, those it holds included. */
-  async function addAgain(p: Playlist) {
-    if (adding) return;
-    adding = p.id;
-    try {
-      const r = await appendTracks(
-        p.id,
-        source,
-        ids.filter((id) => states[id].addable),
-      );
-      withUndo(`Added ${r.added} ${r.added === 1 ? 'track' : 'tracks'} to ${p.name}.`, [r.undo]);
-      onclose();
-      refresh();
-    } catch (e) {
-      toast.fail(e, 'The tracks were not added');
-    } finally {
-      adding = null;
-    }
-  }
-  /** The tracks the playlist does not hold yet. */
-  async function addOthers(p: Playlist) {
-    if (adding) return;
-    step = 'lists';
-    adding = p.id;
-    try {
-      // One by one, in play order, so the tracks are added in it; those already in it (or not in Music) are passed.
-      for (const id of ids) {
-        const s = states[id];
-        if (s && (!s.addable || member(id, p))) continue;
-        states[id] = await setTrackMember(source, id, p.id, true);
-      }
-      refresh();
-    } catch (e) {
-      toast.fail(e, 'Not every track was added');
-      refresh();
-    } finally {
-      adding = null;
-    }
-  }
 
   // What its library allows, each asked in place. Deleting from the primary library asks once more.
   // svelte-ignore state_referenced_locally
@@ -566,8 +485,8 @@
       </div>
     </div>
   {:else if step === 'menu'}
-    <div class="cards" role="menu">
-      <div class="group" role="group">
+    <MenuCards>
+      <MenuGroup>
         {#if viewable}
           <MenuEntry
             icon="squareArrowOutUpRight"
@@ -580,10 +499,10 @@
         {/if}
         {#each artistNames as name (name)}<MenuEntry icon="user" label="Go to {name}" onclick={() => goToArtist(name)} />{/each}
         {#each genres as g (g)}<MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
-      </div>
+      </MenuGroup>
       {#if rating !== null}
         {@const r = rating}
-        <div class="group" role="group">
+        <MenuGroup>
           <div class="entry rating" role="group" aria-label="Rating">
             <span>Rating</span>
             <span class="stars">
@@ -592,9 +511,9 @@
               {/each}
             </span>
           </div>
-        </div>
+        </MenuGroup>
       {/if}
-      <div class="group" role="group">
+      <MenuGroup>
         {#if addable}<MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
         {#if inApp && tracks?.length && kept.length < tracks.length}
           {@const list = tracks}
@@ -606,6 +525,11 @@
               download(list);
             }}
           />
+        {/if}
+        {#if inApp}
+          <!-- Kept on this device (decision 0038): stays in step offline; Download above is a one-time copy. -->
+          {@const on = isKept('album', source, a.id)}
+          <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
         {/if}
         {#if kept.length}
           {@const ids = kept.map((t) => t.download.id)}
@@ -619,10 +543,10 @@
           />
         {/if}
         <MenuEntry icon="share" label="Share" onclick={shareIt} />
-      </div>
+      </MenuGroup>
       {#if offer && (offer.job !== null || offer.targets.length || offer.replaceable || offer.deletable)}
         {@const o = offer}
-        <div class="group" role="group" aria-label="Library">
+        <MenuGroup label="Library">
           {#if o.job !== null}
             {@const job = o.job}
             <MenuEntry icon="close" label="Cancel conversion" danger onclick={() => cancel(job)} />
@@ -631,78 +555,25 @@
             {#if o.replaceable}<MenuEntry icon="swap" label={`Replace in ${music}`} onclick={askReplace} />{/if}
             {#if o.deletable}<MenuEntry icon="trash" label="Delete album" danger onclick={() => (ask = 'delete')} />{/if}
           {/if}
-        </div>
+        </MenuGroup>
       {/if}
-      <div class="group" role="group">
+      <MenuGroup>
         <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
         <MenuEntry icon={ownCover ? 'imageOff' : 'reset'} label={ownCover ? "Use the server's cover" : 'Read the cover again'} onclick={serverCover} />
-      </div>
-      <div class="group" role="group">
+      </MenuGroup>
+      <MenuGroup>
         {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
         <MenuEntry icon="search" label="Web search" onclick={() => search('https://duckduckgo.com/?q=')} />
         <MenuEntry icon="search" label="Genius search" onclick={() => search('https://genius.com/search?q=')} />
-      </div>
+      </MenuGroup>
       <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
-    </div>
-  {:else if step === 'again' && again}
-    {@const g = again}
-    <div class="heading">{g.already === g.of ? `${g.p.name} holds this album` : `${g.already} of these ${g.of} tracks are in ${g.p.name}`}</div>
-    <div role="group" aria-label="Add again">
-      <MenuEntry icon="listAdd" label="Add again" busy={adding === g.p.id} disabled={adding !== null} onclick={() => addAgain(g.p)} />
-      {#if g.already < g.of}
-        <MenuEntry icon="check" label="Add only the others" disabled={adding !== null} onclick={() => addOthers(g.p)} />
-      {/if}
-    </div>
+    </MenuCards>
   {:else}
-    <div class="heading">Add to playlist</div>
-    <div role="group" aria-label="Playlists">
-      {#each playlists as p (p.id)}
-        <MenuEntry label={p.name} checked={holds(p)} busy={adding === p.id} disabled={adding !== null && adding !== p.id} onclick={() => add(p)} />
-      {/each}
-    </div>
+    <PlaylistsStep to={toList} bind:step {onclose} />
   {/if}
 </MenuSheet>
 
 <style>
-  /* Symfonium's menu: the entries on rounded cards, a little apart; related ones joined in one card, each a row of it
-     a hairline apart, the card's corners on the first and last. */
-  .cards {
-    display: grid;
-    gap: 12px;
-    padding: 4px 12px 8px;
-  }
-
-  .group {
-    display: grid;
-    gap: 3px;
-  }
-
-  .group:empty {
-    display: none;
-  }
-
-  .group > :global(.entry) {
-    min-height: 60px;
-    padding: 0 20px;
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--text) 8%, transparent);
-  }
-
-  .group > :global(.entry:hover),
-  .group > :global(.entry:focus-visible) {
-    background: color-mix(in srgb, var(--text) 13%, transparent);
-  }
-
-  .group > :global(.entry:first-child) {
-    border-top-left-radius: 20px;
-    border-top-right-radius: 20px;
-  }
-
-  .group > :global(.entry:last-child) {
-    border-bottom-left-radius: 20px;
-    border-bottom-right-radius: 20px;
-  }
-
   /* The rating's card: its word, then five stars, filled up to the rating in the accent. */
   .rating {
     display: flex;
@@ -745,12 +616,6 @@
 
   .picker {
     display: none;
-  }
-
-  .heading {
-    padding: 0 16px 12px;
-    font-size: 18px;
-    text-align: center;
   }
 
   .form {

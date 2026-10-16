@@ -85,6 +85,9 @@ export function goToArtist(source: string, name: string) {
   viewOver(artistSubject(source, name));
 }
 
+/** An artist's picture on this device: kept as an album's cover is (lib/localCovers), under an id no album has. */
+export const artistPictureId = (name: string) => `artist:${name}`;
+
 export const lossless = (a: ListedAlbum) => a.format === 'FLAC';
 /** "FLAC", "MP3 256 kbps", "Mixed formats". */
 export const quality = (a: ListedAlbum) =>

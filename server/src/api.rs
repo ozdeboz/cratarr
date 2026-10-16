@@ -83,6 +83,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/artists/{source}", get(artist_view))
         .route("/api/artists/{source}/favorite", post(artist_favorite))
         .route("/api/albums/{source}/{album}", get(album_view))
+        .route("/api/kept", post(kept_ask))
         .route("/api/albums/{source}/{album}/cover", get(album_cover))
         .route("/api/albums/{source}/{album}/play", post(play_album))
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
@@ -233,6 +234,11 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
 
 /// An album's view in the panel (decision 0023), and its tracks for the local player (decision 0022).
 /// An album as the panel shows it. One that left Incoming is followed: where it is now, or what became of it.
+/// Kept on this device (decision 0038): what the app's kept items hold now, with their versions.
+async fn kept_ask(State(app): State<Arc<App>>, Json(ask): Json<crate::app::kept::Ask>) -> Json<serde_json::Value> {
+    Json(json!({ "items": crate::app::kept::ask(&app, ask).await }))
+}
+
 async fn album_view(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::AlbumView>, ApiError> {
     use crate::app::AlbumFate;
     let failed = match app.playing.album_view(&source, &album).await {

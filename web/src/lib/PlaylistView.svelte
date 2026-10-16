@@ -71,7 +71,7 @@
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
-  import { goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
+  import { artistPictureId, goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
   import ListHead from './ListHead.svelte';
@@ -83,6 +83,8 @@
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
   import ArtistBody from './ArtistBody.svelte';
+  import ArtistMenu from './ArtistMenu.svelte';
+  import { coverKey, localCovers } from './localCovers.svelte';
   import ExportTab from './ExportTab.svelte';
   import PlaylistItem from './PlaylistItem.svelte';
   import Row from './Row.svelte';
@@ -326,6 +328,10 @@
     if (crateEditing) {
       if (crateImage && crateImage !== 'remove') return [crateImage.url];
       return builder?.id ? crateArt(builder.id, crateImage !== 'remove') : [];
+    }
+    if (artist) {
+      const own = localCovers[coverKey(artist.source, artistPictureId(artist.name))];
+      return own ? [own] : covers;
     }
     return crate && genreOf(crate) === null ? crateArt(crate) : covers;
   });
@@ -603,6 +609,7 @@
   });
   // An album's menu (its ⋮ in the action bar).
   let albumMenuOpen = $state(false);
+  let artistMenuOpen = $state(false);
   async function resumeAlbum() {
     const at = resumeAt;
     const i = at ? playable.findIndex((r) => r.id === at.track) : -1;
@@ -991,7 +998,7 @@
   // Esc closes it (when no sheet of its own is open; in edit mode Cancel is the way out).
   $effect(() => {
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || menuOpen || trackMenu || editing || crateEditing || making || sortOpen || albumMenuOpen) return;
+      if (e.key !== 'Escape' || menuOpen || trackMenu || editing || crateEditing || making || sortOpen || albumMenuOpen || artistMenuOpen) return;
       if (selecting) selecting = null;
       else if (other) backToTracks();
       else closePlaylist();
@@ -1153,6 +1160,7 @@
               ><Icon name="heart" size={24} /></button
             >
           {/if}
+          <button class="icon" aria-label={`Menu of ${artist.name}`} onclick={() => (artistMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {:else if album}
           <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (albumMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
@@ -1230,7 +1238,7 @@
           >
         {:else if artist?.tracks}
           <button class="chip" onclick={() => viewOver(artistSubject(artist.source, artist.name))}
-            >{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{artist.name}</span></button
+            >{#if heroArt[0]}<img src={heroArt[0]} alt="" />{/if}<span>{artist.name}</span></button
           >
         {/if}
         <!-- A genre opens in the panel (its own crate). -->
@@ -1502,6 +1510,7 @@
   <PlaylistMenu
     playlists={selected}
     ondownload={inApp && selected.length === 1 && playable.length ? () => download(tracksOf(playable)) : null}
+    keepFrom={inApp && selected.length === 1 && source ? source : null}
     start={menuStart}
     ondeleted={() => (editing = null)}
     onclose={() => {
@@ -1515,6 +1524,20 @@
 {/if}
 {#if trackMenu}
   <TrackMenu track={trackMenu.track} start={trackMenu.start} onclose={() => (trackMenu = null)} />
+{/if}
+{#if artistMenuOpen && artist}
+  <ArtistMenu
+    source={artist.source}
+    name={artist.name}
+    cover={heroArt[0] ?? null}
+    albums={artistHead?.albums.length ?? 0}
+    tracks={tracksOf(playable)}
+    favorite={artistHead?.favorite}
+    ontogglefavorite={toggleArtistFavorite}
+    onact={(mode) => act(mode)}
+    onradio={isLocal() && artist.source === 'cratarr' ? artistRadio : undefined}
+    onclose={() => (artistMenuOpen = false)}
+  />
 {/if}
 {#if albumMenuOpen && album}
   <AlbumMenu

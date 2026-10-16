@@ -44,6 +44,20 @@ class Prefs(context: Context) {
             p.edit().putBoolean(DOWNLOAD_MOBILE, value).apply()
         }
 
+    /** Kept on this device (decision 0038): the storage budget in GB, 0 for no limit. */
+    var syncBudgetGb: Long
+        get() = p.getLong(SYNC_BUDGET_GB, 20L)
+        set(value) {
+            p.edit().putLong(SYNC_BUDGET_GB, value.coerceAtLeast(0L)).apply()
+        }
+
+    /** Downloads (kept and the owner's) only while the device charges. */
+    var syncOnlyCharging: Boolean
+        get() = p.getBoolean(SYNC_ONLY_CHARGING, false)
+        set(value) {
+            p.edit().putBoolean(SYNC_ONLY_CHARGING, value).apply()
+        }
+
     /** Repeat: off, one or all (Repeat). */
     var repeat: String
         get() = p.getString(REPEAT, Repeat.OFF) ?: Repeat.OFF
@@ -161,6 +175,8 @@ class Prefs(context: Context) {
         const val STAY_READY = "stay_ready"
         const val DOWNLOAD_QUALITY = "download_quality"
         const val DOWNLOAD_MOBILE = "download_mobile"
+        const val SYNC_BUDGET_GB = "sync_budget_gb"
+        const val SYNC_ONLY_CHARGING = "sync_only_charging"
         const val QUALITY_ORIGINAL = "original"
         const val QUALITY_SMALLER = "smaller"
 

@@ -11,6 +11,7 @@
   import { untrack } from 'svelte';
   import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers, playlistTrackIds } from './api';
   import { startRadio } from './localPlayer.svelte';
+  import { isKept, setKept } from './kept.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import { isLocal, startPlaylists } from './output.svelte';
   import { openTab, viewSelection, panel, type Tab } from './panel.svelte';
@@ -29,6 +30,7 @@
     onrenamed,
     ondeleted,
     ondownload = null,
+    keepFrom = null,
     start = 'menu',
   }: {
     /** One or more (in the order ticked). */
@@ -40,6 +42,8 @@
     ondeleted?: (id: string) => void;
     /** Its tracks onto the phone (the app's Downloads); given only in the app, for one playlist whose rows are known. */
     ondownload?: (() => void) | null;
+    /** The server its tracks are kept from (Keep on this device, decision 0038): given in the app, for one playlist. */
+    keepFrom?: string | null;
   } = $props();
 
   let mode = $state<'menu' | 'rename' | 'delete' | 'spoken'>(untrack(() => start));
@@ -230,6 +234,12 @@
             ondownload();
           }}
         />
+      {/if}
+      {#if one && keepFrom}
+        {@const from = keepFrom}
+        {@const p = one}
+        {@const on = isKept('playlist', from, p.id)}
+        <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('playlist', from, p.id, !on, p.name)} />
       {/if}
       <!-- The panel's other views of them (back returns to their tracks). -->
       <MenuEntry icon="info" label="Info" onclick={() => viewTab('info')} />

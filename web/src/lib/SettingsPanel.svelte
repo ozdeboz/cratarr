@@ -16,6 +16,7 @@
   import ConnectionsPart from './settings/ConnectionsPart.svelte';
   import DevicePart from './settings/DevicePart.svelte';
   import DisplayPart from './settings/DisplayPart.svelte';
+  import SyncPart from './settings/SyncPart.svelte';
   import ImportPart from './settings/ImportPart.svelte';
   import LibrariesPart from './settings/LibrariesPart.svelte';
   import PlayersSettings from './PlayersSettings.svelte';
@@ -41,6 +42,8 @@
     {#if ed.loadError}<Notice text={ed.loadError} />{/if}
     {#if section === 'device'}
       <DevicePart />
+    {:else if section === 'sync'}
+      <SyncPart />
     {:else if section === 'display'}
       <DisplayPart />
     {:else if section === 'players'}
@@ -462,6 +465,11 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  /* A form's buttons a little apart from its last field. */
+  .scroll :global(.fields + .row) {
+    margin-top: 16px;
   }
 
   .scroll :global(.row select) {

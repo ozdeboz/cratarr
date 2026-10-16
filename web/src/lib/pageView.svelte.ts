@@ -7,7 +7,8 @@ import type { IconName } from './Icon.svelte';
 import type { AlbumLayout, CollectionOrder, CrateOrder, PlaylistOrder } from './prefs.svelte';
 
 /** The page's own button at the pill's end: a + where it makes something, or with things ticked their menu (⋮). */
-export type PageAction = { icon: IconName; label: string; run: () => void };
+/** `progress`: a ring around the icon, 0 to 1, while work goes on (the Downloads page's sync, decision 0038). */
+export type PageAction = { icon: IconName; label: string; run: () => void; progress?: number | null };
 
 /** A playlist chip's least width per size step (prefs.zoom). */
 export const PLAYLIST_WIDTHS: readonly number[] = [110, 140, 170, 210, 260, 340];

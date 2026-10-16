@@ -1,8 +1,8 @@
 <script lang="ts">
-  // This device (decision 0031): the app's own settings, this device's only; they act at once.
+  // This device (decision 0031): the app's own settings, this device's only; they act at once. How it keeps music
+  // (quality, mobile data, the budget) is under Sync (decision 0038).
   import Switch from '../Switch.svelte';
-  import { allowBackground, appInfo, downloads, inApp, setDevice } from '../app.svelte';
-  import { downloadedSize } from './editor.svelte';
+  import { allowBackground, appInfo, inApp, setDevice } from '../app.svelte';
 </script>
 
 {#if inApp}
@@ -34,15 +34,5 @@
         }}
       />
     </label>
-    <label class="pref">
-      <span class="l">Downloads <small>{downloads.tracks.length} tracks · {downloadedSize(downloads.bytes)}</small></span>
-      <select value={appInfo.downloadQuality} onchange={(e) => setDevice({ downloadQuality: e.currentTarget.value })}>
-        <option value="original">Originals</option>
-        <option value="smaller">Smaller copies</option>
-      </select>
-    </label>
-    <div class="pref">
-      <Switch label="Download over mobile data" checked={appInfo.downloadOverMobile} onchange={(on) => setDevice({ downloadOverMobile: on })} />
-    </div>
   </section>
 {/if}
