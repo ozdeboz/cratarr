@@ -73,8 +73,17 @@ values below). It is never written into the files.
     - or Mixxx's QM-DSP TempoTrackV2 (GPL-2.0-or-later, which AGPL allows).
   - It is chosen after both are measured on a sample of tracks whose tempo the owner knows. That measurement counts
     the half- and double-tempo mistakes every detector makes.
-- **Loudness** (an option for the owner): integrated loudness and true peak (EBU R128), by the `ebur128` crate (MIT),
-  the reference implementation. From these follows a track gain for volume levelling, the way ReplayGain works.
+- **Loudness**, for volume levelling the way ReplayGain does (the owner, 2026-10-16: "replay gain and waveform
+  analysis and BPM analysis will all be grouped"): integrated loudness and true peak (EBU R128), by the `ebur128` crate
+  (MIT), the reference implementation, in the same decode.
+  - **Track gain and album gain.** Track gain levels shuffle and radio; album gain keeps an album's own dynamics (a
+    quiet interlude stays quiet). A player uses album gain while an album plays in order, else track gain.
+  - **Album gain is measured, not averaged.** The pass walks the library album by album and keeps each track's
+    measurement until the album's last, then gates them together (`loudness_global_multiple`), as a ReplayGain
+    scanner does. An album with a changed track is measured again whole. A track worked out on demand gets its track
+    gain at once; its album's waits for the pass.
+  - **Target −18 LUFS** (ReplayGain 2.0's reference): gain = −18 − loudness. The peaks are kept beside the gains
+    (linear, as ReplayGain's tags), so a player never raises a track past its true peak.
 - **Each value keeps where it came from:** this pass, the file's tags, or an import (below).
 
 **Tempo from three places, in this order:**
@@ -83,6 +92,10 @@ values below). It is never written into the files.
 2. AudioMuse's tempo, once the radio's analysis is imported (decision 0036, phase 2: Essentia's RhythmExtractor,
    better than anything written here);
 3. this pass's estimate.
+
+**Loudness from two places:** this pass's; until a track has one, the file's own tags (`REPLAYGAIN_TRACK_GAIN` and
+`_PEAK`, `REPLAYGAIN_ALBUM_*`; Opus's `R128_TRACK_GAIN` and `R128_ALBUM_GAIN`, which count from −23 LUFS, so 5 dB is
+added). iTunes's `iTunNORM` is not read. The pass wins once it has a value, so every track is levelled the same way.
 
 **Where it shows:**
 
@@ -94,23 +107,27 @@ values below). It is never written into the files.
 - **BPM:** by the order above, the analysis's only when confident.
   - It fills the crate builder's BPM range.
   - It fills OpenSubsonic's `bpm` on songs, which Symfonium and other apps show and filter on.
-- **Loudness** (if taken up): OpenSubsonic's `replayGain` on songs, and the players' levelling.
+- **Loudness:** OpenSubsonic's `replayGain` on songs (`trackGain`, `albumGain`, `trackPeak`, `albumPeak`), so other
+  apps level too.
+  - Cratarr's own players level by it: the web player with a gain node, the app in its player (Media3).
+  - The Opus copies (0033's downloads) carry it as `R128_TRACK_GAIN` and `R128_ALBUM_GAIN`, so offline playback
+    levels too.
 
 ## Open questions for the owner
 
-1. **Loudness:** in this pass (it costs little more), or not now?
-2. **Tempo shown only when confident**, with "no tempo" otherwise, or always a number?
-3. **Accuracy check before tempo is used:** the owner names about 20 tracks with a known tempo, a mix of styles, to
+1. **Tempo shown only when confident**, with "no tempo" otherwise, or always a number?
+2. **Accuracy check before tempo is used:** the owner names about 20 tracks with a known tempo, a mix of styles, to
    measure against.
 
 ## Consequences
 
 - The NAS does a one-time overnight pass, then a little work per new track.
-- The seekbar, a populated BPM axis in crates, and (optionally) levelling come with no work on the phone.
+- The seekbar, a populated BPM axis in crates, and levelling come with no work on the phone.
 - **Offline:** the app fetches each download's waveform with it and keeps it in its store, or the seekbar would be
   blank in airplane mode (claude-5f).
 - **Order** (claude-5f): the 0034 server half, then the radio (0036), then this, unless the owner reorders.
 - **Work split:**
   - claude-5f: the pass, the table and the endpoint (catalogue);
-  - claude-5f: the seekbars (the web player's NowPlaying, the app);
-  - claude-a5: the OpenSubsonic fields (`bpm`, `replayGain`).
+  - claude-5f: the seekbars (the web player's NowPlaying, the app), the players' levelling, the Opus copies' gain
+    tags;
+  - claude-a5: the OpenSubsonic fields (`bpm`, `replayGain`), and reading the files' gain tags into the catalogue.
