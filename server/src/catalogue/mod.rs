@@ -811,7 +811,7 @@ impl Catalogue {
              AND name IN ('title', 'artist', 'album', 'albumartist', 'tracknumber', 'discnumber', 'originaldate', 'date', 'bpm') ORDER BY n",
         )?;
         let mut analysed = db.prepare_cached(
-            "SELECT a.bpm, a.duration_secs FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+            "SELECT a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
              WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime",
         )?;
         // "3", "3/12": the number before a slash.
@@ -842,19 +842,12 @@ impl Catalogue {
                     }
                 }
                 row.year = original.or(date);
-                let (analysed_bpm, analysed_secs) = analysed
-                    .query_row(params![folder, rel], |r| Ok((r.get::<_, Option<f64>>(0)?, r.get::<_, Option<f64>>(1)?)))
-                    .optional()?
-                    .unwrap_or((None, None));
                 // As the crates' BPM axis and the served library read it.
-                row.bpm = bpm.or(analysed_bpm).map(f64::round).filter(|b| *b > 0.0).map(|b| b as u32);
-                // Its length as decoded whole, where the file's header said otherwise (as the served library takes it).
-                if let Some(secs) = analysed_secs.filter(|s| *s > 0.0) {
-                    let measured = (secs * 1000.0).round() as i64;
-                    if row.duration_ms.is_none_or(|ms| (ms - measured).abs() > 1_500) {
-                        row.duration_ms = Some(measured);
-                    }
-                }
+                let bpm = match bpm {
+                    Some(b) => Some(b),
+                    None => analysed.query_row(params![folder, rel], |r| r.get::<_, Option<f64>>(0)).optional()?.flatten(),
+                };
+                row.bpm = bpm.map(f64::round).filter(|b| *b > 0.0).map(|b| b as u32);
                 row.track_id = ids.query_row(params![source, folder, rel], |r| r.get::<_, String>(0)).optional()?;
                 Ok(row)
             })
@@ -2139,11 +2132,6 @@ mod tests {
         drop(db);
         let rows = cat.file_rows("jellyfin", 0, &[two.clone(), one.clone()]).unwrap();
         assert_eq!((rows[0].bpm, rows[1].bpm), (Some(93), Some(137)));
-        // A length its header got wrong: the analysis's (it decoded the file whole); a close one stays.
-        cat.db().execute("UPDATE analysis SET duration_secs = 408.2 WHERE rel = ?1", params![one]).unwrap();
-        assert_eq!(cat.file_rows("jellyfin", 0, &[one.clone()]).unwrap()[0].duration_ms, Some(408_200));
-        cat.db().execute("UPDATE analysis SET duration_secs = 61.0 WHERE rel = ?1", params![one]).unwrap();
-        assert_eq!(cat.file_rows("jellyfin", 0, &[one.clone()]).unwrap()[0].duration_ms, Some(61_500));
         cat.db().execute("UPDATE analysis SET mtime = mtime + 1 WHERE rel = ?1", params![one]).unwrap();
         assert_eq!(cat.file_rows("jellyfin", 0, &[one.clone()]).unwrap()[0].bpm, None, "a file changed since its analysis");
         std::fs::remove_dir_all(&d).ok();
