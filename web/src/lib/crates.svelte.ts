@@ -1,6 +1,6 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
-import { getCrates, setCrateFavourites, type Condition, type Crate, type CrateFavourites } from './api';
+import { albumCoverUrl, crateImageUrl, getCrates, removeCrateImage, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
 import { prefs } from './prefs.svelte';
 import { viewPlaylist } from './panel.svelte';
 import { toast } from './toast.svelte';
@@ -116,6 +116,26 @@ export function forgetDraft(id: string | null) {
   }
 }
 export const crateName = (id: string) => crates.list?.find((c) => c.id === id)?.name ?? genreOf(id) ?? id;
+
+// A crate's picture (decided 2026-10-16): its own, else its albums' covers (four as a mosaic, else the first), on its
+// card and over it in the panel. Its own is read again after a change (a new address).
+const imageRounds = $state<Record<string, number>>({});
+/** `own`: false leaves its own picture out (edit mode, about to remove it). */
+export function crateArt(id: string, own = true): string[] {
+  const c = crates.list?.find((x) => x.id === id);
+  if (!c) return [];
+  if (own && c.image) return [crateImageUrl(id, imageRounds[id] ?? 0)];
+  const covers = (c.stats?.covers ?? []).map((x) => albumCoverUrl(x.source, x.album_id));
+  return covers.length >= 4 ? covers.slice(0, 4) : covers.slice(0, 1);
+}
+/** Sets a crate's own picture (`file`), or removes it (`null`). */
+export async function setCrateArt(id: string, file: Blob | null) {
+  if (file) await setCrateImage(id, file);
+  else await removeCrateImage(id);
+  imageRounds[id] = Date.now();
+  const c = crates.list?.find((x) => x.id === id);
+  if (c) c.image = !!file;
+}
 
 /** A genre in the panel: a crate of that one genre, made by the server when asked for (`crate:genre:<name>`), never
  *  saved; reached from a track's menu and from the genres shown on top of a list. */

@@ -135,8 +135,13 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   device, so the page plays without a connection; an album still coming shows how far ("Downloading 6 of 10"), one
   partly here "3 of 8 on this device". The select bar plays or removes; the menu is the album's one menu, with Remove
   from this device (and Download for the rest), as everywhere an album is downloaded.
-- **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as chips
-  with their live counts, styled as the playlist chips (the viewed one bordered). A crate is viewed in the panel as a
+- **Crates** (decision 0024, between Incoming and Playlists): the permanent crate (Unlisted) and one's own as **big
+  cards** (decided 2026-10-16, `lib/CrateCard`; one across a phone): its picture on the left (its own, else a mosaic of
+  its albums' covers), then its name, tracks and length with the favourites setting's small heart, its top three
+  genres, "312 unplayed" and "+12 new" (this week's) as badges, and along its foot how much of it was played (the
+  explored bar). Tinted as the playlist chips, the viewed one bordered. The same picture is the crate's cover in the
+  panel. Its edit mode has Change image (and Remove image) in the middle of the cover, set with Save as the rest. A
+  crate is viewed in the panel as a
   playlist does, without the statistics and editing, with Play, Shuffle and its favourites toggle (No favourites,
   Only favourites, All tracks; decision 0024, amended) as its actions; its rows come in pages, newest first; the arrow-into-a-box icon
   (where a playlist has the pencil) makes a playlist of it, which is then viewed. "New crate" (and the pencil on one's own

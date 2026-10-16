@@ -219,6 +219,20 @@ export type Crate = {
   favourites: CrateFavourites;
   counts: Record<CrateFavourites, number | null>;
   permanent: boolean;
+  /** What its card shows, as its favourites toggle is set; absent where that is not known (favourites not read). */
+  stats?: CrateStats;
+  /** A picture of its own was set (crateImageUrl). */
+  image: boolean;
+};
+/** A crate's card (decided 2026-10-16): its size and length, how much was never played (null: no owner account to ask
+ *  about), what came this week, its top three genres and up to four of its albums (most of its tracks first). */
+export type CrateStats = {
+  tracks: number;
+  seconds: number;
+  unplayed: number | null;
+  new_week: number;
+  genres: string[];
+  covers: { source: string; album_id: string }[];
 };
 
 /** One condition of a crate: an axis, what it is tested against, negated or not. */
@@ -259,6 +273,12 @@ export const previewCrate = (conditions: Condition[], limit: number, source?: st
 };
 export const getCrates = (source?: string) => quietly<Crate[]>(`/api/crates${follow(source)}`);
 /** A page of a crate's rows (newest first) and the crate's size. */
+/** A crate's own picture (kept as JPEG within 800 px); `round` reads it again after a change. */
+export const crateImageUrl = (id: string, round = 0) => `/api/crates/${encodeURIComponent(id)}/image${round ? `?v=${round}` : ''}`;
+/** Sets it: any JPEG, PNG, GIF or WebP, up to 32 MB. */
+export const setCrateImage = (id: string, file: Blob) =>
+  request<void>(`/api/crates/${encodeURIComponent(id)}/image`, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
+export const removeCrateImage = (id: string) => request<void>(`/api/crates/${encodeURIComponent(id)}/image`, { method: 'DELETE' });
 /** The crate panel's favourites toggle (decision 0024, amended): all its tracks, only the favourites, or none. */
 export type CrateFavourites = 'all' | 'only' | 'none';
 /** `favourites`: the toggle's setting as the page shows it (a tap may be on its way); the saved one without. */

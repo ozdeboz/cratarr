@@ -44,6 +44,7 @@
   import {
     builderOf,
     CRATE,
+    crateArt,
     crateName,
     crateOf,
     crates,
@@ -57,6 +58,7 @@
     keepDraft,
     keptDraft,
     loadCrates,
+    setCrateArt,
     startCrate,
     viewGenre,
     type CrateDraft,
@@ -112,6 +114,8 @@
   const builder = $derived(builderOf(panel.viewed));
   const crateEditing = $derived(builder !== null);
   let crateDraft = $state<CrateDraft | null>(null);
+  /** Edit mode's picture, saved with Save as the rest is: one picked (shown at once), or the crate's own removed. */
+  let crateImage = $state<{ file: Blob; url: string } | 'remove' | null>(null);
   /** The viewed crate's id, when a crate is viewed (not a playlist), or changed. */
   const crate = $derived(crateOf(panel.viewed) ?? builder?.id ?? null);
   /** The viewed album (an Incoming one, or a track's), when an album is viewed. */
@@ -316,6 +320,17 @@
       () => {},
     );
   });
+
+  // The cover's place: a crate's picture (its own, else its albums' covers; in edit mode as Save will leave it).
+  const heroArt = $derived.by(() => {
+    if (crateEditing) {
+      if (crateImage && crateImage !== 'remove') return [crateImage.url];
+      return builder?.id ? crateArt(builder.id, crateImage !== 'remove') : [];
+    }
+    return crate && genreOf(crate) === null ? crateArt(crate) : covers;
+  });
+  /** Edit mode: there is a picture of its own to remove (as saved, or picked). */
+  const ownImage = $derived(crateImage ? crateImage !== 'remove' : !!crates.list?.find((c) => c.id === builder?.id)?.image);
 
   const length = $derived(rows ? rows.reduce((a, r) => a + (r.duration_secs ?? 0), 0) : 0);
   const playable = $derived(rows ? rows.filter((r) => r.id && !r.missing) : []);
@@ -781,12 +796,30 @@
   let crateSaving = $state(false);
   /** Delete: a second tap on the trash confirms (Undo follows). */
   let crateDeleteArmed = $state(false);
+  const forgetPicked = () => {
+    if (crateImage && crateImage !== 'remove') URL.revokeObjectURL(crateImage.url);
+    crateImage = null;
+  };
+  function pickCrateImage(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    forgetPicked();
+    crateImage = { file, url: URL.createObjectURL(file) };
+  }
+  function removeCrateImage() {
+    const own = !!crates.list?.find((c) => c.id === builder?.id)?.image;
+    forgetPicked();
+    if (own) crateImage = 'remove';
+  }
   $effect(() => {
     const b = builder;
     void panel.again;
     crateDraft = null;
     crateTotal = null;
     crateDeleteArmed = false;
+    untrack(forgetPicked);
     if (!b) return;
     const kept = keptDraft(b.id);
     if (kept) return void (crateDraft = kept);
@@ -818,6 +851,8 @@
     try {
       const saved = b.id ? await updateCrate(b.id, name, d.conditions) : await createCrate(name, d.conditions);
       withUndo(b.id ? `Saved ${name}.` : `Created ${name}.`, [saved.undo], { after: () => followCrate(saved.id) });
+      const img = crateImage;
+      if (img) await setCrateArt(saved.id, img === 'remove' ? null : img.file).catch((e) => toast.fail(e, "The crate's picture wasn't saved"));
       forgetDraft(b.id);
       await loadCrates();
       viewPlaylist(CRATE + saved.id);
@@ -1017,8 +1052,17 @@
       </div>
       </header>
     {:else if !other}
-      <div class="hero" class:mosaic={covers.length === 4} class:bare={!covers.length}>
-        {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={heroIcon} size={56} /></span>{/each}
+      <div class="hero" class:mosaic={heroArt.length === 4} class:bare={!heroArt.length}>
+        {#each heroArt as c, i (i)}<img src={c} alt="" />{:else}{#if !crateEditing}<span class="noart"><Icon name={heroIcon} size={56} /></span>{/if}{/each}
+        {#if crateEditing}
+          <!-- The crate's own picture, set or removed with Save. -->
+          <span class="art-tools">
+            <label class="art-tool"
+              ><Icon name="image" size={18} /><span>Change image</span><input type="file" accept="image/*" hidden onchange={pickCrateImage} /></label
+            >
+            {#if ownImage}<button class="art-tool" onclick={removeCrateImage}><Icon name="imageOff" size={18} /><span>Remove image</span></button>{/if}
+          </span>
+        {/if}
       </div>
       {#if editing}
       <!-- Edit mode's bar in the action bar's place, its buttons where the bar's were: Delete, then Cancel (in red once
@@ -1991,6 +2035,36 @@
     aspect-ratio: auto;
     height: 168px;
     color: var(--muted);
+  }
+
+  /* Edit mode's Change image (and Remove), in the middle of the cover's place. */
+  .art-tools {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    align-content: center;
+    gap: 8px;
+    padding: 16px;
+  }
+
+  .art-tool {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface) 80%, transparent);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
   }
 
   .hero::after {

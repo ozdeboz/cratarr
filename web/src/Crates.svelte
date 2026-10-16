@@ -1,14 +1,12 @@
 <script lang="ts">
   // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the permanent
-  // Unlisted, and one's own), each a medium row (lib/Row.svelte) with its live count, as the playlists; a tap views it in the panel
-  // (decision 0023), where it plays and is sorted like a playlist, and can be saved as one. Where a favourite playlist's
-  // chip has its small heart, a crate's shows its favourites setting (the panel's toggle sets it).
+  // Unlisted, and one's own), each a big card (lib/CrateCard, decided 2026-10-16) with its picture and what it holds;
+  // a tap views it in the panel (decision 0023), where it plays and is sorted like a playlist, and can be saved as one.
   import { prefs } from './lib/prefs.svelte';
   import ListHead from './lib/ListHead.svelte';
   import { CRATE_ORDERS, howMany, usePageAction } from './lib/pageView.svelte';
-  import { crates, CRATE, EDIT_CRATE, FAVOURITES, favouritesOf, loadCrates, startCrate } from './lib/crates.svelte';
-  import Icon from './lib/Icon.svelte';
-  import Row from './lib/Row.svelte';
+  import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
+  import CrateCard from './lib/CrateCard.svelte';
   import { shownPlaylists } from './lib/output.svelte';
   import { viewPlaylist, panel } from './lib/panel.svelte';
   import Notice from './lib/Notice.svelte';
@@ -41,21 +39,8 @@
     <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(sorted.length, 'crate')} />
     <ul class="grid">
       {#each sorted as c (c.id)}
-        {@const fav = FAVOURITES[favouritesOf(c.id)]}
-        {@const n = c.counts[favouritesOf(c.id)]}
         <li>
-          <Row
-            size="medium"
-            title={c.name}
-            count={n === null ? '–' : n.toLocaleString()}
-            active={panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id}
-            label={`View ${c.name}`}
-            onclick={() => viewPlaylist(CRATE + c.id)}
-          >
-            {#snippet meta()}
-              <span class="flags"><span class="heart" class:filled={fav.filled} title={fav.label} aria-label={fav.label}><Icon name={fav.icon} size={10} /></span></span>
-            {/snippet}
-          </Row>
+          <CrateCard crate={c} active={panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id} onclick={() => viewPlaylist(CRATE + c.id)} />
         </li>
       {/each}
     </ul>
@@ -71,32 +56,13 @@
     container-type: inline-size;
   }
 
+  /* One card across a phone, more as the page widens. */
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+    gap: 12px;
     margin: 0;
     padding: 0;
     list-style: none;
-  }
-
-  /* In a favourite playlist's small heart's place after its count (Playlists), in the chip's accent: filled for Only
-     favourites. */
-  .flags {
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 10px;
-    margin-left: -4px;
-  }
-
-  .heart {
-    display: flex;
-    color: var(--accent);
-  }
-
-  .heart.filled :global(svg) {
-    fill: currentColor;
   }
 </style>
