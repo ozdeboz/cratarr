@@ -5,7 +5,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 
 ## Structure
 
-- **Pages:** Incoming (only when an Incoming library is set), Collection, Crates, Playlists; Insights, Health and Settings apart
+- **Pages:** Library (decision 0034: Incoming and Collection as one page; `#/incoming` and `#/collection` open it), Crates, Playlists; Insights, Health and Settings apart
   (at the bottom of the sidebar, in that order; on a phone they follow the others in the same order). One thing lives in one place: no setting, list or action
   appears on two pages. Health lists the library's files that cannot be read properly; playlists are repaired in the
   panel's Repair tab (decision 0025).
@@ -123,9 +123,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   launcher).
 - **Filters** (the filter sheet, from the funnel in a floating pill; decided 2026-10-16): only the **server** a
   browser follows, with its **libraries**, is remembered, and it holds everywhere (every page, the panel, what plays);
-  its cards come last in every filter sheet. On the followed server's card the libraries the page lists are switches
-  (Collection: its Music libraries, Incoming: its Incoming ones; elsewhere a chip only shows a library's use), so a
-  library is switched where its effect shows; the last one on stays on, so a page never filters down to nothing; and
+  its cards come last in every filter sheet. On the followed server's card the libraries are switches on
+  the Library, every used one (elsewhere a chip only shows a library's use), so a library is switched where its effect
+  shows; the last one on stays on, so a page never filters down to nothing; and
   while one is off the funnel is lit (as the magnifier is while a search applies), the remembered filter's only trace. Every other filter lasts only for the list it was set on and is not remembered, first in the
   sheet: Playlists' Favourites only (off again on leaving the page), the panel's Hide missing tracks (off again when
   the panel shows something else), and any still to come (a tag, a genre).
@@ -171,10 +171,12 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   the size, the second line and the action.
 - **A large row's controls may go under its text** when the panel is narrow (Sync's settings, Repair's buttons): a
   row never scrolls sideways.
-- **Album lists** (Incoming, Collection; decision 0028, `lib/AlbumShelf.svelte`): the filter, the order (Collection:
-  Artist, Title, Year, Added), Rows or Covers, and Size, over each server's albums in columns as the playlist chips
-  are. Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was
-  added, and the page's own lines: Incoming's conversion and how it relates to Music); Covers are tiles. A row's cover
+- **The Library** (decision 0034, `Library.svelte` over `lib/AlbumShelf.svelte`, decision 0028): every album of the
+  followed server's Music and Incoming libraries as one list, the libraries switched in the filter; the order (Artist,
+  Title, Year, Added; Added newest first at first), Rows or Covers, and Size, in columns as the playlist chips are.
+  Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was added,
+  and an Incoming album's lines: its conversion and how it relates to Music); an Incoming album's menu is Incoming's
+  sheet (Keep, Replace, Delete), a Music album's View and Play until moves come (0034); Covers are tiles. A row's cover
   plays the album (the rest of the row views it); a row ends in ⋮ (its menu): **wherever a cover plays, its play
   icon is in the cover's lower right corner**, as on a tile (decided 2026-10-16). **Select** as on every list: the
   header's icon or a long-press ticks albums (a row lighter edge to edge, a tile bordered, the tick at a row's end or
@@ -193,8 +195,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
 ## Gestures
 
 - **Tap does the page's main action** on an item: on Playlists add or remove the playing track (the circle; the
-  name views the playlist, in Select ticks it); on an album list (Incoming, Collection) view the album in the panel
-  (Play is the row's or tile's button); on Insights' graph highlight the playlist and its closest playlists.
+  name views the playlist, in Select ticks it); on the Library view the album in the panel
+  (its cover's play icon plays it); on Insights' graph highlight the playlist and its closest playlists.
 - **Long-press (right-click with a mouse) opens the item's menu** when the item has more than one other action. Every
   menu is a **bottom sheet like Finamp's track menu** (decision 0021, `lib/MenuSheet.svelte` + `lib/MenuEntry.svelte`),
   the same component on every page: at most 500 px wide, rising from the bottom, a drag handle; the item on a card at
