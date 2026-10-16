@@ -8,13 +8,13 @@
   export function moreMusicParts(): { icon: 'radio' | 'infinity'; text: string }[] {
     const parts: { icon: 'radio' | 'infinity'; text: string }[] = [];
     if (local.radio) parts.push({ icon: 'radio', text: local.radioBy === 'track' ? 'Radio' : `Radio, ${RADIO_NAMES[local.radioBy].toLowerCase()}` });
-    if (local.autoplay) parts.push({ icon: 'infinity', text: `${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}` });
+    if (local.autoplay) parts.push({ icon: 'infinity', text: `${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}${local.autoplay.restart ? ', restart' : ''}` });
     return parts;
   }
 
   /** What is on, in a line: the sheet's chip ("Radio · ∞ Similar", "Off"). */
   export function moreMusicLine() {
-    const parts = [local.radio ? (local.radioBy === 'track' ? 'Radio' : `Radio, ${RADIO_NAMES[local.radioBy].toLowerCase()}`) : null, local.autoplay ? `∞ ${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}` : null];
+    const parts = [local.radio ? (local.radioBy === 'track' ? 'Radio' : `Radio, ${RADIO_NAMES[local.radioBy].toLowerCase()}`) : null, local.autoplay ? `∞ ${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}${local.autoplay.restart ? ', restart' : ''}` : null];
     return parts.filter(Boolean).join(' · ') || 'Off';
   }
 </script>
@@ -23,8 +23,9 @@
   // More music (decision 0036, amended; one sheet for both, decided 2026-10-16): what plays besides what was chosen.
   // Radio, between: tracks like each of the queue's own tracks (similar to it, its artist or its era), so many after
   // it. Autoplay, at the end: what plays when the queue runs out, then its switches (whole albums while albums were
-  // playing; a playlist starting again instead). Each a choice of one, as View's order (a round mark); the sheet stays
+  // playing; a playlist starting again instead), each saying what it does while it is on. Each a choice of one, as View's order (a round mark); the sheet stays
   // open while it is set. From the queue's floating pill and the player's radio button.
+  import { slide } from 'svelte/transition';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { RADIO_BYS, RADIO_MAX, setAutoplay, setRadio } from './localPlayer.svelte';
@@ -82,10 +83,14 @@
     </div>
     <div class="toggles">
       <button class="switch" role="switch" aria-checked={albums} disabled={now === 'stop'} onclick={() => setAutoplay(now, { albums: !albums })}>
-        <span>Queue albums</span><i aria-hidden="true"></i>
+        <span>Queue albums{#if albums}<small transition:slide={{ duration: 200 }}>While albums play, whole albums instead of single tracks.</small>{/if}</span><i
+          aria-hidden="true"
+        ></i>
       </button>
       <button class="switch" role="switch" aria-checked={restart} disabled={now === 'stop'} onclick={() => setAutoplay(now, { restart: !restart })}>
-        <span>Restart playlists</span><i aria-hidden="true"></i>
+        <span>Restart playlists{#if restart}<small transition:slide={{ duration: 200 }}>A playlist that ends starts again (shuffled if it played shuffled).</small>{/if}</span><i
+          aria-hidden="true"
+        ></i>
       </button>
     </div>
   </div>
@@ -215,6 +220,16 @@
   .switch span {
     flex: 1;
     min-width: 0;
+    padding: 8px 0;
+  }
+
+  /* While it is on, what it does, under its name (the owner: it expands with the explanation). */
+  .switch small {
+    display: block;
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.35;
   }
 
   .switch i {
