@@ -67,9 +67,9 @@ export type Upcoming = {
   album_id: string | null;
   addable: boolean;
   duration_secs: number | null;
-  /** `next`: added by hand, ahead of the album or playlist (decision 0033's two lanes); `radio`: chosen by the radio,
-   *  after everything else (decision 0036). */
-  lane?: 'next' | 'radio';
+  /** `next`: added by hand, ahead of the album or playlist (decision 0033's two lanes); `radio`: Radio's inserts;
+   *  `autoplay`: Autoplay's, after everything (decision 0036, amended). */
+  lane?: 'next' | 'radio' | 'autoplay';
 };
 
 export type Progress = {
@@ -159,8 +159,10 @@ export type PlayOnPlayer = {
   shuffled?: boolean;
   /** Its sleep timer, while one is set: it pauses at `at_ms` (epoch ms) or when the playing track ends. */
   sleep?: { at_ms: number | null; end_of_track: boolean } | null;
-  /** Its radio's mode while the radio is on (decision 0036). */
-  radio?: string | null;
+  /** Radio's switch (decision 0036, amended). */
+  radio?: boolean;
+  /** Autoplay while on: its mode and switches. */
+  autoplay?: { mode: string; albums: boolean; restart: boolean } | null;
   track: QueueTrack | null;
   queue?: QueueTrack[];
 };
@@ -291,7 +293,7 @@ const post = <T>(path: string, body: unknown) =>
 
 /** The radio's next tracks (decision 0036), already in the radio's lane: like `seed` (the radio's seed, or the queue's
  *  own album or playlist), none of `exclude` (the queue), after `last` (the playing track). */
-export const radioNext = (ask: { mode: string; seed: string[]; exclude: string[]; last: string | null; count: number; within?: string | null }) =>
+export const radioNext = (ask: { mode: string; seed: string[]; exclude: string[]; last: string | null; count: number; within?: string | null; albums?: boolean }) =>
   post<{ tracks: QueueTrack[] }>('/api/radio/next', ask);
 
 /** Apply every safe repair, or only those of these playlists (the panel's Repair tab, decision 0025). */

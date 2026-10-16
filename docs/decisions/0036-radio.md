@@ -168,7 +168,9 @@ Autoplay, and "album mix" sets `albums`. During the change-over Cratarr accepts 
 - a `radio` command with `mode`, `seed` or `within` is the old shape and maps to Autoplay (Album mix maps to
   `similar` with `albums`, Reshuffle to `restart`);
 - one with only `on` is the new Radio;
-- a bare `radio {on: false}` switches off both, so "radio off" still stops what Home Assistant started.
+- a bare `radio {on: false}` switches Radio off only. (A first draft had it stop Autoplay too, so that "radio off" by
+  voice would stop what Home Assistant started; but then the player's own radio switch would stop Autoplay as well.
+  Home Assistant moves to `autoplay` itself instead, so the rule is not needed.)
 
 **Work:** the lane rule (queue.rs) and the page's fill (localPlayer) are the radio's builders' (the HA session's);
 the app's fill is claude-5f's; the buttons and Autoplay's sheet are claude-a5's.

@@ -34,7 +34,8 @@ function take(players: PlayOnPlayer[]) {
     error: null,
     repeat: p.repeat,
     sleep,
-    radio: p.radio ?? null,
+    radio: p.radio ?? false,
+    autoplay: p.autoplay ?? null,
   });
   if (p.queue_version !== shownVersion) {
     const version = p.queue_version;

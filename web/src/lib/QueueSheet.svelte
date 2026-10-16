@@ -21,8 +21,7 @@
   import { swipe } from './swipe';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
-  import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming, setRepeat, setShuffle } from './localPlayer.svelte';
-  import RadioSheet from './RadioSheet.svelte';
+  import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming, setRadio, setRepeat, setShuffle } from './localPlayer.svelte';
   import { albumSubject, viewPlaylist } from './panel.svelte';
   import { crates, CRATE } from './crates.svelte';
   import { player } from './live.svelte';
@@ -85,8 +84,6 @@
   const matches = (t: { name: string; artist: string | null; album: string | null }) =>
     !q || [t.name, t.artist, t.album].some((x) => x?.toLowerCase().includes(q));
 
-  // The radio's sheet, from the head (as the player's radio button).
-  let radioOpen = $state(false);
 
   // Clear: what comes next goes; the toast's Undo puts it back.
   function clear() {
@@ -220,7 +217,7 @@
               onclick={() => setRepeat(local.repeat === 'off' ? 'all' : local.repeat === 'all' ? 'one' : 'off')}
               ><Icon name={local.repeat === 'one' ? 'repeatOne' : 'repeat'} size={22} /></button
             >
-            <button class:on={local.radio !== null} aria-label="Radio" aria-haspopup="dialog" aria-pressed={local.radio !== null} onclick={() => (radioOpen = true)}
+            <button class:on={local.radio} aria-label="Radio" aria-pressed={local.radio} onclick={() => setRadio(!local.radio)}
               ><Icon name="radio" size={22} /></button
             >
             <button aria-label="Clear the queue" disabled={!np.upcoming.length} onclick={clear}><Icon name="clearQueue" size={22} /></button>
@@ -291,7 +288,7 @@
             <li
               hidden={!matches(t)}
               class:lifted={drag?.from === i}
-              class:lane-end={i > 0 && np.upcoming[i - 1].lane !== t.lane && (np.upcoming[i - 1].lane === 'next' || t.lane === 'radio')}
+              class:lane-end={i > 0 && np.upcoming[i - 1].lane !== t.lane && (np.upcoming[i - 1].lane === 'next' || t.lane === 'radio' || t.lane === 'autoplay')}
               style:transform={drag ? `translateY(${reorder.offset(i)}px)` : null}
             >
               <button
@@ -326,9 +323,7 @@
   </div>
 {/if}
 
-{#if radioOpen}
-  <RadioSheet onclose={() => (radioOpen = false)} />
-{/if}
+
 
 {#if menuShown && menuFor}
   <TrackMenu

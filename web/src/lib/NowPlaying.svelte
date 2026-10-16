@@ -12,13 +12,12 @@
   import QueueSheet from './QueueSheet.svelte';
   import OutputSheet from './OutputSheet.svelte';
   import SleepSheet from './SleepSheet.svelte';
-  import RadioSheet from './RadioSheet.svelte';
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
-  import { local, setRepeat, setShuffle } from './localPlayer.svelte';
+  import { local, setRadio, setRepeat, setShuffle } from './localPlayer.svelte';
   import { keepViewed, panel } from './panel.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
@@ -107,7 +106,6 @@
   let queueOpen = $state(false);
   let outputOpen = $state(false);
   let sleepOpen = $state(false);
-  let radioOpen = $state(false);
   const openMenu = (e: Event, start: 'menu' | 'lists' = 'menu') => {
     menuStart = start;
     menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -420,15 +418,10 @@
             aria-pressed={favorite()}
             onclick={toggleFavorite}><Icon name="heart" size={26} /></button
           >
-          <!-- The radio (decision 0036), where the device button was; only where the page holds the queue. Lit while on. -->
+          <!-- Radio (decision 0036, amended), where the device button was; only where the page holds the queue. A tap switches it; lit while on. -->
           {#if isLocal()}
-            <button
-              class="act radio"
-              class:on={local.radio !== null}
-              aria-label="Radio"
-              aria-haspopup="dialog"
-              aria-pressed={local.radio !== null}
-              onclick={() => (radioOpen = true)}><Icon name="radio" size={24} /></button
+            <button class="act radio" class:on={local.radio} aria-label="Radio" aria-pressed={local.radio} onclick={() => setRadio(!local.radio)}
+              ><Icon name="radio" size={24} /></button
             >
           {/if}
           <button class="act labelled" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
@@ -454,9 +447,7 @@
 {#if sleepOpen}
   <SleepSheet onclose={() => (sleepOpen = false)} />
 {/if}
-{#if radioOpen}
-  <RadioSheet onclose={() => (radioOpen = false)} />
-{/if}
+
 
 <style>
   /* The player's own surface: the cover, heavily blurred, under a veil (dark, or light in the light theme), as

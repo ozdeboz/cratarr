@@ -594,7 +594,7 @@
     if (!c) return;
     navigator.vibrate?.(8);
     try {
-      if (inside) return await startRadio([], title, 'similar', c);
+      if (inside) return await startRadio([], title, c);
       const ids = (await crateRows(c, 0, 1000, 'cratarr')).rows.flatMap((r) => (r.id ? [r.id] : []));
       await startRadio(ids.length > 300 ? [...ids].sort(() => Math.random() - 0.5).slice(0, 300) : ids, title);
     } catch (e) {

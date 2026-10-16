@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
 use super::queue::{Queue, Repeat};
-use super::radio::{Mode as RadioMode, Radio};
+use super::radio::{AutoMode, Autoplay, AutoplayMode, Mode as RadioMode, from_old};
 use super::{PlaylistService, ToggleError};
 
 /// A player not heard from (a report, the 30 s heartbeat) for this long is offline, even if its connection still looks
@@ -76,9 +76,13 @@ pub struct Report {
     /// Its sleep timer, as it keeps it; none set (or one that fired) is left out or null.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep: Option<Sleep>,
-    /// Its radio (decision 0036), on or off; apps from before it leave it out.
+    /// Its Radio (decision 0036, amended): on or off. Apps from before the amendment report their Autoplay here, as an
+    /// object; apps from before 0036 leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub radio: Option<RadioState>,
+    pub radio: Option<ReportedRadio>,
+    /// Its Autoplay: the setting, or null while off; left out: not said.
+    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub autoplay: Option<Option<Autoplay>>,
     pub position_ms: u64,
     #[serde(default)]
     pub duration_ms: Option<u64>,
@@ -107,7 +111,20 @@ pub struct Sleep {
     pub end_of_track: bool,
 }
 
-/// A player's radio as it reports it (decision 0036): on with its mode and seed, or off.
+/// A report's `radio`: Radio's switch, or (an app from before the amendment) its Autoplay as the radio was then.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ReportedRadio {
+    On(bool),
+    Old(RadioState),
+}
+
+/// A value that is there, null included: `Some(None)` for null, the field's absence stays `None` (its default).
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+
+/// A player's radio as apps before the amendment report it: on with its mode and seed, or off. Taken as Autoplay.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RadioState {
     pub on: bool,
@@ -198,8 +215,9 @@ pub enum Command {
     Shuffle { on: bool },
     /// Repeat off, one (the playing track) or all (the album or playlist), decision 0033 amended.
     Repeat { mode: Repeat },
-    /// The radio on (a mode and a seed of track ids; left out: as it was) or off (decision 0036). On turns repeat all
-    /// off; off takes the radio's tracks to come out.
+    /// Radio on or off (decision 0036, amended): while on, the player inserts about five tracks like each own track
+    /// right after it; off takes the inserts to come out. With a mode, seed or bound it is the command from before the
+    /// amendment, taken as Autoplay during the change-over; a bare off then stops Autoplay too.
     Radio {
         on: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,6 +225,19 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seed: Option<Vec<String>>,
         /// A crate to play inside (its id); "" plays outside any again; left out: as it was.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        within: Option<String>,
+    },
+    /// Autoplay in a mode, or `stop` (decision 0036, amended): the player appends its tracks when the queue runs out.
+    /// What is left out stays as it was; `within` "" plays outside any crate again. On turns repeat all off.
+    Autoplay {
+        mode: AutoplayMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        albums: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        restart: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<Vec<String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         within: Option<String>,
     },
@@ -270,6 +301,14 @@ pub struct TrackIds {
     pub album_artist: Option<String>,
 }
 
+/// Autoplay as the player view shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct AutoplayView {
+    pub mode: AutoMode,
+    pub albums: bool,
+    pub restart: bool,
+}
+
 /// A player as Home Assistant and the pages see it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PlayerView {
@@ -296,8 +335,10 @@ pub struct PlayerView {
     pub shuffled: bool,
     /// Its sleep timer, while one is set.
     pub sleep: Option<Sleep>,
-    /// Its radio's mode while the radio is on (decision 0036).
-    pub radio: Option<RadioMode>,
+    /// Radio's switch (decision 0036, amended).
+    pub radio: bool,
+    /// Autoplay while on: its mode and switches (its seed and bound stay with the player).
+    pub autoplay: Option<AutoplayView>,
     /// Goes up whenever the queue changes: ask for the player by name to see the new one.
     pub queue_version: u64,
     /// The track at `index`.
@@ -409,7 +450,8 @@ impl Entry {
             repeat: self.queue.repeat,
             shuffled: shuffled_order(&self.queue.tracks, index),
             sleep: r.sleep.filter(|s| s.at_ms.is_some() || s.end_of_track),
-            radio: self.queue.radio.as_ref().map(|r| r.mode),
+            radio: self.queue.radio,
+            autoplay: self.queue.autoplay.as_ref().map(|a| AutoplayView { mode: a.mode, albums: a.albums, restart: a.restart }),
             queue_version: self.queue.version,
             title: track.as_ref().map(|t| t.name.clone()),
             artist: track.as_ref().and_then(|t| t.artist.clone()),
@@ -700,8 +742,19 @@ impl PlayOn {
                 if let Some(r) = report.repeat {
                     e.queue.repeat = r;
                 }
-                if let Some(r) = &report.radio {
-                    e.queue.radio = r.on.then(|| Radio { mode: r.mode, seed: r.seed.clone(), within: r.within.clone() });
+                match &report.radio {
+                    Some(ReportedRadio::On(on)) => e.queue.radio = *on,
+                    // An app from before the amendment: its radio was Autoplay.
+                    Some(ReportedRadio::Old(r)) => {
+                        e.queue.autoplay = r.on.then(|| {
+                            let (mode, albums, restart) = from_old(Some(r.mode));
+                            Autoplay { mode, albums, restart, seed: r.seed.clone(), within: r.within.clone() }
+                        })
+                    }
+                    None => {}
+                }
+                if let Some(a) = &report.autoplay {
+                    e.queue.autoplay = a.clone();
                 }
             }
             e.report = Report { queue: None, ..report };
@@ -828,17 +881,28 @@ impl PlayOn {
         if tracks.is_empty() {
             return Err(ToggleError::Refused(format!("{from} has nothing to hand over.")));
         }
-        let (repeat, sleep, radio) =
-            self.entries().get(from).map(|e| (e.queue.repeat, e.report.sleep, e.queue.radio.clone())).unwrap_or_default();
+        let (repeat, sleep, radio, autoplay) = self
+            .entries()
+            .get(from)
+            .map(|e| (e.queue.repeat, e.report.sleep, e.queue.radio, e.queue.autoplay.clone()))
+            .unwrap_or_default();
         Box::pin(self.command(to, Command::play(tracks, index, position_ms))).await?;
-        // Repeat moves with the queue (decision 0033, amended), repeat one too; a sleep timer moves with the music; the
-        // radio too, with its seed (decision 0036). The radio after repeat: on turns repeat all off, and both came so.
+        // Repeat moves with the queue (decision 0033, amended), repeat one too; a sleep timer moves with the music; Radio
+        // and Autoplay too, Autoplay with its seed and bound (decision 0036, amended). Radio first (a bare off stops
+        // Autoplay during the change-over), Autoplay last (on turns repeat all off, and both came so).
         let _ = Box::pin(self.command(to, Command::Repeat { mode: repeat })).await;
-        let (on, mode, seed, within) = match radio {
-            Some(r) => (true, Some(r.mode), Some(r.seed), Some(r.within.unwrap_or_default())),
-            None => (false, None, None, None),
+        let _ = Box::pin(self.command(to, Command::Radio { on: radio, mode: None, seed: None, within: None })).await;
+        let auto = match autoplay {
+            Some(a) => Command::Autoplay {
+                mode: AutoplayMode::of(Some(a.mode)),
+                albums: Some(a.albums),
+                restart: Some(a.restart),
+                seed: Some(a.seed),
+                within: Some(a.within.unwrap_or_default()),
+            },
+            None => Command::Autoplay { mode: AutoplayMode::Stop, albums: None, restart: None, seed: None, within: None },
         };
-        let _ = Box::pin(self.command(to, Command::Radio { on, mode, seed, within })).await;
+        let _ = Box::pin(self.command(to, auto)).await;
         if let Some(s) = sleep.filter(|s| s.at_ms.is_some() || s.end_of_track) {
             let _ = Box::pin(self.command(to, Command::Sleep { at_ms: s.at_ms, end_of_track: s.end_of_track })).await;
         }
