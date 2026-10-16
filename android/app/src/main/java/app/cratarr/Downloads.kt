@@ -15,8 +15,10 @@ import androidx.media3.common.MediaItem
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.ContentMetadata
@@ -59,22 +61,27 @@ object Downloads {
         SimpleCache(dir, NoOpCacheEvictor(), database(app)).also { cache = it }
     }
 
-    private fun http(): DefaultHttpDataSource.Factory = DefaultHttpDataSource.Factory()
-        .setConnectTimeoutMs(15_000)
-        .setReadTimeoutMs(60_000)
-        .setAllowCrossProtocolRedirects(true)
+    /** Cratarr over HTTP, on the address in use: what was queued or asked for on the other one is read from this one. */
+    private fun http(context: Context): DataSource.Factory {
+        val app = context.applicationContext
+        val http = DefaultHttpDataSource.Factory()
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(60_000)
+            .setAllowCrossProtocolRedirects(true)
+        return ResolvingDataSource.Factory(http) { spec -> spec.withUri(Reach.rewrite(app, spec.uri)) }
+    }
 
     /** What the player reads tracks through: the store first, Cratarr for the rest. Streamed tracks are not stored. */
     fun playback(context: Context): CacheDataSource.Factory = CacheDataSource.Factory()
         .setCache(cache(context))
-        .setUpstreamDataSourceFactory(http())
+        .setUpstreamDataSourceFactory(http(context))
         .setCacheWriteDataSinkFactory(null)
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
     @Synchronized
     fun manager(context: Context): DownloadManager = manager ?: run {
         val app = context.applicationContext
-        DownloadManager(app, database(app), cache(app), http(), Executors.newFixedThreadPool(2)).also {
+        DownloadManager(app, database(app), cache(app), http(app), Executors.newFixedThreadPool(2)).also {
             it.maxParallelDownloads = 2
             it.requirements = requirements(Prefs(app))
             manager = it
@@ -193,7 +200,7 @@ object Downloads {
                     saveAutoKept(app, kept)
                 }
                 val spec = DataSpec.Builder().setUri("$server/api/file/$key").setKey(key).build()
-                val source = CacheDataSource.Factory().setCache(store).setUpstreamDataSourceFactory(http()).createDataSourceForDownloading()
+                val source = CacheDataSource.Factory().setCache(store).setUpstreamDataSourceFactory(http(app)).createDataSourceForDownloading()
                 val writer = CacheWriter(source, spec, null, null)
                 writing = writer
                 try {

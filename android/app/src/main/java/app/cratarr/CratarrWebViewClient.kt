@@ -19,8 +19,8 @@ import androidx.webkit.WebViewClientCompat
 import androidx.webkit.WebViewFeature
 
 class CratarrWebViewClient(
-    /** The server's origin: pages there stay in the app. */
-    private val origin: String?,
+    /** Cratarr's origins (its two addresses'): pages there stay in the app. */
+    private val origins: Set<String>,
     /** The page itself cannot be loaded (with why). */
     private val onError: (String) -> Unit,
     /** The page's renderer is gone: the WebView must be made anew. */
@@ -28,7 +28,7 @@ class CratarrWebViewClient(
 ) : WebViewClientCompat() {
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-        if (!request.isForMainFrame || Prefs.originOf(request.url.toString()) == origin) return false
+        if (!request.isForMainFrame || Prefs.originOf(request.url.toString()) in origins) return false
         try {
             view.context.startActivity(Intent(Intent.ACTION_VIEW, request.url))
         } catch (e: ActivityNotFoundException) {

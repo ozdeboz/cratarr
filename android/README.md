@@ -9,8 +9,9 @@ AGPL-3.0-or-later. Every file taken from Jellyfin's app says at its top what was
 
 ## What it does
 
-- Shows the Cratarr server's pages (the address is asked once; Settings change it). The pages come from the server;
-  nothing of the web app is built into the app.
+- Shows the Cratarr server's pages (the address is asked once; Settings → Network change it). The pages come from the
+  server; nothing of the web app is built into the app. Two addresses (decision 0031's amendment): the public one, and
+  a local network address used while preferred and answering (`Reach.kt`).
 - Plays the music itself (Media3's ExoPlayer in a media session service): the page's player hands its queue over, and
   the app fetches each track's original file (`/api/file/{source}/{id}`, with byte ranges) and plays it gapless. The
   lock screen, the notification, headphone buttons, audio focus, pausing when headphones go, and a wake lock and a

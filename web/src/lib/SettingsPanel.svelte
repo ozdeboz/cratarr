@@ -16,6 +16,7 @@
   import ConnectionsPart from './settings/ConnectionsPart.svelte';
   import DevicePart from './settings/DevicePart.svelte';
   import DisplayPart from './settings/DisplayPart.svelte';
+  import NetworkPart from './settings/NetworkPart.svelte';
   import SyncPart from './settings/SyncPart.svelte';
   import ImportPart from './settings/ImportPart.svelte';
   import LibrariesPart from './settings/LibrariesPart.svelte';
@@ -42,6 +43,8 @@
     {#if ed.loadError}<Notice text={ed.loadError} />{/if}
     {#if section === 'device'}
       <DevicePart />
+    {:else if section === 'network'}
+      <NetworkPart />
     {:else if section === 'sync'}
       <SyncPart />
     {:else if section === 'display'}

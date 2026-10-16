@@ -59,6 +59,8 @@
         return accounts === null ? '' : accounts.length ? accounts.join(' · ') : 'No account';
       case 'import':
         return lastImport?.finished ? `Last ${new Date(lastImport.finished * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : 'Not yet';
+      case 'network':
+        return appInfo.inUse ? appInfo.inUse.replace(/^\w+:\/\//, '') : '';
       case 'sync':
         return [kept.known ? `${kept.items.length} kept` : null, appInfo.syncBudgetGb ? `${appInfo.syncBudgetGb} GB` : 'No limit'].filter(Boolean).join(' · ');
       case 'display':

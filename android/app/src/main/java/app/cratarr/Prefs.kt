@@ -9,12 +9,56 @@ import android.os.Build
 class Prefs(context: Context) {
     private val p: SharedPreferences = shared(context)
 
-    /** The Cratarr server's address, with its scheme; null until set. */
-    var serverUrl: String?
+    /** Cratarr's public address (the one used from anywhere), with its scheme; null until set. */
+    var publicAddress: String?
         get() = p.getString(SERVER_URL, null)?.trim()?.takeIf { it.isNotEmpty() }
         set(value) {
             p.edit().putString(SERVER_URL, value).apply()
         }
+
+    /** Cratarr's local network address (also reached over a VPN that carries only that network); optional. */
+    var localAddress: String?
+        get() = p.getString(LOCAL_URL, null)?.trim()?.takeIf { it.isNotEmpty() }
+        set(value) {
+            p.edit().putString(LOCAL_URL, value).apply()
+        }
+
+    /** Prefer the local network: its address is used whenever it answers. */
+    var preferLocal: Boolean
+        get() = p.getBoolean(PREFER_LOCAL, false)
+        set(value) {
+            p.edit().putBoolean(PREFER_LOCAL, value).apply()
+        }
+
+    /** The local network address, when it is to be preferred. */
+    val preferredLocal: String? get() = localAddress?.takeIf { preferLocal }
+
+    /** The address in use, which every request goes to: the local network's while preferred and answering, else the
+     *  public one ([Reach]). */
+    val serverUrl: String?
+        get() {
+            val local = preferredLocal
+            val public = publicAddress
+            return p.getString(IN_USE, null)?.takeIf { it == local || it == public } ?: public ?: local
+        }
+
+    /** The address in use as last chosen (null before any was). */
+    val inUse: String? get() = p.getString(IN_USE, null)
+
+    /** Uses [address] (one of the two) from now on. */
+    fun use(address: String?) {
+        p.edit().putString(IN_USE, address).apply()
+    }
+
+    /** The page's own settings (its `cratarr-prefs`), kept here so both addresses' pages share them. */
+    var pagePrefs: String?
+        get() = p.getString(PAGE_PREFS, null)
+        set(value) {
+            p.edit().putString(PAGE_PREFS, value).apply()
+        }
+
+    /** The origins of the two addresses: the pages that stay in the app and may talk to it. */
+    fun origins(): Set<String> = listOfNotNull(localAddress, publicAddress).mapNotNull(::originOf).toSet()
 
     /** How Home Assistant and the other players see this one; the device's model until set. */
     var playerName: String
@@ -178,7 +222,12 @@ class Prefs(context: Context) {
         const val SLEEP = "sleep"
         const val REPEAT = "repeat"
         const val SHUFFLED = "shuffled"
+        /** The public address (the app's only one before it had two). */
         const val SERVER_URL = "server_url"
+        const val LOCAL_URL = "local_url"
+        const val PREFER_LOCAL = "prefer_local"
+        const val IN_USE = "address_in_use"
+        const val PAGE_PREFS = "page_prefs"
         const val PLAYER_NAME = "player_name"
         const val STAY_READY = "stay_ready"
         const val DOWNLOAD_QUALITY = "download_quality"

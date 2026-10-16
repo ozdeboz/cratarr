@@ -9,6 +9,7 @@ import android.app.AlertDialog
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
@@ -42,6 +43,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import androidx.webkit.JavaScriptReplyProxy
+import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +62,18 @@ class MainActivity : AppCompatActivity() {
 
     /** The address the WebView shows. */
     private var shown: String? = null
+
+    /** The page's settings, put into its storage before it starts (so both addresses' pages share them). */
+    private var pageScript: ScriptHandler? = null
+
+    /** The other address taken into use ([Reach]): the page from there. */
+    private val inUseChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key != Prefs.IN_USE) return@OnSharedPreferenceChangeListener
+        runOnUiThread {
+            val url = prefs.serverUrl
+            if (url != null && shown != null && url != shown && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) show(url)
+        }
+    }
 
     /** The page that said hello: where the player's reports go. */
     private var page: JavaScriptReplyProxy? = null
@@ -142,6 +156,8 @@ class MainActivity : AppCompatActivity() {
         Kept.onChange = { runOnUiThread { tellKept() } }
         Kept.schedule(this)
         Kept.sync(this)
+        Prefs.shared(this).registerOnSharedPreferenceChangeListener(inUseChanged)
+        Reach.watch(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -155,15 +171,23 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // Back from Android's background dialog, say: the page shows the settings as they are now.
         page?.postMessage(appMessage())
-        val url = prefs.serverUrl
         when {
-            url == null -> askForAddress()
-            url != shown -> show(url)
+            prefs.serverUrl == null -> askForAddress()
+            // The first page: from the address that answers.
+            shown == null -> lifecycleScope.launch {
+                withContext(Dispatchers.IO) { Reach.check(this@MainActivity) }
+                prefs.serverUrl?.let { if (it != shown) show(it) }
+            }
+            else -> {
+                prefs.serverUrl?.let { if (it != shown) show(it) }
+                Reach.checkSoon(this)
+            }
         }
         PlayerService.ready(this)
     }
 
     override fun onDestroy() {
+        Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
         Downloads.manager(this).removeListener(downloadsChanged)
         webView?.let {
             frame.removeView(it)
@@ -175,18 +199,6 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    /** Whether a Cratarr answers at [url] (its health check); blocking. */
-    private fun answers(url: String): Boolean = try {
-        val c = java.net.URL("$url/api/health").openConnection() as java.net.HttpURLConnection
-        c.connectTimeout = 4_000
-        c.readTimeout = 4_000
-        val ok = c.responseCode == 200
-        c.disconnect()
-        ok
-    } catch (e: java.io.IOException) {
-        false
-    }
-
     /** A new WebView on [url]: on first start, after the address changed, and after the page's renderer died. */
     private fun show(url: String) {
         dialog?.dismiss()
@@ -195,7 +207,9 @@ class MainActivity : AppCompatActivity() {
             it.destroy()
         }
         page = null
-        val origin = Prefs.originOf(url)
+        pageScript = null
+        // Either address's pages stay in the app and may talk to it.
+        val origins = prefs.origins() + listOfNotNull(Prefs.originOf(url))
         val view = WebView(this)
         view.settings.apply {
             javaScriptEnabled = true
@@ -206,7 +220,7 @@ class MainActivity : AppCompatActivity() {
         }
         // The page keeps its priority when not in view: it is the player.
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
-        view.webViewClient = CratarrWebViewClient(origin, onError = { cannotReach(url, it) }, onGone = { show(url) })
+        view.webViewClient = CratarrWebViewClient(origins, onError = { cannotReach(url, it) }, onGone = { show(url) })
         view.webChromeClient = CratarrWebChromeClient { intent, callback ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
@@ -217,22 +231,23 @@ class MainActivity : AppCompatActivity() {
                 callback.onReceiveValue(null)
             }
         }
-        // `window.CratarrApp`, on the server's pages only.
-        if (origin != null && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            WebViewCompat.addWebMessageListener(view, "CratarrApp", setOf(origin)) { _, message, _, isMainFrame, reply ->
+        // `window.CratarrApp`, on Cratarr's pages only.
+        if (origins.isNotEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            WebViewCompat.addWebMessageListener(view, "CratarrApp", origins) { _, message, _, isMainFrame, reply ->
                 val data = message.data
                 if (isMainFrame && data != null) onPageMessage(data, reply)
             }
         }
         frame.addView(view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         webView = view
+        keepPagePrefs(view)
         shown = url
         view.loadUrl(if (openSettings) "${url.trimEnd('/')}/#/settings" else url)
         openSettings = false
     }
 
     /** A message from the page: `hello`, `player` (its player's calls), `device` and `device-set` (this device's
-     *  settings), `battery`, `address`, `open` (a link outside). */
+     *  settings), `page-prefs` (its own settings), `network-test`, `battery`, `address`, `open` (a link outside). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -248,6 +263,16 @@ class MainActivity : AppCompatActivity() {
             }
             "player" -> player?.handle(message) ?: waiting.add(message)
             "device" -> reply.postMessage(appMessage())
+            // Settings' "Test both connections".
+            "network-test" -> lifecycleScope.launch {
+                val (local, public) = withContext(Dispatchers.IO) { Reach.test(this@MainActivity) }
+                reply.postMessage(JSONObject().put("type", "network-test").put("local", local ?: JSONObject.NULL).put("public", public ?: JSONObject.NULL).toString())
+                Reach.checkSoon(this@MainActivity)
+            }
+            "page-prefs" -> message.optString("prefs").takeIf { it.isNotEmpty() && it != prefs.pagePrefs }?.let {
+                prefs.pagePrefs = it
+                webView?.let(::keepPagePrefs)
+            }
             "device-set" -> {
                 message.optString("player").trim().takeIf { it.isNotEmpty() }?.let { prefs.playerName = it }
                 if (message.has("stayReady")) {
@@ -266,17 +291,23 @@ class MainActivity : AppCompatActivity() {
                     prefs.syncBudgetGb = message.optLong("syncBudgetGb", 20L)
                     Kept.sync(this)
                 }
-                // Another server: switched to once it answers, so a stray edit does not take the app off its server
-                // (the field shows the address in use again).
-                val server = message.optString("server").trim().takeIf { it.isNotEmpty() }?.let(Prefs::normalise)
-                if (server != null && server != prefs.serverUrl) {
+                // The local network address: as typed (empty: none), and whether it is preferred.
+                val local = if (message.has("local")) message.optString("local").trim().takeIf { it.isNotEmpty() }?.let(Prefs::normalise) else prefs.localAddress
+                val preferLocal = if (message.has("preferLocal")) message.optBoolean("preferLocal") else prefs.preferLocal
+                // Another public address (`server` from pages before there were two): kept once it answers, so a stray
+                // edit does not take the app off Cratarr (the field shows the address it has again).
+                val public = (if (message.has("public")) message.optString("public") else message.optString("server"))
+                    .trim().takeIf { it.isNotEmpty() }?.let(Prefs::normalise)
+                if (local != prefs.localAddress || preferLocal != prefs.preferLocal || (public != null && public != prefs.publicAddress)) {
                     lifecycleScope.launch {
-                        if (withContext(Dispatchers.IO) { answers(server) }) {
-                            prefs.serverUrl = server
-                            show(server)
-                        } else {
-                            reply.postMessage(appMessage())
+                        prefs.localAddress = local
+                        prefs.preferLocal = preferLocal
+                        if (public != null && public != prefs.publicAddress && withContext(Dispatchers.IO) { Reach.answers(public) }) {
+                            prefs.publicAddress = public
                         }
+                        // Which of them answers now: the page comes from there.
+                        withContext(Dispatchers.IO) { Reach.check(this@MainActivity) }
+                        reply.postMessage(appMessage())
                     }
                     return
                 }
@@ -332,7 +363,12 @@ class MainActivity : AppCompatActivity() {
         .put("version", BuildConfig.VERSION_NAME)
         .put("player", prefs.playerName)
         .put("stayReady", prefs.stayReady)
-        .put("server", prefs.serverUrl ?: "")
+        // `server`: the public address, for pages from before there were two.
+        .put("server", prefs.publicAddress ?: "")
+        .put("public", prefs.publicAddress ?: "")
+        .put("local", prefs.localAddress ?: "")
+        .put("preferLocal", prefs.preferLocal)
+        .put("inUse", prefs.serverUrl ?: "")
         .put("batteryAllowed", getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
         .put("downloadQuality", prefs.downloadQuality)
         .put("downloadOverMobile", prefs.downloadOverMobile)
@@ -386,12 +422,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** The page's settings as the app keeps them, into the page's storage before its script runs, on either address. */
+    private fun keepPagePrefs(view: WebView) {
+        pageScript?.remove()
+        pageScript = null
+        val saved = prefs.pagePrefs ?: return
+        val origins = prefs.origins()
+        if (origins.isEmpty() || !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+        pageScript = WebViewCompat.addDocumentStartJavaScript(view, "try { localStorage.setItem('cratarr-prefs', ${JSONObject.quote(saved)}) } catch (e) {}", origins)
+    }
+
     private fun askForAddress() {
         if (dialog?.isShowing == true) return
         val field = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             hint = getString(R.string.server_address_hint)
-            setText(prefs.serverUrl ?: "")
+            setText(prefs.publicAddress ?: "")
             setSingleLine()
         }
         val box = FrameLayout(this).apply {
@@ -409,7 +455,8 @@ class MainActivity : AppCompatActivity() {
                     askForAddress()
                 } else {
                     val url = Prefs.normalise(typed)
-                    prefs.serverUrl = url
+                    prefs.publicAddress = url
+                    prefs.use(url)
                     show(url)
                 }
             }
@@ -418,13 +465,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun cannotReach(url: String, why: String) {
         if (dialog?.isShowing == true || isFinishing) return
-        dialog = AlertDialog.Builder(this)
-            .setTitle(getString(R.string.cannot_reach, url))
-            .setMessage(why.takeIf { it.isNotBlank() })
-            .setCancelable(false)
-            .setPositiveButton(R.string.try_again) { _, _ -> show(url) }
-            .setNegativeButton(R.string.change_address) { _, _ -> askForAddress() }
-            .show()
+        lifecycleScope.launch {
+            // The other address may answer (off the local network, say): its page then, without a word.
+            val now = withContext(Dispatchers.IO) { Reach.check(this@MainActivity) }
+            if (now != null && now != shown) {
+                show(now)
+                return@launch
+            }
+            if (dialog?.isShowing == true || isFinishing) return@launch
+            dialog = AlertDialog.Builder(this@MainActivity)
+                .setTitle(getString(R.string.cannot_reach, url))
+                .setMessage(why.takeIf { it.isNotBlank() })
+                .setCancelable(false)
+                .setPositiveButton(R.string.try_again) { _, _ -> show(url) }
+                .setNegativeButton(R.string.change_address) { _, _ -> askForAddress() }
+                .show()
+        }
     }
 
     /** Cratarr's Settings page from the launcher (a long press on the icon): "This device" is at its top. */

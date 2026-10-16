@@ -1,6 +1,7 @@
 // Display preferences: per browser, kept in localStorage (which may be unavailable; then defaults apply and nothing
 // is remembered). Server-wide settings live on the server, see Settings.svelte.
 
+import { inApp, toApp } from './app.svelte';
 import { LIST_WIDTHS } from './pageView.svelte';
 
 export type Theme = 'auto' | 'light' | 'dark';
@@ -168,6 +169,8 @@ $effect.root(() => {
     } catch {
       /* not remembered */
     }
+    // In the app the same settings go to it too: it hands them to its pages on either of its two addresses (Network).
+    if (inApp) toApp({ type: 'page-prefs', prefs: snapshot });
     if (prefs.theme === 'auto') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.dataset.theme = prefs.theme;
   });

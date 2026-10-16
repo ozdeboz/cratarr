@@ -99,3 +99,24 @@ The player keeps the sleep timer, as it keeps repeat: only the device that plays
 view carry `sleep: {at_ms, end_of_track} | null`. When it fires, the player pauses, as the pause button does, and the
 timer clears; one that runs out while paused only clears. A handover takes it along; a stop ends it. A page that plays
 in the browser keeps its own.
+
+## Amendment (2026-10-16): two addresses, the Network settings
+
+The owner, from a phone on a VPN to the home router that carries only the home network: Cratarr's public address led
+past the VPN to the reverse proxy, which serves the home network only, and everything was refused. So the app knows two
+addresses, as Finamp's Network settings do (its redesign: "Public Address", "Prefer Local Network", "Local Network
+Address", "Active Address", "Test both connections"), in a Network part of the settings of its own (app only):
+
+- **Public address**: the one used from anywhere (the app's only address before).
+- **Prefer local network** and **Local network address**: while on, the local network address is used whenever it
+  answers (at home, or over such a VPN), else the public one; when neither answers, the one in use stays.
+- **Active address** shows which, and **Test both connections** tries both.
+
+Answering is tried (Cratarr's health check), as Finamp does, rather than the home network told from the Wi-Fi's name
+as Home Assistant's app does: that needs location access, and misses a VPN. The app looks again when it starts, on
+every change of network, when it comes back to the front, and when its connection to Cratarr fails; a page that cannot
+load tries the other address before the "Cannot reach" dialog. Everything follows the address in use: the page, Play
+On's connection, radio, levelling, plays told, and what was set up on the other address (queued tracks, downloads),
+read from this one. The page's own settings (`cratarr-prefs`) live in the browser storage of its address, so the app
+keeps a copy (sent on each change) and puts it into the page's storage before the page starts, on either address.
+

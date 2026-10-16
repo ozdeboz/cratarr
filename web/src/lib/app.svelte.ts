@@ -14,8 +14,13 @@ export const appInfo = $state({
   version: null as string | null,
   /** This player's name, as Home Assistant and the other players see it. */
   player: null as string | null,
-  /** The Cratarr server's address the app shows. */
-  server: null as string | null,
+  /** Network (after Finamp's): the public address; the local network address, used while preferred and answering; the
+   *  address in use. `addresses`: the app knows two (an app from before knew one, its `server`). */
+  publicAddress: null as string | null,
+  localAddress: null as string | null,
+  preferLocal: false,
+  inUse: null as string | null,
+  addresses: false,
   /** Kept awake and listening for Play On while idle. */
   stayReady: false,
   /** Android lets the app run in the background (left out of battery optimisation). */
@@ -56,10 +61,24 @@ export function toApp(message: Message) {
   port?.postMessage(JSON.stringify(message));
 }
 
+/** "Test both connections": whether each address answered (null: not set), once the app has tried. */
+export const networkTest = $state({ testing: false, local: null as boolean | null, public: null as boolean | null, done: false });
+
+/** Tries both addresses (the app answers with a `network-test`). */
+export function testNetwork() {
+  networkTest.testing = true;
+  networkTest.done = false;
+  toApp({ type: 'network-test' });
+}
+
 /** Changes this device's settings; the app answers with all of them. */
 export const setDevice = (change: {
   player?: string;
+  /** The public address (`server` too, for an app from before there were two). */
+  public?: string;
   server?: string;
+  local?: string;
+  preferLocal?: boolean;
   stayReady?: boolean;
   downloadQuality?: string;
   downloadOverMobile?: boolean;
@@ -91,7 +110,11 @@ if (port) {
     if (m.type === 'app') {
       appInfo.version = typeof m.version === 'string' ? m.version : null;
       appInfo.player = typeof m.player === 'string' ? m.player : null;
-      appInfo.server = typeof m.server === 'string' ? m.server : null;
+      appInfo.addresses = typeof m.public === 'string';
+      appInfo.publicAddress = typeof m.public === 'string' ? m.public : typeof m.server === 'string' ? m.server : null;
+      appInfo.localAddress = typeof m.local === 'string' && m.local ? m.local : null;
+      appInfo.preferLocal = m.preferLocal === true;
+      appInfo.inUse = typeof m.inUse === 'string' && m.inUse ? m.inUse : appInfo.publicAddress;
       appInfo.stayReady = m.stayReady === true;
       appInfo.batteryAllowed = m.batteryAllowed !== false;
       appInfo.downloadQuality = m.downloadQuality === 'smaller' ? 'smaller' : 'original';
@@ -99,6 +122,12 @@ if (port) {
       appInfo.syncBudgetGb = typeof m.syncBudgetGb === 'number' ? m.syncBudgetGb : 20;
       appInfo.syncOnlyCharging = m.syncOnlyCharging === true;
       appInfo.levelling = m.levelling !== false;
+    }
+    if (m.type === 'network-test') {
+      networkTest.local = typeof m.local === 'boolean' ? m.local : null;
+      networkTest.public = typeof m.public === 'boolean' ? m.public : null;
+      networkTest.testing = false;
+      networkTest.done = true;
     }
     if (m.type === 'downloads') {
       downloads.tracks = Array.isArray(m.tracks) ? (m.tracks as DownloadedTrack[]) : [];

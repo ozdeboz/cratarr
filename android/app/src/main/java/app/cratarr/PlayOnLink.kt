@@ -161,6 +161,8 @@ class PlayOnLink(
                 read(BufferedReader(InputStreamReader(c.inputStream, Charsets.UTF_8)))
             } catch (e: Exception) {
                 if (running) Log.w(TAG, "connection to Cratarr: ${e.message}")
+                // Out of reach there: perhaps the other address answers.
+                if (running) Reach.checkSoon(service, failed = true)
             } finally {
                 connection?.disconnect()
                 connection = null

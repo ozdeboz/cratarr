@@ -1,6 +1,6 @@
 <script lang="ts">
   // This device (decision 0031): the app's own settings, this device's only; they act at once. How it keeps music
-  // (quality, mobile data, the budget) is under Sync (decision 0038).
+  // (quality, mobile data, the budget) is under Sync (decision 0038), how it reaches Cratarr under Network.
   import Switch from '../Switch.svelte';
   import { allowBackground, appInfo, inApp, setDevice } from '../app.svelte';
 </script>
@@ -20,19 +20,5 @@
       <span class="l">Background <small>{appInfo.batteryAllowed ? 'Allowed to run' : 'Android may stop Cratarr'}</small></span>
       {#if !appInfo.batteryAllowed}<button onclick={allowBackground}>Allow</button>{/if}
     </div>
-    <label class="pref">
-      <span class="l">Server</span>
-      <input
-        type="url"
-        value={appInfo.server ?? ''}
-        spellcheck="false"
-        autocapitalize="off"
-        autocomplete="off"
-        onchange={(e) => {
-          const server = e.currentTarget.value.trim();
-          if (server && server !== appInfo.server) setDevice({ server });
-        }}
-      />
-    </label>
   </section>
 {/if}
