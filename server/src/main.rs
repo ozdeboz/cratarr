@@ -119,13 +119,17 @@ async fn main() -> Result<()> {
         .context("cannot open the OpenSubsonic library")?;
     serve::set_instance(served.clone());
     let (snapcast_bind, snapcast_host) = (cfg.snapcast_bind.clone(), cfg.snapcast_host.clone());
+    // Cratarr on the local network, as a Kodi streams from it: the host players reach Snapcast on, and Cratarr's port.
+    let lan_base = snapcast_host.clone().map(|h| format!("http://{h}:{}", cfg.bind.rsplit(':').next().unwrap_or("8080")));
     let app = app::App::new(cfg, saved, origin).await.context("cannot open the catalogue")?;
+    app.play_on.set_lan_base(lan_base);
     // Sync play (decision 0037): groups' sound on Snapcast's protocol; Cratarr runs on without it if the port is taken.
     if let Some(bind) = snapcast_bind {
         match tokio::net::TcpListener::bind(&bind).await {
             Ok(listener) => {
                 let port = listener.local_addr().map(|a| a.port()).unwrap_or(snapcast::PORT);
                 let snap = snapcast::Snapcast::new(app.play_on.clone(), snapcast::BUFFER_MS);
+                snapcast::Snapcast::set_instance(snap.clone());
                 app.play_on.serve_sync_play(port, snapcast::BUFFER_MS, snapcast_host);
                 tokio::spawn(snap.serve(listener));
                 tracing::info!("sync play on {bind}");

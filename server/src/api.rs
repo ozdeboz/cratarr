@@ -31,6 +31,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}/state", axum::routing::put(player_state))
         .route("/api/players/{name}/sample", post(player_sample))
         .route("/api/players/{name}/delay", axum::routing::put(player_delay))
+        .route("/api/groups/{leader}/listen.wav", get(group_listen))
         .route("/api/time", get(time_now))
         .route("/api/sync/measure", get(sync_measure))
         .route("/api/radio/next", post(radio_next))
@@ -674,6 +675,21 @@ async fn player_sample(State(app): State<Arc<App>>, Path(name): Path<String>, Js
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct Listening {
+    player: String,
+}
+
+/// A group's sound as one long WAV, for a player without Snapcast's player (a Kodi, decision 0037 amended).
+async fn group_listen(State(app): State<Arc<App>>, Path(leader): Path<String>, Query(q): Query<Listening>) -> Response {
+    let Some(snap) = crate::snapcast::Snapcast::instance() else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "Sync play is not served here." }))).into_response();
+    };
+    let delay = u32::from(app.play_on.delay_of(&q.player));
+    let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(snap.listen(&leader, &q.player, delay)));
+    ([(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav")), (header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], body).into_response()
+}
+
 #[derive(serde::Deserialize)]
 struct DelayBody {
     ms: u16,
@@ -707,11 +723,11 @@ async fn player_connect(
     Ok(axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15))))
 }
 
-async fn play_on_settings(State(app): State<Arc<App>>) -> Json<crate::app::PlayOnSettings> {
-    Json(app.play_on.settings())
+async fn play_on_settings(State(app): State<Arc<App>>) -> Json<crate::app::PlayOnSettingsView> {
+    Json(app.play_on.settings_view())
 }
 
-async fn save_play_on_settings(State(app): State<Arc<App>>, Json(s): Json<crate::app::PlayOnSettings>) -> Result<Json<crate::app::PlayOnSettings>, ApiError> {
+async fn save_play_on_settings(State(app): State<Arc<App>>, Json(s): Json<crate::app::PlayOnSettings>) -> Result<Json<crate::app::PlayOnSettingsView>, ApiError> {
     Ok(Json(app.play_on.save_settings(s).await?))
 }
 

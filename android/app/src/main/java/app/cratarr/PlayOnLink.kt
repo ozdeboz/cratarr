@@ -64,9 +64,12 @@ class PlayOnLink(
 
     private var clockThread: Thread? = null
 
-    /** Sync play (decision 0037): the clock's offset to Cratarr's, kept while running: quickly at first, then every 5 s. */
+    /** Sync play (decision 0037): the clock's offset to Cratarr's, kept while running: quickly at first, then every 5 s.
+     *  Unanswered (out of reach, or refused, as a proxy does off the home network), it waits longer each time, up to a
+     *  minute, and starts quickly again once answered. */
     private fun keepClock() {
         var pinged = 0
+        var failed = 0
         var server: String? = null
         while (running) {
             val now = prefs.serverUrl
@@ -74,9 +77,21 @@ class PlayOnLink(
                 Clock.forget()
                 server = now
                 pinged = 0
+                failed = 0
             }
-            if (now != null && Clock.ping(now)) pinged++
-            sleep(if (pinged < 10) 300 else 5_000)
+            if (now != null && Clock.ping(now)) {
+                pinged++
+                failed = 0
+            } else {
+                failed++
+            }
+            sleep(
+                when {
+                    failed > 0 -> (5_000L shl (failed - 1).coerceAtMost(4)).coerceAtMost(60_000L)
+                    pinged < 10 -> 300
+                    else -> 5_000
+                },
+            )
         }
     }
 
