@@ -3,7 +3,8 @@
   // over the player on the blurred cover, a grab handle and "Queue"; then the previous tracks (folded, this device
   // only: the server's player reports only what comes next), the playing track as a card that fills as it plays
   // (pinned at the top), the "Playing from" header (pinned under it) and what comes next. From Symfonium's queue
-  // (decided 2026-10-16): search, shuffle, repeat, the radio and Clear (what comes next goes, with Undo) in the head;
+  // (decided 2026-10-16): search, the radio, Autoplay and Clear (what comes next goes, with Undo) in the head (shuffle and
+  // repeat are the player's own: the same twice was one too many, the owner said);
   // when the queue ends on the clock; "Playing from" a chip that opens it; a row's album after its artist (not the
   // album the queue plays), and its ⋮.
   // Gestures as Finamp's: drag the handle area down to close; a tap on a row plays it, a long-press (or right-click) is
@@ -21,7 +22,7 @@
   import { swipe } from './swipe';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
-  import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming, setRadio, setRepeat, setShuffle } from './localPlayer.svelte';
+  import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming, setRadio } from './localPlayer.svelte';
   import AutoplaySheet from './AutoplaySheet.svelte';
   import { albumSubject, viewPlaylist } from './panel.svelte';
   import { crates, CRATE } from './crates.svelte';
@@ -213,14 +214,6 @@
             ><Icon name="search" size={22} /></button
           >
           {#if here}
-            <button class:on={local.shuffled} aria-label="Shuffle" aria-pressed={local.shuffled} onclick={() => setShuffle(!local.shuffled)}><Icon name="shuffle" size={22} /></button>
-            <button
-              class:on={local.repeat !== 'off'}
-              aria-label={local.repeat === 'one' ? 'Repeat one' : local.repeat === 'all' ? 'Repeat all' : 'Repeat'}
-              aria-pressed={local.repeat !== 'off'}
-              onclick={() => setRepeat(local.repeat === 'off' ? 'all' : local.repeat === 'all' ? 'one' : 'off')}
-              ><Icon name={local.repeat === 'one' ? 'repeatOne' : 'repeat'} size={22} /></button
-            >
             <button class:on={local.radio} aria-label="Radio" aria-pressed={local.radio} onclick={() => setRadio(!local.radio)}
               ><Icon name="radio" size={22} /></button
             >
@@ -409,7 +402,7 @@
     background: var(--muted);
   }
 
-  /* The head's row: "Queue", then its tools (Symfonium's: search, shuffle, repeat, the radio; Autoplay, Clear), lit while
+  /* The head's row: "Queue", then its tools (search, the radio, Autoplay, Clear), lit while
      on. */
   .bar {
     display: flex;
