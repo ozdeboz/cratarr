@@ -74,7 +74,13 @@
     {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
     {#if page && pageView.action}
       {@const a = pageView.action}
-      <button aria-label={a.label} title={a.label} onclick={a.run}><Icon name={a.icon} size={22} /></button>
+      <button class="action" aria-label={a.label} title={a.label} onclick={a.run}
+        ><Icon name={a.icon} size={22} />{#if a.progress != null}<svg class="ring" viewBox="0 0 36 36" aria-hidden="true"
+            ><circle class="bg" cx="18" cy="18" r="16" /><circle cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{Math.round(
+                Math.min(1, Math.max(0, a.progress)) * 100,
+              )} 100" /></svg
+          >{/if}</button
+      >
     {/if}
   </div>
 {/if}
@@ -115,6 +121,29 @@
 
   button:hover {
     background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  /* The page's own button with work going on: a ring of its progress around the icon. */
+  .action {
+    position: relative;
+  }
+
+  .ring {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 38px;
+    height: 38px;
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    transform: translate(-50%, -50%) rotate(-90deg);
+    pointer-events: none;
+  }
+
+  .ring .bg {
+    stroke: color-mix(in srgb, var(--accent) 25%, transparent);
   }
 
   /* A search or a filter that applies. */

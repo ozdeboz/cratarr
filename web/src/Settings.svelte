@@ -9,6 +9,7 @@
   import { panel, SETTINGS, viewPlaylist } from './lib/panel.svelte';
   import { playOn } from './lib/playOn.svelte';
   import { prefs } from './lib/prefs.svelte';
+  import { kept } from './lib/kept.svelte';
   import { SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
 
   // The last answer (kept for the panel too), read again here.
@@ -58,6 +59,8 @@
         return accounts === null ? '' : accounts.length ? accounts.join(' · ') : 'No account';
       case 'import':
         return lastImport?.finished ? `Last ${new Date(lastImport.finished * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : 'Not yet';
+      case 'sync':
+        return [kept.known ? `${kept.items.length} kept` : null, appInfo.syncBudgetGb ? `${appInfo.syncBudgetGb} GB` : 'No limit'].filter(Boolean).join(' · ');
       case 'display':
         return THEME[prefs.theme];
     }

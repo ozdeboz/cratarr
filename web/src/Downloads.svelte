@@ -15,6 +15,10 @@
   import { library, readLibrary } from './lib/albums.svelte';
   import { playQueue } from './lib/localPlayer.svelte';
   import { prefs } from './lib/prefs.svelte';
+  import { inApp } from './lib/app.svelte';
+  import { kept, keptBusy } from './lib/kept.svelte';
+  import KeptSheet from './lib/KeptSheet.svelte';
+  import { usePageAction } from './lib/pageView.svelte';
 
   askDownloads();
   // The Library's list, for what each album is (the kept copy first; without a connection that is all there is).
@@ -69,6 +73,16 @@
 
   let menu = $state<{ source: string; a: ListedAlbum } | null>(null);
   let menuShown = $state(false);
+
+  // Kept on this device (decision 0038): the pill's last button opens the progress sheet, ringed while anything syncs
+  // or waits; there while anything is kept.
+  let syncOpen = $state(false);
+  usePageAction(() => {
+    if (!inApp || !kept.items.length) return null;
+    const want = kept.items.reduce((n, i) => n + i.total - i.over_budget, 0);
+    const done = kept.items.reduce((n, i) => n + i.done, 0);
+    return { icon: 'arrowDownToLine', label: 'Sync', run: () => (syncOpen = true), progress: keptBusy() ? (want ? done / want : 0) : null };
+  });
 </script>
 
 <main>
@@ -129,6 +143,10 @@
     </AlbumShelf>
   {/if}
 </main>
+
+{#if syncOpen}
+  <KeptSheet onclose={() => (syncOpen = false)} />
+{/if}
 
 {#if menuShown && menu}
   {@const m = menu}
