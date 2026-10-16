@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
     let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), tag_rules, &env)
         .context("cannot open the OpenSubsonic library")?;
     serve::set_instance(served.clone());
-    let snapcast_bind = cfg.snapcast_bind.clone();
+    let (snapcast_bind, snapcast_host) = (cfg.snapcast_bind.clone(), cfg.snapcast_host.clone());
     let app = app::App::new(cfg, saved, origin).await.context("cannot open the catalogue")?;
     // Sync play (decision 0037): groups' sound on Snapcast's protocol; Cratarr runs on without it if the port is taken.
     if let Some(bind) = snapcast_bind {
@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
             Ok(listener) => {
                 let port = listener.local_addr().map(|a| a.port()).unwrap_or(snapcast::PORT);
                 let snap = snapcast::Snapcast::new(app.play_on.clone(), snapcast::BUFFER_MS);
-                app.play_on.serve_sync_play(port, snapcast::BUFFER_MS);
+                app.play_on.serve_sync_play(port, snapcast::BUFFER_MS, snapcast_host);
                 tokio::spawn(snap.serve(listener));
                 tracing::info!("sync play on {bind}");
             }

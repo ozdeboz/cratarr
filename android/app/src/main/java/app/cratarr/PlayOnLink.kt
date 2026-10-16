@@ -255,7 +255,12 @@ class PlayOnLink(
             "repeat" -> Repeat.set(service, p, m.optString("mode"), service::located)
             "sleep" -> Sleep.set(service, m, "at_ms", "end_of_track")
             // Sync play (decision 0037): the group this player plays in, by its leader (none: alone).
-            "group" -> sync.group(if (m.isNull("leader")) null else m.optString("leader"), m.optInt("port", 1704), m.optLong("buffer_ms", 1000))
+            "group" -> sync.group(
+                if (m.isNull("leader")) null else m.optString("leader"),
+                if (m.isNull("host")) null else m.optString("host").ifEmpty { null },
+                m.optInt("port", 1704),
+                m.optLong("buffer_ms", 1000),
+            )
             "radio" -> Radio.command(service, p, m)
             "autoplay" -> Autoplay.command(service, p, m)
             "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))

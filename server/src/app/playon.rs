@@ -303,6 +303,9 @@ pub enum Command {
     /// the group's sound is (Snapcast's port on Cratarr's host, and its buffer). Never taken from outside.
     Group {
         leader: Option<String>,
+        /// Where Snapcast's port is, when not on the host the player reaches Cratarr on.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
         port: u16,
         buffer_ms: u32,
     },
@@ -546,8 +549,8 @@ pub struct PlayOn {
     playlists: Arc<PlaylistService>,
     /// Sync play's measurements, waiting for the players' samples (decision 0037, step 1).
     samples: super::together::Samples,
-    /// Where groups' sound is (Snapcast's port, its buffer), once Cratarr serves it (decision 0037).
-    sync_play: Mutex<Option<(u16, u32)>>,
+    /// Where groups' sound is (Snapcast's port, its buffer, the host when another), once Cratarr serves it (0037).
+    sync_play: Mutex<Option<(u16, u32, Option<String>)>>,
     /// Counts joins, for who joined longest ago.
     joins: AtomicU64,
 }
@@ -1015,13 +1018,14 @@ impl PlayOn {
         Ok(())
     }
 
-    /// Cratarr serves groups' sound (decision 0037): on Snapcast's `port`, played `buffer_ms` after it is stamped.
-    pub fn serve_sync_play(&self, port: u16, buffer_ms: u32) {
-        *self.sync_play.lock().unwrap_or_else(|p| p.into_inner()) = Some((port, buffer_ms));
+    /// Cratarr serves groups' sound (decision 0037): on Snapcast's `port` (on `host`, when the players reach it on
+    /// another host than Cratarr's pages), played `buffer_ms` after it is stamped.
+    pub fn serve_sync_play(&self, port: u16, buffer_ms: u32, host: Option<String>) {
+        *self.sync_play.lock().unwrap_or_else(|p| p.into_inner()) = Some((port, buffer_ms, host));
     }
 
-    fn sync_play(&self) -> Option<(u16, u32)> {
-        *self.sync_play.lock().unwrap_or_else(|p| p.into_inner())
+    fn sync_play(&self) -> Option<(u16, u32, Option<String>)> {
+        self.sync_play.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     /// The leader of the group `name` plays in (itself when it leads); `None` when it plays alone.
@@ -1040,9 +1044,9 @@ impl PlayOn {
 
     /// Tells a player the group it plays in (none: alone), as Cratarr knows it.
     fn tell_group(&self, name: &str) {
-        let (port, buffer_ms) = self.sync_play().unwrap_or((crate::snapcast::PORT, crate::snapcast::BUFFER_MS));
+        let (port, buffer_ms, host) = self.sync_play().unwrap_or((crate::snapcast::PORT, crate::snapcast::BUFFER_MS, None));
         let leader = self.leader_of(name);
-        let _ = self.send(name, &Command::Group { leader, port, buffer_ms });
+        let _ = self.send(name, &Command::Group { leader, host, port, buffer_ms });
     }
 
     /// `name` plays with `to`'s group, which `to` leads when it plays in none (decision 0037). Out of any group it
@@ -1523,13 +1527,14 @@ mod tests {
             assert_eq!(group_of(c), vec![None]);
         }
         assert!(matches!(p.command("phone", Command::Join { to: "tablet".into() }).await, Err(ToggleError::Refused(_))), "not served");
-        p.serve_sync_play(1704, 1000);
+        p.serve_sync_play(1704, 1000, Some("192.168.1.5".into()));
         p.command("tablet", Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).await.unwrap();
         p.report("tablet", Report { index: 0, playing: true, volume: 80, ..Report::default() }).unwrap();
         told(&mut tablet);
 
         p.command("phone", Command::Join { to: "tablet".into() }).await.unwrap();
-        assert_eq!(group_of(&mut tablet), vec![Some("tablet".to_string())]);
+        let to_tablet = told(&mut tablet);
+        assert_eq!((to_tablet[0]["leader"].as_str(), to_tablet[0]["host"].as_str()), (Some("tablet"), Some("192.168.1.5")));
         assert_eq!(group_of(&mut phone), vec![Some("tablet".to_string())]);
         // The phone shows the group's music, with its own name and volume.
         p.report("phone", Report { index: -1, volume: 30, ..Report::default() }).unwrap();

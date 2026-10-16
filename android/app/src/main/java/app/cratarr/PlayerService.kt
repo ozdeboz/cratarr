@@ -52,7 +52,7 @@ class PlayerService : MediaSessionService() {
     private val prefsChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == Prefs.SERVER_URL || key == Prefs.PLAYER_NAME || key == Prefs.STAY_READY) link?.reconnect()
         // Another server or name: Cratarr says the group again once connected.
-        if ((key == Prefs.SERVER_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, 0, sync.bufferMs)
+        if ((key == Prefs.SERVER_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, null, 0, sync.bufferMs)
         if (key == Prefs.SLEEP) {
             keepSleep()
             link?.sleepChanged()

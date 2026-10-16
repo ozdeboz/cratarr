@@ -92,9 +92,10 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
         }
     }
 
-    /** Cratarr's word (main thread): the group it plays in, where its sound is. */
-    fun group(leader: String?, port: Int, bufferMs: Long) {
-        val host = prefs.serverUrl?.let { Uri.parse(it.trim()).host }
+    /** Cratarr's word (main thread): the group it plays in, where its sound is (on `host`, else on the host Cratarr's
+     *  pages come from). */
+    fun group(leader: String?, host: String?, port: Int, bufferMs: Long) {
+        val host = host ?: prefs.serverUrl?.let { Uri.parse(it.trim()).host }
         val me = prefs.playerName
         val wasLeading = leads
         val wasFollowing = follows
@@ -151,7 +152,7 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     fun leave() {
         val server = prefs.serverUrl?.trimEnd('/') ?: return
         val url = "$server/api/players/${Uri.encode(prefs.playerName)}/command"
-        group(null, 0, bufferMs)
+        group(null, null, 0, bufferMs)
         Thread {
             try {
                 val c = URL(url).openConnection() as HttpURLConnection

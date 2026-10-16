@@ -13,6 +13,9 @@ pub struct Config {
     pub data_dir: Option<String>,
     /// Where Snapcast's clients connect for sync play (decision 0037), e.g. `0.0.0.0:1704`; empty: not served.
     pub snapcast_bind: Option<String>,
+    /// The host the players reach that port on, when not the one they reach Cratarr on (a page behind a reverse proxy
+    /// on a public name, the port open on the local network only): e.g. the server's LAN address.
+    pub snapcast_host: Option<String>,
 }
 
 /// Variables that are no longer read: `placement.rs` finds paths on its own, and no Jellyfin user is involved.
@@ -29,6 +32,7 @@ impl Config {
                 Some(b) => Some(b.trim().to_string()).filter(|b| !b.is_empty()),
                 None => Some("0.0.0.0:1704".into()),
             },
+            snapcast_host: get("CRATARR_SNAPCAST_HOST"),
         })
     }
 }
