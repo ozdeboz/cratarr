@@ -76,6 +76,14 @@ pub struct AlbumView {
     /// Its weakest track's bitrate.
     pub bitrate_kbps: Option<u32>,
     pub rows: Vec<super::playlists::PlaylistRow>,
+    /// When it came and when it was last played (epoch seconds), and how often: the panel's About; absent where the
+    /// source cannot say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub played: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plays: Option<u32>,
 }
 
 /// A track the page plays itself (decision 0022) as the player shows it: its playlists, and whether it can be added
@@ -516,7 +524,21 @@ impl PlayingService {
                 }
             })
             .collect();
-        Ok(AlbumView { source: source_id.to_string(), id: album_id.to_string(), title, artist, year, genres, format, bitrate_kbps, rows })
+        let listening = s.album_listening(album_id).await.unwrap_or_default();
+        Ok(AlbumView {
+            source: source_id.to_string(),
+            id: album_id.to_string(),
+            title,
+            artist,
+            year,
+            genres,
+            format,
+            bitrate_kbps,
+            rows,
+            added: listening.added,
+            played: listening.played,
+            plays: listening.plays,
+        })
     }
 
     /// Plays an album of a connected server on that server's player. Returns the player's label.

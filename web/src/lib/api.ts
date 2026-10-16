@@ -831,6 +831,11 @@ export type AlbumView = {
   /** Its weakest track's bitrate. */
   bitrate_kbps: number | null;
   rows: PlaylistRow[];
+  /** When it came and when it was last played (epoch seconds), and how often (the panel's About); absent where the
+   *  server cannot say. */
+  added?: number;
+  played?: number;
+  plays?: number;
 };
 export const albumView = (source: string, album: string) =>
   quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);

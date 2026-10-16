@@ -25,7 +25,7 @@
     type TrackState,
   } from './api';
   import MarkLoader from './MarkLoader.svelte';
-  import { pageView } from './pageView.svelte';
+  import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -101,15 +101,11 @@
 
   // Go to artist: the Library page with that artist's albums (the search says the name). A "feat." credit is left out:
   // the albums are under the main artist.
-  const artistName = $derived(t?.artist?.split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim() || null);
+  const artistName = $derived(mainArtist(t?.artist));
   function goToArtist() {
     if (!artistName) return;
-    pageView.artist = artistName;
-    pageView.next = artistName;
-    pageView.query = artistName;
     onclose();
-    if (player.full) player.full = false;
-    location.hash = keepViewed('#/library');
+    showArtist(artistName);
   }
 
   // Share: the track in words, and its album's link here (a track has no page of its own; lib/share.ts).

@@ -62,7 +62,7 @@
     type ReplacePreview,
     type TrackState,
   } from './api';
-  import { albumPlay, playAlbums, playListedAlbum } from './albums.svelte';
+  import { albumPlay, goToArtist as showArtist, mainArtist, playAlbums, playListedAlbum } from './albums.svelte';
   import { download, downloads, inApp, removeDownloads } from './app.svelte';
   import { viewGenre } from './crates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
@@ -214,16 +214,10 @@
 
   // Go to artist: the Library with that artist's albums (the search says the name), as the track menu's; one for each
   // artist the album is credited to (as Symfonium's). Without the source's list, the credit with a "feat." left out.
-  const artistNames = $derived(
-    a.artists?.length ? a.artists : [a.artist?.split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim() ?? ''].filter(Boolean),
-  );
+  const artistNames = $derived(a.artists?.length ? a.artists : [mainArtist(a.artist) ?? ''].filter(Boolean));
   function goToArtist(name: string) {
-    pageView.artist = name;
-    pageView.next = name;
-    pageView.query = name;
     onclose();
-    if (player.full) player.full = false;
-    location.hash = keepViewed('#/library');
+    showArtist(name);
   }
   function goToGenre(name: string) {
     onclose();
