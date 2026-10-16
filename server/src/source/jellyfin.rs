@@ -517,6 +517,11 @@ impl Source for JellyfinSource {
 
     /// Jellyfin refuses replacing a playlist's list (and moving an entry) to an API key; adding and removing entries
     /// it allows (observed on 10.11). So: the smallest of append, remove, or empty and refill.
+    /// A Jellyfin playlist holds a track once, whatever it is sent.
+    fn playlists_keep_repeats(&self) -> bool {
+        false
+    }
+
     fn set_playlist_tracks<'a>(&'a self, user: &'a str, playlist: &'a str, ids: &'a [String]) -> Fut<'a, ()> {
         Box::pin(async move {
             let now = self.jf.playlist_entry_ids(user, playlist).await?;

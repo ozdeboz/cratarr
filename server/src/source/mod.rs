@@ -464,6 +464,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this server has no favourites") })
     }
 
+    /// Whether this server's playlists can hold a track twice. Jellyfin's cannot: the playlist sync then compares and
+    /// writes the first copies only, and keeps the file's repeats (decision 0025, amended 2026-10-16).
+    fn playlists_keep_repeats(&self) -> bool {
+        true
+    }
+
     /// Optional (decision 0012): make a playlist hold exactly these tracks, in this order. Safe to repeat.
     fn set_playlist_tracks<'a>(&'a self, _user: &'a str, _playlist: &'a str, _ids: &'a [String]) -> Fut<'a, ()> {
         Box::pin(async { anyhow::bail!("this server keeps no playlists of its own") })

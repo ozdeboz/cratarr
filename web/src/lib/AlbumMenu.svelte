@@ -9,7 +9,8 @@
   // its entries on rounded cards, related ones joined: the favourite; Add to playlist (all its tracks, the playlists
   // as toggle cards in a step of the sheet, as a track's); and while it is in Incoming, Keep, Replace and Delete,
   // which close the menu and leave the question to the panel.
-  import { albumCoverUrl, setAlbumFavorite, setTrackMember, trackState, type Playlist, type TrackState } from './api';
+  import { albumCoverUrl, appendTracks, setAlbumFavorite, setTrackMember, trackState, type Playlist, type TrackState } from './api';
+  import { withUndo } from './undo.svelte';
   import { isFavorite, loadFavorites, setFavorite } from './favourites.svelte';
   import { refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -97,7 +98,9 @@
   const addable = $derived(!!first?.addable);
 
   // svelte-ignore state_referenced_locally
-  let step = $state<'menu' | 'lists'>(start);
+  let step = $state<'menu' | 'lists' | 'again'>(start);
+  // A playlist that holds some of the album's tracks already: the sheet asks (decision 0025, amended 2026-10-16).
+  let again = $state<{ p: Playlist; already: number; of: number } | null>(null);
   $effect(() => {
     if (step === 'lists') ask(tracks);
   });
@@ -119,7 +122,37 @@
   // The playlist the album is going into: one at a time, its card spinning until the last track is in.
   let adding = $state<string | null>(null);
   async function add(p: Playlist) {
-    if (adding || holds(p)) return;
+    if (adding || !known) return;
+    const can = tracks.filter((id) => states[id].addable);
+    const already = can.filter((id) => member(id, p)).length;
+    if (already > 0) {
+      again = { p, already, of: can.length };
+      step = 'again';
+      return;
+    }
+    await addOthers(p);
+  }
+
+  /** Every track again at the playlist's end, those it holds included. */
+  async function addAgain(p: Playlist) {
+    if (adding) return;
+    adding = p.id;
+    try {
+      const r = await appendTracks(p.id, source, tracks.filter((id) => states[id].addable));
+      withUndo(`Added ${r.added} ${r.added === 1 ? 'track' : 'tracks'} to ${p.name}.`, [r.undo]);
+      onclose();
+      refresh();
+    } catch (e) {
+      toast.fail(e, 'The tracks were not added');
+    } finally {
+      adding = null;
+    }
+  }
+
+  /** The tracks the playlist does not hold yet. */
+  async function addOthers(p: Playlist) {
+    if (adding) return;
+    step = 'lists';
     adding = p.id;
     try {
       // One by one, in play order, so the tracks are added in it; those already in it (or not in Music) are passed.
@@ -151,7 +184,7 @@
   images={[cover ?? albumCoverUrl(source, album)]}
   {title}
   chips={[artist ?? 'Unknown artist']}
-  onback={step === 'menu' ? null : () => (step = 'menu')}
+  onback={step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
   {step}
 >
   {#if step === 'menu'}
@@ -191,6 +224,15 @@
           {#if replace}<MenuEntry icon="swap" label={`Replace in ${music}`} onclick={() => incomingStep(replace)} />{/if}
           {#if remove}<MenuEntry icon="trash" label="Delete album" danger onclick={() => incomingStep(remove)} />{/if}
         </div>
+      {/if}
+    </div>
+  {:else if step === 'again' && again}
+    {@const a = again}
+    <div class="heading">{a.already === a.of ? `${a.p.name} holds this album` : `${a.already} of these ${a.of} tracks are in ${a.p.name}`}</div>
+    <div role="group" aria-label="Add again">
+      <MenuEntry icon="listAdd" label="Add again" busy={adding === a.p.id} disabled={adding !== null} onclick={() => addAgain(a.p)} />
+      {#if a.already < a.of}
+        <MenuEntry icon="check" label="Add only the others" disabled={adding !== null} onclick={() => addOthers(a.p)} />
       {/if}
     </div>
   {:else}

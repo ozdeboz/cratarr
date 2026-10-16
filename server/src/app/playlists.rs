@@ -1052,6 +1052,41 @@ impl PlaylistService {
         Ok(self.keep_texts(vec![edit]))
     }
 
+    /// Take the repeats out of one playlist, the first copy of each track staying: the user's "Remove repeats"
+    /// (decision 0025, amended 2026-10-16). Returns the undo token, none when it held none.
+    pub async fn remove_repeats(&self, id: &str) -> Result<Option<String>, ToggleError> {
+        let Some(edit) = self.lib.store()?.remove_repeats(id).await? else { return Ok(None) };
+        self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
+        Ok(self.keep_texts(vec![edit]))
+    }
+
+    /// Add these tracks (ids on `source_id`, in order) at a playlist's end, whether or not it holds them already: the
+    /// page asked and the user chose Add again (decision 0025, amended 2026-10-16). Tracks outside the library are left
+    /// out. Returns how many were added and the undo token.
+    pub async fn append_tracks(&self, id: &str, source_id: &str, ids: &[String]) -> Result<(usize, Option<String>), ToggleError> {
+        let gone = || ToggleError::Refused("Those tracks are not on a connected server.".into());
+        let (a, s) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id).ok_or_else(gone)?;
+        let store = self.lib.store()?;
+        let folders = self.lib.folders();
+        let mut entries = Vec::new();
+        for track in ids {
+            if !crate::covers::valid_item_id(track) {
+                continue;
+            }
+            if let Ok(t) = s.track(track).await
+                && let Some(e) = a.line(&folders, &t)
+            {
+                entries.push(e);
+            }
+        }
+        if entries.is_empty() {
+            return Err(ToggleError::NotInLibrary);
+        }
+        let edit = store.append(id, &entries).await?;
+        self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
+        Ok((entries.len(), self.keep_texts(vec![edit])))
+    }
+
     /// Every playlist's name, lines and missing-track count (the OpenSubsonic playlists, decision 0030).
     pub async fn snapshot(&self) -> Result<Vec<(String, Vec<String>, usize)>, ToggleError> {
         Ok(self.lib.store()?.snapshot().await?)
@@ -1064,8 +1099,8 @@ impl PlaylistService {
 
     /// A playlist's lines replaced as one write, as `edit`, but the new list may also hold lines it did not have (an
     /// OpenSubsonic client adding songs, decision 0030). The caller makes the lines from the catalogue, never from what
-    /// a client sent. Refused when the playlist changed since `expected`. A line that would repeat is left out by the
-    /// store (decision 0025, amended). Returns the undo token (none when nothing changed).
+    /// a client sent. Refused when the playlist changed since `expected`. Repeats are kept as the client wrote them
+    /// (decision 0025, amended 2026-10-16). Returns the undo token (none when nothing changed).
     pub async fn set_entries(&self, id: &str, expected: &[String], entries: &[String]) -> Result<Option<String>, ToggleError> {
         let Some(edit) = self.lib.store()?.replace_entries_if(id, expected, entries).await? else {
             return Err(ToggleError::Refused("The playlist changed meanwhile: look at it again.".into()));

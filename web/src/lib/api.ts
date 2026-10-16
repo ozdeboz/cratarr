@@ -258,9 +258,10 @@ export const setCrateFavourites = (id: string, favourites: CrateFavourites) =>
     body: JSON.stringify({ favourites }),
   });
 export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
-/** `ids`: the queue to make it from (the local player's); without, the server's player's queue. */
-export const playlistFromQueue = (name: string, source?: string, ids?: string[]) =>
-  post<{ playlist: string; added: number; left_out: number } & Undo>(`/api/queue/playlist${follow(source)}`, ids ? { name, ids } : { name });
+/** `ids`: the queue to make it from (the local player's); without, the server's player's queue. `repeats`: a track
+ *  the queue plays twice is in it twice (the page asked), else once (decision 0025, amended 2026-10-16). */
+export const playlistFromQueue = (name: string, source?: string, ids?: string[], repeats = false) =>
+  post<{ playlist: string; added: number; left_out: number } & Undo>(`/api/queue/playlist${follow(source)}`, ids ? { name, ids, repeats } : { name, repeats });
 
 /** Mark the playing track a favourite or not. Says the state wanted, so a retried request changes nothing more. */
 export const setFavorite = (on: boolean, source?: string) => {
@@ -328,6 +329,14 @@ export type PlaylistRow = {
   duration_secs: number | null;
   missing: boolean;
 };
+
+/** Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16). */
+export const removeRepeats = (id: string) =>
+  request<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/repeats`, { method: 'DELETE' });
+
+/** Add tracks (ids on `source`, in order) at a playlist's end, whether or not it holds them already: Add again. */
+export const appendTracks = (id: string, source: string, ids: string[]) =>
+  post<{ playlist: string; added: number } & Undo>(`/api/playlists/${encodeURIComponent(id)}/append`, { source, ids });
 
 export const playlistRows = (id: string, source?: string) =>
   quietly<{ source: string; rows: PlaylistRow[] }>(

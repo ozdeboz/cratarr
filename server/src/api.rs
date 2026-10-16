@@ -56,6 +56,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/favourites", put(crate_favourites))
         .route("/api/playlists/{id}/favorite", post(playlist_favorite))
         .route("/api/playlists/{id}/entries", put(edit_playlist))
+        .route("/api/playlists/{id}/repeats", delete(remove_repeats))
+        .route("/api/playlists/{id}/append", post(append_tracks))
         .route("/api/playlists/{id}/toggle", post(toggle))
         .route("/api/favorite", post(favorite))
         .route("/api/playlists/{id}/play", post(play_playlist))
@@ -499,6 +501,24 @@ struct Edit {
 async fn edit_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(e): Json<Edit>) -> Result<Json<serde_json::Value>, ApiError> {
     let undo = app.playlists.edit(&id, &e.expected, &e.entries).await?;
     Ok(Json(json!({ "playlist": id, "entries": e.entries.len(), "undo": undo })))
+}
+
+/// Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16).
+async fn remove_repeats(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let undo = app.playlists.remove_repeats(&id).await?;
+    Ok(Json(json!({ "playlist": id, "undo": undo })))
+}
+
+/// Tracks to add at a playlist's end, whether or not it holds them already (the user chose Add again).
+#[derive(Deserialize)]
+struct Append {
+    source: String,
+    ids: Vec<String>,
+}
+
+async fn append_tracks(State(app): State<Arc<App>>, Path(id): Path<String>, Json(a): Json<Append>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (added, undo) = app.playlists.append_tracks(&id, &a.source, &a.ids).await?;
+    Ok(Json(json!({ "playlist": id, "added": added, "undo": undo })))
 }
 
 /// A playlist's tracks for the local player: the server they are on and their ids in file order (decision 0022).
@@ -1043,6 +1063,9 @@ async fn queue_jump(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(q
 struct QueuePlaylist {
     name: String,
     ids: Option<Vec<String>>,
+    /// A track the queue plays twice stays twice (the page asked); else once.
+    #[serde(default)]
+    repeats: bool,
 }
 
 async fn queue_playlist(
@@ -1050,7 +1073,7 @@ async fn queue_playlist(
     Query(f): Query<Follow>,
     Json(q): Json<QueuePlaylist>,
 ) -> Result<(StatusCode, Json<crate::app::FromQueue>), ApiError> {
-    let made = app.playing.playlist_from_queue(f.source.as_deref(), &q.name, q.ids).await?;
+    let made = app.playing.playlist_from_queue(f.source.as_deref(), &q.name, q.ids, q.repeats).await?;
     Ok((StatusCode::CREATED, Json(made)))
 }
 

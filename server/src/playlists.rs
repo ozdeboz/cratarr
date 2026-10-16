@@ -443,11 +443,9 @@ impl Store {
     }
 
     /// Replace the playlist with `new_text`: back the old file up, write a temporary file next to it and rename it
-    /// into place. The caller must hold the write lock. A playlist never holds a track twice: only the first copy of
-    /// each is written (decision 0025, amended 2026-10-15). Returns the text as written.
+    /// into place. The caller must hold the write lock. Written as given, repeats included: a playlist holds a track
+    /// twice when it was asked to (decision 0025, amended 2026-10-16). Returns the text as written.
     async fn commit(&self, id: &str, path: &Path, perms: std::fs::Permissions, new_text: &str) -> Result<String> {
-        let (new_text, _) = m3u::with_deduped(new_text);
-        let new_text = new_text.as_str();
         self.backup(id, path).await?;
         let tmp = self.dir.join(format!(".{id}.m3u.cratarr-tmp"));
         tokio::fs::write(&tmp, new_text).await.with_context(|| format!("writing {}", tmp.display()))?;
@@ -609,12 +607,14 @@ impl Store {
             let mut text = before.clone();
             let mut total = 0;
             for r in repairs {
-                let (t, n) = m3u::with_replaced(&text, &self.line(&r.from), &self.line(&r.to));
+                let (from, to) = (self.line(&r.from), self.line(&r.to));
+                // A dead line pointed at a file the playlist already lists would become a repeat nobody asked for:
+                // it goes instead (decision 0025, amended 2026-10-16: repeats only when asked for).
+                let (t, n) = if m3u::contains(&text, &to) { m3u::with_removed(&text, &from) } else { m3u::with_replaced(&text, &from, &to) };
                 text = t;
                 total += n;
             }
             if total > 0 {
-                // A line pointed at a file the playlist already lists becomes a repeat: only the first stays.
                 let after = self.commit(&id, &path, perms, &text).await?;
                 changed.push(Edited { id, before, after });
             }
@@ -675,40 +675,27 @@ impl Store {
         Ok(out)
     }
 
-    /// Take the repeats out of every playlist that has any, keeping the first copy of each track: a playlist never
-    /// holds a track twice, but a file can still come with repeats (edited by hand, put back from a backup). Returns
-    /// (playlist, how many lines went) for each changed one.
-    pub async fn without_repeats(&self) -> Result<Vec<(String, usize)>> {
-        self.view(None).await?;
-        let repeating: Vec<String> = {
-            let cache = self.cache.read().await;
-            cache
-                .iter()
-                .filter(|(_, c)| {
-                    let mut seen = HashSet::new();
-                    c.lines.iter().any(|l| !seen.insert(l))
-                })
-                .map(|(id, _)| id.clone())
-                .collect()
-        };
+    /// Take the repeats out of one playlist, the first copy of each track staying: the user's "Remove repeats"
+    /// (decision 0025, amended 2026-10-16). `None` when it held none.
+    pub async fn remove_repeats(&self, id: &str) -> Result<Option<Edited>, StoreError> {
         let _one_writer = self.write.lock().await;
-        let mut out = Vec::new();
-        for id in repeating {
-            let (path, perms, text) = match self.load_for_edit(&id).await {
-                Ok(f) => f,
-                Err(StoreError::Unknown) => continue, // gone since
-                Err(e) => {
-                    tracing::warn!("{id}: {e:#}");
-                    continue;
-                }
-            };
-            let (_, removed) = m3u::with_deduped(&text);
-            if removed > 0 {
-                self.commit(&id, &path, perms, &text).await?;
-                out.push((id, removed));
-            }
+        let (path, perms, text) = self.load_for_edit(id).await?;
+        let (deduped, removed) = m3u::with_deduped(&text);
+        if removed == 0 {
+            return Ok(None);
         }
-        Ok(out)
+        let after = self.commit(id, &path, perms, &deduped).await?;
+        Ok(Some(Edited { id: id.to_string(), before: text, after }))
+    }
+
+    /// Add `entries` at the playlist's end, in order, whether or not it holds them already: the user chose Add again
+    /// (decision 0025, amended 2026-10-16). Membership asks use `set_member`, which never makes a repeat.
+    pub async fn append(&self, id: &str, entries: &[String]) -> Result<Edited, StoreError> {
+        let _one_writer = self.write.lock().await;
+        let (path, perms, text) = self.load_for_edit(id).await?;
+        let new_text = entries.iter().fold(text.clone(), |t, e| m3u::with_added(&t, &self.line(e)));
+        let after = if new_text != text { self.commit(id, &path, perms, &new_text).await? } else { text.clone() };
+        Ok(Edited { id: id.to_string(), before: text, after })
     }
 
     /// Create an empty playlist. Never overwrites an existing file.
@@ -1078,9 +1065,9 @@ B/2.mp3
         let s = d.store();
         assert_eq!(s.view(None).await.unwrap()[0].count, 3, "duplicate lines count, comments and blanks do not");
         s.toggle("a", "C/3.mp3").await.unwrap();
-        assert_eq!(s.view(None).await.unwrap()[0].count, 3, "a write keeps only the first copy of A");
+        assert_eq!(s.view(None).await.unwrap()[0].count, 4, "a write keeps both copies of A");
         s.toggle("a", "A/1.mp3").await.unwrap();
-        assert_eq!(s.view(None).await.unwrap()[0].count, 2);
+        assert_eq!(s.view(None).await.unwrap()[0].count, 2, "taking A out takes every copy");
     }
 
     #[tokio::test]
@@ -1245,6 +1232,21 @@ B/2.mp3
     }
 
     #[tokio::test]
+    async fn a_repair_onto_a_file_the_playlist_already_lists_takes_the_dead_line_out() {
+        let d = Dir::new();
+        d.touch("Alb (2020)/01 A - One.flac");
+        d.write("p.m3u", "Alb (2020)/01 A - One.flac
+Alb (2020)/01 A - One.mp3
+");
+        let s = d.store();
+        let r = s.repairs().await.unwrap();
+        assert_eq!(r.safe.len(), 1, "{r:?}");
+        s.apply_repairs(&r.safe).await.unwrap();
+        assert_eq!(d.read("p.m3u"), "Alb (2020)/01 A - One.flac
+", "no repeat made by a repair");
+    }
+
+    #[tokio::test]
     async fn a_repair_that_is_not_currently_offered_is_refused() {
         let d = Dir::new();
         d.touch("Alb (2020)/01 A - One.flac");
@@ -1273,29 +1275,32 @@ B/2.mp3
     }
 
     #[tokio::test]
-    async fn repeats_are_taken_out_keeping_the_first_copy() {
+    async fn remove_repeats_keeps_the_first_copy_of_one_playlist() {
         let d = Dir::new();
         d.write("a.m3u", "A/1.mp3\nB/2.mp3\nA/1.mp3\nA/1.mp3\n");
-        d.write("clean.m3u", "A/1.mp3\n");
+        d.write("b.m3u", "A/1.mp3\nA/1.mp3\n");
         let s = d.store();
-        assert_eq!(s.without_repeats().await.unwrap(), vec![("a".to_string(), 2)]);
+        let edit = s.remove_repeats("a").await.unwrap().unwrap();
         assert_eq!(d.read("a.m3u"), "A/1.mp3\nB/2.mp3\n");
-        assert!(s.without_repeats().await.unwrap().is_empty());
-        assert_eq!(std::fs::read_dir(d.0.join(BACKUP_DIR)).unwrap().count(), 1, "only the changed playlist is backed up");
+        assert_eq!(edit.before, "A/1.mp3\nB/2.mp3\nA/1.mp3\nA/1.mp3\n", "as it was, for undo");
+        assert_eq!(d.read("b.m3u"), "A/1.mp3\nA/1.mp3\n", "only the playlist asked for");
+        assert!(s.remove_repeats("a").await.unwrap().is_none(), "none left");
     }
 
     #[tokio::test]
-    async fn no_write_leaves_a_repeat() {
+    async fn writes_keep_repeats_and_append_adds_again() {
         let d = Dir::new();
         d.write("p.m3u", "A/1.mp3\nB/2.mp3\n");
         let s = d.store();
         let e = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         let edit = s.replace_entries_if("p", &e(&["A/1.mp3", "B/2.mp3"]), &e(&["B/2.mp3", "A/1.mp3", "B/2.mp3"])).await.unwrap().unwrap();
-        assert_eq!(d.read("p.m3u"), "B/2.mp3\nA/1.mp3\n", "the first copy stays");
+        assert_eq!(d.read("p.m3u"), "B/2.mp3\nA/1.mp3\nB/2.mp3\n", "as an app wrote it (decision 0025, amended 2026-10-16)");
         assert_eq!(edit.after, d.read("p.m3u"), "what was written, for undo");
         let back = s.put_back_if("p", fingerprint(&edit.after), "C/3.mp3\nC/3.mp3\n").await.unwrap().unwrap();
-        assert_eq!(back.after, "C/3.mp3\n");
-        assert_eq!(d.read("p.m3u"), "C/3.mp3\n");
+        assert_eq!(back.after, "C/3.mp3\nC/3.mp3\n");
+        assert!(!s.set_member("p", "C/3.mp3", true).await.unwrap(), "a member asked for is never added twice");
+        s.append("p", &e(&["C/3.mp3", "A/1.mp3"])).await.unwrap();
+        assert_eq!(d.read("p.m3u"), "C/3.mp3\nC/3.mp3\nC/3.mp3\nA/1.mp3\n", "Add again: at the end, whatever it holds");
     }
 
     #[tokio::test]

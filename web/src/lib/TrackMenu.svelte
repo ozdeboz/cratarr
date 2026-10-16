@@ -98,7 +98,13 @@
 
   // The step it opens on; later steps are the sheet's own.
   // svelte-ignore state_referenced_locally
-  let step = $state<'menu' | 'lists' | 'new' | 'details'>(start);
+  let step = $state<'menu' | 'lists' | 'new' | 'repeats' | 'details'>(start);
+  // The queue a new playlist is made of; one that plays a track twice asks: Keep repeats, or each track once
+  // (decision 0025, amended 2026-10-16).
+  const queueIds = $derived(
+    isLocal() ? local.queue.slice(Math.max(0, local.index)).map((x) => x.id) : np ? [np.id, ...np.upcoming.map((u) => u.id)] : [],
+  );
+  const queueRepeats = $derived(new Set(queueIds).size < queueIds.length);
 
   // Go to artist: the Library page with that artist's albums (the search says the name). A "feat." credit is left out:
   // the albums are under the main artist.
@@ -235,13 +241,13 @@
     }
   }
 
-  async function makePlaylist() {
+  async function makePlaylist(repeats = false) {
     const name = nameField.trim();
     if (!name || working) return;
     working = true;
     try {
       const ids = isLocal() ? local.queue.slice(Math.max(0, local.index)).map((t) => t.id) : undefined;
-      const made = await playlistFromQueue(name, t?.source, ids);
+      const made = await playlistFromQueue(name, t?.source, ids, repeats);
       const left = made.left_out ? `, ${made.left_out} not in the library left out` : '';
       withUndo(`Made ${made.playlist}: ${made.added} ${made.added === 1 ? 'track' : 'tracks'}${left}.`, [made.undo], {
         after: (undone) => (undone ? followDelete(made.playlist) : followCreate(made.playlist)),
@@ -286,7 +292,7 @@
             { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },
             { icon: 'playlists', label: 'Add to queue', onclick: () => queue('last'), disabled: working },
           ]}
-    onback={step === 'menu' ? null : () => (step = 'menu')}
+    onback={step === 'menu' ? null : () => (step = step === 'repeats' ? 'new' : 'menu')}
     {step}
   >
     {#if step === 'menu'}
@@ -350,12 +356,19 @@
       {:else}
         <div class="loading"><MarkLoader size={40} /></div>
       {/if}
+    {:else if step === 'repeats'}
+      <div class="heading">The queue plays some tracks more than once</div>
+      <div role="group" aria-label="Repeated tracks">
+        <MenuEntry icon="listAdd" label="Keep repeats" disabled={working} onclick={() => makePlaylist(true)} />
+        <MenuEntry icon="check" label="Each track once" disabled={working} onclick={() => makePlaylist(false)} />
+      </div>
     {:else}
       <form
         class="form"
         onsubmit={(e) => {
           e.preventDefault();
-          makePlaylist();
+          if (queueRepeats) step = 'repeats';
+          else makePlaylist();
         }}
       >
         <div class="heading">New playlist from the queue</div>

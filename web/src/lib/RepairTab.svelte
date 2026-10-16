@@ -1,14 +1,16 @@
 <script lang="ts">
   // The panel's Repair tab (decision 0025; what the Repairs page offered for playlists), for the selected playlists:
   // missing tracks found in another format (fixed together), likely matches (one at a time), and missing tracks with
-  // no file anywhere (Not found: removed one by one or all). Every change can be undone. Repeated tracks need no
-  // repair: a playlist never holds a track twice (decision 0025, amended 2026-10-15).
+  // no file anywhere (Not found: removed one by one or all), and tracks a playlist holds more than once (Repeated: the
+  // repeats taken out on request, the first copy staying; decision 0025, amended 2026-10-16). Every change can be
+  // undone.
   import {
     applyOne,
     applySafe,
     editPlaylist,
     getRepairs,
     playlistRows,
+    removeRepeats,
     type PlaylistRow,
     type Repair,
   } from './api';
@@ -26,8 +28,9 @@
   const mine = (playlist: string) => ids.some((id) => id.toLowerCase() === playlist.toLowerCase());
   let safe = $state<Repair[]>([]);
   let review = $state<Repair[]>([]);
-  /** Each selected playlist's missing lines (only asked for when it has any). */
+  /** Each selected playlist's missing lines, and its repeated ones (each once, with how many times it is there). */
   let missingOf = $state<Record<string, PlaylistRow[]>>({});
+  let repeatsOf = $state<Record<string, { row: PlaylistRow; times: number }[]>>({});
   let loaded = $state(false);
   let error = $state<string | null>(null);
   let busy = $state(false);
@@ -37,12 +40,12 @@
     const want = [...ids];
     try {
       const r = await getRepairs();
-      const dead = shownPlaylists().filter((p) => want.includes(p.id) && p.dead > 0);
-      const rows = await Promise.all(dead.map((p) => playlistRows(p.id, prefs.source || undefined).then((x) => [p.id, x.rows.filter((row) => row.missing)] as const)));
+      const rows = await Promise.all(want.map((id) => playlistRows(id, prefs.source || undefined).then((x) => [id, x.rows] as const)));
       if (want.join('\n') !== ids.join('\n')) return;
       safe = r.safe.filter((x) => mine(x.playlist));
       review = r.review.filter((x) => mine(x.playlist));
-      missingOf = Object.fromEntries(rows);
+      missingOf = Object.fromEntries(rows.map(([id, all]) => [id, all.filter((row) => row.missing)]));
+      repeatsOf = Object.fromEntries(rows.map(([id, all]) => [id, repeated(all)]));
       error = null;
     } catch (e) {
       if (!loaded) error = e instanceof Error ? e.message : 'Unexpected error';
@@ -73,7 +76,8 @@
       (missingOf[id] ?? []).filter((r) => !offered.has(`${id.toLowerCase()}\n${r.entry}`)).map((r) => ({ playlist: id, row: r })),
     ),
   );
-  const nothing = $derived(loaded && !error && !safe.length && !review.length && !notFound.length);
+  const repeats = $derived(ids.flatMap((id) => (repeatsOf[id] ?? []).map((x) => ({ playlist: id, ...x }))));
+  const nothing = $derived(loaded && !error && !safe.length && !review.length && !notFound.length && !repeats.length);
 
   const tracks = (n: number) => `${n} ${n === 1 ? 'track' : 'tracks'}`;
   const inPlaylists = (n: number) => `${n} ${n === 1 ? 'playlist' : 'playlists'}`;
@@ -94,6 +98,27 @@
       refresh();
       await load();
     }
+  }
+
+  /** The lines a playlist holds more than once: each once, with how many times, in the order first met. */
+  function repeated(rows: PlaylistRow[]) {
+    const times = new Map<string, { row: PlaylistRow; times: number }>();
+    for (const row of rows) {
+      const t = times.get(row.entry);
+      if (t) t.times++;
+      else times.set(row.entry, { row, times: 1 });
+    }
+    return [...times.values()].filter((x) => x.times > 1);
+  }
+
+  /** Takes the repeats out of the playlists that have any, the first copy of each track staying. */
+  function removeAllRepeats() {
+    const lists = [...new Set(repeats.map((x) => x.playlist))];
+    return run(async () => {
+      const undo: (string | null)[] = [];
+      for (const id of lists) undo.push((await removeRepeats(id)).undo);
+      return { playlists: lists, undo };
+    }, 'Removed the repeats');
   }
 
   /** Takes these lines out of their playlists, each playlist written once. */
@@ -176,6 +201,18 @@
               <FileItem path={x.row.entry} name={x.row.name ?? undefined} detail={x.row.artist ?? undefined} playlist={several ? x.playlist : undefined}>
                 {#snippet action()}<button class="text" onclick={() => removeLines([x])} disabled={busy}>Remove</button>{/snippet}
               </FileItem>
+            </li>
+          {/each}
+        </ul>
+      </Section>
+    {/if}
+    {#if repeats.length > 0}
+      <Section title="Repeated" count={tracks(repeats.length)} hint="Tracks a playlist holds more than once. Removing the repeats keeps the first copy of each.">
+        <div class="do"><button class="primary" onclick={removeAllRepeats} disabled={busy}>Remove repeats</button></div>
+        <ul class="rows">
+          {#each repeats as x (`${x.playlist}\n${x.row.entry}`)}
+            <li>
+              <FileItem path={x.row.entry} name={x.row.name ?? undefined} detail={`${x.times} times${x.row.artist ? ` · ${x.row.artist}` : ''}`} playlist={several ? x.playlist : undefined} />
             </li>
           {/each}
         </ul>

@@ -30,7 +30,7 @@ use anyhow::{Result, bail};
 use super::ToggleError;
 use super::library::{Library, epoch_now, label_of};
 use crate::catalogue::Catalogue;
-use crate::playlist_merge::{Item, Newer, merge};
+use crate::playlist_merge::{Item, Newer, merge, merge_once};
 use crate::playlists::Store;
 use crate::source::{PlaylistChange, Source};
 use crate::sync_state::{Kind, Link, LinkStatus, LinkView, SyncState, Target};
@@ -133,16 +133,6 @@ impl SyncService {
                 tracing::warn!("playlist sync: {e:#}");
                 return;
             }
-        }
-        // A playlist never holds a track twice (decision 0025, amended 2026-10-15): a file that came with repeats
-        // (edited by hand, put back) keeps the first copy of each, before its copies are compared.
-        match store.without_repeats().await {
-            Ok(done) => {
-                for (playlist, n) in done {
-                    tracing::info!("playlist sync: {playlist}: {n} repeated track(s) taken out, the first copy kept");
-                }
-            }
-            Err(e) => tracing::warn!("playlist sync: cannot take out repeated tracks: {e:#}"),
         }
         match self.state.make_native() {
             Ok(Some(n)) => tracing::info!("playlist sync: {n} shared copies in Music are replaced by copies in your account"),
@@ -1007,6 +997,10 @@ async fn sync_content(
     })
     .await?;
     let away = Arc::new(away);
+    // A server that holds each track once (Jellyfin) is compared and written on the first copies only: the file's
+    // other copies are the file's, and never read as taken out there (decision 0025, amended 2026-10-16).
+    let once = !s.playlists_keep_repeats();
+    let file_tracks = if once { first_copies(&file_tracks) } else { file_tracks };
     let stamp_moved = stamp != link.stamp || link.stamp.is_none();
     if !stamp_moved && !verify && file_tracks == link.base {
         return Ok(());
@@ -1030,9 +1024,15 @@ async fn sync_content(
     }
     // Reordered on both sides: the server's order.
     let newer = if server_changed { Newer::Server } else { Newer::File };
-    let merged = merge(&link.base, &items, &server_tracks, newer);
+    let merged = if once { merge_once(&link.base, &items, &server_tracks, newer) } else { merge(&link.base, &items, &server_tracks, newer) };
     let (t, m, aw) = (tr.clone(), merged.clone(), away.clone());
     let (new_lines, on_server) = blocking(move || (t.lines(&m), t.on_server(&m, &aw))).await?;
+    let on_server = if once {
+        let mut seen = std::collections::HashSet::new();
+        on_server.into_iter().filter(|(x, _)| seen.insert(*x)).collect()
+    } else {
+        on_server
+    };
     if new_lines != lines && !store.set_entries_if(&link.name, lines, &new_lines).await? {
         // Edited while this pass merged: the next pass merges that too.
         return Ok(());
@@ -1070,6 +1070,12 @@ fn with_vanished_kept(base: &[i64], mut items: Vec<Item>, away: impl Fn(i64) -> 
         }
     }
     items
+}
+
+/// Each track's first copy, in order: a list as a server that holds each track once has it.
+fn first_copies(tracks: &[i64]) -> Vec<i64> {
+    let mut seen = std::collections::HashSet::new();
+    tracks.iter().copied().filter(|t| seen.insert(*t)).collect()
 }
 
 #[cfg(test)]

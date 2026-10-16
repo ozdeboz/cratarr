@@ -197,8 +197,10 @@ impl PlayingService {
     }
 
     /// A new playlist of these tracks (`ids` on `want`, the local player's queue), or else of what the server's player
-    /// plays and what comes next; tracks outside the library are left out (decision 0019).
-    pub async fn playlist_from_queue(&self, want: Option<&str>, name: &str, ids: Option<Vec<String>>) -> Result<FromQueue, ToggleError> {
+    /// plays and what comes next; tracks outside the library are left out (decision 0019). A track the queue plays
+    /// twice is in it twice when `repeats` (the page asked: Keep repeats), else once (decision 0025, amended
+    /// 2026-10-16).
+    pub async fn playlist_from_queue(&self, want: Option<&str>, name: &str, ids: Option<Vec<String>>, repeats: bool) -> Result<FromQueue, ToggleError> {
         let (active, s, ids) = match ids {
             Some(ids) => {
                 let (a, s) = self.source(want.ok_or_else(|| ToggleError::Refused("Which server are the tracks on?".into()))?)?;
@@ -220,8 +222,8 @@ impl PlayingService {
                 Err(_) => None,
             };
             match entry {
-                // A track twice in the queue is once in the playlist.
-                Some(e) if !entries.contains(&e) => entries.push(e),
+                // A track twice in the queue: twice in the playlist when asked to keep repeats, else once.
+                Some(e) if repeats || !entries.contains(&e) => entries.push(e),
                 Some(_) => {}
                 None => left_out += 1,
             }

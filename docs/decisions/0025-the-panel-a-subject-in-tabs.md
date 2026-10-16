@@ -71,7 +71,7 @@ arrow out of its corner), the rows' labels, Select's "View N playlists", Insight
 (`?view=…`, in place of `?open=…` above and in 0023 and 0024). Old links (`?open=…`, Insights' `?playlist=…`) are no longer
 translated: there were none.
 
-## Amendment (2026-10-15): a playlist never holds a track twice
+## Amendment (2026-10-15): a playlist never holds a track twice (reversed 2026-10-16, below)
 
 A repeated track in a playlist is always a mistake (the same track added twice), so there is nothing to choose: a
 playlist holds each track once, the first copy (its oldest place) stays. Every write keeps only the first copy, the
@@ -81,3 +81,26 @@ sync's merge (0012) never makes a repeat, and each sync pass takes the repeats o
 Found when the playlists became copies in your account (0014, amended 2026-10-15): Jellyfin holds a track in a playlist
 it makes only once, and the sync took each lost repeat for a removal there. That did what this rule does, the first
 copy kept, in six playlists.
+
+## Amendment (2026-10-16): repeats are the user's to choose
+
+The rule above is reversed. Found with Symfonium (an OpenSubsonic app, 2026-10-16): it makes the user choose the
+direction of every playlist sync, and a pushed playlist with repeats was quietly kept once each by Cratarr, so the app
+showed 19 tracks and Cratarr held 9 until the next "Replace with provider version". An app that writes a list expects
+the server to hold that list. The owner: "We should not be automatically removing duplicates. This should be an
+option for the user", asked when it happens.
+
+- **A playlist holds what it is given:** every write keeps its repeats (an app's, an edit's, an Undo's); the sync no
+  longer takes repeats out of the files.
+- **Cratarr asks where it would make a repeat itself:**
+  - adding an album to a playlist that holds some of its tracks: Add again (every track at the end), or Add only the
+    others;
+  - a new playlist from a queue that plays a track twice: Keep repeats, or Each track once.
+  Membership asks (the circle on a playlist chip, a track's playlists) stay what they were: on or off. Taking a track
+  out takes every copy.
+- **Repair → Repeated** lists the tracks a playlist holds more than once; **Remove repeats** keeps the first copy of
+  each, one Undo for the lot (`DELETE /api/playlists/{id}/repeats`). Adding again is `POST /api/playlists/{id}/append`.
+- **A repair never makes one:** a dead line pointed at a file the playlist already lists goes instead.
+- **A server that holds each track once (Jellyfin)** is synced on the first copies (`playlist_merge::merge_once`,
+  `Source::playlists_keep_repeats`): the file's repeats are put back where they were and are never read as removed
+  there; a track taken out on either side goes with all its copies. A server that keeps repeats is merged copy by copy.
