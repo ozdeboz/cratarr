@@ -22,6 +22,7 @@
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
   import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming, setRadio, setRepeat, setShuffle } from './localPlayer.svelte';
+  import AutoplaySheet from './AutoplaySheet.svelte';
   import { albumSubject, viewPlaylist } from './panel.svelte';
   import { crates, CRATE } from './crates.svelte';
   import { player } from './live.svelte';
@@ -78,6 +79,9 @@
   }
 
   // Search: what comes next, by title, artist or album; the rows that match show (no reordering meanwhile).
+  // Autoplay's sheet (decision 0036, amended), from the head's ∞.
+  let autoplayOpen = $state(false);
+
   let searching = $state(false);
   let query = $state('');
   const q = $derived(searching ? query.trim().toLowerCase() : '');
@@ -220,6 +224,9 @@
             <button class:on={local.radio} aria-label="Radio" aria-pressed={local.radio} onclick={() => setRadio(!local.radio)}
               ><Icon name="radio" size={22} /></button
             >
+            <button class:on={local.autoplay !== null} aria-label="Autoplay" aria-haspopup="dialog" aria-pressed={local.autoplay !== null} onclick={() => (autoplayOpen = true)}
+              ><Icon name="infinity" size={22} /></button
+            >
             <button aria-label="Clear the queue" disabled={!np.upcoming.length} onclick={clear}><Icon name="clearQueue" size={22} /></button>
           {/if}
         </span>
@@ -298,7 +305,7 @@
                 use:swipe={{ enabled: here && !drag, onswipe: () => removeSwiped(i) }}
               >
                 {#if t.album_id}<img src={albumCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
-                <div><strong>{t.name}</strong><span>{#if t.lane === 'radio'}<i class="radio" title="Radio"><Icon name="radio" size={14} /></i>{/if}{@render byline(t)}</span></div>
+                <div><strong>{t.name}</strong><span>{#if t.lane === 'radio'}<i class="radio" title="Radio"><Icon name="radio" size={14} /></i>{:else if t.lane === 'autoplay'}<i class="radio" title="Autoplay"><Icon name="infinity" size={14} /></i>{/if}{@render byline(t)}</span></div>
                 {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
               </button>
               {@render rowHeart(asTrack(t, np.source))}
@@ -324,6 +331,10 @@
 {/if}
 
 
+
+{#if autoplayOpen}
+  <AutoplaySheet onclose={() => (autoplayOpen = false)} />
+{/if}
 
 {#if menuShown && menuFor}
   <TrackMenu
@@ -398,7 +409,8 @@
     background: var(--muted);
   }
 
-  /* The head's row: "Queue", then its tools (Symfonium's: search, shuffle, repeat, the radio), lit while on. */
+  /* The head's row: "Queue", then its tools (Symfonium's: search, shuffle, repeat, the radio; Autoplay, Clear), lit while
+     on. */
   .bar {
     display: flex;
     align-items: center;
@@ -678,7 +690,7 @@
     box-sizing: border-box;
   }
 
-  /* The radio's tracks carry its mark before the artist (decision 0036). */
+  /* The radio's and Autoplay's tracks carry their mark before the artist (decision 0036, amended). */
   .row .radio {
     display: inline-block;
     margin-right: 4px;

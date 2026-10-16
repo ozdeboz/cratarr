@@ -39,13 +39,15 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     so does changing page. Maximise (beside the page) and back-beside-the-page (over it) are remembered.
   - **Queue** (`lib/QueueSheet.svelte`, as Finamp's queue sheet): a sheet over the player on the blurred cover, a grab
     handle and "Queue" (drag it down to close), and in its row the tools (decided 2026-10-16, as Symfonium's queue):
-    search (the rows whose title, artist or album match show), and where the page holds the queue shuffle, repeat, the
-    radio and Clear (what comes next goes; the toast's Undo puts it back); the previous tracks folded under "Previous
+    search (the rows whose title, artist or album match show), and where the page holds the queue shuffle, repeat,
+    Radio (a switch: about five tracks like each of the queue's own tracks, after it), Autoplay (∞, lit while on: its
+    sheet, what plays when the queue runs out, Stop, Similar, Same artist, Same era or Random, then Queue albums and
+    Restart playlists; decision 0036, amended) and Clear (what comes next goes; the toast's Undo puts it back); the previous tracks folded under "Previous
     Tracks" (this device only); the playing track as a card pinned at the top that fills in the cover's colour as it
     plays, with play/pause on its cover, the heart and the track menu; what it plays from as a chip that opens it (its
     album, playlist or crate), or "Playing on …" for the server's player, and "i of n · time left · until 05:09" (when
     it ends on the clock) pinned under it; then what comes next, 70 px rows (60 px cover, title up to two lines, the
-    artist and the album, not the album the queue plays, the radio's mark before them; length, heart, ⋮). A tap plays
+    artist and the album, not the album the queue plays, Radio's or Autoplay's mark before them; length, heart, ⋮). A tap plays
     a row. Playing on this device a row's handle reorders and a swipe left past 65 % removes it,
     with no undo, as Finamp; the server's player takes neither command. A long-press or right-click opens a menu, the
     same everywhere in the sheet: on the playing track's card (it has no ⋯) the playing track's own menu; on a row a
