@@ -133,7 +133,45 @@ idle I/O on the N95, files read from the disks. 170 random Music files: 150 MP3,
 1. **Tempo shown only when confident**, with "no tempo" otherwise, or always a number? **Answered (2026-10-16): only
    when confident.**
 2. **Accuracy check before tempo is used:** the owner names about 20 tracks with a known tempo, a mix of styles, to
-   measure against.
+   measure against. **Replaced (2026-10-16)** by the published results below, the owner's two answers and our own run
+   on public datasets: 20 tracks would measure accuracy to about ±21 points, too wide to add to what is published.
+3. **Beatless and ambient tracks get no tempo:** fine (the owner, 2026-10-16).
+4. **Dub and reggae: the slow count** (about 70, not 140; the owner, 2026-10-16).
+
+## Amended (2026-10-16): the estimator must give a confidence; what is published
+
+Read in the sources (Zapata & Gómez 2011; Percival & Tzanetakis 2014; Schreiber's tempo_eval reports and per-genre
+results; Knees et al. 2015; Zapata et al. 2012). Acc1 is the right tempo within 4 %, Acc2 also counts half, double and
+thirds:
+
+| Estimator | Mainstream sets (Ballroom, GTZAN, ACM Mirum) | Electronic (GiantSteps) | Hard, expressive (SMC) | Confidence |
+|---|---|---|---|---|
+| QM-DSP TempoTrackV2 (Mixxx) | 59-67 / 88-91 | 27 / 46 | 13 / 31 | none |
+| librosa (its ancestor, Ellis 2007) | about the same as QM (45.6 / 80.7 against 43.2 / 80.4 on ISMIR04) | | | none |
+| Essentia's multi-feature (AudioMuse's) | no peer-reviewed tempo figures | | | yes: the trackers' agreement, 0 to 5.32 |
+
+- **By genre** (GTZAN, QM): hip-hop 93 / 99, disco 89 / 98, reggae 40 / 99 (its misses are half or double only),
+  jazz 44 / 73, classical 19 / 56 (every system, neural ones too, fails there).
+- **Both of the first candidates give no confidence**, so they cannot do "only when confident" (question 1). A
+  committee's agreement does: Zapata et al. 2012 found that 1.5 bits of agreement keeps about 73 % of tracks, with
+  beats right 90 % of the time above it and 59 % below, and listeners agreeing.
+- **Nothing published tests "no tempo"**: no standard dataset holds beatless or ambient music.
+
+**So the candidates change:**
+
+1. **taktus** (Rust, Apache-2.0, 2026), which reports Essentia-level accuracy and a confidence gate keeping 82-95 % of
+   tracks at 97-99 % Acc2. Its figures are its own: **we run it on the public sets ourselves first** (GTZAN, Ballroom,
+   GiantSteps, with tempo_eval's annotations) before taking it.
+2. **Else Essentia's multi-feature agreement**, ported (AGPL-3.0, as Cratarr).
+
+**The owner's answers as rules:**
+
+- A tempo below the confidence threshold is no tempo. Beatless and ambient tracks are expected there, and are checked
+  on the library's own ambient-tagged tracks: they should come out without one.
+- **The slow count for dub and reggae:** a track whose genre tag is reggae, dub, roots or dancehall and whose estimate
+  is above 110 BPM gets half of it. Checked on the library's reggae-tagged tracks: they should land between about 60
+  and 95.
+
 
 ## Where the first pass runs (the owner, 2026-10-16)
 
