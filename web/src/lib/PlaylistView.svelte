@@ -407,6 +407,8 @@
   });
 
   let menuOpen = $state(false);
+  /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
+  let menuStart = $state<'menu' | 'delete'>('menu');
   let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists' } | null>(null);
   const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? null });
 
@@ -791,12 +793,26 @@
         {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={crate ? 'crates' : 'albums'} size={56} /></span>{/each}
       </div>
       {#if editing}
-      <!-- Edit mode's bar in the action bar's place: Cancel (in red once something changed) against Save. -->
+      <!-- Edit mode's bar in the action bar's place, its buttons where the bar's were: Delete, then Cancel (in red once
+           something changed) in the pencil's place, the heart staying, Save in the menu's place. -->
       <div class="actbar" class:stuck bind:this={actbar} role="toolbar" aria-label="Edit">
+        <span class="grow"></span>
+        <button
+          class="icon"
+          aria-label={`Delete ${id}`}
+          title="Delete"
+          disabled={editing.saving}
+          onclick={() => {
+            menuStart = 'delete';
+            menuOpen = true;
+          }}><Icon name="trash" size={22} /></button
+        >
         <button class="icon" class:destructive={tracksChanged || nameChanged} aria-label="Cancel" title="Cancel" onclick={() => (editing = null)} disabled={editing.saving}
           ><Icon name="reset" size={24} /></button
         >
-        <span class="grow"></span>
+        <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
+          ><Icon name="heart" size={24} /></button
+        >
         <button class="icon save" aria-label="Save" title="Save" onclick={save} disabled={editing.saving} aria-busy={editing.saving}><Icon name="arrowDownToLine" size={24} /></button>
       </div>
       {:else}
@@ -1112,7 +1128,12 @@
   <PlaylistMenu
     playlists={selected}
     ondownload={inApp && selected.length === 1 && playable.length ? () => download(tracksOf(playable)) : null}
-    onclose={() => (menuOpen = false)}
+    start={menuStart}
+    ondeleted={() => (editing = null)}
+    onclose={() => {
+      menuOpen = false;
+      menuStart = 'menu';
+    }}
   />
 {/if}
 {#if trackMenu}

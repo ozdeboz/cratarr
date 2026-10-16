@@ -7,6 +7,7 @@
   // playlist only), and Delete (one Undo for all), each done inside the sheet.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
+  import { untrack } from 'svelte';
   import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers } from './api';
   import MenuEntry from './MenuEntry.svelte';
   import { startPlaylists } from './output.svelte';
@@ -26,9 +27,12 @@
     onrenamed,
     ondeleted,
     ondownload = null,
+    start = 'menu',
   }: {
     /** One or more (in the order ticked). */
     playlists: Item[];
+    /** Straight to Delete's confirmation (the edit bar's trash). */
+    start?: 'menu' | 'delete';
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
@@ -36,7 +40,7 @@
     ondownload?: (() => void) | null;
   } = $props();
 
-  let mode = $state<'menu' | 'rename' | 'delete' | 'spoken'>('menu');
+  let mode = $state<'menu' | 'rename' | 'delete' | 'spoken'>(untrack(() => start));
   $effect(() => void loadPlaylistFavorites());
 
   /** The one playlist, when the menu is for one. */
