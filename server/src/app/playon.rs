@@ -53,6 +53,9 @@ pub struct QueueTrack {
     pub album: Option<String>,
     #[serde(default)]
     pub album_id: Option<String>,
+    /// Its length, for the queue's rows and the time left; players keep it as they keep the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<f64>,
 }
 
 /// What a player reports.
@@ -873,7 +876,15 @@ impl PlayOn {
             .into_iter()
             .filter(|r| !r.missing)
             .filter_map(|r| {
-                Some(QueueTrack { source: source.clone(), id: r.id?, name: r.name.unwrap_or_default(), artist: r.artist, album: r.album, ..QueueTrack::default() })
+                Some(QueueTrack {
+                    source: source.clone(),
+                    id: r.id?,
+                    name: r.name.unwrap_or_default(),
+                    artist: r.artist,
+                    album: r.album,
+                    duration_secs: r.duration_secs,
+                    ..QueueTrack::default()
+                })
             })
             .collect())
     }
@@ -1005,6 +1016,7 @@ async fn own_tracks(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleEr
                 artist: named(s.artist),
                 album: named(s.album),
                 album_id: named(s.album_id),
+                duration_secs: Some(s.duration as f64).filter(|d| *d > 0.0),
                 ..QueueTrack::default()
             })
             .collect(),
