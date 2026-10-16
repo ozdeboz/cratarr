@@ -45,8 +45,18 @@ pub struct SourceView {
     pub libraries: settings::Roles,
     /// Its music libraries and where Cratarr sees their files (decision 0009).
     pub server_libraries: Vec<placement::PlacedLibrary>,
+    /// Each used library's format and colour as they apply (its own, else its use's and the palette's; decision 0034).
+    pub policies: BTreeMap<String, EffectivePolicy>,
     /// Why the source could not be connected or its choices not filled, if so.
     pub error: Option<String>,
+}
+
+/// A used library's settings as they apply (decision 0034).
+#[derive(Debug, Serialize)]
+pub struct EffectivePolicy {
+    pub format: settings::Format,
+    /// None for a Music library (the primary).
+    pub colour: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -223,6 +233,13 @@ impl SettingsService {
             choices: BTreeMap::new(),
             libraries: cfg.libraries.clone(),
             server_libraries: Vec::new(),
+            policies: cfg
+                .libraries
+                .music
+                .iter()
+                .chain(&cfg.libraries.incoming)
+                .map(|l| (l.clone(), EffectivePolicy { format: cfg.libraries.format_of(l), colour: cfg.libraries.colour_of(l) }))
+                .collect(),
             error,
         };
         let Some(s) = source else { return view };
