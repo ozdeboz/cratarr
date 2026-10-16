@@ -4,7 +4,7 @@
 const HOLD_MS = 250;
 const SLOP_PX = 10;
 
-type Hold = { start: () => void; end: () => void; enabled: boolean };
+type Hold = { start: () => void; end: () => void; enabled: boolean; ms?: number };
 
 export function hold(node: HTMLElement, initial: Hold) {
   let opts = initial;
@@ -28,7 +28,7 @@ export function hold(node: HTMLElement, initial: Hold) {
       held = true;
       node.setPointerCapture?.(from.id);
       opts.start();
-    }, HOLD_MS);
+    }, opts.ms ?? HOLD_MS);
   }
   function move(e: PointerEvent) {
     if (from && !held && Math.hypot(e.clientX - from.x, e.clientY - from.y) > SLOP_PX) {

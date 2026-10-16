@@ -3,24 +3,34 @@
   // (the Android app elsewhere: Play On), or the media server's player. Choosing another moves the music there (queue
   // and position) and stops the side that played; one of Cratarr's players that plays already is asked about first:
   // take it over (the music moves there), or not (it plays on, and what played here pauses).
+  // Sync play (decision 0037): while one of Cratarr's players is played on, holding another adds it to its group (or
+  // takes it out); the group's players show ticked. A tap plays on that one player alone: the group ends.
+  import { appInfo, inApp } from './app.svelte';
   import { coverUrl, type PlayOnPlayer } from './api';
+  import { hold } from './hold';
   import { live } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { canPlayHere } from './localPlayer.svelte';
   import { hasMusic, joinTo, moveTo } from './output.svelte';
-  import { choosable, drivenName, playOn } from './playOn.svelte';
+  import { choosable, drivenName, endGroup, groupOf, head, outputName, playOn, toggleGroup } from './playOn.svelte';
   import { prefs } from './prefs.svelte';
   import { shownCover } from './remote.svelte';
   import { toast } from './toast.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
+  /** A long press, as the rest of the page's (a track's menu). */
+  const HOLD_MS = 500;
+
   // The server's player as the page last saw it ("Finamp on Lenovo Tab"); a plain name when nothing plays there.
   const remoteName = $derived(live.view?.now_playing?.player ?? 'The server’s player');
   const src = $derived(shownCover());
   const here = $derived(prefs.output === 'local' && canPlayHere);
-  const shown = $derived(here ? 'This device' : (drivenName() ?? remoteName));
+  const shown = $derived(here || drivenName() !== null ? outputName() : remoteName);
+  const group = $derived(groupOf(head()));
+  // Holding groups: offered while one of Cratarr's players is played on (in the app, this device is one).
+  const groupable = (name: string | null) => name !== null && head() !== null && name !== head();
   // The chosen player stays listed while it is away (offline), so what is chosen shows.
   const players = $derived.by(() => {
     const list = choosable().map((p) => p.name);
@@ -32,6 +42,13 @@
   let asking = $state<PlayOnPlayer | null>(null);
 
   function pick(output: typeof prefs.output) {
+    if (group.length > 1) {
+      onclose();
+      endGroup()
+        .then(() => choose(output, moveTo))
+        .catch((e) => toast.fail(e, "The group didn't end"));
+      return;
+    }
     const name = output.startsWith('player:') ? output.slice('player:'.length) : null;
     const there = name === null ? undefined : playOn.players.find((p) => p.name === name);
     if (there?.online && there.playing && output !== prefs.output && hasMusic()) {
@@ -39,6 +56,10 @@
       return;
     }
     choose(output, moveTo);
+  }
+
+  function held(name: string) {
+    toggleGroup(name).catch((e) => toast.fail(e, group.includes(name) ? "It didn't leave the group" : "It didn't join"));
   }
 
   async function choose(output: typeof prefs.output, how: (output: typeof prefs.output) => Promise<void>) {
@@ -67,10 +88,27 @@
       <MenuEntry label="Don't take over" onclick={() => choose(`player:${name}`, joinTo)} />
     {:else}
       {#if canPlayHere}
-        <MenuEntry label="This device" checked={here} onclick={() => pick('local')} />
+        {@const me = inApp ? appInfo.player : null}
+        <div use:hold={{ start: () => me && held(me), end: () => {}, enabled: groupable(me), ms: HOLD_MS }}>
+          <MenuEntry
+            label="This device"
+            checked={here || (me !== null && group.includes(me))}
+            badge={me !== null && group.length > 1 && group[0] === me ? 'crown' : null}
+            badgeLabel="Leads the group"
+            onclick={() => pick('local')}
+          />
+        </div>
       {/if}
       {#each players as name (name)}
-        <MenuEntry label={name} checked={drivenName() === name} onclick={() => pick(`player:${name}`)} />
+        <div use:hold={{ start: () => held(name), end: () => {}, enabled: groupable(name), ms: HOLD_MS }}>
+          <MenuEntry
+            label={name}
+            checked={drivenName() === name || group.includes(name)}
+            badge={group.length > 1 && group[0] === name ? 'crown' : null}
+            badgeLabel="Leads the group"
+            onclick={() => pick(`player:${name}`)}
+          />
+        </div>
       {/each}
       <MenuEntry label={remoteName} checked={!here && drivenName() === null} onclick={() => pick('remote')} />
     {/if}

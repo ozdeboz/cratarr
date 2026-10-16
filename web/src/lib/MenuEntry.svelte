@@ -2,7 +2,8 @@
   // One entry in a menu sheet (decision 0021), as Finamp's: a 56 px row, a 24 px icon in the accent colour, the label
   // at 16 px. Destructive entries stay Cratarr's way: red (and last in the list). `checked` makes it one of Finamp's
   // toggle cards (the playlists for a track): filled with the accent, stronger when on, a mark at the right. `busy`:
-  // its action is under way (an album going into a playlist track by track), the spinner in place of its label.
+  // its action is under way (an album going into a playlist track by track), the spinner in place of its label. `badge`:
+  // a small icon after a toggle's label (a group's leader: a crown), `badgeLabel` saying what it means.
   import Icon, { type IconName } from './Icon.svelte';
 
   let {
@@ -13,6 +14,8 @@
     danger = false,
     checked = null,
     busy = false,
+    badge = null,
+    badgeLabel = '',
   }: {
     icon?: IconName | null;
     label: string;
@@ -21,6 +24,8 @@
     danger?: boolean;
     checked?: boolean | null;
     busy?: boolean;
+    badge?: IconName | null;
+    badgeLabel?: string;
   } = $props();
 </script>
 
@@ -30,7 +35,9 @@
   </button>
 {:else}
   <button class="toggle" class:on={checked} role="menuitemcheckbox" aria-checked={checked} disabled={disabled || busy} aria-busy={busy} {onclick}>
-    <span>{label}</span><i aria-hidden="true"></i><Icon name={checked ? 'check' : 'plus'} size={22} />
+    <span class:badged={badge !== null}
+      >{#if badge}<em>{label}</em><b title={badgeLabel} aria-label={badgeLabel}><Icon name={badge} size={18} /></b>{:else}{label}{/if}</span
+    ><i aria-hidden="true"></i><Icon name={checked ? 'check' : 'plus'} size={22} />
   </button>
 {/if}
 
@@ -103,6 +110,24 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .toggle span.badged {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .toggle span.badged em {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-style: normal;
+  }
+
+  .toggle span.badged b {
+    display: flex;
+    flex: none;
   }
 
   .toggle i {

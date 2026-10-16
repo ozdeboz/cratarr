@@ -72,17 +72,36 @@ private object Scorer {
 
 object Radio {
     const val LANE = "radio"
-    private const val COUNT = 5
+    /** Inserts after each own track unless told; at most [MAX]. */
+    const val COUNT = 5
+    const val MAX = 10
+    /** What its tracks are like: the track (the first, the default), its artist, its era. */
+    val BYS = listOf("track", "artist", "era")
 
     /** The playing track's entry asked for, while it is being asked: one ask per track. */
     @Volatile private var asking: String? = null
 
     fun on(context: Context): Boolean = Prefs(context).radioOn
 
-    fun set(context: Context, player: Player, on: Boolean) {
-        Prefs(context).radioOn = on
-        if (!on) Scorer.dropAhead(player, LANE)
+    /** On or off, with what its tracks are like and how many (left out: as they were). Another choice while on drops
+     *  the inserts still to come; the playing track gets new ones (the prefs' change says so to the service). */
+    fun set(context: Context, player: Player, on: Boolean, by: String? = null, count: Int? = null) {
+        val prefs = Prefs(context)
+        val was = Triple(prefs.radioOn, prefs.radioBy, prefs.radioCount)
+        by?.takeIf { it in BYS }?.let { prefs.radioBy = it }
+        count?.let { prefs.radioCount = it }
+        prefs.radioOn = on
+        val other = (was.second to was.third) != (prefs.radioBy to prefs.radioCount)
+        if (!on || (was.first && other)) {
+            Scorer.dropAhead(player, LANE)
+            asking = null
+        }
     }
+
+    /** As reports and the page say it. */
+    fun by(context: Context): String = Prefs(context).radioBy
+
+    fun count(context: Context): Int = Prefs(context).radioCount
 
     /** A `radio` op or command. One with a mode, seed or bound is the older shape: Autoplay (decision 0036, amended);
      *  else Radio alone (off leaves Autoplay be). */
@@ -99,7 +118,8 @@ object Radio {
             Autoplay.command(context, player, fields)
             return
         }
-        set(context, player, m.optBoolean("on"))
+        val count = if (m.has("count") && !m.isNull("count")) m.optInt("count") else null
+        set(context, player, m.optBoolean("on"), m.optString("by").takeIf { it in BYS }, count)
     }
 
     /** With radio on, the playing track one of the queue's own: tracks like it after it and its hand-added run, unless
@@ -114,21 +134,23 @@ object Radio {
         val key = playing.optString("entry").ifEmpty { "$c" }
         if (asking == key || placeFor(player) == null) return
         val queue = Scorer.tracksOf(player)
+        val (by, n) = by(context) to count(context)
         val ask = JSONObject()
             .put("mode", LANE)
+            .put("by", by)
             .put("seed", JSONArray(listOf(playing.optString("id"))))
             .put("exclude", JSONArray(queue.map { it.optString("id") }))
             .put("last", playing.optString("id"))
-            .put("count", COUNT)
+            .put("count", n)
         val app = context.applicationContext
         asking = key
         Scorer.asks.execute {
             val artists = setOfNotNull(playing.optString("artist").takeIf { it.isNotEmpty() })
-            val got = server?.let { Scorer.ask(it, ask) } ?: Scorer.offline(app, queue, artists, false, COUNT, LANE)
+            val got = server?.let { Scorer.ask(it, ask) } ?: Scorer.offline(app, queue, artists, false, n, LANE)
             Scorer.main.post {
-                asking = null
-                // Still on, still that track, still without its inserts.
-                if (!on(app) || got.length() == 0) return@post
+                if (asking == key) asking = null
+                // Still on as asked, still that track, still without its inserts.
+                if (!on(app) || by(app) != by || count(app) != n || got.length() == 0) return@post
                 val now = player.currentMediaItem?.let(::trackOf)?.optString("entry")?.ifEmpty { null } ?: "${player.currentMediaItemIndex}"
                 if (now != key) return@post
                 val at = placeFor(player) ?: return@post

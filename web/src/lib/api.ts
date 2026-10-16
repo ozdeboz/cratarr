@@ -165,6 +165,8 @@ export type PlayOnPlayer = {
   radio_count?: number;
   /** Autoplay while on: its mode and switches. */
   autoplay?: { mode: string; albums: boolean; restart: boolean } | null;
+  /** The group it plays in, by its leader (decision 0037): a player of a group shows what the group plays. */
+  group?: string | null;
   track: QueueTrack | null;
   queue?: QueueTrack[];
 };

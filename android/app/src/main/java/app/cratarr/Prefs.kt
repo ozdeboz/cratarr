@@ -72,6 +72,20 @@ class Prefs(context: Context) {
             p.edit().putBoolean(RADIO_ON, value).apply()
         }
 
+    /** What Radio's tracks are like: the track, its artist or its era (decision 0036's choice). */
+    var radioBy: String
+        get() = p.getString(RADIO_BY, null)?.takeIf { it in Radio.BYS } ?: Radio.BYS[0]
+        set(value) {
+            p.edit().putString(RADIO_BY, value.takeIf { it in Radio.BYS } ?: Radio.BYS[0]).apply()
+        }
+
+    /** How many Radio inserts after each of the queue's own tracks. */
+    var radioCount: Int
+        get() = p.getInt(RADIO_COUNT, Radio.COUNT).coerceIn(1, Radio.MAX)
+        set(value) {
+            p.edit().putInt(RADIO_COUNT, value.coerceIn(1, Radio.MAX)).apply()
+        }
+
     /** Autoplay (Autoplay), as `{"mode", "albums", "restart", "seed", "within"}`; null while it is off. */
     var autoplay: Autoplay.State?
         get() = p.getString(AUTOPLAY, null)?.let {
@@ -127,6 +141,8 @@ class Prefs(context: Context) {
 
     companion object {
         const val RADIO_ON = "radio_on"
+        const val RADIO_BY = "radio_by"
+        const val RADIO_COUNT = "radio_count"
         const val AUTOPLAY = "autoplay"
         private const val OLD_RADIO = "radio"
         const val SLEEP = "sleep"

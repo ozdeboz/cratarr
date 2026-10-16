@@ -373,6 +373,8 @@ class PlayOnLink(
             .put("repeat", Repeat.mode(service))
             .put("sleep", Sleep.json(service, "at_ms", "end_of_track"))
             .put("radio", Radio.on(service))
+            .put("radio_by", Radio.by(service))
+            .put("radio_count", Radio.count(service))
             .put("autoplay", Autoplay.json(service))
             // Leading a group, where it is heard: a buffer behind this player.
             .put("position_ms", sync.heardPosition(p).coerceAtLeast(0))

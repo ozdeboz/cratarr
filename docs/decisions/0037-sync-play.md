@@ -131,3 +131,27 @@ time each chunk should sound, played out by each device with sample-level correc
   the buffer (about a second). Playing alone is unchanged.
 - **Kept from above:** groups at Cratarr, commands to the group, each device's speaker delay measured once with a
   microphone, and Wi-Fi held in low-latency mode while grouped.
+
+## Amended (2026-10-16): the leader's app decodes, Cratarr times and sends
+
+Built folded in, with one change to the above: **the group's sound is decoded by its leader's app, not at Cratarr.**
+The leader plays the queue exactly as it plays alone (Radio, Autoplay, the sleep timer, repeat, downloads, the lock
+screen, counting plays), its own speaker silent, and sends what its player plays (after decoding and gapless trimming,
+16-bit PCM) to Cratarr on Snapcast's port. Cratarr stamps it with the time it was played, on its own steady clock, and
+sends it to every device of the group, the leader's own Snapcast player too. Decoding at Cratarr would have meant a
+second player there, with its own queue handling, Radio, Autoplay and sleep timer, and a remote media session on every
+device; this keeps one player, the app's.
+
+- **A break** (a seek, a jump, a pause, a stop) silences the group at once and drops the sound still to come; the new
+  sound is heard as it starts playing, a buffer (1 s) later. Pausing, the leader goes back a buffer, to where the group
+  was heard, so it goes on from there.
+- **A new format** (a track at another sample rate) waits until the old sound has played everywhere: a short pause
+  between those tracks.
+- **The leader's reports** say where the group is heard (a buffer behind its player).
+- **Followers** keep no queue (as above) and stay in front with a notification naming the leader. Playing something on
+  a follower takes it out of the group.
+- **Snapcast's player** is Snapdroid's build of snapclient (GPL-3.0), taken from Snapdroid's release at build time and
+  checked against a pinned checksum, and run by the app as Snapdroid runs it; no binary is kept in this repository.
+- **The page:** the group's leader shows a crown in the device sheet (the owner).
+- **Port:** 1704 (`CRATARR_SNAPCAST_BIND`, empty to switch sync play off). Tested against snapclient 0.31: chunks played
+  at age 0, silence on a break, heard again as the new sound began.

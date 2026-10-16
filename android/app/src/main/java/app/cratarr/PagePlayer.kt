@@ -3,10 +3,15 @@ package app.cratarr
 import android.content.Context
 import android.content.SharedPreferences
 
+import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaController
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -16,11 +21,16 @@ import org.json.JSONObject
  * artist, album, album_id), kept with each media item, so a queue the player changed itself (Play On) reaches the page
  * as it is.
  */
+@OptIn(UnstableApi::class)
 class PagePlayer(private val context: Context, private val controller: MediaController, private val send: (String) -> Unit) : Player.Listener {
+    /** Hold-to-preview (the queue's covers): a second player for the held track, while the music waits. */
+    private var previewer: ExoPlayer? = null
+    /** The music played when the preview began: it goes on after. */
+    private var resumeAfter = false
 
     /** The sleep timer changed (set, or done): the page is told. Held here, as Android keeps listeners only weakly. */
     private val sleepChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == Prefs.SLEEP || key == Prefs.RADIO_ON || key == Prefs.AUTOPLAY) report()
+        if (key == Prefs.SLEEP || key == Prefs.RADIO_ON || key == Prefs.RADIO_BY || key == Prefs.RADIO_COUNT || key == Prefs.AUTOPLAY) report()
     }
 
     init {
@@ -29,6 +39,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
     }
 
     fun release() {
+        previewer?.release()
+        previewer = null
         controller.removeListener(this)
         Prefs.shared(context).unregisterOnSharedPreferenceChangeListener(sleepChanged)
     }
@@ -68,6 +80,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             "radio" -> Radio.command(context, c, m)
             "autoplay" -> Autoplay.command(context, c, m)
             "seek" -> c.seekTo(m.optLong("positionMs"))
+            "preview" -> preview(m.optJSONObject("track"), m.optLong("positionMs"))
+            "preview-end" -> previewEnd()
             "play" -> play()
             "pause" -> c.pause()
             "toggle" -> if (c.playWhenReady && c.playbackState != Player.STATE_ENDED) c.pause() else play()
@@ -76,6 +90,28 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
                 c.clearMediaItems()
             }
         }
+    }
+
+    /** The held track from `positionMs`, the music paused meanwhile. */
+    private fun preview(track: JSONObject?, positionMs: Long) {
+        val item = track?.let { mediaItems(JSONArray().put(it)).firstOrNull() } ?: return
+        val located = Downloads.locate(context, item, Prefs(context).serverUrl?.trimEnd('/'))
+        val p = previewer ?: ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playback(context)))
+            .build()
+            .also { previewer = it }
+        if (!p.isPlaying) resumeAfter = controller.playWhenReady && controller.playbackState != Player.STATE_ENDED
+        controller.pause()
+        p.setMediaItem(located, positionMs.coerceAtLeast(0))
+        p.prepare()
+        p.play()
+    }
+
+    /** The finger lifted: the music goes on where it was. */
+    private fun previewEnd() {
+        previewer?.stop()
+        if (resumeAfter) play()
+        resumeAfter = false
     }
 
     private fun play() {
@@ -98,6 +134,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("repeat", Repeat.mode(context))
             .put("sleep", Sleep.json(context, "atMs", "endOfTrack"))
             .put("radio", Radio.on(context))
+            .put("radioBy", Radio.by(context))
+            .put("radioCount", Radio.count(context))
             .put("autoplay", Autoplay.json(context))
         if (withQueue) out.put("queue", queueOf(c))
         send(out.toString())

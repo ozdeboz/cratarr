@@ -25,7 +25,7 @@ import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
 import { canPlayHere, local, playQueue, enqueue, stop, togglePlay, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
-import { drivenName, follow } from './playOn.svelte';
+import { drivenName, follow, outputName } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
@@ -57,7 +57,7 @@ export function localNowPlaying(): NowPlaying | null {
     album_id: t.album_id,
     addable: localState.view?.addable ?? t.addable ?? true,
     progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, estimated: false },
-    player: drivenName() ?? 'This device',
+    player: outputName(),
     favorite: localState.view?.favorite ?? null,
     // As the heart, the chips stay until the new track's arrive (no row coming and going between tracks).
     info: localState.view?.info ?? null,

@@ -166,6 +166,18 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    /** Whether a Cratarr answers at [url] (its health check); blocking. */
+    private fun answers(url: String): Boolean = try {
+        val c = java.net.URL("$url/api/health").openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 4_000
+        c.readTimeout = 4_000
+        val ok = c.responseCode == 200
+        c.disconnect()
+        ok
+    } catch (e: java.io.IOException) {
+        false
+    }
+
     /** A new WebView on [url]: on first start, after the address changed, and after the page's renderer died. */
     private fun show(url: String) {
         dialog?.dismiss()
@@ -237,6 +249,20 @@ class MainActivity : AppCompatActivity() {
                 if (message.has("downloadOverMobile")) {
                     prefs.downloadOverMobile = message.optBoolean("downloadOverMobile")
                     Downloads.manager(this).requirements = Downloads.requirements(prefs)
+                }
+                // Another server: switched to once it answers, so a stray edit does not take the app off its server
+                // (the field shows the address in use again).
+                val server = message.optString("server").trim().takeIf { it.isNotEmpty() }?.let(Prefs::normalise)
+                if (server != null && server != prefs.serverUrl) {
+                    lifecycleScope.launch {
+                        if (withContext(Dispatchers.IO) { answers(server) }) {
+                            prefs.serverUrl = server
+                            show(server)
+                        } else {
+                            reply.postMessage(appMessage())
+                        }
+                    }
+                    return
                 }
                 reply.postMessage(appMessage())
             }
