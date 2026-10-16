@@ -27,6 +27,7 @@
     actions = [],
     onback = null,
     step = 'menu',
+    top = false,
     children,
   }: {
     label: string;
@@ -45,6 +46,8 @@
     onback?: (() => void) | null;
     /** Which step shows: a change fades the new content in (500 ms) while the sheet resizes. */
     step?: string;
+    /** From the top of the window, not the bottom: a sheet to type in (a name), which the keyboard would cover. */
+    top?: boolean;
     children: Snippet;
   } = $props();
 
@@ -70,7 +73,7 @@
     return () => removeEventListener('keydown', key, true);
   });
 
-  // Dragging the sheet down past 80 px closes it; less springs back.
+  // Dragging the sheet down past 80 px closes it (up, for one at the top); less springs back.
   let dy = $state(0);
   let from: { y: number; id: number } | null = null;
   function down(e: PointerEvent) {
@@ -79,12 +82,12 @@
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
   function move(e: PointerEvent) {
-    if (from && e.pointerId === from.id) dy = Math.max(0, e.clientY - from.y);
+    if (from && e.pointerId === from.id) dy = top ? Math.min(0, e.clientY - from.y) : Math.max(0, e.clientY - from.y);
   }
   function up() {
     if (!from) return;
     from = null;
-    if (dy > 80) onclose();
+    if (Math.abs(dy) > 80) onclose();
     dy = 0;
   }
 
@@ -141,14 +144,15 @@
   style:--side-w={side ? `${side.width}px` : null}
   style:left={side ? `${side.left + side.width / 2}px` : null}
   style:transform={dy ? `translateY(${dy}px)` : null}
-  class:dragging={dy > 0}
+  class:dragging={dy !== 0}
+  class:top
   bind:this={sheet}
   onpointerdown={down}
   onpointermove={move}
   onpointerup={up}
   onpointercancel={up}
-  in:fly|global={{ y: 400, duration: SHEET_IN, easing: decelerate }}
-  out:fly|global={{ y: 400, duration: SHEET_OUT, easing: decelerate }}
+  in:fly|global={{ y: top ? -400 : 400, duration: SHEET_IN, easing: decelerate }}
+  out:fly|global={{ y: top ? -400 : 400, duration: SHEET_OUT, easing: decelerate }}
 >
   {#if images?.[0]}<img class="blur" src={images[0]} alt="" aria-hidden="true" />{/if}
   <div class="veil"></div>
@@ -243,6 +247,20 @@
 
   .sheet.dragging {
     transition: none;
+  }
+
+  /* From the top: square at the top, rounded below, the handle at its foot. */
+  .sheet.top {
+    top: 0;
+    bottom: auto;
+    padding-top: calc(16px + env(safe-area-inset-top));
+    padding-bottom: 0;
+    border-radius: 0 0 20px 20px;
+  }
+
+  .sheet.top .handle {
+    order: 1;
+    margin: 6px auto 12px;
   }
 
   .blur {

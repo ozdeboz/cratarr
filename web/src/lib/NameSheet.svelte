@@ -35,7 +35,8 @@
   }
 </script>
 
-<MenuSheet label={title} {title} {onclose}>
+<!-- From the top: the keyboard comes up from below. -->
+<MenuSheet label={title} {title} {onclose} top>
   <form
     class="form"
     onsubmit={(e) => {
