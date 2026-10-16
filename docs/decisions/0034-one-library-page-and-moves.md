@@ -160,3 +160,18 @@ Home Assistant's promote ("into Music") stays unambiguous.
     Settings → Libraries, and the redirects;
   - server (claude-5f): one list endpoint with facts against every library, move and replace with the target's
     policies, delete from any library, the format policy and colour settings, and HA's calls on the new move.
+
+## Amendment (2026-10-16, as built): each library keeps its own trash
+
+The owner: "either library-specific trash bins or one global trash bin, but not one library's trash kept in another's
+bin". Each library keeps its own hidden `.cratarr-trash`, Music's too: a delete stays an instant rename on its own disk.
+
+- **Delete** from any library puts the album in that library's trash. This replaces "outside the Music folder" above.
+- **Replace** puts the old Music album in Music's trash, no longer in Incoming's. Entries made before still undo from
+  where their moves say.
+- The trash days empty every library's trash.
+- Lidarr is told only when an album leaves an Incoming folder (a move or a delete). Music stays out of Lidarr, so
+  reading Lidarr's own root folders (above) waits until a library other than the Incoming ones is one of them.
+- Built: `GET /api/albums`, `GET`/`POST /api/albums/{source}/{album}/move {to, year?}`,
+  `POST /api/albums/{source}/{album}/delete`, and each library's format and colour in `libraries.policies`.
+  Replace into a library other than Music is still to come.

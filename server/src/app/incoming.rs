@@ -505,19 +505,28 @@ impl IncomingService {
             .find(|a| a.id == album_id)
             .cloned()
             .ok_or_else(|| ToggleError::Refused("that album is no longer in Incoming".into()))?;
-        let path = album.path.clone().ok_or_else(|| ToggleError::Refused("the server gives no folder for that album".into()))?;
-        let (_, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
-        let dir = incoming_dir(&incoming, &path)
-            .cloned()
-            .ok_or_else(|| ToggleError::Refused("Cratarr cannot see that album's folder".into()))?;
+        self.delete_listed(source_id, album).await
+    }
+
+    /// Whether Music's albums can be deleted: Cratarr writes in Music (its trash is its own).
+    pub(super) async fn music_deletable(&self) -> bool {
+        let Some(music) = self.lib.catalogue().folders().first().cloned() else { return false };
+        self.can_write(&music).await
+    }
+
+    /// Delete a listed album of any used library (decision 0034): into that library's own trash (each library keeps
+    /// its own, the owner, 2026-10-16), Undo for the trash days.
+    pub async fn delete_listed(&self, source_id: &str, album: source::Album) -> Result<DeleteResult, ToggleError> {
+        self.refuse_if_queued(&album.id)?;
+        let at = self.locate_listed(source_id, album).await?;
+        let (album, dir, folder) = (at.album, at.dir, at.root);
         let catalogue = self.lib.catalogue();
-        let folder = catalogue
-            .folders()
-            .get(dir.folder as usize)
-            .cloned()
-            .ok_or_else(|| ToggleError::Refused("that Incoming folder is not in use any more".into()))?;
+        if !self.can_write(&folder).await {
+            return Err(ToggleError::Refused("Cratarr cannot write in that library".into()));
+        }
         // Write-ahead: the journal knows what is about to happen before it does (the token is known up front), so a
-        // crash in between is finished or forgotten by `reconcile`, never lost. Lidarr hears of it once applied.
+        // crash in between is finished or forgotten by `reconcile`, never lost. Lidarr hears of it once applied, and only
+        // for an album that leaves an Incoming folder (Music stays out of it).
         let now = epoch_now();
         let token = crate::trash::token(now, &dir.dir);
         let event = Event::AlbumRejected {
@@ -527,7 +536,7 @@ impl IncomingService {
             folder: dir.folder,
             dir: dir.dir.clone(),
             token: token.clone(),
-            release_group: dir.release_group.clone(),
+            release_group: if dir.folder != 0 { dir.release_group.clone() } else { None },
         };
         // Deleting the album that plays: the player stops first (a player going on with an item the server then drops
         // reports on it, which Jellyfin refuses; decision 0013). Nothing is played after: it is gone.
@@ -586,8 +595,9 @@ impl IncomingService {
                     moves.iter().any(|m| folders.get(m.to.0 as usize).is_some_and(|f| f.join(&m.to.1).is_file()))
                 }
                 // Replace: it happened when the old files' trash entry exists (they move first).
-                Event::AlbumReplaced { from_dir, token, .. } => {
-                    let root = self.lib.catalogue().folders().get(from_dir.0 as usize).cloned();
+                Event::AlbumReplaced { from_dir, replaced, token, .. } => {
+                    let trash = replaced.first().map_or(from_dir.0, |r| r.to.0);
+                    let root = self.lib.catalogue().folders().get(trash as usize).cloned();
                     root.is_some_and(|r| crate::trash::holds(&r, token))
                 }
             };
@@ -1217,7 +1227,7 @@ impl IncomingService {
 
     /// Empty Incoming trash older than the trash days set in Settings.
     pub(super) async fn purge_trash(&self) {
-        let folders: Vec<std::path::PathBuf> = self.lib.catalogue().folders().into_iter().skip(1).collect();
+        let folders: Vec<std::path::PathBuf> = self.lib.catalogue().folders();
         let (now, keep, files) = (epoch_now(), self.trash_days(), self.files.clone());
         let gone = tokio::task::spawn_blocking(move || {
             folders.iter().map(|f| files.purge(f, now, keep).unwrap_or_else(|e| {
@@ -1228,7 +1238,7 @@ impl IncomingService {
         .await
         .unwrap_or(0);
         if gone > 0 {
-            tracing::info!("emptied {gone} old deletion(s) from the Incoming trash");
+            tracing::info!("emptied {gone} old deletion(s) from the libraries' trash");
         }
         // What the trash no longer holds can no longer be undone.
         if let Err(e) = self.journal.prune(now - (i64::from(keep) + 1) * 86_400) {

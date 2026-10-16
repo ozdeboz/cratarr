@@ -173,7 +173,8 @@ impl IncomingService {
         })
     }
 
-    /// Replace (decision 0013): the old album's files go to the trash in the Incoming folder, the new ones into Music
+    /// Replace (decision 0013): the old album's files go to Music's own trash (each library keeps its own, 2026-10-16;
+    /// before, Incoming's), the new ones into Music
     /// named per the library's template, each taking over its old track's id. Lidarr stops fetching the album and the
     /// old tracks' play data goes to the new server items (handlers). Undo puts it all back.
     /// Hi-res files are converted first, in the queue: the plan is checked now, so a refusal shows at once.
@@ -217,7 +218,8 @@ impl IncomingService {
                 TrackMove {
                     track: c.track_of(0, &from),
                     from: (0, from),
-                    to: (inc, format!("{}/{token}/{rel}", crate::trash::TRASH_DIR)),
+                    // Into Music's own trash: each library keeps its own (the owner, 2026-10-16).
+                    to: (0, format!("{}/{token}/{rel}", crate::trash::TRASH_DIR)),
                     was: None,
                 }
             })

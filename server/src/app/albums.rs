@@ -78,6 +78,7 @@ impl App {
             }
         }
         let live = self.library.connected();
+        let music_deletable = self.incoming.music_deletable().await;
         let sources = ids
             .into_iter()
             .map(|id| {
@@ -111,7 +112,12 @@ impl App {
                     as_of: [c.map(|c| c.as_of), i.map(|i| i.as_of)].into_iter().flatten().min().unwrap_or_else(epoch_now),
                     waiting: waiting(&verdicts, music_albums),
                     verdicts,
-                    deletable: i.map(|i| i.deletable.clone()).unwrap_or_default(),
+                    deletable: i
+                        .map(|i| i.deletable.clone())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .chain(music_albums.iter().filter(|_| music_deletable).filter(|a| a.path.is_some()).map(|a| a.id.clone()))
+                        .collect(),
                     libraries,
                     library_info,
                     id,
@@ -127,6 +133,12 @@ impl App {
     async fn listed_album(&self, source: &str, album: &str) -> Result<source::Album, ToggleError> {
         let view = self.albums(Some(source)).await;
         view.sources.into_iter().flat_map(|s| s.albums).find(|a| a.id == album).ok_or_else(|| ToggleError::Refused("that album is no longer listed".into()))
+    }
+
+    /// Delete an album of any used library, into that library's trash (decision 0034).
+    pub async fn delete_album(&self, source: &str, album: &str) -> Result<super::DeleteResult, ToggleError> {
+        let a = self.listed_album(source, album).await?;
+        self.incoming.delete_listed(source, a).await
     }
 
     /// Move an album into another used library of its server (decision 0034).

@@ -77,6 +77,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/collection", get(collection))
         .route("/api/albums", get(albums))
         .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
+        .route("/api/albums/{source}/{album}/delete", post(delete_album))
         .route("/api/albums/duplicates", get(album_duplicates))
         .route("/api/repairs", get(repairs))
         .route("/api/repairs/apply", post(apply_repairs))
@@ -786,6 +787,10 @@ struct MoveTo {
     to: String,
     #[serde(default)]
     year: Option<String>,
+}
+
+async fn delete_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::DeleteResult>, ApiError> {
+    Ok(Json(app.delete_album(&source, &album).await?))
 }
 
 async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<MoveTo>) -> Result<Json<crate::app::KeepPreview>, ApiError> {

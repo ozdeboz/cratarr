@@ -1,12 +1,13 @@
-//! Incoming albums deleted from Cratarr go to a trash folder inside their own Incoming folder, so Undo can put them
-//! back and nothing is lost on one tap; the trash is emptied after the days set in Settings (decision 0010). Inside
-//! the same folder because a rename across mounts fails (and copying an album would be slow). Blocking file operations.
+//! Albums deleted from Cratarr go to a trash folder inside their own library's folder (each library keeps its own, the
+//! owner, 2026-10-16; Music's too since decision 0034), so Undo can put them back and nothing is lost on one tap; the
+//! trash is emptied after the days set in Settings (decision 0010). Inside the same folder because a rename across
+//! mounts fails (and copying an album would be slow). Blocking file operations.
 
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-/// Under each Incoming folder; hidden, so media servers and Lidarr leave it alone.
+/// Under each library's folder; hidden, so media servers, Lidarr and Cratarr's own scan leave it alone.
 pub const TRASH_DIR: &str = ".cratarr-trash";
 /// How long a deleted album can still be brought back, until Settings says otherwise.
 pub const DEFAULT_KEEP_DAYS: u32 = 14;

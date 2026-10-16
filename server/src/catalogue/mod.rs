@@ -1125,7 +1125,7 @@ impl Catalogue {
         Ok(rels.len())
     }
 
-    /// Rows Cratarr moved into the trash of another folder (Replace: old files from Music into Incoming's trash):
+    /// Rows Cratarr moved into a trash (Replace: the old files into Music's trash; before 2026-10-16, Incoming's):
     /// they follow, marked trashed with the trash token, so they retire when the trash is emptied. Blocking.
     pub fn move_into_trash(&self, from: (i64, &str), to: (i64, &str), token: &str) -> Result<usize> {
         self.rekey(from.0, from.1, to.0, to.1, Some(token))
