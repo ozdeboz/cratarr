@@ -201,7 +201,7 @@ async fn albums(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<cr
 
 /// A track's file as it is (the track menu's Details): where it lies, its audio, size and dates, and every tag, in the
 /// file's order (a tag Cratarr knows by its Picard name, any other by its own key).
-/// A track's waveform (decision 0035): its analysis' 512 bins, each its loudest sample (0..=255 of full scale), as
+/// A track's waveform (decision 0035): its analysis' 512 bins, each its RMS (0..=255 of the track's loudest bin), as
 /// bytes; the seekbar draws it. 404 until the track is analysed (or while its file changed since). It changes only
 /// with a new analysis: an ETag of when that was made, and kept a long time.
 async fn track_waveform(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {

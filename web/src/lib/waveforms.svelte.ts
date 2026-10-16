@@ -1,4 +1,4 @@
-// A track's waveform (decision 0035): its analysis' 512 bins, each its loudest sample (0..=255 of full scale), read
+// A track's waveform (decision 0035): its analysis' 512 bins, each its RMS (0..=255 of the track's loudest bin), read
 // once per track (the browser keeps it a month, with an ETag) and kept here while the page is open. Undefined while it
 // loads, null where the track has none (not analysed yet, or its server is not Cratarr's own).
 
