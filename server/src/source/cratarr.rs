@@ -485,6 +485,18 @@ impl Source for CratarrSource {
         })
     }
 
+    fn album_uses(&self) -> Fut<'_, BTreeMap<String, super::AlbumUse>> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            Ok(s.userdata
+                .used(&o, Item::Album)?
+                .into_iter()
+                .map(|(id, a)| (id, super::AlbumUse { plays: a.play_count, played: a.play_date, rating: a.rating }))
+                .collect())
+        })
+    }
+
     fn tracks_of_album<'a>(&'a self, album_id: &'a str) -> Fut<'a, Vec<AlbumTrack>> {
         Box::pin(async move {
             let s = server()?;

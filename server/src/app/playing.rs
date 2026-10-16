@@ -501,6 +501,13 @@ impl PlayingService {
         s.favorite_albums().await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
+    /// How the owner used each album of a connected server (plays, last played, rating): the Library's orders and
+    /// filters.
+    pub async fn album_uses(&self, source_id: &str) -> Result<std::collections::BTreeMap<String, source::AlbumUse>, ToggleError> {
+        let (_, s) = self.source(source_id)?;
+        s.album_uses().await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
     /// An album of a connected server, for its view in the panel.
     pub async fn album_view(&self, source_id: &str, album_id: &str) -> Result<AlbumView, ToggleError> {
         if !crate::covers::valid_item_id(album_id) {

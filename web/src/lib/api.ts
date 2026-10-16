@@ -766,6 +766,11 @@ export const albumCoverUrl = (source: string, album: string) => {
   const round = coverRounds[key];
   return localCovers[key] ?? `${serverCoverUrl(source, album)}${round ? `?v=${round}` : ''}`;
 };
+/** How the owner used an album (decided 2026-10-16: the Library's orders and filters): its plays, when last played
+ *  (epoch seconds), its rating (0: none). */
+export type AlbumUse = { plays: number; played?: number; rating: number };
+/** Every album of a server played or rated, by id; read fresh each time (plays change). */
+export const getAlbumUses = (source: string) => quietly<Record<string, AlbumUse>>(`/api/album-uses/${encodeURIComponent(source)}`);
 /** An album's rating, 0 to 5; null when its server keeps none. */
 export const getAlbumRating = (source: string, album: string) =>
   quietly<{ rating: number | null }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/rating`);

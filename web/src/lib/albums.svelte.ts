@@ -1,5 +1,16 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
-import { albumView, getAlbums, playAlbum, queueTracks, type AlbumsView, type ListedAlbum } from './api';
+import {
+  albumView,
+  getAlbumRating,
+  getAlbums,
+  getAlbumUses,
+  playAlbum,
+  queueTracks,
+  setAlbumRating,
+  type AlbumsView,
+  type AlbumUse,
+  type ListedAlbum,
+} from './api';
 import { player, refresh, untilNewTrack } from './live.svelte';
 import { enqueue, type LocalTrack } from './localPlayer.svelte';
 import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
@@ -83,6 +94,49 @@ export const mainArtist = (artist: string | null | undefined) => artist?.split(/
 export function goToArtist(source: string, name: string) {
   if (player.full) player.full = false;
   viewOver(artistSubject(source, name));
+}
+
+// How the owner used the albums (decided 2026-10-16): plays, last played and rating, per server, for the Library's
+// orders (Plays, Last played, Rating) and filters (Not played yet, 4 stars and up). Read when one of those is chosen,
+// and again each time (plays change).
+export const albumUses = $state<Record<string, Record<string, AlbumUse>>>({});
+const NOT_USED: AlbumUse = { plays: 0, rating: 0 };
+export const useOf = (source: string, id: string): AlbumUse => albumUses[source]?.[id] ?? NOT_USED;
+export async function loadAlbumUses(source: string) {
+  try {
+    albumUses[source] = await getAlbumUses(source);
+  } catch {
+    /* the orders fall back to the albums' own order */
+  }
+}
+
+// An album's rating, the one its menu and its About show (lib/RatingStars): `source/id` → 0–5, null where the server
+// keeps none (no stars then).
+export const albumRatings = $state<Record<string, number | null>>({});
+export function loadAlbumRating(source: string, id: string) {
+  getAlbumRating(source, id).then(
+    (r) => (albumRatings[`${source}/${id}`] = r.rating),
+    () => {},
+  );
+}
+/** A tap on a star: that rating, or none when it is the one it has; shown at once, back as it was when refused. */
+export async function rateAlbum(source: string, id: string, stars: number) {
+  const key = `${source}/${id}`;
+  const was = albumRatings[key] ?? 0;
+  const now = was === stars ? 0 : stars;
+  const set = (r: number) => {
+    albumRatings[key] = r;
+    const uses = albumUses[source];
+    if (uses) uses[id] = { ...(uses[id] ?? NOT_USED), rating: r };
+  };
+  set(now);
+  navigator.vibrate?.(8);
+  try {
+    await setAlbumRating(source, id, now);
+  } catch (e) {
+    set(was);
+    toast.fail(e, "The rating didn't change");
+  }
 }
 
 /** An artist's picture on this device: kept as an album's cover is (lib/localCovers), under an id no album has. */

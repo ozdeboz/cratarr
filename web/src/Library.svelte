@@ -8,7 +8,7 @@
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
   import AlbumMenu, { offerIn, type AlbumOffer } from './lib/AlbumMenu.svelte';
-  import { library, readLibrary } from './lib/albums.svelte';
+  import { library, loadAlbumUses, readLibrary, useOf } from './lib/albums.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
@@ -113,10 +113,18 @@
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
 
-  // The filter's own switches, Favourites only and Upgrades waiting: the list's, so off again when the page goes.
+  // The filter's own switches (Favourites only, Upgrades waiting, Not played yet, 4 stars and up): the list's, so off
+  // again when the page goes.
   $effect(() => () => {
     pageView.favouritesOnly = false;
     pageView.upgradesOnly = false;
+    pageView.unplayedOnly = false;
+    pageView.topRatedOnly = false;
+  });
+  // Not played yet and 4 stars and up read how you used the albums, again each time one is switched on.
+  $effect(() => {
+    if (!pageView.unplayedOnly && !pageView.topRatedOnly) return;
+    for (const s of untrack(() => sources ?? [])) loadAlbumUses(s.id);
   });
   // Favourites only asks each server again (an app may have changed a star meanwhile); one that cannot tell says so.
   $effect(() => {
@@ -125,9 +133,17 @@
       loadAlbumFavorites(s.id).then((ok) => ok || toast.show({ text: `${s.label} can't list favourite albums`, tone: 'error' }));
   });
   const shown = $derived.by<ShelfSource[] | null>(() => {
-    const { favouritesOnly: fav, upgradesOnly: up } = pageView;
-    if (!sources || !(fav || up)) return sources;
-    const keep = (s: ShelfSource, a: ListedAlbum) => (!fav || isFavorite(s.id, a.id)) && (!up || verdictOf(s, a)?.kind === 'upgrade');
+    const { favouritesOnly: fav, upgradesOnly: up, unplayedOnly: unplayed, topRatedOnly: top } = pageView;
+    if (!sources || !(fav || up || unplayed || top)) return sources;
+    const keep = (s: ShelfSource, a: ListedAlbum) => {
+      const u = useOf(s.id, a.id);
+      return (
+        (!fav || isFavorite(s.id, a.id)) &&
+        (!up || verdictOf(s, a)?.kind === 'upgrade') &&
+        (!unplayed || (u.plays === 0 && !u.played)) &&
+        (!top || u.rating >= 4)
+      );
+    };
     return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => keep(s, a)) }));
   });
 </script>

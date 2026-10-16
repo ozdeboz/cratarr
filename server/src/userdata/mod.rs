@@ -265,6 +265,28 @@ impl UserData {
         Ok(())
     }
 
+    /// Every item of one kind a user played or rated, with its annotation (the Library's orders and filters by plays
+    /// and rating): one read for all of them.
+    pub fn used(&self, user: &str, kind: Kind) -> Result<std::collections::HashMap<String, Annotation>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT item, play_count, play_date, rating, starred, starred_at FROM annotation
+             WHERE user = ?1 AND kind = ?2 AND (play_count > 0 OR play_date IS NOT NULL OR rating > 0)",
+        )?;
+        let rows = st.query_map(params![user, kind.as_str()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                Annotation {
+                    play_count: r.get::<_, i64>(1)?.max(0) as u32,
+                    play_date: r.get(2)?,
+                    rating: r.get::<_, i64>(3)?.clamp(0, 5) as u8,
+                    starred_at: if r.get::<_, i64>(4)? != 0 { Some(r.get::<_, Option<i64>>(5)?.unwrap_or(0)) } else { None },
+                },
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The items of one kind a user starred, newest star first.
     pub fn starred(&self, user: &str, kind: Kind) -> Result<Vec<String>> {
         let db = self.db();
@@ -756,6 +778,19 @@ mod tests {
         let s = u.play_stats("me", &["tr-1".to_string(), "tr-2".to_string()]).unwrap();
         assert_eq!(s.get("tr-1"), Some(&(2, Some(200))));
         assert!(!s.contains_key("tr-2"), "never played");
+    }
+
+    #[test]
+    fn the_albums_used_are_those_played_or_rated() {
+        let u = UserData::open(None).unwrap();
+        u.count_play("me", ("tr-1", "pid1"), "al-1", &[], 100).unwrap();
+        u.set_rating("me", Kind::Album, "al-2", 4).unwrap();
+        u.set_starred("me", Kind::Album, &["al-3".to_string()], true).unwrap();
+        let used = u.used("me", Kind::Album).unwrap();
+        assert_eq!((used["al-1"].play_count, used["al-1"].play_date, used["al-1"].rating), (1, Some(100), 0));
+        assert_eq!((used["al-2"].play_count, used["al-2"].rating), (0, 4));
+        assert!(!used.contains_key("al-3"), "only starred: not used");
+        assert!(u.used("you", Kind::Album).unwrap().is_empty(), "per user");
     }
 
     #[test]

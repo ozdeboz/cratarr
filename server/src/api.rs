@@ -80,6 +80,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/sync/targets", get(sync_targets))
         .route("/api/playlists/by-name", get(playlist_by_name))
         .route("/api/playlists/{id}/spoken", put(set_spoken))
+        .route("/api/album-uses/{source}", get(album_uses))
         .route("/api/artists/{source}", get(artist_view))
         .route("/api/artists/{source}/favorite", post(artist_favorite))
         .route("/api/albums/{source}/{album}", get(album_view))
@@ -298,6 +299,15 @@ async fn artist_favorite(
     Query(q): Query<ArtistName>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "favorite": app.playing.artist_favorite(&source, &q.name, q.on).await? })))
+}
+
+/// Every album the owner played or rated on a server, by id: plays, last played, rating (the Library's orders and
+/// filters, decided 2026-10-16).
+async fn album_uses(
+    State(app): State<Arc<App>>,
+    Path(source): Path<String>,
+) -> Result<Json<std::collections::BTreeMap<String, crate::source::AlbumUse>>, ApiError> {
+    Ok(Json(app.playing.album_uses(&source).await?))
 }
 
 /// The album panel's heart: an album a favourite or not.
