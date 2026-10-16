@@ -374,7 +374,7 @@
     </div>
   {/if}
   {#if mini}
-    <div class="mini-dock"><MiniPlayer /></div>
+    <div class="mini-dock" class:over={playlistLayer}><MiniPlayer /></div>
   {/if}
   <!-- Played on from elsewhere before this page was touched: the browser holds the sound back until a tap. -->
   {#if target.tapToPlay}
@@ -765,6 +765,12 @@
     .mini-dock,
     .page-row {
       left: calc(240px + 12px);
+    }
+
+    /* A playlist over the page covers the navigation too: the mini-player floats over it with the same space on both
+       sides, never pushed to one side by a navigation it is not beside (the owner, 2026-10-17). */
+    .mini-dock.over {
+      left: 12px;
     }
 
     .bar,
