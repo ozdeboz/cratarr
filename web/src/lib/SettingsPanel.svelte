@@ -467,6 +467,11 @@
     flex-wrap: wrap;
   }
 
+  /* A form's buttons a little apart from its last field. */
+  .scroll :global(.fields + .row) {
+    margin-top: 16px;
+  }
+
   .scroll :global(.row select) {
     width: auto;
   }
