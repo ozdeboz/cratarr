@@ -19,6 +19,9 @@
     albumResume,
     albumView,
     type AlbumView,
+    artistView,
+    type ArtistView,
+    setArtistFavorite,
     coverUrl,
     crateRows,
     crateToPlaylist,
@@ -66,7 +69,7 @@
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
-  import { library, mainArtist, readLibrary } from './albums.svelte';
+  import { goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
   import ListHead from './ListHead.svelte';
@@ -76,7 +79,8 @@
   import { download, inApp } from './app.svelte';
   import { longpress } from './longpress';
   import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
-  import { albumMoved, albumOf, backToTracks, closePlaylist, NEW_PLAYLIST, panelDepth, viewPlaylist, panel, TABS } from './panel.svelte';
+  import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
+  import ArtistBody from './ArtistBody.svelte';
   import ExportTab from './ExportTab.svelte';
   import PlaylistItem from './PlaylistItem.svelte';
   import Row from './Row.svelte';
@@ -112,8 +116,12 @@
   const crate = $derived(crateOf(panel.viewed) ?? builder?.id ?? null);
   /** The viewed album (an Incoming one, or a track's), when an album is viewed. */
   const album = $derived(albumOf(panel.viewed));
-  /** A crate or an album: tracks without a playlist's file (no tabs, no editing, no statistics). */
-  const plain = $derived(!!crate || !!album || crateEditing || creating);
+  /** The viewed artist (their page), or all their tracks (`tracks`: their Top tracks' ›), when an artist is viewed. */
+  const artist = $derived(artistOf(panel.viewed));
+  /** A crate, an album or an artist: tracks without a playlist's file (no tabs, no editing, no statistics). */
+  const plain = $derived(!!crate || !!album || !!artist || crateEditing || creating);
+  /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
+  let artistHead = $state<Pick<ArtistView, 'albums' | 'appears_on' | 'favorite'> | null>(null);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays'> & { kbps: number | null } | null>(null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
@@ -133,12 +141,18 @@
           ? crateName(crate)
           : album
             ? (albumHead?.title ?? '')
-            : multi
+            : artist
+              ? artist.tracks
+                ? 'Top tracks'
+                : artist.name
+              : multi
               ? `${ids.length} playlists`
               : id,
   );
   /** The cover's place without covers: a genre's, a crate's or an album's icon. */
-  const heroIcon = $derived(creating ? 'playlists' : crate && genreOf(crate) !== null ? 'music' : crate || crateEditing ? 'crates' : 'albums');
+  const heroIcon = $derived(
+    creating ? 'playlists' : crate && genreOf(crate) !== null ? 'music' : crate || crateEditing ? 'crates' : artist ? 'user' : 'albums',
+  );
   const isPermanentCrate = $derived(!!crate && (crates.list?.find((c) => c.id === crate)?.permanent ?? true));
   const p = $derived(plain || multi ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
   /** The selected playlists, in the order ticked (for the menu, the counts). */
@@ -221,6 +235,7 @@
     if (!want || multi || builderOf(want) || want === NEW_PLAYLIST) return;
     const c = crateOf(want);
     const a = albumOf(want);
+    const ar = artistOf(want);
     // As the toggle shows it (the server's saved setting until the crates are known).
     const shownFav = () => (c && crates.list ? favouritesOf(c) : undefined);
     const fav = shownFav();
@@ -229,6 +244,7 @@
       rows = null;
       error = null;
       albumHead = null;
+      artistHead = null;
       listGenres = null;
     }
     // A crate keeps the pages it has (at least the first) when it is asked for again.
@@ -241,7 +257,17 @@
               albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays };
             return { ...r, total: r.rows.length };
           })
-        : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length, genres: null }));
+        : ar
+          ? artistView(ar.source, ar.name).then((r) => {
+              if (want === id) {
+                artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite };
+                // Their picture: their newest album's cover (Symfonium's, without an artist's photo).
+                const first = r.albums[0] ?? r.appears_on[0];
+                covers = first ? [albumCoverUrl(r.source, first.id)] : [];
+              }
+              return { ...r, total: r.rows.length, genres: null };
+            })
+          : playlistRows(want, prefs.source || undefined).then((r) => ({ ...r, total: r.rows.length, genres: null }));
     asked.then(
       (r) => {
         if (want !== id || shownFav() !== fav) return;
@@ -264,7 +290,8 @@
   $effect(() => {
     const want = id;
     covers = [];
-    if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST) return;
+    // An artist's comes with their albums (above).
+    if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST || artistOf(want)) return;
     const a = albumOf(want);
     if (a) {
       covers = [albumCoverUrl(a.source, a.id)];
@@ -301,13 +328,13 @@
   let sortDown = $state(false);
   let sortOpen = $state(false);
   const sortFields = $derived<{ value: SortKey; label: string }[]>([
-    { value: 'own', label: album ? 'Track number' : crate ? 'Newest first' : 'Playlist order' },
+    { value: 'own', label: album ? 'Track number' : crate ? 'Newest first' : artist ? 'Newest album first' : 'Playlist order' },
     { value: 'title', label: 'Title' },
     { value: 'artist', label: 'Artist' },
     ...(album ? [] : [{ value: 'album' as SortKey, label: 'Album' }]),
     { value: 'length', label: 'Length' },
     // A playlist's: what its files and the plays say, and when an entry came (decision 0025, amended 2026-10-16: Orders).
-    ...(plain
+    ...(plain && !artist
       ? []
       : ([
           { value: 'albumArtist', label: 'Album artist' },
@@ -344,9 +371,12 @@
       : sortKey === 'lastPlayed' ? (r.last_played ?? null)
       : (r.added ?? null);
     const byNumber = (x: number | null, y: number | null) => (x === y ? 0 : x === null ? -1 : y === null ? 1 : x - y);
-    if (['length', 'year', 'track', 'plays', 'lastPlayed', 'added'].includes(sortKey)) list.sort((a, b) => byNumber(num(a.r), num(b.r)));
-    else if (sortKey !== 'own') list.sort((a, b) => ordered(text(a.r), text(b.r)));
-    if (sortDown) list.reverse();
+    // Turned round, equals keep the subject's order (an artist's most played: as their Top tracks show them).
+    const way = sortDown ? -1 : 1;
+    if (sortKey === 'own') {
+      if (sortDown) list.reverse();
+    } else if (['length', 'year', 'track', 'plays', 'lastPlayed', 'added'].includes(sortKey)) list.sort((a, b) => way * byNumber(num(a.r), num(b.r)));
+    else list.sort((a, b) => way * ordered(text(a.r), text(b.r)));
     return list;
   });
   const shownRows = $derived(shown ? shown.map((x) => x.r) : []);
@@ -376,10 +406,10 @@
   const ticked = $derived(selecting && shown ? shown.filter((x) => selecting!.has(x.i) && x.r.id && !x.r.missing).map((x) => x.r) : []);
   const tickedFav = $derived(ticked.length > 0 && ticked.every((r) => isFavorite(source, r.id!)));
   $effect(() => {
-    // Another subject: its own order, nothing ticked.
-    void id;
-    sortKey = 'own';
-    sortDown = false;
+    // Another subject: its own order (an artist's tracks: most played first), nothing ticked.
+    const top = !!artistOf(id)?.tracks;
+    sortKey = top ? 'plays' : 'own';
+    sortDown = top;
     selecting = null;
   });
   async function actOnTicked(mode: 'play' | 'next' | 'last') {
@@ -415,7 +445,7 @@
   }
   // An album's tracks carry its id: its cover, and the Incoming page's mark on what plays.
   const tracksOf = (list: PlaylistRow[], src = source): LocalTrack[] =>
-    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album?.id ?? null, duration_secs: x.duration_secs }));
+    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album?.id ?? x.album_id ?? null, duration_secs: x.duration_secs }));
 
   // Several playlists: each section's rows, asked for when it comes into view; a section folds.
   let sections = $state<Record<string, { rows: PlaylistRow[]; source: string } | { error: string }>>({});
@@ -465,7 +495,7 @@
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
   let menuStart = $state<'menu' | 'delete'>('menu');
   let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists' } | null>(null);
-  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? null });
+  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null });
 
   // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
   // or at the end of the queue; an album also Resume. A crate plays and shuffles; its favourites toggle sits at the
@@ -478,6 +508,8 @@
     if (album) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
     list.push(play('shuffle', 'shuffle', 'Shuffle'));
     if (!crate) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
+    // An artist as the radio's input (decision 0036), as a crate is: their tracks, and like them from anywhere.
+    if (artist && isLocal() && source === 'cratarr') list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: artistRadio, disabled: !canPlay });
     // A crate as the radio's input (decision 0036): like it, from anywhere; or only its tracks, endlessly.
     else if (isLocal()) {
       list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: () => crateRadio(false), disabled: !canPlay });
@@ -487,7 +519,9 @@
   });
   // A genre shows all its tracks: no favourites toggle.
   const favState = $derived(crate && genreOf(crate) === null ? FAVOURITES[favouritesOf(crate)] : null);
-  const closeLabel = $derived(crate ? 'Close the crate' : album ? 'Close the album' : multi ? 'Close the playlists' : 'Close the playlist');
+  const closeLabel = $derived(
+    crate ? 'Close the crate' : album ? 'Close the album' : artist ? 'Close the artist' : multi ? 'Close the playlists' : 'Close the playlist',
+  );
 
   // Under the cover, as Symfonium's: the name large, then one line of what it is (an album: its length, year, format
   // and bitrate; a playlist or a crate: how many tracks, and the length), and the genres.
@@ -496,6 +530,10 @@
     if (crate) return rows ? plural(total, 'track') : '';
     if (multi) return plural(chosenCount, 'track');
     if (!rows) return '';
+    if (artist) {
+      const albums = artist.tracks ? null : plural(artistHead?.albums.length ?? 0, 'album');
+      return [albums, plural(rows.length, 'track'), length ? clockText(length) : null].filter(Boolean).join(' • ');
+    }
     const h = album ? albumHead : null;
     const parts = album
       ? [length ? clockText(length) : null, h?.year, h?.format, h?.kbps ? `${h.kbps} kb/s` : null]
@@ -601,6 +639,34 @@
   /** The crate as the radio's input (decision 0036). Start radio: tracks like the crate's, from the whole library (up
    *  to 300 of its tracks as the seed). Play as radio: only the crate's tracks, as its favourites toggle is set, never
    *  ending and never in the same order; Cratarr reads the crate itself on each refill. */
+  async function artistRadio() {
+    navigator.vibrate?.(8);
+    const ids = playable.map((r) => r.id!);
+    try {
+      await startRadio(ids.length > 300 ? [...ids].sort(() => Math.random() - 0.5).slice(0, 300) : ids, title);
+    } catch (e) {
+      toast.fail(e, "The radio didn't start");
+    }
+  }
+
+  // The artist's heart: shows the change at once, back as it was when the server refuses.
+  async function toggleArtistFavorite() {
+    const h = artistHead;
+    if (!artist || !h || h.favorite === undefined) return;
+    const on = !h.favorite;
+    h.favorite = on;
+    try {
+      await setArtistFavorite(artist.source, artist.name, on);
+    } catch (e) {
+      h.favorite = !on;
+      toast.fail(e, "The favourite didn't change");
+    }
+  }
+  // Top tracks: the artist's five most played (equals in their albums' order); › shows them all.
+  const topRows = $derived(
+    artist && !artist.tracks && rows ? [...playable].sort((x, y) => (y.play_count ?? 0) - (x.play_count ?? 0)).slice(0, 5) : [],
+  );
+
   async function crateRadio(inside: boolean) {
     const c = crate;
     if (!c) return;
@@ -1037,6 +1103,12 @@
           {:else}
             <button class="icon" aria-label="Make playlist" title="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
           {/if}
+        {:else if artist}
+          {#if artistHead?.favorite !== undefined}
+            <button class="icon" class:fav={artistHead.favorite} aria-pressed={artistHead.favorite} aria-label="Favourite" onclick={toggleArtistFavorite}
+              ><Icon name="heart" size={24} /></button
+            >
+          {/if}
         {:else if album}
           <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (albumMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
@@ -1108,7 +1180,14 @@
         {#if details}<p class="details">{details}</p>{/if}
         {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
         {#if album && albumHead?.artist}
-          <span class="chip">{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{albumHead.artist}</span></span>
+          {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
+          <button class="chip" disabled={!by} onclick={() => by && goToArtist(album.source, by)}
+            >{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{albumHead.artist}</span></button
+          >
+        {:else if artist?.tracks}
+          <button class="chip" onclick={() => viewOver(artistSubject(artist.source, artist.name))}
+            >{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{artist.name}</span></button
+          >
         {/if}
         <!-- A genre opens in the panel (its own crate). -->
         {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
@@ -1205,6 +1284,19 @@
       <!-- another tab, the sections, or the edit list: above -->
     {:else if error}
       <p class="error" role="alert">{error}</p>
+    {:else if artist && !artist.tracks && rows && artistHead}
+      <!-- An artist's page (Symfonium's): their albums, what they appear on, their most played. -->
+      <ArtistBody
+        source={artist.source}
+        name={artist.name}
+        albums={artistHead.albums}
+        appearsOn={artistHead.appears_on}
+        top={topRows.length ? topList : undefined}
+        ontracks={() => viewOver(artistSubject(artist.source, artist.name, true))}
+      />
+      {#snippet topList()}
+        <ol class="rows">{#each topRows as r (r.id)}{@render trackRow(r, source, title, topRows)}{/each}</ol>
+      {/snippet}
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
     {:else if rows && shown}
@@ -1314,7 +1406,7 @@
     >
       {#snippet lead()}{@render cover(r, src, here)}{/snippet}
       {#snippet sub()}
-        {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album}<span class="album">{r.album}</span>{/if}{/if}
+        {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else if artist}<span class="artist">{r.album ?? ''}</span>{#if r.year}<span class="album">{r.year}</span>{/if}{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album}<span class="album">{r.album}</span>{/if}{/if}
       {/snippet}
       {#snippet action()}{#if ok}{@render rowEnd(r, src, i)}{/if}{/snippet}
     </Row>
@@ -1967,16 +2059,25 @@
     font-size: 15px;
   }
 
+  /* The album's artist (Symfonium's chip): it opens the artist. */
   .chip {
     display: inline-flex;
     align-items: center;
     gap: 12px;
     max-width: 100%;
-    padding-right: 16px;
+    padding: 0 16px 0 0;
     overflow: hidden;
+    border: 0;
     border-radius: 8px;
     background: color-mix(in srgb, var(--text) 9%, transparent);
+    color: inherit;
+    font: inherit;
     font-size: 15px;
+    cursor: pointer;
+  }
+
+  .chip:not(:has(img)) {
+    padding-left: 16px;
   }
 
   .chip img {

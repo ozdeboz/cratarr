@@ -4,6 +4,7 @@
   // from: the server and its library. What is not known is left out; Last played says Never when it never was.
   import { viewGenre } from './crates.svelte';
   import Icon from './Icon.svelte';
+  import SectionHead from './SectionHead.svelte';
 
   let {
     genres,
@@ -30,8 +31,9 @@
   };
 </script>
 
-<section aria-labelledby="album-about">
-  <h2 id="album-about">About</h2>
+<section aria-label="About">
+  <SectionHead title="About" />
+  <div class="body">
   {#if genres.length}
     <h3>Genres</h3>
     <p class="chips">
@@ -57,30 +59,31 @@
       {provider.server}{#if provider.library}<span class="sep">·</span>{#if provider.colour}<i class="dot" style:background={provider.colour}></i>{/if}{provider.library}{/if}
     </span>
   </p>
+  </div>
 </section>
 
 <style>
   section {
     margin-top: 24px;
+  }
+
+  .body {
     padding: 0 16px;
   }
 
-  h2 {
-    margin: 8px 0 4px;
-    font-size: 18px;
-    font-weight: 600;
-  }
-
+  /* As Symfonium's: the facts' names plain and muted, what they say a little in from them. */
   h3 {
-    margin: 16px 0 6px;
+    margin: 14px 0 8px;
     color: var(--muted);
-    font-size: 13px;
-    font-weight: 500;
+    font-size: 17px;
+    font-weight: 400;
   }
 
   p {
     margin: 0;
+    padding-left: 8px;
     font-size: 15px;
+    font-weight: 500;
   }
 
   .chips {

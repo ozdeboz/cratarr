@@ -376,6 +376,8 @@ export type PlaylistRow = {
   last_played?: number;
   /** and when the entry came (none for one held before Cratarr kept that). */
   added?: number;
+  /** Its album's id, where the rows are of several albums (an artist's). */
+  album_id?: string;
 };
 
 /** Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16). */
@@ -839,6 +841,21 @@ export type AlbumView = {
 };
 export const albumView = (source: string, album: string) =>
   quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
+/** An artist as their panel shows them (decided 2026-10-16, as Symfonium's), by name as the albums credit them: their
+ *  albums and the albums they appear on, newest first, and their tracks album by album with the plays. */
+export type ArtistView = {
+  source: string;
+  name: string;
+  albums: ListedAlbum[];
+  appears_on: ListedAlbum[];
+  rows: PlaylistRow[];
+  /** Null where the server keeps no favourite artists. */
+  favorite?: boolean;
+};
+export const artistView = (source: string, name: string) =>
+  quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?name=${encodeURIComponent(name)}`);
+export const setArtistFavorite = (source: string, name: string, on: boolean) =>
+  request<{ favorite: boolean }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}&on=${on}`, { method: 'POST' });
 /** Where an album of Cratarr's own library was left (Resume): a track and a position, from the bookmarks apps keep
  *  (decision 0030); `track` null when there is none. */
 export const albumResume = (album: string) =>

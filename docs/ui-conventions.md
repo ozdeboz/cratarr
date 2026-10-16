@@ -92,8 +92,16 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   2026-10-16): More from the artist (their other albums on that server, newest first, in a row that scrolls sideways;
   a cover opens that album, the heading's › goes to the artist), then About: genres and year as chips, last played and
   date added (date and time), and the media provider (the server and library, with the library's dot). Anything not
-  known is left out. Go to artist (here, or in a menu) keeps the panel beside the page; where the panel covers the
-  page it leaves it, and back returns to it. In
+  known is left out. The album's artist chip opens the artist too.
+  **An artist** (decided 2026-10-16, as Symfonium's; `?view=artist:<server>/<name>`, by name as the albums credit
+  them) is a subject of the panel like an album: their newest album's cover (no artist photos yet), the action bar
+  (Play, Shuffle, Play next, Add to queue: all their tracks, album by album, newest first; Start radio on Cratarr's own
+  player; the heart), the name and "8 albums • 124 tracks • 7:06:37". Then Albums (theirs, newest first) and Appears
+  on (others' albums they are credited on a track of), both as covers three across on a phone, and Top tracks: their
+  five most played (by your plays), whose › shows all their tracks most played first (`artist-tracks:`). Their rows say
+  album and year rather than artist. Go to artist (an album's or a track's menu, More from's ›, the chip) and a cover
+  in these rows open over what the panel views: a step of its own, which back returns from. A list sorted the other
+  way round keeps equals in the subject's order. In
   edit mode the cover and the name stay where they are; the action bar's place holds Cancel (a reset arrow, red once
   something changed) against Save (an arrow down to a line on a filled accent round), and the pills keep ✕. Rows as the
   queue's; edit mode as Finamp's playlist edit screen: the title is editable where it is, looking the same (Spoken

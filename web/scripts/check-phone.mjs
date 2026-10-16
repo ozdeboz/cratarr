@@ -1,4 +1,4 @@
-// Phone check (decided 2026-10-16): every page, every part of the settings and an album in the panel, at a phone's
+// Phone check (decided 2026-10-16): every page, every part of the settings, an album and an artist in the panel, at a phone's
 // width (390 px, as touch), must not scroll sideways: neither the page nor any box that scrolls up and down. A box
 // meant to scroll sideways (a row of chips) scrolls only that way, so it is not looked at. A page that throws, or that
 // the dev server cannot build (its error overlay), fails too.
@@ -89,6 +89,8 @@ try {
   const albums = await (await fetch(`${base}/api/albums`)).json();
   const s = albums.sources?.find((x) => x.albums?.length);
   if (s) views.push(`/library?view=album:${s.id}/${s.albums[0].id}`);
+  const by = s?.albums.find((a) => a.artist)?.artist;
+  if (by) views.push(`/library?view=artist:${s.id}/${encodeURIComponent(by)}`);
 } catch {
   /* no albums to look at */
 }

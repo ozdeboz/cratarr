@@ -115,11 +115,10 @@
   const pagePill = $derived(PLAYABLE.includes(page));
   // An icon button's label on a long-press or right-click, everywhere (lib/labels).
   $effect(installLabels);
-  // Each page starts with its search empty (the pill's field), or with the one it was opened for (Go to artist).
+  // Each page starts with its search empty (the pill's field).
   $effect(() => {
     void page;
-    pageView.query = untrack(() => pageView.next);
-    pageView.next = '';
+    pageView.query = '';
   });
   const pillDevice = $derived(!playing() && !(sidebar && panelShowsPlayer()));
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on

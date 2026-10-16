@@ -59,6 +59,20 @@ pub struct StateView {
 /// The most genres the panel shows on top of an album or a crate.
 pub const GENRES_SHOWN: usize = 5;
 
+/// An artist as the panel shows them (decided 2026-10-16, as Symfonium's): their albums and the albums they appear on,
+/// newest first, and their tracks album by album as a playlist's rows, with the owner's plays (Top tracks; what Play
+/// plays).
+#[derive(Debug, Serialize)]
+pub struct ArtistView {
+    pub source: String,
+    pub name: String,
+    pub albums: Vec<source::Album>,
+    pub appears_on: Vec<source::Album>,
+    pub rows: Vec<super::playlists::PlaylistRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub favorite: Option<bool>,
+}
+
 /// An album as its view in the panel shows it (decision 0023): what its tracks say of it, and its tracks in play order
 /// as a playlist's rows. A row's `entry` is the server's path of the file.
 #[derive(Debug, Serialize)]
@@ -539,6 +553,51 @@ impl PlayingService {
             played: listening.played,
             plays: listening.plays,
         })
+    }
+
+    /// An artist of a connected server, for their view in the panel (by name, as the albums credit them).
+    pub async fn artist_view(&self, source_id: &str, name: &str) -> Result<ArtistView, ToggleError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(ToggleError::Refused("That is not an artist.".into()));
+        }
+        let (_, s) = self.source(source_id)?;
+        let works = s.artist_works(name).await.map_err(|e| {
+            tracing::warn!("{source_id}: artist {name}: {e:#}");
+            ToggleError::Refused("The server could not read this artist.".into())
+        })?;
+        let w = works.ok_or_else(|| ToggleError::Refused("This server cannot show artists.".into()))?;
+        let rows = w
+            .tracks
+            .into_iter()
+            .map(|a| {
+                let t = a.track;
+                let entry = t.path.unwrap_or_else(|| t.id.clone());
+                super::playlists::PlaylistRow {
+                    file: entry.rsplit('/').next().unwrap_or(&entry).to_string(),
+                    entry,
+                    id: Some(t.id),
+                    name: Some(t.title),
+                    artist: t.artist,
+                    album: t.album,
+                    duration_secs: t.duration_secs,
+                    album_artist: t.album_artist,
+                    year: t.year.map(|y| y as i32),
+                    play_count: Some(a.plays),
+                    last_played: a.played,
+                    album_id: Some(a.album_id),
+                    missing: false,
+                    ..Default::default()
+                }
+            })
+            .collect();
+        Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums: w.albums, appears_on: w.appears_on, rows, favorite: w.favorite })
+    }
+
+    /// Makes an artist a favourite or not (the artist panel's heart).
+    pub async fn artist_favorite(&self, source_id: &str, name: &str, on: bool) -> Result<bool, ToggleError> {
+        let (_, s) = self.source(source_id)?;
+        s.set_artist_favorite(name.trim(), on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
     /// Plays an album of a connected server on that server's player. Returns the player's label.

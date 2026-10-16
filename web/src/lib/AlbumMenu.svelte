@@ -71,8 +71,7 @@
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { playPlaylistFrom } from './output.svelte';
-  import { pageView } from './pageView.svelte';
-  import { albumGone, albumSubject, keepViewed, viewPlaylist } from './panel.svelte';
+  import { albumGone, albumSubject, viewPlaylist } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo, share } from './share';
   import Icon from './Icon.svelte';
@@ -212,12 +211,12 @@
     return list;
   });
 
-  // Go to artist: the Library with that artist's albums (the search says the name), as the track menu's; one for each
+  // Go to artist: the artist's panel, as the track menu's; one for each
   // artist the album is credited to (as Symfonium's). Without the source's list, the credit with a "feat." left out.
   const artistNames = $derived(a.artists?.length ? a.artists : [mainArtist(a.artist) ?? ''].filter(Boolean));
   function goToArtist(name: string) {
     onclose();
-    showArtist(name);
+    showArtist(source, name);
   }
   function goToGenre(name: string) {
     onclose();

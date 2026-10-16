@@ -246,6 +246,40 @@ impl Library {
         Ok(Some(artist))
     }
 
+    /// An artist's work (the artist panel): the albums credited to them and the albums they only appear on (credited
+    /// on a track), both newest first, and the songs credited to them or on their albums, album by album in disc and
+    /// track order.
+    pub fn artist_works(&self, artist_id: &str) -> Result<(Vec<Album>, Vec<Album>, Vec<Song>)> {
+        let db = self.db();
+        let own = numbers(
+            &db,
+            "SELECT a.n FROM album_artists x JOIN albums a ON a.id = x.album_id WHERE x.artist_id = ?1
+               ORDER BY a.year DESC, a.order_name, a.n",
+            &[&artist_id],
+        )?;
+        let on = numbers(
+            &db,
+            "SELECT DISTINCT a.n, a.year, a.order_name FROM song_artists x JOIN songs s ON s.id = x.song_id JOIN albums a ON a.id = s.album_id
+               WHERE x.artist_id = ?1 AND NOT EXISTS (SELECT 1 FROM album_artists y WHERE y.album_id = a.id AND y.artist_id = ?1)
+               ORDER BY a.year DESC, a.order_name, a.n",
+            &[&artist_id],
+        )?;
+        let songs = numbers(
+            &db,
+            "SELECT s.n FROM songs s JOIN albums a ON a.id = s.album_id
+               WHERE s.album_id IN (SELECT album_id FROM album_artists WHERE artist_id = ?1)
+                  OR s.id IN (SELECT song_id FROM song_artists WHERE artist_id = ?1)
+               ORDER BY a.year DESC, a.order_name, a.n, coalesce(s.disc_no, 1), s.track_no, s.rel",
+            &[&artist_id],
+        )?;
+        let mut own = by_numbers(&db, "albums", ALBUM_COLS, "a", &own, album_of)?;
+        let mut on = by_numbers(&db, "albums", ALBUM_COLS, "a", &on, album_of)?;
+        self.album_artists(&db, &mut own)?;
+        self.album_artists(&db, &mut on)?;
+        let songs = by_numbers(&db, "songs", SONG_COLS, "s", &songs, song_of)?;
+        Ok((own, on, songs))
+    }
+
     /// Genres with their song and album counts.
     pub fn genres(&self) -> Result<Vec<(String, u32, u32)>> {
         let db = self.db();

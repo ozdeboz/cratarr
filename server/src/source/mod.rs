@@ -221,6 +221,28 @@ pub struct Album {
     pub artists: Vec<String>,
 }
 
+/// What a source knows of an artist (the artist panel, decided 2026-10-16, as Symfonium's): the albums credited to them
+/// and those they only appear on, newest first, and their tracks (those credited to them, and every track of their
+/// albums) album by album.
+#[derive(Debug, Clone, Default)]
+pub struct ArtistWorks {
+    pub albums: Vec<Album>,
+    pub appears_on: Vec<Album>,
+    pub tracks: Vec<ArtistTrack>,
+    /// A favourite of the account the source plays for; `None` where the source keeps none.
+    pub favorite: Option<bool>,
+}
+
+/// One of an artist's tracks, with its album and that account's plays of it.
+#[derive(Debug, Clone)]
+pub struct ArtistTrack {
+    pub track: AlbumTrack,
+    pub album_id: String,
+    pub plays: u32,
+    /// Epoch seconds.
+    pub played: Option<i64>,
+}
+
 /// One of a user's own playlists on the server (decision 0012).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnPlaylist {
@@ -365,6 +387,16 @@ pub trait Source: Send + Sync {
     /// sources: Cratarr takes them from its own catalogue where it can, and keeps them (decision 0011).
     fn album_summary<'a>(&'a self, _album: &'a str) -> Fut<'a, Option<AlbumDetails>> {
         Box::pin(async { Ok(None) })
+    }
+
+    /// Optional: an artist's albums and tracks (the artist panel), by their name. `None`: the source cannot say.
+    fn artist_works<'a>(&'a self, _name: &'a str) -> Fut<'a, Option<ArtistWorks>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Optional: makes an artist a favourite or not (the artist panel's heart).
+    fn set_artist_favorite<'a>(&'a self, _name: &'a str, _on: bool) -> Fut<'a, bool> {
+        Box::pin(async { Err(anyhow::anyhow!("This server keeps no favourite artists.")) })
     }
 
     /// Optional: when an album came and how it has been played (the album panel's About), never kept: plays change.

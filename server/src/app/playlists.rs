@@ -196,6 +196,9 @@ pub struct PlaylistRow {
     /// and when the entry came into the playlist (none for one held before Cratarr kept that).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added: Option<i64>,
+    /// Its album's id, where the rows are of several albums (an artist's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_id: Option<String>,
     /// No such file in the Music folder.
     pub missing: bool,
 }
@@ -867,6 +870,7 @@ impl PlaylistService {
                     play_count: None,
                     last_played: None,
                     added: None,
+                    album_id: None,
                 })
                 .collect())
         })

@@ -420,6 +420,71 @@ impl Source for CratarrSource {
         })
     }
 
+    // An artist is their name's id (as Subsonic apps see them): the albums crediting it, the songs crediting it. Plays
+    // and the heart are the owner's.
+    fn artist_works<'a>(&'a self, name: &'a str) -> Fut<'a, Option<super::ArtistWorks>> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            let id = crate::serve::ids::artist(name);
+            let (lib, aid) = (s.library.clone(), id.clone());
+            let (own, on, songs) = blocking(move || lib.artist_works(&aid)).await?;
+            let ids: Vec<String> = songs.iter().map(|t| t.id.clone()).collect();
+            let seen = s.userdata.get(&o, Item::Song, &ids)?;
+            let favorite = s.userdata.get(&o, Item::Artist, std::slice::from_ref(&id))?.get(&id).is_some_and(|a| a.starred_at.is_some());
+            let card = |a: crate::serve::api::Album| Album {
+                added: a.created.as_deref().and_then(crate::nowplaying::parse_iso_epoch),
+                title: a.name,
+                artist: Some(a.artist),
+                year: a.year,
+                path: None,
+                tracks: a.song_count,
+                format: None,
+                bitrate_kbps: None,
+                tags: Vec::new(),
+                library: None,
+                artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
+                id: a.id,
+            };
+            let tracks = songs
+                .into_iter()
+                .map(|t| {
+                    let a = seen.get(&t.id);
+                    super::ArtistTrack {
+                        plays: a.map_or(0, |a| a.play_count),
+                        played: a.and_then(|a| a.play_date),
+                        album_id: t.album_id.clone(),
+                        track: AlbumTrack {
+                            id: t.id,
+                            title: t.title,
+                            artist: Some(t.artist).filter(|a| !a.is_empty()),
+                            album: Some(t.album),
+                            album_artist: Some(t.display_album_artist).filter(|a| !a.is_empty()),
+                            year: t.year,
+                            path: Some(t.path),
+                            duration_secs: Some(t.duration as f64),
+                        },
+                    }
+                })
+                .collect();
+            Ok(Some(super::ArtistWorks {
+                albums: own.into_iter().map(card).collect(),
+                appears_on: on.into_iter().map(card).collect(),
+                tracks,
+                favorite: Some(favorite),
+            }))
+        })
+    }
+
+    fn set_artist_favorite<'a>(&'a self, name: &'a str, on: bool) -> Fut<'a, bool> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            s.userdata.set_starred(&o, Item::Artist, &[crate::serve::ids::artist(name)], on)?;
+            Ok(on)
+        })
+    }
+
     fn tracks_of_album<'a>(&'a self, album_id: &'a str) -> Fut<'a, Vec<AlbumTrack>> {
         Box::pin(async move {
             let s = server()?;

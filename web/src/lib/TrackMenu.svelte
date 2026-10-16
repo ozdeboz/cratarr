@@ -35,7 +35,7 @@
   import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
   import { toast } from './toast.svelte';
-  import { albumSubject, keepViewed, viewPlaylist } from './panel.svelte';
+  import { albumSubject, viewOver } from './panel.svelte';
   import { linkTo, share } from './share';
   import { viewGenre } from './crates.svelte';
   import { download, inApp } from './app.svelte';
@@ -83,7 +83,7 @@
     onclose();
     // From the full-screen player: it closes, or it would cover the album.
     player.full = false;
-    viewPlaylist(subject);
+    viewOver(subject);
   }
   const heartOn = $derived(forPlaying ? favorite() : !!other?.favorite);
   const heartKnown = $derived(forPlaying ? np?.favorite !== null : other !== null && other.favorite !== null);
@@ -99,13 +99,13 @@
   // svelte-ignore state_referenced_locally
   let step = $state<'menu' | 'lists' | 'details'>(start);
 
-  // Go to artist: the Library page with that artist's albums (the search says the name). A "feat." credit is left out:
-  // the albums are under the main artist.
+  // Go to artist: the artist's panel (lib/albums goToArtist). A "feat." credit is left out: the albums are under the
+  // main artist.
   const artistName = $derived(mainArtist(t?.artist));
   function goToArtist() {
     if (!artistName) return;
     onclose();
-    showArtist(artistName);
+    showArtist(t!.source, artistName);
   }
 
   // Share: the track in words, and its album's link here (a track has no page of its own; lib/share.ts).

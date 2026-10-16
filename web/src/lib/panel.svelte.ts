@@ -24,7 +24,21 @@ export function albumOf(viewed: string | null): { source: string; id: string } |
   return at > 0 && at < rest.length - 1 ? { source: rest.slice(0, at), id: rest.slice(at + 1) } : null;
 }
 
-/** A crate, its builder or an album: a subject of one, without tabs (decision 0025). */
+/** An artist in the address (`artist:<server>/<name>`, decided 2026-10-16), by name as the albums credit them; and all
+ *  their tracks, most played first (`artist-tracks:`, their Top tracks' ›). */
+const ARTIST = 'artist:';
+const ARTIST_TRACKS = 'artist-tracks:';
+export const artistSubject = (source: string, name: string, tracks = false) => `${tracks ? ARTIST_TRACKS : ARTIST}${source}/${name}`;
+export function artistOf(viewed: string | null): { source: string; name: string; tracks: boolean } | null {
+  const tracks = !!viewed?.startsWith(ARTIST_TRACKS);
+  if (!tracks && !viewed?.startsWith(ARTIST)) return null;
+  const rest = viewed!.slice((tracks ? ARTIST_TRACKS : ARTIST).length);
+  // A server's id has no slash; a name may.
+  const at = rest.indexOf('/');
+  return at > 0 && at < rest.length - 1 ? { source: rest.slice(0, at), name: rest.slice(at + 1), tracks } : null;
+}
+
+/** A crate, its builder, an album or an artist: a subject of one, without tabs (decision 0025). */
 /** A playlist being made: the panel's edit mode, with no playlist yet (New playlist, as `crate-new` is New crate). */
 export const NEW_PLAYLIST = 'playlist-new';
 
@@ -34,7 +48,7 @@ export const settingsOf = (viewed: string | null) => (viewed?.startsWith(SETTING
 
 export const isSingleSubject = (viewed: string | null) =>
   !!viewed &&
-  (viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM));
+  (viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
 
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */
@@ -107,6 +121,19 @@ export function viewSelection(names: string[], tab: Tab = 'tracks') {
 
 /** Views one playlist (or a crate, or an album) on its Tracks. */
 export const viewPlaylist = (name: string) => viewSelection([name]);
+
+/** Views a subject over the one viewed, going deeper (an album's artist, an artist's album, as Symfonium's): a step of
+ *  its own, which back returns from. With nothing viewed, as viewPlaylist. */
+export function viewOver(name: string) {
+  if (!panel.viewed) return viewPlaylist(name);
+  panel.playerTop = false;
+  if (name === panel.viewed && !panel.selection.length) {
+    panel.again++;
+    return;
+  }
+  push(address([name], 'tracks'));
+  read();
+}
 
 /** One of the playlists' other views (Info, Export, Repair, Sync: from their menu, decided 2026-10-16). Over their
  *  tracks it is a step of its own, which back returns from (backToTracks); playlists not viewed yet open on it. */

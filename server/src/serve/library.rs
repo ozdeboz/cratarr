@@ -52,6 +52,7 @@ CREATE INDEX IF NOT EXISTS albums_by_artist ON albums (artist_id, year, n);
 CREATE TABLE IF NOT EXISTS album_artists (album_id TEXT NOT NULL, artist_id TEXT NOT NULL, name TEXT NOT NULL,
   position INTEGER NOT NULL, PRIMARY KEY (album_id, position)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS album_artists_by_artist ON album_artists (artist_id, album_id);
+CREATE INDEX IF NOT EXISTS song_artists_by_artist ON song_artists (artist_id, song_id);
 CREATE TABLE IF NOT EXISTS artists (
   n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, mbid TEXT, album_count INTEGER NOT NULL,
   song_count INTEGER NOT NULL, order_name TEXT NOT NULL);
@@ -601,6 +602,33 @@ mod tests {
         assert_eq!((track, disc), (1, 2));
         let order: String = db.query_row("SELECT order_name FROM artists WHERE name = 'The Orb'", [], |r| r.get(0)).unwrap();
         assert_eq!(order, "orb");
+    }
+
+    #[test]
+    fn an_artists_work_is_their_albums_newest_first_then_what_they_appear_on() {
+        let lib = Library::open(None).unwrap();
+        let t = |n: i64, rel: &str, artist: &str, album_artist: &str, album: &str, date: &str| {
+            let title = format!("t{n}");
+            row(n, rel, &[("title", &title), ("artist", artist), ("albumartist", album_artist), ("album", album), ("tracknumber", &n.to_string()), ("date", date)])
+        };
+        let folders = vec![FolderRows {
+            folder: 0,
+            root: "/music".into(),
+            rows: vec![
+                t(1, "A/Old (2001)/01 t.flac", "A", "A", "Old", "2001"),
+                t(2, "A/New (2010)/01 t.flac", "A", "A", "New", "2010"),
+                t(3, "A/New (2010)/02 t.flac", "C", "A", "New", "2010"),
+                t(4, "B/Mix (2005)/01 t.flac", "B", "B", "Mix", "2005"),
+                t(5, "B/Mix (2005)/02 t.flac", "A", "B", "Mix", "2005"),
+            ],
+        }];
+        lib.refresh(&folders, &Rules::default()).unwrap();
+        let (own, on, songs) = lib.artist_works(&super::super::ids::artist("a")).unwrap();
+        let names = |l: &[crate::serve::api::Album]| l.iter().map(|a| a.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&own), ["New", "Old"]);
+        assert_eq!(names(&on), ["Mix"], "credited on a track only");
+        let titles: Vec<&str> = songs.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["t2", "t3", "t5", "t1"], "every track of their albums, and theirs on others', album by album");
     }
 
     #[test]

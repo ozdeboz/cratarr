@@ -1,10 +1,9 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
 import { albumView, getAlbums, playAlbum, queueTracks, type AlbumsView, type ListedAlbum } from './api';
-import { inSidebar, player, refresh, untilNewTrack } from './live.svelte';
+import { player, refresh, untilNewTrack } from './live.svelte';
 import { enqueue, type LocalTrack } from './localPlayer.svelte';
 import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
-import { pageView } from './pageView.svelte';
-import { keepViewed } from './panel.svelte';
+import { artistSubject, viewOver } from './panel.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
@@ -79,14 +78,11 @@ export const artistCredits = (artist: string | null) =>
 /** Whom a credit is under: "A feat. B" is A's (the albums are under the main artist). */
 export const mainArtist = (artist: string | null | undefined) => artist?.split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim() || null;
 
-/** Go to artist: the Library page with that artist's albums (the search says the name, lib/AlbumShelf). What the panel
- *  views stays beside the page; where the panel covers the page (a phone) it is left, back returns to it. */
-export function goToArtist(name: string) {
-  pageView.artist = name;
-  pageView.next = name;
-  pageView.query = name;
+/** Go to artist: the artist's panel (decided 2026-10-16, as Symfonium's), over what the panel views (back returns to
+ *  it). From the full-screen player, which closes, or it would cover the panel. */
+export function goToArtist(source: string, name: string) {
   if (player.full) player.full = false;
-  location.hash = inSidebar() ? keepViewed('#/library') : '#/library';
+  viewOver(artistSubject(source, name));
 }
 
 export const lossless = (a: ListedAlbum) => a.format === 'FLAC';
