@@ -363,6 +363,7 @@ fn track_info(d: &crate::jellyfin::MediaDetails) -> super::TrackInfo {
         sample_rate_hz: audio.and_then(|a| a.sample_rate),
         // Jellyfin keeps no explicit flag for music.
         explicit: None,
+        bpm: None,
     }
 }
 

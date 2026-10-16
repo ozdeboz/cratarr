@@ -98,6 +98,7 @@
     const out: string[] = [];
     if (i.explicit) out.push('Explicit');
     if (i.play_count !== null) out.push(`${i.play_count} ${i.play_count === 1 ? 'play' : 'plays'}`);
+    if (i.bpm) out.push(`${i.bpm} BPM`);
     const codec = [i.codec?.toUpperCase(), i.bitrate_kbps ? `${i.bitrate_kbps} kbps` : null].filter(Boolean).join(' @ ');
     if (codec) out.push(codec);
     const format = [i.bit_depth ? `${i.bit_depth}-bit` : null, i.sample_rate_hz ? `${+(i.sample_rate_hz / 1000).toFixed(1)} kHz` : null]

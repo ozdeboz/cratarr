@@ -730,6 +730,7 @@ impl Source for SubsonicSource {
                     Some("clean") => Some(false),
                     _ => None,
                 },
+                bpm: None,
             }))
         })
     }

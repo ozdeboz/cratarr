@@ -96,6 +96,8 @@ pub struct TrackInfo {
     pub bit_depth: Option<u32>,
     pub sample_rate_hz: Option<u32>,
     pub explicit: Option<bool>,
+    /// Its tempo (decision 0035): the file's BPM tag, else the analysis'; none for a track without a beat.
+    pub bpm: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

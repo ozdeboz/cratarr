@@ -169,6 +169,7 @@
     const out: [string, string][] = [];
     if (audio.length) out.push(['Audio', audio.join(' · ')]);
     if (d.duration_ms) out.push(['Length', clock(d.duration_ms / 1000)]);
+    if (d.bpm) out.push(['Tempo', `${d.bpm} BPM`]);
     if (d.size) out.push(['Size', `${(d.size / 1e6).toFixed(1)} MB`]);
     if (plays !== null) out.push(['Plays', String(plays)]);
     if (d.added) out.push(['Added', day(d.added)]);

@@ -60,6 +60,8 @@ export type TrackInfo = {
   bit_depth: number | null;
   sample_rate_hz: number | null;
   explicit: boolean | null;
+  /** Its tempo (decision 0035); absent from a server before it. */
+  bpm?: number | null;
 };
 
 /** A track the player plays after the current one. */
@@ -827,6 +829,8 @@ export type TrackFile = {
   bit_depth: number | null;
   channels: number | null;
   duration_ms: number | null;
+  /** Its tempo (decision 0035): the BPM tag, else the analysis'; none without a beat. */
+  bpm?: number | null;
   size: number | null;
   modified: number | null;
   added: number | null;

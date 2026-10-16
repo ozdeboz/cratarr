@@ -193,8 +193,8 @@ async fn track_gain(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
     ([cache], Json(gain.map_or(json!({}), |g| serde_json::to_value(g).unwrap_or_default()))).into_response()
 }
 
-/// A track's ReplayGain as Cratarr's library serves it (its analysis, else its file's tags).
-async fn replay_gain_of(app: &App, source: &str, id: &str) -> Option<crate::serve::api::ReplayGain> {
+/// A track as Cratarr's library serves it: its gains and tempo from its analysis, else from its file's tags.
+async fn served_song(app: &App, source: &str, id: &str) -> Option<crate::serve::api::Song> {
     let served = crate::serve::instance()?;
     let (cat, source, id) = (app.library.catalogue(), source.to_string(), id.to_string());
     tokio::task::spawn_blocking(move || {
@@ -203,11 +203,16 @@ async fn replay_gain_of(app: &App, source: &str, id: &str) -> Option<crate::serv
         } else {
             cat.track_of_source(&source, &id).and_then(|t| served.library.song_ids(t).ok().flatten()).map(|s| s.song_id)
         }?;
-        served.library.songs_by_id(&[song]).ok()?.into_iter().next()?.replay_gain
+        served.library.songs_by_id(&[song]).ok()?.into_iter().next()
     })
     .await
     .ok()
     .flatten()
+}
+
+/// A track's ReplayGain as Cratarr's library serves it (its analysis, else its file's tags).
+async fn replay_gain_of(app: &App, source: &str, id: &str) -> Option<crate::serve::api::ReplayGain> {
+    served_song(app, source, id).await?.replay_gain
 }
 
 /// A track's title, artist and album, for the local player's queue (decision 0022).
@@ -312,6 +317,8 @@ async fn analysis_import(
 }
 
 async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Response {
+    // Its tempo as the library serves it (the BPM tag, else the analysis').
+    let bpm = served_song(&app, &source, &id).await.and_then(|s| s.bpm);
     let cat = app.library.catalogue();
     let read = tokio::task::spawn_blocking(move || -> Option<serde_json::Value> {
         let track = cat.track_of_source(&source, &id)?;
@@ -331,6 +338,7 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
             "bit_depth": file.bit_depth,
             "channels": file.channels,
             "duration_ms": file.duration_ms,
+            "bpm": bpm,
             "size": meta.map(|m| m.len()),
             "modified": modified,
             "added": cat.born_of(track),

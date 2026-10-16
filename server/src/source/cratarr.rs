@@ -556,6 +556,7 @@ impl Source for CratarrSource {
                 play_count: plays.or(Some(0)),
                 codec: Some(song.suffix.to_uppercase()).filter(|c| !c.is_empty()),
                 bitrate_kbps: song.bit_rate,
+                bpm: song.bpm,
                 ..TrackInfo::default()
             }))
         })
