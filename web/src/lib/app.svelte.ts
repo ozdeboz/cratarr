@@ -24,6 +24,9 @@ export const appInfo = $state({
   downloadQuality: 'original' as 'original' | 'smaller',
   /** Downloads over mobile data too, not only over Wi-Fi. */
   downloadOverMobile: false,
+  /** Kept on this device (decision 0038): the storage budget in GB, 0 for no limit; syncing only while charging. */
+  syncBudgetGb: 20,
+  syncOnlyCharging: false,
 });
 
 /** A track kept on the device: as the page described it when it was downloaded, and how far the download is. */
@@ -52,7 +55,15 @@ export function toApp(message: Message) {
 }
 
 /** Changes this device's settings; the app answers with all of them. */
-export const setDevice = (change: { player?: string; server?: string; stayReady?: boolean; downloadQuality?: string; downloadOverMobile?: boolean }) =>
+export const setDevice = (change: {
+  player?: string;
+  server?: string;
+  stayReady?: boolean;
+  downloadQuality?: string;
+  downloadOverMobile?: boolean;
+  syncBudgetGb?: number;
+  syncOnlyCharging?: boolean;
+}) =>
   toApp({ type: 'device-set', ...change });
 /** Keeps these tracks on the device, in the quality the settings say. */
 export const download = (tracks: { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null }[]) =>
@@ -82,6 +93,8 @@ if (port) {
       appInfo.batteryAllowed = m.batteryAllowed !== false;
       appInfo.downloadQuality = m.downloadQuality === 'smaller' ? 'smaller' : 'original';
       appInfo.downloadOverMobile = m.downloadOverMobile === true;
+      appInfo.syncBudgetGb = typeof m.syncBudgetGb === 'number' ? m.syncBudgetGb : 20;
+      appInfo.syncOnlyCharging = m.syncOnlyCharging === true;
     }
     if (m.type === 'downloads') {
       downloads.tracks = Array.isArray(m.tracks) ? (m.tracks as DownloadedTrack[]) : [];
