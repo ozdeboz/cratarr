@@ -471,7 +471,9 @@ export type Values = Record<string, string | string[]>;
 
 /** What is saved for a source. Secrets left blank keep the saved ones (while their bound fields stay the same). */
 /** What a server's libraries are used for, by library id (decision 0009). Libraries in neither list are not used. */
-export type Roles = { music: string[]; incoming: string[] };
+/** A library's own settings (decision 0034): what a move into it does to the files, and its dot's colour. */
+export type LibraryPolicy = { format?: 'cd' | 'as_is'; colour?: string | null };
+export type Roles = { music: string[]; incoming: string[]; policies?: Record<string, LibraryPolicy> };
 
 export type LibraryUse = 'music' | 'incoming' | 'unused';
 
@@ -497,6 +499,8 @@ export type SourceView = SourceConfig & {
   choices: Record<string, Choice[]>;
   server_libraries: ServerLibrary[];
   error: string | null;
+  /** Each used library's settings as they apply (its own, else its use's and the palette's). */
+  policies?: Record<string, { format: 'cd' | 'as_is'; colour: string | null }>;
 };
 
 export type Kind = { id: string; label: string; fields: Field[] };
@@ -523,6 +527,8 @@ export type Settings = {
   catalogue: CatalogueStatus | null;
   /** The saved naming template of Music; null: the one the library already follows. */
   naming: string | null;
+  /** The libraries' colours to choose from (decision 0034). */
+  palette: string[];
 };
 
 /** A naming template measured against Music (decision 0013). */

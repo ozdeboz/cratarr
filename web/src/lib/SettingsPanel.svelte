@@ -280,6 +280,20 @@
     if (use !== 'unused') d.libraries[use].push(id);
   }
 
+  // A used library's own settings (decision 0034): what a move into it does to the files (CD format converts hi-res to
+  // 16-bit/44.1 kHz; as it is moves them unchanged), and for one other than the primary its dot's colour. Shown as they
+  // apply (the server's), changed here with the rest and saved with Save.
+  const policyOf = (d: Draft, id: string) => ({ format: 'as_is' as 'cd' | 'as_is', colour: null as string | null, ...d.view?.policies?.[id], ...d.libraries.policies?.[id] });
+  function setPolicy(d: Draft, id: string, change: { format?: 'cd' | 'as_is'; colour?: string }) {
+    d.libraries.policies = { ...(d.libraries.policies ?? {}), [id]: { ...policyOf(d, id), ...change } };
+  }
+  /** The colours to choose from (none from a server before it sent them: only the system's picker then). */
+  const palette = $derived(s?.palette ?? []);
+  const FORMATS = [
+    { id: 'cd', label: 'CD format' },
+    { id: 'as_is', label: 'As it is' },
+  ] as const;
+
   const USES: { id: LibraryUse; label: string }[] = [
     { id: 'music', label: 'Music' },
     { id: 'incoming', label: 'Incoming' },
@@ -676,6 +690,38 @@
                       <button aria-pressed={u === x.id} onclick={() => setUse(d, l.id, x.id)}>{x.label}</button>
                     {/each}
                   </div>
+                  {#if u !== 'unused'}
+                    {@const pol = policyOf(d, l.id)}
+                    <div class="policy">
+                      <span class="hint">Albums moved in</span>
+                      <div class="seg" role="group" aria-label={`Albums moved into ${l.name}`}>
+                        {#each FORMATS as f (f.id)}
+                          <button aria-pressed={pol.format === f.id} onclick={() => setPolicy(d, l.id, { format: f.id })}>{f.label}</button>
+                        {/each}
+                      </div>
+                    </div>
+                    {#if u === 'incoming'}
+                      <div class="policy">
+                        <span class="hint">Dot</span>
+                        <div class="swatches" role="radiogroup" aria-label={`Colour of ${l.name}`}>
+                          {#each palette as c (c)}
+                            <button
+                              class="swatch"
+                              role="radio"
+                              aria-checked={pol.colour === c}
+                              aria-label={c}
+                              style:background={c}
+                              onclick={() => setPolicy(d, l.id, { colour: c })}
+                            ></button>
+                          {/each}
+                          <label class="swatch own" class:on={!!pol.colour && !palette.includes(pol.colour)} style:background={pol.colour && !palette.includes(pol.colour) ? pol.colour : null}>
+                            <span class="sr">Another colour</span>
+                            <input type="color" value={pol.colour ?? palette[0] ?? '#e0a23a'} onchange={(e) => setPolicy(d, l.id, { colour: e.currentTarget.value })} />
+                          </label>
+                        </div>
+                      </div>
+                    {/if}
+                  {/if}
                 </li>
               {:else}
                 <li class="hint">No music libraries on this server.</li>
@@ -1112,11 +1158,72 @@
     border-bottom: 0;
   }
 
+  /* A used library's own settings, each a line of its own under it: its name, the control at the end. */
+  .policy {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-basis: 100%;
+  }
+
+  .swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .swatch {
+    position: relative;
+    width: 28px;
+    height: 28px;
+    min-height: 0;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  .swatch[aria-checked='true'],
+  .swatch.own.on {
+    box-shadow:
+      0 0 0 2px var(--bg),
+      0 0 0 4px var(--text);
+  }
+
+  /* Any other colour: the system's picker, behind a round of the chosen one (else a rainbow). */
+  .swatch.own {
+    display: block;
+    overflow: hidden;
+    background: conic-gradient(#e0a23a, #d4567f, #9a6fdc, #5b8def, #3fae9a, #e0a23a);
+  }
+
+  .swatch.own input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
   /* Phones: every row the same, the name above and the choice full width below. */
   @media (max-width: 520px) {
+    /* In a column nothing wraps: a full-width line would else start a column of its own beside the others. */
     .libs li {
       flex-direction: column;
+      flex-wrap: nowrap;
       align-items: stretch;
+    }
+
+    .policy {
+      flex-basis: auto;
     }
 
     .libs .seg button {

@@ -82,6 +82,8 @@ pub struct SettingsView {
     pub catalogue: Option<crate::catalogue::Status>,
     /// The saved naming template of Music; `None`: the one the library follows (see `NamingView`).
     pub naming: Option<String>,
+    /// The libraries' colours to choose from (decision 0034), as a new one gets them.
+    pub palette: &'static [&'static str],
 }
 
 /// A naming template measured against the Music library (decision 0013), for the Settings page.
@@ -311,6 +313,7 @@ impl SettingsService {
                 tokio::task::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok)
             },
             naming: self.lib.templates().0.map(|t| t.to_string()),
+            palette: &crate::settings::PALETTE,
         })
     }
 
