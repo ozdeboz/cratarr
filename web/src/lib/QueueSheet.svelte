@@ -22,6 +22,7 @@
   import RowHeart from './RowHeart.svelte';
   import { swipe } from './swipe';
   import { sheetDrag } from './sheetDrag';
+  import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
   import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming } from './localPlayer.svelte';
@@ -88,6 +89,8 @@
   let moreOpen = $state(false);
 
   let searching = $state(false);
+  /** New playlist from the queue, its name sheet open. */
+  let saving = $state(false);
   let query = $state('');
   const q = $derived(searching ? query.trim().toLowerCase() : '');
   const matches = (t: { name: string; artist: string | null; album: string | null }) =>
@@ -230,6 +233,7 @@
           <span class="title">Queue</span>
           <span class="tools">
             <button aria-label="Search the queue" onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
+            <button aria-label="New playlist from the queue" title="New playlist from the queue" onclick={() => (saving = true)}><Icon name="intoBox" size={22} /></button>
             {#if here}<button aria-label="Clear the queue" disabled={!np.upcoming.length} onclick={clear}><Icon name="clearQueue" size={22} /></button>{/if}
           </span>
         {/if}
@@ -353,6 +357,9 @@
     queue={menuFor.queue}
     onclose={() => (menuShown = false)}
   />
+{/if}
+{#if saving}
+  <QueuePlaylistSheet onclose={() => (saving = false)} />
 {/if}
 
 <style>
