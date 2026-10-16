@@ -719,7 +719,8 @@ impl Catalogue {
         // it was then. The tag comes first.
         let mut st = db.prepare(
             "SELECT a.rel, a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
-             WHERE a.folder = ?1 AND a.bpm IS NOT NULL AND a.size = f.size AND a.mtime = f.mtime",
+             WHERE a.folder = ?1 AND a.bpm IS NOT NULL AND a.size = f.size AND a.mtime = f.mtime
+               AND (a.complete IS NULL OR a.complete != 0)",
         )?;
         let analysed: HashMap<String, f64> =
             st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?.collect::<rusqlite::Result<_>>()?;
@@ -814,7 +815,8 @@ impl Catalogue {
         )?;
         let mut analysed = db.prepare_cached(
             "SELECT a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
-             WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime",
+             WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime
+               AND (a.complete IS NULL OR a.complete != 0)",
         )?;
         // "3", "3/12": the number before a slash.
         let number = |v: &str| v.split('/').next().and_then(|n| n.trim().parse::<u32>().ok());
@@ -1771,6 +1773,8 @@ pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32,
         let dir = rel.rsplit_once('/').map_or("", |(d, _)| d).to_string();
         let entry = dirs.entry(dir).or_insert_with(|| Some(Vec::new()));
         match (entry.as_mut(), a) {
+            // A track whose analysis covers only part of it: as a track without one (decision 0035, 2026-10-17).
+            (Some(_), Some(a)) if a.complete == Some(false) => *entry = None,
             (Some(list), Some(a)) => list.push(a),
             // A track without one: the album waits.
             (Some(_), None) => *entry = None,
@@ -1881,6 +1885,13 @@ mod tests {
         assert!(two.1.ends_with("Two.flac"));
         cat.store_analysis(two.0, &two.1, two.3, two.4, &an_analysis(-5.0, 480)).unwrap();
         assert!(cat.unanalysed(10).unwrap().is_empty());
+        assert!(cat.album_gains(folder).unwrap().contains_key("A - B (2020)"));
+        // An analysis of only part of its track: no BPM from it, and its album waits as for a track without one.
+        let partial = crate::analysis::Analysis { complete: Some(false), ..an_analysis(-5.0, 480) };
+        cat.store_analysis(two.0, &two.1, two.3, two.4, &partial).unwrap();
+        assert_eq!(cat.crate_facts(folder).unwrap().iter().find(|f| f.rel == two.1).unwrap().bpm, None);
+        assert!(cat.album_gains(folder).unwrap().is_empty(), "a partial track holds its album back");
+        cat.store_analysis(two.0, &two.1, two.3, two.4, &an_analysis(-5.0, 480)).unwrap();
         assert!(cat.album_gains(folder).unwrap().contains_key("A - B (2020)"));
         // A file changed since is analysed again, and its old analysis no longer serves.
         std::fs::write(d.join(&one), b"changed, so analysed again").unwrap();
