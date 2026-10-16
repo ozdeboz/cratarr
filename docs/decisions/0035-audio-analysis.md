@@ -253,10 +253,12 @@ a speed-up, and the NAS's own pass is the fallback when the ThinkBook is not at 
 
 ## Amendment, 2026-10-17: whether a decode was whole
 
-Of the whole library's first pass, 14 files decoded only in part: Symphonia's FLAC reader takes one frame in eight
-of one album's files (its reader walks the whole stream, the decoder gets every eighth frame), and an MP3 whose
-format changes mid-stream stops decoding there while ffmpeg plays on. Their length, loudness, tempo and waveform then
-describe only that part. An analysis now says whether its decode covered at least 97% of what the reader walked (the
-end of its last packet; not the header's length, which is what lies for other files). Older analyses read as not
-known. Only a complete analysis' length may be served in place of the header's; the files that decode in part are
-analysed again from a whole decode by another decoder.
+Of the whole library's first pass, 19 files decoded short. Twelve are one album's FLACs that are damaged: the
+reader walks the whole stream, but only 7 to 19 seconds of each decode, with Symphonia and with ffmpeg alike (ffmpeg's
+reported time is the last timestamp it saw, not decoded sound). Seven are MP3s that ffmpeg decodes in full and
+Symphonia does not, one stopping at 3:32 of 8:19 where its format changes. A short decode's length, loudness, tempo
+and waveform describe only that part. An analysis now says whether its decode covered at least 97% of what the reader
+walked (the end of its last packet; not the header's length, which is what lies for other files). Older analyses read
+as not known, and only a complete analysis serves anything (length, gain, BPM, waveform; an album waits for it). The
+seven MP3s were analysed again from ffmpeg's whole decode (2026-10-17); the damaged album stays incomplete until it is
+replaced.
