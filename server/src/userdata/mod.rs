@@ -38,6 +38,9 @@ CREATE INDEX IF NOT EXISTS annotation_pid ON annotation (pid);
 CREATE TABLE IF NOT EXISTS play_queue (
   user TEXT PRIMARY KEY, songs TEXT NOT NULL, current TEXT, position_ms INTEGER NOT NULL DEFAULT 0,
   changed INTEGER NOT NULL, changed_by TEXT);
+CREATE TABLE IF NOT EXISTS app_queue (
+  user TEXT NOT NULL, client TEXT NOT NULL, songs TEXT NOT NULL, current INTEGER, position_ms INTEGER NOT NULL DEFAULT 0,
+  changed INTEGER NOT NULL, PRIMARY KEY (user, client)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS added (album TEXT PRIMARY KEY, at INTEGER NOT NULL, origin TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS playlist_seen (name TEXT PRIMARY KEY, print TEXT NOT NULL, created INTEGER NOT NULL, changed INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS album_review (album TEXT PRIMARY KEY, base TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, undo TEXT,
@@ -145,13 +148,15 @@ pub struct ImportChange {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PlayQueue {
+pub struct AppQueue {
+    /// The app that saved it (Subsonic's `c`); every install of an app shares its name.
+    pub client: String,
     pub songs: Vec<String>,
-    pub current: Option<String>,
+    /// The place of the song that plays (0-based): a song can be in the queue twice.
+    pub current: Option<usize>,
     pub position_ms: u64,
     /// Epoch seconds.
     pub changed: i64,
-    pub changed_by: Option<String>,
 }
 
 /// A position kept in a song (OpenSubsonic `createBookmark`).
@@ -192,6 +197,24 @@ fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
+/// One queue per account was kept before (`play_queue`); each moves to the app that saved it, the song that played
+/// found by its id (the first copy: all that was known).
+fn move_old_play_queues(conn: &Connection) -> Result<()> {
+    let old: Vec<(String, String, Option<String>, i64, i64, Option<String>)> = conn
+        .prepare("SELECT user, songs, current, position_ms, changed, changed_by FROM play_queue")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (user, songs, current, position_ms, changed, by) in old {
+        let current = current.and_then(|c| songs.split(',').position(|s| s == c)).map(|i| i as i64);
+        conn.execute(
+            "INSERT OR IGNORE INTO app_queue (user, client, songs, current, position_ms, changed) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![user, by.unwrap_or_default(), songs, current, position_ms, changed],
+        )?;
+        conn.execute("DELETE FROM play_queue WHERE user = ?1", [&user])?;
+    }
+    Ok(())
+}
+
 /// An `imported` row's (server_item, plays, played, starred, rating).
 fn imported_of(r: &rusqlite::Row) -> rusqlite::Result<Imported> {
     Ok(Imported {
@@ -214,6 +237,7 @@ impl UserData {
         conn.execute_batch(SCHEMA).context("creating the user data tables")?;
         conn.execute_batch(tags::SCHEMA).context("creating the album tag table")?;
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
+        move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         Ok(Self { db: Mutex::new(conn) })
     }
 
@@ -492,31 +516,35 @@ impl UserData {
         Ok(n)
     }
 
-    pub fn play_queue(&self, user: &str) -> Result<Option<PlayQueue>> {
+    /// The queues the apps of an account saved (Subsonic `savePlayQueue`, decision 0033 step 5), one per app.
+    pub fn app_queues(&self, user: &str) -> Result<Vec<AppQueue>> {
         let db = self.db();
-        db.query_row(
-            "SELECT songs, current, position_ms, changed, changed_by FROM play_queue WHERE user = ?1",
-            [user],
-            |r| {
-                let songs: String = r.get(0)?;
-                Ok(PlayQueue {
-                    songs: songs.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect(),
-                    current: r.get(1)?,
-                    position_ms: r.get::<_, i64>(2)?.max(0) as u64,
-                    changed: r.get(3)?,
-                    changed_by: r.get(4)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
+        let mut st = db.prepare_cached("SELECT client, songs, current, position_ms, changed FROM app_queue WHERE user = ?1")?;
+        let rows = st.query_map([user], |r| {
+            let songs: String = r.get(1)?;
+            Ok(AppQueue {
+                client: r.get(0)?,
+                songs: songs.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect(),
+                current: r.get::<_, Option<i64>>(2)?.and_then(|i| usize::try_from(i).ok()),
+                position_ms: r.get::<_, i64>(3)?.max(0) as u64,
+                changed: r.get(4)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
     }
 
-    pub fn save_play_queue(&self, user: &str, q: &PlayQueue) -> Result<()> {
-        self.db().execute(
-            "INSERT OR REPLACE INTO play_queue (user, songs, current, position_ms, changed, changed_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![user, q.songs.join(","), q.current, q.position_ms as i64, q.changed, q.changed_by],
-        )?;
+    /// Keeps an app's queue in place of the one it saved before; an empty one is taken away (OpenSubsonic: a save
+    /// without songs clears).
+    pub fn save_app_queue(&self, user: &str, q: &AppQueue) -> Result<()> {
+        let db = self.db();
+        if q.songs.is_empty() {
+            db.execute("DELETE FROM app_queue WHERE user = ?1 AND client = ?2", params![user, q.client])?;
+        } else {
+            db.execute(
+                "INSERT OR REPLACE INTO app_queue (user, client, songs, current, position_ms, changed) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![user, q.client, q.songs.join(","), q.current.map(|i| i as i64), q.position_ms as i64, q.changed],
+            )?;
+        }
         Ok(())
     }
 
@@ -917,11 +945,47 @@ mod tests {
     }
 
     #[test]
-    fn the_play_queue_round_trips() {
+    fn a_queue_kept_before_moves_to_its_app() {
+        let dir = std::env::temp_dir().join(format!("cratarr-userdata-queue-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("userdata.sqlite");
+        {
+            let conn = Connection::open(&file).unwrap();
+            conn.execute_batch(SCHEMA).unwrap();
+            conn.execute(
+                "INSERT INTO play_queue (user, songs, current, position_ms, changed, changed_by) VALUES ('me', 'tr-1,tr-2', 'tr-2', 1500, 9, 'Feishin')",
+                [],
+            )
+            .unwrap();
+        }
+        let u = UserData::open(Some(&file)).unwrap();
+        let moved = AppQueue { client: "Feishin".into(), songs: vec!["tr-1".into(), "tr-2".into()], current: Some(1), position_ms: 1500, changed: 9 };
+        assert_eq!(u.app_queues("me").unwrap(), vec![moved.clone()]);
+        drop(u);
+        assert_eq!(UserData::open(Some(&file)).unwrap().app_queues("me").unwrap(), vec![moved], "moved once");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn each_app_keeps_its_own_play_queue() {
         let u = UserData::open(None).unwrap();
-        let q = PlayQueue { songs: vec!["tr-1".into(), "tr-2".into()], current: Some("tr-2".into()), position_ms: 1500, changed: 9, changed_by: Some("Feishin".into()) };
-        u.save_play_queue("me", &q).unwrap();
-        assert_eq!(u.play_queue("me").unwrap(), Some(q));
+        let q = |client: &str, current| AppQueue {
+            client: client.into(),
+            songs: vec!["tr-1".into(), "tr-2".into(), "tr-1".into()],
+            current,
+            position_ms: 1500,
+            changed: 9,
+        };
+        u.save_app_queue("me", &q("Feishin", Some(2))).unwrap();
+        u.save_app_queue("me", &q("DSub", Some(0))).unwrap();
+        u.save_app_queue("me", &q("Feishin", Some(1))).unwrap();
+        let mut got = u.app_queues("me").unwrap();
+        got.sort_by(|a, b| a.client.cmp(&b.client));
+        assert_eq!(got, vec![q("DSub", Some(0)), q("Feishin", Some(1))], "one per app, the last save kept");
+        assert!(u.app_queues("you").unwrap().is_empty());
+        u.save_app_queue("me", &AppQueue { client: "DSub".into(), ..AppQueue::default() }).unwrap();
+        assert_eq!(u.app_queues("me").unwrap(), vec![q("Feishin", Some(1))], "a save without songs clears");
         u.set_added("al-x", 200, "jellyfin").unwrap();
         u.set_added("al-x", 100, "jellyfin").unwrap();
         u.set_added("al-x", 300, "jellyfin").unwrap();

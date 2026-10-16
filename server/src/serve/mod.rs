@@ -10,6 +10,7 @@ pub mod import;
 pub mod library;
 pub mod library_api;
 pub mod playlists;
+pub mod queues;
 pub mod read;
 pub mod review;
 pub mod routes;
@@ -78,6 +79,8 @@ pub struct Serve {
     playlists: std::sync::OnceLock<Arc<crate::app::PlaylistService>>,
     /// Playlists a client emptied, waiting briefly for the call that refills them (`playlists::Held`).
     pub held: playlists::Held,
+    /// What the Subsonic apps report playing (`getNowPlaying`).
+    pub now_playing: queues::Sessions,
     /// Cratarr's Incoming, once the app is up (`set_incoming`): promote and reject are its Keep and Delete.
     incoming: std::sync::OnceLock<Arc<crate::app::IncomingService>>,
 }
@@ -114,6 +117,7 @@ impl Serve {
             resizing: tokio::sync::Semaphore::new(1),
             playlists: Default::default(),
             held: Default::default(),
+            now_playing: Default::default(),
             incoming: Default::default(),
         }))
     }

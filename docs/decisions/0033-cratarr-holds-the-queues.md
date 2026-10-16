@@ -177,3 +177,35 @@ playing an album, say) gives it a new id and its name, and reports them (`queue_
 the queue that played before in the list, as it stood when last reported. A play Cratarr sends (Home Assistant, a page
 driving a player, a switch) carries the id and name it chose, so the player reports them back unchanged. An app from
 before this reports neither, and its queue simply plays on as one.
+
+## Amendment (2026-10-16, the owner's go): step 5, what Subsonic apps see
+
+"Seen, not changed" alone would have broken the apps. Their source was read on 2026-10-16:
+- Apps that use the saved queue also write it, often. Supersonic and DSub save on every change, airsonic-refix every
+  10 s, Youamp every 5 s, Psysonic by default.
+- Many take the server's queue in place of their own: when they start (Supersonic, refix, Youamp, Cassette), or every
+  10 s while paused (Psysonic).
+- DSub asks to continue whenever the server's queue is newer than its own.
+
+So a player's live queue given back, with the apps' saves dropped, would replace their queue with a Kodi's again and
+again. A refused save shows errors (Feishin, refix). The servers differ too: Navidrome, gonic and nghe keep one queue
+per account, the last save winning; Ampache keeps one per account and app.
+
+- **Each app's save is its own:** one per account and app (Subsonic's `c`; every install of an app shares it), the
+  song that plays kept by its place. A save without songs clears it. It never touches a player's queue.
+- **The queue an app is given** (`getPlayQueue`) is the one started or saved last: an app's save, or the queue something
+  new was last started in on one of Cratarr's players (a play, a handover, a queue of its own the player reports). The
+  player's name is `changedBy`, the queue as it plays now and where it is. A player playing on, Radio's and Autoplay's
+  inserts and edits leave the queue's start time (`started`) alone. So an app that takes the server's queue takes a
+  player's once, after something new started there.
+- **By index** (OpenSubsonic `indexBasedQueue`): a song in the queue twice is told apart. Feishin shows its server-queue
+  buttons only with it.
+- A queue given is cut to 1000 songs around the one that plays (100 before). Songs the library no longer serves are
+  left out, and the place of the one that plays moves along with them (Navidrome's bug #6297 was a stale place).
+- **What plays where** (`getNowPlaying`): each of Cratarr's players that plays or is paused, under its name, with a
+  number that stays the same, its state and position. Each app that reports is listed too: `reportPlayback`
+  (OpenSubsonic `playbackReport`) or `scrobble` with `submission=false`. These sessions are Navidrome's:
+  - a report that stops past half the song or 4 minutes counts a play, unless `ignoreScrobble`;
+  - a session ends 5 s after its song while playing, and 30 minutes after a pause.
+- No `jukeboxControl`: it hands an app the whole queue of one device, every server ties it to a single output, and
+  Symfonium refuses it. Driving Cratarr's players stays Play On's.

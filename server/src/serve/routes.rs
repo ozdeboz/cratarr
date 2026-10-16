@@ -17,7 +17,7 @@ use super::Serve;
 use super::api::{self, Album, Artist, Song};
 use super::read::AlbumOrder;
 use super::users::User;
-use crate::userdata::{Annotation, Kind, PlayQueue};
+use crate::userdata::{Annotation, Kind};
 
 /// A request's parameters; a name may repeat (`id=1&id=2`).
 pub struct Params(Vec<(String, String)>);
@@ -57,7 +57,7 @@ pub enum Answer {
 }
 
 /// A handler's failure, as a Subsonic error code and message.
-pub struct Failed(u32, String);
+pub struct Failed(pub(super) u32, pub(super) String);
 
 impl<E: std::fmt::Display> From<E> for Failed {
     fn from(e: E) -> Self {
@@ -65,11 +65,11 @@ impl<E: std::fmt::Display> From<E> for Failed {
     }
 }
 
-fn missing(name: &str) -> Failed {
+pub(super) fn missing(name: &str) -> Failed {
     Failed(10, format!("Required parameter is missing: {name}"))
 }
 
-fn not_found(what: &str) -> Failed {
+pub(super) fn not_found(what: &str) -> Failed {
     Failed(70, format!("{what} not found"))
 }
 
@@ -141,7 +141,7 @@ fn json_response(v: Value) -> Response {
 }
 
 /// Runs blocking library work off the async threads.
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, Failed> {
+pub(super) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, Failed> {
     tokio::task::spawn_blocking(f).await.map_err(|e| Failed(0, e.to_string()))?.map_err(Failed::from)
 }
 
@@ -158,6 +158,8 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         "getLicense" => Ok(Answer::Json(json!({ "license": { "valid": true } }))),
         "getOpenSubsonicExtensions" => Ok(Answer::Json(json!({ "openSubsonicExtensions": [
             { "name": "formPost", "versions": [1] },
+            { "name": "indexBasedQueue", "versions": [1] },
+            { "name": "playbackReport", "versions": [1] },
         ] }))),
         "getUser" => Ok(Answer::Json(json!({ "user": {
             "username": user.name, "adminRole": user.admin, "settingsRole": user.admin, "streamRole": true,
@@ -402,8 +404,10 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             Ok(Answer::Json(json!({})))
         }
         "scrobble" => {
-            // A submission counts a play; `submission=false` says what plays now, which Cratarr does not keep yet.
-            if p.get("submission").is_none_or(|v| v != "false") {
+            // A submission counts a play; `submission=false` says what plays now (`getNowPlaying`).
+            if p.get("submission").is_some_and(|v| v == "false") {
+                super::queues::now_playing_from_scrobble(serve, user, p).await?;
+            } else {
                 let times = p.all("time");
                 for (i, id) in p.all("id").into_iter().enumerate() {
                     let at = times.get(i).and_then(|t| t.parse::<i64>().ok()).map_or_else(now, |ms| ms / 1000);
@@ -446,31 +450,12 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             serve.userdata.delete_bookmark(&me, id)?;
             Ok(Answer::Json(json!({})))
         }
-        "getPlayQueue" => match serve.userdata.play_queue(&me)? {
-            None => Ok(Answer::Json(json!({}))),
-            Some(q) => {
-                let ids = q.songs.clone();
-                let mut songs = blocking(move || s.library.songs_by_id(&ids)).await?;
-                annotate_songs(serve, &me, &mut songs)?;
-                let mut body = json!({ "entry": songs, "position": q.position_ms, "username": me, "changed": api::iso(q.changed),
-                    "changedBy": q.changed_by.unwrap_or_default() });
-                if let Some(c) = q.current {
-                    body["current"] = c.into();
-                }
-                Ok(Answer::Json(json!({ "playQueue": body })))
-            }
-        },
-        "savePlayQueue" => {
-            let q = PlayQueue {
-                songs: p.all("id"),
-                current: p.get("current").map(str::to_string),
-                position_ms: p.number("position").unwrap_or(0).max(0) as u64,
-                changed: now(),
-                changed_by: p.get("c").map(str::to_string),
-            };
-            serve.userdata.save_play_queue(&me, &q)?;
-            Ok(Answer::Json(json!({})))
-        }
+        "getPlayQueue" => super::queues::get(serve, user, false).await,
+        "getPlayQueueByIndex" => super::queues::get(serve, user, true).await,
+        "savePlayQueue" => super::queues::save(serve, user, p, false),
+        "savePlayQueueByIndex" => super::queues::save(serve, user, p, true),
+        "getNowPlaying" => super::queues::now_playing(serve, user).await,
+        "reportPlayback" => super::queues::report_playback(serve, user, p).await,
         "stream" | "download" => {
             let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
             let path = serve.song_path(&id).await?.ok_or_else(|| not_found("Song"))?;
@@ -687,7 +672,7 @@ fn apply(a: Option<&Annotation>, starred: &mut Option<String>, plays: &mut Optio
     *rating = (a.rating > 0).then_some(a.rating);
 }
 
-fn annotate_songs(serve: &Serve, user: &str, songs: &mut [Song]) -> Result<(), Failed> {
+pub(super) fn annotate_songs(serve: &Serve, user: &str, songs: &mut [Song]) -> Result<(), Failed> {
     let ids: Vec<String> = songs.iter().map(|s| s.id.clone()).collect();
     let found = serve.userdata.get(user, Kind::Song, &ids)?;
     for s in songs {
@@ -719,6 +704,7 @@ fn annotate_artists(serve: &Serve, user: &str, artists: &mut [Artist]) -> Result
 mod tests {
     use super::*;
     use crate::catalogue::{Catalogue, Rules, ServedRow};
+    use crate::userdata::AppQueue;
     use crate::serve::library::FolderRows;
 
     fn row(track: i64, rel: &str, tags: &[(&str, &str)]) -> ServedRow {
@@ -812,6 +798,71 @@ mod tests {
         assert_eq!(q["playQueue"]["entry"][0]["id"], song.as_str());
         call(&s, &me, "unstar", &format!("id={song}")).await;
         assert!(call(&s, &me, "getStarred2", "").await["starred2"]["song"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn each_app_gets_back_its_queue_and_the_last_saved_is_given() {
+        let (s, me) = server();
+        let album = call(&s, &me, "getAlbumList2", "type=newest").await["albumList2"]["album"][0]["id"].as_str().unwrap().to_string();
+        let songs = call(&s, &me, "getAlbum", &format!("id={album}")).await;
+        let ids: Vec<String> = songs["album"]["song"].as_array().unwrap().iter().map(|x| x["id"].as_str().unwrap().to_string()).collect();
+        let (h, j) = (ids[0].clone(), ids[1].clone());
+        let ext = call(&s, &me, "getOpenSubsonicExtensions", "").await;
+        let names: Vec<&str> = ext["openSubsonicExtensions"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"indexBasedQueue") && names.contains(&"playbackReport"), "{names:?}");
+        // The same song twice: by index, the second copy plays.
+        assert_eq!(call(&s, &me, "savePlayQueueByIndex", &format!("id={h}&id={j}&id={h}&currentIndex=2&position=1500.7&c=Feishin")).await, json!({}));
+        let q = call(&s, &me, "getPlayQueueByIndex", "").await["playQueueByIndex"].clone();
+        assert_eq!((q["currentIndex"].as_u64(), q["position"].as_u64(), q["changedBy"].as_str()), (Some(2), Some(1500), Some("Feishin")));
+        assert_eq!(q["entry"].as_array().unwrap().len(), 3);
+        assert_eq!(q["username"], "me");
+        let q = call(&s, &me, "getPlayQueue", "").await["playQueue"].clone();
+        assert_eq!(q["current"], h.as_str(), "by id: the song");
+        assert_eq!(call(&s, &me, "savePlayQueueByIndex", &format!("id={h}&currentIndex=1&c=Feishin")).await["error"], 10, "not a place in it");
+        // Another app's save is the last: it is given, and the first app's stays its own.
+        let older = AppQueue { client: "Feishin".into(), songs: vec![h.clone(), j.clone()], current: Some(1), position_ms: 9, changed: 100 };
+        s.userdata.save_app_queue("me", &older).unwrap();
+        // One `id` with commas (Castafiore), and a gone song left out with the place moving along.
+        call(&s, &me, "savePlayQueue", &format!("id=tr-999,{j}&current={j}&position=40&c=DSub")).await;
+        let q = call(&s, &me, "getPlayQueueByIndex", "").await["playQueueByIndex"].clone();
+        assert_eq!((q["changedBy"].as_str(), q["currentIndex"].as_u64(), q["entry"][0]["id"].as_str()), (Some("DSub"), Some(0), Some(j.as_str())));
+        assert_eq!(s.userdata.app_queues("me").unwrap().iter().find(|q| q.client == "Feishin"), Some(&older));
+        // A save without songs clears that app's; then the other is given.
+        assert_eq!(call(&s, &me, "savePlayQueue", "c=DSub").await, json!({}));
+        assert_eq!(call(&s, &me, "getPlayQueue", "").await["playQueue"]["changedBy"], "Feishin");
+        assert_eq!(call(&s, &me, "savePlayQueue", "c=Feishin").await, json!({}));
+        assert_eq!(call(&s, &me, "getPlayQueue", "").await, json!({}), "nothing saved");
+    }
+
+    #[tokio::test]
+    async fn apps_reports_show_what_plays_and_a_stop_late_enough_counts() {
+        let (s, me) = server();
+        let song = call(&s, &me, "search3", "query=hunter").await["searchResult3"]["song"][0]["id"].as_str().unwrap().to_string();
+        let plays = |v: &Value| v["song"]["playCount"].as_u64().unwrap_or(0);
+        assert_eq!(call(&s, &me, "getNowPlaying", "").await, json!({ "nowPlaying": { "entry": [] } }));
+        let report = |state: &str, at: u64, more: &str| format!("mediaId={song}&mediaType=song&positionMs={at}&state={state}&c=Feishin{more}");
+        assert_eq!(call(&s, &me, "reportPlayback", &report("starting", 0, "")).await, json!({}));
+        call(&s, &me, "reportPlayback", &report("playing", 30_000, "&playbackRate=1.0")).await;
+        let now = call(&s, &me, "getNowPlaying", "").await["nowPlaying"]["entry"][0].clone();
+        assert_eq!((now["id"].as_str(), now["playerName"].as_str(), now["state"].as_str()), (Some(song.as_str()), Some("Feishin"), Some("playing")));
+        assert_eq!((now["username"].as_str(), now["minutesAgo"].as_u64()), (Some("me"), Some(0)));
+        assert!(now["positionMs"].as_u64().unwrap() >= 30_000 && now["playerId"].as_i64().unwrap() >= 0);
+        // Half of the 200 s song is the line.
+        call(&s, &me, "reportPlayback", &report("stopped", 99_000, "")).await;
+        assert_eq!(plays(&call(&s, &me, "getSong", &format!("id={song}")).await), 0, "stopped too early");
+        assert_eq!(call(&s, &me, "getNowPlaying", "").await["nowPlaying"]["entry"], json!([]), "a stop ends it");
+        call(&s, &me, "reportPlayback", &report("stopped", 100_000, "&ignoreScrobble=true")).await;
+        assert_eq!(plays(&call(&s, &me, "getSong", &format!("id={song}")).await), 0, "told not to count");
+        call(&s, &me, "reportPlayback", &report("stopped", 100_000, "")).await;
+        assert_eq!(plays(&call(&s, &me, "getSong", &format!("id={song}")).await), 1);
+        // Subsonic's "now playing" scrobble shows it and counts nothing.
+        call(&s, &me, "scrobble", &format!("id={song}&submission=false&c=DSub")).await;
+        let now = call(&s, &me, "getNowPlaying", "").await["nowPlaying"]["entry"][0].clone();
+        assert_eq!((now["playerName"].as_str(), now["positionMs"].as_u64()), (Some("DSub"), Some(0)));
+        assert_eq!(plays(&call(&s, &me, "getSong", &format!("id={song}")).await), 1);
+        assert_eq!(call(&s, &me, "reportPlayback", "mediaId=tr-999&mediaType=song&positionMs=0&state=playing").await["error"], 70);
+        assert_eq!(call(&s, &me, "reportPlayback", &report("rewinding", 0, "")).await["error"], 0);
+        assert_eq!(call(&s, &me, "reportPlayback", &format!("mediaId={song}&mediaType=song&state=playing")).await["error"], 10);
     }
 
     #[tokio::test]

@@ -376,6 +376,8 @@ pub struct PlayerView {
     pub autoplay: Option<AutoplayView>,
     /// Goes up whenever the queue changes: ask for the player by name to see the new one.
     pub queue_version: u64,
+    /// When something new started in the queue (epoch seconds, 0: not known): not moved by edits or inserts.
+    pub queue_started: u64,
     /// The track at `index`.
     pub track: Option<QueueTrack>,
     pub title: Option<String>,
@@ -550,6 +552,7 @@ impl Entry {
             skip_favourites: self.queue.skip_favourites,
             autoplay: self.queue.autoplay.as_ref().map(|a| AutoplayView { mode: a.mode, albums: a.albums, restart: a.restart }),
             queue_version: self.queue.version,
+            queue_started: self.queue.started,
             title: track.as_ref().map(|t| t.name.clone()),
             artist: track.as_ref().and_then(|t| t.artist.clone()),
             album: track.as_ref().and_then(|t| t.album.clone()),

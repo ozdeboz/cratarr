@@ -37,6 +37,25 @@ pub struct Queue {
     /// repeat all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autoplay: Option<Autoplay>,
+    /// When something new started in it (epoch seconds; 0: before this was kept): a play, a handover to this player,
+    /// or a queue a player reports that keeps none of the album's or playlist's entries. Edits, Radio's and
+    /// Autoplay's inserts and the music playing on leave it, so it says which queue was started last (the Subsonic
+    /// saved queue, decision 0033 step 5).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub started: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// The entries of the album or playlist that plays (not those added by hand, nor Radio's or Autoplay's).
+fn own_entries(tracks: &[QueueTrack]) -> impl Iterator<Item = &str> {
+    tracks.iter().filter(|t| t.lane.is_none() && !t.entry.is_empty()).map(|t| t.entry.as_str())
 }
 
 /// Off: the queue ends. One: the playing track starts again. All: after the last track the album or playlist starts
@@ -219,6 +238,7 @@ impl Queue {
                 let at = (index + 1).min(tracks.len());
                 tracks.splice(at..at, ahead);
                 self.tracks = tracks;
+                self.started = now_secs();
                 // Something new turns repeat one off; repeat all stays (decision 0033, amended, rule 4).
                 if self.repeat == Repeat::One {
                     self.repeat = Repeat::Off;
@@ -394,6 +414,17 @@ impl Queue {
             .collect();
         if tracks == self.tracks {
             return false;
+        }
+        // Something new the player started itself: none of the album's or playlist's entries are left (a queue of
+        // tracks added by hand alone: none of its entries).
+        let fresh = if own_entries(&tracks).next().is_some() {
+            let own: std::collections::HashSet<&str> = own_entries(&self.tracks).collect();
+            !own_entries(&tracks).any(|e| own.contains(e))
+        } else {
+            !tracks.iter().any(|t| self.tracks.iter().any(|o| o.entry == t.entry))
+        };
+        if fresh && !tracks.is_empty() {
+            self.started = now_secs();
         }
         self.tracks = tracks;
         self.version += 1;
@@ -704,5 +735,35 @@ mod tests {
         // A new track gets a new entry.
         q.adopt(bare(&["b", "a", "a", "c"]));
         assert!(!q.tracks[3].entry.is_empty() && !e.contains(&q.tracks[3].entry));
+    }
+
+    #[test]
+    fn started_moves_only_when_something_new_starts() {
+        let mut q = Queue::default();
+        assert_eq!(q.started, 0, "an old queues.json: not known");
+        q.edit(Command::play(vec![track("a"), track("b")], 0, 0)).unwrap();
+        assert!(q.started > 0, "a play starts it");
+        q.started = 1;
+        // Radio's and Autoplay's inserts, a track added by hand, a move, repeat, shuffle: none start anything.
+        q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { tracks: vec![in_lane("p1", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { tracks: vec![in_lane("x", "next")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
+        let b = q.tracks.iter().find(|t| t.id == "b").unwrap().entry.clone();
+        q.edit(Command::Move { from: None, to: None, entry: Some(b), after: Some(String::new()) }).unwrap();
+        assert_eq!(q.started, 1, "edits and inserts: {}", ids(&q));
+        // The player reports the same queue moved about, or with a track taken out: not new.
+        let mut reported = q.tracks.clone();
+        reported.reverse();
+        reported.pop();
+        assert!(q.adopt(reported));
+        assert_eq!(q.started, 1);
+        // It started something of its own: none of the album's entries are left.
+        assert!(q.adopt(vec![track("c"), track("d")]));
+        assert!(q.started > 1, "a queue of its own");
+        // A queue moved whole to this player (a handover) is a play here.
+        q.started = 1;
+        let moved = q.tracks.clone();
+        q.edit_at(Command::play(moved, 0, 0), Some(0)).unwrap();
+        assert!(q.started > 1, "handed over");
     }
 }
