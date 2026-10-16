@@ -60,6 +60,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
         .route("/api/crates/{id}/favourites", put(crate_favourites))
+        .route(
+            "/api/crates/{id}/image",
+            get(crate_image).put(crate_image_set).delete(crate_image_remove).layer(axum::extract::DefaultBodyLimit::max(32 << 20)),
+        )
         .route("/api/playlists/{id}/favorite", post(playlist_favorite))
         .route("/api/playlists/{id}/entries", put(edit_playlist))
         .route("/api/playlists/{id}/repeats", delete(remove_repeats))
@@ -468,6 +472,32 @@ async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Resul
 async fn crate_delete(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
     let undo = app.playlists.crate_delete(&id).await?;
     Ok(Json(json!({ "deleted": id, "undo": undo })))
+}
+
+/// A crate's own picture (its card's), as JPEG.
+async fn crate_image(State(app): State<Arc<App>>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+    let Some((bytes, modified)) = app.playlists.crate_image(&id).await else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no picture" }))).into_response();
+    };
+    let etag = crate::covers::etag(modified, bytes.len() as u64);
+    let tag = HeaderValue::from_str(&etag).unwrap_or(HeaderValue::from_static("\"\""));
+    let cache = (header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|h| crate::covers::etag_matches(h, &etag)) {
+        return (StatusCode::NOT_MODIFIED, [cache, (header::ETAG, tag)]).into_response();
+    }
+    ([cache, (header::ETAG, tag), (header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"))], bytes).into_response()
+}
+
+/// Sets a crate's own picture: the body is the picture (any Cratarr can read).
+async fn crate_image_set(State(app): State<Arc<App>>, Path(id): Path<String>, body: axum::body::Bytes) -> Result<StatusCode, ApiError> {
+    app.playlists.set_crate_image(&id, body.to_vec()).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The crate shows its albums' covers again.
+async fn crate_image_remove(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    app.playlists.remove_crate_image(&id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The axes the builder draws its controls from, with their domains in this library.

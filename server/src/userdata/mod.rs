@@ -598,6 +598,14 @@ impl UserData {
             .collect()
     }
 
+    /// Every song a user has played at least once (a crate's unplayed tracks are the others).
+    pub fn played(&self, user: &str) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT item FROM annotation WHERE user = ?1 AND kind = ?2 AND play_count > 0")?;
+        let rows = st.query_map(params![user, Kind::Song.as_str()], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Each song's play count and when it was last played, for a user (the panel's orders).
     pub fn play_stats(&self, user: &str, songs: &[String]) -> Result<std::collections::HashMap<String, (u32, Option<i64>)>> {
         let db = self.db();

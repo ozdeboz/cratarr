@@ -87,6 +87,18 @@ pub fn resize(data: &[u8], size: u32) -> Result<Option<Vec<u8>>> {
     Ok(Some(out.into_inner()))
 }
 
+/// A picture as JPEG, no larger than `size` on its longer side (a crate's own picture): resized when larger, else only
+/// written again as JPEG.
+pub fn jpeg_within(data: &[u8], size: u32) -> Result<Vec<u8>> {
+    if let Some(small) = resize(data, size)? {
+        return Ok(small);
+    }
+    let img = image::load_from_memory(data).context("not a picture Cratarr can read")?.to_rgb8();
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&img)?;
+    Ok(out.into_inner())
+}
+
 /// Resized covers on disk, at most `limit` bytes; the oldest go first.
 pub struct Cache {
     dir: Option<PathBuf>,

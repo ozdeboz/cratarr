@@ -74,6 +74,90 @@ pub struct CrateView {
     /// once on a tap); `None` where the favourites are not known (no server connected).
     pub counts: CrateCounts,
     pub permanent: bool,
+    /// What its card shows, as its favourites toggle is set; `None` where that is not known (favourites not read).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats: Option<CrateStats>,
+    /// A picture of its own was set (`GET /api/crates/{id}/image`).
+    pub image: bool,
+}
+
+/// A crate's card (the owner's, 2026-10-16): its size and length, how much of it was never played, what came this week,
+/// its top genres and a few of its albums' covers.
+#[derive(Debug, Default, Serialize, PartialEq)]
+pub struct CrateStats {
+    pub tracks: usize,
+    pub seconds: u64,
+    /// Never played by the owner (Cratarr's own plays); `None` while there is no owner to ask about.
+    pub unplayed: Option<usize>,
+    /// Came in the last seven days.
+    pub new_week: usize,
+    /// Its three most common genres, most common first.
+    pub genres: Vec<String>,
+    /// Up to four of its albums, for a mosaic: those with most of its tracks first, then the newest.
+    pub covers: Vec<CoverRef>,
+}
+
+/// An album's cover, as `/api/cover/{source}/{album_id}` serves it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct CoverRef {
+    pub source: String,
+    pub album_id: String,
+}
+
+/// A crate's picture's file name: its id where that is a plain name, else the id in hex.
+fn image_file(id: &str) -> String {
+    if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        format!("{id}.jpg")
+    } else {
+        format!("x{}.jpg", id.bytes().map(|b| format!("{b:02x}")).collect::<String>())
+    }
+}
+
+/// A crate's card from its lines (`now`: epoch seconds).
+fn crate_stats(
+    lines: &[String],
+    facts: &HashMap<&str, &crates::Facts>,
+    songs: &HashMap<String, crate::serve::library::RelSong>,
+    played: Option<&HashSet<String>>,
+    now: i64,
+) -> CrateStats {
+    const WEEK: i64 = 7 * 86_400;
+    let known: Vec<&crate::serve::library::RelSong> = lines.iter().filter_map(|l| songs.get(l)).collect();
+    let mut genres: Vec<(String, usize)> = Vec::new();
+    for f in lines.iter().filter_map(|l| facts.get(l.as_str())) {
+        for g in &f.genres {
+            match genres.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(g)) {
+                Some((_, n)) => *n += 1,
+                None => genres.push((g.clone(), 1)),
+            }
+        }
+    }
+    genres.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    // Albums: (album, its tracks here, its newest).
+    let mut albums: Vec<(&str, usize, i64)> = Vec::new();
+    for s in &known {
+        let at = s.created.unwrap_or(0);
+        match albums.iter_mut().find(|(a, _, _)| *a == s.album) {
+            Some((_, n, newest)) => {
+                *n += 1;
+                *newest = (*newest).max(at);
+            }
+            None => albums.push((&s.album, 1, at)),
+        }
+    }
+    albums.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(b.0)));
+    CrateStats {
+        tracks: lines.len(),
+        seconds: known.iter().filter_map(|s| s.duration_ms).filter(|d| *d > 0).map(|d| d as u64).sum::<u64>() / 1000,
+        unplayed: played.map(|p| known.iter().filter(|s| !p.contains(&s.song)).count()),
+        new_week: known.iter().filter(|s| s.created.is_some_and(|c| c >= now - WEEK)).count(),
+        genres: genres.into_iter().take(3).map(|(g, _)| g).collect(),
+        covers: albums
+            .into_iter()
+            .take(4)
+            .map(|(a, _, _)| CoverRef { source: crate::source::cratarr::KIND.id.to_string(), album_id: a.to_string() })
+            .collect(),
+    }
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -159,6 +243,40 @@ fn safe_within(safe: Vec<Repair>, within: Option<&[String]>) -> Vec<Repair> {
     match within {
         None => safe,
         Some(w) => safe.into_iter().filter(|r| w.iter().any(|p| p.eq_ignore_ascii_case(&r.playlist))).collect(),
+    }
+}
+
+#[cfg(test)]
+mod card_tests {
+    use super::*;
+    use crate::serve::library::RelSong;
+
+    #[test]
+    fn a_crates_card_counts_its_lines() {
+        let now = 1_000_000_000;
+        let facts = [
+            crates::Facts { rel: "A/1.flac".into(), genres: vec!["Dub".into(), "Reggae".into()], year: None, bpm: None },
+            crates::Facts { rel: "A/2.flac".into(), genres: vec!["dub".into()], year: None, bpm: None },
+            crates::Facts { rel: "B/1.flac".into(), genres: vec!["Jazz".into()], year: None, bpm: None },
+        ];
+        let by: HashMap<&str, &crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
+        let song = |id: &str, album: &str, ms: i64, created: i64| RelSong { song: id.into(), album: album.into(), duration_ms: Some(ms), created: Some(created) };
+        let songs: HashMap<String, RelSong> = [
+            ("A/1.flac".to_string(), song("tr-1", "al-a", 200_000, now - 30 * 86_400)),
+            ("A/2.flac".to_string(), song("tr-2", "al-a", 100_500, now - 30 * 86_400)),
+            ("B/1.flac".to_string(), song("tr-3", "al-b", 60_000, now - 86_400)),
+        ]
+        .into_iter()
+        .collect();
+        let played: HashSet<String> = ["tr-1".to_string()].into_iter().collect();
+        let lines: Vec<String> = ["A/1.flac", "A/2.flac", "B/1.flac", "gone.flac"].iter().map(|s| s.to_string()).collect();
+        let s = crate_stats(&lines, &by, &songs, Some(&played), now);
+        assert_eq!((s.tracks, s.seconds, s.unplayed, s.new_week), (4, 360, Some(2), 1));
+        assert_eq!(s.genres, vec!["Dub", "Jazz", "Reggae"], "spelt as first met, counted regardless of capitals");
+        assert_eq!(s.covers.iter().map(|c| c.album_id.as_str()).collect::<Vec<_>>(), vec!["al-a", "al-b"]);
+        assert_eq!(crate_stats(&lines, &by, &songs, None, now).unplayed, None, "no owner: not known");
+        assert_eq!(image_file("c-12ab"), "c-12ab.jpg");
+        assert_eq!(image_file("../x"), "x2e2e2f78.jpg");
     }
 }
 
@@ -801,20 +919,90 @@ impl PlaylistService {
         let count = |conditions: Vec<crates::Condition>| {
             (!crates::needs_favourites(&conditions) || lib.favourites.is_some()).then(|| lib.select(&conditions).len())
         };
+        // The cards' facts: the songs of the Music folder, and what the owner has played.
+        let songs_played = match crate::serve::instance() {
+            Some(serve) => tokio::task::spawn_blocking(move || {
+                let songs = serve.library.songs_by_rel(0).unwrap_or_default();
+                let played = serve.users.owner().and_then(|me| serve.userdata.played(&me).ok());
+                (songs, played)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+            None => (HashMap::new(), None),
+        };
+        let (songs, played) = songs_played;
+        let facts: HashMap<&str, &crates::Facts> = lib.files.iter().map(|f| (f.rel.as_str(), f)).collect();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let images = self.crate_images();
         Ok(all
             .into_iter()
-            .map(|(permanent, c)| CrateView {
-                counts: CrateCounts {
-                    all: count(crates::Favourites::All.with(&c.conditions)),
-                    only: count(crates::Favourites::Only.with(&c.conditions)),
-                    none: count(crates::Favourites::None.with(&c.conditions)),
-                },
-                favourites: set.get(&c.id).copied().unwrap_or(crates::Favourites::None),
-                id: c.id,
-                name: c.name,
-                permanent,
+            .map(|(permanent, c)| {
+                let favourites = set.get(&c.id).copied().unwrap_or(crates::Favourites::None);
+                let shown = favourites.with(&c.conditions);
+                let stats = (!crates::needs_favourites(&shown) || lib.favourites.is_some())
+                    .then(|| crate_stats(&lib.select(&shown), &facts, &songs, played.as_ref(), now));
+                CrateView {
+                    counts: CrateCounts {
+                        all: count(crates::Favourites::All.with(&c.conditions)),
+                        only: count(crates::Favourites::Only.with(&c.conditions)),
+                        none: count(crates::Favourites::None.with(&c.conditions)),
+                    },
+                    favourites,
+                    stats,
+                    image: images.as_ref().is_some_and(|d| d.join(image_file(&c.id)).is_file()),
+                    id: c.id,
+                    name: c.name,
+                    permanent,
+                }
             })
             .collect())
+    }
+
+    /// Where crates' own pictures are kept (in the data folder); `None` without one.
+    fn crate_images(&self) -> Option<std::path::PathBuf> {
+        self.lib.data_dir().map(|d| std::path::PathBuf::from(d).join("crate-images"))
+    }
+
+    /// Sets a crate's own picture: any picture Cratarr can read, kept as JPEG at most 800 px on its longer side.
+    pub async fn set_crate_image(&self, id: &str, data: Vec<u8>) -> Result<(), ToggleError> {
+        self.crate_def(id).await?;
+        let Some(dir) = self.crate_images() else { return Err(ToggleError::SettingsReadOnly) };
+        let file = dir.join(image_file(id));
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let jpeg = crate::serve::art::jpeg_within(&data, 800)?;
+            std::fs::create_dir_all(&dir)?;
+            let tmp = file.with_extension("jpg.tmp");
+            std::fs::write(&tmp, jpeg)?;
+            std::fs::rename(&tmp, &file)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))
+    }
+
+    /// A crate's own picture and when it was set; `None` when it has none.
+    pub async fn crate_image(&self, id: &str) -> Option<(Vec<u8>, std::time::SystemTime)> {
+        let file = self.crate_images()?.join(image_file(id));
+        tokio::task::spawn_blocking(move || {
+            let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok()?;
+            Some((std::fs::read(&file).ok()?, modified))
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// The crate shows its albums' covers again.
+    pub async fn remove_crate_image(&self, id: &str) -> Result<(), ToggleError> {
+        if let Some(file) = self.crate_images().map(|d| d.join(image_file(id))) {
+            match tokio::fs::remove_file(&file).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(anyhow::Error::from(e).into()),
+            }
+        }
+        Ok(())
     }
 
     /// A crate's definition: a permanent one, or one's own.

@@ -90,6 +90,16 @@ fn leading_number(v: &str) -> Option<u32> {
 }
 
 /// The year in a date tag ("1997-05-12", "1997").
+/// A song as a file of a folder knows it ([`Library::songs_by_rel`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RelSong {
+    pub song: String,
+    pub album: String,
+    pub duration_ms: Option<i64>,
+    /// When it came (epoch seconds).
+    pub created: Option<i64>,
+}
+
 pub fn year_of(v: &str) -> Option<u32> {
     let y: String = v.trim().chars().take(4).collect();
     (y.len() == 4).then(|| y.parse().ok()).flatten().filter(|y| *y > 0)
@@ -430,6 +440,19 @@ impl Library {
     }
 
     /// Where each catalogue folder was at the last build: (folder, path).
+    /// The songs of one folder by their file: their id, album, length and when they came (the crates' cards).
+    pub fn songs_by_rel(&self, folder: i64) -> Result<HashMap<String, RelSong>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT rel, id, album_id, duration_ms, created FROM songs WHERE folder = ?1")?;
+        let rows = st.query_map(rusqlite::params![folder], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                RelSong { song: r.get(1)?, album: r.get(2)?, duration_ms: r.get(3)?, created: r.get(4)? },
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn roots(&self) -> Vec<(i64, String)> {
         let v: Option<String> = self.db().query_row("SELECT value FROM meta WHERE key = 'roots'", [], |r| r.get(0)).optional().ok().flatten();
         v.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
