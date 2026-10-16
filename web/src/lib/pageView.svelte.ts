@@ -41,6 +41,19 @@ export const PLAYLIST_ORDERS: { value: PlaylistOrder; label: string }[] = [
   { value: 'playing', label: 'Playing first' },
 ];
 
+/** A menu's Add to playlist (lib/PlaylistToggles): the same orders, those the item is in ticked first. */
+export const LIST_ORDERS: { value: PlaylistOrder; label: string }[] = PLAYLIST_ORDERS.map((o) =>
+  o.value === 'playing' ? { ...o, label: 'Ticked first' } : o,
+);
+
+/** The playlists' order (the Playlists page's, a menu's Add to playlist): by name, by size, or those holding the item
+ *  first (the playing track, or the menu's: `holds`); equals by name. */
+export function playlistBy<T extends { name: string; count: number }>(order: PlaylistOrder, holds: (p: T) => boolean) {
+  const byName = (a: T, b: T) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  return (a: T, b: T) =>
+    order === 'tracks' ? a.count - b.count || byName(a, b) : order === 'playing' ? Number(holds(b)) - Number(holds(a)) || byName(a, b) : byName(a, b);
+}
+
 export const CRATE_ORDERS: { value: CrateOrder; label: string }[] = [
   { value: 'own', label: 'As made' },
   { value: 'name', label: 'Name' },

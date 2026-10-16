@@ -11,6 +11,9 @@ export type Prefs = {
   zoom: number;
   /** Index into a menu's playlists' widths (LIST_WIDTHS, Add to playlist): one column by default. */
   listZoom: number;
+  /** A menu's playlists' order (its header, LIST_ORDERS), either way round. */
+  listOrder: PlaylistOrder;
+  listDown: boolean;
   /** Playlists the track is in come first. */
   showProgress: boolean;
   /** View's Dates: an album's date added as how long ago ("3 days ago"), not the date. */
@@ -63,6 +66,8 @@ export const DEFAULTS: Prefs = {
   theme: 'auto',
   zoom: 2,
   listZoom: LIST_WIDTHS.length - 1,
+  listOrder: 'playing',
+  listDown: false,
   showProgress: true,
   relativeDates: false,
   source: '',
@@ -103,6 +108,8 @@ function read(): Prefs {
       if (['artist', 'title', 'year', 'added'].includes(saved.libraryOrder)) p.libraryOrder = saved.libraryOrder;
       if (['artist', 'title', 'year', 'added'].includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
       if (['name', 'tracks', 'playing'].includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
+      if (['name', 'tracks', 'playing'].includes(saved.listOrder)) p.listOrder = saved.listOrder;
+      if (typeof saved.listDown === 'boolean') p.listDown = saved.listDown;
       // Before the list header: "✓ first" was the playlists' only other order.
       else if (saved.membersFirst === true) p.playlistOrder = 'playing';
       if (['own', 'name'].includes(saved.crateOrder)) p.crateOrder = saved.crateOrder;

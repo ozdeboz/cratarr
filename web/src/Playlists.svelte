@@ -1,6 +1,6 @@
 <script lang="ts">
   import ListHead from './lib/ListHead.svelte';
-  import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, usePageAction } from './lib/pageView.svelte';
+  import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
   import type { Playlist, PlayMode } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap } from './lib/live.svelte';
@@ -57,13 +57,7 @@
       const i = prefs.pinned.indexOf(id);
       return i < 0 ? Infinity : i;
     };
-    const byName = (a: Playlist, b: Playlist) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
-    const by = (a: Playlist & { member: boolean }, b: Playlist & { member: boolean }) =>
-      prefs.playlistOrder === 'tracks'
-        ? a.count - b.count || byName(a, b)
-        : prefs.playlistOrder === 'playing'
-          ? Number(b.member) - Number(a.member) || byName(a, b)
-          : byName(a, b);
+    const by = playlistBy<Playlist>(prefs.playlistOrder, (p) => p.member);
     const turn = prefs.playlistDown ? -1 : 1;
     return [...list].sort((a, b) => {
       const [pa, pb] = [pin(a.id), pin(b.id)];

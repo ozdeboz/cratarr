@@ -90,11 +90,8 @@
   const heartKnown = $derived(forPlaying ? np?.favorite !== null : other !== null && other.favorite !== null);
   const busy = $derived(forPlaying ? pending() : !other);
   // Playlists holding the track first, then the rest by name.
-  const playlists = $derived(
-    [...(forPlaying ? shownPlaylists() : (other?.playlists ?? []))].sort(
-      (a, b) => Number(b.member) - Number(a.member) || a.name.localeCompare(b.name),
-    ),
-  );
+  // In the order its Add to playlist's header says (lib/PlaylistToggles).
+  const playlists = $derived(forPlaying ? shownPlaylists() : (other?.playlists ?? []));
 
   // The step it opens on; later steps are the sheet's own.
   // svelte-ignore state_referenced_locally
@@ -345,10 +342,8 @@
         {/if}
       </div>
     {:else if step === 'lists'}
-      <PlaylistToggles title="Add to / remove from playlists">
-        {#each playlists as p (p.id)}
-          <MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />
-        {/each}
+      <PlaylistToggles title="Add to / remove from playlists" {playlists} ticked={(p) => p.member}>
+        {#snippet entry(p)}<MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />{/snippet}
       </PlaylistToggles>
     {:else if step === 'details'}
       {#if details}

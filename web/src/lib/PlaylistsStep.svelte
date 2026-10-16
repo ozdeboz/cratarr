@@ -23,10 +23,10 @@
     {/if}
   </div>
 {:else}
-  <PlaylistToggles title="Add to playlist">
-    {#each to.playlists as p (p.id)}
+  <PlaylistToggles title="Add to playlist" playlists={to.playlists} ticked={to.holds}>
+    {#snippet entry(p)}
       <MenuEntry label={p.name} checked={to.holds(p)} busy={to.adding === p.id} disabled={to.adding !== null && to.adding !== p.id} onclick={() => to.add(p, go)} />
-    {/each}
+    {/snippet}
   </PlaylistToggles>
 {/if}
 
