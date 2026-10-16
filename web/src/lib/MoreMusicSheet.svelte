@@ -1,31 +1,33 @@
 <script lang="ts" module>
-  import { local, type AutoplayMode } from './localPlayer.svelte';
+  import { local, type AutoplayMode, type RadioBy } from './localPlayer.svelte';
 
   export const AUTOPLAY_NAMES: Record<AutoplayMode, string> = { similar: 'Similar', artist: 'Same artist', era: 'Same era', random: 'Random' };
+  export const RADIO_NAMES: Record<RadioBy, string> = { track: 'Similar to the track', artist: 'Same artist', era: 'Same era' };
 
   /** What is on, in a line: the queue's floating pill and the sheet's chip ("Radio · ∞ Similar", "Off"). */
   export function moreMusicLine() {
-    const parts = [local.radio ? 'Radio' : null, local.autoplay ? `∞ ${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}` : null];
+    const parts = [local.radio ? (local.radioBy === 'track' ? 'Radio' : `Radio, ${RADIO_NAMES[local.radioBy].toLowerCase()}`) : null, local.autoplay ? `∞ ${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}` : null];
     return parts.filter(Boolean).join(' · ') || 'Off';
   }
 </script>
 
 <script lang="ts">
   // More music (decision 0036, amended; one sheet for both, decided 2026-10-16): what plays besides what was chosen.
-  // Radio, between: tracks like each of the queue's own tracks, after it. Autoplay, at the end: what plays when the
-  // queue runs out, then its switches (whole albums while albums were playing; a playlist starting again instead).
-  // Each a choice of one, as View's order (a round mark); the sheet stays open while it is set. From the queue's
-  // floating pill and the player's radio button.
+  // Radio, between: tracks like each of the queue's own tracks (similar to it, its artist or its era), so many after
+  // it. Autoplay, at the end: what plays when the queue runs out, then its switches (whole albums while albums were
+  // playing; a playlist starting again instead). Each a choice of one, as View's order (a round mark); the sheet stays
+  // open while it is set. From the queue's floating pill and the player's radio button.
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { setAutoplay, setRadio } from './localPlayer.svelte';
+  import { RADIO_BYS, RADIO_COUNTS, setAutoplay, setRadio } from './localPlayer.svelte';
+  import Seg from './Seg.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
-  const RADIO: { on: boolean; name: string }[] = [
-    { on: false, name: 'Off' },
-    { on: true, name: 'Similar to the track' },
-  ];
+  const RADIO: { by: RadioBy | 'off'; name: string }[] = [{ by: 'off', name: 'Off' }, ...RADIO_BYS.map((by) => ({ by, name: RADIO_NAMES[by] }))];
+  const radioNow = $derived<RadioBy | 'off'>(local.radio ? local.radioBy : 'off');
+  // Seg takes words: the counts as such.
+  const COUNTS = RADIO_COUNTS.map((n) => ({ value: String(n), label: String(n) }));
   const AUTOPLAY: { mode: AutoplayMode | 'stop'; name: string }[] = [
     { mode: 'stop', name: 'Stop' },
     ...(Object.entries(AUTOPLAY_NAMES) as [AutoplayMode, string][]).map(([mode, name]) => ({ mode, name })),
@@ -39,10 +41,16 @@
   <div class="parts">
     <div class="part choices" role="radiogroup" aria-label="Radio">
       <span>Radio <small>after each of your tracks</small></span>
-      {#each RADIO as r (r.name)}
-        {@const on = local.radio === r.on}
-        <button role="radio" aria-checked={on} class:on onclick={() => setRadio(r.on)}><Icon name={on ? 'circleCheck' : 'circle'} size={22} />{r.name}</button>
+      {#each RADIO as r (r.by)}
+        {@const on = radioNow === r.by}
+        <button role="radio" aria-checked={on} class:on onclick={() => (r.by === 'off' ? setRadio(false) : setRadio(true, { by: r.by }))}
+          ><Icon name={on ? 'circleCheck' : 'circle'} size={22} />{r.name}</button
+        >
       {/each}
+      <div class="count" class:off={!local.radio}>
+        <span>After each track</span>
+        <Seg label="How many after each track" options={COUNTS} bind:value={() => String(local.radioCount), (n) => setRadio(local.radio, { count: Number(n) })} />
+      </div>
     </div>
     <div class="part choices" role="radiogroup" aria-label="Autoplay">
       <span>Autoplay <small>when the queue ends</small></span>
@@ -111,6 +119,22 @@
 
   .choices button.on :global(svg) {
     color: var(--art-accent, var(--accent));
+  }
+
+  /* How many after each track: the choice of number as View's (Seg), at the part's foot. */
+  .count {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 52px;
+    margin-top: 4px;
+    border-top: 1px solid var(--border);
+    font-size: 15px;
+  }
+
+  .count.off {
+    opacity: 0.55;
   }
 
   .toggles {
