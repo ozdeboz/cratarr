@@ -58,6 +58,9 @@ struct Job {
     state: State,
     /// The album's new folder, as planned when it was queued.
     to: String,
+    /// The catalogue folder it moves into (decision 0034); jobs from before moves were into Music (0).
+    #[serde(default)]
+    target: i64,
     /// The swap's trash stamp, set before the swap (so a repeat uses the same paths).
     swap: Option<i64>,
     /// The action's event, set as soon as it is intended.
@@ -275,7 +278,8 @@ enum Outcome {
 
 impl IncomingService {
     /// Queue Keep or Replace of an album whose `files` need converting first. Returns at once.
-    pub(super) fn enqueue(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, files: Vec<String>, to: String) -> KeepResult {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn enqueue(&self, source_id: &str, at: Located, action: Action, year: Option<&str>, files: Vec<String>, to: String, target: i64) -> KeepResult {
         let title = at.album.title.clone();
         self.queue.change(|jobs| {
             jobs.next += 1;
@@ -293,6 +297,7 @@ impl IncomingService {
                 part: 0.0,
                 state: State::Waiting,
                 to: to.clone(),
+                target,
                 swap: None,
                 event: None,
                 undo: None,
@@ -455,7 +460,7 @@ impl IncomingService {
             root: root.clone(),
         };
         let done = match job.action {
-            Action::Keep => self.keep_now(&at, job.year.as_deref(), converted.clone(), Some(job.id)).await,
+            Action::Keep => self.keep_now(&at, job.target, job.year.as_deref(), converted.clone(), Some(job.id)).await,
             Action::Replace => self.replace_now(&at, job.year.as_deref(), converted.clone(), Some(job.id)).await,
         };
         let outcome = match done {
@@ -571,6 +576,7 @@ mod tests {
             part: 0.0,
             state,
             to: "X - T".into(),
+            target: 0,
             swap: None,
             event: None,
             undo: None,

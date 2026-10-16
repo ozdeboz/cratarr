@@ -76,6 +76,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
         .route("/api/collection", get(collection))
         .route("/api/albums", get(albums))
+        .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
         .route("/api/albums/duplicates", get(album_duplicates))
         .route("/api/repairs", get(repairs))
         .route("/api/repairs/apply", post(apply_repairs))
@@ -777,6 +778,22 @@ struct KeepYear {
     /// Stands in for a missing release year (the page asks for it).
     #[serde(default)]
     year: Option<String>,
+}
+
+/// Where a move goes (decision 0034): a library's id, and the year when the album's tags lack it.
+#[derive(Deserialize)]
+struct MoveTo {
+    to: String,
+    #[serde(default)]
+    year: Option<String>,
+}
+
+async fn move_preview(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<MoveTo>) -> Result<Json<crate::app::KeepPreview>, ApiError> {
+    Ok(Json(app.move_preview(&source, &album, &q.to, q.year.as_deref()).await?))
+}
+
+async fn move_album(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Json(b): Json<MoveTo>) -> Result<Json<crate::app::KeepResult>, ApiError> {
+    Ok(Json(app.move_album(&source, &album, &b.to, b.year.as_deref()).await?))
 }
 
 async fn keep_preview(

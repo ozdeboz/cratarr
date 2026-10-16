@@ -187,7 +187,7 @@ impl IncomingService {
         }
         let convert = self.to_convert(&at).await;
         if !convert.is_empty() {
-            return Ok(self.enqueue(source_id, at, queue::Action::Replace, year, convert, planned.plan.folder));
+            return Ok(self.enqueue(source_id, at, queue::Action::Replace, year, convert, planned.plan.folder, 0));
         }
         self.replace_now(&at, year, Vec::new(), None).await
     }

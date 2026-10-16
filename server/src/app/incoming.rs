@@ -661,6 +661,20 @@ impl IncomingService {
         Ok(title.clone())
     }
 
+    /// Find a listed album on disk, in any of the catalogue's folders (Music's too).
+    async fn locate_listed(&self, source_id: &str, album: source::Album) -> Result<Located, ToggleError> {
+        let path = album.path.clone().ok_or_else(|| ToggleError::Refused("the server gives no folder for that album".into()))?;
+        let (library, incoming) = self.owned_index().await.ok_or_else(|| ToggleError::Refused("the catalogue is not ready yet".into()))?;
+        let music: Vec<IncomingDir> =
+            library.albums.iter().map(|(dir, f)| IncomingDir { folder: 0, dir: dir.clone(), release_group: f.release_group.clone() }).collect();
+        let dir = incoming_dir(&incoming, &path)
+            .or_else(|| incoming_dir(&music, &path))
+            .cloned()
+            .ok_or_else(|| ToggleError::Refused("Cratarr cannot see that album's folder".into()))?;
+        let root = self.lib.catalogue().folders().get(dir.folder as usize).cloned().ok_or_else(|| ToggleError::Refused("that folder is not in use any more".into()))?;
+        Ok(Located { source: source_id.to_string(), album, dir, root })
+    }
+
     /// Find an Incoming album on disk.
     async fn locate(&self, source_id: &str, album_id: &str) -> Result<Located, ToggleError> {
         let album = self
@@ -754,19 +768,88 @@ impl IncomingService {
     pub async fn keep(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
-        let (music, plan) = self.plan_keep(&at, year).await?;
+        self.move_located(source_id, at, 0, settings::Format::Cd, year).await
+    }
+
+    /// Move (decision 0034): an album of any used library into another of its server; Keep is the move into Music.
+    /// The target's policies apply on the way in: its naming (Music: the template; another library: the album's
+    /// folder as it is) and its format (CD format: hi-res converted first, in the queue). `album` is the listed album
+    /// (Music's or another library's).
+    pub async fn move_album(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        self.refuse_if_queued(&album.id)?;
+        let at = self.locate_listed(source_id, album).await?;
+        let (target, format) = self.target_of(source_id, to)?;
+        if target == at.dir.folder {
+            return Err(ToggleError::Refused("the album is in that library already".into()));
+        }
+        self.move_located(source_id, at, target, format, year).await
+    }
+
+    /// What a move would do (decision 0034), for the page to show before asking. Changes nothing.
+    pub async fn move_preview(&self, source_id: &str, album: source::Album, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
+        let at = self.locate_listed(source_id, album).await?;
+        let (target, format) = self.target_of(source_id, to)?;
+        let (_, plan) = self.plan_move(&at, target, year).await?;
+        let convert = if format == settings::Format::Cd { self.to_convert(&at).await.len() } else { 0 };
+        let acquisition = self.acquisition().is_some() && at.dir.folder != 0;
+        Ok(match plan {
+            Ok(p) => KeepPreview { title: at.album.title, folder: Some(p.folder), files: p.moves.len(), refused: None, convert, acquisition },
+            Err(r) => KeepPreview { title: at.album.title, folder: None, files: 0, refused: Some(r), convert, acquisition },
+        })
+    }
+
+    async fn move_located(&self, source_id: &str, at: Located, target: i64, format: settings::Format, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        let (root, plan) = self.plan_move(&at, target, year).await?;
         let plan = plan.map_err(|r| match r {
             KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
             KeepRefused::Other(why) => ToggleError::Refused(why),
         })?;
-        if !self.can_write(&at.root).await || !self.can_write(&music).await {
-            return Err(ToggleError::Refused("Cratarr cannot write in Incoming or Music".into()));
+        if !self.can_write(&at.root).await || !self.can_write(&root).await {
+            return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));
         }
-        let convert = self.to_convert(&at).await;
+        let convert = if format == settings::Format::Cd { self.to_convert(&at).await } else { Vec::new() };
         if !convert.is_empty() {
-            return Ok(self.enqueue(source_id, at, queue::Action::Keep, year, convert, plan.folder));
+            return Ok(self.enqueue(source_id, at, queue::Action::Keep, year, convert, plan.folder, target));
         }
-        self.keep_now(&at, year, Vec::new(), None).await
+        self.keep_now(&at, target, year, Vec::new(), None).await
+    }
+
+    /// A library of a server as Cratarr's catalogue folder (0: the Music folder), and its format policy.
+    fn target_of(&self, source_id: &str, library: &str) -> Result<(i64, settings::Format), ToggleError> {
+        let live = self.lib.live();
+        let a = live.iter().find(|a| a.cfg.id == source_id).ok_or_else(|| ToggleError::Refused("that server is not connected".into()))?;
+        let roles = &a.cfg.libraries;
+        if !roles.music.iter().chain(&roles.incoming).any(|l| l == library) {
+            return Err(ToggleError::Refused("that library is not used".into()));
+        }
+        let format = roles.format_of(library);
+        if roles.music.iter().any(|l| l == library) {
+            return Ok((0, format));
+        }
+        let placed = a.placement.libraries.iter().find(|l| l.id == library).and_then(|l| l.folders.first()).ok_or_else(|| ToggleError::Refused("Cratarr cannot see that library's files".into()))?;
+        let folders = self.lib.catalogue().folders();
+        let i = folders.iter().position(|f| f == &PathBuf::from(placed)).ok_or_else(|| ToggleError::Refused("that library's folder is not in use yet".into()))?;
+        Ok((i as i64, format))
+    }
+
+    /// Work out a move's names, or why not: into Music by the template (Keep's plan), into another library as the album's
+    /// folder is. Reads the disk and the catalogue; changes nothing.
+    async fn plan_move(&self, at: &Located, target: i64, year: Option<&str>) -> Result<(PathBuf, Result<crate::incoming::KeepPlan, KeepRefused>), ToggleError> {
+        if target == 0 {
+            return self.plan_keep(at, year).await;
+        }
+        let root = self.lib.catalogue().folders().get(target as usize).cloned().ok_or_else(|| ToggleError::Refused("that library's folder is not in use".into()))?;
+        let (from, dir, to_root) = (at.root.clone(), at.dir.dir.clone(), root.clone());
+        let plan = tokio::task::spawn_blocking(move || {
+            if to_root.join(&dir).exists() {
+                return Err(KeepRefused::Other(format!("that library already has a folder named {dir}")));
+            }
+            let moves = files_under(&from.join(&dir)).into_iter().map(|rel| (rel.clone(), format!("{dir}/{rel}"))).collect();
+            Ok(crate::incoming::KeepPlan { folder: dir, moves })
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        Ok((root, plan))
     }
 
     /// Keep, its files ready (`converted`: what conversion did just before). `job`: the queued job doing it, told
@@ -774,24 +857,25 @@ impl IncomingService {
     async fn keep_now(
         &self,
         at: &Located,
+        target: i64,
         year: Option<&str>,
         converted: Vec<crate::journal::Converted>,
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
-        let (music, plan) = self.plan_keep(at, year).await?;
+        let (root, plan) = self.plan_move(at, target, year).await?;
         let plan = plan.map_err(|r| match r {
             KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
             KeepRefused::Other(why) => ToggleError::Refused(why),
         })?;
-        if !self.can_write(&at.root).await || !self.can_write(&music).await {
-            return Err(ToggleError::Refused("Cratarr cannot write in Incoming or Music".into()));
+        if !self.can_write(&at.root).await || !self.can_write(&root).await {
+            return Err(ToggleError::Refused("Cratarr cannot write in both libraries".into()));
         }
         let c = self.lib.catalogue();
         let from = |rel: &str| format!("{}/{rel}", at.dir.dir);
         let moves: Vec<TrackMove> = plan
             .moves
             .iter()
-            .map(|(rel, to)| TrackMove { track: c.track_of(at.dir.folder, &from(rel)), from: (at.dir.folder, from(rel)), to: (0, to.clone()), was: None })
+            .map(|(rel, to)| TrackMove { track: c.track_of(at.dir.folder, &from(rel)), from: (at.dir.folder, from(rel)), to: (target, to.clone()), was: None })
             .collect();
         // Before anything moves: what users did with the old server items (the server forgets them after).
         let mut play: Vec<PlayData> = Vec::new();
@@ -817,9 +901,11 @@ impl IncomingService {
             album_id: at.album.id.clone(),
             title: at.album.title.clone(),
             from_dir: (at.dir.folder, at.dir.dir.clone()),
-            to_dir: (0, plan.folder.clone()),
+            to_dir: (target, plan.folder.clone()),
             moves,
-            release_group: at.dir.release_group.clone(),
+            // Lidarr stops fetching an album that leaves a folder it fetches into: an Incoming one (Music stays out of
+            // it); with no release group it is not asked.
+            release_group: if at.dir.folder != 0 { at.dir.release_group.clone() } else { None },
             converted,
         };
         let now = epoch_now();
@@ -974,7 +1060,7 @@ impl IncomingService {
     async fn undo_keep(&self, entry: &Entry) -> Result<String, ToggleError> {
         let Event::AlbumAdopted { album_id, title, .. } = &entry.event else { unreachable!() };
         if entry.undone {
-            return Err(ToggleError::Refused(format!("{title} is already back in Incoming")));
+            return Err(ToggleError::Refused(format!("{title} is already back where it was")));
         }
         let steps = self.undo_steps(&entry.event).ok_or_else(|| ToggleError::Refused("the folders are not in use any more".into()))?;
         let files = self.files.clone();

@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use super::App;
 use super::incoming::VerdictView;
+use super::{App, KeepPreview, KeepResult, ToggleError};
 use super::library::epoch_now;
 use crate::settings::Format;
 use crate::source;
@@ -119,6 +119,26 @@ impl App {
             })
             .collect();
         AlbumsView { sources, trash_days: incoming.trash_days, music: incoming.music }
+    }
+}
+
+impl App {
+    /// A listed album of a server (Music's or another library's), by id.
+    async fn listed_album(&self, source: &str, album: &str) -> Result<source::Album, ToggleError> {
+        let view = self.albums(Some(source)).await;
+        view.sources.into_iter().flat_map(|s| s.albums).find(|a| a.id == album).ok_or_else(|| ToggleError::Refused("that album is no longer listed".into()))
+    }
+
+    /// Move an album into another used library of its server (decision 0034).
+    pub async fn move_album(&self, source: &str, album: &str, to: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+        let a = self.listed_album(source, album).await?;
+        self.incoming.move_album(source, a, to, year).await
+    }
+
+    /// What that move would do.
+    pub async fn move_preview(&self, source: &str, album: &str, to: &str, year: Option<&str>) -> Result<KeepPreview, ToggleError> {
+        let a = self.listed_album(source, album).await?;
+        self.incoming.move_preview(source, a, to, year).await
     }
 }
 
