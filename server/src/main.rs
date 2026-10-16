@@ -66,6 +66,16 @@ async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
         std::process::exit(healthcheck());
     }
+    if std::env::args().nth(1).as_deref() == Some("--analyse") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(match analysis::batch::run(&args) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("{e:#}");
+                2
+            }
+        });
+    }
     if std::env::args().nth(1).as_deref() == Some("--rewrite-playlists") {
         let args: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(match playlist_rewrite::run(&args) {

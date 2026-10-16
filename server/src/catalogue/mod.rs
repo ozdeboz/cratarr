@@ -11,7 +11,7 @@ mod id3;
 pub mod identity;
 pub mod normalise;
 pub mod tags;
-mod walk;
+pub mod walk;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};

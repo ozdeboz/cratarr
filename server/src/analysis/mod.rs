@@ -10,6 +10,8 @@
 //!   halved or doubled into it (on GiantSteps the exact tempo goes from 82 % to 88 % of the sure answers).
 //! Blocking and single-threaded: the pass runs several at once.
 
+pub mod batch;
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -385,7 +387,7 @@ mod tests {
     use super::*;
 
     /// A 16-bit stereo WAV of `secs` seconds at 44.1 kHz, each sample from `f(t)`.
-    fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> std::path::PathBuf {
+    pub(super) fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> std::path::PathBuf {
         let rate = 44_100u32;
         let n = (secs * f64::from(rate)) as usize;
         let mut data = Vec::with_capacity(n * 4);
