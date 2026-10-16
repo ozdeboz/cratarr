@@ -75,6 +75,15 @@
       <ChoiceList label="Autoplay" options={AUTOPLAY} value={now} onchange={(v) => setAutoplay(v)} />
     </Card>
     <div class="toggles">
+      <!-- For both, and the first of the three (the owner): hearted tracks are left out of what Radio and Autoplay pick. -->
+      <Switch
+        card
+        label="Ignore favourites"
+        hint="Radio and Autoplay leave out your hearted tracks."
+        hintWhenOn
+        checked={local.skipFavourites}
+        onchange={setSkipFavourites}
+      />
       <Switch
         card
         label="Queue albums"
@@ -94,15 +103,6 @@
         onchange={(on) => setAutoplay(now, { restart: on })}
       />
     </div>
-    <!-- For both: hearted tracks are left out of what Radio and Autoplay pick (the owner, 2026-10-16). -->
-    <Switch
-      card
-      label="Ignore favourites"
-      hint="Radio and Autoplay leave out your hearted tracks."
-      hintWhenOn
-      checked={local.skipFavourites}
-      onchange={setSkipFavourites}
-    />
   </div>
 </MenuSheet>
 
