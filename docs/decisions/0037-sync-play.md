@@ -74,3 +74,32 @@ so HA's `media_player.join` and `unjoin` map to them.
   outside a group.
 - 20 ms is a target to measure, not a promise: Wi-Fi stalls longer than the buffer still break the sound, and the
   group catches up after.
+
+## Prior art: Jellyfin's SyncPlay (read in its source, 2026-10-16)
+
+Jellyfin's SyncPlay (jellyfin-web `src/plugins/syncPlay`, server `Emby.Server.Implementations/SyncPlay`) is made for
+watch parties in different places, not for devices in one room.
+
+- **Clock:** NTP's four timestamps. The client sends, the server stamps the request's arrival and the answer's
+  departure (`GET /GetUtcTime`), and the client stamps the arrival. Of the last 8 pings the shortest round trip wins.
+  It pings every second three times, then once a minute, on the wall clock with millisecond `Date`s.
+- **Commands:** every change goes through a Waiting state. The server waits until each member says it is ready
+  (buffered), then broadcasts unpause with `When` (now plus the highest ping, 500 ms by default) and a position. Each
+  client sets a timer to its local equivalent of `When`. A member counts as ready within 500 ms of the position.
+- **Holding in line:** `SpeedToSync` sets the playback rate to 1 + difference/1 s for one second when 60 ms <
+  |difference| < 3 s. `SkipToSync` seeks above 400 ms, checked at most every 1.5 s. Correction is **off by
+  default** (`enableSyncCorrection: false`). The code's own notes say "SpeedToSync sounds bad on songs" and that both
+  "have a hard time keeping up on Android Chrome".
+- **Output delay:** not measured. Each device has a hand-set `extraTimeOffset`.
+
+What Cratarr takes from it:
+
+- the four-timestamp ping and the shortest round trip (the server stamping arrival and departure);
+- the Waiting state: nobody starts before everyone has the track ready, then a scheduled start a little ahead.
+
+What it does differently:
+
+- a pitch-free correction in samples (Snapcast's), not a playback rate, which Jellyfin itself finds bad on music;
+- the clock on the monotonic clock, and pinged more often;
+- each device's output delay measured once with a microphone (a click track recorded from both), where Jellyfin
+  leaves it to a hand-set offset. Jellyfin's tolerances (60, 400 and 500 ms) are an order wider than the 20 ms here.
