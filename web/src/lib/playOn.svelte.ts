@@ -26,7 +26,16 @@ function take(players: PlayOnPlayer[]) {
   const p = name ? players.find((x) => x.name === name) : undefined;
   if (!p) return;
   const sleep = p.sleep ? { atMs: p.sleep.at_ms, endOfTrack: p.sleep.end_of_track } : null;
-  reportedBy({ index: p.index, positionMs: p.position_ms, durationMs: p.duration_ms ?? -1, paused: !p.playing, error: null, repeat: p.repeat, sleep });
+  reportedBy({
+    index: p.index,
+    positionMs: p.position_ms,
+    durationMs: p.duration_ms ?? -1,
+    paused: !p.playing,
+    error: null,
+    repeat: p.repeat,
+    sleep,
+    radio: p.radio ?? null,
+  });
   if (p.queue_version !== shownVersion) {
     const version = p.queue_version;
     getPlayer(p.name)

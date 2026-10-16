@@ -204,10 +204,11 @@
       {#if np.upcoming.length}
         <ol class="rows" class:dragging={!!drag}>
           {#each np.upcoming as t, i (t.id + ':' + i)}
-            <!-- A line where the tracks added by hand end and the album or playlist goes on (decision 0033). -->
+            <!-- A line where the tracks added by hand end and the album or playlist goes on (decision 0033), and where
+                 the radio's begin (decision 0036). -->
             <li
               class:lifted={drag?.from === i}
-              class:lane-end={i > 0 && np.upcoming[i - 1].lane === 'next' && t.lane !== 'next'}
+              class:lane-end={i > 0 && np.upcoming[i - 1].lane !== t.lane && (np.upcoming[i - 1].lane === 'next' || t.lane === 'radio')}
               style:transform={drag ? `translateY(${reorder.offset(i)}px)` : null}
             >
               <button
@@ -218,6 +219,7 @@
               >
                 {#if t.album_id}<img src={albumCoverUrl(np.source, t.album_id)} alt="" loading="lazy" />{:else}<span class="noimg"></span>{/if}
                 <div><strong>{t.name}</strong><span>{t.artist ?? ''}</span></div>
+                {#if t.lane === 'radio'}<span class="radio" title="Radio"><Icon name="radio" size={16} /></span>{/if}
                 {#if t.duration_secs}<span class="d">{clockText(t.duration_secs)}</span>{/if}
               </button>
               {@render rowHeart(asTrack(t, np.source))}
@@ -509,6 +511,13 @@
     height: 70px;
     padding: 6px 8px 0;
     box-sizing: border-box;
+  }
+
+  /* The radio's tracks carry its mark (decision 0036). */
+  .row .radio {
+    flex: none;
+    display: grid;
+    color: var(--muted);
   }
 
   /* Takes no room, so dragging counts rows as before. */

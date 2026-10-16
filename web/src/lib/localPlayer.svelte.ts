@@ -14,14 +14,14 @@
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
 import { inApp, onApp, toApp } from './app.svelte';
-import { playerCommand } from './api';
+import { playerCommand, radioNext } from './api';
 
 export type LocalTrack = {
   /** Its entry in a player's queue (decision 0033), once Cratarr or the app has given it one. */
   entry?: string;
   /** `next`: added by hand (Play next, Add to queue), not part of the album or playlist that plays (decision 0033's
-   *  two lanes). */
-  lane?: 'next';
+   *  two lanes). `radio`: chosen by the radio, after everything else (decision 0036). */
+  lane?: 'next' | 'radio';
   /** Its place in the album or playlist as it was played, before any shuffle: turning shuffle off orders by it. */
   n?: number;
   source: string;
@@ -37,6 +37,12 @@ export type LocalTrack = {
 export type Repeat = 'off' | 'one' | 'all';
 /** A sleep timer: pause at `atMs` (epoch ms), or when the playing track ends. */
 export type Sleep = { atMs: number | null; endOfTrack: boolean };
+/** How the radio chooses (decision 0036). */
+export type RadioMode = 'similar' | 'continuous' | 'album_mix' | 'era' | 'artist' | 'reshuffle' | 'random';
+/** The radio while it is on: its mode, and the tracks it stays close to when started from an item (else the queue's
+ *  own album or playlist). */
+export type Radio = { mode: RadioMode; seed: string[] };
+export const RADIO_MODES: readonly RadioMode[] = ['similar', 'continuous', 'album_mix', 'era', 'artist', 'reshuffle', 'random'];
 
 /** One appended track: its queue index, where its sample 0 sits in the stream (s), its length (s; null while
  *  unknown), and the length the server read from the file (s), shown while the exact one is unknown. */
@@ -60,6 +66,8 @@ export const local = $state({
   /** The sleep timer of the player that plays elsewhere (the app, Cratarr's player), as it reports it; null when none
    *  is set or it fired. */
   sleep: null as Sleep | null,
+  /** The radio (decision 0036), null while off: the music goes on after the queue, chosen from the library. */
+  radio: null as Radio | null,
   /** What the queue was started from ("Chill", an album), for the queue sheet's "Playing from"; null when unknown. */
   from: null as string | null,
 });
@@ -436,6 +444,7 @@ function tick() {
       if (local.repeat === 'one' && w.seg.index === local.index + 1) return jump(local.index);
       local.index = w.seg.index;
       nextRound();
+      fillRadio();
     }
     local.position = Math.max(0, w.offset);
     local.duration = w.seg.length ?? w.seg.told;
@@ -513,10 +522,12 @@ export function reportedBy(m: {
   error?: unknown;
   repeat?: unknown;
   sleep?: unknown;
+  radio?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
   if (m.sleep !== undefined) local.sleep = sleepOf(m.sleep);
+  if (m.radio !== undefined) local.radio = radioOf(m.radio);
   if (Array.isArray(m.queue) && !sameQueue(m.queue as LocalTrack[], local.queue)) {
     // A queue the player changed (moved, added to) keeps the names this page already knows of its tracks.
     const known = new Map(local.queue.filter((t) => t.name).map((t) => [`${t.source}/${t.id}`, t]));
@@ -537,6 +548,18 @@ function sleepOf(s: unknown): Sleep | null {
   const { atMs, endOfTrack } = s as Record<string, unknown>;
   const timer = { atMs: typeof atMs === 'number' ? atMs : null, endOfTrack: endOfTrack === true };
   return timer.atMs === null && !timer.endOfTrack ? null : timer;
+}
+
+/** A reported radio: `{on, mode, seed}` from the app, a mode or null from Cratarr's player view. */
+function radioOf(r: unknown): Radio | null {
+  if (typeof r === 'string') return RADIO_MODES.includes(r as RadioMode) ? { mode: r as RadioMode, seed: [] } : null;
+  if (!r || typeof r !== 'object') return null;
+  const { on, mode, seed } = r as Record<string, unknown>;
+  if (on === false) return null;
+  return {
+    mode: RADIO_MODES.includes(mode as RadioMode) ? (mode as RadioMode) : 'similar',
+    seed: Array.isArray(seed) ? seed.filter((s): s is string => typeof s === 'string') : [],
+  };
 }
 
 /** The sleep timer, for the player that plays elsewhere (the app, Cratarr's player), which keeps it: it is sure to be
@@ -624,15 +647,85 @@ export function setShuffle(on: boolean) {
   // A player of Cratarr's: Cratarr orders its queue (it holds it, decision 0033), not this page from what it last saw.
   if (driven !== null) return hand('shuffle', { on });
   const ahead = addedAhead(local.queue, local.index);
-  const rest = local.queue.slice(local.index + 1 + ahead.length);
-  replaceUpcoming([...ahead, ...(on ? shuffledCopy(rest) : inOrder(rest, reached(local.queue, local.index)))]);
+  const after = local.queue.slice(local.index + 1 + ahead.length);
+  // The radio's tracks are not the album's or playlist's own: they stay last, in their order (decision 0036).
+  const rest = after.filter((t) => t.lane !== 'radio');
+  const radio = after.filter((t) => t.lane === 'radio');
+  replaceUpcoming([...ahead, ...(on ? shuffledCopy(rest) : inOrder(rest, reached(local.queue, local.index))), ...radio]);
 }
 
-/** Repeat off, one or all: the player that plays applies it (here, the app, or Cratarr's player). */
+/** Repeat off, one or all: the player that plays applies it (here, the app, or Cratarr's player). Repeat all turns the
+ *  radio off: both say what comes when the queue ends (decision 0036). */
 export function setRepeat(mode: Repeat) {
   local.repeat = mode;
+  if (mode === 'all' && local.radio) radioOff();
   if (handed()) return hand('repeat', { mode });
   nextRound();
+}
+
+/** The radio on (a mode; a seed of track ids when started from an item, else the queue's own) or off (its tracks to
+ *  come go). The player that plays fills its lane: this page for its own stream, else the app or Cratarr's player. On
+ *  turns repeat all off. */
+export function setRadio(on: boolean, mode?: RadioMode, seed?: string[]) {
+  if (!on) {
+    radioOff();
+    if (handed()) hand('radio', { on: false });
+    return;
+  }
+  local.radio = { mode: mode ?? local.radio?.mode ?? 'similar', seed: seed ?? local.radio?.seed ?? [] };
+  if (local.repeat === 'all') local.repeat = 'off';
+  // The seed only when given: the player keeps the one it has (a player's view does not show it here).
+  if (handed()) return hand('radio', { on: true, mode: local.radio.mode, ...(seed ? { seed } : {}) });
+  // Another mode: what it chose before makes way for what this one chooses.
+  const kept = local.queue.slice(local.index + 1).filter((t) => t.lane !== 'radio');
+  if (local.index >= 0 && kept.length !== local.queue.length - local.index - 1) replaceUpcoming(kept);
+  fillRadio();
+}
+
+/** The radio off here: its tracks still to come out (the player that plays is told by the caller). */
+function radioOff() {
+  local.radio = null;
+  if (local.index < 0) return;
+  const kept = local.queue.slice(local.index + 1).filter((t) => t.lane !== 'radio');
+  if (kept.length === local.queue.length - local.index - 1) return;
+  if (handed()) local.queue = [...local.queue.slice(0, local.index + 1), ...kept];
+  else replaceUpcoming(kept);
+}
+
+/** Radio from an item ("Start radio", decision 0036): tracks like `seed` (its own left out) play, and the radio goes
+ *  on with that seed. `from`: its name, for the queue sheet. */
+export async function startRadio(seed: string[], from: string | null, mode: RadioMode = local.radio?.mode ?? 'similar') {
+  const { tracks } = await radioNext({ mode, seed, exclude: seed, last: null, count: RADIO_BATCH });
+  if (!tracks.length) throw new Error('The radio found nothing to play.');
+  playQueue(tracks as LocalTrack[], 0, from);
+  setRadio(true, mode, seed);
+}
+
+/** How many radio tracks are asked for at a time, and how few may be left ahead before more are. */
+const RADIO_BATCH = 5;
+const RADIO_LOW = 3;
+let filling = false;
+
+/** This page's own stream with the radio on: more of the radio's tracks when fewer than three are left ahead. */
+function fillRadio() {
+  const radio = local.radio;
+  if (!radio || handed() || filling || local.index < 0 || local.queue.length - local.index - 1 >= RADIO_LOW) return;
+  const own = local.queue.filter((t) => !t.lane).map((t) => t.id);
+  const ask = {
+    mode: radio.mode,
+    seed: radio.seed.length ? radio.seed : own,
+    exclude: local.queue.map((t) => t.id),
+    last: local.queue[local.index]?.id ?? null,
+    count: RADIO_BATCH,
+  };
+  filling = true;
+  radioNext(ask)
+    .then(({ tracks }) => {
+      // Still on, still here: appended after everything, so the stream goes on into them.
+      if (local.radio && !handed() && tracks.length) local.queue = [...local.queue, ...(tracks as LocalTrack[])];
+    })
+    .catch((e) => (local.error = e instanceof Error ? e.message : String(e)))
+    .finally(() => (filling = false));
 }
 
 /** Under repeat all, while the last track plays here: the next round of the album or playlist after it (decision 0033,
@@ -672,6 +765,9 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   local.shuffled = shuffle || looksShuffled(tracks, index);
   // Something new turns repeat one off; repeat all stays (decision 0033, amended).
   if (local.repeat === 'one') local.repeat = 'off';
+  // The radio stays on, after the new album or playlist, which is its seed now; radio tracks only are a radio starting
+  // from an item, which brings its own seed (decision 0036).
+  if (local.radio && !tracks.every((t) => t.lane === 'radio')) local.radio = { ...local.radio, seed: [] };
   // Those the new queue holds already (a queue moved here whole) are not added twice.
   const holds = (t: LocalTrack) => tracks.some((x) => x === t || (!!t.entry && x.entry === t.entry));
   const ahead = local.index < 0 ? [] : addedAhead(local.queue, local.index).filter((t) => !holds(t));
@@ -684,6 +780,7 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
     return hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true, shuffled: local.shuffled });
   }
   fresh(index, position);
+  fillRadio();
 }
 
 /** Adds tracks by hand (decision 0033's two lanes): right after the playing one (`next`, so the newest come first), or

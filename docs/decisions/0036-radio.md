@@ -54,6 +54,9 @@ the seed.
   it takes repeat. The player view carries it, so Home Assistant sees it. A handover takes it to the new player.
 - **A new play** keeps radio on, so the music goes on after the new album too. The new album or playlist becomes the
   seed, and the old radio tracks go with the rest of the old queue.
+- **"Start radio"** (the track and playlist menus, where the page holds the queue): the first radio tracks like the
+  item are played, and then `radio {on, seed}` is sent. Those are two requests, which may arrive in either order. So a
+  play of radio tracks only keeps the seed it has.
 
 **Radio tracks are a lane of their own: `lane: "radio"`, without `n`.** They are never the album's or playlist's own
 tracks.

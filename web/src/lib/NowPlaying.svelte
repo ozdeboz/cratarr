@@ -12,6 +12,7 @@
   import QueueSheet from './QueueSheet.svelte';
   import OutputSheet from './OutputSheet.svelte';
   import SleepSheet from './SleepSheet.svelte';
+  import RadioSheet from './RadioSheet.svelte';
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
@@ -106,6 +107,7 @@
   let queueOpen = $state(false);
   let outputOpen = $state(false);
   let sleepOpen = $state(false);
+  let radioOpen = $state(false);
   const openMenu = (e: Event, start: 'menu' | 'lists' = 'menu') => {
     menuStart = start;
     menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -418,6 +420,17 @@
             aria-pressed={favorite()}
             onclick={toggleFavorite}><Icon name="heart" size={26} /></button
           >
+          <!-- The radio (decision 0036), where the device button was; only where the page holds the queue. Lit while on. -->
+          {#if isLocal()}
+            <button
+              class="act radio"
+              class:on={local.radio !== null}
+              aria-label="Radio"
+              aria-haspopup="dialog"
+              aria-pressed={local.radio !== null}
+              onclick={() => (radioOpen = true)}><Icon name="radio" size={24} /></button
+            >
+          {/if}
           <button class="act labelled" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
             ><Icon name="playlists" size={24} /><small>{queuePlace}</small></button
           >
@@ -440,6 +453,9 @@
 {/if}
 {#if sleepOpen}
   <SleepSheet onclose={() => (sleepOpen = false)} />
+{/if}
+{#if radioOpen}
+  <RadioSheet onclose={() => (radioOpen = false)} />
 {/if}
 
 <style>
@@ -839,6 +855,11 @@
 
   /* A small label under a button's icon (the place in the queue), outside the button's box: the row's buttons stay
      alike, so their icons line up whatever the labels say. */
+  /* The radio, lit while on (as the heart). */
+  .act.radio.on {
+    color: var(--art-accent);
+  }
+
   .act.labelled {
     position: relative;
   }

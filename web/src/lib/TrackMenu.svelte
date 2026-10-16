@@ -31,7 +31,7 @@
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
-  import { enqueue, jump as localJump, local, moveUpcoming, removeUpcoming } from './localPlayer.svelte';
+  import { enqueue, jump as localJump, local, moveUpcoming, removeUpcoming, startRadio } from './localPlayer.svelte';
   import { playUpcoming } from './remote.svelte';
   import { isLocal, setPlayingMember, shownPlaylists } from './output.svelte';
   import { setFavorite } from './favourites.svelte';
@@ -225,6 +225,22 @@
   }
   const movesHere = $derived(!!place && here && place.list === 'upcoming');
 
+  /** Radio from this track (decision 0036): tracks like it play, and the radio goes on. Cratarr's own tracks only. */
+  const radioFrom = $derived(isLocal() && t?.source === 'cratarr');
+  async function radio() {
+    const tr = t;
+    if (!tr) return;
+    working = true;
+    onclose();
+    try {
+      await startRadio([tr.id], tr.name);
+    } catch (e) {
+      toast.fail(e, "The radio didn't start");
+    } finally {
+      working = false;
+    }
+  }
+
   async function queue(how: 'next' | 'last') {
     const tr = t;
     if (!tr) return;
@@ -301,10 +317,12 @@
         ? [
             { icon: 'play', label: 'Play now', onclick: playNow, disabled: working },
             { icon: 'playNext', label: movesHere ? 'Play next' : 'Play again next', onclick: playNextFromQueue, disabled: working },
+            ...(radioFrom ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
           ]
         : [
             { icon: 'playNext', label: 'Play next', onclick: () => queue('next'), disabled: working },
             { icon: 'playlists', label: 'Add to queue', onclick: () => queue('last'), disabled: working },
+            ...(radioFrom ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
           ]}
     onback={step === 'menu' ? null : () => (step = step === 'repeats' ? 'new' : 'menu')}
     {step}

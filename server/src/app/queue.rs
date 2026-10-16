@@ -155,8 +155,11 @@ impl Queue {
                     self.repeat = Repeat::Off;
                 }
                 // The radio stays on, now after the new album or playlist: that is its seed (decision 0036). Its old
-                // tracks went with the rest of the old queue.
-                if let Some(r) = &mut self.radio {
+                // tracks went with the rest of the old queue. A play of radio tracks only is the radio starting from an
+                // item ("Start radio"): its seed came, or comes, with its own command, in either order.
+                if let Some(r) = &mut self.radio
+                    && !self.tracks.iter().all(|t| t.lane.as_deref() == Some(LANE_RADIO))
+                {
                     r.seed.clear();
                 }
                 Command::Play { from, tracks: Some(self.tracks.clone()), index, position_ms, shuffle, paused }
@@ -461,6 +464,9 @@ mod tests {
             let tail: Vec<&str> = told.iter().rev().take(2).map(|t| t.id.as_str()).collect();
             assert_eq!(tail, ["r2", "r1"], "the radio stays last, in its order (shuffle {on})");
         }
+        // "Start radio": its first tracks played, its seed set first or after; either way the seed stays.
+        q.edit(Command::play(vec![radio_track("f1")], 0, 0)).unwrap();
+        assert_eq!(q.radio.as_ref().map(|r| r.seed.clone()), Some(vec!["s".to_string()]), "a play of radio tracks keeps the seed");
         q.edit(Command::play(vec![track("new")], 0, 0)).unwrap();
         assert_eq!(ids(&q), "new", "the radio's old tracks went with the old queue");
         assert_eq!(q.radio.as_ref().map(|r| r.seed.is_empty()), Some(true), "still on, the new album its seed");

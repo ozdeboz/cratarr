@@ -8,9 +8,10 @@
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
   import { untrack } from 'svelte';
-  import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers } from './api';
+  import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers, playlistTrackIds } from './api';
+  import { startRadio } from './localPlayer.svelte';
   import MenuEntry from './MenuEntry.svelte';
-  import { startPlaylists } from './output.svelte';
+  import { isLocal, startPlaylists } from './output.svelte';
   import { openTab, viewSelection, panel, type Tab } from './panel.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { withUndo } from './undo.svelte';
@@ -118,6 +119,23 @@
     }
   }
 
+  /** Radio from these playlists (decision 0036): tracks like theirs, none of their own, and the radio goes on. */
+  async function radio() {
+    if (working) return;
+    working = true;
+    const list = [...ids];
+    onclose();
+    try {
+      const seed = new Set<string>();
+      for (const id of list) for (const t of (await playlistTrackIds(id, 'cratarr')).ids) seed.add(t);
+      await startRadio([...seed], one?.name ?? null);
+    } catch (e) {
+      fail(e, "The radio didn't start");
+    } finally {
+      working = false;
+    }
+  }
+
   function pin() {
     prefs.pinned = allPinned ? prefs.pinned.filter((x) => !ids.includes(x)) : [...prefs.pinned, ...ids.filter((x) => !prefs.pinned.includes(x))];
     onclose();
@@ -182,6 +200,7 @@
         { icon: 'shuffle', label: 'Shuffle', onclick: () => play('shuffle'), disabled: working },
         { icon: 'playNext', label: 'Play next', onclick: () => play('next'), disabled: working },
         { icon: 'playlists', label: 'Add to queue', onclick: () => play('last'), disabled: working },
+        ...(isLocal() ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
       ]
     : []}
   onback={mode === 'menu' ? null : () => (mode = 'menu')}
