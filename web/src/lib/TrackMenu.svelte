@@ -39,6 +39,7 @@
   import { withUndo } from './undo.svelte';
   import { followCreate, followDelete } from './follow.svelte';
   import { albumSubject, keepViewed, viewPlaylist } from './panel.svelte';
+  import { linkTo, share } from './share';
   import { viewGenre } from './crates.svelte';
   import { download, inApp } from './app.svelte';
 
@@ -118,6 +119,14 @@
     onclose();
     if (player.full) player.full = false;
     location.hash = keepViewed('#/library');
+  }
+
+  // Share: the track in words, and its album's link here (a track has no page of its own; lib/share.ts).
+  function shareIt() {
+    if (!t) return;
+    const { source, name, artist, album_id } = t;
+    onclose();
+    share(name, [artist, name].filter(Boolean).join(' – '), album_id ? linkTo('library', albumSubject(source, album_id)) : null);
   }
 
   // Web search: the track's artist and title, in a new tab (the app opens it outside).
@@ -345,6 +354,7 @@
           <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
         {/each}
         <MenuEntry icon="info" label="Details" onclick={showDetails} />
+        <MenuEntry icon="share" label="Share" onclick={shareIt} />
         <MenuEntry icon="search" label="Web search" onclick={webSearch} />
         {#if inApp && t}
           {@const one = t}

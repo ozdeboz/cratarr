@@ -454,6 +454,25 @@ impl PlayingService {
         s.set_album_favorite(album_id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
+    /// An album's rating on a connected server, 0 to 5; `None` when the server keeps none.
+    pub async fn album_rating(&self, source_id: &str, album_id: &str) -> Result<Option<u8>, ToggleError> {
+        if !crate::covers::valid_item_id(album_id) {
+            return Err(ToggleError::Refused("That is not an album.".into()));
+        }
+        let (_, s) = self.source(source_id)?;
+        s.album_rating(album_id).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
+    /// Rates an album, 0 (none) to 5.
+    pub async fn set_album_rating(&self, source_id: &str, album_id: &str, stars: u8) -> Result<u8, ToggleError> {
+        if !crate::covers::valid_item_id(album_id) {
+            return Err(ToggleError::Refused("That is not an album.".into()));
+        }
+        let (_, s) = self.source(source_id)?;
+        s.set_album_rating(album_id, stars.min(5)).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
+        Ok(stars.min(5))
+    }
+
     /// The favourite albums of a connected server (their ids): the Library's Favourites only, the album panel's heart.
     pub async fn favorite_albums(&self, source_id: &str) -> Result<Vec<String>, ToggleError> {
         let (_, s) = self.source(source_id)?;

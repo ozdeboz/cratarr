@@ -25,7 +25,10 @@
   const music = $derived(library.view?.music ?? 'Music');
 
   // An album's menu (lib/AlbumMenu), the same as everywhere.
+  // Closing it hides it and keeps its album: what the menu does after it closes (Play, Share, a chosen cover) still
+  // reads it.
   let menu = $state<{ source: string; a: ListedAlbum; offer: AlbumOffer } | null>(null);
+  let menuShown = $state(false);
 
   // The album left its library (moved, replaced, deleted): gone at once, before the list is read again.
   function gone(source: string, id: string) {
@@ -104,7 +107,9 @@
   // An album's menu: what its library allows depends on the library and what Cratarr may do there.
   function openMenu(shelf: ShelfSource, a: ListedAlbum) {
     const s = sources?.find((x) => x.id === shelf.id);
-    if (s) menu = { source: s.id, a, offer: offerIn(s, a) };
+    if (!s) return;
+    menu = { source: s.id, a, offer: offerIn(s, a) };
+    menuShown = true;
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
 
@@ -155,7 +160,7 @@
   {/if}
 </main>
 
-{#if menu}
+{#if menuShown && menu}
   {@const m = menu}
   <AlbumMenu
     source={m.source}
@@ -163,7 +168,7 @@
     offer={m.offer}
     {trashDays}
     {music}
-    onclose={() => (menu = null)}
+    onclose={() => (menuShown = false)}
     ongone={() => gone(m.source, m.a.id)}
     onundone={reload}
   />

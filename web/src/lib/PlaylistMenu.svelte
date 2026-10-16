@@ -7,6 +7,7 @@
   // playlist only), and Delete (one Undo for all), each done inside the sheet.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
+  import { linkTo, share } from './share';
   import { untrack } from 'svelte';
   import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers, playlistTrackIds } from './api';
   import { startRadio } from './localPlayer.svelte';
@@ -199,7 +200,7 @@
         { icon: 'play', label: 'Play', onclick: () => play('play'), disabled: working },
         { icon: 'shuffle', label: 'Shuffle', onclick: () => play('shuffle'), disabled: working },
         { icon: 'playNext', label: 'Play next', onclick: () => play('next'), disabled: working },
-        { icon: 'playlists', label: 'Add to queue', onclick: () => play('last'), disabled: working },
+        { icon: 'listAdd', label: 'Add to queue', onclick: () => play('last'), disabled: working },
         ...(isLocal() ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
       ]
     : []}
@@ -250,6 +251,17 @@
           onclick={() => {
             nameField = one.id;
             mode = 'rename';
+          }}
+        />
+      {/if}
+      {#if one}
+        {@const name = one.id}
+        <MenuEntry
+          icon="share"
+          label="Share"
+          onclick={() => {
+            onclose();
+            share(name, name, linkTo('playlists', name));
           }}
         />
       {/if}

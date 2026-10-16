@@ -32,15 +32,19 @@
 
 <script lang="ts">
   // An album's menu, the one every album has wherever it is opened (a Library row or tile, the select bar's More, the
-  // album panel's ⋮), after Symfonium's album sheet: the album on the card (its heart there), the large actions (Play,
+  // album panel's ⋮), after Symfonium's album sheet: the album at the top (its heart there), the large actions (Play,
   // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards, related ones joined: where to go
-  // (View, its artist, its genres); Add to playlist (all its tracks, the playlists as toggle cards in a step, as a
-  // track's) and Download; what its library allows (Move to another, Replace in Music, Delete; decision 0034), each
-  // question asked in place; Remove resume point and Web search.
+  // (View, each of its artists, its genres); its rating; Add to playlist (all its tracks, the playlists as toggle cards
+  // in a step, as a track's), Download and Share; what its library allows (Move to another, Replace in Music, Delete;
+  // decision 0034), each question asked in place; its cover on this device (a picture chosen here, or the server's read
+  // again); Remove resume point, Web search and Genius search.
   import {
     albumCoverUrl,
     albumResume,
     albumView,
+    getAlbumRating,
+    serverCoverUrl,
+    setAlbumRating,
     appendTracks,
     cancelJob,
     deleteAlbum,
@@ -69,6 +73,9 @@
   import { playPlaylistFrom } from './output.svelte';
   import { pageView } from './pageView.svelte';
   import { albumGone, albumSubject, keepViewed, viewPlaylist } from './panel.svelte';
+  import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
+  import { linkTo, share } from './share';
+  import Icon from './Icon.svelte';
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
 
@@ -203,13 +210,15 @@
     return list;
   });
 
-  // Go to artist: the Library with that artist's albums (the search says the name), as the track menu's.
-  const artistName = $derived(a.artist?.split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim() || null);
-  function goToArtist() {
-    if (!artistName) return;
-    pageView.artist = artistName;
-    pageView.next = artistName;
-    pageView.query = artistName;
+  // Go to artist: the Library with that artist's albums (the search says the name), as the track menu's; one for each
+  // artist the album is credited to (as Symfonium's). Without the source's list, the credit with a "feat." left out.
+  const artistNames = $derived(
+    a.artists?.length ? a.artists : [a.artist?.split(/\s+(?:feat\.?|ft\.|featuring)\s+/i)[0].trim() ?? ''].filter(Boolean),
+  );
+  function goToArtist(name: string) {
+    pageView.artist = name;
+    pageView.next = name;
+    pageView.query = name;
     onclose();
     if (player.full) player.full = false;
     location.hash = keepViewed('#/library');
@@ -219,11 +228,62 @@
     player.full = false;
     viewGenre(name);
   }
-  // Web search: the album's artist and title, in a new tab (the app opens it outside).
-  function webSearch() {
+  // Web search and Genius search: the album's artist and title, in a new tab (the app opens it outside).
+  function search(site: string) {
     const words = [a.artist, a.title].filter(Boolean).join(' ');
-    window.open(`https://duckduckgo.com/?q=${encodeURIComponent(words)}`, '_blank', 'noopener');
+    window.open(`${site}${encodeURIComponent(words)}`, '_blank', 'noopener');
     onclose();
+  }
+
+  // Its rating (Symfonium's "Change user rating"): the stars a Subsonic app gives it; a tap on the one it has takes it
+  // off. Shown only when its server keeps ratings; the change shows at once, back as it was when refused.
+  let rating = $state<number | null>(null);
+  $effect(() => {
+    getAlbumRating(source, a.id).then(
+      (r) => (rating = r.rating),
+      () => {},
+    );
+  });
+  async function rate(stars: number) {
+    const was = rating;
+    const now = was === stars ? 0 : stars;
+    rating = now;
+    navigator.vibrate?.(8);
+    try {
+      await setAlbumRating(source, a.id, now);
+    } catch (e) {
+      rating = was;
+      toast.fail(e, "The rating didn't change");
+    }
+  }
+
+  // Share: the album in words and its link here (lib/share.ts).
+  function shareIt() {
+    onclose();
+    share(a.title, [a.artist, a.title].filter(Boolean).join(' – '), linkTo('library', albumSubject(source, a.id)));
+  }
+
+  // Its cover on this device (lib/localCovers.svelte.ts): a picture chosen here, or the server's read again.
+  const ownCover = $derived(!!localCovers[coverKey(source, a.id)]);
+  let picker = $state<HTMLInputElement>();
+  async function chosen(e: Event) {
+    const file = (e.currentTarget as HTMLInputElement).files?.[0];
+    onclose();
+    if (!file) return;
+    try {
+      await setLocalCover(source, a.id, file);
+    } catch (e) {
+      toast.fail(e, "The cover wasn't changed");
+    }
+  }
+  async function serverCover() {
+    onclose();
+    try {
+      if (ownCover) await removeLocalCover(source, a.id);
+      else await refreshCover(source, a.id, serverCoverUrl(source, a.id));
+    } catch (e) {
+      toast.fail(e, "The cover wasn't read again");
+    }
   }
 
   // Add to playlist. Each track's playlists, by track id: the first track's says whether the album is in Music (only
@@ -523,25 +583,37 @@
             }}
           />
         {/if}
-        {#if artistName}<MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />{/if}
+        {#each artistNames as name (name)}<MenuEntry icon="user" label="Go to {name}" onclick={() => goToArtist(name)} />{/each}
         {#each genres as g (g)}<MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
       </div>
-      {#if addable || (inApp && tracks?.length)}
+      {#if rating !== null}
+        {@const r = rating}
         <div class="group" role="group">
-          {#if addable}<MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
-          {#if inApp && tracks?.length}
-            {@const list = tracks}
-            <MenuEntry
-              icon="arrowDownToLine"
-              label="Download"
-              onclick={() => {
-                onclose();
-                download(list);
-              }}
-            />
-          {/if}
+          <div class="entry rating" role="group" aria-label="Rating">
+            <span>Rating</span>
+            <span class="stars">
+              {#each [1, 2, 3, 4, 5] as n (n)}
+                <button class:on={n <= r} aria-label={n === 1 ? '1 star' : `${n} stars`} aria-pressed={n === r} onclick={() => rate(n)}><Icon name="star" size={24} /></button>
+              {/each}
+            </span>
+          </div>
         </div>
       {/if}
+      <div class="group" role="group">
+        {#if addable}<MenuEntry icon="listAdd" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+        {#if inApp && tracks?.length}
+          {@const list = tracks}
+          <MenuEntry
+            icon="arrowDownToLine"
+            label="Download"
+            onclick={() => {
+              onclose();
+              download(list);
+            }}
+          />
+        {/if}
+        <MenuEntry icon="share" label="Share" onclick={shareIt} />
+      </div>
       {#if offer && (offer.job !== null || offer.targets.length || offer.replaceable || offer.deletable)}
         {@const o = offer}
         <div class="group" role="group" aria-label="Library">
@@ -556,9 +628,15 @@
         </div>
       {/if}
       <div class="group" role="group">
-        {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
-        <MenuEntry icon="search" label="Web search" onclick={webSearch} />
+        <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
+        <MenuEntry icon={ownCover ? 'imageOff' : 'reset'} label={ownCover ? "Use the server's cover" : 'Read the cover again'} onclick={serverCover} />
       </div>
+      <div class="group" role="group">
+        {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
+        <MenuEntry icon="search" label="Web search" onclick={() => search('https://duckduckgo.com/?q=')} />
+        <MenuEntry icon="search" label="Genius search" onclick={() => search('https://genius.com/search?q=')} />
+      </div>
+      <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
     </div>
   {:else if step === 'again' && again}
     {@const g = again}
@@ -617,6 +695,50 @@
   .group > :global(.entry:last-child) {
     border-bottom-left-radius: 20px;
     border-bottom-right-radius: 20px;
+  }
+
+  /* The rating's card: its word, then five stars, filled up to the rating in the accent. */
+  .rating {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 60px;
+    padding: 0 12px 0 20px;
+    border-radius: 20px;
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    font-size: 16px;
+  }
+
+  .rating > span:first-child {
+    flex: 1;
+  }
+
+  .stars {
+    display: flex;
+  }
+
+  .stars button {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 44px;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: color-mix(in srgb, var(--text) 45%, transparent);
+    cursor: pointer;
+  }
+
+  .stars button.on {
+    color: var(--art-accent, var(--accent));
+  }
+
+  .stars button.on :global(svg) {
+    fill: currentColor;
+  }
+
+  .picker {
+    display: none;
   }
 
   .heading {
