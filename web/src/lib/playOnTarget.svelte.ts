@@ -9,6 +9,7 @@ import { inApp } from './app.svelte';
 import { canPlayHere, local, pageVolume, playOnCommand } from './localPlayer.svelte';
 import { playOn, drivenName } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
+import { refused, refusedFor } from './reach.svelte';
 import { setOwnSleep, sleep } from './sleep.svelte';
 
 /** Every so often a report, even with nothing changed: the position, and that the page is still there. */
@@ -56,7 +57,8 @@ let reportTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** What plays, to Cratarr; with the queue when it changed since the last report (or `withQueue`). */
 async function report(withQueue = false) {
-  if (!name || !target.connected) return;
+  // Not while the proxy refuses this page (lib/reach): each would be one more knock on a ban.
+  if (!name || !target.connected || refusedFor() > 0) return;
   // Tracks this page added itself get an entry, as the app gives them.
   for (const t of local.queue) if (!t.entry) t.entry = uuid();
   const key = local.queue.map((t) => t.entry).join(',');
@@ -102,6 +104,7 @@ async function report(withQueue = false) {
       body: JSON.stringify(body),
     });
     if (res.ok && queue) sentQueue = key;
+    if (res.status === 403 || res.status === 401) refused();
   } catch {
     /* the next report tries again */
   }
@@ -147,7 +150,7 @@ function connect() {
     if (es.readyState === EventSource.CLOSED) {
       target.connected = false;
       clearTimeout(retryTimer);
-      retryTimer = setTimeout(() => want() && connect(), retry);
+      retryTimer = setTimeout(() => want() && connect(), Math.max(retry, refusedFor()));
       retry = Math.min(retry * 2, 60_000);
     }
   };

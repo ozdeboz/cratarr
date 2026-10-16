@@ -1,6 +1,6 @@
 import { track } from './progress.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
-import { notReached, reached, unreached } from './reach.svelte';
+import { notReached, reached, refused, refusedFor, unreached } from './reach.svelte';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -112,6 +112,8 @@ function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** A request in the background (polling, checks while typing): no progress bar. */
 function quietly<T>(path: string, init?: RequestInit): Promise<T> {
+  // Not while a refusal holds them back (lib/reach): each would be one more knock on a ban.
+  if (refusedFor() > 0) return Promise.reject(new ApiError(UNREACHED));
   return fetchJson<T>(path, init);
 }
 
@@ -131,6 +133,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* no words from the server */
     }
+    if (!message && (res.status === 403 || res.status === 401)) refused();
     if (!message && notReached(res.status)) {
       unreached();
       throw new ApiError(UNREACHED);

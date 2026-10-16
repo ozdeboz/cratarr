@@ -7,7 +7,7 @@
 // at most six connections to a server, shared by all its tabs, and every open stream holds one for good (seen
 // 2026-10-13: six background tabs, and the Settings page never loaded).
 
-import { reach } from './reach.svelte';
+import { reach, refusedFor } from './reach.svelte';
 
 type Handler = (data: unknown) => void;
 
@@ -65,6 +65,12 @@ export function open(follow?: string) {
 }
 
 function connect(follow?: string) {
+  // Refused by the proxy a moment ago: again once that has passed (lib/reach), not before.
+  if (refusedFor() > 0) {
+    clearTimeout(retry);
+    retry = setTimeout(() => wanted && connect(follow), refusedFor());
+    return;
+  }
   const next = `/api/events${follow ? `?source=${encodeURIComponent(follow)}` : ''}`;
   if (source && url === next && source.readyState !== EventSource.CLOSED) return;
   clearTimeout(retry);

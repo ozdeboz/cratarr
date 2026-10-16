@@ -20,3 +20,17 @@ export function reached() {
 export function unreached() {
   reach.away = true;
 }
+
+/** After the proxy refused (403 without Cratarr's words: its intrusion blocker banned this address; 401: not signed
+ *  in), this long without any background request or reconnect: knocking on through a ban keeps it alive (2026-10-16:
+ *  the 403s the polling met while banned got the owner's phone banned again, for hours). */
+const REFUSED_MS = 5 * 60_000;
+let refusedUntil = 0;
+
+/** Whether a refusal holds the background requests back; how long still (ms). */
+export const refusedFor = () => Math.max(0, refusedUntil - Date.now());
+
+export function refused() {
+  refusedUntil = Date.now() + REFUSED_MS;
+  reach.away = true;
+}
