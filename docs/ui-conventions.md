@@ -126,6 +126,17 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   in Music, Cancel conversion while queued), each question asked in the sheet; Change cover on this device (a
   picture kept in this browser, shown wherever the album's cover is) and Read the cover again (or Use the server's
   cover); Remove resume point, Web search, Genius search.
+- **An artist's menu** (`lib/ArtistMenu.svelte`, the artist panel's ⋮, decided 2026-10-16) as the album's: the artist
+  with their heart, the large actions, Start radio, Add to playlist (all their tracks), Download, Share, and their
+  picture on this device. No Instant mix (the owner) and no rating.
+- **Keep on this device** (decision 0038, in the app): a switch entry (`MenuEntry`'s `switched`: the entry with a
+  switch at its end) in the album's, the artist's and the panel playlist's menu, beside Download (a one-time copy);
+  on a crate or a genre, an icon in its action bar, in the accent while kept.
+- **Add to playlist** (a track's, an album's, an artist's menu; `lib/PlaylistToggles`): the playlists as toggle cards
+  with the size buttons beside the heading (decided 2026-10-16): two bare icons, dimmed when they would change
+  nothing; one column by default, two when smaller, never three on a phone (three only on a wider sheet; a name wraps
+  to two lines); over them the lists' header (Name, Tracks, Ticked first, either way round; Ticked first by default).
+  Size and order are remembered apart from the Playlists page's; the orders are the page's (one function).
 - **Share** (track, album, one playlist): the item in words ("Artist – Title") and its link here, through the
   phone's share sheet (the app's in the app), else copied.
 - **A favourite album's cover** carries a small heart in its upper right corner, in the Library's rows and tiles.

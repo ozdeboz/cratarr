@@ -53,7 +53,7 @@ export class TracksToPlaylist {
     return !!this.first?.addable;
   }
   get playlists() {
-    return [...(this.first?.playlists ?? [])].sort((x, y) => x.name.localeCompare(y.name));
+    return this.first?.playlists ?? [];
   }
   /** Every track's state is known (until then no playlist is marked as holding them). */
   get known() {

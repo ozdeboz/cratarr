@@ -1,12 +1,19 @@
 // Display preferences: per browser, kept in localStorage (which may be unavailable; then defaults apply and nothing
 // is remembered). Server-wide settings live on the server, see Settings.svelte.
 
+import { LIST_WIDTHS } from './pageView.svelte';
+
 export type Theme = 'auto' | 'light' | 'dark';
 
 export type Prefs = {
   theme: Theme;
   /** Index into the playlist chip widths (Playlists.svelte). */
   zoom: number;
+  /** Index into a menu's playlists' widths (LIST_WIDTHS, Add to playlist): one column by default. */
+  listZoom: number;
+  /** A menu's playlists' order (its header, LIST_ORDERS), either way round. */
+  listOrder: PlaylistOrder;
+  listDown: boolean;
   /** Playlists the track is in come first. */
   showProgress: boolean;
   /** View's Dates: an album's date added as how long ago ("3 days ago"), not the date. */
@@ -58,6 +65,9 @@ export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
   zoom: 2,
+  listZoom: LIST_WIDTHS.length - 1,
+  listOrder: 'playing',
+  listDown: false,
   showProgress: true,
   relativeDates: false,
   source: '',
@@ -90,6 +100,7 @@ function read(): Prefs {
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
+      if (Number.isInteger(saved.listZoom) && saved.listZoom >= 0 && saved.listZoom < LIST_WIDTHS.length) p.listZoom = saved.listZoom;
       if (typeof saved.filterOpen === 'boolean') p.filterOpen = saved.filterOpen;
       if (typeof saved.relatedFilterOpen === 'boolean') p.relatedFilterOpen = saved.relatedFilterOpen;
       if (saved.albumLayout === 'rows' || saved.albumLayout === 'grid') p.albumLayout = saved.albumLayout;
@@ -97,6 +108,8 @@ function read(): Prefs {
       if (['artist', 'title', 'year', 'added'].includes(saved.libraryOrder)) p.libraryOrder = saved.libraryOrder;
       if (['artist', 'title', 'year', 'added'].includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
       if (['name', 'tracks', 'playing'].includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
+      if (['name', 'tracks', 'playing'].includes(saved.listOrder)) p.listOrder = saved.listOrder;
+      if (typeof saved.listDown === 'boolean') p.listDown = saved.listDown;
       // Before the list header: "✓ first" was the playlists' only other order.
       else if (saved.membersFirst === true) p.playlistOrder = 'playing';
       if (['own', 'name'].includes(saved.crateOrder)) p.crateOrder = saved.crateOrder;
