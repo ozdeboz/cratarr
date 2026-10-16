@@ -62,10 +62,15 @@ audio held in memory for a 4-minute track. On a phone that is not workable.
 **What it keeps per track**, in a catalogue table of its own (`analysis`: the track, the algorithm's version, then the
 values below). It is never written into the files.
 
-- **Waveform:** 256 values, one byte each. Each value is the RMS loudness of its stretch of the track, mapped from
-  −60…0 dBFS to 0–255. RMS, not peaks: a loud modern master drawn from peaks is a flat block.
-  - That is about 8 MB for the whole library.
-  - A player reduces the 256 values to the bars it draws.
+- **Waveform:** 512 values, one byte each. Each value is the RMS of its stretch of the track, linear, as 0–255 of
+  the track's loudest stretch. Its loudness is kept apart (below), so the bytes go to its shape.
+  - RMS, not peaks: a loud modern master's peaks are near full scale all through, so it would be a flat block.
+  - Linear, not in dB: a dB scale squeezes the shape too. Measured on four of the library's tracks, drawn as the
+    seekbar draws them (120 bars against the loudest): for a loud master, the bars at 90 % or more of the top were
+    87 % of them from peaks, 89 % from RMS in dB, 15 % from linear RMS. For the three others, linear RMS gave the most
+    shape too (2–18 % at the top, against 4–36 % from peaks and 31–45 % in dB).
+  - That is about 15 MB for the whole library.
+  - A player reduces the 512 values to the bars it draws.
 - **Tempo:** a BPM with a confidence, or **no tempo**. Beatless and ambient tracks, a good part of this library,
   get no tempo rather than a guess.
   - **A proven estimator is taken, not invented** (the owner's rule: copy, don't reinvent). First proposed: librosa
@@ -104,7 +109,7 @@ added). iTunes's `iTunNORM` is not read. The pass wins once it has a value, so e
 **Where it shows:**
 
 - `GET /api/track/{source}/{id}/waveform`, beside the other track routes (`/details`, `/playlists`) and resolved
-  through `track_of_source`, so Incoming's tracks have one too. It returns the 256 bytes, with an ETag and a long cache
+  through `track_of_source`, so Incoming's tracks have one too. It returns the 512 bytes, with an ETag and a long cache
   life.
   - The web player and the app draw the seekbar from it.
   - A Cratarr OpenSubsonic extension may offer it to Subsonic apps.
