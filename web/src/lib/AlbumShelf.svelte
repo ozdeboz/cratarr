@@ -53,6 +53,79 @@
     pageView.width = width;
   });
   let noCover = $state<Record<string, boolean>>({});
+
+  // Only what is near is made (2026-10-16: the whole Library at once hung the app). Each server's albums are cut into
+  // blocks of whole grid rows, each its own grid, so the columns line up from block to block. A block is made while it
+  // is within a screen of what shows, else it is an empty box as tall as it was when last made (an estimate before
+  // that), so the page keeps its length and the scroll does not jump. Watched against the box that scrolls (a margin
+  // reaches no further than the box that clips it).
+  const GAP = 10;
+  const ROWS_PER_BLOCK = 8;
+  const minPx = $derived(ALBUM_WIDTHS[prefs.albumLayout][prefs.albumZoom]);
+  const cols = $derived(Math.max(1, Math.floor((width + GAP) / (minPx + GAP))));
+  const perBlock = $derived(cols * ROWS_PER_BLOCK);
+  const blocksOf = (albums: ListedAlbum[]) => {
+    const out: ListedAlbum[][] = [];
+    for (let i = 0; i < albums.length; i += perBlock) out.push(albums.slice(i, i + perBlock));
+    return out;
+  };
+  /** Blocks within reach (made), and each block's height and rows when last made, by key. */
+  let near = $state<Record<string, boolean>>({});
+  let heights = $state<Record<string, number>>({});
+  const rowsOf: Record<string, number> = {};
+  /** A grid row's height as the blocks made so far measure it, else a row's usual height (a tile: its column's width
+   *  and two lines), for the blocks not made yet. */
+  const rowHeight = $derived.by(() => {
+    let h = 0;
+    let n = 0;
+    const tail = `:${perBlock}:${prefs.albumLayout}:`;
+    for (const [key, height] of Object.entries(heights)) {
+      if (!key.includes(tail) || !rowsOf[key]) continue;
+      h += height - (rowsOf[key] - 1) * GAP;
+      n += rowsOf[key];
+    }
+    if (n) return h / n;
+    return prefs.albumLayout === 'grid' ? (width - GAP * (cols - 1)) / cols + 64 : 90;
+  });
+  const estimate = (n: number) => {
+    const rows = Math.ceil(n / cols);
+    return rows * rowHeight + (rows - 1) * GAP;
+  };
+  const scrollerOf = (node: Element): Element | null => {
+    for (let el = node.parentElement; el; el = el.parentElement) {
+      const o = getComputedStyle(el).overflowY;
+      if (o === 'auto' || o === 'scroll') return el;
+    }
+    return null;
+  };
+  let seen: IntersectionObserver | null = null;
+  const sized = new ResizeObserver((entries) => {
+    for (const e of entries) {
+      const key = (e.target as HTMLElement).dataset.key!;
+      if (near[key] && e.contentRect.height > 0) heights[key] = e.contentRect.height;
+    }
+  });
+  /** Watches a block: made while near, measured while made. */
+  const watch = (key: string, rows: number) => (node: HTMLElement) => {
+    rowsOf[key] = rows;
+    seen ??= new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) near[(e.target as HTMLElement).dataset.key!] = e.isIntersecting;
+      },
+      { root: scrollerOf(node), rootMargin: '100% 0px' },
+    );
+    node.dataset.key = key;
+    seen.observe(node);
+    sized.observe(node);
+    return () => {
+      seen?.unobserve(node);
+      sized.unobserve(node);
+    };
+  };
+  $effect(() => () => {
+    seen?.disconnect();
+    sized.disconnect();
+  });
   // What is playing (the shell polls it), so the album being listened to stands out.
   const playing = $derived(nowPlaying());
   let menu = $state<{ source: ShelfSource; a: ListedAlbum; anchor: DOMRect } | null>(null);
@@ -199,8 +272,13 @@
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
       />
-      <ul class={prefs.albumLayout} style:--min="{ALBUM_WIDTHS[prefs.albumLayout][prefs.albumZoom]}px">
-        {#each albums as a (a.id)}
+      {#each blocksOf(albums) as block, bi (`${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`)}
+        {@const key = `${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`}
+        {@const made = near[key] ?? bi === 0}
+        <div class="block" {@attach watch(key, Math.ceil(block.length / cols))} style:height={made ? null : `${heights[key] ?? estimate(block.length)}px`}>
+          {#if made}
+      <ul class={prefs.albumLayout} style:--min="{minPx}px">
+        {#each block as a (a.id)}
           {@const here = playing?.album_id === a.id}
           {@const viewed = panel.viewed === albumSubject(s.id, a.id)}
           {@const on = !!selecting && selecting.has(keyOf(s, a))}
@@ -257,6 +335,9 @@
           </li>
         {/each}
       </ul>
+          {/if}
+        </div>
+      {/each}
     {/if}
   {/each}
   {#if selecting}
@@ -364,7 +445,7 @@
     color: var(--danger);
   }
 
-  /* In columns, as the playlist chips are (lib/zoom.ts). The browser skips laying out what is off screen. */
+  /* In columns, as the playlist chips are (lib/zoom.ts). */
   ul {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr));
@@ -376,15 +457,11 @@
 
   li {
     min-width: 0;
-    content-visibility: auto;
   }
 
-  ul.rows li {
-    contain-intrinsic-size: auto 96px;
-  }
-
-  ul.grid li {
-    contain-intrinsic-size: auto calc(var(--min) + 60px);
+  /* A block of whole grid rows (made while near, else an empty box its height); the grid's gap between blocks too. */
+  .block + .block {
+    margin-top: 10px;
   }
 
   .cover {
