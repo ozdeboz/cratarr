@@ -30,7 +30,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
 
     /** The sleep timer changed (set, or done): the page is told. Held here, as Android keeps listeners only weakly. */
     private val sleepChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == Prefs.SLEEP || key == Prefs.RADIO_ON || key == Prefs.RADIO_BY || key == Prefs.RADIO_COUNT || key == Prefs.AUTOPLAY) report()
+        if (key == Prefs.SLEEP || key == Prefs.RADIO_ON || key == Prefs.RADIO_BY || key == Prefs.RADIO_COUNT || key == Prefs.AUTOPLAY || key == Prefs.SKIP_FAVOURITES) report()
     }
 
     init {
@@ -79,6 +79,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             // Kept and filled by the service (Radio); the change reaches the page as a report.
             "radio" -> Radio.command(context, c, m)
             "autoplay" -> Autoplay.command(context, c, m)
+            "skip_favourites" -> SkipFavourites.set(context, c, m.optBoolean("on"))
             "seek" -> c.seekTo(m.optLong("positionMs"))
             "preview" -> preview(m.optJSONObject("track"), m.optLong("positionMs"))
             "preview-end" -> previewEnd()
@@ -136,6 +137,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("radio", Radio.on(context))
             .put("radioBy", Radio.by(context))
             .put("radioCount", Radio.count(context))
+            .put("skipFavourites", SkipFavourites.on(context))
             .put("autoplay", Autoplay.json(context))
         if (withQueue) out.put("queue", queueOf(c))
         send(out.toString())

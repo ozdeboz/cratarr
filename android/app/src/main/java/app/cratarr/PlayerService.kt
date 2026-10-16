@@ -59,7 +59,7 @@ class PlayerService : MediaSessionService() {
         }
         // Radio or Autoplay set (here, by the page or by Cratarr): Cratarr is told; the playing track gets its inserts,
         // the queue its next ones when it runs low.
-        if (key == Prefs.RADIO_ON || key == Prefs.RADIO_BY || key == Prefs.RADIO_COUNT || key == Prefs.AUTOPLAY) {
+        if (key == Prefs.RADIO_ON || key == Prefs.RADIO_BY || key == Prefs.RADIO_COUNT || key == Prefs.AUTOPLAY || key == Prefs.SKIP_FAVOURITES) {
             link?.sleepChanged()
             Radio.insert(this, player, prefs.serverUrl, ::located)
             Autoplay.fill(this, player, prefs.serverUrl, ::located)

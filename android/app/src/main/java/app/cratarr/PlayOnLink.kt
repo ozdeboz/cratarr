@@ -263,6 +263,7 @@ class PlayOnLink(
             )
             "radio" -> Radio.command(service, p, m)
             "autoplay" -> Autoplay.command(service, p, m)
+            "skip_favourites" -> SkipFavourites.set(service, p, m.optBoolean("on"))
             "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))
             "volume" -> {
                 val v = m.optInt("level", 100).coerceIn(0, 100) / 100f
@@ -380,6 +381,7 @@ class PlayOnLink(
             .put("radio", Radio.on(service))
             .put("radio_by", Radio.by(service))
             .put("radio_count", Radio.count(service))
+            .put("skip_favourites", SkipFavourites.on(service))
             .put("autoplay", Autoplay.json(service))
             // Leading a group, where it is heard: a buffer behind this player.
             .put("position_ms", sync.heardPosition(p).coerceAtLeast(0))

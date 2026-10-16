@@ -86,6 +86,13 @@ class Prefs(context: Context) {
             p.edit().putInt(RADIO_COUNT, value.coerceIn(1, Radio.MAX)).apply()
         }
 
+    /** Ignore favourites (SkipFavourites): Radio's inserts and Autoplay's picks leave the hearted tracks out. */
+    var skipFavourites: Boolean
+        get() = p.getBoolean(SKIP_FAVOURITES, false)
+        set(value) {
+            p.edit().putBoolean(SKIP_FAVOURITES, value).apply()
+        }
+
     /** Autoplay (Autoplay), as `{"mode", "albums", "restart", "seed", "within"}`; null while it is off. */
     var autoplay: Autoplay.State?
         get() = p.getString(AUTOPLAY, null)?.let {
@@ -143,6 +150,7 @@ class Prefs(context: Context) {
         const val RADIO_ON = "radio_on"
         const val RADIO_BY = "radio_by"
         const val RADIO_COUNT = "radio_count"
+        const val SKIP_FAVOURITES = "skip_favourites"
         const val AUTOPLAY = "autoplay"
         private const val OLD_RADIO = "radio"
         const val SLEEP = "sleep"

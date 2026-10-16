@@ -70,6 +70,24 @@ private object Scorer {
     }
 }
 
+/**
+ * Ignore favourites (decision 0036, amended; the owner's): Radio's inserts and Autoplay's picks leave out every track the
+ * owner hearted (Cratarr's scorer does, told with each ask; without a connection the downloads are chosen from as they
+ * are). Changed, both lanes' tracks still to come go, and both choose anew: the prefs' change tells the service.
+ */
+object SkipFavourites {
+    fun on(context: Context): Boolean = Prefs(context).skipFavourites
+
+    fun set(context: Context, player: Player, on: Boolean) {
+        val prefs = Prefs(context)
+        if (prefs.skipFavourites == on) return
+        Scorer.dropAhead(player, Radio.LANE)
+        Scorer.dropAhead(player, Autoplay.LANE)
+        Radio.forget()
+        prefs.skipFavourites = on
+    }
+}
+
 object Radio {
     const val LANE = "radio"
     /** Inserts after each own track unless told; at most [MAX]. */
@@ -96,6 +114,11 @@ object Radio {
             Scorer.dropAhead(player, LANE)
             asking = null
         }
+    }
+
+    /** The playing track asked for no more: it gets its inserts anew. */
+    fun forget() {
+        asking = null
     }
 
     /** As reports and the page say it. */
@@ -135,9 +158,11 @@ object Radio {
         if (asking == key || placeFor(player) == null) return
         val queue = Scorer.tracksOf(player)
         val (by, n) = by(context) to count(context)
+        val skip = SkipFavourites.on(context)
         val ask = JSONObject()
             .put("mode", LANE)
             .put("by", by)
+            .put("skip_favourites", skip)
             .put("seed", JSONArray(listOf(playing.optString("id"))))
             .put("exclude", JSONArray(queue.map { it.optString("id") }))
             .put("last", playing.optString("id"))
@@ -150,7 +175,7 @@ object Radio {
             Scorer.main.post {
                 if (asking == key) asking = null
                 // Still on as asked, still that track, still without its inserts.
-                if (!on(app) || by(app) != by || count(app) != n || got.length() == 0) return@post
+                if (!on(app) || by(app) != by || count(app) != n || SkipFavourites.on(app) != skip || got.length() == 0) return@post
                 val now = player.currentMediaItem?.let(::trackOf)?.optString("entry")?.ifEmpty { null } ?: "${player.currentMediaItemIndex}"
                 if (now != key) return@post
                 val at = placeFor(player) ?: return@post
@@ -244,8 +269,10 @@ object Autoplay {
             return
         }
         val playing = queue.getOrNull(c)
+        val skip = SkipFavourites.on(context)
         val ask = JSONObject()
             .put("mode", a.mode)
+            .put("skip_favourites", skip)
             .put("albums", a.albums)
             .put("seed", JSONArray(a.seed.ifEmpty { own.map { it.optString("id") } }))
             .put("within", a.within ?: JSONObject.NULL)
@@ -262,7 +289,11 @@ object Autoplay {
             val got = server?.let { Scorer.ask(it, ask) } ?: Scorer.offline(app, queue, artists, a.mode == "random", BATCH, LANE)
             Scorer.main.post {
                 filling = false
-                if (get(app) == null || got.length() == 0) return@post
+                // Off meanwhile, or asked before favourites were ignored (or no longer): what came is not wanted.
+                if (get(app) == null || SkipFavourites.on(app) != skip || got.length() == 0) {
+                    if (SkipFavourites.on(app) != skip) fill(app, player, server, locate)
+                    return@post
+                }
                 player.addMediaItems(mediaItems(got).map(locate))
             }
         }
