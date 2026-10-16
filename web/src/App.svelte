@@ -120,7 +120,9 @@
     void page;
     pageView.query = '';
   });
-  const pillDevice = $derived(!playing() && !(sidebar && panelShowsPlayer()));
+  // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
+  const panelDevice = $derived(sidebar && panel.viewed !== null && !panelShowsPlayer() && !settingsShown);
+  const pillDevice = $derived(!playing() && !(sidebar && panelShowsPlayer()) && !panelDevice);
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
   // the one the app opened with.
   let navAt = $state(0);
