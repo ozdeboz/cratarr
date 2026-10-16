@@ -53,6 +53,7 @@
     keepDraft,
     keptDraft,
     loadCrates,
+    startCrate,
     viewGenre,
     type CrateDraft,
   } from './crates.svelte';
@@ -1013,7 +1014,18 @@
             >
           {/if}
           {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => viewPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
-          <button class="icon" aria-label="Make playlist" title="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
+          {@const genre = genreOf(crate)}
+          {#if genre !== null}
+            <!-- A genre (the owner): a crate of one's own starts from it, its one condition in place, to narrow further. -->
+            <button
+              class="icon"
+              aria-label="Start a crate"
+              title="Start a crate"
+              onclick={() => startCrate(genre, [{ axis: 'genre', not: false, value: { kind: 'any_of', values: [genre] } }])}><Icon name="crates" size={22} /></button
+            >
+          {:else}
+            <button class="icon" aria-label="Make playlist" title="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
+          {/if}
         {:else if album}
           <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (albumMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
