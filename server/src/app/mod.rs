@@ -12,6 +12,7 @@
 //! - `settings`: the Settings page.
 
 mod albums;
+pub mod analysis_pass;
 pub mod analysis_import;
 mod collection;
 mod error;

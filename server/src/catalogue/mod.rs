@@ -1272,6 +1272,15 @@ impl Catalogue {
             .collect()
     }
 
+    /// A file's genre tags as read, in order (the analysis' tempo rules). Blocking.
+    pub fn genres_of_file(&self, folder: i64, rel: &str) -> Vec<String> {
+        let db = self.db();
+        let Ok(mut st) = db.prepare_cached("SELECT value FROM tags WHERE folder = ?1 AND rel = ?2 AND name = 'genre' ORDER BY n") else {
+            return Vec::new();
+        };
+        st.query_map(params![folder, rel], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()).unwrap_or_default()
+    }
+
     /// A file's length as read from it (milliseconds), when known.
     pub fn duration_of(&self, folder: i64, rel: &str) -> Option<u64> {
         self.db()

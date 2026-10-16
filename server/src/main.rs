@@ -146,6 +146,9 @@ async fn main() -> Result<()> {
     let linker = app.clone();
     tokio::spawn(catalogue::run(app.library.catalogue(), move || linker.library.connected_sources()));
 
+    // Decision 0035: the NAS keeps the analysis up to date (after the ThinkBook's first pass, or all of it).
+    app::analysis_pass::run(app.library.catalogue(), app::analysis_pass::Mode::from_env(env("CRATARR_ANALYSIS").as_deref()));
+
     // The crates' favourites are asked for once at start, as the media server may take a minute (decision 0024).
     let warm = app.clone();
     tokio::spawn(async move { warm.playlists.warm_favourites().await });
