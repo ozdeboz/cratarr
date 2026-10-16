@@ -82,7 +82,10 @@ object Downloads {
     }
 
     /** Over Wi-Fi only, unless the owner allows mobile data. */
-    fun requirements(prefs: Prefs) = Requirements(if (prefs.downloadOverMobile) Requirements.NETWORK else Requirements.NETWORK_UNMETERED)
+    fun requirements(prefs: Prefs) = Requirements(
+        (if (prefs.downloadOverMobile) Requirements.NETWORK else Requirements.NETWORK_UNMETERED) or
+            (if (prefs.syncOnlyCharging) Requirements.DEVICE_CHARGING else 0),
+    )
 
     /** A track's id in the store and in the download index: `source/id`, as its media item's. */
     private fun keyOf(track: JSONObject) = "${Uri.encode(track.optString("source"))}/${Uri.encode(track.optString("id"))}"
@@ -94,6 +97,7 @@ object Downloads {
         val copies = prefs.downloadQuality == Prefs.QUALITY_SMALLER
         // The order they were given in, kept: an album's tracks list as the album runs.
         val added = System.currentTimeMillis() * 1000
+        val held = mutableListOf<String>()
         for (i in 0 until tracks.length()) {
             val t = tracks.optJSONObject(i) ?: continue
             if (t.optString("source").isEmpty() || t.optString("id").isEmpty()) continue
@@ -106,14 +110,16 @@ object Downloads {
                 .setData(JSONObject(t.toString()).apply { remove("entry"); put("added", added + i) }.toString().toByteArray())
                 .build()
             DownloadService.sendAddDownload(context, CratarrDownloadService::class.java, request, false)
+            held.add(key)
         }
+        // The owner's from now on, whatever kept item also holds them (decision 0038).
+        Kept.holdManual(context, held)
     }
 
-    fun remove(context: Context, ids: List<String>) {
-        for (id in ids) DownloadService.sendRemoveDownload(context, CratarrDownloadService::class.java, id, false)
-    }
+    /** The owner's downloads go; a track a kept item holds stays (decision 0038). */
+    fun remove(context: Context, ids: List<String>) = Kept.releaseManual(context, ids, all = false)
 
-    fun removeAll(context: Context) = DownloadService.sendRemoveAllDownloads(context, CratarrDownloadService::class.java, false)
+    fun removeAll(context: Context) = Kept.releaseManual(context, emptyList(), all = true)
 
     /** The owner's downloads, for the page: each track as it was given, with `download` (its id, state, size). */
     fun list(context: Context): JSONObject {

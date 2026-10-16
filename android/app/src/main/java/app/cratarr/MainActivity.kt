@@ -81,11 +81,16 @@ class MainActivity : AppCompatActivity() {
 
     /** The downloads' progress goes to the page as it changes, a second apart at most. */
     private val downloadsChanged = object : DownloadManager.Listener {
-        override fun onDownloadChanged(manager: DownloadManager, download: Download, finalException: Exception?) = tellDownloads()
+        override fun onDownloadChanged(manager: DownloadManager, download: Download, finalException: Exception?) {
+            tellDownloads()
+            tellKept()
+        }
         override fun onDownloadRemoved(manager: DownloadManager, download: Download) = tellDownloads()
     }
     private var downloadsTold = 0L
     private var downloadsPending = false
+    private var keptTold = 0L
+    private var keptPending = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,6 +138,10 @@ class MainActivity : AppCompatActivity() {
         addSettingsShortcut()
         askForNotifications()
         Downloads.manager(this).addListener(downloadsChanged)
+        // Kept on this device (decision 0038): in step now, and every few hours from here on.
+        Kept.onChange = { runOnUiThread { tellKept() } }
+        Kept.schedule(this)
+        Kept.sync(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -246,9 +255,15 @@ class MainActivity : AppCompatActivity() {
                     PlayerService.ready(this)
                 }
                 message.optString("downloadQuality").takeIf { it.isNotEmpty() }?.let { prefs.downloadQuality = it }
-                if (message.has("downloadOverMobile")) {
-                    prefs.downloadOverMobile = message.optBoolean("downloadOverMobile")
+                if (message.has("downloadOverMobile") || message.has("syncOnlyCharging")) {
+                    if (message.has("downloadOverMobile")) prefs.downloadOverMobile = message.optBoolean("downloadOverMobile")
+                    if (message.has("syncOnlyCharging")) prefs.syncOnlyCharging = message.optBoolean("syncOnlyCharging")
                     Downloads.manager(this).requirements = Downloads.requirements(prefs)
+                    Kept.schedule(this)
+                }
+                if (message.has("syncBudgetGb")) {
+                    prefs.syncBudgetGb = message.optLong("syncBudgetGb", 20L)
+                    Kept.sync(this)
                 }
                 // Another server: switched to once it answers, so a stray edit does not take the app off its server
                 // (the field shows the address in use again).
@@ -272,6 +287,17 @@ class MainActivity : AppCompatActivity() {
                 tellDownloads()
             }
             "downloads" -> tellDownloads(now = true)
+            // Kept on this device (decision 0038).
+            "kept" -> tellKept(now = true)
+            "kept-set" -> {
+                val kind = message.optString("kind")
+                val source = message.optString("source")
+                val id = message.optString("id")
+                if (kind in setOf("album", "playlist", "crate", "artist") && source.isNotEmpty() && id.isNotEmpty()) {
+                    Kept.set(this, kind, source, id, message.optString("name"), message.optBoolean("on"))
+                }
+            }
+            "kept-sync" -> Kept.sync(this, retryFailed = true)
             "download-remove" -> {
                 if (message.optBoolean("all")) {
                     Downloads.removeAll(this)
@@ -309,7 +335,23 @@ class MainActivity : AppCompatActivity() {
         .put("batteryAllowed", getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
         .put("downloadQuality", prefs.downloadQuality)
         .put("downloadOverMobile", prefs.downloadOverMobile)
+        .put("syncBudgetGb", prefs.syncBudgetGb)
+        .put("syncOnlyCharging", prefs.syncOnlyCharging)
         .toString()
+
+    /** The kept items' progress (decision 0038), read off the main thread, to the page; changes close together go as one. */
+    private fun tellKept(now: Boolean = false) {
+        if (page == null || keptPending) return
+        val wait = if (now) 0L else (1_000L - (System.currentTimeMillis() - keptTold)).coerceAtLeast(0L)
+        keptPending = true
+        lifecycleScope.launch {
+            delay(wait)
+            val report = withContext(Dispatchers.IO) { Kept.report(this@MainActivity).toString() }
+            keptPending = false
+            keptTold = System.currentTimeMillis()
+            page?.postMessage(report)
+        }
+    }
 
     /** The downloads, read off the main thread, to the page; changes close together go as one. */
     private fun tellDownloads(now: Boolean = false) {
