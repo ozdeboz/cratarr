@@ -69,6 +69,24 @@ pub struct Analysis {
     pub bpm_confidence: f32,
     /// `WAVEFORM_BINS` bins, each its stretch's RMS (linear), 0..=255 of the track's loudest bin.
     pub waveform: Vec<u8>,
+    /// Whether the decoder gave the sound of the whole stream the reader walked (at least `COMPLETE` of it). Some
+    /// files decode only in part (Symphonia's FLAC reader takes one frame in eight of some files; an MP3 whose format
+    /// changes mid-stream stops decoding there), and then the length, loudness, tempo and waveform describe only that
+    /// part. `None`: not known (analysed before this was recorded, or the stream has no time base).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complete: Option<bool>,
+}
+
+/// The share of the walked stream the decoded sound must cover to count as complete. Below 1 for what decoders
+/// rightly drop: an encoder's delay and padding.
+const COMPLETE: f64 = 0.97;
+
+/// Whether `frames` decoded frames cover a stream the reader walked to `walked` (in `time_base` units, numerator over
+/// denominator seconds) at `rate` frames a second.
+fn covered(frames: u64, walked: u64, time_base: Option<(u32, u32)>, rate: u32) -> Option<bool> {
+    let (numer, denom) = time_base?;
+    let walked_frames = walked as f64 * f64::from(numer) / f64::from(denom) * f64::from(rate);
+    (walked_frames > 0.0).then(|| frames as f64 >= COMPLETE * walked_frames)
 }
 
 /// Gating blocks by loudness: (bin, count), bin `i` covering LOWEST + i * 0.1 LUFS; only bins that hold any.
@@ -160,6 +178,8 @@ struct Opened {
     track: u32,
     rate: u32,
     channels: usize,
+    /// The track's time base (numerator, denominator), which packets' times are in.
+    time_base: Option<(u32, u32)>,
 }
 
 fn open_from(path: &Path, start: u64) -> Result<Opened> {
@@ -175,13 +195,14 @@ fn open_from(path: &Path, start: u64) -> Result<Opened> {
     let track = reader.default_track(TrackType::Audio).context("no audio track")?;
     let params = track.codec_params.as_ref().and_then(|p| p.audio()).cloned().context("no audio parameters")?;
     let id = track.id;
+    let time_base = track.time_base.map(|tb| (tb.numer.get(), tb.denom.get()));
     let decoder = symphonia::default::get_codecs().make_audio_decoder(&params, &AudioDecoderOptions::default())?;
     let rate = params.sample_rate.context("the sample rate is unknown")?;
     let channels = params.channels.as_ref().map(|c| c.count()).context("the channels are unknown")?;
     if channels == 0 || rate < 8_000 {
         bail!("{channels} channels at {rate} Hz");
     }
-    Ok(Opened { reader, decoder, track: id, rate, channels })
+    Ok(Opened { reader, decoder, track: id, rate, channels, time_base })
 }
 
 /// Opens the file; one that does not probe is tried again after its ID3v2 tag.
@@ -261,6 +282,8 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
     let mut ear = taktus::Ear::new(o.rate);
     let mut onsets: Vec<f32> = Vec::new();
     let mut frames = 0u64;
+    // How far the reader walked the stream (the end of its last packet), against which `frames` is measured.
+    let mut walked = 0u64;
     let mut scratch: Vec<Vec<f32>> = Vec::new();
 
     let mut feed = |planes: &[Vec<f32>], r128: &mut ebur128::EbuR128, pending: &mut Vec<Vec<f32>>| -> Result<()> {
@@ -295,6 +318,7 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
         if packet.track_id != o.track {
             continue;
         }
+        walked = walked.max((packet.pts.get().max(0) as u64).saturating_add(packet.dur.get()));
         let decoded = match o.decoder.decode(&packet) {
             Ok(d) => d,
             // A damaged frame of a lossy file: skipped, as a player skips it.
@@ -358,6 +382,7 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
         bpm,
         bpm_confidence,
         waveform,
+        complete: covered(frames, walked, o.time_base, o.rate),
     })
 }
 
@@ -385,6 +410,33 @@ fn bin_waveform(squares: &[f32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_is_measured_against_what_the_reader_walked() {
+        // The two cases found in the library (2026-10-17), in 1/44100 s units: a FLAC whose reader walked 5,999,364
+        // frames while 732,672 decoded, an MP3 walked to 23,115,311 and decoded to 9,361,199; and a whole decode.
+        let cd = Some((1, 44_100));
+        assert_eq!(covered(732_672, 5_999_364, cd, 44_100), Some(false));
+        assert_eq!(covered(9_361_199, 23_115_311, cd, 44_100), Some(false));
+        assert_eq!(covered(5_999_364, 5_999_364, cd, 44_100), Some(true));
+        // An encoder's delay and padding are not missing sound.
+        assert_eq!(covered(5_999_364 - 2_000, 5_999_364, cd, 44_100), Some(true));
+        // Another time base: milliseconds, at 48 kHz.
+        assert_eq!(covered(48_000 * 200, 200_000, Some((1, 1_000)), 48_000), Some(true));
+        assert_eq!(covered(48_000 * 100, 200_000, Some((1, 1_000)), 48_000), Some(false));
+        // Not known without a time base or a walk.
+        assert_eq!(covered(100, 1_000, None, 44_100), None);
+        assert_eq!(covered(100, 0, cd, 44_100), None);
+    }
+
+    #[test]
+    fn an_analysis_from_before_complete_was_recorded_reads_as_not_known() {
+        let mut a = analyse(&wav("old-line", 1.0, |t| 0.2 * (2.0 * std::f64::consts::PI * 440.0 * t).sin() as f32), &[]).unwrap();
+        let line = serde_json::to_string(&Analysis { complete: None, ..a.clone() }).unwrap();
+        assert!(!line.contains("complete"), "an unknown is left out of a line");
+        a.complete = None;
+        assert_eq!(serde_json::from_str::<Analysis>(&line).unwrap(), a);
+    }
 
     /// A 16-bit stereo WAV of `secs` seconds at 44.1 kHz, each sample from `f(t)`.
     pub(super) fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> std::path::PathBuf {
@@ -423,6 +475,7 @@ mod tests {
         let a = analyse(&path, &[]).unwrap();
         std::fs::remove_file(&path).ok();
         assert!((a.duration_secs - 10.0).abs() < 0.01, "{}", a.duration_secs);
+        assert_eq!(a.complete, Some(true), "a whole decode");
         assert!((a.loudness_lufs + 20.0).abs() < 0.5, "{}", a.loudness_lufs);
         assert!((a.track_gain_db - (-18.0 - a.loudness_lufs)).abs() < 1e-4);
         assert!((a.track_peak - 0.1).abs() < 0.005, "{}", a.track_peak);

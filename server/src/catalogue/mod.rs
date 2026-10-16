@@ -79,13 +79,15 @@ const GENERATION: &str = "generation";
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 5] = [
+const ADDED_COLUMNS: [(&str, &str); 6] = [
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
     ("files", "track INTEGER"),
     ("files", "gone_at INTEGER"),
     ("files", "trashed TEXT"),
+    // Decision 0035: whether the analysis decoded the whole stream (NULL: not known, analysed before it was recorded).
+    ("analysis", "complete INTEGER"),
 ];
 
 /// File states.
@@ -1697,7 +1699,7 @@ pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
 
 // The analysis' columns as `analysis_row` reads them (the struct's order).
 const ANALYSIS_COLS: &str =
-    "a.version, a.duration_secs, a.loudness_lufs, a.track_gain_db, a.track_peak, a.blocks, a.bpm, a.bpm_confidence, a.waveform";
+    "a.version, a.duration_secs, a.loudness_lufs, a.track_gain_db, a.track_peak, a.blocks, a.bpm, a.bpm_confidence, a.waveform, a.complete";
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -1706,8 +1708,8 @@ fn now_secs() -> i64 {
 fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64, a: &crate::analysis::Analysis, now: i64) -> Result<()> {
     db.prepare_cached(
         "INSERT OR REPLACE INTO analysis (folder, rel, size, mtime, version, duration_secs, loudness_lufs, track_gain_db,
-           track_peak, bpm, bpm_confidence, waveform, blocks, analysed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+           track_peak, bpm, bpm_confidence, waveform, blocks, analysed_at, complete)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
     )?
     .execute(params![
         folder,
@@ -1723,7 +1725,8 @@ fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64
         a.bpm_confidence,
         a.waveform,
         serde_json::to_string(&a.blocks)?,
-        now
+        now,
+        a.complete
     ])?;
     Ok(())
 }
@@ -1745,6 +1748,7 @@ fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::anal
         bpm: r.get::<_, Option<f64>>(at + 6)?.map(|b| b as f32),
         bpm_confidence: r.get::<_, Option<f64>>(at + 7)?.unwrap_or(0.0) as f32,
         waveform: r.get::<_, Option<Vec<u8>>>(at + 8)?.unwrap_or_default(),
+        complete: r.get(at + 9)?,
     })
 }
 
@@ -1848,6 +1852,7 @@ mod tests {
             bpm: Some(120.0),
             bpm_confidence: 0.9,
             waveform: vec![7; crate::analysis::WAVEFORM_BINS],
+            complete: Some(true),
         }
     }
 
@@ -1864,6 +1869,10 @@ mod tests {
         cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
         let back = cat.analysis_of(folder, &one).unwrap();
         assert_eq!((back.track_gain_db, back.bpm, back.waveform.len(), back.blocks.0.clone()), (-3.0, Some(120.0), 512, vec![(500, 40)]));
+        assert_eq!(back.complete, Some(true));
+        // Not known, as for an analysis from before it was recorded, stays not known.
+        cat.store_analysis(folder, &one, size, mtime, &crate::analysis::Analysis { complete: None, ..an_analysis(-3.0, 500) }).unwrap();
+        assert_eq!(cat.analysis_of(folder, &one).unwrap().complete, None);
         assert_eq!(cat.analysis_counts().unwrap(), (1, 2));
         // The crates' BPM range finds it by its analysis (the file has no BPM tag).
         assert_eq!(cat.crate_facts(folder).unwrap().iter().find(|f| f.rel == one).unwrap().bpm, Some(120.0));

@@ -250,3 +250,13 @@ a speed-up, and the NAS's own pass is the fallback when the ThinkBook is not at 
   - claude-5f: the seekbars (the web player's NowPlaying, the app), the players' levelling, the Opus copies' gain
     tags;
   - claude-a5: the OpenSubsonic fields (`bpm`, `replayGain`), and reading the files' gain tags into the catalogue.
+
+## Amendment, 2026-10-17: whether a decode was whole
+
+Of the whole library's first pass, 14 files decoded only in part: Symphonia's FLAC reader takes one frame in eight
+of one album's files (its reader walks the whole stream, the decoder gets every eighth frame), and an MP3 whose
+format changes mid-stream stops decoding there while ffmpeg plays on. Their length, loudness, tempo and waveform then
+describe only that part. An analysis now says whether its decode covered at least 97% of what the reader walked (the
+end of its last packet; not the header's length, which is what lies for other files). Older analyses read as not
+known. Only a complete analysis' length may be served in place of the header's; the files that decode in part are
+analysed again from a whole decode by another decoder.
