@@ -24,6 +24,7 @@ mod playlists;
 mod playon;
 mod plays;
 mod queue;
+pub mod radio;
 mod settings;
 mod shelf;
 mod sync;

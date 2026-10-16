@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
 use super::playon::{Command, QueueTrack, shuffled};
+use super::radio::{LANE_RADIO, Radio};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Queue {
@@ -18,6 +19,9 @@ pub struct Queue {
     /// Repeat (decision 0033, amended): a setting of the queue; the player that plays applies it when a track ends.
     #[serde(default)]
     pub repeat: Repeat,
+    /// Radio (decision 0036): on while there is one; the player that plays fills its lane. Excludes repeat all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radio: Option<Radio>,
 }
 
 /// Off: the queue ends. One: the playing track starts again. All: after the last track the album or playlist starts
@@ -115,6 +119,18 @@ impl Queue {
         self.tracks.iter().skip(c + 1).take_while(|t| t.lane.as_deref() == Some(LANE_NEXT)).cloned().collect()
     }
 
+    /// The radio's tracks still to come, out (radio going off, repeat all coming on): `true` when there were any.
+    fn drop_radio_ahead(&mut self, current: Option<usize>) -> bool {
+        let keep = current.map_or(0, |c| c + 1).min(self.tracks.len());
+        let before = self.tracks.len();
+        let mut i = 0;
+        self.tracks.retain(|t| {
+            i += 1;
+            i <= keep || t.lane.as_deref() != Some(LANE_RADIO)
+        });
+        self.tracks.len() != before
+    }
+
     /// `edit_at` with no track playing.
     #[cfg(test)]
     pub fn edit(&mut self, command: Command) -> Result<Command, ToggleError> {
@@ -137,6 +153,11 @@ impl Queue {
                 // Something new turns repeat one off; repeat all stays (decision 0033, amended, rule 4).
                 if self.repeat == Repeat::One {
                     self.repeat = Repeat::Off;
+                }
+                // The radio stays on, now after the new album or playlist: that is its seed (decision 0036). Its old
+                // tracks went with the rest of the old queue.
+                if let Some(r) = &mut self.radio {
+                    r.seed.clear();
                 }
                 Command::Play { from, tracks: Some(self.tracks.clone()), index, position_ms, shuffle, paused }
             }
@@ -193,13 +214,15 @@ impl Queue {
             Command::Shuffle { on } => {
                 let c = current.filter(|c| *c < self.tracks.len()).ok_or_else(|| ToggleError::Refused("Nothing plays.".into()))?;
                 let ahead = self.added_ahead(Some(c));
-                let mut rest = self.tracks[c + 1 + ahead.len()..].to_vec();
+                // The radio's tracks are not the album's or playlist's own: they stay last, in their order (0036).
+                let (mut rest, radio): (Vec<QueueTrack>, Vec<QueueTrack>) =
+                    self.tracks[c + 1 + ahead.len()..].iter().cloned().partition(|t| t.lane.as_deref() != Some(LANE_RADIO));
                 if on {
                     shuffled(&mut rest);
                 } else {
                     rest = in_order(rest, reached(&self.tracks[..=c]));
                 }
-                let upcoming: Vec<QueueTrack> = ahead.into_iter().chain(rest).collect();
+                let upcoming: Vec<QueueTrack> = ahead.into_iter().chain(rest).chain(radio).collect();
                 self.tracks.truncate(c + 1);
                 self.tracks.extend(upcoming.iter().cloned());
                 Command::Upcoming { tracks: upcoming, shuffled: Some(on) }
@@ -209,10 +232,32 @@ impl Queue {
                 let gone = self.tracks.remove(i);
                 Command::Remove { index: Some(i), entry: Some(gone.entry) }
             }
-            // A setting, not a change of the tracks: the queue's version stays.
+            // A setting, not a change of the tracks: the queue's version stays. Repeat all turns the radio off (decision
+            // 0036), and its tracks to come go: that is an edit.
             Command::Repeat { mode } => {
                 self.repeat = mode;
+                if mode == Repeat::All && self.radio.take().is_some() && self.drop_radio_ahead(current) {
+                    self.version += 1;
+                }
                 return Ok(Command::Repeat { mode });
+            }
+            // The radio on (its mode and seed; what is not given stays) or off (its tracks to come go, an edit). On turns
+            // repeat all off: both say what comes when the queue ends (decision 0036).
+            Command::Radio { on: true, mode, seed } => {
+                let was = self.radio.take().unwrap_or_default();
+                let radio = Radio { mode: mode.unwrap_or(was.mode), seed: seed.unwrap_or(was.seed) };
+                self.radio = Some(radio.clone());
+                if self.repeat == Repeat::All {
+                    self.repeat = Repeat::Off;
+                }
+                return Ok(Command::Radio { on: true, mode: Some(radio.mode), seed: Some(radio.seed) });
+            }
+            Command::Radio { on: false, .. } => {
+                self.radio = None;
+                if self.drop_radio_ahead(current) {
+                    self.version += 1;
+                }
+                return Ok(Command::Radio { on: false, mode: None, seed: None });
             }
             // Not an edit: the entry that plays is the player's to say.
             Command::Jump { index, entry } => {
@@ -375,6 +420,52 @@ mod tests {
         let (after, before): (Vec<u32>, Vec<u32>) = want.into_iter().partition(|n| *n > here);
         assert_eq!(order, [after, before].concat(), "from the playing track's place on, the earlier ones last");
         assert!(q.edit_at(Command::Shuffle { on: true }, None).is_err(), "nothing plays");
+    }
+
+    fn radio_track(id: &str) -> QueueTrack {
+        QueueTrack { lane: Some(LANE_RADIO.into()), ..track(id) }
+    }
+
+    #[test]
+    fn radio_and_repeat_all_exclude_each_other_and_off_takes_its_tracks_out() {
+        use super::super::radio::Mode;
+        let mut q = played(&["a", "b"]);
+        q.edit(Command::Repeat { mode: Repeat::All }).unwrap();
+        let v = q.version;
+        let told = q.edit(Command::Radio { on: true, mode: None, seed: None }).unwrap();
+        assert_eq!(told, Command::Radio { on: true, mode: Some(Mode::Similar), seed: Some(vec![]) }, "Similar by default");
+        assert_eq!((q.repeat, q.version), (Repeat::Off, v), "radio on turns repeat all off; a setting, the version stays");
+        // The player filled the radio's lane; playing b.
+        q.edit_at(Command::Add { tracks: vec![radio_track("r1"), radio_track("r2")], at: None, after: None, how: None }, Some(1)).unwrap();
+        let v = q.version;
+        q.edit_at(Command::Radio { on: true, mode: Some(Mode::Era), seed: None }, Some(1)).unwrap();
+        assert_eq!((q.radio.as_ref().map(|r| r.mode), q.version), (Some(Mode::Era), v), "the mode changes, the tracks stay");
+        q.edit_at(Command::Radio { on: false, mode: None, seed: None }, Some(1)).unwrap();
+        assert_eq!((ids(&q), q.radio.clone(), q.version), ("a b".to_string(), None, v + 1), "off: its tracks to come go, an edit");
+        // Repeat all turns the radio off the same way; a radio track already played stays (it played).
+        q.edit(Command::Radio { on: true, mode: None, seed: None }).unwrap();
+        q.edit(Command::Add { tracks: vec![radio_track("r3"), radio_track("r4")], at: None, after: None, how: None }).unwrap();
+        q.edit_at(Command::Repeat { mode: Repeat::All }, Some(2)).unwrap();
+        assert_eq!((ids(&q), q.radio.is_none()), ("a b r3".to_string(), true));
+    }
+
+    #[test]
+    fn shuffle_leaves_the_radio_last_and_a_new_play_keeps_the_radio_with_a_new_seed() {
+        let tracks: Vec<QueueTrack> = (0..6u32).map(|i| QueueTrack { n: Some(i), ..track(&format!("t{i}")) }).collect();
+        let mut q = Queue::default();
+        q.edit(Command::play(tracks, 0, 0)).unwrap();
+        q.edit(Command::Radio { on: true, mode: None, seed: Some(vec!["s".into()]) }).unwrap();
+        q.edit(Command::Add { tracks: vec![radio_track("r1"), radio_track("r2")], at: None, after: None, how: None }).unwrap();
+        for on in [true, false] {
+            let Command::Upcoming { tracks: told, .. } = q.edit_at(Command::Shuffle { on }, Some(0)).unwrap() else { panic!() };
+            let tail: Vec<&str> = told.iter().rev().take(2).map(|t| t.id.as_str()).collect();
+            assert_eq!(tail, ["r2", "r1"], "the radio stays last, in its order (shuffle {on})");
+        }
+        q.edit(Command::play(vec![track("new")], 0, 0)).unwrap();
+        assert_eq!(ids(&q), "new", "the radio's old tracks went with the old queue");
+        assert_eq!(q.radio.as_ref().map(|r| r.seed.is_empty()), Some(true), "still on, the new album its seed");
+        let c: Command = serde_json::from_str(r#"{"command":"radio","on":true,"mode":"album_mix"}"#).unwrap();
+        assert_eq!(c, Command::Radio { on: true, mode: Some(super::super::radio::Mode::AlbumMix), seed: None });
     }
 
     #[test]

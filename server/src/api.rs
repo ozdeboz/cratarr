@@ -29,6 +29,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}", get(player))
         .route("/api/players/{name}/command", post(player_command))
         .route("/api/players/{name}/state", axum::routing::put(player_state))
+        .route("/api/radio/next", post(radio_next))
         .route("/api/players/{name}/connect", get(player_connect))
         .route("/api/track/{source}/{id}", get(track_info))
         .route("/api/track/{source}/{id}/playlists", get(track_state))
@@ -573,6 +574,12 @@ async fn player_command(State(app): State<Arc<App>>, Path(name): Path<String>, J
 async fn player_state(State(app): State<Arc<App>>, Path(name): Path<String>, Json(r): Json<crate::app::PlayerReport>) -> Result<StatusCode, ApiError> {
     app.play_on.report(&name, r)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The radio's next tracks for the player that plays (decision 0036): already in the radio lane.
+async fn radio_next(Json(r): Json<crate::app::radio::NextRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let tracks = crate::app::radio::next(r).await?;
+    Ok(Json(serde_json::json!({ "tracks": tracks })))
 }
 
 /// The player's own connection: the commands for it, as server-sent events (`command`).

@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
 use super::queue::{Queue, Repeat};
+use super::radio::{Mode as RadioMode, Radio};
 use super::{PlaylistService, ToggleError};
 
 /// A player not heard from (a report, the 30 s heartbeat) for this long is offline, even if its connection still looks
@@ -72,6 +73,9 @@ pub struct Report {
     /// Its sleep timer, as it keeps it; none set (or one that fired) is left out or null.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sleep: Option<Sleep>,
+    /// Its radio (decision 0036), on or off; apps from before it leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radio: Option<RadioState>,
     pub position_ms: u64,
     #[serde(default)]
     pub duration_ms: Option<u64>,
@@ -98,6 +102,16 @@ pub struct Sleep {
     pub at_ms: Option<u64>,
     #[serde(default)]
     pub end_of_track: bool,
+}
+
+/// A player's radio as it reports it (decision 0036): on with its mode and seed, or off.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RadioState {
+    pub on: bool,
+    #[serde(default)]
+    pub mode: RadioMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seed: Vec<String>,
 }
 
 /// What `play` plays when it is not given tracks; resolved here, so it never reaches the player.
@@ -178,6 +192,15 @@ pub enum Command {
     Shuffle { on: bool },
     /// Repeat off, one (the playing track) or all (the album or playlist), decision 0033 amended.
     Repeat { mode: Repeat },
+    /// The radio on (a mode and a seed of track ids; left out: as it was) or off (decision 0036). On turns repeat all
+    /// off; off takes the radio's tracks to come out.
+    Radio {
+        on: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<RadioMode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<Vec<String>>,
+    },
     /// The sleep timer: pause at `at_ms` (epoch milliseconds) or when the playing track ends; neither clears it.
     Sleep {
         #[serde(default)]
@@ -262,6 +285,8 @@ pub struct PlayerView {
     pub shuffled: bool,
     /// Its sleep timer, while one is set.
     pub sleep: Option<Sleep>,
+    /// Its radio's mode while the radio is on (decision 0036).
+    pub radio: Option<RadioMode>,
     /// Goes up whenever the queue changes: ask for the player by name to see the new one.
     pub queue_version: u64,
     /// The track at `index`.
@@ -373,6 +398,7 @@ impl Entry {
             repeat: self.queue.repeat,
             shuffled: shuffled_order(&self.queue.tracks, index),
             sleep: r.sleep.filter(|s| s.at_ms.is_some() || s.end_of_track),
+            radio: self.queue.radio.as_ref().map(|r| r.mode),
             queue_version: self.queue.version,
             title: track.as_ref().map(|t| t.name.clone()),
             artist: track.as_ref().and_then(|t| t.artist.clone()),
@@ -644,6 +670,9 @@ impl PlayOn {
                 if let Some(r) = report.repeat {
                     e.queue.repeat = r;
                 }
+                if let Some(r) = &report.radio {
+                    e.queue.radio = r.on.then(|| Radio { mode: r.mode, seed: r.seed.clone() });
+                }
             }
             e.report = Report { queue: None, ..report };
             e.at = Instant::now();
@@ -769,10 +798,17 @@ impl PlayOn {
         if tracks.is_empty() {
             return Err(ToggleError::Refused(format!("{from} has nothing to hand over.")));
         }
-        let (repeat, sleep) = self.entries().get(from).map(|e| (e.queue.repeat, e.report.sleep)).unwrap_or_default();
+        let (repeat, sleep, radio) =
+            self.entries().get(from).map(|e| (e.queue.repeat, e.report.sleep, e.queue.radio.clone())).unwrap_or_default();
         Box::pin(self.command(to, Command::play(tracks, index, position_ms))).await?;
-        // Repeat moves with the queue (decision 0033, amended), repeat one too; a sleep timer moves with the music.
+        // Repeat moves with the queue (decision 0033, amended), repeat one too; a sleep timer moves with the music; the
+        // radio too, with its seed (decision 0036). The radio after repeat: on turns repeat all off, and both came so.
         let _ = Box::pin(self.command(to, Command::Repeat { mode: repeat })).await;
+        let (on, mode, seed) = match radio {
+            Some(r) => (true, Some(r.mode), Some(r.seed)),
+            None => (false, None, None),
+        };
+        let _ = Box::pin(self.command(to, Command::Radio { on, mode, seed })).await;
         if let Some(s) = sleep.filter(|s| s.at_ms.is_some() || s.end_of_track) {
             let _ = Box::pin(self.command(to, Command::Sleep { at_ms: s.at_ms, end_of_track: s.end_of_track })).await;
         }
