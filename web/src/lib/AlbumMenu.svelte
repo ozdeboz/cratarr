@@ -11,7 +11,7 @@
   // which close the menu and leave the question to the panel.
   import { albumCoverUrl, appendTracks, setAlbumFavorite, setTrackMember, trackState, type Playlist, type TrackState } from './api';
   import { withUndo } from './undo.svelte';
-  import { isFavorite, loadFavorites, setFavorite } from './favourites.svelte';
+  import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import { refresh } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -52,7 +52,7 @@
   // The heart is the one the panel's top bar shows (lib/favourites.svelte.ts), so both change together. Asked for
   // again in case the menu opens where the album's heart was not.
   $effect(() => {
-    loadFavorites(source, [album]);
+    loadAlbumFavorites(source, [album]);
   });
   const fav = $derived(isFavorite(source, album));
   // Shows the change at once, back as it was when the server refuses (the panel's heart does the same).

@@ -878,6 +878,15 @@ impl Jellyfin {
 
     /// The audio items `user` has as favourites (their ids).
     pub async fn favorite_audio(&self, user: &str) -> Result<Vec<String>> {
+        self.favorite_items(user, "Audio").await
+    }
+
+    /// `user`'s favourite albums (their ids).
+    pub async fn favorite_albums(&self, user: &str) -> Result<Vec<String>> {
+        self.favorite_items(user, "MusicAlbum").await
+    }
+
+    async fn favorite_items(&self, user: &str, kind: &str) -> Result<Vec<String>> {
         anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
         // In pages, the ids only (no images, user data or fields): a few thousand favourites in one request, with
         // Jellyfin's default fields, did not answer within 90 s on 2026-10-14 (4,786 of them, Jellyfin slow per item),
@@ -887,7 +896,7 @@ impl Jellyfin {
         loop {
             let page: ItemsPage<IdOnly> = self
                 .get(&format!(
-                    "/Items?IncludeItemTypes=Audio&Recursive=true&Filters=IsFavorite&UserId={user}&SortBy=SortName&EnableImages=false&EnableUserData=false&Fields=&StartIndex={}&Limit={PAGE}",
+                    "/Items?IncludeItemTypes={kind}&Recursive=true&Filters=IsFavorite&UserId={user}&SortBy=SortName&EnableImages=false&EnableUserData=false&Fields=&StartIndex={}&Limit={PAGE}",
                     ids.len()
                 ))
                 .await?;

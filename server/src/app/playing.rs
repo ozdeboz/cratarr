@@ -451,7 +451,13 @@ impl PlayingService {
             return Err(ToggleError::Refused("That is not an album.".into()));
         }
         let (_, s) = self.source(source_id)?;
-        s.set_favorite(album_id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+        s.set_album_favorite(album_id, on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
+    /// The favourite albums of a connected server (their ids): the Library's Favourites only, the album panel's heart.
+    pub async fn favorite_albums(&self, source_id: &str) -> Result<Vec<String>, ToggleError> {
+        let (_, s) = self.source(source_id)?;
+        s.favorite_albums().await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
     /// An album of a connected server, for its view in the panel.

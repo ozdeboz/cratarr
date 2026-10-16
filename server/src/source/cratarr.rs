@@ -489,6 +489,24 @@ impl Source for CratarrSource {
         Box::pin(async move { Ok(self.favorites(&[track.to_string()]).await?.get(track).copied()) })
     }
 
+    // An album's star is the one a Subsonic app gives it (`star?albumId=`), so the panel's heart and the apps' agree.
+    fn favorite_albums(&self) -> Fut<'_, Vec<String>> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            s.userdata.starred(&o, Item::Album)
+        })
+    }
+
+    fn set_album_favorite<'a>(&'a self, album: &'a str, on: bool) -> Fut<'a, bool> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            s.userdata.set_starred(&o, Item::Album, &[album.to_string()], on)?;
+            Ok(on)
+        })
+    }
+
     fn set_favorite<'a>(&'a self, track: &'a str, on: bool) -> Fut<'a, bool> {
         Box::pin(async move {
             let s = server()?;

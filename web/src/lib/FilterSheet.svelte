@@ -73,11 +73,16 @@
 
 <MenuSheet label="Filter" icon="funnel" title="Filter" {onclose}>
   <div class="cards">
-    {#if page === 'playlists'}
+    {#if page === 'playlists' || page === 'library'}
       <div class="toggles">
         <button class="switch" role="switch" aria-checked={pageView.favouritesOnly} onclick={() => (pageView.favouritesOnly = !pageView.favouritesOnly)}>
           <span>Favourites only</span><i aria-hidden="true"></i>
         </button>
+        {#if page === 'library'}
+          <button class="switch" role="switch" aria-checked={pageView.upgradesOnly} onclick={() => (pageView.upgradesOnly = !pageView.upgradesOnly)}>
+            <span>Upgrades waiting</span><i aria-hidden="true"></i>
+          </button>
+        {/if}
       </div>
     {:else if page === null}
       <div class="toggles">

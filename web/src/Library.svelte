@@ -14,6 +14,9 @@
   import { toast } from './lib/toast.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { on, stream } from './lib/events.svelte';
+  import { isFavorite, loadAlbumFavorites } from './lib/favourites.svelte';
+  import { pageView } from './lib/pageView.svelte';
+  import { untrack } from 'svelte';
 
   let incoming = $state<IncomingSource[] | null>(null);
   let collection = $state<ShelfSource[] | null>(null);
@@ -131,17 +134,35 @@
     return true;
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => incomingOf(shelf.id, a)?.verdicts?.[a.id];
+
+  // The filter's own switches, Favourites only and Upgrades waiting: the list's, so off again when the page goes.
+  $effect(() => () => {
+    pageView.favouritesOnly = false;
+    pageView.upgradesOnly = false;
+  });
+  // Favourites only asks each server again (an app may have changed a star meanwhile); one that cannot tell says so.
+  $effect(() => {
+    if (!pageView.favouritesOnly) return;
+    for (const s of untrack(() => sources ?? []))
+      loadAlbumFavorites(s.id).then((ok) => ok || toast.show({ text: `${s.label} can't list favourite albums`, tone: 'error' }));
+  });
+  const shown = $derived.by<ShelfSource[] | null>(() => {
+    const { favouritesOnly: fav, upgradesOnly: up } = pageView;
+    if (!sources || !(fav || up)) return sources;
+    const keep = (s: ShelfSource, a: ListedAlbum) => (!fav || isFavorite(s.id, a.id)) && (!up || verdictOf(s, a)?.kind === 'upgrade');
+    return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => keep(s, a)) }));
+  });
 </script>
 
 <main>
   {#if error}
     <p class="error" role="alert">{error}</p>
-  {:else if sources === null}
+  {:else if shown === null}
     <PageLoading />
-  {:else if sources.length === 0}
+  {:else if shown.length === 0}
     <p class="empty">No server with a Music or Incoming library is connected.</p>
   {:else}
-    <AlbumShelf {sources} empty="No albums." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
+    <AlbumShelf sources={shown} empty="No albums." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}
           {@const job = jobs.of(s.id, a.id)!}

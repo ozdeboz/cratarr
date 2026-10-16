@@ -56,8 +56,10 @@ export const DIRECTIONS = [
 export const pageView = $state({
   /** The page's grid width, which its size steps depend on (lib/SizeControl). */
   width: 0,
-  /** Playlists: favourites only; not remembered (as it was on the page). */
+  /** Playlists, Library: favourites only; not remembered, the list's own (off again on another page). */
   favouritesOnly: false,
+  /** Library: only Incoming's albums that would upgrade one in Music; not remembered either. */
+  upgradesOnly: false,
   /** The page's search (the pill's field): what its list is filtered by; empty again on another page. */
   query: '',
   /** The search the next page starts with (the track menu's Go to artist), instead of an empty one. */
