@@ -173,6 +173,26 @@ thirds:
   and 95.
 
 
+## Measured: taktus on the public sets (2026-10-16)
+
+taktus 0.1.0, decoded as Cratarr decodes (symphonia), the whole excerpt (`tempo_of`); Acc1 within 4 %, Acc2 also
+half, double and thirds. Gated: `sure >= 0.05` and `catch >= 1.0`.
+
+| Set | Acc1 | Acc2 | Gated: answers | Gated Acc1 | Gated Acc2 | Time (this PC) |
+|---|---|---|---|---|---|---|
+| Ballroom, 698 (Krebs' corrected beats) | 77.4 % | 99.0 % | 93.4 % | 79.1 % | 99.2 % | 0.07 s per 30 s |
+| GiantSteps, 664 (corrected v2) | 80.9 % | 95.5 % | 94.3 % | 82.1 % | 97.3 % | 0.27 s per 2 min |
+
+- **Its own figures hold**, to the decimal on both sets. Against the original 2004 Ballroom values it scores 95.6 %
+  Acc2: those values have known errors, which Krebs' beat annotations correct.
+- **The gate:** stricter ones gain under a point and lose a lot (sure >= 0.15, catch >= 1.5: GiantSteps answers
+  62 %). The core uses 0.05 / 1.0.
+- **What it misses when sure:** on GiantSteps mostly 4:3 (127 read as 168), then 2:3; octave slips (half or double)
+  are 95 of 626 answers. Folding every estimate into 90–180 BPM would raise GiantSteps' gated Acc1 to 88 % but lower
+  Ballroom's to 70 % (its slow dances): only for dance genre tags, if at all (the owner's call).
+- **taktus is taken** (the core, `server/src/analysis`). The source was read: one file, no dependency,
+  `forbid(unsafe_code)`, no file or network access.
+
 ## Where the first pass runs (the owner, 2026-10-16)
 
 **The one-time pass over the whole library runs on the ThinkBook**; the NAS then keeps up with new and replaced files.
