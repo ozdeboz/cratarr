@@ -44,7 +44,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     and repeat, which are the player's (the same twice was one too many). **More music** floats over the list's lower
     right corner where the page holds the queue: a pill saying what is on ("Radio · ∞ Same era", else "Off"), lit in
     the cover's accent while either is, opening its sheet (the player's radio button too): Radio, after each of the
-    queue's own tracks (Off, Similar to the track, Same artist, Same era; 3, 5 or 10 after each), and Autoplay, when the queue ends (Stop, Similar, Same artist, Same era,
+    queue's own tracks (Off, Similar to the track, Same artist, Same era; how many after each on a slider, 1 to 10, set when the finger lifts), and Autoplay, when the queue ends (Stop, Similar, Same artist, Same era,
     Random; Queue albums, Restart playlists), each a choice of one with round marks as View's order (decision 0036,
     amended); the previous tracks folded under "Previous
     Tracks" (this device only); the playing track as a card pinned at the top that fills in the cover's colour as it

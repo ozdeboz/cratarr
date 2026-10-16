@@ -48,7 +48,7 @@ export type RadioBy = 'track' | 'artist' | 'era';
 export const RADIO_BYS: readonly RadioBy[] = ['track', 'artist', 'era'];
 /** How many Radio inserts after each own track: the choices offered, and the most the server keeps. */
 export const RADIO_COUNTS: readonly number[] = [3, 5, 10];
-const RADIO_MAX = 10;
+export const RADIO_MAX = 10;
 /** Autoplay while on: its mode; whole albums (`albums`); a playlist that ends starts again instead (`restart`); the
  *  tracks it stays close to when started from an item, else the queue's own (`seed`); the crate it plays inside
  *  ("Play as radio": only the crate's tracks), when it does. */

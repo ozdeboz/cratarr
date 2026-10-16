@@ -27,15 +27,15 @@
   // open while it is set. From the queue's floating pill and the player's radio button.
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { RADIO_BYS, RADIO_COUNTS, setAutoplay, setRadio } from './localPlayer.svelte';
-  import Seg from './Seg.svelte';
+  import { RADIO_BYS, RADIO_MAX, setAutoplay, setRadio } from './localPlayer.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
   const RADIO: { by: RadioBy | 'off'; name: string }[] = [{ by: 'off', name: 'Off' }, ...RADIO_BYS.map((by) => ({ by, name: RADIO_NAMES[by] }))];
   const radioNow = $derived<RadioBy | 'off'>(local.radio ? local.radioBy : 'off');
-  // Seg takes words: the counts as such.
-  const COUNTS = RADIO_COUNTS.map((n) => ({ value: String(n), label: String(n) }));
+  // How many after each track: a slider (the owner), 1 to the player's most; the number follows the finger, and is set
+  // when it lifts (each setting asks the server anew).
+  let dragging = $state<number | null>(null);
   const AUTOPLAY: { mode: AutoplayMode | 'stop'; name: string }[] = [
     { mode: 'stop', name: 'Stop' },
     ...(Object.entries(AUTOPLAY_NAMES) as [AutoplayMode, string][]).map(([mode, name]) => ({ mode, name })),
@@ -57,7 +57,20 @@
       {/each}
       <div class="count" class:off={!local.radio}>
         <span>After each track</span>
-        <Seg label="How many after each track" options={COUNTS} bind:value={() => String(local.radioCount), (n) => setRadio(local.radio, { count: Number(n) })} />
+        <input
+          type="range"
+          min="1"
+          max={RADIO_MAX}
+          step="1"
+          value={dragging ?? local.radioCount}
+          aria-label="Tracks after each track"
+          oninput={(e) => (dragging = Number(e.currentTarget.value))}
+          onchange={(e) => {
+            setRadio(local.radio, { count: Number(e.currentTarget.value) });
+            dragging = null;
+          }}
+        />
+        <output>{dragging ?? local.radioCount}</output>
       </div>
     </div>
     <div class="part choices" role="radiogroup" aria-label="Autoplay">
@@ -129,7 +142,7 @@
     color: var(--art-accent, var(--accent));
   }
 
-  /* How many after each track: the choice of number as View's (Seg), at the part's foot. */
+  /* How many after each track: a slider at the part's foot, its number after it. */
   .count {
     display: flex;
     align-items: center;
@@ -143,6 +156,18 @@
 
   .count.off {
     opacity: 0.55;
+  }
+
+  .count input {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--art-accent, var(--accent));
+  }
+
+  .count output {
+    width: 2ch;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 
   .toggles {
