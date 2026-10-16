@@ -18,7 +18,7 @@
   import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import { isLocal, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
-  import { keepViewed, panel } from './panel.svelte';
+  import { panel } from './panel.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
@@ -150,13 +150,7 @@
     return () => removeEventListener('keydown', onKey);
   });
 
-  /** Swipe up: the playlists that hold the track, on the Playlists page (over the page it closes first). */
-  function toPlaylists() {
-    if (place === 'overlay') player.full = false;
-    if (location.hash.split('?')[0] !== '#/' && location.hash !== '') location.hash = keepViewed('#/');
-  }
-
-  // Gestures. Anywhere: swipe down closes, swipe up shows the playlists. On the cover: swipe left or right skips, a
+  // Gestures, over the page and beside it. Anywhere: swipe down closes, swipe up opens the queue. On the cover: swipe left or right skips, a
   // tap plays or pauses, a double-tap toggles the favourite. A swipe never also counts as a tap.
   let head = $state<HTMLElement>();
   let swiped = false;
@@ -181,7 +175,7 @@
         close();
       } else if (dy < -80 && -dy > 2 * Math.abs(dx)) {
         swiped = true;
-        toPlaylists();
+        if (playing()) queueOpen = true;
       }
     };
     const el = head;
@@ -268,7 +262,6 @@
     class:landscape={layout?.landscape}
     class:drop-gapsBig={dropped('gapsBig')}
     class:drop-buttons={dropped('buttons')}
-    class:drop-pill={dropped('pill')}
     class:drop-gapsSmall={dropped('gapsSmall')}
     class:drop-chips={dropped('chips')}
     class:drop-title={dropped('title')}
@@ -327,7 +320,10 @@
       <i class="sp a"></i>
       <div class="track">
         {#if np}
-          {#if np.player}<span class="pill">{np.player}</span>{/if}
+          <!-- Where it plays, and where to play it: the output's sheet. Always there (never gives way). -->
+          <button class="pill" aria-haspopup="dialog" aria-label="Playing on {np.player ?? 'another player'}; play on" onclick={() => (outputOpen = true)}
+            ><Icon name="speaker" size={14} />{#if np.player}<span>{np.player}</span>{/if}</button
+          >
           <div class="title">{np.name}</div>
           <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
         {:else}
@@ -416,7 +412,6 @@
             aria-pressed={favorite()}
             onclick={toggleFavorite}><Icon name="heart" size={26} /></button
           >
-          <button class="act" aria-label="Play on" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={24} /></button>
           <button class="act labelled" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
             ><Icon name="playlists" size={24} /><small>{queuePlace}</small></button
           >
@@ -616,14 +611,20 @@
     user-select: none;
   }
 
+  /* The output: a small floating pill over the title, a button. */
   .pill {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     margin-bottom: 6px;
-    padding: 1px 8px;
+    padding: 2px 10px;
     border: 1px solid color-mix(in srgb, var(--text) 25%, transparent);
     border-radius: 999px;
+    background: none;
     color: var(--muted);
+    font: inherit;
     font-size: 0.72rem;
+    cursor: pointer;
   }
 
   .title {
@@ -865,10 +866,6 @@
     width: 48px;
     height: 48px;
     border-radius: 12px;
-  }
-
-  header.drop-pill .pill {
-    display: none;
   }
 
   header.drop-gapsSmall .sp {

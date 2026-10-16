@@ -21,15 +21,17 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     the heart (the player's account's Jellyfin favourite). The bar fills from the left as the track plays, in the
     cover's colour. Tap or swipe up opens the full player; swipe left or right skips; swipe down does nothing.
   - **Full player** (`lib/NowPlaying.svelte`): the cover (library cover, else the album image from the server), the
-    active player named in a small pill (even when there is only one), title, artist · album, the transport controls
-    (previous, play/pause as a rounded square, next), progress, the heart and "in N playlists". It lays itself out
+    active player named in a small floating pill over the title (even when there is only one; tap: the output's sheet,
+    the only way there), title, artist · album, the transport controls (shuffle, previous, play/pause as a rounded
+    square, next, repeat), progress, and the bottom row (menu, heart, queue with its place under it; the label hangs
+    below its icon so the icons line up). The top bar: close at the left; add to playlist (lit while the track is in a
+    playlist), the sleep timer (lit while one runs) and beside / over the page at the right, icons only. It lays itself out
     for its space (`lib/playerLayout.ts`, a port of Finamp's layout): portrait or landscape, whichever gives the
     larger cover; spare room spreads its three groups (track name; chips, progress and buttons; the actions row);
-    when short of height the large gaps, the large play button, the pill, the small gaps, the info chips, the
+    when short of height the large gaps, the large play button, the small gaps, the info chips, the
     title's second line and the progress bar give way, in that order. Playing on this device the progress bar is a
     slider (Finamp's): drag the handle and the time follows, the player seeks on release; arrow keys move 5 s. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
-    cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere: swipe up shows the
-    playlists, swipe down closes.
+    cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere (over the page and beside it): swipe up opens the queue, swipe down closes.
   - **Where it shows:** with room for it (a content area of 800 × 500 px or more) the full player sits beside the page
     by itself while something plays, resizable at its edge (handle in the middle), the width remembered; its chevron
     folds it to the mini-player until that is tapped. Otherwise the mini-player shows, and opens the full player

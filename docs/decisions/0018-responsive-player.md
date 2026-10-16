@@ -102,3 +102,9 @@ with the local player (decision 0022) Cratarr plays music itself, so the player 
 only a remote for adding what plays to playlists. The mini-player, the player beside the page and the player over
 everything show on Repairs, Insights and Settings too. The server picker stays on Playlists and Incoming, the pages
 that act on what a server plays.
+
+## Amendment (2026-10-16): swipe up opens the queue
+
+The owner: in the full player, over the page and beside it, swipe up opens the queue, not the playlists. The
+playlists that hold the track are the top bar's add-to-playlist button. The output is the player pill over the title
+(a button); the bottom row's output button is gone, its place kept for radio.

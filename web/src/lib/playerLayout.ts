@@ -3,10 +3,10 @@
 // sizes per element; Cratarr measures its controls instead (`measure`), so the rules stay right when a font or a
 // button changes. Everything else follows Finamp's code, step for step.
 
-/** What gives way when the player runs out of height, first to last (Finamp's `verticalHideOrder`). Finamp's bottom
- *  actions row is Cratarr's player pill here: Cratarr's own row (menu, queue, favourite and the playlist count) never
- *  gives way, nor do the title, the artist line and previous / play / next. Step n is dropped at level n + 1. */
-export const STEPS = ['gapsBig', 'buttons', 'pill', 'gapsSmall', 'chips', 'title', 'progress'] as const;
+/** What gives way when the player runs out of height, first to last (Finamp's `verticalHideOrder`, without its bottom
+ *  actions row): Cratarr's own row (menu, favourite, queue), the output pill (the only way to the output), the title,
+ *  the artist line and previous / play / next never give way. Step n is dropped at level n + 1. */
+export const STEPS = ['gapsBig', 'buttons', 'gapsSmall', 'chips', 'title', 'progress'] as const;
 export type Step = (typeof STEPS)[number];
 
 /** Finamp's `maxShrink`: how far (percent of the cover's size, per side, times the cover priority) the cover may shrink
@@ -14,7 +14,6 @@ export type Step = (typeof STEPS)[number];
 const MAX_SHRINK: Record<Step, number> = {
   gapsBig: 1,
   buttons: 1,
-  pill: 2,
   gapsSmall: 2,
   chips: 3,
   title: 3,
