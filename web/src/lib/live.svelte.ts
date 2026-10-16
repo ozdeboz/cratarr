@@ -14,6 +14,7 @@ import { remember } from './sources.svelte';
 import { toast } from './toast.svelte';
 import { on, open, close, stream } from './events.svelte';
 import { track } from './progress.svelte';
+import { reach } from './reach.svelte';
 
 /** How a server answer relates to the expected result: it, something else, or not yet. */
 export type Settled = 'yes' | 'no' | 'wait';
@@ -240,7 +241,8 @@ function take(fresh: State) {
 }
 
 /** Keep `live` current: from the live channel (events.svelte.ts) while it is open, asking every 2 s (5 s while the
- *  page is hidden) while it is not, and every 30 s regardless. Returns a stop function.
+ *  page is hidden) while it is not, and every 30 s regardless. Every 30 s while Cratarr is out of reach (lib/reach), and
+ *  at once when the network comes back. Returns a stop function.
  *
  *  Untracked: started in an effect, what it reads on the way (whether the channel is open) must not become the
  *  effect's dependency. It was (until 0.5.3): the channel opening re-ran the effect, whose cleanup closed the channel
@@ -263,7 +265,7 @@ function follow(): () => void {
   async function tick() {
     const quiet = Date.now() - last;
     if (!document.hidden && (!stream.connected || quiet > 30_000)) await refresh();
-    if (!stopped) timer = setTimeout(tick, stream.connected ? 5000 : 2000);
+    if (!stopped) timer = setTimeout(tick, reach.away ? 30_000 : stream.connected ? 5000 : 2000);
   }
   const back = () => {
     if (document.hidden || stopped) return;
@@ -271,11 +273,13 @@ function follow(): () => void {
     tick();
   };
   document.addEventListener('visibilitychange', back);
+  addEventListener('online', back);
   tick();
   return () => {
     stopped = true;
     clearTimeout(timer);
     document.removeEventListener('visibilitychange', back);
+    removeEventListener('online', back);
     off();
     close();
   };

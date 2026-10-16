@@ -1,8 +1,12 @@
 // Cratarr service worker: makes the app installable and lets the shell open without the server. Everything under
 // /api/ is live data and always goes to the network, except the Library's album list: it changes
 // slowly and are large, so the last copy is shown at once while a fresh one is fetched (stale-while-revalidate). The shell is network-first (a new build shows up at once);
-// Vite's fingerprinted assets and the icons never change, so they are cache-first.
+// Vite's fingerprinted assets and the icons never change, so they are cache-first. The covers of the albums downloaded
+// in the app are kept apart, as the page lists them (lib/coversAway.svelte.ts), so they show away from home, where only
+// downloads play (decision 0033, step 4).
 const CACHE = 'cratarr-v3';
+const COVERS = 'cratarr-covers';
+const ALBUM_COVER = /^\/api\/albums\/[^/]+\/[^/]+\/cover$/;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/', '/manifest.webmanifest'])));
@@ -13,7 +17,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== COVERS).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -25,6 +29,33 @@ const put = (key, response) => {
   }
   return response;
 };
+
+// The covers to keep (their paths, without a version): those no longer listed go, the missing ones are fetched.
+self.addEventListener('message', (event) => {
+  if (event.data?.type !== 'keep-covers' || !Array.isArray(event.data.urls)) return;
+  const want = new Set(event.data.urls.map((u) => new URL(u, self.location.origin).pathname));
+  event.waitUntil(
+    caches.open(COVERS).then(async (c) => {
+      const have = new Set();
+      for (const k of await c.keys()) {
+        const path = new URL(k.url).pathname;
+        if (want.has(path)) have.add(path);
+        else await c.delete(k);
+      }
+      for (const path of want) {
+        if (have.has(path)) continue;
+        try {
+          const r = await fetch(path);
+          if (r.ok) await c.put(path, r);
+          // Out of reach: the next list tries again.
+          else if (r.status === 403) return;
+        } catch {
+          return;
+        }
+      }
+    }),
+  );
+});
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
@@ -40,6 +71,23 @@ self.addEventListener('fetch', (event) => {
     }
     event.waitUntil(fresh.catch(() => {}));
     event.respondWith(caches.match(req).then((hit) => hit || fresh));
+    return;
+  }
+  if (ALBUM_COVER.test(url.pathname)) {
+    // A kept cover is kept fresh, and serves while Cratarr is out of reach (the proxy's 403, or no network).
+    const kept = () => caches.match(url.pathname, { cacheName: COVERS });
+    event.respondWith(
+      fetch(req)
+        .then(async (r) => {
+          if (!r.ok) return (await kept()) || r;
+          if (await kept()) {
+            const copy = r.clone();
+            caches.open(COVERS).then((c) => c.put(url.pathname, copy));
+          }
+          return r;
+        })
+        .catch(async () => (await kept()) || Response.error()),
+    );
     return;
   }
   if (url.pathname.startsWith('/api/')) return;

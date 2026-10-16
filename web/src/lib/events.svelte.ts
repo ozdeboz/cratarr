@@ -7,6 +7,8 @@
 // at most six connections to a server, shared by all its tabs, and every open stream holds one for good (seen
 // 2026-10-13: six background tabs, and the Settings page never loaded).
 
+import { reach } from './reach.svelte';
+
 type Handler = (data: unknown) => void;
 
 export const stream = $state({ connected: false });
@@ -74,10 +76,11 @@ function connect(follow?: string) {
   es.onopen = () => (stream.connected = true);
   es.onerror = () => {
     stream.connected = false;
-    // The browser retries by itself, unless it gave up (the server answered with an error): then try again later.
+    // The browser retries by itself, unless it gave up (the server answered with an error): then try again later, less
+    // often while Cratarr is out of reach (lib/reach).
     if (es.readyState === EventSource.CLOSED && source === es) {
       clearTimeout(retry);
-      retry = setTimeout(() => source === es && connect(follow), 10_000);
+      retry = setTimeout(() => source === es && connect(follow), reach.away ? 30_000 : 10_000);
     }
   };
 }
