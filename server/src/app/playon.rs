@@ -390,6 +390,8 @@ pub struct PlayerView {
     pub group: Option<String>,
     /// Its speaker delay (ms), decision 0037.
     pub delay_ms: u16,
+    /// `app` (the Android app) or `kodi` (a Kodi Cratarr drives): what it can do (a Kodi joins no group).
+    pub kind: &'static str,
     /// The whole queue, for one player asked for by name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<Vec<QueueTrack>>,
@@ -405,6 +407,27 @@ pub struct PlayOnSettings {
     /// earlier. Set with `PUT /api/players/{name}/delay`; kept when the webhooks are saved.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub delays: std::collections::BTreeMap<String, u16>,
+    /// Kodis Cratarr plays on (their passwords are never shown: blank keeps the saved one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kodi: Vec<super::kodi::KodiConfig>,
+}
+
+/// The Play On settings as the page sees them: no password, whether one is set, and Cratarr's address on the local
+/// network as a Kodi's default `stream_from`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlayOnSettingsView {
+    pub webhooks: Vec<String>,
+    pub kodi: Vec<KodiView>,
+    pub stream_default: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KodiView {
+    pub name: String,
+    pub url: String,
+    pub user: String,
+    pub password_set: bool,
+    pub stream_from: String,
 }
 
 /// The most a speaker delay can be (ms): well inside the group's buffer, which snapclient shortens by it.
@@ -434,6 +457,24 @@ struct Entry {
     leader: Option<String>,
     /// When it joined its group, counted: the longest-joined leads when the leader leaves.
     joined: u64,
+    kind: PlayerKind,
+}
+
+/// What a player is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum PlayerKind {
+    #[default]
+    App,
+    Kodi,
+}
+
+impl PlayerKind {
+    fn name(self) -> &'static str {
+        match self {
+            PlayerKind::App => "app",
+            PlayerKind::Kodi => "kodi",
+        }
+    }
 }
 
 impl Entry {
@@ -451,6 +492,7 @@ impl Entry {
             told: 0,
             leader: None,
             joined: 0,
+            kind: PlayerKind::App,
         }
     }
 
@@ -515,6 +557,7 @@ impl Entry {
             current_entry_id: track.as_ref().map(|t| t.entry.clone()).filter(|e| !e.is_empty()),
             group: self.leader.clone(),
             delay_ms: 0,
+            kind: self.kind.name(),
             track,
             queue: with_queue.then(|| self.queue.tracks.clone()),
         }
@@ -562,6 +605,10 @@ pub struct PlayOn {
     sync_play: Mutex<Option<(u16, u32, Option<String>)>>,
     /// Counts joins, for who joined longest ago.
     joins: AtomicU64,
+    /// The Kodi drivers running (stopped when the settings change).
+    kodis: Mutex<Vec<tokio::task::AbortHandle>>,
+    /// Cratarr's address on the local network (a Kodi's default `stream_from`).
+    lan_base: Mutex<Option<String>>,
 }
 
 /// A player's queue as saved, with where it was in it and whether it played.
@@ -611,12 +658,62 @@ impl PlayOn {
             samples: super::together::Samples::default(),
             sync_play: Mutex::new(None),
             joins: AtomicU64::new(1),
+            kodis: Mutex::new(Vec::new()),
+            lan_base: Mutex::new(None),
         });
         me.clone().tell_webhooks();
         me.clone().watch_leases();
         me.clone().keep_queues();
+        me.start_kodis();
         let _ = INSTANCE.set(me.clone());
         me
+    }
+
+    /// Cratarr's address on the local network, as players there reach it (a Kodi streams from it).
+    pub fn set_lan_base(self: &Arc<Self>, base: Option<String>) {
+        *self.lan_base.lock().unwrap_or_else(|p| p.into_inner()) = base;
+        self.start_kodis();
+    }
+
+    /// A driver for each Kodi of the settings (the ones before stopped).
+    fn start_kodis(self: &Arc<Self>) {
+        let base = self.lan_base.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let mut running = self.kodis.lock().unwrap_or_else(|p| p.into_inner());
+        for h in running.drain(..) {
+            h.abort();
+        }
+        for mut cfg in self.settings().kodi {
+            if cfg.stream_from.trim().is_empty() {
+                cfg.stream_from = base.clone().unwrap_or_default();
+            }
+            if cfg.name.trim().is_empty() || cfg.url.trim().is_empty() || cfg.stream_from.trim().is_empty() {
+                continue;
+            }
+            running.push(tokio::spawn(super::kodi::drive(Arc::downgrade(self), cfg)).abort_handle());
+        }
+    }
+
+    /// A Kodi's driver joins as a player (`app::kodi`).
+    pub(super) fn connect_kodi(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
+        let c = self.connect(name)?;
+        if let Some(e) = self.entries().get_mut(name) {
+            e.kind = PlayerKind::Kodi;
+        }
+        Ok(c)
+    }
+
+    /// The Play On settings as the page sees them.
+    pub fn settings_view(&self) -> PlayOnSettingsView {
+        let s = self.settings();
+        PlayOnSettingsView {
+            webhooks: s.webhooks,
+            kodi: s
+                .kodi
+                .into_iter()
+                .map(|k| KodiView { password_set: !k.password.is_empty(), name: k.name, url: k.url, user: k.user, stream_from: k.stream_from })
+                .collect(),
+            stream_default: self.lan_base.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+        }
     }
 
     /// Sync play, step 1 (decision 0037): every online player asked what it plays this moment, and the answers
@@ -822,7 +919,7 @@ impl PlayOn {
         e.heard = Instant::now();
         // Back without a queue (the app was updated, or killed): it gets its queue back where it was, playing on if it
         // played (the owner's wish, 2026-10-15), else paused.
-        let came_back_empty = std::mem::take(&mut e.fresh) && report.index < 0 && !e.queue.tracks.is_empty();
+        let came_back_empty = std::mem::take(&mut e.fresh) && report.index < 0 && !e.queue.tracks.is_empty() && e.kind == PlayerKind::App;
         let give_back = came_back_empty.then(|| {
             let (index, position_ms, paused) = (before.index.max(0) as usize, before.position_ms, !before.playing);
             Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused }
@@ -1079,7 +1176,12 @@ impl PlayOn {
                     return Err(ToggleError::Refused(format!("{n} is not connected.")));
                 }
             }
-            entries.get(to).and_then(|e| e.leader.clone()).unwrap_or_else(|| to.to_string())
+            let leader = entries.get(to).and_then(|e| e.leader.clone()).unwrap_or_else(|| to.to_string());
+            // A Kodi follows, never leads (the owner): its sound cannot be sent on.
+            if entries.get(&leader).is_some_and(|e| e.kind != PlayerKind::App) {
+                return Err(ToggleError::Refused(format!("{leader} cannot lead a group: play on another player and add {leader} to it.")));
+            }
+            leader
         };
         if name == leader || self.leader_of(name).as_deref() == Some(leader.as_str()) {
             return Ok(());
@@ -1120,8 +1222,14 @@ impl PlayOn {
         let rest = self.group(&leader);
         tracing::info!("player {name:?} plays alone again");
         if leader == name {
-            if let Some(next) = rest.first() {
-                let alone = rest.len() == 1;
+            // The longest-joined of the app's players leads on; with none (Kodis only), the first plays alone.
+            let apps: Vec<String> = {
+                let entries = self.entries();
+                rest.iter().filter(|n| entries.get(*n).is_some_and(|e| e.kind == PlayerKind::App)).cloned().collect()
+            };
+            let next = apps.first().or(rest.first()).cloned();
+            if let Some(next) = next.as_ref() {
+                let alone = rest.len() == 1 || apps.is_empty();
                 {
                     let mut entries = self.entries();
                     for n in &rest {
@@ -1231,7 +1339,7 @@ impl PlayOn {
         self.settings.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
-    pub async fn save_settings(&self, draft: PlayOnSettings) -> Result<PlayOnSettings, ToggleError> {
+    pub async fn save_settings(self: &Arc<Self>, draft: PlayOnSettings) -> Result<PlayOnSettingsView, ToggleError> {
         let Some(file) = self.file.clone() else { return Err(ToggleError::SettingsReadOnly) };
         let mut webhooks = Vec::new();
         for w in draft.webhooks.iter().map(|w| w.trim()).filter(|w| !w.is_empty()) {
@@ -1240,12 +1348,36 @@ impl PlayOn {
             }
             webhooks.push(w.to_string());
         }
-        let saved = PlayOnSettings { webhooks, delays: self.settings().delays };
+        let before = self.settings();
+        let mut kodi: Vec<super::kodi::KodiConfig> = Vec::new();
+        for k in draft.kodi {
+            let name = k.name.trim().to_string();
+            valid_name(&name)?;
+            let url = k.url.trim().to_string();
+            if !(url.starts_with("http://") || url.starts_with("https://")) || reqwest::Url::parse(&url).is_err() {
+                return Err(ToggleError::BadSettings(format!("{url} is not Kodi's web address (http://host:8080)")));
+            }
+            let stream_from = k.stream_from.trim().trim_end_matches('/').to_string();
+            if !stream_from.is_empty() && reqwest::Url::parse(&stream_from).is_err() {
+                return Err(ToggleError::BadSettings(format!("{stream_from} is not an address")));
+            }
+            if kodi.iter().any(|o| o.name == name) {
+                return Err(ToggleError::BadSettings(format!("two Kodis are called {name}")));
+            }
+            let password = if k.password.is_empty() {
+                before.kodi.iter().find(|o| o.name == name).map(|o| o.password.clone()).unwrap_or_default()
+            } else {
+                k.password
+            };
+            kodi.push(super::kodi::KodiConfig { name, url, user: k.user.trim().to_string(), password, stream_from });
+        }
+        let saved = PlayOnSettings { webhooks, delays: before.delays, kodi };
         let body = serde_json::to_string_pretty(&saved).map_err(anyhow::Error::from)?;
         tokio::task::spawn_blocking(move || write_private(&file, &body)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
-        *self.settings.lock().unwrap_or_else(|p| p.into_inner()) = saved.clone();
+        *self.settings.lock().unwrap_or_else(|p| p.into_inner()) = saved;
+        self.start_kodis();
         self.changed();
-        Ok(saved)
+        Ok(self.settings_view())
     }
 
     /// A player's speaker delay (ms).
@@ -1257,7 +1389,9 @@ impl PlayOn {
     /// there is one.
     pub async fn set_delay(&self, name: &str, ms: u16) -> Result<u16, ToggleError> {
         valid_name(name)?;
-        let ms = ms.min(MAX_DELAY_MS);
+        // A Kodi's delay is its own buffering too: up to the group's whole buffer.
+        let kodi = self.entries().get(name).is_some_and(|e| e.kind == PlayerKind::Kodi);
+        let ms = ms.min(if kodi { crate::snapcast::BUFFER_MS as u16 } else { MAX_DELAY_MS });
         let saved = {
             let mut settings = self.settings.lock().unwrap_or_else(|p| p.into_inner());
             if ms == 0 {
