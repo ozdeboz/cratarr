@@ -145,8 +145,9 @@ Almost everything is set in Settings. The environment covers what has to be know
   OpenSubsonic Cratarr's follow ([0030](docs/decisions/0030-cratarr-serves-opensubsonic.md)).
 - [Snapcast](https://github.com/badaix/snapcast), whose protocol and timekeeping sync play uses
   ([0037](docs/decisions/0037-sync-play.md)).
-- [Finamp](https://github.com/finamp-app/finamp), whose player and menus Cratarr's follow
-  ([0019](docs/decisions/0019-remote-features-from-finamps-player.md), [0021](docs/decisions/0021-menus-are-finamp-style-sheets.md)).
+- [Finamp](https://github.com/finamp-app/finamp), whose player, menus and settings Cratarr's follow
+  ([0019](docs/decisions/0019-remote-features-from-finamps-player.md), [0021](docs/decisions/0021-menus-are-finamp-style-sheets.md),
+  [ui-conventions](docs/ui-conventions.md)).
 - [Seerr](https://github.com/seerr-team/seerr), for its layout and its settings that choose from what the servers
   already know ([0009](docs/decisions/0009-library-uses.md)).
 
