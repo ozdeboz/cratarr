@@ -1,7 +1,7 @@
 // A track's sound in three frequency bands (decision 0046, amended): low (kick drum and bass), middle (snare, voices,
-// most instruments) and high (hats and cymbals). Each band's loudness every 50 ms and its transients, from the track's
-// analysis on the server, which works them out the first time they are asked for (in the decode that finds its beats).
-// Read once per track and kept while the page is open.
+// most instruments) and high (hats and cymbals). Each band's loudness every 50 ms and its transients, and the whole
+// sound's loudness as heard every 100 ms, from the track's analysis on the server, which works them out the first time
+// they are asked for (in the decode that finds its beats). Read once per track and kept while the page is open.
 import { asksSignIn, toSignIn } from '../reach.svelte';
 
 export const BANDS = 3;
@@ -14,6 +14,9 @@ export type Bands = {
   /** Each band's transients: their times (seconds, in order) and strengths (0..1). */
   at: Float64Array[];
   strength: Float32Array[];
+  /** The loudness as heard (LUFS, EBU R128's momentary), `momentsRate` a second; null from a server before it. */
+  moments: Float32Array | null;
+  momentsRate: number;
 };
 
 /** A band now: how loud it is, and how much its last transient still rings (0..1). */
@@ -44,7 +47,8 @@ export function bandsOf(source: string, id: string): Bands | null | undefined {
   const tries = (was?.tries ?? 0) + 1;
   asking.set(key, { at: now, tries, busy: true });
   const done = () => asking.set(key, { at: performance.now(), tries, busy: false });
-  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/bands`)
+  // `v`: the form read here; a browser keeps an older one under the address without it for a month.
+  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/bands?v=2`)
     .then(async (r) => {
       if (asksSignIn(r)) toSignIn();
       if (r.ok) kept.set(key, decode(await r.arrayBuffer()));
@@ -54,13 +58,17 @@ export function bandsOf(source: string, id: string): Bands | null | undefined {
   return undefined;
 }
 
-/** The server's form (`GET /api/track/{source}/{id}/bands`): a format byte (1), the bands (3), loudness values a
- *  second, a zero; the loudness frames (u32, little-endian) and a byte a band in each; then each band's transients,
- *  their number (u32) and each one's milliseconds (u32) and strength (u8). Anything else: none. */
+/** The server's form (`GET /api/track/{source}/{id}/bands`): a format byte (2), the bands (3), band loudness values
+ *  a second, loudness-as-heard values a second; the loudness frames (u32, little-endian) and a byte a band in each;
+ *  then each band's transients, their number (u32) and each one's milliseconds (u32) and strength (u8); then the
+ *  loudness as heard, its number (u32) and a byte each (thirds of a dB from -70 LUFS). Format 1 is the same without the
+ *  loudness as heard. Anything else: none. */
 function decode(buffer: ArrayBuffer): Bands | null {
   const v = new DataView(buffer);
-  if (buffer.byteLength < 8 || v.getUint8(0) !== 1 || v.getUint8(1) !== BANDS) return null;
+  const format = buffer.byteLength >= 8 ? v.getUint8(0) : 0;
+  if ((format !== 1 && format !== 2) || v.getUint8(1) !== BANDS) return null;
   const rate = v.getUint8(2);
+  const momentsRate = format === 2 ? v.getUint8(3) : 0;
   const frames = v.getUint32(4, true);
   let at = 8;
   if (buffer.byteLength < at + frames * BANDS) return null;
@@ -82,7 +90,25 @@ function decode(buffer: ArrayBuffer): Bands | null {
     times.push(t);
     strength.push(s);
   }
-  return { rate, loudness, at: times, strength };
+  let moments: Float32Array | null = null;
+  if (format === 2) {
+    if (buffer.byteLength < at + 4) return null;
+    const n = v.getUint32(at, true);
+    at += 4;
+    if (buffer.byteLength < at + n) return null;
+    moments = new Float32Array(n);
+    for (let i = 0; i < n; i++) moments[i] = -70 + v.getUint8(at + i) / 3;
+  }
+  return { rate, loudness, at: times, strength, moments, momentsRate };
+}
+
+/** The loudness as heard at `t` seconds (LUFS, between its values); null where the server did not say. */
+export function heardAt(b: Bands, t: number): number | null {
+  const m = b.moments;
+  if (!m || !m.length || !b.momentsRate) return null;
+  const x = Math.min(Math.max(t * b.momentsRate, 0), m.length - 1);
+  const i = Math.floor(x);
+  return m[i] + (m[Math.min(i + 1, m.length - 1)] - m[i]) * (x - i);
 }
 
 /** Each band at `t` seconds into the track: its loudness (between its frames) and its last transient's ring. */

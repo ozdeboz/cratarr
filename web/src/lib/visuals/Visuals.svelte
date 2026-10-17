@@ -1,9 +1,10 @@
 <script lang="ts">
   // Full-screen visuals (decision 0046), from the full player's top bar: each track's own fractal flame
   // (lib/visuals/flame.ts, made from its id) drawn on the GPU (lib/visuals/render.ts), its transforms turning a step
-  // and the picture flashing on each of the track's beats, brighter where the track is loud (lib/visuals/music.svelte.ts),
-  // blending into the next track's flame as it starts. Each of its three transforms answers to a band of the sound
-  // (low, middle, high): the band's transients light that transform's colour, its loudness evolves that transform.
+  // and the picture flashing on each of the track's beats (lib/visuals/music.svelte.ts), blending into the next track's
+  // flame as it starts. The whole show is as intense as the music is loud as heard: brightness, size, motion and every
+  // light. Within that, each of its three transforms answers to a band of the sound (low, middle, high): the band's
+  // transients light that transform's colour, its loudness evolves that transform.
   // Over everything, on black. A tap or a mouse move shows the track, the close button and the dice for a few seconds;
   // the dice show another flame at random, until the track changes or they are pressed again. Esc, Back or a swipe down
   // closes it. The screen stays on while it shows, where the browser allows that.
@@ -127,7 +128,8 @@
     // swell, 0..1.
     let beatCount: number | null = null;
     let pulse = 0;
-    let loud = 0.6;
+    // How intense the show is (the loudness as heard, followed over a fifth of a second), and paused or not.
+    let intensity = 0.5;
     let glow = 1;
     let passes = 4;
     let raf = 0;
@@ -137,6 +139,8 @@
     let slow = 0;
     let quick = 0;
 
+    // How much of the turning the music's loudness allows: nearly none in silence.
+    const motion = () => 0.1 + 0.9 * intensity;
     // A turn of `by` (radians): each band's transform turns by it, further the louder its band.
     const turnBands = (by: number) => {
       for (let i = 0; i < BANDS; i++) turned[i] += by * (0.4 + 1.2 * bandLoud[i]);
@@ -182,8 +186,8 @@
         const moved = beatCount === null ? 0 : counted - beatCount;
         // Backwards or by more than two beats: a seek, not turned for.
         if (moved > 0 && moved < 2) {
-          turnBands(STEP * moved * (still ? 0.25 : 1));
-          turn += STEP * 0.12 * moved;
+          turnBands(STEP * moved * (still ? 0.25 : 1) * motion());
+          turn += STEP * 0.12 * moved * motion();
         }
         beatCount = counted;
         speed = (STEP / b.length) * (still ? 0.25 : 1);
@@ -193,17 +197,18 @@
         const beats = (m.bpm ?? 90) / 60;
         const want = m.playing ? STEP * beats * (still ? 0.25 : 1) : 0;
         speed += (want - speed) * Math.min(1, dt * 1.5);
-        turnBands(speed * dt);
-        turn += speed * 0.12 * dt;
+        turnBands(speed * dt * motion());
+        turn += speed * 0.12 * dt * motion();
         pulse *= Math.exp(-dt / 0.15);
       }
-      // Brighter where the track is loud, following it quickly; dimmer while paused.
-      loud += ((m.energy ?? 0.6) - loud) * Math.min(1, dt * 6);
+      // The whole show follows how loud the track is as heard: near dark and still in silence or a fade, all of it at
+      // the loudest. Dimmer while paused.
+      intensity += (m.intensity - intensity) * Math.min(1, dt * 5);
       glow += ((m.playing ? 1 : 0.55) - glow) * Math.min(1, dt * 2);
-      // The bands: each one's loudness evolves its transform (turning further on each beat, larger, its variations
-      // given over to its band's own, its colour moved along the palette), its transients light its colour.
-      for (let i = 0; i < BANDS; i++) bandLoud[i] += ((m.bands?.[i].loud ?? 0.5) - bandLoud[i]) * Math.min(1, dt * 4);
-      const hits: [number, number, number] = [0, 1, 2].map((i) => (m.playing ? (m.bands?.[i].hit ?? 0) : 0)) as [number, number, number];
+      // The bands, within that: each one's loudness evolves its transform (turning further on each beat, larger, its
+      // variations given over to its band's own, its colour moved along the palette), its transients light its colour.
+      for (let i = 0; i < BANDS; i++) bandLoud[i] += ((m.bands?.[i].loud ?? 0.5) * intensity - bandLoud[i]) * Math.min(1, dt * 4);
+      const hits: [number, number, number] = [0, 1, 2].map((i) => (m.playing ? (m.bands?.[i].hit ?? 0) * intensity : 0)) as [number, number, number];
       const parts: Part[] = bandLoud.map((l, i) => ({
         turn: turned[i],
         size: 0.94 + 0.12 * l,
@@ -230,14 +235,17 @@
       renderer.frame(
         passes,
         {
-          brightness: (0.6 + 0.5 * loud) * glow,
+          brightness: 1,
           keep: 0.93,
           gamma: 3,
           vibrancy: 1,
           turn,
-          zoom: 1 + (still ? 0 : 0.04) * pulse,
-          // With the bands known, their own lights carry most of the beat.
-          flash: 1 + (still ? 0.15 : m.bands ? 0.1 : 0.35) * pulse,
+          // Smaller when quiet, its full size at the loudest; a beat's swell as loud as the music.
+          scale: 0.8 + 0.2 * intensity,
+          zoom: 1 + (still ? 0 : 0.04) * pulse * intensity,
+          // Near dark in silence (after the gamma, so dark it is), all at the loudest; a beat's flash as loud as the
+          // music, smaller where the bands' own lights carry the beat.
+          flash: (0.03 + 0.97 * intensity) * glow * (1 + (still ? 0.15 : m.bands ? 0.1 : 0.35) * pulse * intensity),
           hits: still ? (hits.map((h) => h * 0.5) as [number, number, number]) : hits,
         },
         w,

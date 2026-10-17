@@ -167,3 +167,28 @@ seed over 1.5 s; another press, another one; the next track brings back its own.
 - Every track's flame is new (three transforms each, where it was two to four).
 - What the visuals draw from the sound is still only what the server worked out; a track is decoded once (about a
   second) the first time the visuals show it.
+
+## Amendment, 2026-10-17: as intense as the music is loud
+
+The owner (in claude-5f's session): "I also want the overall show to be proportional to the overall loudness. Do you
+think we've sufficiently implemented that now? Probably not. So fix it in the next version." It was not: the loudness
+(the waveform, against the track's own loudest moment) set only the brightness, between 60 % and 110 %; silence still
+showed at 60 %, a quiet track looked as intense as a loud one, and the bands, each against its own loudest, kept a soft
+passage with busy hats looking busy.
+
+**Now one intensity drives the whole show:** the loudness as heard. The server keeps EBU R128's momentary loudness
+(400 ms) every tenth of a second with the bands (their format 2; a format 1 kept since preview 55 counts as not worked
+out and is worked out again; the page asks with `?v=2`, past a browser's month-old copy). Where the player levels
+(decision 0035: the app's setting in the app, the page's own in a browser), the page adds the gain it plays the track
+at (its track gain, never above full nor past its peak). From -45 LUFS (and silence) to -10, in equal steps of dB, the
+intensity runs from nothing to all, followed over a fifth of a second, and scales:
+
+- the brightness, after the gamma, from 3 % to all: near dark in silence and a fade;
+- the size the flame is drawn at, from 80 % to all (in the drawing, so its edges stay whole);
+- the turning, from a tenth to all: near still in silence;
+- the beat's flash and swell, and the bands' lights;
+- the bands' loudness, which now acts within it: a soft passage evolves the flame softly, however busy its hats.
+
+**Measured** (a browser over test tracks): a ramp from -60 LUFS rising 2.5 dB a second shows at 3 % up to -45, 32 % at
+-35, 56 % at -25, 88 % at -15, all at -8. A quiet track at -28 LUFS shows at 51 %, levelled or not (its gain of +10 dB
+is never applied above full); a loud master at -9 LUFS at all unlevelled, 78 % levelled (its -9 dB bring it to -18).

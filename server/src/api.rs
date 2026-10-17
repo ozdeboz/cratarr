@@ -469,13 +469,16 @@ async fn track_beats(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
 
 /// A track's sound in three frequency bands (decision 0046, amended), low (below 150 Hz), middle (300 Hz to 2.5 kHz)
 /// and high (above 5 kHz), as `analysis::bands::Bands` keeps it:
-/// - a format byte (1; another scale or layout is another format), the number of bands (3), loudness values a second
-///   (20), a zero byte;
+/// - a format byte (2; another scale or layout is another format), the number of bands (3), band loudness values a
+///   second (20), loudness-as-heard values a second (10);
 /// - the number of loudness frames (u32, little-endian), then that many frames of one byte a band, low first: the
 ///   band's level over that 50 ms in dB, 0 for 30 dB or more under the band's loudest in the track (its 98th
 ///   percentile), 255 at it, linear in dB between;
 /// - for each band, low first: its number of transients (u32), then each one's time in milliseconds from the start
-///   (u32) and strength (u8; 255 for the band's strong ones).
+///   (u32) and strength (u8; 255 for the band's strong ones);
+/// - the loudness as heard: its number of values (u32), then a byte each, EBU R128's momentary loudness (400 ms) around
+///   each tenth of a second, in thirds of a dB from -70 LUFS (0: -70 or quieter; 255: +15): the file's own, before
+///   any levelling (a player that levels plays it its gain louder or softer).
 ///
 /// Empty where the decode did not cover the whole file. Worked out and kept as `track_beats`, in the same decode.
 async fn track_bands(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {

@@ -196,7 +196,9 @@ export type Shown = {
   vibrancy: number;
   /** The whole picture's turn, radians. */
   turn: number;
-  /** How much larger it shows about its middle (a beat's swell): 1 for none. */
+  /** How large the flame is drawn: 1 as framed (smaller with more dark around it). */
+  scale: number;
+  /** How much larger it shows about its middle (a beat's swell): 1 for none, never less. */
   zoom: number;
   /** Brighter by this much as shown (a beat's flash): 1 for none. */
   flash: number;
@@ -413,7 +415,7 @@ export class FlameRenderer {
 
     // The points: each pass one step of the chaos game for every point, drawn where it lands.
     gl.useProgram(this.iterate);
-    gl.uniform4f(this.u(this.iterate, 'uCamera'), flame.center[0], flame.center[1], 1 / flame.size, this.width / this.height);
+    gl.uniform4f(this.u(this.iterate, 'uCamera'), flame.center[0], flame.center[1], look.scale / flame.size, this.width / this.height);
     gl.uniform2f(this.u(this.iterate, 'uTurn'), Math.cos(look.turn), Math.sin(look.turn));
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.palette);

@@ -1,14 +1,16 @@
 // What the visuals follow (decision 0046): the playing track's beats where they fall and its sound in three frequency
-// bands (each band's loudness and transients; both from its analysis, worked out on the server), its loudness where it
-// is (its waveform, decision 0035), its tempo, and whether it plays. Nothing listens to the sound itself: in the app
+// bands (each band's loudness and transients; both from its analysis, worked out on the server), how loud it is as
+// heard (its momentary loudness, with the levelling's gain where the player levels), its tempo, and whether it plays. Nothing listens to the sound itself: in the app
 // the music plays natively, out of the page's reach, and on another player it plays elsewhere. Read once per frame by
 // the visuals' loop.
-import { trackState } from '../api';
+import { getTrackGain, trackState, type TrackGain } from '../api';
+import { appInfo, inApp } from '../app.svelte';
+import { prefs } from '../prefs.svelte';
 import { positionNow } from '../localPlayer.svelte';
 import { isLocal } from '../output.svelte';
 import { paused, playing } from '../remote.svelte';
 import { loadWaveform, waveformOf } from '../waveforms.svelte';
-import { bandsAt, bandsOf, type Band } from './bands';
+import { bandsAt, bandsOf, heardAt, type Band } from './bands';
 import { beatAt, beatsOf, type Beat } from './beats';
 
 export type Music = {
@@ -16,6 +18,9 @@ export type Music = {
   key: string | null;
   /** Its loudness here, 0..1 of its loudest moment (its waveform), or null where it has none. */
   energy: number | null;
+  /** How intense the show is: the loudness as heard here, from near nothing at -45 LUFS (or silence) to all at -10
+   *  (0..1); from the waveform where the server has not said it (yet). */
+  intensity: number;
   /** Its tempo, when the analysis is sure of one (decision 0035). */
   bpm: number | null;
   /** The beat it is at, where it has beats (a tempo) and they are known here yet. */
@@ -31,10 +36,34 @@ const AHEAD = 0.05;
 
 const tempos = new Map<string, number | null>();
 
+/** The loudness as heard that makes the show's intensity nothing, and all (LUFS): a quiet room's music to a loud
+ *  master's chorus, in equal steps of dB. */
+const QUIET = -45;
+const LOUD = -10;
+
+/** The gain the player plays a track at, as the players level it (decision 0035: never louder than as it is, nor past
+ *  its peak), in dB; 0 where it does not level, or the gain is not known yet. */
+const gains = new Map<string, TrackGain | null>();
+function levelDb(source: string, id: string): number {
+  if (!(inApp ? appInfo.levelling : prefs.levelling)) return 0;
+  const key = `${source}/${id}`;
+  if (!gains.has(key)) {
+    gains.set(key, null);
+    getTrackGain(source, id).then(
+      (g) => gains.set(key, g),
+      () => gains.delete(key),
+    );
+  }
+  const g = gains.get(key);
+  if (!g || g.trackGain === undefined) return 0;
+  const peak = g.trackPeak && g.trackPeak > 0 ? -20 * Math.log10(g.trackPeak) : 0;
+  return Math.min(g.trackGain, peak, 0);
+}
+
 /** The music now. `at` is the frame's time (performance.now()), to move the position on between the player's reports. */
 export function musicNow(at: number): Music {
   const np = playing();
-  if (!np) return { key: null, energy: null, bpm: null, beat: null, bands: null, playing: false };
+  if (!np) return { key: null, energy: null, intensity: 0, bpm: null, beat: null, bands: null, playing: false };
   const key = `${np.source}/${np.id}`;
   loadWaveform(np.source, np.id);
   if (!tempos.has(key)) {
@@ -55,9 +84,14 @@ export function musicNow(at: number): Music {
   }
   const wave = waveformOf(np.source, np.id);
   const length = np.progress?.duration_secs ?? null;
+  const energy = wave && length ? loudnessAt(wave, pos / length) : null;
+  const heard = bands ? heardAt(bands, pos) : null;
+  const intensity =
+    heard !== null ? Math.min(1, Math.max(0, (heard + levelDb(np.source, np.id) - QUIET) / (LOUD - QUIET))) : 0.25 + 0.6 * (energy ?? 0.6);
   return {
     key,
-    energy: wave && length ? loudnessAt(wave, pos / length) : null,
+    energy,
+    intensity,
     bpm: tempos.get(key) ?? null,
     beat: beats ? beatAt(beats, pos) : null,
     bands: bands ? bandsAt(bands, pos) : null,

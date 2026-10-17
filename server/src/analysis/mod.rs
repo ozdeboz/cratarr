@@ -334,6 +334,8 @@ fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(An
     let mut pending: Vec<Vec<f32>> = vec![Vec::new(); ch];
     let mut hops = 0u64;
     let mut bins = vec![0u32; BINS];
+    // With the bands: the momentary loudness (400 ms) at each hop, the loudness as heard (decision 0046, amended).
+    let mut moments: Vec<f32> = Vec::new();
     // The waveform: the mean square per hundredth of a second, binned at the end.
     let centi = (o.rate / 100).max(1) as usize;
     let mut squares: Vec<f32> = Vec::new();
@@ -360,6 +362,9 @@ fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(An
                 if m.is_finite() && m >= LOWEST {
                     let i = (((m - LOWEST) / STEP) as usize).min(BINS - 1);
                     bins[i] += 1;
+                }
+                if with_bands {
+                    moments.push(m as f32);
                 }
             }
             for p in pending.iter_mut() {
@@ -451,7 +456,7 @@ fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(An
         complete: covered(frames, walked, o.time_base, o.rate),
         beats: Some(beats),
     };
-    Ok((analysis, in_bands.map(bands::BandEar::finish)))
+    Ok((analysis, in_bands.map(|b| b.finish(&moments))))
 }
 
 /// The beats of a track at the tempo kept (none without one, so a slow-counted track's are the slow ones): taktus's
@@ -649,6 +654,22 @@ pub(crate) mod tests {
         // It goes into an analysis' line and back.
         let line = serde_json::to_string(&Analysis { beats: Some(beats.clone()), ..a.clone() }).unwrap();
         assert_eq!(serde_json::from_str::<Analysis>(&line).unwrap().beats, Some(beats));
+    }
+
+    #[test]
+    fn the_loudness_as_heard_follows_the_sound_every_tenth_of_a_second() {
+        // 3 s of a 1 kHz sine at 0.1 (about -20 LUFS, as above), then 3 s at 0.01 (20 dB down).
+        let path = wav("moments", 6.0, |t| if t < 3.0 { 0.1 } else { 0.01 } * (2.0 * std::f64::consts::PI * 1000.0 * t).sin() as f32);
+        let (a, bands) = analyse_with_bands(&path, &[]).unwrap();
+        std::fs::remove_file(&path).ok();
+        let r = bands.read().expect("reads back");
+        assert!(r.moments.len().abs_diff(60) <= 1, "ten a second: {}", r.moments.len());
+        let around = |secs: f64| r.moments[(secs * bands::MOMENTS_RATE as f64) as usize];
+        assert!((around(1.5) + 20.0).abs() < 0.7, "{}", around(1.5));
+        assert!((around(4.5) + 40.0).abs() < 0.7, "{}", around(4.5));
+        // A window by its middle: 200 ms either side of the step it is half way between the two.
+        assert!(around(2.8) > -21.0 && around(3.2) < -39.0, "{} {}", around(2.8), around(3.2));
+        assert!((a.loudness_lufs - r.moments[15]).abs() < 4.0, "the same scale as the integrated loudness");
     }
 
     #[test]

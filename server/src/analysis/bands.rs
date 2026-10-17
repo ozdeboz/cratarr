@@ -1,6 +1,7 @@
 //! A track's sound in three bands, for the visuals (decision 0046, amended): low (kick drum and bass, below 150 Hz),
 //! middle (snare, voices, most instruments: 300 Hz to 2.5 kHz) and high (hats and cymbals, above 5 kHz). For each, its
-//! loudness every 50 ms and its transients: each sudden start, with its strength. Worked out from the same decode as the
+//! loudness every 50 ms and its transients: each sudden start, with its strength. And the whole sound's loudness as
+//! heard, every 100 ms: EBU R128's momentary loudness (LUFS), which the show's intensity follows. Worked out from the same decode as the
 //! rest of the analysis, only when the visuals ask (`analyse_with_bands`): some 20 KB a track, not for the whole
 //! library.
 
@@ -8,8 +9,12 @@
 pub const BANDS: usize = 3;
 /// Loudness values a second.
 pub const LOUDNESS_RATE: usize = 20;
-/// The kept form's first byte.
-const FORMAT: u8 = 1;
+/// The kept form's first byte. 1: before the loudness as heard was kept (read as not worked out).
+pub const FORMAT: u8 = 2;
+/// The loudness as heard: values a second, and its scale (a byte is a third of a dB from -70 LUFS: 255 is +15).
+pub const MOMENTS_RATE: usize = 10;
+const MOMENT_FLOOR: f32 = -70.0;
+const MOMENT_STEPS: f32 = 3.0;
 /// The filters' corners (Hz): low below the first, middle between the second and third, high above the fourth.
 const LOW_BELOW: f64 = 150.0;
 const MIDDLE_FROM: f64 = 300.0;
@@ -101,15 +106,19 @@ impl BandEar {
         }
     }
 
-    pub fn finish(self) -> Bands {
-        Bands::of(&self.energy)
+    /// The bands, with `moments`: the momentary loudness (LUFS) of each 400 ms window ending every 100 ms from the
+    /// fourth on.
+    pub fn finish(self, moments: &[f32]) -> Bands {
+        Bands::of(&self.energy, moments)
     }
 }
 
-/// A track's bands as kept and served: a format byte (1), the number of bands (3), loudness values a second (20), a
-/// zero; the loudness frames (u32, little-endian), then that many frames of one byte a band (low, middle, high: 0 for
-/// 30 dB or more under the band's loudest, 255 for its loudest); then for each band its transients: their number (u32),
-/// then each one's time in milliseconds (u32) and strength (0..=255, 255 for the band's strong ones).
+/// A track's bands as kept and served: a format byte (2), the number of bands (3), loudness values a second (20), the
+/// loudness as heard's values a second (10); the loudness frames (u32, little-endian), then that many frames of one
+/// byte a band (low, middle, high: 0 for 30 dB or more under the band's loudest, 255 for its loudest); then for each band
+/// its transients: their number (u32), then each one's time in milliseconds (u32) and strength (0..=255, 255 for the
+/// band's strong ones); then the loudness as heard: its number of values (u32), then one byte each, the momentary
+/// loudness of the 400 ms around that tenth of a second in thirds of a dB from -70 LUFS (0: -70 or quieter).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Bands(pub Vec<u8>);
 
@@ -120,16 +129,18 @@ pub struct Read {
     pub loudness: Vec<[u8; BANDS]>,
     /// Each band's transients: (milliseconds, strength).
     pub transients: [Vec<(u32, u8)>; BANDS],
+    /// The loudness as heard (LUFS), `MOMENTS_RATE` a second.
+    pub moments: Vec<f32>,
 }
 
 impl Bands {
-    fn of(energy: &[[f32; BANDS]]) -> Self {
+    fn of(energy: &[[f32; BANDS]], moments: &[f32]) -> Self {
         let levels: Vec<Vec<f32>> = (0..BANDS).map(|b| energy.iter().map(|e| db(e[b])).collect()).collect();
         // Each band's loudest: its 98th percentile, among the frames with any sound in that band.
         let tops: Vec<f32> = levels.iter().map(|l| percentile(l.iter().copied().filter(|v| *v > -100.0).collect(), 0.98).unwrap_or(-100.0)).collect();
         let per = FRAMES_A_SECOND / LOUDNESS_RATE;
         let frames = energy.len().div_ceil(per);
-        let mut out = vec![FORMAT, BANDS as u8, LOUDNESS_RATE as u8, 0];
+        let mut out = vec![FORMAT, BANDS as u8, LOUDNESS_RATE as u8, MOMENTS_RATE as u8];
         out.extend_from_slice(&(frames as u32).to_le_bytes());
         for f in 0..frames {
             let span = &energy[f * per..((f + 1) * per).min(energy.len())];
@@ -148,6 +159,10 @@ impl Bands {
                 out.push(strength);
             }
         }
+        // Each window by its middle: the first ends 400 ms in, around 200 ms; the two before it are its value too.
+        let centred: Vec<f32> = moments.first().map(|m| [*m, *m]).into_iter().flatten().chain(moments.iter().copied()).collect();
+        out.extend_from_slice(&(centred.len() as u32).to_le_bytes());
+        out.extend(centred.iter().map(|m| if m.is_finite() { ((m - MOMENT_FLOOR) * MOMENT_STEPS).clamp(0.0, 255.0).round() as u8 } else { 0 }));
         Bands(out)
     }
 
@@ -176,7 +191,11 @@ impl Bands {
                 at += 5;
             }
         }
-        (at == b.len()).then_some(Read { loudness, transients })
+        let n = u32_at(at)? as usize;
+        at += 4;
+        let moments = b.get(at..at + n)?.iter().map(|v| MOMENT_FLOOR + f32::from(*v) / MOMENT_STEPS).collect();
+        at += n;
+        (at == b.len()).then_some(Read { loudness, transients, moments })
     }
 }
 
@@ -244,7 +263,7 @@ mod tests {
         for i in 0..(secs * f64::from(rate)) as usize {
             ear.hear(f(i as f64 / f64::from(rate)) as f32);
         }
-        ear.finish().read().expect("reads back")
+        ear.finish(&[]).read().expect("reads back")
     }
 
     #[test]

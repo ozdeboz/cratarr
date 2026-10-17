@@ -99,8 +99,10 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
 
 /// What the visuals ask for (decision 0046) worked out when first asked: one decode at a time, beside the pass.
 static ON_DEMAND: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-/// Files decoded for the visuals since Cratarr started.
-static DECODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// The files decoded for the visuals, one entry a decode: the tests count their own files' (a count of all would count
+/// another test's too, run beside them).
+#[cfg(test)]
+static DECODED: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 /// How long a request waits for its turn, and then for its decode (a 40-minute track takes about 7 s on the NAS).
 const TURN: Duration = Duration::from_secs(20);
 const DECODE: Duration = Duration::from_secs(60);
@@ -116,9 +118,10 @@ pub async fn bands(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Band
     visual(cat, folder, rel, true).await.map(|(_, bands)| bands)
 }
 
-/// What is kept of a file's beats and bands, as the file is now.
+/// What is kept of a file's beats and bands, as the file is now. Bands of an older form count as not worked out.
 fn kept(cat: &Catalogue, folder: i64, rel: &str) -> (Option<Beats>, Option<Bands>) {
-    (cat.beats_of(folder, rel).flatten(), cat.bands_of(folder, rel).flatten())
+    let bands = cat.bands_of(folder, rel).flatten().filter(|b| b.0.first().is_none_or(|f| *f == crate::analysis::bands::FORMAT));
+    (cat.beats_of(folder, rel).flatten(), bands)
 }
 
 /// A file's beats and, when `with_bands`, its bands: as kept, or worked out now and kept. The page asks for both at
@@ -145,7 +148,8 @@ async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_bands: bool)
         let (path, size, mtime) = cat.file_to_analyse(folder, &rel).ok_or_else(|| anyhow::anyhow!("not in the library"))?;
         let started = Instant::now();
         let (a, bands) = crate::analysis::analyse_with_bands(&path, &cat.genres_of_file(folder, &rel))?;
-        DECODES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(test)]
+        DECODED.lock().unwrap().push(path.clone());
         let whole = a.complete != Some(false);
         let beats = match had_beats {
             Some(b) => b,
@@ -202,7 +206,7 @@ mod tests {
         }
         let cat = Arc::new(Catalogue::open(None, vec![d.clone()]).unwrap());
         cat.walk_all();
-        let decodes = || DECODES.load(std::sync::atomic::Ordering::Relaxed);
+        let decodes = || DECODED.lock().unwrap().iter().filter(|p| p.starts_with(&d)).count();
         let before = decodes();
 
         // A new track, its beats and bands asked for at once: one decode, both kept.
