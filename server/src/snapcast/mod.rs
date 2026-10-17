@@ -216,12 +216,14 @@ impl Snapcast {
                     let me = self.clone();
                     tokio::spawn(async move {
                         if let Err(e) = me.connection(sock).await {
-                            tracing::debug!("snapcast {peer}: {e}");
+                            let (client, error) = (peer.ip().to_string(), e.to_string());
+                            tracing::debug!(target: "syncplay", client, error, "connection failed");
                         }
                     });
                 }
                 Err(e) => {
-                    tracing::warn!("snapcast: cannot take a connection: {e}");
+                    let error = e.to_string();
+                    tracing::warn!(target: "syncplay", error, "cannot take a connection");
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
             }
@@ -277,7 +279,7 @@ impl Snapcast {
         let id = self.sources.fetch_add(1, Ordering::Relaxed);
         let stream = self.stream(&name);
         stream.take_over(id, self.now());
-        tracing::info!("snapcast: {name:?} sends its sound");
+        tracing::info!(target: "syncplay", player = name.as_str(), "sound started");
         let result = loop {
             let (h, payload) = match proto::read(&mut reader, || self.now()).await {
                 Ok(m) => m,
@@ -286,7 +288,7 @@ impl Snapcast {
             match h.kind {
                 proto::CODEC_HEADER => match proto::read_codec_header(&payload) {
                     Some(f) => stream.codec(id, f, h.received_us),
-                    None => tracing::warn!("snapcast: {name:?} sends a format other than PCM"),
+                    None => tracing::warn!(target: "syncplay", player = name.as_str(), "sound not PCM"),
                 },
                 proto::WIRE_CHUNK => {
                     if let Some(audio) = proto::read_wire_chunk(&payload) {
@@ -297,7 +299,7 @@ impl Snapcast {
                 _ => {}
             }
         };
-        tracing::info!("snapcast: {name:?} stopped sending its sound");
+        tracing::info!(target: "syncplay", player = name.as_str(), "sound stopped");
         stream.brk(id, self.now());
         result
     }
@@ -310,7 +312,7 @@ impl Snapcast {
         mut reader: tokio::net::tcp::OwnedReadHalf,
         mut w: tokio::net::tcp::OwnedWriteHalf,
     ) -> std::io::Result<()> {
-        tracing::info!("snapcast: {name:?} connected");
+        tracing::info!(target: "syncplay", player = name.as_str(), "listener connected");
         // Read on its own (a read cut off halfway would lose the connection's place): the time requests come through here.
         let (asked_tx, mut asked) = mpsc::channel::<proto::Header>(64);
         let clock = self.clone();
@@ -345,7 +347,7 @@ impl Snapcast {
                 o = next(&mut sound) => match o {
                     Ok(Out::Codec(c)) => w.write_all(&proto::message(proto::CODEC_HEADER, 0, 0, self.now(), &c)).await?,
                     Ok(Out::Chunk(c)) => w.write_all(&proto::message(proto::WIRE_CHUNK, 0, 0, self.now(), &c)).await?,
-                    Err(broadcast::error::RecvError::Lagged(n)) => tracing::warn!("snapcast: {name:?} fell {n} chunks behind"),
+                    Err(broadcast::error::RecvError::Lagged(chunks)) => tracing::warn!(target: "syncplay", player = name.as_str(), chunks, "listener fell behind"),
                     Err(broadcast::error::RecvError::Closed) => sound = None,
                 },
                 _ = changed(&mut muted) => {}
@@ -373,7 +375,7 @@ impl Snapcast {
             }
         };
         reading.abort();
-        tracing::info!("snapcast: {name:?} disconnected");
+        tracing::info!(target: "syncplay", player = name.as_str(), "listener disconnected");
         result
     }
 }

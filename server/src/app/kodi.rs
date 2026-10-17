@@ -250,7 +250,8 @@ impl Driver {
         let middle = sorted[sorted.len() / 2];
         self.lags.clear();
         if middle.abs() > OUT_OF_LINE_US {
-            tracing::info!("Kodi {:?} plays {} ms {}: put back", self.name, middle.abs() / 1000, if middle > 0 { "late" } else { "early" });
+            let (ms, late) = (middle.abs() / 1000, middle > 0);
+            tracing::info!(target: "syncplay", player = self.name.as_str(), ms, late, "put back in step");
             listener.adjust(middle);
             self.corrected = Some(std::time::Instant::now());
         }
@@ -592,7 +593,8 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
     loop {
         if let Err(e) = rpc.call("JSONRPC.Ping", json!({})).await {
             if !warned {
-                tracing::warn!("Kodi {:?} is out of reach: {e:#}", cfg.name);
+                let error = format!("{e:#}");
+                tracing::warn!(target: "playon", player = cfg.name.as_str(), error, "out of reach");
                 warned = true;
             }
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -605,7 +607,6 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
         let queue = me.get(&cfg.name).and_then(|v| v.queue).unwrap_or_default();
         drop(me);
         let mut d = Driver::new(&cfg, queue);
-        tracing::info!("Kodi {:?} is a player", cfg.name);
         let mut misses = 0;
         // The next read: a deadline of its own, so the fill's chunks (or anything else) do not put it off.
         let mut read_at = tokio::time::Instant::now();
@@ -635,17 +636,22 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
                     match serde_json::from_value::<Command>(v) {
                         Ok(c) => {
                             if let Err(e) = d.run(c).await {
-                                tracing::warn!("Kodi {:?}: {e:#}", d.name);
+                                let error = format!("{e:#}");
+                                tracing::warn!(target: "playon", player = d.name.as_str(), error, "command failed");
                             }
                         }
-                        Err(e) => tracing::debug!("Kodi {:?}: a command it does not take: {e}", d.name),
+                        Err(e) => {
+                            let error = e.to_string();
+                            tracing::debug!(target: "playon", player = d.name.as_str(), error, "command not understood");
+                        }
                     }
                     // Read at once: what the command did is reported now.
                     read_at = tokio::time::Instant::now() + Duration::from_millis(300);
                 }
                 _ = tokio::time::sleep_until(d.fill_at), if d.filling() => {
                     if let Err(e) = d.fill_step(usize::MAX).await {
-                        tracing::warn!("Kodi {:?}: adding the queue to its playlist: {e:#}", d.name);
+                        let error = format!("{e:#}");
+                        tracing::warn!(target: "playon", player = d.name.as_str(), error, "cannot fill its playlist");
                         d.fill_at = tokio::time::Instant::now() + Duration::from_secs(10);
                     }
                 }
@@ -670,7 +676,8 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
                         Err(e) => {
                             misses += 1;
                             if misses >= MISSES {
-                                tracing::warn!("Kodi {:?} stopped answering: {e:#}", d.name);
+                                let error = format!("{e:#}");
+                                tracing::warn!(target: "playon", player = d.name.as_str(), error, "stopped answering");
                                 break;
                             }
                         }

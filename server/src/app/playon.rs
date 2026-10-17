@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -103,6 +103,43 @@ pub struct Report {
     /// The whole queue when it changed since the last report; `None` keeps it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<Vec<QueueTrack>>,
+    /// Its own view of its link to Cratarr (decision 0045); apps from before it leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<ReportedLink>,
+}
+
+/// A player's link as the player sees it (decision 0045): what Cratarr cannot see while the player's reports still get
+/// through and its command stream does not. Times are epoch ms on Cratarr's clock.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReportedLink {
+    /// Its command stream open since; none while it is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected_since: Option<u64>,
+    /// Attempts to connect that failed since it was last connected.
+    #[serde(default)]
+    pub failed: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// The address of Cratarr's it uses (home or public).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// A wait it is in before trying again: until when, and why (a refusal's ten minutes, say).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_until: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_why: Option<String>,
+}
+
+/// A player's link as Cratarr knows it (decision 0045), in its view.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct LinkView {
+    /// Offline since (epoch seconds); none while online, or not known (offline since Cratarr started).
+    pub offline_since: Option<u64>,
+    /// How its last connection ended (`replaced`, `gone quiet`, `closed`, `server stopping`), and when (epoch seconds).
+    pub ended: Option<&'static str>,
+    pub ended_at: Option<u64>,
+    /// Its own view, from its last report.
+    pub own: Option<ReportedLink>,
 }
 
 fn full_volume() -> u8 {
@@ -346,6 +383,8 @@ pub struct PlayerView {
     pub name: String,
     /// Connected now and heard from lately: commands reach it.
     pub online: bool,
+    /// Its link, as Cratarr knows it and as the player last told (decision 0045).
+    pub link: LinkView,
     /// `playing`, `paused` or `stopped` (nothing loaded).
     pub state: &'static str,
     /// When it was last heard from (epoch seconds).
@@ -438,6 +477,11 @@ pub const MAX_DELAY_MS: u16 = 500;
 struct Entry {
     /// The open connection, as (its number, where its commands go).
     connection: Option<(u64, mpsc::Sender<String>)>,
+    /// The id the player gave its connection (`X-Cratarr-Connection`; a page's own id), for the log (decision 0045).
+    conn: Option<String>,
+    /// Offline since, and how its last connection ended, and when (decision 0045).
+    offline_since: Option<SystemTime>,
+    ended: Option<(&'static str, SystemTime)>,
     seen: SystemTime,
     /// When it was last heard from, for the lease.
     heard: Instant,
@@ -491,6 +535,9 @@ impl Entry {
     fn new() -> Self {
         Self {
             connection: None,
+            conn: None,
+            offline_since: None,
+            ended: None,
             seen: SystemTime::now(),
             heard: Instant::now(),
             ids: (None, TrackIds::default()),
@@ -534,9 +581,16 @@ impl Entry {
             }
             t
         });
+        let secs = |t: SystemTime| t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         PlayerView {
             name: name.to_string(),
             online: self.online(),
+            link: LinkView {
+                offline_since: self.offline_since.filter(|_| !self.online()).map(secs),
+                ended: self.ended.map(|(why, _)| why),
+                ended_at: self.ended.map(|(_, at)| secs(at)),
+                own: self.report.link.clone(),
+            },
             state: if track.is_none() {
                 "stopped"
             } else if r.playing {
@@ -587,6 +641,7 @@ fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Op
         Some((l, le)) => PlayerView {
             name: own.name,
             online: own.online,
+            link: own.link,
             seen: own.seen,
             volume: own.volume,
             ducked: own.ducked,
@@ -624,6 +679,8 @@ pub struct PlayOn {
     kodis: Mutex<Vec<tokio::task::AbortHandle>>,
     /// Cratarr's address on the local network (a Kodi's default `stream_from`).
     lan_base: Mutex<Option<String>>,
+    /// Cratarr is stopping: the connections that end now end for that.
+    stopping: AtomicBool,
 }
 
 /// A player's queue as saved, with where it was in it and whether it played.
@@ -675,6 +732,7 @@ impl PlayOn {
             joins: AtomicU64::new(1),
             kodis: Mutex::new(Vec::new()),
             lan_base: Mutex::new(None),
+            stopping: AtomicBool::new(false),
         });
         me.clone().tell_webhooks();
         me.clone().watch_leases();
@@ -710,11 +768,7 @@ impl PlayOn {
 
     /// A Kodi's driver joins as a player (`app::kodi`).
     pub(super) fn connect_kodi(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
-        let c = self.connect(name)?;
-        if let Some(e) = self.entries().get_mut(name) {
-            e.kind = PlayerKind::Kodi;
-        }
-        Ok(c)
+        self.connect_as(name, PlayerKind::Kodi, None, None)
     }
 
     /// A page in a browser joins as a player while it is open (decision 0033; 0031 amended).
@@ -728,22 +782,13 @@ impl PlayOn {
         {
             return Err(ToggleError::Refused(format!("{name} is another player's name.")));
         }
-        let c = self.connect(name)?;
-        if let Some(e) = self.entries().get_mut(name) {
-            e.kind = PlayerKind::Browser;
-            e.page = page.map(str::to_string);
-        }
-        Ok(c)
+        self.connect_as(name, PlayerKind::Browser, page, page)
     }
 
-    /// The app joins as a player (a name a page used before is the app's again).
-    pub fn connect_app(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
-        let c = self.connect(name)?;
-        if let Some(e) = self.entries().get_mut(name) {
-            e.kind = PlayerKind::App;
-            e.page = None;
-        }
-        Ok(c)
+    /// The app joins as a player (a name a page used before is the app's again); `conn`: the id it gave this
+    /// connection (decision 0045).
+    pub fn connect_app(self: &Arc<Self>, name: &str, conn: Option<&str>) -> Result<Commands, ToggleError> {
+        self.connect_as(name, PlayerKind::App, None, conn)
     }
 
     /// The Play On settings as the page sees them.
@@ -841,11 +886,25 @@ impl PlayOn {
                 if now.iter().any(|(n, on)| was.get(n).is_some_and(|w| w != on)) {
                     me.changed();
                 }
+                // Its connection still open but nothing heard for the lease: it ended, gone quiet, when last heard from.
+                let quiet: Vec<(String, Option<String>)> = me
+                    .entries()
+                    .iter_mut()
+                    .filter(|(n, e)| was.get(*n) == Some(&true) && now.get(*n) == Some(&false) && e.connection.is_some())
+                    .map(|(n, e)| {
+                        e.ended = Some(("gone quiet", SystemTime::now()));
+                        e.offline_since = SystemTime::now().checked_sub(e.heard.elapsed());
+                        (n.clone(), e.conn.clone())
+                    })
+                    .collect();
+                for (n, conn) in quiet {
+                    tracing::info!(target: "playon", player = n.as_str(), conn = conn.as_deref(), reason = "gone quiet", "connection ended");
+                }
                 was = now;
                 // Gone (its lease over) leaves its group, which plays on; back, it does not join again by itself.
                 let gone: Vec<String> = me.entries().iter().filter(|(_, e)| e.leader.is_some() && e.heard.elapsed() >= LEASE).map(|(n, _)| n.clone()).collect();
                 for n in gone {
-                    tracing::info!("player {n:?} is gone: out of its group");
+                    tracing::info!(target: "playon", player = n.as_str(), reason = "gone quiet", "out of its group");
                     let _ = me.leave(&n).await;
                 }
             }
@@ -890,8 +949,14 @@ impl PlayOn {
                 let (f, b) = (file.clone(), body.clone());
                 match tokio::task::spawn_blocking(move || write_private(&f, &b)).await {
                     Ok(Ok(())) => last = body,
-                    Ok(Err(e)) => tracing::warn!("Play On: cannot save the queues: {e:#}"),
-                    Err(e) => tracing::warn!("Play On: cannot save the queues: {e}"),
+                    Ok(Err(e)) => {
+                        let error = format!("{e:#}");
+                        tracing::error!(target: "playon", error, "cannot save the queues");
+                    }
+                    Err(e) => {
+                        let error = e.to_string();
+                        tracing::error!(target: "playon", error, "cannot save the queues");
+                    }
                 }
             }
         });
@@ -921,35 +986,79 @@ impl PlayOn {
         v.map(|v| PlayerView { delay_ms: self.delay_of(name), ..v })
     }
 
+    /// An app's player, without a connection id (the tests').
+    #[cfg(test)]
+    pub fn connect(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
+        self.connect_as(name, PlayerKind::App, None, None)
+    }
+
     /// A player connects: the commands for it come out of the returned stream, which closes the connection when it
     /// is dropped (the player went away). A second connection under the same name replaces the first.
-    pub fn connect(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
+    fn connect_as(self: &Arc<Self>, name: &str, kind: PlayerKind, page: Option<&str>, conn: Option<&str>) -> Result<Commands, ToggleError> {
         valid_name(name)?;
         let (tx, rx) = mpsc::channel(16);
         let id = self.connections.fetch_add(1, Ordering::Relaxed);
-        {
+        let replaced = {
             let mut entries = self.entries();
             let e = entries.entry(name.to_string()).or_insert_with(Entry::new);
+            let replaced = e.connection.is_some().then(|| e.conn.clone());
+            if replaced.is_some() {
+                e.ended = Some(("replaced", SystemTime::now()));
+            }
             e.connection = Some((id, tx));
+            e.conn = conn.map(str::to_string);
+            e.kind = kind;
+            e.page = page.map(str::to_string);
+            e.offline_since = None;
             e.seen = SystemTime::now();
             e.heard = Instant::now();
             e.fresh = true;
+            replaced
+        };
+        if let Some(old) = replaced {
+            tracing::info!(target: "playon", player = name, conn = old.as_deref(), reason = "replaced", "connection ended");
         }
+        tracing::info!(target: "playon", player = name, conn, kind = kind.name(), "connection opened");
         // Its group as Cratarr knows it (none, after it was gone): what it played with before it went is set straight.
         self.tell_group(name);
-        tracing::info!("player {name:?} connected");
         self.changed();
         Ok(Commands { rx, play_on: self.clone(), name: name.to_string(), id })
     }
 
+    /// Its connection closed: by the player or the network (Cratarr cannot tell which; the player's own log can).
     fn disconnected(&self, name: &str, id: u64) {
         let mut entries = self.entries();
         let Some(e) = entries.get_mut(name) else { return };
         if e.connection.as_ref().is_some_and(|(c, _)| *c == id) {
             e.connection = None;
+            e.offline_since.get_or_insert_with(SystemTime::now);
+            let stopping = self.stopping.load(Ordering::Relaxed);
+            if !stopping {
+                e.ended = Some(("closed", SystemTime::now()));
+            }
+            let conn = e.conn.clone();
             drop(entries);
-            tracing::info!("player {name:?} disconnected");
+            if !stopping {
+                tracing::info!(target: "playon", player = name, conn = conn.as_deref(), reason = "closed", "connection ended");
+            }
             self.changed();
+        }
+    }
+
+    /// Cratarr is stopping: each player connected now has its connection end for that (decision 0045).
+    pub fn stopping(&self) {
+        self.stopping.store(true, Ordering::Relaxed);
+        let ended: Vec<(String, Option<String>)> = self
+            .entries()
+            .iter_mut()
+            .filter(|(_, e)| e.connection.is_some())
+            .map(|(n, e)| {
+                e.ended = Some(("server stopping", SystemTime::now()));
+                (n.clone(), e.conn.clone())
+            })
+            .collect();
+        for (n, conn) in ended {
+            tracing::info!(target: "playon", player = n.as_str(), conn = conn.as_deref(), reason = "server stopping", "connection ended");
         }
     }
 
@@ -964,6 +1073,7 @@ impl PlayOn {
         // Back without a queue (the app was updated, or killed): it gets its queue back where it was, playing on if it
         // played (the owner's wish, 2026-10-15), else paused.
         let came_back_empty = std::mem::take(&mut e.fresh) && report.index < 0 && !e.queue.tracks.is_empty() && e.kind != PlayerKind::Kodi;
+        let given = came_back_empty.then(|| (e.queue.tracks.len(), before.playing));
         let give_back = came_back_empty.then(|| {
             let (index, position_ms, paused) = (before.index.max(0) as usize, before.position_ms, !before.playing);
             Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused }
@@ -974,14 +1084,17 @@ impl PlayOn {
             let moved = std::mem::take(&mut e.moved);
             report.entry.as_deref().map_or(report.index >= 0, |x| moved.iter().any(|m| m == x))
         };
+        let mut adopted = None;
         if give_back.is_some() {
             e.at = Instant::now();
         } else {
             // Taken as the player holds it, unless it was made before Cratarr's latest edit reached the player: that edit
             // is on its way, and the player reports again once it has it (no flip back and forth).
             if report.version.is_none_or(|v| v >= e.told) {
-                if let Some(q) = report.queue.clone() {
-                    e.queue.adopt(q);
+                if let Some(q) = report.queue.clone()
+                    && e.queue.adopt(q)
+                {
+                    adopted = Some((e.queue.tracks.len(), e.queue.version));
                 }
                 if let Some(r) = report.repeat {
                     e.queue.repeat = r;
@@ -1016,12 +1129,15 @@ impl PlayOn {
         let track = e.view(name, false).track;
         let new_track = key(track.as_ref()) != e.ids.0;
         drop(entries);
-        if let Some(c) = give_back {
-            tracing::info!("player {name:?} came back without its queue: given back");
+        if let (Some(c), Some((tracks, playing))) = (give_back, given) {
+            tracing::info!(target: "playon", player = name, tracks, playing, "queue given back");
             let _ = self.send(name, &c);
         }
+        if let Some((tracks, version)) = adopted {
+            tracing::info!(target: "playon", player = name, tracks, version, "queue adopted");
+        }
         if stop_moved {
-            tracing::info!("player {name:?} came back playing what was handed away: stopped");
+            tracing::info!(target: "playon", player = name, "stopped on its return");
             let _ = self.send(name, &Command::Stop);
         }
         // A new track: its ids, looked up outside the lock; its album's id from its own source when it came without one
@@ -1101,6 +1217,7 @@ impl PlayOn {
         let mut entries = self.entries();
         let Some(e) = entries.get_mut(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
         if !e.online() {
+            tracing::warn!(target: "playon", player = name, command = command_name(&command).as_str(), reason = "offline", "command not delivered");
             return Err(ToggleError::Refused(format!("{name} is not connected.")));
         }
         let mut queue = e.queue.clone();
@@ -1134,12 +1251,21 @@ impl PlayOn {
     fn tell(e: &mut Entry, name: &str, command: &Command, version: u64) -> Result<(), ToggleError> {
         let mut json = serde_json::to_value(command).map_err(anyhow::Error::from)?;
         json["version"] = version.into();
-        let Some((_, tx)) = &e.connection else { return Err(ToggleError::Refused(format!("{name} is not connected."))) };
-        tx.try_send(json.to_string()).map_err(|_| ToggleError::Refused(format!("{name} does not take commands now.")))
+        let what = json["command"].as_str().unwrap_or_default().to_string();
+        let Some((_, tx)) = &e.connection else {
+            tracing::warn!(target: "playon", player = name, command = what.as_str(), reason = "offline", "command not delivered");
+            return Err(ToggleError::Refused(format!("{name} is not connected.")));
+        };
+        tx.try_send(json.to_string()).map_err(|err| {
+            let reason = if matches!(err, mpsc::error::TrySendError::Full(_)) { "too many waiting" } else { "closed" };
+            tracing::warn!(target: "playon", player = name, command = what.as_str(), reason, "command not delivered");
+            ToggleError::Refused(format!("{name} does not take commands now."))
+        })
     }
 
     /// The queue and position of `from` go to `to`, which plays them, with their entries; `from` stops (decision 0033).
     async fn handover(&self, from: &str, to: &str) -> Result<(), ToggleError> {
+        tracing::info!(target: "playon", player = from, to, "handover");
         let (tracks, index, position_ms) = {
             let entries = self.entries();
             let Some(e) = entries.get(from) else { return Err(ToggleError::Refused(format!("No player is called {from}."))) };
@@ -1201,7 +1327,7 @@ impl PlayOn {
         e.report = Report { index: -1, volume: e.report.volume, ducked: e.report.ducked, ..Report::default() };
         e.at = Instant::now();
         drop(entries);
-        tracing::info!("player {name:?} was handed away from while offline: stopped here");
+        tracing::info!(target: "playon", player = name, "stopped while offline");
         self.changed();
     }
 
@@ -1280,7 +1406,7 @@ impl PlayOn {
             }
             newly.is_some()
         };
-        tracing::info!("player {name:?} plays with {leader:?}");
+        tracing::info!(target: "playon", player = name, leader = leader.as_str(), "joined a group");
         if newly_leads {
             self.tell_group(&leader);
         }
@@ -1298,7 +1424,7 @@ impl PlayOn {
         }
         self.tell_group(name);
         let rest = self.group(&leader);
-        tracing::info!("player {name:?} plays alone again");
+        tracing::info!(target: "playon", player = name, leader = leader.as_str(), "left its group");
         if leader == name {
             // The longest-joined of the app's players leads on; with none (Kodis only), the first plays alone.
             let apps: Vec<String> = {
@@ -1564,6 +1690,11 @@ impl Drop for Commands {
 
 /// Whether what comes of the album or playlist after place `index` is out of its own order: more than the one turn
 /// back that starting partway in gives (as the page tells it, lib/localPlayer.svelte.ts).
+/// A command's name as players are told it (`play`, `stop`…), for the log.
+fn command_name(c: &Command) -> String {
+    serde_json::to_value(c).ok().and_then(|v| v["command"].as_str().map(str::to_string)).unwrap_or_default()
+}
+
 fn shuffled_order(tracks: &[QueueTrack], index: i64) -> bool {
     let from = usize::try_from(index + 1).unwrap_or(0);
     let ns: Vec<u32> = tracks.iter().skip(from).filter(|t| t.lane.is_none()).filter_map(|t| t.n).collect();
@@ -1889,6 +2020,31 @@ mod tests {
         said(&mut phone);
         p.report("phone", playing("chosen-on-the-phone")).unwrap();
         assert!(said(&mut phone).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_players_link_shows_how_its_connection_ended() {
+        let p = play_on().await;
+        let first = p.connect_app("phone", Some("c-1")).unwrap();
+        assert_eq!(p.get("phone").unwrap().link, LinkView::default());
+        let second = p.connect_app("phone", Some("c-2")).unwrap();
+        assert_eq!(p.get("phone").unwrap().link.ended, Some("replaced"));
+        // The replaced connection closing changes nothing.
+        drop(first);
+        assert!(p.get("phone").unwrap().online);
+        drop(second);
+        let v = p.get("phone").unwrap();
+        assert_eq!((v.online, v.link.ended), (false, Some("closed")));
+        assert!(v.link.offline_since.is_some() && v.link.ended_at.is_some());
+        // Its own view, while its reports get through.
+        let own = ReportedLink { failed: 3, last_error: Some("HTTP 401".into()), wait_why: Some("refused".into()), ..ReportedLink::default() };
+        p.report("phone", Report { index: -1, link: Some(own.clone()), ..Report::default() }).unwrap();
+        assert_eq!(p.get("phone").unwrap().link.own, Some(own));
+        // Cratarr stopping: that is why the connections end.
+        let _third = p.connect_app("phone", None).unwrap();
+        assert_eq!(p.get("phone").unwrap().link.offline_since, None);
+        p.stopping();
+        assert_eq!(p.get("phone").unwrap().link.ended, Some("server stopping"));
     }
 
     #[test]

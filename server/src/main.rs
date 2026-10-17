@@ -220,13 +220,46 @@ async fn main() -> Result<()> {
     tracing::info!("listening on {bind}");
     // Every route behind the sign-in requirement (decision 0043), and with each connection's address: the sign-in
     // page's throttle reads it where no proxy names the client.
-    let routes = api::router(app).merge(serve::routes::router(served.clone())).layer(axum::middleware::from_fn_with_state(served, serve::access::require));
-    axum::serve(listener, routes.into_make_service_with_connect_info::<std::net::SocketAddr>())
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await?;
-    tracing::info!(target: "server", "stopping");
+    // Each request's id around all of it, the sign-in layer's refusals too (decision 0045).
+    let routes = api::router(app.clone())
+        .merge(serve::routes::router(served.clone()))
+        .layer(axum::middleware::from_fn_with_state(served, serve::access::require))
+        .layer(axum::middleware::from_fn(api::request_ids));
+    // Stopped (docker stop's SIGTERM, or Ctrl-C): no new requests, the players told why their connections end, and
+    // what is still open (the players' and pages' live connections never end by themselves) cut after a few seconds.
+    let (stopping, mut stopped) = tokio::sync::watch::channel(false);
+    let server = axum::serve(listener, routes.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(async move {
+        stop_signal().await;
+        tracing::info!(target: "server", "stopping");
+        app.play_on.stopping();
+        let _ = stopping.send(true);
+    });
+    tokio::select! {
+        r = server => r?,
+        () = async {
+            let _ = stopped.wait_for(|s| *s).await;
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        } => {}
+    }
     kept_log.flush();
     Ok(())
+}
+
+/// SIGTERM (what docker stop sends) or Ctrl-C.
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = term.recv() => {}
+                    _ = tokio::signal::ctrl_c() => {}
+                }
+                return;
+            }
+            Err(e) => tracing::warn!("cannot listen for SIGTERM: {e}"),
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }

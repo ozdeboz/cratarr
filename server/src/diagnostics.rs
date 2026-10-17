@@ -17,9 +17,6 @@
 //! logged by area changes while Cratarr runs ([set_levels]), for a while and then back by itself; the same filter governs
 //! this log and what the server prints.
 
-// Until the routes read the log and set the levels (decision 0045, claude-5f's part); it goes once they do.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;

@@ -27,6 +27,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/file/{source}/{id}", get(file))
         .route("/api/track/{source}/{id}/gain", get(track_gain))
         .route("/api/players", get(players))
+        .route("/api/players/{name}/log", get(player_log_last).post(player_log_add))
+        .route("/api/diagnostics", get(diagnostics_rows))
+        .route("/api/diagnostics/download", get(diagnostics_download))
+        .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
         .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
         .route("/api/players/{name}", get(player))
         .route("/api/players/{name}/command", post(player_command))
@@ -123,6 +127,150 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/catalogue/problems", get(catalogue_problems))
         .fallback(crate::web::serve)
         .with_state(app)
+}
+
+/// Every answer carries its request's id (`X-Request-Id`), and the request runs in a `request` span with it and the
+/// app's connection id (`X-Cratarr-Connection`), so the events it logs carry both (decision 0045). Outermost: the
+/// sign-in layer's refusals have them too.
+pub async fn request_ids(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    use tracing::Instrument;
+    let (id, conn) = {
+        let header = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok()).filter(|v| plain_id(v)).map(str::to_string);
+        (header("x-request-id").unwrap_or_else(new_request_id), header("x-cratarr-connection"))
+    };
+    let span = tracing::info_span!("request", request = %id, conn = tracing::field::Empty);
+    if let Some(c) = &conn {
+        span.record("conn", c.as_str());
+    }
+    let mut res = next.run(req).instrument(span).await;
+    if let Ok(v) = HeaderValue::from_str(&id) {
+        res.headers_mut().insert("x-request-id", v);
+    }
+    res
+}
+
+/// The diagnostics log (decision 0045), off the async threads; refused while it is not open.
+async fn with_log<T: Send + 'static>(f: impl FnOnce(&crate::diagnostics::Diagnostics) -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
+    let Some(d) = crate::diagnostics::get() else { return Err(ToggleError::Refused("The diagnostics log is not open.".into()).into()) };
+    let done = tokio::task::spawn_blocking(move || f(&d)).await.map_err(anyhow::Error::from).and_then(|r| r);
+    done.map_err(|e| ToggleError::Upstream(e).into())
+}
+
+/// The log, newest first, by player and area (`place`, `area`, `level`, `since`, `before`, `limit`).
+async fn diagnostics_rows(Query(q): Query<crate::diagnostics::Query>) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Some(level) = &q.level
+        && !LEVELS.contains(&level.as_str())
+    {
+        return Err(ToggleError::Refused(format!("No level is called {level}.")).into());
+    }
+    let rows = with_log(move |d| d.query(&q)).await?;
+    Ok(Json(json!({ "rows": rows })))
+}
+
+/// One file for a bug report (decision 0045 item 5): the log with client addresses masked, the players, and the settings
+/// without secrets; a webhook's address keeps only its scheme and host (its path is its secret).
+async fn diagnostics_download(State(app): State<Arc<App>>) -> Result<Response, ApiError> {
+    let log = with_log(|d| d.download()).await?;
+    let settings = app.settings.view().await.map_err(ToggleError::from)?;
+    let mut play_on = app.play_on.settings_view();
+    for w in &mut play_on.webhooks {
+        *w = w.find("://").and_then(|i| w[i + 3..].find('/').map(|j| format!("{}/…", &w[..i + 3 + j]))).unwrap_or_else(|| "…".into());
+    }
+    let made = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let body = json!({
+        "cratarr": env!("CARGO_PKG_VERSION"),
+        "made": made,
+        "levels": crate::diagnostics::levels(),
+        "players": app.play_on.list(),
+        "play_on": play_on,
+        "settings": settings,
+        "log": log,
+    });
+    let name = format!("cratarr-diagnostics-{}.json", made / 1000);
+    let headers = [(header::CONTENT_TYPE, HeaderValue::from_static("application/json")), (header::CONTENT_DISPOSITION, HeaderValue::from_str(&attachment(&name)).map_err(anyhow::Error::from).map_err(ToggleError::from)?)];
+    Ok((headers, body.to_string()).into_response())
+}
+
+const LEVELS: [&str; 5] = ["error", "warn", "info", "debug", "trace"];
+
+/// What is logged now, by area: the base, and what was added for a while (until when).
+fn levels_view() -> serde_json::Value {
+    let now = crate::diagnostics::levels();
+    let areas: serde_json::Map<String, serde_json::Value> = now
+        .as_ref()
+        .map(|l| l.directives.split(',').filter_map(|d| d.split_once('=')).filter(|(a, _)| crate::diagnostics::AREAS.contains(a)).map(|(a, l)| (a.to_string(), l.into())).collect())
+        .unwrap_or_default();
+    json!({ "areas": crate::diagnostics::AREAS, "levels": LEVELS, "now": areas, "until": now.and_then(|l| l.until) })
+}
+
+async fn diagnostics_levels() -> Json<serde_json::Value> {
+    Json(levels_view())
+}
+
+#[derive(Deserialize)]
+struct LevelsBody {
+    /// An area's level for a while (`{"playon": "debug"}`); none: back to the base now.
+    #[serde(default)]
+    areas: std::collections::BTreeMap<String, String>,
+    /// For how long (hours; at most a week).
+    #[serde(default = "an_hour")]
+    hours: u64,
+}
+
+fn an_hour() -> u64 {
+    1
+}
+
+/// More (or less) logged by area for a while, then the base again by itself, without a restart (decision 0045).
+async fn set_diagnostics_levels(Json(b): Json<LevelsBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut added = Vec::new();
+    for (area, level) in &b.areas {
+        if !crate::diagnostics::AREAS.contains(&area.as_str()) {
+            return Err(ToggleError::Refused(format!("No area is called {area}.")).into());
+        }
+        if !LEVELS.contains(&level.as_str()) {
+            return Err(ToggleError::Refused(format!("No level is called {level}.")).into());
+        }
+        added.push(format!("{area}={level}"));
+    }
+    let holds = std::time::Duration::from_secs(b.hours.clamp(1, 24 * 7) * 3600);
+    crate::diagnostics::set_levels(&added.join(","), holds).map_err(ToggleError::from)?;
+    Ok(Json(levels_view()))
+}
+
+#[derive(Deserialize)]
+struct LogOf {
+    /// The name of the player's log (a new one each time its log starts over).
+    log: String,
+}
+
+/// The last line Cratarr holds of a player's own log (decision 0045 item 2): the player sends the lines after it.
+async fn player_log_last(Path(name): Path<String>, Query(q): Query<LogOf>) -> Result<Json<serde_json::Value>, ApiError> {
+    let last = with_log(move |d| d.last_line(&name, &q.log)).await?;
+    Ok(Json(json!({ "last": last })))
+}
+
+#[derive(Deserialize)]
+struct LogLines {
+    log: String,
+    lines: Vec<crate::diagnostics::DeviceLine>,
+}
+
+/// Lines of a player's own log, their times on Cratarr's clock: added after the last one held, which is the answer.
+async fn player_log_add(Path(name): Path<String>, Json(b): Json<LogLines>) -> Result<Json<serde_json::Value>, ApiError> {
+    let last = with_log(move |d| d.add_lines(&name, &b.log, &b.lines)).await?;
+    Ok(Json(json!({ "last": last })))
+}
+
+/// An id from outside is taken only as a short plain token: it goes into logs and headers.
+fn plain_id(v: &str) -> bool {
+    (1..=64).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+fn new_request_id() -> String {
+    let mut b = [0u8; 8];
+    getrandom::fill(&mut b).expect("the operating system's random source");
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 async fn health(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -918,12 +1066,15 @@ async fn player_connect(
     State(app): State<Arc<App>>,
     Path(name): Path<String>,
     Query(q): Query<ConnectAs>,
+    headers: HeaderMap,
 ) -> Result<axum::response::sse::Sse<impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>>, ApiError> {
     use tokio_stream::StreamExt;
     let commands = if q.kind.as_deref() == Some("browser") {
         app.play_on.connect_browser(&name, q.page.as_deref())?
     } else {
-        app.play_on.connect_app(&name)?
+        // The id the app gave this connection (decision 0045), for the log.
+        let conn = headers.get("x-cratarr-connection").and_then(|v| v.to_str().ok()).filter(|v| plain_id(v));
+        app.play_on.connect_app(&name, conn)?
     };
     let stream = commands.map(|c| Ok(axum::response::sse::Event::default().event("command").data(c)));
     Ok(axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15))))
@@ -1612,6 +1763,27 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{ExportRequest, attachment, form_decode};
+
+    #[tokio::test]
+    async fn every_answer_carries_its_request_id() {
+        use axum::body::Body;
+        use tower::ServiceExt;
+        let app = axum::Router::new().route("/x", axum::routing::get(|| async { "ok" })).layer(axum::middleware::from_fn(super::request_ids));
+        let id_of = |r: axum::response::Response| r.headers()["x-request-id"].to_str().unwrap().to_string();
+        let ask = |id: Option<&str>| {
+            let mut b = axum::http::Request::get("/x");
+            if let Some(id) = id {
+                b = b.header("x-request-id", id);
+            }
+            b.body(Body::empty()).unwrap()
+        };
+        // A proxy's id is kept; without one, or with one that is not a plain token, Cratarr makes its own.
+        assert_eq!(id_of(app.clone().oneshot(ask(Some("caddy-42"))).await.unwrap()), "caddy-42");
+        let own = id_of(app.clone().oneshot(ask(None)).await.unwrap());
+        assert!(own.len() == 16 && own.bytes().all(|b| b.is_ascii_hexdigit()), "{own}");
+        assert_ne!(id_of(app.clone().oneshot(ask(Some("a b"))).await.unwrap()), "a b");
+        assert_ne!(own, id_of(app.oneshot(ask(None)).await.unwrap()));
+    }
 
     #[test]
     fn the_export_address_names_playlists_and_options() {
