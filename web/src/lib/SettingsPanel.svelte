@@ -529,8 +529,9 @@
   }
 
   /* Every button of a part, except an (i) (lib/MoreInfo), an icon on its own, and a switch (lib/Switch), which is its
-     whole row: flat, as Finamp's settings rows, not a box in the card. */
-  .scroll :global(button:not(.info):not(.switch)) {
+     whole row: flat, as Finamp's settings rows, not a box in the card. In :where, so the exceptions add no weight
+     (a part's own buttons, Seg's, still outweigh this). */
+  .scroll :global(button:where(:not(.info, .switch))) {
     min-height: 44px;
     padding: 0 14px;
     background: var(--bg);
@@ -541,7 +542,7 @@
     cursor: pointer;
   }
 
-  .scroll :global(.server button:not(.info):not(.switch)) {
+  .scroll :global(.server button:where(:not(.info, .switch))) {
     background: var(--surface);
   }
 

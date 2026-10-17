@@ -191,7 +191,7 @@
       {/if}
 
       {#if devices.length}
-        <h3 id="signed-in-h">Signed in</h3>
+        <div class="group"><h3 id="signed-in-h">Signed in</h3></div>
         <ul class="list" aria-labelledby="signed-in-h">
           {#each devices as d (d.id)}
             <li>
@@ -208,9 +208,11 @@
         </ul>
       {/if}
 
-      <h3 id="keys-h">
-        API keys <MoreInfo label="API keys" text="For what cannot sign in on a page: Home Assistant, scripts. A key shows once, when it is made; revoking one ends it at once." />
-      </h3>
+      <div class="group">
+        <h3 id="keys-h">
+          API keys <MoreInfo label="API keys" text="For what cannot sign in on a page: Home Assistant, scripts. A key shows once, when it is made; revoking one ends it at once." />
+        </h3>
+      </div>
       {#if keys.length}
         <ul class="list" aria-labelledby="keys-h">
           {#each keys as k (k.id)}
@@ -240,10 +242,10 @@
 {/if}
 
 <style>
-  /* Each group (Signed in, API keys) apart from the one above it. */
-  section h3 {
-    margin-top: 24px;
-    margin-bottom: 4px;
+  /* Each group (Signed in, API keys) apart from the one above it: its heading's own room, which the panel's heading
+     rule leaves alone. */
+  .group {
+    padding: 24px 0 4px;
   }
 
   .list {
