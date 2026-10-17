@@ -614,6 +614,12 @@ impl PlayingService {
         s.set_artist_favorite(name.trim(), on).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
+    /// Whether an artist is a favourite (the heart on their chip); `None` where the server keeps no favourite artists.
+    pub async fn artist_is_favorite(&self, source_id: &str, name: &str) -> Result<Option<bool>, ToggleError> {
+        let (_, s) = self.source(source_id)?;
+        s.artist_favorite(name.trim()).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
     /// Plays an album of a connected server on that server's player. Returns the player's label.
     pub async fn play_album(&self, source_id: &str, album_id: &str) -> Result<String, ToggleError> {
         if !crate::covers::valid_item_id(album_id) {

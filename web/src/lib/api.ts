@@ -920,6 +920,9 @@ export type ArtistView = {
 };
 export const artistView = (source: string, name: string) =>
   quietly<ArtistView>(`/api/artists/${encodeURIComponent(source)}?name=${encodeURIComponent(name)}`);
+/** Whether an artist is a favourite (the heart on an album's artist chip); null where the server keeps none. */
+export const artistFavorite = (source: string, name: string) =>
+  quietly<{ favorite: boolean | null }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}`);
 export const setArtistFavorite = (source: string, name: string, on: boolean) =>
   request<{ favorite: boolean }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}&on=${on}`, { method: 'POST' });
 /** Where an album of Cratarr's own library was left (Resume): a track and a position, from the bookmarks apps keep

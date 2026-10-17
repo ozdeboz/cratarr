@@ -19,6 +19,7 @@
     albumResume,
     albumView,
     type AlbumView,
+    artistFavorite,
     artistView,
     type ArtistView,
     setArtistFavorite,
@@ -199,6 +200,25 @@
     const s = a ? library.view?.sources.find((x) => x.id === a.source) : undefined;
     const la = s?.albums.find((x) => x.id === a!.id);
     return s && la ? { s, a: la } : null;
+  });
+
+  // The album's artist chip: who it opens (their panel), and whether they are a favourite (a heart in the chip, as on
+  // their own panel's chip).
+  const albumBy = $derived(album && albumHead?.artist ? (listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)) : null);
+  let albumByFavorite = $state<boolean | null>(null);
+  $effect(() => {
+    const a = album;
+    const by = albumBy;
+    albumByFavorite = null;
+    if (!a || !by) return;
+    let live = true;
+    artistFavorite(a.source, by).then(
+      (r) => live && (albumByFavorite = r.favorite),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
   });
 
   // Where the album comes from (its About): the server, and its library as the Library's list names it.
@@ -1245,13 +1265,16 @@
         {#if details}<p class="details">{details}</p>{/if}
         {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
         {#if album && albumHead?.artist}
-          {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
-          <button class="chip" disabled={!by} onclick={() => by && goToArtist(album.source, by)}
-            >{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{albumHead.artist}</span></button
+          <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
+            >{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
+                ><Icon name="heart" size={16} /></i
+              >{/if}</button
           >
         {:else if artist?.tracks}
           <button class="chip" onclick={() => viewOver(artistSubject(artist.source, artist.name))}
-            >{#if heroArt[0]}<img src={heroArt[0]} alt="" />{/if}<span>{artist.name}</span></button
+            >{#if heroArt[0]}<img src={heroArt[0]} alt="" />{/if}<span>{artist.name}</span>{#if artistHead?.favorite}<i class="liked" role="img" aria-label="Favourite"
+                ><Icon name="heart" size={16} /></i
+              >{/if}</button
           >
         {/if}
         <!-- A genre opens in the panel (its own crate). -->
@@ -2206,6 +2229,17 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* A favourite artist: a heart after the name, filled as the panel's own heart is. */
+  .chip .liked {
+    display: flex;
+    flex: none;
+    margin-left: -4px;
+  }
+
+  .chip .liked :global(svg) {
+    fill: currentColor;
   }
 
   p.genres {

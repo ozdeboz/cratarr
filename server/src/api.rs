@@ -86,7 +86,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/spoken", put(set_spoken))
         .route("/api/album-uses/{source}", get(album_uses))
         .route("/api/artists/{source}", get(artist_view))
-        .route("/api/artists/{source}/favorite", post(artist_favorite))
+        .route("/api/artists/{source}/favorite", get(artist_is_favorite).post(artist_favorite))
         .route("/api/albums/{source}/{album}", get(album_view))
         .route("/api/kept", post(kept_ask))
         .route("/api/albums/{source}/{album}/cover", get(album_cover))
@@ -416,6 +416,15 @@ async fn artist_view(
     Query(q): Query<ArtistName>,
 ) -> Result<Json<crate::app::ArtistView>, ApiError> {
     Ok(Json(app.playing.artist_view(&source, &q.name).await?))
+}
+
+/// Whether an artist is a favourite (`?name=`): the heart on an album's artist chip; null where the server keeps none.
+async fn artist_is_favorite(
+    State(app): State<Arc<App>>,
+    Path(source): Path<String>,
+    Query(q): Query<ArtistName>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "favorite": app.playing.artist_is_favorite(&source, &q.name).await? })))
 }
 
 /// The artist panel's heart (`?name=&on=`).

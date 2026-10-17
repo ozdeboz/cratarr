@@ -485,6 +485,16 @@ impl Source for CratarrSource {
         })
     }
 
+    fn artist_favorite<'a>(&'a self, name: &'a str) -> Fut<'a, Option<bool>> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            // As artist_works reads it: the same name, the same id.
+            let id = crate::serve::ids::artist(name);
+            Ok(Some(s.userdata.get(&o, Item::Artist, std::slice::from_ref(&id))?.get(&id).is_some_and(|a| a.starred_at.is_some())))
+        })
+    }
+
     fn album_uses(&self) -> Fut<'_, BTreeMap<String, super::AlbumUse>> {
         Box::pin(async move {
             let s = server()?;

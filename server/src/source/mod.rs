@@ -411,6 +411,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { Err(anyhow::anyhow!("This server keeps no favourite artists.")) })
     }
 
+    /// Optional: whether an artist is a favourite (the heart on their chip), by their name as the artist panel has it.
+    /// `None`: the source keeps no favourite artists.
+    fn artist_favorite<'a>(&'a self, _name: &'a str) -> Fut<'a, Option<bool>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// Optional: every album played or rated, by id (the Library's orders and filters by plays and rating), never kept:
     /// plays change. Empty where the source cannot say.
     fn album_uses(&self) -> Fut<'_, BTreeMap<String, AlbumUse>> {
