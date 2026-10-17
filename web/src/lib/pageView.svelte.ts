@@ -44,6 +44,12 @@ export const ALBUM_ORDERS: { value: CollectionOrder; label: string }[] = [
 /** The orders by how you used the albums (lib/albums albumUses): read when chosen, most first when chosen. */
 export const USE_ORDERS: readonly CollectionOrder[] = ['plays', 'played', 'rating'];
 
+/** The Playlists page's layouts: its chips, or a table (decision 0042). */
+export const PLAYLIST_LAYOUTS = [
+  { value: 'chips' as const, label: 'Chips', icon: 'layoutGrid' as const },
+  { value: 'table' as const, label: 'Table', icon: 'table' as const },
+];
+
 export const PLAYLIST_ORDERS: { value: PlaylistOrder; label: string }[] = [
   { value: 'name', label: 'Name' },
   { value: 'tracks', label: 'Tracks' },

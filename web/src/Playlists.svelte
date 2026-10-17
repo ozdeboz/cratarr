@@ -21,6 +21,11 @@
   import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './lib/favourites.svelte';
   import { endSelect, pickWhich, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
   import SelectSheet from './lib/SelectSheet.svelte';
+  import Row, { type Cell } from './lib/Row.svelte';
+  import { fit } from './lib/columns.svelte';
+  import { playlistStats, type PlaylistStats } from './lib/api';
+  import { addedOn } from './lib/albums.svelte';
+  import { clockText } from './lib/remote.svelte';
 
   // What is playing and the playlists come from the shell's poll (live.svelte.ts).
   const view = $derived(live.view);
@@ -99,6 +104,30 @@
 
   const missing = (n: number) => `${n} missing ${n === 1 ? 'track' : 'tracks'}`;
 
+  // The table (decision 0042): a playlist a line, its facts in columns, as many as the page's width allows in the
+  // owner's order (View). The facts are asked for while the table shows, again when the playlists change.
+  const table = $derived(prefs.playlistLayout === 'table');
+  const cols = $derived(table ? fit('playlists', gridWidth) : []);
+  let stats = $state<Record<string, PlaylistStats>>({});
+  const listsKey = $derived(shownPlaylists().map((p) => `${p.id}:${p.count}`).join('|'));
+  $effect(() => {
+    if (!table || !cols.length) return;
+    void listsKey;
+    playlistStats()
+      .then((s) => (stats = s))
+      .catch(() => {});
+  });
+  function cellText(id: string, st: PlaylistStats | undefined): string {
+    if (!st) return '';
+    if (id === 'length') return st.seconds ? clockText(st.seconds) : '';
+    if (id === 'genres') return st.genres.join(', ');
+    if (id === 'lastPlayed') return st.last_played ? addedOn(st.last_played) : '';
+    if (id === 'changed') return st.changed ? addedOn(st.changed) : '';
+    if (id === 'unplayed') return st.unplayed ? st.unplayed.toLocaleString() : '';
+    return '';
+  }
+  const cellsOf = (id: string): Cell[] | undefined => (cols.length ? cols.map((c) => ({ ...c, text: cellText(c.id, stats[id]) })) : undefined);
+
   // The pill's last button (lib/TopPill): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
   usePageAction(() => ({ icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
@@ -148,14 +177,23 @@
       selecting={select.on}
       onselect={() => (select.on ? endSelect() : startSelect())}
     />
-    <ul class="grid" class:pending={pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
+    {#if table && cols.length}
+      <!-- The table's column names, a row of the same shape so they line up. -->
+      <div class="table-head">
+        <Row size="large" as="div" head title="Name" count="Tracks" cells={cols.map((c) => ({ ...c, text: c.label }))}>
+          {#snippet action()}<span></span>{/snippet}
+        </Row>
+      </div>
+    {/if}
+    <ul class="grid" class:table class:pending={pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
       {#each items as p (p.id)}
         <li>
           <!-- The label views the playlist (decision 0023), in Select ticks it (decision 0025); the circle adds or removes
                the playing track. The border: in the panel's selection (or ticked). -->
           <PlaylistItem
             {p}
-            size="medium"
+            size={table ? 'large' : 'medium'}
+            cells={table ? cellsOf(p.id) : undefined}
             class={['chip', busy[p.id] && 'busy', live.queued.includes(p.id) && 'queued', !np && 'idle', !!np && !np.addable && !p.member && 'blocked']
               .filter(Boolean)
               .join(' ')}
@@ -235,6 +273,20 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  /* A table (decision 0042): a playlist a line, the lines touching, lower than a track's (no cover). */
+  .grid.table {
+    display: block;
+  }
+
+  .grid.table :global(.row.large),
+  .table-head :global(.row.large) {
+    min-height: 48px;
+  }
+
+  .table-head :global(.row.head) {
+    min-height: 32px;
   }
 
   /* The chips are medium rows (lib/Row.svelte, Finamp's add-to-playlist tile); what is the page's own is how adding

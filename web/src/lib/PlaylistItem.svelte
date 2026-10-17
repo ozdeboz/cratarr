@@ -10,7 +10,7 @@
   import Icon from './Icon.svelte';
   import Meter from './Meter.svelte';
   import { prefs } from './prefs.svelte';
-  import Row from './Row.svelte';
+  import Row, { type Cell } from './Row.svelte';
 
   let {
     p,
@@ -24,6 +24,7 @@
     wrap = false,
     class: extra = '',
     attach,
+    cells,
   }: {
     /** As the playlists list has it; only the name is needed for one that is not listed (yet). */
     p: Pick<Playlist, 'id' | 'name'> & Partial<Playlist>;
@@ -38,6 +39,8 @@
     wrap?: boolean;
     class?: string;
     attach?: Attachment<HTMLElement>;
+    /** Its columns in a table (decision 0042, lib/Row). */
+    cells?: readonly Cell[];
   } = $props();
 
   const missing = (n: number) => `${n} missing ${n === 1 ? 'track' : 'tracks'}`;
@@ -64,6 +67,7 @@
   {attach}
   tooltip={dead > 0 ? missing(dead) : undefined}
   count={p.count}
+  {cells}
 >
   {#snippet badges()}
     {#if prefs.pinned.includes(p.id)}<span class="mark" title="Pinned"><Icon name="pin" size={13} /></span>{/if}

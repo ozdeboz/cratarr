@@ -20,7 +20,7 @@
   import ColumnOrder from './ColumnOrder.svelte';
   import { COLUMNS, fit } from './columns.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, CRATE_ORDERS, DATES, DIRECTIONS, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
+  import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, CRATE_ORDERS, DATES, DIRECTIONS, PLAYLIST_LAYOUTS, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
   import { prefs } from './prefs.svelte';
   import Seg from './Seg.svelte';
   import SettingRow from './SettingRow.svelte';
@@ -45,7 +45,12 @@
     {:else if page === 'playlists'}
       <SettingRow card label="Order"><Seg label="Order" options={PLAYLIST_ORDERS} bind:value={prefs.playlistOrder} /></SettingRow>
       <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.playlistDown} /></SettingRow>
-      <SettingRow card label="Size"><SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} /></SettingRow>
+      <SettingRow card label="Layout"><Seg label="Layout" options={PLAYLIST_LAYOUTS} bind:value={prefs.playlistLayout} /></SettingRow>
+      {#if prefs.playlistLayout === 'table'}
+        <ColumnOrder kind="playlists" shown={fit('playlists', pageView.width).map((c) => c.id)} offered={COLUMNS.playlists.map((c) => c.id)} />
+      {:else}
+        <SettingRow card label="Size"><SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} /></SettingRow>
+      {/if}
     {:else if page === 'crates'}
       <SettingRow card label="Order"><Seg label="Order" options={CRATE_ORDERS} bind:value={prefs.crateOrder} /></SettingRow>
       <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.crateDown} /></SettingRow>

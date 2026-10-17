@@ -60,6 +60,8 @@ export type Prefs = {
   downloadsDown: boolean;
   playlistOrder: PlaylistOrder;
   playlistDown: boolean;
+  /** The Playlists page as chips or as a table (decision 0042). */
+  playlistLayout: 'chips' | 'table';
   crateOrder: CrateOrder;
   crateDown: boolean;
 };
@@ -105,6 +107,7 @@ export const DEFAULTS: Prefs = {
   downloadsDown: false,
   playlistOrder: 'name',
   playlistDown: false,
+  playlistLayout: 'chips',
   crateOrder: 'own',
   crateDown: false,
 };
@@ -124,6 +127,7 @@ function read(): Prefs {
       if (COLLECTION_ORDERS.includes(saved.libraryOrder)) p.libraryOrder = saved.libraryOrder;
       if (COLLECTION_ORDERS.includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
       if (['name', 'tracks', 'playing'].includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
+      if (saved.playlistLayout === 'chips' || saved.playlistLayout === 'table') p.playlistLayout = saved.playlistLayout;
       if (['name', 'tracks', 'playing'].includes(saved.listOrder)) p.listOrder = saved.listOrder;
       if (typeof saved.listDown === 'boolean') p.listDown = saved.listDown;
       // Before the list header: "✓ first" was the playlists' only other order.

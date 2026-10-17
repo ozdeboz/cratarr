@@ -12,7 +12,7 @@ use super::library::{Library, fts_query};
 
 const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.artist, s.album, s.album_artist, s.track_no, s.disc_no,
   s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover,
-  s.rg_track_gain, s.rg_track_peak, s.rg_album_gain, s.rg_album_peak";
+  s.rg_track_gain, s.rg_track_peak, s.rg_album_gain, s.rg_album_peak, s.genres";
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
   a.created, a.mbid, a.compilation, a.cover";
 
@@ -37,6 +37,11 @@ pub enum AlbumOrder {
     ByGenre(String),
 }
 
+/// A song of the genre in parameter `n`: any of its genres, whole, regardless of capitals (as albums are found).
+fn any_genre(n: usize) -> String {
+    format!("('\u{1f}' || genres || '\u{1f}') LIKE ('%\u{1f}' || ?{n} || '\u{1f}%')")
+}
+
 fn song_of(r: &rusqlite::Row) -> rusqlite::Result<Song> {
     let suffix: Option<String> = r.get(16)?;
     let suffix = suffix.unwrap_or_default();
@@ -52,7 +57,8 @@ fn song_of(r: &rusqlite::Row) -> rusqlite::Result<Song> {
         artist: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
         track: r.get(9)?,
         year: r.get(11)?,
-        genres: genre.iter().map(|g| GenreRef { name: g.clone() }).collect(),
+        // Every genre (OpenSubsonic's list); the one-genre field has the first.
+        genres: r.get::<_, String>(25)?.split('\u{1f}').filter(|g| !g.is_empty()).map(|g| GenreRef { name: g.into() }).collect(),
         genre,
         cover_art: r.get::<_, Option<String>>(20)?.unwrap_or_else(|| album_id.clone()),
         size: r.get::<_, i64>(15)?.max(0) as u64,
@@ -297,7 +303,7 @@ impl Library {
         let mut p: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         if let Some(g) = genre {
             p.push(Box::new(g.to_string()));
-            sql.push_str(&format!(" AND genre = ?{} COLLATE NOCASE", p.len()));
+            sql.push_str(&format!(" AND {}", any_genre(p.len())));
         }
         if let Some(y) = years.0 {
             sql.push_str(&format!(" AND year >= {y}"));
@@ -322,7 +328,7 @@ impl Library {
         let f = folder.map_or(String::new(), |f| format!(" AND folder = {f}"));
         let ns = numbers(
             &db,
-            &format!("SELECT n FROM songs WHERE genre = ?1 COLLATE NOCASE{f} ORDER BY order_title, n LIMIT ?2 OFFSET ?3"),
+            &format!("SELECT n FROM songs WHERE {}{f} ORDER BY order_title, n LIMIT ?2 OFFSET ?3", any_genre(1)),
             &[&genre, &(size as i64), &(offset as i64)],
         )?;
         let mut songs = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
