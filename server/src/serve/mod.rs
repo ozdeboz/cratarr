@@ -7,6 +7,7 @@ pub mod auth_check;
 pub mod files;
 pub mod ids;
 pub mod import;
+pub mod ldap;
 pub mod library;
 pub mod library_api;
 pub mod playlists;
@@ -62,6 +63,8 @@ pub struct Serve {
     pub users: users::Users,
     /// Signed-in devices (decision 0039), and the sign-in page's failed tries.
     pub sessions: sessions::Sessions,
+    /// A directory (LDAP) asked first at sign-in (decision 0040).
+    pub directory: ldap::Directory,
     pub throttle: signin::Throttle,
     /// Attached once the app has opened it (`attach_catalogue`); the server opens before the app, so the built-in
     /// Cratarr source can answer while the app starts (decision 0032).
@@ -114,6 +117,7 @@ impl Serve {
             userdata,
             users,
             sessions,
+            directory: ldap::Directory::open(data_dir)?,
             throttle: Default::default(),
             catalogue_cell: Default::default(),
             import: import::Importer::default(),
@@ -131,8 +135,14 @@ impl Serve {
     }
 
     /// The account a user name and password sign in as on the sign-in page (decision 0039). The one place an account
-    /// is checked: a directory (LDAP) would be asked first here, Cratarr's own accounts staying the fallback.
-    pub fn sign_in(&self, name: &str, password: &str) -> Option<String> {
+    /// is checked: the directory (LDAP), when one is set, is asked first (decision 0040), Cratarr's own accounts staying
+    /// the fallback.
+    pub async fn sign_in(&self, name: &str, password: &str) -> Option<String> {
+        let names = self.users.names();
+        let exists = |a: &str| names.iter().any(|n| n == a);
+        if let Some(account) = self.directory.sign_in(name, password, &exists, now()).await {
+            return Some(account);
+        }
         self.users.sign_in(name, password).map(|u| u.name)
     }
 

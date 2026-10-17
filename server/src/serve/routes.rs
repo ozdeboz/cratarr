@@ -83,6 +83,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .with_state(serve.clone())
         .merge(super::auth_check::router(serve.clone()))
         .merge(super::signin::router(serve.clone()))
+        .merge(super::ldap::router(serve.clone()))
         .merge(super::library_api::router(serve))
 }
 

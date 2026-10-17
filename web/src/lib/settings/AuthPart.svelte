@@ -3,6 +3,7 @@
   // from home (decision 0039) sign in with, and the devices signed in there, each to sign out; acts at once.
   import { getSignedIn, signOutDevice, type SignedIn } from '../api';
   import { ed } from './editor.svelte';
+  import DirectoryPart from './DirectoryPart.svelte';
 
   let devices = $state<SignedIn[]>([]);
   let error = $state<string | null>(null);
@@ -85,6 +86,7 @@
         </ul>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
       {/if}
+      <DirectoryPart />
     {/if}
   </section>
 {/if}

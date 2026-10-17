@@ -345,7 +345,7 @@ async fn sign_in(State(serve): State<Arc<Serve>>, request: Request) -> Response 
         let error = format!("Too many tries. Try again in {} min.", (wait + 59) / 60);
         return page_response(StatusCode::TOO_MANY_REQUESTS, &next, name, Some(&error), Some(wait));
     }
-    let Some(user) = serve.sign_in(name, &form.password) else {
+    let Some(user) = serve.sign_in(name, &form.password).await else {
         serve.throttle.failed(&keys, now);
         tracing::warn!("sign-in: refused for {name:?} from {client}");
         let error = if serve.users.names().is_empty() { NO_ACCOUNT } else { "Wrong user name or password." };
