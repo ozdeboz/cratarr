@@ -50,6 +50,24 @@ export const DEFAULTS: VisualSettings = {
   evolution: [0.25, 0.25, 0.25],
 };
 
+/** Each setting's range, as its slider has it (the bands' times in seconds, though their sliders double). A kept value
+ *  outside it (from a version whose range was another) is brought into it. */
+export const RANGES: Record<keyof VisualSettings, [number, number]> = {
+  points: [14, 21],
+  steps: [1, 16],
+  resolution: [0.25, 1],
+  fps: [10, 60],
+  intensity: [0, 1],
+  speed: [0, 2],
+  beat: [0, 2],
+  bands: [0, 2],
+  brightness: [0.1, 1],
+  lighting: [0.02, 1],
+  evolution: [0.02, 2],
+};
+
+const within = (key: keyof VisualSettings, v: number) => Math.min(RANGES[key][1], Math.max(RANGES[key][0], v));
+
 /** The pixels the display pass draws by default: about a megapixel. The points fall into a buffer of at most 0.6 MP
  *  anyway; drawing that out to every pixel of a large screen cost the most of a frame on integrated graphics (5.5 ms of
  *  22 at 2560 x 1600, measured 2026-10-17) and showed little more. */
@@ -69,8 +87,10 @@ function load(): VisualSettings {
     const out = fresh();
     for (const k of Object.keys(DEFAULTS) as (keyof VisualSettings)[]) {
       const v = saved[k];
-      if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = v;
-      else if (Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && x > 0)) (out as Record<string, unknown>)[k] = [...v];
+      if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = within(k, v);
+      else if (Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
+        (out as Record<string, unknown>)[k] = v.map((x) => within(k, x));
+      }
     }
     return out;
   } catch {

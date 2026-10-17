@@ -18,7 +18,7 @@
   import { between, evolved, flameFrom, seedOf, type Flame, type Part } from './flame';
   import { musicNow } from './music.svelte';
   import { FlameRenderer } from './render';
-  import { autoResolution, resetVisualSettings, saveVisualSettings, visualSettings as s, type VisualSettings } from './settings.svelte';
+  import { autoResolution, RANGES, resetVisualSettings, saveVisualSettings, visualSettings as s, type VisualSettings } from './settings.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -85,31 +85,33 @@
 
   // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then the look.
   type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution'>;
-  type Row = { key: One; label: string; min: number; max: number; step: number; text: (v: number) => string };
+  type Row = { key: One; label: string; step: number; text: (v: number) => string };
   const percent = (v: number) => `${Math.round(v * 100)}%`;
   const thousands = (log2: number) => {
     const n = 2 ** log2;
     return n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}M` : `${Math.round(n / 1024)}k`;
   };
   const COMPUTE: Row[] = [
-    { key: 'points', label: 'Points', min: 14, max: 21, step: 0.25, text: thousands },
-    { key: 'steps', label: 'Steps', min: 1, max: 16, step: 1, text: (v) => `${v}` },
-    { key: 'resolution', label: 'Resolution', min: 0.25, max: 1, step: 0.05, text: percent },
-    { key: 'fps', label: 'FPS', min: 10, max: 60, step: 5, text: (v) => `${v}` },
+    { key: 'points', label: 'Points', step: 0.25, text: thousands },
+    { key: 'steps', label: 'Steps', step: 1, text: (v) => `${v}` },
+    { key: 'resolution', label: 'Resolution', step: 0.05, text: percent },
+    { key: 'fps', label: 'FPS', step: 5, text: (v) => `${v}` },
   ];
   const LOOK: Row[] = [
-    { key: 'intensity', label: 'Intensity', min: 0, max: 1, step: 0.05, text: percent },
-    { key: 'speed', label: 'Speed', min: 0, max: 2, step: 0.05, text: percent },
-    { key: 'beat', label: 'Beat', min: 0, max: 2, step: 0.05, text: percent },
-    { key: 'bands', label: 'Bands', min: 0, max: 2, step: 0.05, text: percent },
-    { key: 'brightness', label: 'Brightness', min: 0.1, max: 1, step: 0.05, text: percent },
+    { key: 'intensity', label: 'Intensity', step: 0.05, text: percent },
+    { key: 'speed', label: 'Speed', step: 0.05, text: percent },
+    { key: 'beat', label: 'Beat', step: 0.05, text: percent },
+    { key: 'bands', label: 'Bands', step: 0.05, text: percent },
+    { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
   ];
-  // Each band's times, on a doubling scale (20 ms to 1 s for its light, to 2 s for its evolution).
+  // Each band's times, on a doubling scale.
   const BAND_ROWS = ['Sub', 'Mid', 'Treble'];
-  const TIMES = [
-    { key: 'lighting', label: 'Lighting', min: Math.log2(0.02), max: 0 },
-    { key: 'evolution', label: 'Evolution', min: Math.log2(0.02), max: 1 },
-  ] as const;
+  const TIMES = (['lighting', 'evolution'] as const).map((key) => ({
+    key,
+    label: key === 'lighting' ? 'Lighting' : 'Evolution',
+    min: Math.log2(RANGES[key][0]),
+    max: Math.log2(RANGES[key][1]),
+  }));
   const seconds = (v: number) => (v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(1)} s`);
   function setTime(key: 'lighting' | 'evolution', band: number, log2: number) {
     s[key][band] = 2 ** log2;
@@ -421,7 +423,14 @@
               {#each rows as row (row.key)}
                 <label class="row">
                   <span>{row.label}</span>
-                  <input type="range" min={row.min} max={row.max} step={row.step} value={valueOf(row.key)} oninput={(e) => set(row.key, Number(e.currentTarget.value))} />
+                  <input
+                    type="range"
+                    min={RANGES[row.key][0]}
+                    max={RANGES[row.key][1]}
+                    step={row.step}
+                    value={valueOf(row.key)}
+                    oninput={(e) => set(row.key, Number(e.currentTarget.value))}
+                  />
                   <output>{row.text(valueOf(row.key))}</output>
                 </label>
               {/each}
