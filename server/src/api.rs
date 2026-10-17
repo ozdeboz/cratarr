@@ -64,6 +64,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}", get(crate_get).put(crate_update).delete(crate_delete))
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/tempo", get(crate_tempo))
+        .route("/api/playlists/stats", get(playlist_stats))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
         .route("/api/crates/{id}/favourites", put(crate_favourites))
         .route(
@@ -665,6 +666,11 @@ async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q
 /// A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, counted on the server.
 async fn crate_tempo(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Json<crate::crates::TempoBands>, ApiError> {
     Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), q.favourites).await?))
+}
+
+/// Every playlist's facts for the Playlists page's table (decision 0042), by id.
+async fn playlist_stats(State(app): State<Arc<App>>) -> Result<Json<std::collections::BTreeMap<String, crate::app::playlists::PlaylistStats>>, ApiError> {
+    Ok(Json(app.playlists.playlist_stats().await?))
 }
 
 /// One's own crate as the builder sends it (decision 0024).

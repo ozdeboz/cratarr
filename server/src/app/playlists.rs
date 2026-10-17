@@ -97,6 +97,43 @@ pub struct CrateStats {
     pub covers: Vec<CoverRef>,
 }
 
+/// A playlist's facts for the Playlists page's table (decision 0042): how long, its top genres, how much of it the
+/// owner never played and when they last played any of it, and when its file last changed.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct PlaylistStats {
+    pub seconds: u64,
+    /// Its three most common genres (its tracks' albums'), most common first.
+    pub genres: Vec<String>,
+    /// Never played by the owner (Cratarr's own plays); `None` while there is no owner to ask about.
+    pub unplayed: Option<usize>,
+    /// The latest play of any of its tracks (epoch seconds).
+    pub last_played: Option<i64>,
+    /// When its file last changed (epoch seconds).
+    pub changed: i64,
+}
+
+/// A playlist's facts from its lines (library-relative), the Music folder's songs and the owner's plays.
+fn playlist_stats(
+    lines: &[String],
+    songs: &HashMap<String, crate::serve::library::RelSong>,
+    plays: Option<&HashMap<String, (u32, Option<i64>)>>,
+    changed: i64,
+) -> PlaylistStats {
+    let known: Vec<&crate::serve::library::RelSong> = lines.iter().filter_map(|l| songs.get(l)).collect();
+    PlaylistStats {
+        seconds: known.iter().filter_map(|s| s.duration_ms).filter(|d| *d > 0).map(|d| d as u64).sum::<u64>() / 1000,
+        genres: crates::top_genres(known.iter().map(|s| s.genres.as_slice()), 3),
+        unplayed: plays.map(|p| known.iter().filter(|s| !p.contains_key(&s.song)).count()),
+        last_played: plays.and_then(|p| known.iter().filter_map(|s| p.get(&s.song).and_then(|(_, at)| *at)).max()),
+        changed,
+    }
+}
+
+/// The playlists' facts as last worked out, and what they were worked out from (the playlists' files, the library's
+/// build, the owner's plays): the table asks again whenever the list changes, and the answer is kept until one of
+/// those does.
+type StatsKept = std::sync::Mutex<Option<(String, std::collections::BTreeMap<String, PlaylistStats>)>>;
+
 /// An album's cover, as `/api/cover/{source}/{album_id}` serves it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct CoverRef {
@@ -268,7 +305,7 @@ mod card_tests {
             crates::Facts { rel: "B/1.flac".into(), genres: vec!["Jazz".into()], year: None, bpm: None },
         ];
         let by: HashMap<&str, &crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
-        let song = |id: &str, album: &str, ms: i64, created: i64| RelSong { song: id.into(), album: album.into(), duration_ms: Some(ms), created: Some(created) };
+        let song = |id: &str, album: &str, ms: i64, created: i64| RelSong { song: id.into(), album: album.into(), duration_ms: Some(ms), created: Some(created), genres: Vec::new() };
         let songs: HashMap<String, RelSong> = [
             ("old.flac".to_string(), song("tr-0", "al-z", 1_000, now - 300 * 86_400)),
             ("A/1.flac".to_string(), song("tr-1", "al-a", 200_000, now - 30 * 86_400)),
@@ -286,6 +323,31 @@ mod card_tests {
         assert_eq!(crate_stats(&lines, &by, &songs, None, now).unplayed, None, "no owner: not known");
         assert_eq!(image_file("c-12ab"), "c-12ab.jpg");
         assert_eq!(image_file("../x"), "x2e2e2f78.jpg");
+    }
+
+    #[test]
+    fn a_playlists_facts_count_its_lines() {
+        let song = |id: &str, ms: i64, genres: &[&str]| RelSong {
+            song: id.into(),
+            album: "al".into(),
+            duration_ms: Some(ms),
+            created: None,
+            genres: genres.iter().map(|g| g.to_string()).collect(),
+        };
+        let songs: HashMap<String, RelSong> = [
+            ("A/1.flac".to_string(), song("tr-1", 200_000, &["Dub", "Reggae"])),
+            ("A/2.flac".to_string(), song("tr-2", 100_500, &["dub"])),
+            ("B/1.flac".to_string(), song("tr-3", 60_000, &["Jazz"])),
+        ]
+        .into_iter()
+        .collect();
+        let plays: HashMap<String, (u32, Option<i64>)> = [("tr-1".to_string(), (3, Some(500))), ("tr-3".to_string(), (1, Some(900)))].into_iter().collect();
+        let lines: Vec<String> = ["A/1.flac", "A/2.flac", "B/1.flac", "gone.flac"].iter().map(|s| s.to_string()).collect();
+        let s = playlist_stats(&lines, &songs, Some(&plays), 42);
+        assert_eq!((s.seconds, s.unplayed, s.last_played, s.changed), (360, Some(1), Some(900), 42));
+        assert_eq!(s.genres, vec!["Dub", "Jazz", "Reggae"]);
+        let none = playlist_stats(&lines, &songs, None, 42);
+        assert_eq!((none.unplayed, none.last_played), (None, None), "no owner: not known");
     }
 }
 
@@ -431,6 +493,8 @@ pub struct PlaylistService {
     journal: Arc<Journal>,
     /// The favourite tracks' lines for the crates (see `favourite_lines`).
     favourites: Arc<FavouritesKept>,
+    /// The playlists' table's facts (see `playlist_stats`).
+    stats: StatsKept,
 }
 
 /// How long the favourites heard are answered before they are asked for again (in the background).
@@ -561,7 +625,40 @@ impl PlaylistService {
     pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>) -> Self {
         let crate_store = crates::CrateStore::new(lib.data_dir());
         let favourites = Arc::new(FavouritesKept::load(lib.data_dir().map(|d| std::path::PathBuf::from(d).join("favourites.json"))));
-        Self { lib, sync, crate_store, journal, favourites }
+        Self { lib, sync, crate_store, journal, favourites, stats: StatsKept::default() }
+    }
+
+    /// Every playlist's facts for the Playlists page's table (decision 0042), by id. Worked out again only when a
+    /// playlist's file, the library's build or the owner's plays changed since.
+    pub async fn playlist_stats(&self) -> Result<std::collections::BTreeMap<String, PlaylistStats>, ToggleError> {
+        let Some(store) = self.lib.store_opt() else { return Ok(Default::default()) };
+        let lists = store.lines_of_all().await?;
+        let Some(serve) = crate::serve::instance() else { return Ok(Default::default()) };
+        let stamps: String = lists.iter().map(|(id, changed, lines)| format!("{id}:{changed}:{};", lines.len())).collect();
+        let s = serve.clone();
+        let key_and_owner = tokio::task::spawn_blocking(move || {
+            let me = s.users.owner();
+            let plays = me.as_ref().and_then(|me| s.userdata.plays_print(me).ok());
+            (format!("{stamps}|{}|{plays:?}", s.built_at()), me)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let (key, me) = key_and_owner;
+        if let Some((k, kept)) = self.stats.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
+            && *k == key
+        {
+            return Ok(kept.clone());
+        }
+        let worked = tokio::task::spawn_blocking(move || {
+            let songs = serve.library.songs_by_rel(0).unwrap_or_default();
+            let plays = me.and_then(|me| serve.userdata.song_plays(&me).ok());
+            lists.into_iter().map(|(id, changed, lines)| (id, playlist_stats(&lines, &songs, plays.as_ref(), changed))).collect::<std::collections::BTreeMap<_, _>>()
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let answer = worked.clone();
+        *self.stats.lock().unwrap_or_else(|p| p.into_inner()) = Some((key, worked));
+        Ok(answer)
     }
 
     /// Ask the media server for the favourites once, at start, when a crate shows by them: the first visit to Crates

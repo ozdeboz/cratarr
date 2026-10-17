@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS songs (
   album_id TEXT NOT NULL, title TEXT NOT NULL, artist TEXT, album TEXT NOT NULL, album_artist TEXT,
   track_no INTEGER, disc_no INTEGER, year INTEGER, genre TEXT, bpm INTEGER, duration_ms INTEGER, size INTEGER NOT NULL,
   suffix TEXT, kbps INTEGER, created INTEGER, mbid TEXT, order_title TEXT NOT NULL, cover TEXT,
-  rg_track_gain REAL, rg_track_peak REAL, rg_album_gain REAL, rg_album_peak REAL);
+  rg_track_gain REAL, rg_track_peak REAL, rg_album_gain REAL, rg_album_peak REAL, genres TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS songs_by_album ON songs (album_id, disc_no, track_no, rel);
 CREATE INDEX IF NOT EXISTS songs_by_title ON songs (order_title, n);
 CREATE INDEX IF NOT EXISTS songs_by_pid ON songs (pid);
@@ -65,7 +65,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(name, content='', cont
 ";
 
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 7;
+const LAYOUT: i64 = 8;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -165,6 +165,8 @@ pub struct RelSong {
     pub duration_ms: Option<i64>,
     /// When it came (epoch seconds).
     pub created: Option<i64>,
+    /// Its genres, as its tags have them: what a playlist's top genres count.
+    pub genres: Vec<String>,
 }
 
 pub fn year_of(v: &str) -> Option<u32> {
@@ -378,9 +380,9 @@ impl Library {
             let mut ins_song = tx.prepare(
                 "INSERT INTO songs (id, pid, folder, rel, album_id, title, artist, album, album_artist, track_no, disc_no, year,
                    genre, bpm, duration_ms, size, suffix, kbps, created, mbid, order_title, path,
-                   rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak)
+                   rg_track_gain, rg_track_peak, rg_album_gain, rg_album_peak, genres)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-                   ?23, ?24, ?25, ?26)",
+                   ?23, ?24, ?25, ?26, ?27)",
             )?;
             let mut ins_fts = tx.prepare("INSERT INTO songs_fts (rowid, title, artist, album) VALUES (?1, ?2, ?3, ?4)")?;
             let mut ins_artist = tx.prepare("INSERT INTO song_artists (song_id, artist_id, name, position) VALUES (?1, ?2, ?3, ?4)")?;
@@ -416,6 +418,7 @@ impl Library {
                     g.track_peak,
                     g.album_gain,
                     g.album_peak,
+                    s.genres.join("\u{1f}"),
                 ])?;
                 let n = tx.last_insert_rowid();
                 ins_fts.execute(params![n, s.title, s.artist_credit.as_deref().unwrap_or(""), s.album])?;
@@ -536,13 +539,20 @@ impl Library {
     pub fn songs_by_rel(&self, folder: i64) -> Result<HashMap<String, RelSong>> {
         let db = self.db();
         let mut st = db.prepare(
-            "SELECT s.rel, s.id, s.album_id, s.duration_ms, MIN(COALESCE(s.created, a.created), COALESCE(a.created, s.created))
+            "SELECT s.rel, s.id, s.album_id, s.duration_ms, MIN(COALESCE(s.created, a.created), COALESCE(a.created, s.created)), s.genres
              FROM songs s LEFT JOIN albums a ON a.id = s.album_id WHERE s.folder = ?1",
         )?;
         let rows = st.query_map(rusqlite::params![folder], |r| {
+            let genres: Option<String> = r.get(5)?;
             Ok((
                 r.get::<_, String>(0)?,
-                RelSong { song: r.get(1)?, album: r.get(2)?, duration_ms: r.get(3)?, created: r.get(4)? },
+                RelSong {
+                    song: r.get(1)?,
+                    album: r.get(2)?,
+                    duration_ms: r.get(3)?,
+                    created: r.get(4)?,
+                    genres: genres.map(|g| g.split('\u{1f}').filter(|x| !x.is_empty()).map(str::to_string).collect()).unwrap_or_default(),
+                },
             ))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -785,6 +795,20 @@ mod tests {
         lib.build(&sample(), &Rules::default()).unwrap();
         let created: i64 = lib.db().query_row("SELECT created FROM albums WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
         assert_eq!(created, 1_700_000_001, "a later one does not move it");
+    }
+
+    #[test]
+    fn a_song_has_all_its_genres_and_is_found_by_each() {
+        let lib = Library::open(None).unwrap();
+        assert!(lib.refresh(&sample(), &Rules::default()).unwrap());
+        let found = lib.songs_by_genre("Art Pop", 10, 0, None).unwrap();
+        assert_eq!(found.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Hunter", "Jóga"], "found by its second genre too");
+        assert_eq!(found[0].genres.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["Electronic", "Art Pop"]);
+        assert_eq!(found[0].genre.as_deref(), Some("Electronic"), "the one-genre field keeps the first");
+        assert_eq!(lib.songs_by_genre("art pop", 10, 0, None).unwrap().len(), 2, "regardless of capitals");
+        assert_eq!(lib.random_songs(10, Some("Art Pop"), (None, None), None).unwrap().len(), 2);
+        assert!(lib.songs_by_genre("Art", 10, 0, None).unwrap().is_empty(), "a whole genre, not a part of one");
+        assert_eq!(lib.songs_by_rel(0).unwrap()["Björk/Homogenic (1997)/01 Hunter.flac"].genres, ["Electronic", "Art Pop"]);
     }
 
     #[test]

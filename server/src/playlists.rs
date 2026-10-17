@@ -394,6 +394,20 @@ impl Store {
         Ok(out)
     }
 
+    /// Every playlist's lines (library-relative) and when its file last changed (epoch seconds), as `view` lists them.
+    pub async fn lines_of_all(&self) -> Result<Vec<(String, i64, Vec<String>)>> {
+        let ids: Vec<String> = self.view(None).await?.into_iter().map(|p| p.id).collect();
+        let cache = self.cache.read().await;
+        Ok(ids
+            .into_iter()
+            .filter_map(|id| {
+                let c = cache.get(&id)?;
+                let changed = c.stamp.0.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+                Some((id, changed, c.lines.clone()))
+            })
+            .collect())
+    }
+
     /// Re-check every playlist's dead entries against the library (files appear and disappear without the
     /// playlist changing). Meant to run every minute or so in the background.
     pub async fn refresh_dead(&self) {

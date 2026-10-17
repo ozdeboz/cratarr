@@ -659,6 +659,24 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Every song a user played: its play count and when it was last played (the playlists' table, decision 0042).
+    pub fn song_plays(&self, user: &str) -> Result<std::collections::HashMap<String, (u32, Option<i64>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT item, play_count, play_date FROM annotation WHERE user = ?1 AND kind = ?2 AND play_count > 0")?;
+        let rows = st.query_map(params![user, Kind::Song.as_str()], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, i64>(1)?.max(0) as u32, r.get(2)?))))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What changes when a user plays anything (how many songs, how many plays, the latest): a cache's key.
+    pub fn plays_print(&self, user: &str) -> Result<(i64, i64, i64)> {
+        let db = self.db();
+        Ok(db.query_row(
+            "SELECT count(*), total(play_count), COALESCE(max(play_date), 0) FROM annotation WHERE user = ?1 AND kind = ?2 AND play_count > 0",
+            params![user, Kind::Song.as_str()],
+            |r| Ok((r.get(0)?, r.get::<_, f64>(1)? as i64, r.get(2)?)),
+        )?)
+    }
+
     /// Each song's play count and when it was last played, for a user (the panel's orders).
     pub fn play_stats(&self, user: &str, songs: &[String]) -> Result<std::collections::HashMap<String, (u32, Option<i64>)>> {
         let db = self.db();
