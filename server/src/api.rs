@@ -505,7 +505,9 @@ async fn for_visuals(app: Arc<App>, source: String, id: String, headers: HeaderM
     };
     let Some(bytes) = got else { return StatusCode::SERVICE_UNAVAILABLE.into_response() };
     let stamp = tokio::task::spawn_blocking(move || cat.analysis_stamp(folder, &rel)).await.ok().flatten();
-    let etag = stamp.map(|(at, version)| format!("\"{}{version}-{at}\"", if bands { "s" } else { "b" }));
+    // The bands' form in theirs: a copy kept from another form never answers for this one.
+    let kind = if bands { format!("s{}", crate::analysis::bands::FORMAT) } else { "b".to_string() };
+    let etag = stamp.map(|(at, version)| format!("\"{kind}-{version}-{at}\""));
     if etag.is_some() && headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == etag.as_deref() {
         return StatusCode::NOT_MODIFIED.into_response();
     }
