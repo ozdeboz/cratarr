@@ -18,7 +18,7 @@
   import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import Waveform from './Waveform.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
-  import { isLocal, shownPlaylists } from './output.svelte';
+  import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { keepViewed, panel } from './panel.svelte';
@@ -284,7 +284,7 @@
     ro.observe(head);
     return () => ro.disconnect();
   });
-  // What is shown changes the controls' height (a long title, the pill, a progress bar or none). As one value: `np` is
+  // What is shown changes the controls' height (a long title, a progress bar or none). As one value: `np` is
   // new at every report, and laying out again at each would be many times a second.
   const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.showProgress, chips.length]));
   $effect(() => {
@@ -362,10 +362,6 @@
       <i class="sp a"></i>
       <div class="track">
         {#if np}
-          <!-- Where it plays, and where to play it: the output's sheet. Always there (never gives way). -->
-          <button class="pill" aria-haspopup="dialog" aria-label="Playing on {np.player ?? 'another player'}; play on" onclick={() => (outputOpen = true)}
-            ><Icon name="speaker" size={14} />{#if np.player}<span>{np.player}</span>{/if}</button
-          >
           <div class="title">{np.name}</div>
           <div class="sub">
             {#if np.artist}<button class="artist" disabled={!by} onclick={() => by && goToArtist(np.source, by)}
@@ -454,7 +450,17 @@
         <i class="sp c"></i>
         <div class="side">
           <button class="act" aria-label="Track menu" aria-haspopup="menu" onclick={openMenu}><Icon name="menu" size={24} /></button>
-          <!-- Always there; until the server says whether it is a favourite, not to be pressed. -->
+          <!-- Where it plays, and where to play it (the output's sheet): left of the heart (the owner, 2026-10-17), lit
+               while it plays on another device, whose name is under it. -->
+          <button
+            class="act labelled device"
+            class:on={!playsHere()}
+            aria-haspopup="dialog"
+            aria-label={playsHere() ? 'Playing here; play on' : `Playing on ${np.player ?? 'another player'}; play on`}
+            onclick={() => (outputOpen = true)}
+            ><Icon name="speaker" size={24} />{#if !playsHere() && np.player}<small>{np.player}</small>{/if}</button
+          >
+          <!-- In the middle (the owner). Always there; until the server says whether it is a favourite, not to be pressed. -->
           <button
             class="fav"
             class:on={favorite()}
@@ -467,7 +473,7 @@
                A tap opens its sheet; lit while either is on. -->
           {#if isLocal()}
             <button
-              class="act radio"
+              class="act radio more"
               class:on={local.radio || local.autoplay !== null}
               aria-label="More music"
               aria-haspopup="dialog"
@@ -479,7 +485,7 @@
                 >{/if}</button
             >
           {/if}
-          <button class="act labelled" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
+          <button class="act labelled queue" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
             ><Icon name="playlists" size={24} /><small>{queuePlace}</small></button
           >
         </div>
@@ -548,7 +554,7 @@
   /* Finamp's player layout (lib/playerLayout.ts): portrait = the cover's region (the cover centred in it) over the
      controls' box; landscape = the cover's region on the left, the controls' box centred in the rest. Inside the box
      its three groups are spread evenly (Finamp's spaceEvenly; in landscape its spacers 4 / 4 / 10 / 4). What gives
-     way (drop-*): the large gaps, the large play button, the player pill, the small gaps, the info chips, the title's
+     way (drop-*): the large gaps, the large play button, the small gaps, the info chips, the title's
      second line, the progress bar. */
   header {
     box-sizing: border-box;
@@ -682,22 +688,6 @@
     background: var(--surface);
     box-shadow: 0 4px 24px rgb(0 0 0 / 0.3);
     user-select: none;
-  }
-
-  /* The output: a small floating pill over the title, a button. */
-  .pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    margin-bottom: 6px;
-    padding: 2px 10px;
-    border: 1px solid color-mix(in srgb, var(--text) 25%, transparent);
-    border-radius: 999px;
-    background: none;
-    color: var(--muted);
-    font: inherit;
-    font-size: 0.72rem;
-    cursor: pointer;
   }
 
   .title {
@@ -878,10 +868,13 @@
   }
 
   /* The menu, the queue, the favourite and the count. */
+  /* Five places, the heart in the middle whatever is shown: menu, device, heart, More music (where the page holds the
+     queue), queue. */
   .side {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
     align-items: center;
-    justify-content: space-evenly;
+    justify-items: center;
     /* Room for the label under a button (.labelled): counted when the player is fitted, so it is never cut off. */
     padding-bottom: 12px;
   }
@@ -940,9 +933,24 @@
     fill: currentColor;
   }
 
-  /* The radio, lit while on (as the heart). */
-  .act.radio.on {
+  .side .more {
+    grid-column: 4;
+  }
+
+  .side .queue {
+    grid-column: 5;
+  }
+
+  /* The radio, lit while on (as the heart); the device while it plays elsewhere. */
+  .act.radio.on,
+  .act.device.on {
     color: var(--art-accent);
+  }
+
+  .act.device small {
+    max-width: 88px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* Its icon follows what is on (the owner): the radio, ∞ for Autoplay alone, the radio with a small ∞ for both. */
