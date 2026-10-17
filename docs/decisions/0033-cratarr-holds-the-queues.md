@@ -209,3 +209,13 @@ per account, the last save winning; Ampache keeps one per account and app.
   - a session ends 5 s after its song while playing, and 30 minutes after a pause.
 - No `jukeboxControl`: it hands an app the whole queue of one device, every server ties it to a single output, and
   Symfonium refuses it. Driving Cratarr's players stays Play On's.
+
+## Amendment (2026-10-17): a handover from a player that is offline
+
+A handover takes the queue Cratarr holds, so it works from a player that is offline too (Home Assistant moving the
+phone's music to the tablet after the phone dropped off). The stop it sends the player it leaves cannot reach it then.
+On 2026-10-17 the phone came back 8½ minutes later without a queue, and was given back the one that had moved, playing.
+
+- The player left is stopped in Cratarr as the stop would have left it: its queue empty, nothing playing. Back without
+  a queue, it is given nothing.
+- Back still playing an entry of the queue that moved, it is told to stop. Music started on it since plays on.

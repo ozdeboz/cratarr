@@ -455,6 +455,9 @@ struct Entry {
     fresh: bool,
     /// The queue's version in the last edit told to the player: what a report must have seen to be taken.
     told: u64,
+    /// The entries of a queue handed over from it while it was offline (the handover's stop could not reach it): back
+    /// and still playing one of them, it is stopped then.
+    moved: Vec<String>,
     /// The leader of the group it plays in (itself when it leads), decision 0037.
     leader: Option<String>,
     /// When it joined its group, counted: the longest-joined leads when the leader leaves.
@@ -497,6 +500,7 @@ impl Entry {
             at: Instant::now(),
             fresh: false,
             told: 0,
+            moved: Vec::new(),
             leader: None,
             joined: 0,
             kind: PlayerKind::App,
@@ -964,6 +968,12 @@ impl PlayOn {
             let (index, position_ms, paused) = (before.index.max(0) as usize, before.position_ms, !before.playing);
             Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused }
         });
+        // Back after its music was handed away (its stop could not reach it): still playing that music, it stops now, as
+        // it would have then; what was started on it since is its own.
+        let stop_moved = e.connection.is_some() && !e.moved.is_empty() && {
+            let moved = std::mem::take(&mut e.moved);
+            report.entry.as_deref().map_or(report.index >= 0, |x| moved.iter().any(|m| m == x))
+        };
         if give_back.is_some() {
             e.at = Instant::now();
         } else {
@@ -1009,6 +1019,10 @@ impl PlayOn {
         if let Some(c) = give_back {
             tracing::info!("player {name:?} came back without its queue: given back");
             let _ = self.send(name, &c);
+        }
+        if stop_moved {
+            tracing::info!("player {name:?} came back playing what was handed away: stopped");
+            let _ = self.send(name, &Command::Stop);
         }
         // A new track: its ids, looked up outside the lock; its album's id from its own source when it came without one
         // (queued by a page, handed over): Home Assistant finds "this album" by it.
@@ -1166,9 +1180,29 @@ impl PlayOn {
         if let Some(s) = sleep.filter(|s| s.at_ms.is_some() || s.end_of_track) {
             let _ = Box::pin(self.command(to, Command::Sleep { at_ms: s.at_ms, end_of_track: s.end_of_track })).await;
         }
-        // The music is on its way there; this one stopping is no reason to fail the handover.
-        let _ = Box::pin(self.command(from, Command::Stop)).await;
+        // The music is on its way there; this one stopping is no reason to fail the handover. One that cannot be told
+        // (offline) is stopped here as the stop would have left it, and stopped itself once it is back.
+        if Box::pin(self.command(from, Command::Stop)).await.is_err() {
+            self.stopped_away(from);
+        }
         Ok(())
+    }
+
+    /// A player the music was handed away from without its knowing: its queue emptied here, as a stop does, so it is
+    /// not given back when the player returns without one; the entries that moved kept, to stop it should it still
+    /// play one of them.
+    fn stopped_away(&self, name: &str) {
+        let mut entries = self.entries();
+        let Some(e) = entries.get_mut(name) else { return };
+        e.moved = e.queue.tracks.iter().map(|t| t.entry.clone()).filter(|x| !x.is_empty()).collect();
+        if e.queue.edit(Command::Stop).is_ok() {
+            e.told = e.queue.version;
+        }
+        e.report = Report { index: -1, volume: e.report.volume, ducked: e.report.ducked, ..Report::default() };
+        e.at = Instant::now();
+        drop(entries);
+        tracing::info!("player {name:?} was handed away from while offline: stopped here");
+        self.changed();
     }
 
     /// Cratarr serves groups' sound (decision 0037): on Snapcast's `port` (on `host`, when the players reach it on
@@ -1811,6 +1845,50 @@ mod tests {
         assert!(p.list().iter().all(|v| v.group.is_none()));
         assert_eq!(said(&mut kitchen).iter().filter(|c| *c == "play").count(), 1);
         assert_eq!(said(&mut phone).last().map(String::as_str), Some("stop"));
+    }
+
+    #[tokio::test]
+    async fn a_player_handed_away_from_while_offline_does_not_play_that_music_again() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let mut tablet = p.connect("tablet").unwrap();
+        let phone = p.connect("phone").unwrap();
+        p.command("phone", Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).await.unwrap();
+        let entries: Vec<String> = p.get("phone").unwrap().queue.unwrap().iter().map(|t| t.entry.clone()).collect();
+        let version = p.get("phone").unwrap().queue_version;
+        let playing = |entry: &str| Report { index: 0, entry: Some(entry.into()), version: Some(version), playing: true, ..Report::default() };
+        p.report("phone", playing(&entries[0])).unwrap();
+
+        // The phone drops off; the music is handed over from it all the same (Cratarr holds its queue).
+        drop(phone);
+        p.command("phone", Command::Handover { to: "tablet".into() }).await.unwrap();
+        assert_eq!(said(&mut tablet).iter().filter(|c| *c == "play").count(), 1);
+        let v = p.get("phone").unwrap();
+        assert_eq!((v.state, v.playing, v.queue_length), ("stopped", false, 0), "stopped here, as the stop would have");
+
+        // Back without a queue: nothing is given back.
+        let mut phone = p.connect("phone").unwrap();
+        p.report("phone", Report { index: -1, ..Report::default() }).unwrap();
+        assert!(!said(&mut phone).iter().any(|c| c == "play" || c == "stop"));
+
+        // Back still playing what moved: it is stopped.
+        p.command("phone", Command::play(vec![t("tr-3")], 0, 0)).await.unwrap();
+        let moved = p.get("phone").unwrap().queue.unwrap()[0].entry.clone();
+        drop(phone);
+        p.command("phone", Command::Handover { to: "tablet".into() }).await.unwrap();
+        let mut phone = p.connect("phone").unwrap();
+        said(&mut phone);
+        p.report("phone", playing(&moved)).unwrap();
+        assert_eq!(said(&mut phone), vec!["stop"]);
+
+        // Back playing something started on it since: that plays on.
+        p.command("phone", Command::play(vec![t("tr-4")], 0, 0)).await.unwrap();
+        drop(phone);
+        p.command("phone", Command::Handover { to: "tablet".into() }).await.unwrap();
+        let mut phone = p.connect("phone").unwrap();
+        said(&mut phone);
+        p.report("phone", playing("chosen-on-the-phone")).unwrap();
+        assert!(said(&mut phone).is_empty());
     }
 
     #[test]
