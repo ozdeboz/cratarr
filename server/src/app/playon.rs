@@ -1079,6 +1079,10 @@ impl PlayOn {
         let came_back_empty = std::mem::take(&mut e.fresh) && report.index < 0 && !e.queue.tracks.is_empty() && e.kind != PlayerKind::Kodi;
         let given = came_back_empty.then(|| (e.queue.tracks.len(), before.playing));
         let give_back = came_back_empty.then(|| {
+            // A version of its own: what the player was told before (its group, as it connected, carries the queue's
+            // version too) must not count as having this queue (the tablet's queue was taken as empty at 00:36,
+            // 2026-10-18, by a report with its group's version).
+            e.queue.version += 1;
             let (index, position_ms, paused) = (before.index.max(0) as usize, before.position_ms, !before.playing);
             Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused }
         });
@@ -1089,15 +1093,18 @@ impl PlayOn {
             report.entry.as_deref().map_or(report.index >= 0, |x| moved.iter().any(|m| m == x))
         };
         let mut adopted = None;
-        // Given its queue back, a player reports without a version until that queue reaches it: it says what it held
-        // before, nothing, and neither empties Cratarr's queue nor stands for what it plays (the tablet's queue was taken
-        // as empty for 0.75 s after its app was updated, 2026-10-17). Its first report with that version counts again.
-        let before_given = e.giving_back && report.version.is_none();
+        // Given its queue back, a player reports from before that queue reaches it (without a version, or with an
+        // older one): it says what it held before, nothing, and neither empties Cratarr's queue nor stands for what it
+        // plays (the tablet's queue was taken as empty for 0.75 s after its app was updated, 2026-10-17). Its first
+        // report with the given version counts again.
+        let before_given = e.giving_back && report.version.is_none_or(|v| v < e.told);
         if report.version.is_some_and(|v| v >= e.told) {
             e.giving_back = false;
         }
         if give_back.is_some() {
             e.giving_back = true;
+            // Told here already (`send` tells it again): a report between this lock and the send must not count.
+            e.told = e.queue.version;
             e.at = Instant::now();
         } else if !before_given {
             // Taken as the player holds it, unless it was made before Cratarr's latest edit reached the player: that edit
@@ -1940,6 +1947,12 @@ mod tests {
         p.report("tablet", Report { index: -1, queue: Some(Vec::new()), ..Report::default() }).unwrap();
         let v = p.get("tablet").unwrap();
         assert_eq!((v.queue_length, v.index), (3, 1), "not emptied, and still where it was");
+        // Nor with the version its group came with as it connected (the tablet at 00:36, 2026-10-18): the queue given
+        // back has a version of its own.
+        assert!(play["version"].as_u64() > Some(version));
+        p.report("tablet", Report { index: -1, queue: Some(Vec::new()), version: Some(version), ..Report::default() }).unwrap();
+        let v = p.get("tablet").unwrap();
+        assert_eq!((v.queue_length, v.index), (3, 1), "not emptied by a report with the group's version");
 
         // Once it has it, its reports count again: the queue as it holds it, emptied too.
         p.report("tablet", Report { index: -1, queue: Some(Vec::new()), version: play["version"].as_u64(), ..Report::default() }).unwrap();
