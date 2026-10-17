@@ -18,7 +18,7 @@ title and its end: a page in its new Table layout, and the panel's track lists w
 
 - Each kind of list has its columns in an order of priority: tracks (album, tempo, plays, last played, added, year,
   album artist, genre, format), albums (year, tracks, length, added, plays, last played, format, genre), playlists (tracks, length,
-  genres, last played, changed), crates (tracks, length, genres, unplayed).
+  genres, last played, changed). (Crates: no table, the owner 2026-10-17.)
 - The list measures its own width (not the window's: a panel beside the page and one over it differ) and shows as many
   columns from the top of the order as fit, each at least its own width (tempo needs little, album much).
 - The order is the owner's: View lists a kind's columns, dragged into the order wanted, remembered per kind. The first
@@ -34,7 +34,8 @@ title and its end: a page in its new Table layout, and the panel's track lists w
 **A Table layout for the pages.** Next to Rows and Covers (decision 0028), Table shows one item per line over the full
 width, with columns. Rows and Covers stay as they are. Built first for the album pages (Library, Downloads; 2026-10-17): year,
 tracks, added, plays, last played, format and rating, a smaller cover whose Play shows on the line a mouse points at;
-a table has no sizes. The playlists' and crates' tables follow once the server lists their length, genres and dates.
+a table has no sizes. The playlists' table follows once the server lists their length, genres and dates. Crates stay
+big cards only, no table (the owner, 2026-10-17).
 
 **An edge's handle is the edge's line.** The line between page and panel, and the navigation's edge, are each 1 px
 wide; what is on either side fills right up to it. The handle in the middle, and the room to grab it, reach over both
