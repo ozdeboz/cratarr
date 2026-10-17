@@ -197,6 +197,11 @@
     overflow-wrap: anywhere;
   }
 
+  .list select {
+    flex: none;
+    width: auto;
+  }
+
   .what small,
   .when small {
     display: block;
