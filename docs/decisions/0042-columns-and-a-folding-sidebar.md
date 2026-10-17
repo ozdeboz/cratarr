@@ -32,7 +32,9 @@ title and its end: a page in its new Table layout, and the panel's track lists w
 - A phone keeps today's rows: no column fits.
 
 **A Table layout for the pages.** Next to Rows and Covers (decision 0028), Table shows one item per line over the full
-width, with columns. Rows and Covers stay as they are.
+width, with columns. Rows and Covers stay as they are. Built first for the album pages (Library, Downloads; 2026-10-17): year,
+tracks, added, plays, last played, format and rating, a smaller cover whose Play shows on the line a mouse points at;
+a table has no sizes. The playlists' and crates' tables follow once the server lists their length, genres and dates.
 
 **An edge's handle is the edge's line.** The line between page and panel, and the navigation's edge, are each 1 px
 wide; what is on either side fills right up to it. The handle in the middle, and the room to grab it, reach over both

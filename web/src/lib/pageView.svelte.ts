@@ -16,15 +16,18 @@ export const PLAYLIST_WIDTHS: readonly number[] = [110, 140, 170, 210, 260, 340]
  *  never three (the owner: a toggle card narrower than that cannot show its name); three on a wider sheet. */
 export const LIST_WIDTHS: readonly number[] = [160, 220, 340];
 
-/** An album's least width per size step (prefs.albumZoom): rows need room for their lines, covers less. */
+/** An album's least width per size step (prefs.albumZoom): rows need room for their lines, covers less. A table has one
+ *  album a line, and no size steps (decision 0042). */
 export const ALBUM_WIDTHS: Record<AlbumLayout, readonly number[]> = {
   rows: [240, 280, 340, 420, 520, 680],
   grid: [110, 140, 170, 210, 260, 340],
+  table: [],
 };
 
 export const ALBUM_LAYOUTS = [
   { value: 'rows' as const, label: 'Rows', icon: 'list' as const },
   { value: 'grid' as const, label: 'Covers', icon: 'layoutGrid' as const },
+  { value: 'table' as const, label: 'Table', icon: 'table' as const },
 ];
 
 // Each order ascending as named (A–Z, oldest first, fewest first); a list's arrow turns it round. Plays, Last played

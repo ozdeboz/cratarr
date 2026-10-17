@@ -1,6 +1,7 @@
 <script module lang="ts">
   /** One column's value in a row (decision 0042); in a list's head, its name, a tap to order by it. */
-  export type Cell = { id: string; text: string; width: number; end?: boolean; grow?: boolean; onclick?: () => void; on?: boolean };
+  /** `warn`: a value that is a problem (a lossy album's bitrate), in the danger colour. */
+  export type Cell = { id: string; text: string; width: number; end?: boolean; grow?: boolean; warn?: boolean; onclick?: () => void; on?: boolean };
 </script>
 
 <script lang="ts">
@@ -141,7 +142,7 @@
         {#if c.onclick}
           <button type="button" class="cell" class:end={c.end} class:on={c.on} style:flex={basis(c)} onclick={c.onclick}>{c.text}</button>
         {:else}
-          <span class="cell" class:end={c.end} style:flex={basis(c)}>{c.text}</span>
+          <span class="cell" class:end={c.end} class:warn={c.warn} style:flex={basis(c)}>{c.text}</span>
         {/if}
       {/each}
     </span>
@@ -174,6 +175,16 @@
   .cell.end {
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  .cell.warn {
+    color: var(--danger);
+  }
+
+  /* A head's names: those that order the list are buttons, the rest the same words plain. */
+  .head .cell {
+    font-size: 0.8rem;
+    font-weight: 600;
   }
 
   button.cell {
