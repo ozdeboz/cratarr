@@ -23,8 +23,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::ids;
 use crate::catalogue::{Rules, ServedRow};
 
+// journal_size_limit: as the catalogue's (the log's file cut back after a checkpoint).
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
+PRAGMA journal_size_limit = 8388608;
 PRAGMA synchronous = NORMAL;
 PRAGMA temp_store = MEMORY;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

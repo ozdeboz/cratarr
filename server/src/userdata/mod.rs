@@ -23,8 +23,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
+// journal_size_limit: as the catalogue's (the log's file cut back after a checkpoint).
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
+PRAGMA journal_size_limit = 8388608;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS annotation (
   user TEXT NOT NULL, item TEXT NOT NULL, kind TEXT NOT NULL, pid TEXT,
