@@ -2,8 +2,9 @@
 // 2008): an iterated function system whose transforms are an affine map followed by a weighted sum of nonlinear
 // "variations", drawn by the chaos game with a colour coordinate per point. This file holds a flame's description:
 // made from a seed (a track's id gives the same flame every time), checked on the CPU before it is shown (a flame that
-// collapses to a point or smears into noise is passed over), framed, turned for its animation, and blended into the
+// collapses to a point or smears into noise is passed over), framed, evolved by the music, and blended into the
 // next. The drawing is lib/visuals/render.ts.
+import { BANDS } from './bands';
 
 /** The variations, by the paper's numbers (its appendix). The shader (render.ts) implements the same list. */
 export const VARIATIONS = {
@@ -190,9 +191,10 @@ export function flameFrom(seed: number): Flame {
   const rnd = randomFrom(seed);
   let best: { flame: Flame; score: number } | null = null;
   for (let attempt = 0; attempt < 40; attempt++) {
-    const count = 2 + Math.floor(rnd() * 3);
+    // Three transforms, one for each of the music's bands, low to high (decision 0046, amended: `evolved`).
+    const count = BANDS;
     const xforms = Array.from({ length: count }, () => randomXform(rnd));
-    // Each transform its own stretch of the palette, so the parts of the flame differ in colour.
+    // Each transform its own stretch of the palette, so the parts of the flame (and the bands) differ in colour.
     const offset = rnd();
     xforms.forEach((x, i) => (x.color = (offset + i / count) % 1));
     const order = rnd() < 0.45 ? 1 : 2 + Math.floor(rnd() * 5);
@@ -215,7 +217,8 @@ function fallback(): Flame {
     xforms: [
       { affine: [0.6, -0.3, 0.2, 0.3, 0.6, 0.1], variations: new Map([[VARIATIONS.spherical, 0.6], [VARIATIONS.swirl, 0.4]]), weight: 1, color: 0.1, colorSpeed: 0.5, turns: true },
       { affine: [0.5, 0.4, -0.5, -0.4, 0.5, 0.3], variations: new Map([[VARIATIONS.julia, 1]]), weight: 0.7, color: 0.8, colorSpeed: 0.5, turns: true },
-      ...symmetry(4, 0.85),
+      { affine: [0.4, 0, 0.4, 0, 0.4, -0.4], variations: new Map([[VARIATIONS.sinusoidal, 1]]), weight: 0.6, color: 0.45, colorSpeed: 0.5, turns: true },
+      ...symmetry(4, 0.77),
     ],
     palette: { a: [0.5, 0.5, 0.5], b: [0.5, 0.5, 0.5], c: [1, 1, 1], d: [0, 0.33, 0.67] },
     center: [0, 0],
@@ -358,16 +361,38 @@ export function apply(t: Xform, px: number, py: number, rnd: () => number): [num
 
 // --- Animation and blending ---
 
-/** The flame turned by `angle`: each turning transform's linear part rotated, as Electric Sheep's loops turn theirs. */
-export function turned(flame: Flame, angle: number): Flame {
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
+/** The variation a band's loudness (decision 0046, amended: low, middle and high; a flame's first three transforms
+ *  are theirs) brings into its transform: round and heavy for the low band (bubble), a twist for
+ *  the middle (swirl), a fine ripple for the high (sinusoidal). */
+const BAND_VARIATIONS: Variation[] = [VARIATIONS.bubble, VARIATIONS.swirl, VARIATIONS.sinusoidal];
+
+/** How a band's transform has evolved: turned by `turn` (radians, as Electric Sheep's loops turn the linear part), that
+ *  part scaled by `size`, `morph` (0..1) of its variations given over to its band's own, and its colour moved along the
+ *  palette by `hue`. */
+export type Part = { turn: number; size: number; morph: number; hue: number };
+
+/** The flame with each band's transform evolved by its part (the symmetry's rotations stay as they are). */
+export function evolved(flame: Flame, parts: Part[]): Flame {
   return {
     ...flame,
-    xforms: flame.xforms.map((t) => {
-      if (!t.turns) return t;
+    xforms: flame.xforms.map((t, i) => {
+      const p = parts[i];
+      if (!t.turns || !p) return t;
+      const cos = Math.cos(p.turn) * p.size;
+      const sin = Math.sin(p.turn) * p.size;
       const [a, b, c, d, e, f] = t.affine;
-      return { ...t, affine: [cos * a - sin * d, cos * b - sin * e, c, sin * a + cos * d, sin * b + cos * e, f] };
+      let variations = t.variations;
+      if (p.morph > 0) {
+        variations = new Map([...t.variations].map(([v, w]) => [v, w * (1 - p.morph)]));
+        const own = BAND_VARIATIONS[i];
+        variations.set(own, (variations.get(own) ?? 0) + p.morph);
+      }
+      return {
+        ...t,
+        affine: [cos * a - sin * d, cos * b - sin * e, c, sin * a + cos * d, sin * b + cos * e, f],
+        variations,
+        color: Math.min(1, Math.max(0, t.color + p.hue)),
+      };
     }),
   };
 }

@@ -278,3 +278,13 @@ against the track's strong beats). A track without a tempo has none, kept as non
   decode that does not cover the whole file gives none, kept as none, so a damaged file is not decoded at every request.
 - **Served** at `GET /api/track/{source}/{id}/beats`, beside `/waveform`: the bytes as kept, an ETag of the analysis,
   kept a month; 404 for a track whose file Cratarr does not keep, 503 when they cannot be worked out now.
+
+## Amendment, 2026-10-17: the sound in bands
+
+For the visuals (decision 0046, amended), a track's sound in three bands (low below 150 Hz, middle 300 Hz to 2.5 kHz,
+high above 5 kHz): each band's loudness every 50 ms and its transients, worked out in the decode that finds the beats,
+**only when the visuals first ask** (`analyse_with_bands`; the pass never does, so the library does not grow by some
+25 KB a track). Kept in `analysis_shape.bands` beside the beats, as they are (an added column, the analysis' stamp
+guarding the write, upserted, following the file); a decode that does not cover the file gives none, kept as none.
+Served at `GET /api/track/{source}/{id}/bands`, whose doc gives the format (versioned by its first byte). One decode
+answers both routes: the page asks for both at once, and the second finds the first's result.

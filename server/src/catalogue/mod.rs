@@ -87,7 +87,7 @@ const GENERATION: &str = "generation";
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 7] = [
+const ADDED_COLUMNS: [(&str, &str); 8] = [
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
@@ -98,6 +98,8 @@ const ADDED_COLUMNS: [(&str, &str); 7] = [
     ("analysis", "complete INTEGER"),
     // Decision 0046: the track's beats (`analysis::Beats`; empty: no tempo; NULL: not worked out yet).
     ("analysis_shape", "beats BLOB"),
+    // Decision 0046, amended: the sound in bands (`analysis::bands::Bands`), kept only once the visuals asked for it.
+    ("analysis_shape", "bands BLOB"),
 ];
 
 /// File states.
@@ -1396,29 +1398,50 @@ impl Catalogue {
     /// A file's beats (decision 0046), while it is as it was analysed: `None` without such an analysis, `Some(None)`
     /// when that analysis has none worked out yet (it is from before they were kept). Blocking.
     pub fn beats_of(&self, folder: i64, rel: &str) -> Option<Option<crate::analysis::Beats>> {
-        self.db()
-            .query_row(
-                &format!(
-                    "SELECT s.beats FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel {SHAPE_JOIN}
-                     WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime"
-                ),
-                params![folder, rel],
-                |r| Ok(r.get::<_, Option<Vec<u8>>>(0)?.map(crate::analysis::Beats)),
-            )
-            .optional()
-            .ok()
-            .flatten()
+        self.shape_blob(folder, rel, "beats").map(|b| b.map(crate::analysis::Beats))
     }
 
     /// Keeps a file's beats beside its analysis, which stays as it is, when that analysis is of the file as it was
     /// (`size`, `mtime`) when the beats were worked out; an analysis without a shape row gets one holding only them.
     /// Whether they were kept. Blocking.
     pub fn store_beats(&self, folder: i64, rel: &str, size: u64, mtime: i64, beats: &crate::analysis::Beats) -> Result<bool> {
+        self.store_shape_blob(folder, rel, size, mtime, "beats", &beats.0)
+    }
+
+    /// A file's sound in bands (decision 0046, amended), as `beats_of`: `Some(None)` until the visuals first asked.
+    pub fn bands_of(&self, folder: i64, rel: &str) -> Option<Option<crate::analysis::bands::Bands>> {
+        self.shape_blob(folder, rel, "bands").map(|b| b.map(crate::analysis::bands::Bands))
+    }
+
+    /// Keeps a file's bands beside its analysis, as `store_beats` keeps beats (and leaves them as they are).
+    pub fn store_bands(&self, folder: i64, rel: &str, size: u64, mtime: i64, bands: &crate::analysis::bands::Bands) -> Result<bool> {
+        self.store_shape_blob(folder, rel, size, mtime, "bands", &bands.0)
+    }
+
+    /// One of the shape's blobs worked out apart (`beats`, `bands`), while the file is as it was analysed.
+    fn shape_blob(&self, folder: i64, rel: &str, column: &'static str) -> Option<Option<Vec<u8>>> {
+        self.db()
+            .query_row(
+                &format!(
+                    "SELECT s.{column} FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel {SHAPE_JOIN}
+                     WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime"
+                ),
+                params![folder, rel],
+                |r| r.get::<_, Option<Vec<u8>>>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    fn store_shape_blob(&self, folder: i64, rel: &str, size: u64, mtime: i64, column: &'static str, blob: &[u8]) -> Result<bool> {
         let n = self.db().execute(
-            "INSERT INTO analysis_shape (folder, rel, beats)
-               SELECT ?1, ?2, ?5 WHERE EXISTS (SELECT 1 FROM analysis a WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = ?3 AND a.mtime = ?4)
-             ON CONFLICT (folder, rel) DO UPDATE SET beats = excluded.beats",
-            params![folder, rel, size as i64, mtime, beats.0],
+            &format!(
+                "INSERT INTO analysis_shape (folder, rel, {column})
+                   SELECT ?1, ?2, ?5 WHERE EXISTS (SELECT 1 FROM analysis a WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = ?3 AND a.mtime = ?4)
+                 ON CONFLICT (folder, rel) DO UPDATE SET {column} = excluded.{column}"
+            ),
+            params![folder, rel, size as i64, mtime, blob],
         )?;
         Ok(n > 0)
     }

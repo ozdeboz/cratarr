@@ -118,3 +118,52 @@ between the player's reports was moved on with the frame clock and set back at e
   steady turning, as before.
 - What the player reports is what the visuals follow. Delay after the player (Bluetooth speakers, an amplifier's own
   processing) is not counted unless the player counts it.
+
+## Amendment, 2026-10-17: the sound in three bands, and the dice
+
+The owner, after the beats: "I want you to couple transients in different frequency bands to different colors. I also
+want you to couple the loudness of the different frequency bands to evolutionary parameters of their respective
+colors." Then, in claude-5f's session: "Include a button to change the current set of parameters, like a random next
+visualization switch."
+
+**The bands** (decision 0035, amended the same day): the server hears each track in three bands, low (below 150 Hz:
+kick drum, bass), middle (300 Hz to 2.5 kHz: snare, voices, most instruments) and high (above 5 kHz: hats, cymbals),
+through filters falling 24 dB an octave at each edge, at the file's own rate. For each band it keeps the loudness every
+50 ms (in dB, over the 30 dB under the band's own loudest in the track, so a quiet band moves as much as a loud one)
+and its transients: where its level rises by 6 dB or more within 20 ms, more than the rises around it, while the band
+is not quiet, one per 120 ms (low), 90 (middle) or 60 (high), each with its strength. Worked out in the same decode as
+the beats, only when the visuals first ask: about 20 to 30 KB a track, not kept for the whole library.
+
+**A colour for each band:** a flame now always has three transforms (and a symmetry's rotations), one for each band,
+low to high, each its own stretch of the palette as before. Beside the colours, the drawing counts how much of each
+band's colour a pixel's points are (by how near a point's colour is to each band's), so:
+
+- **a band's transient lights its own colour:** the points of that colour brighten (by up to 60 %) and glow in it,
+  fading over 0.18 s (low), 0.14 (middle) or 0.09 (high). The kick lights one colour, the snare another, the hats the
+  third. The beat's own flash is smaller when the bands are known (10 % against 35 %); the swell stays.
+- **a band's loudness evolves its own transform**, followed over a quarter of a second: it turns further on each beat
+  (0.4 to 1.6 times the beat's step), its linear part grows (0.94 to 1.06 of its size), its variations give way to its
+  band's own (up to 35 %: bubble for the low band, round and heavy; swirl for the middle; sinusoidal for the high, a
+  fine ripple), and its colour moves along the palette (by up to 0.04 either way). Reduced motion: less morphing, softer
+  lights.
+
+**The dice:** beside the close button, top right, showing and fading with it. A press blends in a flame from a random
+seed over 1.5 s; another press, another one; the next track brings back its own.
+
+**Measured:**
+
+- On test sounds through the server's code: a tone at 60 Hz, 1 kHz and 9 kHz each reaches its own band's top and stays
+  at or under 40 of 255 in the others, at 44.1 and 96 kHz. A kick (55 Hz), a snare (900 and 1300 Hz) and hats (7.5 to
+  11 kHz) at 120 BPM: each band's transients are within 15 ms of its own hits, 90 % or more of them found, none from the
+  others'. Silence: quiet bands, no transients.
+- A new track whose beats and bands the page asks for at once is decoded once; a track with beats kept but no bands is
+  decoded for its bands alone and its beats stay byte for byte.
+- In a browser over a test track: each band's light matched its own transients frame by frame (apart from frames within
+  2 ms of one); 52 to 56 frames a second at 12 passes over 131,000 points on the PC's integrated graphics. The second
+  buffer doubles what each point writes; the load adapts to the tablet.
+
+**Consequences:**
+
+- Every track's flame is new (three transforms each, where it was two to four).
+- What the visuals draw from the sound is still only what the server worked out; a track is decoded once (about a
+  second) the first time the visuals show it.

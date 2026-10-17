@@ -10,6 +10,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::analysis::Beats;
+use crate::analysis::bands::Bands;
 use crate::catalogue::Catalogue;
 
 /// Before the first look: Cratarr has just started, and its catalogue is still catching up.
@@ -95,53 +97,91 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
     });
 }
 
-/// Beats worked out when they are asked for (decision 0046): one decode at a time, beside the pass.
+/// What the visuals ask for (decision 0046) worked out when first asked: one decode at a time, beside the pass.
 static ON_DEMAND: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+/// Files decoded for the visuals since Cratarr started.
+static DECODES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 /// How long a request waits for its turn, and then for its decode (a 40-minute track takes about 7 s on the NAS).
 const TURN: Duration = Duration::from_secs(20);
 const DECODE: Duration = Duration::from_secs(60);
 
-/// A file's beats (decision 0046): as kept, or worked out now and kept: from an analysis of the file as it is now (a
-/// file without one gets the whole analysis kept, as the pass would). A decode that does not cover the whole file
-/// gives no beats, kept as none, so it is not decoded again at every request. `None`: the file cannot be analysed, or
+/// A file's beats (decision 0046): as kept, or worked out now (see `visual`). `None`: the file cannot be analysed, or
 /// its turn or its decode took too long (its result is still kept when it comes).
-pub async fn beats(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<crate::analysis::Beats> {
+pub async fn beats(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Beats> {
+    visual(cat, folder, rel, false).await.map(|(beats, _)| beats)
+}
+
+/// A file's sound in bands (decision 0046, amended): as kept, or worked out now, as `beats`.
+pub async fn bands(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Bands> {
+    visual(cat, folder, rel, true).await.map(|(_, bands)| bands)
+}
+
+/// What is kept of a file's beats and bands, as the file is now.
+fn kept(cat: &Catalogue, folder: i64, rel: &str) -> (Option<Beats>, Option<Bands>) {
+    (cat.beats_of(folder, rel).flatten(), cat.bands_of(folder, rel).flatten())
+}
+
+/// A file's beats and, when `with_bands`, its bands: as kept, or worked out now and kept. The page asks for both at
+/// once for a new track: whichever comes first decodes the file once for all that is missing (beats, bands or both)
+/// and keeps it, and the other finds it kept once it has its turn. What was kept stays as it was (byte for byte). A file
+/// without an analysis of it as it is now gets the whole analysis kept, as the pass would. A decode that does not cover
+/// the whole file gives no beats and no bands, kept as none, so it is not decoded again at every request.
+async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_bands: bool) -> Option<(Beats, Bands)> {
+    let enough = move |k: &(Option<Beats>, Option<Bands>)| k.0.is_some() && (!with_bands || k.1.is_some());
     let c = cat.clone();
     let r = rel.clone();
-    if let Some(Some(b)) = tokio::task::spawn_blocking(move || c.beats_of(folder, &r)).await.ok()? {
-        return Some(b);
+    let k = tokio::task::spawn_blocking(move || kept(&c, folder, &r)).await.ok()?;
+    if enough(&k) {
+        return Some((k.0.unwrap_or_default(), k.1.unwrap_or_default()));
     }
     // The permit is held here, not by the decode: a decode past its deadline goes on alone and lets the next one in.
     let _turn = tokio::time::timeout(TURN, ON_DEMAND.acquire()).await.ok()?.ok()?;
-    let work = tokio::task::spawn_blocking(move || -> anyhow::Result<crate::analysis::Beats> {
+    let work = tokio::task::spawn_blocking(move || -> anyhow::Result<(Beats, Bands)> {
         // Kept while this one waited its turn.
-        if let Some(Some(b)) = cat.beats_of(folder, &rel) {
-            return Ok(b);
+        let (had_beats, had_bands) = kept(&cat, folder, &rel);
+        if had_beats.is_some() && (!with_bands || had_bands.is_some()) {
+            return Ok((had_beats.unwrap_or_default(), had_bands.unwrap_or_default()));
         }
         let (path, size, mtime) = cat.file_to_analyse(folder, &rel).ok_or_else(|| anyhow::anyhow!("not in the library"))?;
         let started = Instant::now();
-        let a = crate::analysis::analyse(&path, &cat.genres_of_file(folder, &rel))?;
-        let beats = if a.complete == Some(false) { crate::analysis::Beats::default() } else { a.beats.clone().unwrap_or_default() };
-        if cat.analysis_of(folder, &rel).is_none() {
-            cat.store_analysis(folder, &rel, size, mtime, &crate::analysis::Analysis { beats: Some(beats.clone()), ..a })?;
-        } else {
-            cat.store_beats(folder, &rel, size, mtime, &beats)?;
-        }
-        tracing::info!("analysis: {rel}'s beats when asked for, {} of them, in {:.1} s", beats.each().count(), started.elapsed().as_secs_f64());
-        Ok(beats)
+        let (a, bands) = crate::analysis::analyse_with_bands(&path, &cat.genres_of_file(folder, &rel))?;
+        DECODES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let whole = a.complete != Some(false);
+        let beats = match had_beats {
+            Some(b) => b,
+            None => {
+                let beats = if whole { a.beats.clone().unwrap_or_default() } else { Beats::default() };
+                if cat.analysis_of(folder, &rel).is_none() {
+                    cat.store_analysis(folder, &rel, size, mtime, &crate::analysis::Analysis { beats: Some(beats.clone()), ..a })?;
+                } else {
+                    cat.store_beats(folder, &rel, size, mtime, &beats)?;
+                }
+                beats
+            }
+        };
+        let bands = match had_bands {
+            Some(b) => b,
+            None => {
+                let bands = if whole { bands } else { Bands::default() };
+                cat.store_bands(folder, &rel, size, mtime, &bands)?;
+                bands
+            }
+        };
+        tracing::info!("analysis: {rel}'s beats and bands when asked for, in {:.1} s", started.elapsed().as_secs_f64());
+        Ok((beats, bands))
     });
     match tokio::time::timeout(DECODE, work).await {
-        Ok(Ok(Ok(b))) => Some(b),
+        Ok(Ok(Ok(got))) => Some(got),
         Ok(Ok(Err(e))) => {
-            tracing::warn!("analysis: beats when asked for: {e:#}");
+            tracing::warn!("analysis: beats and bands when asked for: {e:#}");
             None
         }
         Ok(Err(e)) => {
-            tracing::warn!("analysis: beats when asked for: {e}");
+            tracing::warn!("analysis: beats and bands when asked for: {e}");
             None
         }
         Err(_) => {
-            tracing::warn!("analysis: beats when asked for took over {} s", DECODE.as_secs());
+            tracing::warn!("analysis: beats and bands when asked for took over {} s", DECODE.as_secs());
             None
         }
     }
@@ -150,6 +190,45 @@ pub async fn beats(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<crat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_visuals_decode_a_track_once_and_what_was_kept_stays_as_it_was() {
+        let d = std::env::temp_dir().join(format!("cratarr-visuals-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let clicks: Vec<f64> = (0..60).map(|k| 0.25 + 0.5 * k as f64).collect();
+        for name in ["one", "two"] {
+            let made = crate::analysis::tests::click_track(&format!("visuals-{name}"), 30.0, &clicks, |_| 1.0);
+            std::fs::rename(&made, d.join(format!("{name}.wav"))).unwrap();
+        }
+        let cat = Arc::new(Catalogue::open(None, vec![d.clone()]).unwrap());
+        cat.walk_all();
+        let decodes = || DECODES.load(std::sync::atomic::Ordering::Relaxed);
+        let before = decodes();
+
+        // A new track, its beats and bands asked for at once: one decode, both kept.
+        let (beats_one, bands_one) = tokio::join!(beats(cat.clone(), 0, "one.wav".into()), bands(cat.clone(), 0, "one.wav".into()));
+        let (beats_one, bands_one) = (beats_one.unwrap(), bands_one.unwrap());
+        assert_eq!(decodes() - before, 1, "one decode for both");
+        assert!(beats_one.each().count() >= 55 && bands_one.read().is_some_and(|r| r.transients[2].len() >= 55));
+        assert_eq!((cat.beats_of(0, "one.wav"), cat.bands_of(0, "one.wav")), (Some(Some(beats_one.clone())), Some(Some(bands_one.clone()))));
+        // Asked again: kept, no decode.
+        assert_eq!(bands(cat.clone(), 0, "one.wav".into()).await, Some(bands_one));
+        assert_eq!(decodes() - before, 1);
+
+        // A track whose beats are kept (here, other ones than its own would be) and its bands not yet: decoded for its
+        // bands alone, and its beats stay byte for byte.
+        let (path, size, mtime) = cat.file_to_analyse(0, "two.wav").unwrap();
+        let kept = crate::analysis::Beats(vec![1, 2, 3, 4, 5]);
+        let a = crate::analysis::analyse(&path, &[]).unwrap();
+        cat.store_analysis(0, "two.wav", size, mtime, &crate::analysis::Analysis { beats: Some(kept.clone()), ..a }).unwrap();
+        let got = bands(cat.clone(), 0, "two.wav".into()).await.unwrap();
+        assert_eq!(decodes() - before, 2);
+        assert!(got.read().is_some());
+        assert_eq!(cat.beats_of(0, "two.wav"), Some(Some(kept.clone())));
+        assert_eq!(beats(cat.clone(), 0, "two.wav".into()).await, Some(kept));
+        assert_eq!(decodes() - before, 2, "beats kept: no decode");
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     #[test]
     fn its_mode_comes_from_the_environment() {

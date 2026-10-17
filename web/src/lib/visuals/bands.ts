@@ -1,0 +1,110 @@
+// A track's sound in three frequency bands (decision 0046, amended): low (kick drum and bass), middle (snare, voices,
+// most instruments) and high (hats and cymbals). Each band's loudness every 50 ms and its transients, from the track's
+// analysis on the server, which works them out the first time they are asked for (in the decode that finds its beats).
+// Read once per track and kept while the page is open.
+import { asksSignIn, toSignIn } from '../reach.svelte';
+
+export const BANDS = 3;
+
+export type Bands = {
+  /** Loudness values a second. */
+  rate: number;
+  /** Each band's loudness, `rate` a second, 0..1 (1: the band's loudest in the track, 0: 30 dB under it). */
+  loudness: Float32Array[];
+  /** Each band's transients: their times (seconds, in order) and strengths (0..1). */
+  at: Float64Array[];
+  strength: Float32Array[];
+};
+
+/** A band now: how loud it is, and how much its last transient still rings (0..1). */
+export type Band = { loud: number; hit: number };
+
+/** How long a band's transient rings in the picture (seconds): a kick longer than a hat. */
+const RING = [0.18, 0.14, 0.09];
+
+/** The server could not work them out then: asked again after this long, at most this many times. */
+const AGAIN_MS = 15_000;
+const TRIES = 3;
+
+const kept = new Map<string, Bands | null>();
+const asking = new Map<string, { at: number; tries: number; busy: boolean }>();
+
+/** A track's bands: undefined while they are asked for, null where it has none (a file Cratarr does not keep, or one
+ *  that does not decode whole). */
+export function bandsOf(source: string, id: string): Bands | null | undefined {
+  const key = `${source}/${id}`;
+  if (kept.has(key)) return kept.get(key);
+  const now = performance.now();
+  const was = asking.get(key);
+  if (was && (was.busy || now - was.at < AGAIN_MS)) return undefined;
+  if (was && was.tries >= TRIES) {
+    kept.set(key, null);
+    return null;
+  }
+  const tries = (was?.tries ?? 0) + 1;
+  asking.set(key, { at: now, tries, busy: true });
+  const done = () => asking.set(key, { at: performance.now(), tries, busy: false });
+  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/bands`)
+    .then(async (r) => {
+      if (asksSignIn(r)) toSignIn();
+      if (r.ok) kept.set(key, decode(await r.arrayBuffer()));
+      else if (r.status !== 503) kept.set(key, null);
+    })
+    .then(done, done);
+  return undefined;
+}
+
+/** The server's form (`GET /api/track/{source}/{id}/bands`): a format byte (1), the bands (3), loudness values a
+ *  second, a zero; the loudness frames (u32, little-endian) and a byte a band in each; then each band's transients,
+ *  their number (u32) and each one's milliseconds (u32) and strength (u8). Anything else: none. */
+function decode(buffer: ArrayBuffer): Bands | null {
+  const v = new DataView(buffer);
+  if (buffer.byteLength < 8 || v.getUint8(0) !== 1 || v.getUint8(1) !== BANDS) return null;
+  const rate = v.getUint8(2);
+  const frames = v.getUint32(4, true);
+  let at = 8;
+  if (buffer.byteLength < at + frames * BANDS) return null;
+  const loudness = Array.from({ length: BANDS }, () => new Float32Array(frames));
+  for (let f = 0; f < frames; f++) for (let b = 0; b < BANDS; b++) loudness[b][f] = v.getUint8(at++) / 255;
+  const times: Float64Array[] = [];
+  const strength: Float32Array[] = [];
+  for (let b = 0; b < BANDS; b++) {
+    if (buffer.byteLength < at + 4) return null;
+    const n = v.getUint32(at, true);
+    at += 4;
+    if (buffer.byteLength < at + n * 5) return null;
+    const t = new Float64Array(n);
+    const s = new Float32Array(n);
+    for (let i = 0; i < n; i++, at += 5) {
+      t[i] = v.getUint32(at, true) / 1000;
+      s[i] = v.getUint8(at + 4) / 255;
+    }
+    times.push(t);
+    strength.push(s);
+  }
+  return { rate, loudness, at: times, strength };
+}
+
+/** Each band at `t` seconds into the track: its loudness (between its frames) and its last transient's ring. */
+export function bandsAt(b: Bands, t: number): Band[] {
+  return b.loudness.map((loud, i) => {
+    const x = Math.min(Math.max(t * b.rate, 0), loud.length - 1);
+    const f = Math.floor(x);
+    const level = loud.length ? loud[f] + ((loud[Math.min(f + 1, loud.length - 1)] ?? loud[f]) - loud[f]) * (x - f) : 0;
+    return { loud: level, hit: ring(b.at[i], b.strength[i], t, RING[i]) };
+  });
+}
+
+/** The last transient at or before `t`, fading over `ring` seconds. */
+function ring(at: Float64Array, strength: Float32Array, t: number, ring: number): number {
+  let lo = 0;
+  let hi = at.length - 1;
+  if (hi < 0 || !(t >= at[0])) return 0;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (at[mid] <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  const since = t - at[lo];
+  return since > ring * 5 ? 0 : (0.3 + 0.7 * strength[lo]) * Math.exp(-since / ring);
+}

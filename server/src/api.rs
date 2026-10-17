@@ -47,6 +47,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/details", get(track_details))
         .route("/api/track/{source}/{id}/waveform", get(track_waveform))
         .route("/api/track/{source}/{id}/beats", get(track_beats))
+        .route("/api/track/{source}/{id}/bands", get(track_bands))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
         .route("/api/track/{source}/{id}/favorite", post(track_favorite))
@@ -463,6 +464,26 @@ async fn track_waveform(State(app): State<Arc<App>>, Path((source, id)): Path<(S
 /// they cannot be worked out now. It changes only with a new analysis: an ETag of when that was made, and kept a long
 /// time.
 async fn track_beats(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+    for_visuals(app, source, id, headers, false).await
+}
+
+/// A track's sound in three frequency bands (decision 0046, amended), low (below 150 Hz), middle (300 Hz to 2.5 kHz)
+/// and high (above 5 kHz), as `analysis::bands::Bands` keeps it:
+/// - a format byte (1; another scale or layout is another format), the number of bands (3), loudness values a second
+///   (20), a zero byte;
+/// - the number of loudness frames (u32, little-endian), then that many frames of one byte a band, low first: the
+///   band's level over that 50 ms in dB, 0 for 30 dB or more under the band's loudest in the track (its 98th
+///   percentile), 255 at it, linear in dB between;
+/// - for each band, low first: its number of transients (u32), then each one's time in milliseconds from the start
+///   (u32) and strength (u8; 255 for the band's strong ones).
+///
+/// Empty where the decode did not cover the whole file. Worked out and kept as `track_beats`, in the same decode.
+async fn track_bands(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+    for_visuals(app, source, id, headers, true).await
+}
+
+/// A track's beats, or its bands: as kept or worked out now (`app::analysis_pass::visual`).
+async fn for_visuals(app: Arc<App>, source: String, id: String, headers: HeaderMap, bands: bool) -> Response {
     let cat = app.library.catalogue();
     let c = cat.clone();
     let file = tokio::task::spawn_blocking(move || {
@@ -474,15 +495,18 @@ async fn track_beats(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     .flatten();
     let Some((folder, rel)) = file else { return StatusCode::NOT_FOUND.into_response() };
     // Not now: the file did not decode, or its turn or decode took too long; the page may ask again later.
-    let Some(beats) = crate::app::analysis_pass::beats(cat.clone(), folder, rel.clone()).await else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    let got = if bands {
+        crate::app::analysis_pass::bands(cat.clone(), folder, rel.clone()).await.map(|b| b.0)
+    } else {
+        crate::app::analysis_pass::beats(cat.clone(), folder, rel.clone()).await.map(|b| b.0)
     };
+    let Some(bytes) = got else { return StatusCode::SERVICE_UNAVAILABLE.into_response() };
     let stamp = tokio::task::spawn_blocking(move || cat.analysis_stamp(folder, &rel)).await.ok().flatten();
-    let etag = stamp.map(|(at, version)| format!("\"b{version}-{at}\""));
+    let etag = stamp.map(|(at, version)| format!("\"{}{version}-{at}\"", if bands { "s" } else { "b" }));
     if etag.is_some() && headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == etag.as_deref() {
         return StatusCode::NOT_MODIFIED.into_response();
     }
-    let mut res = ([(header::CONTENT_TYPE, "application/octet-stream")], beats.0).into_response();
+    let mut res = ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response();
     let h = res.headers_mut();
     if let Some(v) = etag.and_then(|e| HeaderValue::from_str(&e).ok()) {
         h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=2592000"));

@@ -1,12 +1,14 @@
-// What the visuals follow (decision 0046): the playing track's beats where they fall (its analysis, worked out on the
-// server), its loudness where it is (its waveform, decision 0035), its tempo, and whether it plays. Nothing listens to
-// the sound itself: in the app the music plays natively, out of the page's reach, and on another player it plays
-// elsewhere. Read once per frame by the visuals' loop.
+// What the visuals follow (decision 0046): the playing track's beats where they fall and its sound in three frequency
+// bands (each band's loudness and transients; both from its analysis, worked out on the server), its loudness where it
+// is (its waveform, decision 0035), its tempo, and whether it plays. Nothing listens to the sound itself: in the app
+// the music plays natively, out of the page's reach, and on another player it plays elsewhere. Read once per frame by
+// the visuals' loop.
 import { trackState } from '../api';
 import { positionNow } from '../localPlayer.svelte';
 import { isLocal } from '../output.svelte';
 import { paused, playing } from '../remote.svelte';
 import { loadWaveform, waveformOf } from '../waveforms.svelte';
+import { bandsAt, bandsOf, type Band } from './bands';
 import { beatAt, beatsOf, type Beat } from './beats';
 
 export type Music = {
@@ -18,6 +20,8 @@ export type Music = {
   bpm: number | null;
   /** The beat it is at, where it has beats (a tempo) and they are known here yet. */
   beat: Beat | null;
+  /** Its bands now, low to high, once they are known here. */
+  bands: Band[] | null;
   playing: boolean;
 };
 
@@ -30,7 +34,7 @@ const tempos = new Map<string, number | null>();
 /** The music now. `at` is the frame's time (performance.now()), to move the position on between the player's reports. */
 export function musicNow(at: number): Music {
   const np = playing();
-  if (!np) return { key: null, energy: null, bpm: null, beat: null, playing: false };
+  if (!np) return { key: null, energy: null, bpm: null, beat: null, bands: null, playing: false };
   const key = `${np.source}/${np.id}`;
   loadWaveform(np.source, np.id);
   if (!tempos.has(key)) {
@@ -43,8 +47,12 @@ export function musicNow(at: number): Music {
   const on = !paused();
   const pos = positionAt(key, on, at) + (on ? AHEAD : 0);
   const beats = beatsOf(np.source, np.id);
+  const bands = bandsOf(np.source, np.id);
   // The next track's too, so it pulses from its first beat.
-  if (np.upcoming[0]) beatsOf(np.source, np.upcoming[0].id);
+  if (np.upcoming[0]) {
+    beatsOf(np.source, np.upcoming[0].id);
+    bandsOf(np.source, np.upcoming[0].id);
+  }
   const wave = waveformOf(np.source, np.id);
   const length = np.progress?.duration_secs ?? null;
   return {
@@ -52,6 +60,7 @@ export function musicNow(at: number): Music {
     energy: wave && length ? loudnessAt(wave, pos / length) : null,
     bpm: tempos.get(key) ?? null,
     beat: beats ? beatAt(beats, pos) : null,
+    bands: bands ? bandsAt(bands, pos) : null,
     playing: on,
   };
 }

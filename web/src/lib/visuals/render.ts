@@ -5,7 +5,9 @@
 //   little every frame: the picture is the last second or so of points, which gives the many samples a flame needs
 //   without drawing them all every frame, and a little motion blur;
 // - the screen shows that buffer by the paper's log-density display: brightness from the log of how many points fell
-//   on a pixel, colour from their average, then gamma and vibrancy (its section 4), with a little blur where few fell.
+//   on a pixel, colour from their average, then gamma and vibrancy (its section 4), with a little blur where few fell;
+// - beside the colours, a second buffer counts how many of a pixel's points are of each of the music's bands' colours
+//   (decision 0046, amended), so a band's transient lights its own colour where it lies.
 import { paletteAt, type Flame } from './flame';
 
 const MAX_XFORMS = 12;
@@ -19,6 +21,7 @@ layout(location = 1) in uint aSeed;
 out vec3 vState;
 flat out uint vSeed;
 out vec3 vColor;
+out vec3 vBand;
 uniform int uCount;
 uniform vec3 uAbc[${MAX_XFORMS}];
 uniform vec3 uDef[${MAX_XFORMS}];
@@ -28,6 +31,8 @@ uniform vec4 uVarW[${MAX_XFORMS * 2}];
 uniform vec4 uCamera;
 uniform vec2 uTurn;
 uniform sampler2D uPalette;
+// Where on the palette each band's transform has its colour.
+uniform vec3 uBandColor;
 const float PI = 3.14159265358979;
 
 uint next(inout uint s) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
@@ -99,6 +104,10 @@ void main() {
   vState = vec3(p, c);
   vSeed = s;
   vColor = texture(uPalette, vec2(c, 0.5)).rgb;
+  // How much of each band's colour the point is: by how near its colour coordinate is to each band's, shares of one.
+  vec3 d = c - uBandColor;
+  vec3 near = exp(-d * d * 50.0);
+  vBand = near / max(near.x + near.y + near.z, 1e-6);
   // The camera: centred, the flame's size to the shorter side, turned slowly as a whole.
   vec2 v = (p - uCamera.xy) * uCamera.z;
   v = vec2(uTurn.x * v.x - uTurn.y * v.y, uTurn.y * v.x + uTurn.x * v.y);
@@ -110,8 +119,10 @@ void main() {
 const PLOT = `#version 300 es
 precision mediump float;
 in vec3 vColor;
-out vec4 o;
-void main() { o = vec4(vColor, 1.0); }`;
+in vec3 vBand;
+layout(location = 0) out vec4 o;
+layout(location = 1) out vec4 band;
+void main() { o = vec4(vColor, 1.0); band = vec4(vBand, 0.0); }`;
 
 const FULL = `#version 300 es
 void main() {
@@ -122,8 +133,9 @@ void main() {
 const FADE = `#version 300 es
 precision mediump float;
 uniform float uKeep;
-out vec4 o;
-void main() { o = vec4(0.0, 0.0, 0.0, uKeep); }`;
+layout(location = 0) out vec4 o;
+layout(location = 1) out vec4 band;
+void main() { o = vec4(0.0, 0.0, 0.0, uKeep); band = o; }`;
 
 const SHOW = `#version 300 es
 precision highp float;
@@ -135,12 +147,18 @@ uniform float uGamma;
 uniform float uVibrancy;
 uniform float uZoom;
 uniform float uFlash;
+uniform sampler2D uBands;
+// Each band's transient now (0..1), and its colour.
+uniform vec3 uHit;
+uniform vec3 uBandRgb[3];
 out vec4 o;
 void main() {
   // A beat's swell: the picture drawn a little larger about its middle.
   vec2 uv = 0.5 + (gl_FragCoord.xy / uView - 0.5) / uZoom;
   vec2 px = 1.0 / vec2(textureSize(uAcc, 0));
   vec4 a = texture(uAcc, uv);
+  // The pixel's points by band: shares of one.
+  vec3 share = texture(uBands, uv).rgb / max(a.a, 1e-6);
   // The paper's density estimation, cheaply: where few points fell, the pixel is the mean of a wider ring around it
   // (up to three pixels out), where many fell it stays sharp.
   float radius = 3.0 / (1.0 + sqrt(a.a * uK2) * 2.0);
@@ -161,8 +179,12 @@ void main() {
   float g = alpha < T ? alpha / T * pow(T, 1.0 / uGamma) : pow(min(alpha, 1.0), 1.0 / uGamma);
   vec3 vib = c * (g / max(alpha, 1e-6));
   vec3 flat_ = pow(max(c, 0.0), vec3(1.0 / uGamma));
-  // A beat's flash, after the gamma, so it shows as much in the faint parts as in the bright ones.
-  o = vec4(clamp(mix(flat_, vib, uVibrancy) * uFlash, 0.0, 1.0), 1.0);
+  // A beat's flash, after the gamma, so it shows as much in the faint parts as in the bright ones; a band's transient
+  // brightens the points of its colour, and adds a glow of that colour.
+  vec3 hit = uHit * share;
+  vec3 shown = mix(flat_, vib, uVibrancy) * uFlash * (1.0 + 0.6 * (hit.x + hit.y + hit.z));
+  shown += 0.2 * g * (hit.x * uBandRgb[0] + hit.y * uBandRgb[1] + hit.z * uBandRgb[2]);
+  o = vec4(clamp(shown, 0.0, 1.0), 1.0);
 }`;
 
 export type Shown = {
@@ -178,6 +200,8 @@ export type Shown = {
   zoom: number;
   /** Brighter by this much as shown (a beat's flash): 1 for none. */
   flash: number;
+  /** Each band's transient now, low to high (0..1): its colour's points light up. */
+  hits: [number, number, number];
 };
 
 export class FlameRenderer {
@@ -190,6 +214,9 @@ export class FlameRenderer {
   private vaos: WebGLVertexArrayObject[] = [];
   private feedback: WebGLTransformFeedback;
   private acc: WebGLTexture | null = null;
+  /** Beside `acc`: each pixel's points by band. */
+  private bands: WebGLTexture | null = null;
+  private bandRgb = new Float32Array(9);
   private accFbo: WebGLFramebuffer | null = null;
   private palette: WebGLTexture;
   private empty: WebGLVertexArrayObject;
@@ -280,21 +307,29 @@ export class FlameRenderer {
     this.width = width;
     this.height = height;
     if (this.acc) gl.deleteTexture(this.acc);
+    if (this.bands) gl.deleteTexture(this.bands);
     if (this.accFbo) gl.deleteFramebuffer(this.accFbo);
-    this.acc = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_2D, this.acc);
-    if (this.precision === 32) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
-    else if (this.precision === 16) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
-    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     // 32-bit float textures filter only with an extension; without it the screen reads them nearest.
     const smooth = this.precision !== 32 || !!gl.getExtension('OES_texture_float_linear');
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const texture = () => {
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      if (this.precision === 32) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
+      else if (this.precision === 16) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
+      else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return tex;
+    };
+    this.acc = texture();
+    this.bands = texture();
     this.accFbo = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.acc, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.bands, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
     // A driver may still refuse the kind it offered: one step down, and again.
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE && this.precision !== 8) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -354,6 +389,10 @@ export class FlameRenderer {
     gl.uniform4fv(this.u(this.iterate, 'uMeta'), meta);
     gl.uniform4iv(this.u(this.iterate, 'uVarId'), ids);
     gl.uniform4fv(this.u(this.iterate, 'uVarW'), ws);
+    // The bands' transforms are the first three (flame.ts).
+    const bandColor = [0, 1, 2].map((b) => xs[b]?.color ?? b / 3);
+    gl.uniform3f(this.u(this.iterate, 'uBandColor'), bandColor[0], bandColor[1], bandColor[2]);
+    bandColor.forEach((c, b) => this.bandRgb.set(paletteAt(flame.palette, c), b * 3));
   }
 
   /** One frame: the old picture fades by `look.keep`, `passes` more steps of every point fall into it, and it shows. */
@@ -416,6 +455,12 @@ export class FlameRenderer {
     gl.uniform1f(this.u(this.show, 'uVibrancy'), look.vibrancy);
     gl.uniform1f(this.u(this.show, 'uZoom'), look.zoom);
     gl.uniform1f(this.u(this.show, 'uFlash'), look.flash);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.bands);
+    gl.uniform1i(this.u(this.show, 'uBands'), 1);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform3f(this.u(this.show, 'uHit'), look.hits[0], look.hits[1], look.hits[2]);
+    gl.uniform3fv(this.u(this.show, 'uBandRgb'), this.bandRgb);
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
@@ -434,6 +479,7 @@ export class FlameRenderer {
     gl.deleteTransformFeedback(this.feedback);
     gl.deleteTexture(this.palette);
     if (this.acc) gl.deleteTexture(this.acc);
+    if (this.bands) gl.deleteTexture(this.bands);
     if (this.accFbo) gl.deleteFramebuffer(this.accFbo);
     for (const p of new Set([this.iterate, this.plot, this.fade, this.show])) gl.deleteProgram(p);
     gl.getExtension('WEBGL_lose_context')?.loseContext();

@@ -10,8 +10,11 @@
 //!   halved or doubled into it (on GiantSteps the exact tempo goes from 82 % to 88 % of the sure answers).
 //! - **Beats** (decision 0046): where there is a tempo, every beat's time and strength, by taktus's beat tracker at
 //!   that tempo; the visuals pulse on them.
+//! - **Bands** (decision 0046, amended), only when the visuals ask: the sound's loudness and transients in three
+//!   frequency bands (`bands`).
 //! Blocking and single-threaded: the pass runs several at once.
 
+pub mod bands;
 pub mod batch;
 
 use std::fs::File;
@@ -311,6 +314,16 @@ fn tempo(beat: Option<(f64, f64, f64)>, genres: &[String]) -> (Option<f32>, f32)
 
 /// One track's analysis from its file. `genres`: its genre tags (for the slow count).
 pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
+    Ok(analyse_inner(path, genres, false)?.0)
+}
+
+/// The analysis and the sound in bands (decision 0046, amended), from one decode: what the visuals ask for.
+pub fn analyse_with_bands(path: &Path, genres: &[String]) -> Result<(Analysis, bands::Bands)> {
+    let (a, b) = analyse_inner(path, genres, true)?;
+    Ok((a, b.unwrap_or_default()))
+}
+
+fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(Analysis, Option<bands::Bands>)> {
     let mut o = open(path)?;
     let ch = o.channels;
     let mut r128 = ebur128::EbuR128::new(ch as u32, o.rate, ebur128::Mode::I | ebur128::Mode::M | ebur128::Mode::SAMPLE_PEAK)
@@ -327,6 +340,7 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
     let (mut square, mut in_centi) = (0f32, 0usize);
     // The tempo: taktus hears the mono sound.
     let mut ear = taktus::Ear::new(o.rate);
+    let mut in_bands = with_bands.then(|| bands::BandEar::new(o.rate));
     let mut onsets: Vec<f32> = Vec::new();
     let mut frames = 0u64;
     // How far the reader walked the stream (the end of its last packet), against which `frames` is measured.
@@ -389,8 +403,12 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
                 sum += p[i];
                 energy += p[i] * p[i];
             }
-            if let Some(onset) = ear.hear(sum / ch as f32) {
+            let mono = sum / ch as f32;
+            if let Some(onset) = ear.hear(mono) {
                 onsets.push(onset);
+            }
+            if let Some(b) = in_bands.as_mut() {
+                b.hear(mono);
             }
             square += energy / ch as f32;
             in_centi += 1;
@@ -420,7 +438,7 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
     let beat = taktus::tempo_of(&onsets).map(|b| (b.bpm(), b.sure, b.catch));
     let (bpm, bpm_confidence) = tempo(beat, genres);
     let beats = beats_of(&onsets, bpm);
-    Ok(Analysis {
+    let analysis = Analysis {
         version: VERSION,
         duration_secs: frames as f64 / f64::from(o.rate),
         loudness_lufs: loudness as f32,
@@ -432,7 +450,8 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
         waveform,
         complete: covered(frames, walked, o.time_base, o.rate),
         beats: Some(beats),
-    })
+    };
+    Ok((analysis, in_bands.map(bands::BandEar::finish)))
 }
 
 /// The beats of a track at the tempo kept (none without one, so a slow-counted track's are the slow ones): taktus's
@@ -480,7 +499,7 @@ fn bin_waveform(squares: &[f32]) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -511,7 +530,7 @@ mod tests {
     }
 
     /// A 16-bit stereo WAV of `secs` seconds at 44.1 kHz, each sample from `f(t)`.
-    pub(super) fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> std::path::PathBuf {
+    pub(crate) fn wav(name: &str, secs: f64, f: impl Fn(f64) -> f32) -> std::path::PathBuf {
         let rate = 44_100u32;
         let n = (secs * f64::from(rate)) as usize;
         let mut data = Vec::with_capacity(n * 4);
@@ -593,7 +612,7 @@ mod tests {
     }
 
     /// Short noise bursts at `clicks` (seconds), each `loud(k)` (0..=1), over `secs` seconds.
-    fn click_track(name: &str, secs: f64, clicks: &[f64], loud: impl Fn(usize) -> f32) -> std::path::PathBuf {
+    pub(crate) fn click_track(name: &str, secs: f64, clicks: &[f64], loud: impl Fn(usize) -> f32) -> std::path::PathBuf {
         let clicks = clicks.to_vec();
         wav(name, secs, move |t| {
             let k = clicks.partition_point(|c| *c <= t);
