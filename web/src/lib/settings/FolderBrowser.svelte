@@ -27,7 +27,7 @@
 
   const isChosen = (p: string) => chosen.includes(p);
   const name = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
-  const tracks = (e: FolderEntry) => (e.audio === 0 ? null : `${e.audio}${e.more ? '+' : ''} tracks`);
+  const tracks = (e: FolderEntry) => (e.audio === 0 ? null : `${e.audio}${e.more ? '+' : ''} ${e.audio === 1 && !e.more ? 'track' : 'tracks'}`);
   const shownFound = $derived(found.filter((p) => !isChosen(p)));
 
   function add(path: string) {

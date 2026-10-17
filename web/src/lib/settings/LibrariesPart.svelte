@@ -48,7 +48,7 @@
   const size = (b: number) => (b >= 1e12 ? `${(b / 1e12).toFixed(1)} TB` : `${Math.round(b / 1e9)} GB`);
   /** A folder's line: its tracks, its disk's free space, and read only where that matters. */
   const statusLine = (st: FolderStatus, use: string) =>
-    [st.tracks ? `${count(st.tracks)} tracks` : null, st.free !== null ? `${size(st.free)} free` : null, !st.writable && use !== 'unused' ? 'read only' : null]
+    [st.tracks ? `${count(st.tracks)} ${st.tracks === 1 ? 'track' : 'tracks'}` : null, st.free !== null ? `${size(st.free)} free` : null, !st.writable && use !== 'unused' ? 'read only' : null]
       .filter(Boolean)
       .join(' · ');
   /** Another server's library: its path as the server sees it, and where that is in Cratarr's folders. */
