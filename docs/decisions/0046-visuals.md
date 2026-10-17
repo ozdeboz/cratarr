@@ -103,6 +103,12 @@ between the player's reports was moved on with the frame clock and set back at e
 - The visuals in a browser over a 120 BPM grid: every frame's flash was the one its beat calls for, apart from frames
   within 2 ms of a beat (the lab's own clock); the first frame after a beat came 8 ms after it on average, 17 at most
   (60 frames a second; up to 33 at the tablet's 30).
+- The library, once live (preview 54): of 55 tracks on four albums (techno, big beat, two of hip-hop), 46 have beats,
+  each grid at its track's tempo within about 1 BPM. On five of them against librosa 1.0's beat tracker: it finds 90 to
+  98 % of ours on the techno and big beat tracks (within 70 ms), 78 % on a hip-hop one, 50 % on one where it drifts
+  itself (87 % of its beats on a kick, 99 % of ours). Ours come a steady 18 to 20 ms before librosa's and before the
+  kicks' onsets (low band, librosa's onset detector). With the 50 ms lead, a flash should come some 20 to 40 ms before
+  its kick on the tablet, within what reads as on the beat.
 
 **Consequences:**
 
