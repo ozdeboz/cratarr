@@ -35,6 +35,8 @@ export type Prefs = {
   /** Wide windows show the player beside the page (true) or the mini-player with the player over the page (false,
    *  after Maximise). */
   sidebar: boolean;
+  /** The navigation folded to a strip of icons on a wide window (decision 0042). */
+  navFolded: boolean;
   /** Where music plays (decisions 0019, 0022, 0031): on a server's player (`remote`), in this browser or app (`local`),
    *  or on one of Cratarr's own players by name (`player:Salon tablet`). */
   output: 'remote' | 'local' | `player:${string}`;
@@ -84,6 +86,7 @@ export const DEFAULTS: Prefs = {
   signals: { tracks: true, genre: true, artists: true },
   playerWidth: 400,
   sidebar: true,
+  navFolded: false,
   // This browser (it falls back to a player where a browser cannot play): Cratarr's own source has no server-side
   // player, which a page's first play went to, and failed (2026-10-16).
   output: 'local',
@@ -133,6 +136,7 @@ function read(): Prefs {
       if (typeof saved.source === 'string') p.source = saved.source;
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;
+      if (typeof saved.navFolded === 'boolean') p.navFolded = saved.navFolded;
       if (saved.output === 'remote' || saved.output === 'local' || (typeof saved.output === 'string' && saved.output.startsWith('player:')))
         p.output = saved.output;
       if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');

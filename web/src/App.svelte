@@ -75,6 +75,25 @@
   // otherwise the mini-player along the bottom (`mini`), which opens it over everything (`overlay`). The player over
   // everything closes when the page changes or the navigation is used, and the page behind it does not scroll.
   const collapse = () => (player.full = false);
+  // The navigation folds to a strip of icons on a wide window (decision 0042). Folded, it shows whole over the page,
+  // never pushing it aside, while a mouse is on it or after a tap on the strip outside its icons; a tap elsewhere or
+  // the mouse leaving folds it again.
+  let peek = $state(false);
+  $effect(() => {
+    if (!peek) return;
+    const away = (e: PointerEvent) => {
+      if (!(e.target as Element | null)?.closest('.sidebar')) peek = false;
+    };
+    addEventListener('pointerdown', away, true);
+    return () => removeEventListener('pointerdown', away, true);
+  });
+  function stripTap(e: MouseEvent) {
+    if (prefs.navFolded && !peek && !(e.target as Element).closest('a, button')) peek = true;
+  }
+  function fold() {
+    prefs.navFolded = !prefs.navFolded;
+    peek = false;
+  }
   $effect(() => {
     page;
     untrack(collapse);
@@ -299,26 +318,39 @@
   const overflowActive = $derived(overflow.some((p) => p.id === page));
 </script>
 
-<div class="shell">
-  <aside class="sidebar" onclickcapture={collapse}>
+<div class="shell" class:folded={prefs.navFolded}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+  <aside
+    class="sidebar"
+    class:peek
+    onclickcapture={collapse}
+    onclick={stripTap}
+    onpointerenter={(e) => prefs.navFolded && e.pointerType === 'mouse' && (peek = true)}
+    onpointerleave={(e) => e.pointerType === 'mouse' && (peek = false)}
+  >
     <div class="brand">
       <span class="logo"><Mark /></span>
       <span class="name">Cratarr</span>
     </div>
     {#if connection}
-      <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i>{connection.text}</a>
+      <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
     {/if}
 
     <nav aria-label="Pages">
       {#each MAIN as p (p.id)}
-        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}
+          ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
+        >
       {/each}
     </nav>
 
     <div class="foot">
       {#each APART as p (p.id)}
-        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}</a>
+        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
       {/each}
+      <button class="fold" aria-pressed={prefs.navFolded} title={prefs.navFolded ? 'Unfold the navigation' : 'Fold the navigation'} onclick={fold}
+        ><Icon name={prefs.navFolded ? 'panelLeftOpen' : 'panelLeftClose'} /><span class="label">{prefs.navFolded ? 'Unfold' : 'Fold'}</span></button
+      >
       {#if status}<div class="version">Cratarr {status.version}</div>{/if}
     </div>
   </aside>
@@ -711,7 +743,8 @@
 
   .sheet a,
   .sidebar nav a,
-  .foot a {
+  .foot a,
+  .fold {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -724,7 +757,8 @@
 
   .sheet a:hover,
   .sidebar nav a:hover,
-  .foot a:hover {
+  .foot a:hover,
+  .fold:hover {
     background: color-mix(in srgb, var(--text) 7%, transparent);
   }
 
@@ -738,8 +772,14 @@
 
   @media (min-width: 1024px) {
     .shell {
+      --nav-w: 240px;
       display: grid;
-      grid-template-columns: 240px minmax(0, 1fr);
+      grid-template-columns: var(--nav-w) minmax(0, 1fr);
+    }
+
+    /* Its own column always, also while the navigation shows over it (out of the grid's flow). */
+    .content {
+      grid-column: 2;
     }
 
     .sidebar {
@@ -764,7 +804,7 @@
 
     .mini-dock,
     .page-row {
-      left: calc(240px + 12px);
+      left: calc(var(--nav-w) + 12px);
     }
 
     /* A playlist over the page covers the navigation too: the mini-player floats over it with the same space on both
@@ -844,5 +884,64 @@
     padding: 0 12px;
     color: var(--muted);
     font-size: 0.75rem;
+  }
+
+  .fold {
+    width: 100%;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  /* Folded (decision 0042): a strip of icons; the names stay for screen readers. */
+  @media (min-width: 1024px) {
+    .shell.folded {
+      --nav-w: 68px;
+    }
+
+    .folded .sidebar:not(.peek) {
+      padding-inline: 10px;
+    }
+
+    .folded .sidebar:not(.peek) :is(nav a, .foot a, .fold, .conn, .brand) {
+      justify-content: center;
+      padding-inline: 0;
+    }
+
+    .folded .sidebar:not(.peek) :is(.label, .name) {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .folded .sidebar:not(.peek) .version {
+      display: none;
+    }
+
+    .folded .sidebar:not(.peek) nav a {
+      position: relative;
+    }
+
+    .folded .sidebar:not(.peek) .count {
+      position: absolute;
+      top: 2px;
+      right: 4px;
+      margin: 0;
+    }
+
+    /* Shown whole over the page: the page keeps its place beside the strip. */
+    .sidebar.peek {
+      position: fixed;
+      left: 0;
+      top: 0;
+      z-index: 25;
+      width: 240px;
+      box-shadow: 8px 0 32px rgb(0 0 0 / 0.45);
+    }
   }
 </style>
