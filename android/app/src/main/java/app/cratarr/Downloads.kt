@@ -138,6 +138,7 @@ object Downloads {
     fun list(context: Context): JSONObject {
         val found = mutableListOf<JSONObject>()
         var bytes = 0L
+        val albums = Kept.albumIds(context)
         manager(context).downloadIndex.getDownloads().use { c ->
             while (c.moveToNext()) {
                 val d = c.download
@@ -146,6 +147,8 @@ object Downloads {
                 } catch (e: Exception) {
                     JSONObject()
                 }
+                // An older request without its album: the kept item's track has it (Kept.albumIds).
+                if (t.isNull("album_id")) albums[d.request.id]?.let { t.put("album_id", it) }
                 val state = when (d.state) {
                     Download.STATE_COMPLETED -> "done"
                     Download.STATE_FAILED -> "failed"

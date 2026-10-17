@@ -315,6 +315,23 @@ object Kept {
         DownloadService.sendAddDownload(app, CratarrDownloadService::class.java, r, false)
     }
 
+    /**
+     * Each kept track's album id, by its download's id (`source/id`), as Cratarr last sent the items' tracks. Downloads
+     * requested before Cratarr sent album ids with a playlist's or a crate's tracks have none in their request; the
+     * page's list takes it from here (Downloads.list), without asking for the download again.
+     */
+    fun albumIds(context: Context): Map<String, String> {
+        val app = context.applicationContext
+        return worker.submit<Map<String, String>> {
+            val out = mutableMapOf<String, String>()
+            for (item in loadItems(app)) for (i in 0 until item.tracks.length()) {
+                val t = item.tracks.optJSONObject(i) ?: continue
+                if (!t.isNull("album_id")) t.optString("album_id").takeIf { it.isNotEmpty() }?.let { out.putIfAbsent(keyOf(t), it) }
+            }
+            out
+        }.get()
+    }
+
     // --- the report for the page (the progress sheet) ---
 
     fun report(context: Context): JSONObject {
