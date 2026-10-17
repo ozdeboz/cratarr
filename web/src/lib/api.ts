@@ -650,6 +650,30 @@ export const getSignedIn = () => quietly<{ sessions: SignedIn[] }>('/api/auth/se
 /** Signs that device out: its next request goes to the sign-in page. */
 export const signOutDevice = (id: string) => request<void>(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
+/** A directory (LDAP) asked first at sign-in (decision 0040); its service account's password stays in a file. */
+export type DirectoryConfig = {
+  enabled: boolean;
+  url: string;
+  starttls: boolean;
+  base_dn: string;
+  user_attribute: string;
+  group: string;
+  bind_dn: string;
+  bind_password_file: string;
+  accounts: Record<string, string>;
+};
+export type DirectorySettings = { config: DirectoryConfig; bind_password: 'set' | 'not set' | 'unreadable' };
+export const getDirectory = () => quietly<DirectorySettings>('/api/auth/ldap');
+export const saveDirectory = (config: DirectoryConfig) =>
+  request<DirectorySettings>('/api/auth/ldap', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
+/** Binds as the service account and, with a name, looks that user up (no password). */
+export const testDirectory = (config: DirectoryConfig, name: string) =>
+  request<{ ok: boolean; found?: boolean | null; error?: string }>('/api/auth/ldap/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ config, name }),
+  });
+
 /** Importing an account's plays, favourites, ratings and added dates from a server into a Subsonic account. */
 export type ImportWhat = { plays: boolean; favorites: boolean; ratings: boolean; added: boolean };
 /** A server that can import: its accounts (`id` is the server's), and the choices made last time. */
