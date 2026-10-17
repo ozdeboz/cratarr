@@ -6,6 +6,7 @@
   // the bar's Download. The log as it is, no prose.
   import { getLog, getLogLevels, getPlayers, setLogLevels, type LogLevels, type LogRow, type PlayOnPlayer } from '../api';
   import Switch from '../Switch.svelte';
+  import { offerReset } from './reset.svelte';
 
   const AREA_NAMES: Record<string, string> = {
     playon: 'Play On',
@@ -87,6 +88,10 @@
   const detailed = $derived(!!levels && Object.keys(levels.now).length > 0);
   /** More detail: every area, or back to normal. */
   const detail = (on: boolean) => levels && setLevels(on ? Object.fromEntries(levels.areas.map((a) => [a, 'debug'])) : {});
+  offerReset(
+    () => (detailed ? 'More detail back to off, every area to normal.' : null),
+    () => setLevels({}),
+  );
 
   const today = new Date().toDateString();
   /** The time, with the day when it is not today. */
@@ -111,7 +116,14 @@
   <section aria-labelledby="detail-h">
     <h2 id="detail-h">Diagnostics</h2>
     <div class="pref">
-      <Switch label="More detail" hint={levels.until ? `Until ${time(levels.until, false)}` : null} hintWhenOn checked={detailed} onchange={detail} />
+      <Switch
+        label="More detail"
+        hint={levels.until ? `Until ${time(levels.until, false)}` : null}
+        hintWhenOn
+        more="Cratarr logs more of what happens, for a day, and then goes back by itself. While it is on, each area can be set on its own."
+        checked={detailed}
+        onchange={detail}
+      />
     </div>
     {#if detailed}
       <ul class="list">

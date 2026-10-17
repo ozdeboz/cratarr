@@ -7,6 +7,13 @@
   import SettingRow from '../SettingRow.svelte';
   import Switch from '../Switch.svelte';
   import { appInfo, inApp, networkTest, setDevice, testNetwork } from '../app.svelte';
+  import { offerReset } from './reset.svelte';
+
+  // Its Reset: Prefer local network off; the addresses stay (lib/settings/reset).
+  offerReset(
+    () => (inApp && appInfo.addresses ? 'Prefer local network back to off. The addresses stay.' : null),
+    () => setDevice({ preferLocal: false }),
+  );
 
   /** An address field's change, sent as typed (the app tries https:// and then http:// when no scheme is typed). */
   function changed(e: Event & { currentTarget: HTMLInputElement }, which: 'public' | 'local') {
@@ -53,20 +60,29 @@
     </label>
     {#if appInfo.addresses}
       <div class="pref">
-        <Switch label="Prefer local network" checked={appInfo.preferLocal} onchange={(on) => setDevice({ preferLocal: on })} />
-      </div>
-      <label class="pref">
-        <span class="l">Local network address</span>
-        <input
-          type="url"
-          value={appInfo.localAddress ?? ''}
-          placeholder="http://192.168.1.5:8081"
-          spellcheck="false"
-          autocapitalize="off"
-          autocomplete="off"
-          onchange={(e) => changed(e, 'local')}
+        <Switch
+          label="Prefer local network"
+          hint="The local network address when it answers"
+          more="On, the app uses the local network address whenever it answers (at home, or over a VPN that carries only the local network), and the public address otherwise. It looks again at every change of network."
+          checked={appInfo.preferLocal}
+          onchange={(on) => setDevice({ preferLocal: on })}
         />
-      </label>
+      </div>
+      <!-- Only while it is used (as Finamp shows a setting's deeper ones only while they apply); kept while off. -->
+      {#if appInfo.preferLocal}
+        <label class="pref">
+          <span class="l">Local network address</span>
+          <input
+            type="url"
+            value={appInfo.localAddress ?? ''}
+            placeholder="http://192.168.1.5:8081"
+            spellcheck="false"
+            autocapitalize="off"
+            autocomplete="off"
+            onchange={(e) => changed(e, 'local')}
+          />
+        </label>
+      {/if}
       <SettingRow label="Active address">
         <span class="active">{appInfo.inUse ?? ''}</span>
       </SettingRow>

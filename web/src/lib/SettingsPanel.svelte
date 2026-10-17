@@ -5,6 +5,7 @@
   // all of them and survives going from one to another. Authentication's account, Import, this device's settings and
   // Display act at once.
   import Icon from './Icon.svelte';
+  import MenuSheet from './MenuSheet.svelte';
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import PanelPlace from './PanelPlace.svelte';
@@ -13,6 +14,7 @@
   import { prefs } from './prefs.svelte';
   import { SECTIONS, type SettingsSection } from './settingsSections.svelte';
   import { ed } from './settings/editor.svelte';
+  import { partReset } from './settings/reset.svelte';
   import AuthPart from './settings/AuthPart.svelte';
   import ConnectionsPart from './settings/ConnectionsPart.svelte';
   import DevicePart from './settings/DevicePart.svelte';
@@ -39,6 +41,19 @@
     askDownloads();
   }
   ed.load();
+
+  // A part's Reset (lib/settings/reset): asked once more, in a sheet, before its preferences go back to their defaults.
+  let resetting = $state(false);
+  let resetBusy = $state(false);
+  async function reset() {
+    resetBusy = true;
+    try {
+      await partReset.run?.();
+      resetting = false;
+    } finally {
+      resetBusy = false;
+    }
+  }
 </script>
 
 <div class="view">
@@ -48,6 +63,8 @@
     <span class="end">
       <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
       {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
+      <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar. -->
+      {#if partReset.run}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="reset" size={22} /></button></span>{/if}
       <PanelPlace />
     </span>
   </div>
@@ -75,6 +92,18 @@
       <AuthPart />
     {:else if section === 'import'}
       <ImportPart />
+    {/if}
+
+    {#if resetting && partReset.run}
+      <MenuSheet label="Reset" icon="reset" title={`Reset ${title}`} onclose={() => (resetting = false)}>
+        <div class="reset">
+          <p>{partReset.what}</p>
+          <div class="row">
+            <button class="primary" disabled={resetBusy} aria-busy={resetBusy} onclick={reset}>Reset</button>
+            <button disabled={resetBusy} onclick={() => (resetting = false)}>Cancel</button>
+          </div>
+        </div>
+      </MenuSheet>
     {/if}
 
     {#if ed.dirty}
@@ -120,6 +149,21 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  /* Padding, not margin: the sheet measures its content's height. */
+  .reset {
+    padding: 4px 24px 20px;
+  }
+
+  .reset p {
+    margin: 0 0 16px;
+    color: var(--muted);
+  }
+
+  .reset .row {
+    display: flex;
+    gap: 12px;
   }
 
   .navpill {

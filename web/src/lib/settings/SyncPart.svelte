@@ -1,12 +1,14 @@
 <script lang="ts">
   // Sync (decision 0038): how this device keeps music: the storage budget, over which network, only while charging,
-  // and in which quality. This device's own; it acts at once. Only in the app.
+  // and in which quality. This device's own; it acts at once. Only in the app. Its Reset: all four back to their
+  // defaults (lib/settings/reset); what is kept stays.
   import Seg from '../Seg.svelte';
   import SettingRow from '../SettingRow.svelte';
   import Switch from '../Switch.svelte';
   import { appInfo, inApp, setDevice } from '../app.svelte';
   import { kept } from '../kept.svelte';
   import { downloadedSize } from './editor.svelte';
+  import { offerReset } from './reset.svelte';
 
   const BUDGETS: { value: string; label: string }[] = [
     { value: '20', label: '20 GB' },
@@ -18,6 +20,11 @@
     { value: 'original', label: 'Originals' },
     { value: 'smaller', label: 'Smaller copies' },
   ];
+
+  offerReset(
+    () => (inApp ? 'Storage, quality, mobile data and charging back to their defaults. What is kept stays.' : null),
+    () => setDevice({ syncBudgetGb: 20, downloadQuality: 'original', downloadOverMobile: false, syncOnlyCharging: false }),
+  );
 </script>
 
 {#if inApp}
@@ -25,14 +32,18 @@
     <h2 id="sync-h">Sync</h2>
     <p class="lede">This device only.</p>
 
-    <SettingRow label="Storage" hint={kept.known ? `${downloadedSize(kept.used)} used` : null}>
+    <SettingRow
+      label="Storage"
+      hint={kept.known ? `${downloadedSize(kept.used)} used` : null}
+      more="When it runs out, what was kept longest ago shrinks first: its tracks furthest from its start go."
+    >
       <Seg
         label="Storage"
         options={BUDGETS}
         bind:value={() => String(appInfo.syncBudgetGb), (v) => setDevice({ syncBudgetGb: Number(v) })}
       />
     </SettingRow>
-    <SettingRow label="Quality">
+    <SettingRow label="Quality" more="Originals: the files as they are. Smaller copies: Cratarr makes 160 kb/s Opus copies of lossless files; lossy files come as they are.">
       <Seg label="Quality" options={QUALITY} bind:value={() => appInfo.downloadQuality, (v) => setDevice({ downloadQuality: v })} />
     </SettingRow>
     <div class="pref">

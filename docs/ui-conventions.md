@@ -233,6 +233,19 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   What a part edits is saved with the Save bar at its foot. A part opens on the settings last read (reading them
   checks every connection, which takes seconds) and takes the fresh ones unless something was edited meanwhile.
   Technical details go to About or nowhere. A use is set only there (decision 0009).
+- **Settings as Finamp presents them** (the owner, 2026-10-17: "we learn from the way Finamp presents settings and
+  deeper settings"; chosen: these three, not a quick-settings card):
+  - **One short line, the rest behind an (i).** A setting shows its name and at most one short line; a longer
+    explanation opens from an (i) beside it, in a sheet with the setting's name (`lib/MoreInfo`; `more` on
+    `lib/Switch` and `lib/SettingRow`), as Finamp's subtitle with a more-info dialog. The (i) is never inside another
+    control (a switch's row, a field's label): beside it.
+  - **Deeper only while it applies.** A setting that only matters while another is on shows only then, and keeps its
+    value meanwhile (Network's local address under Prefer local network; Diagnostics' areas under More detail;
+    Libraries' format and dot under a used library), as Finamp shows the bitrate only while transcoding is on.
+  - **Reset per part.** A part that holds preferences has a Reset in the panel's bar (`lib/settings/reset`): after a
+    confirm naming what goes back, its preferences return to their defaults. Never servers, accounts, keys, folders,
+    addresses, the sign-in requirement or what was imported: Connections, Libraries, Players, Authentication and its
+    Directory have none.
 
 - **Shared pieces, not each page's own layout** (decided 2026-10-16): a sheet's or a setting's card is `lib/Card`
   (its title and a muted note, then what it holds); a setting's row is `lib/SettingRow` (its name at the start, its
@@ -328,7 +341,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   - *server*: Jellyfin and the like (not "source").
 - **Counts say what they count:** "in 3 playlists", "12 tracks", "92 missing tracks".
 - **Buttons are verbs** saying what happens: "Fix 92 missing tracks", "Delete playlist", not "OK" or "Submit".
-- **Help text** is one sentence under the thing it explains, only where the label is not enough.
+- **Help text** is one short line under the thing it explains, only where the label is not enough; more goes behind
+  an (i) (Settings as Finamp presents them, above).
 
 ## Feedback
 

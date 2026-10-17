@@ -5,6 +5,7 @@
   import { setPlayerDelay } from './api';
   import Icon from './Icon.svelte';
   import KodiSettings from './KodiSettings.svelte';
+  import MoreInfo from './MoreInfo.svelte';
   import { playOn } from './playOn.svelte';
   import { toast } from './toast.svelte';
 
@@ -55,7 +56,12 @@
     {@const ms = delay(p.name)}
     <div class="player">
       <span class="name">{p.name}{#if !p.online}<small>offline</small>{/if}</span>
-      <span class="l">Speaker delay <small>How late it sounds</small></span>
+      <span class="l"
+        >Speaker delay <MoreInfo
+          label="Speaker delay"
+          text={"In a group, a player whose speaker sounds late (Bluetooth, a soundbar's processing) plays that much earlier, so the group sounds as one.\n\nStand between two speakers and move it until they sound together. A Kodi's counts its own buffering too, up to a second."}
+        /><small>How late it sounds</small></span
+      >
       <div class="delay">
         <button aria-label="Less" title="Less" disabled={ms <= 0} onclick={() => set(p.name, ms - STEP)}><Icon name="minus" size={20} /></button>
         <input

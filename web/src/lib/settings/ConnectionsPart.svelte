@@ -1,6 +1,7 @@
 <script lang="ts">
   // Connections: the servers Cratarr works with, and Lidarr; saved with the Save bar.
   import { ed } from './editor.svelte';
+  import MoreInfo from '../MoreInfo.svelte';
   import Switch from '../Switch.svelte';
   import { str } from './editor.svelte';
 
@@ -13,7 +14,7 @@
   <section aria-labelledby="conn-h">
     <h2 id="conn-h">Connections</h2>
     <p class="lede">
-      The servers Cratarr works with. Shared by everyone who uses Cratarr.
+      The servers Cratarr works with <MoreInfo label="Connections" text="Shared by everyone who uses Cratarr, not this device's own." />
       {#if s.origin === 'env'}Until you save here, these come from the container's settings.{/if}
     </p>
 
@@ -106,7 +107,11 @@
     {#if ed.showLidarr}
       <article class="server lidarr">
         <header>
-          <h3>Lidarr<small>optional</small></h3>
+          <h3>
+            Lidarr<MoreInfo label="Lidarr" text="With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again." /><small
+              >optional</small
+            >
+          </h3>
           {#if s.lidarr && ed.lid.url}
             {#if ed.lid.removing}
               <span class="ask">Remove Lidarr?</span>
@@ -138,7 +143,7 @@
             {#if ed.lidarrKeyNeeded}
               <span class="hint warn">You changed the server address, so enter the API key again.</span>
             {:else}
-              <span class="hint">In Lidarr under Settings, General. Lets Delete in Incoming stop Lidarr fetching the album again.</span>
+              <span class="hint">In Lidarr under Settings, General</span>
             {/if}
           </label>
         </div>

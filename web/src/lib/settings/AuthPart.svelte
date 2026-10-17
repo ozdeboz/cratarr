@@ -14,6 +14,7 @@
     type ApiKey,
     type SignedIn,
   } from '../api';
+  import MoreInfo from '../MoreInfo.svelte';
   import Switch from '../Switch.svelte';
   import { ed } from './editor.svelte';
   import DirectoryPart from './DirectoryPart.svelte';
@@ -117,7 +118,10 @@
 {#if ed.sub.accounts}
   <section aria-labelledby="auth-h">
     <h2 id="auth-h">Authentication</h2>
-    <p class="lede">Your account for signing in to Cratarr, and for Subsonic apps (Symfonium, Feishin…) at this server address: <code>{location.origin}</code></p>
+    <p class="lede">
+      Your account for Cratarr and Subsonic apps: <code>{location.origin}</code>
+      <MoreInfo label="Authentication" text="Sign in to these pages with it. Subsonic apps (Symfonium, Feishin…) take this address with the same name and password." />
+    </p>
     {#if ed.sub.accounts.length === 0}
       <div class="fields">
         <label>
@@ -153,7 +157,13 @@
 
       {#if required !== null}
         <div class="pref">
-          <Switch label="Sign-in required everywhere" checked={switching ?? required} disabled={busy} onchange={(on) => (switching = on === required ? null : on)} />
+          <Switch
+            label="Sign-in required everywhere"
+            more={"On, Cratarr asks every request for a sign-in, an API key or a signed link, on the home network too. Off, it asks none itself: a proxy in front of it may.\n\nSwitching it asks for the password again."}
+            checked={switching ?? required}
+            disabled={busy}
+            onchange={(on) => (switching = on === required ? null : on)}
+          />
         </div>
         {#if switching !== null}
           <form class="confirm" onsubmit={(e) => (e.preventDefault(), confirmSwitch())}>
@@ -182,7 +192,9 @@
         </ul>
       {/if}
 
-      <h3 id="keys-h">API keys</h3>
+      <h3 id="keys-h">
+        API keys <MoreInfo label="API keys" text="For what cannot sign in on a page: Home Assistant, scripts. A key shows once, when it is made; revoking one ends it at once." />
+      </h3>
       {#if keys.length}
         <ul class="list" aria-labelledby="keys-h">
           {#each keys as k (k.id)}

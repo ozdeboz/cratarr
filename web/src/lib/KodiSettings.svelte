@@ -4,6 +4,7 @@
   // reaches it, and a group takes it in as a follower. Its password is never shown again (blank keeps it).
   import { getPlayOnSettings, savePlayOnSettings, type KodiSetting } from './api';
   import Icon from './Icon.svelte';
+  import MoreInfo from './MoreInfo.svelte';
   import { toast } from './toast.svelte';
 
   let webhooks = $state<string[]>([]);
@@ -50,7 +51,12 @@
 {#if loaded}
   <section class="kodi" aria-label="Kodi">
     <div class="head">
-      <span>Kodi</span>
+      <span
+        >Kodi <MoreInfo
+          label="Kodi"
+          text={"Cratarr drives a Kodi over Kodi's own remote control (Settings → Services → Control → Allow remote control via HTTP); nothing is installed on Kodi. In a group it follows, and never leads.\n\nCratarr for Kodi: the address Kodi reaches Cratarr on, when it is not the one these pages use."}
+        /></span
+      >
       <button class="icon" aria-label="Add a Kodi" title="Add a Kodi" onclick={add}><Icon name="plus" size={22} /></button>
     </div>
     {#each kodis as k, i (i)}

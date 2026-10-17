@@ -3,6 +3,7 @@
   // set here: the operator writes ldap.json in the data folder (a page that could set the address or the password file
   // could send a file's contents anywhere, or sign anyone in). The service account's password: only whether it is set.
   import { getDirectory, type DirectorySettings } from '../api';
+  import MoreInfo from '../MoreInfo.svelte';
 
   let d = $state<DirectorySettings | null>(null);
   $effect(() => {
@@ -16,7 +17,12 @@
 
 {#if d?.config.enabled}
   <section aria-labelledby="dir-h">
-    <h3 id="dir-h">Directory</h3>
+    <h3 id="dir-h">
+      Directory <MoreInfo
+        label="Directory"
+        text={"Asked first at sign-in; Cratarr's own account stays a way in.\n\nSet by whoever runs Cratarr, in ldap.json in its data folder, and never here: a page that could set it could send a file's contents anywhere, or sign anyone in."}
+      />
+    </h3>
     <dl class="account">
       <dt>Address</dt>
       <dd><code>{d.config.url}</code>{#if d.config.starttls} · StartTLS{/if}</dd>

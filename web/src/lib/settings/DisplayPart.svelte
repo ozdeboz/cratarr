@@ -1,17 +1,29 @@
 <script lang="ts">
-  // Display: this browser's own look; acts at once.
+  // Display: this browser's own look; acts at once. Its Reset: the theme, the progress bar and levelling back to their
+  // defaults (lib/settings/reset).
   import Seg from '../Seg.svelte';
   import SettingRow from '../SettingRow.svelte';
   import Switch from '../Switch.svelte';
   import { appInfo, inApp, setDevice } from '../app.svelte';
   import { setLevelling } from '../localPlayer.svelte';
   import { prefs, type Theme } from '../prefs.svelte';
+  import { offerReset } from './reset.svelte';
 
   const THEMES: { value: Theme; label: string }[] = [
     { value: 'auto', label: 'System' },
     { value: 'light', label: 'Light' },
     { value: 'dark', label: 'Dark' },
   ];
+
+  const setLevel = (on: boolean) => (inApp ? setDevice({ levelling: on }) : setLevelling(on));
+  offerReset(
+    () => 'Theme, progress bar and levelling back to their defaults.',
+    () => {
+      prefs.theme = 'auto';
+      prefs.showProgress = true;
+      setLevel(true);
+    },
+  );
 </script>
 
   <section aria-labelledby="display-h">
@@ -28,8 +40,9 @@
       <Switch
         label="Level the volume"
         hint="Every track about as loud as the next"
+        more={"Each track plays at about the same loudness, as Cratarr measured it (or as the file's ReplayGain tags say, until it has).\n\nAn album played through keeps its own dynamics; shuffle and radio are levelled track by track."}
         checked={inApp ? appInfo.levelling : prefs.levelling}
-        onchange={(on) => (inApp ? setDevice({ levelling: on }) : setLevelling(on))}
+        onchange={setLevel}
       />
     </div>
   </section>

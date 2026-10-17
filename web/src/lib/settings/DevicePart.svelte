@@ -1,10 +1,17 @@
 <script lang="ts">
   // This device (decision 0031): the app's own settings, this device's only; they act at once. How it keeps music
   // (quality, mobile data, the budget) is under Sync (decision 0038), how it reaches Cratarr under Network.
+  import MoreInfo from '../MoreInfo.svelte';
   import Switch from '../Switch.svelte';
+  import { offerReset } from './reset.svelte';
   import { allowBackground, appInfo, inApp, setDevice } from '../app.svelte';
   import { prefs } from '../prefs.svelte';
   import { defaultBrowserName } from '../playOnTarget.svelte';
+
+  offerReset(
+    () => (inApp ? 'Stay ready back to off.' : null),
+    () => setDevice({ stayReady: false }),
+  );
 </script>
 
 {#if inApp}
@@ -16,10 +23,21 @@
       <input type="text" value={appInfo.player ?? ''} onchange={(e) => e.currentTarget.value.trim() && setDevice({ player: e.currentTarget.value.trim() })} />
     </label>
     <div class="pref">
-      <Switch label="Stay ready" hint="Keeps listening for Play On while idle" checked={appInfo.stayReady} onchange={(on) => setDevice({ stayReady: on })} />
+      <Switch
+        label="Stay ready"
+        hint="Keeps listening for Play On while idle"
+        more="While nothing plays, the app keeps its connection to Cratarr up (a wake lock and a Wi-Fi lock), so Play On from Home Assistant or another device starts music here with the screen locked. It uses some battery."
+        checked={appInfo.stayReady}
+        onchange={(on) => setDevice({ stayReady: on })}
+      />
     </div>
     <div class="pref">
-      <span class="l">Background <small>{appInfo.batteryAllowed ? 'Allowed to run' : 'Android may stop Cratarr'}</small></span>
+      <span class="l"
+        >Background <MoreInfo
+          label="Background"
+          text="Android may stop an app in the background to save battery. Allowed, Cratarr keeps playing and stays ready with the screen off."
+        /><small>{appInfo.batteryAllowed ? 'Allowed to run' : 'Android may stop Cratarr'}</small></span
+      >
       {#if !appInfo.batteryAllowed}<button onclick={allowBackground}>Allow</button>{/if}
     </div>
   </section>

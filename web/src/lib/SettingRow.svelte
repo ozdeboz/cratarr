@@ -2,25 +2,28 @@
   // A setting's row (decided 2026-10-16: shared pieces): its name (and a muted hint under it) at the start, its control
   // at the end. Where both do not fit, the control goes under the name, as wide as the row: the row wraps, so no rule
   // of a page decides it (a page's narrow-screen rule turned rows into columns once, 2026-10-16). `card`: on a rounded
-  // card of its own, as View's rows.
+  // card of its own, as View's rows. `more`: a longer explanation behind an (i) after the name (lib/MoreInfo).
   import type { Snippet } from 'svelte';
+  import MoreInfo from './MoreInfo.svelte';
 
   let {
     label,
     hint = null,
     card = false,
+    more = null,
     children,
   }: {
     label: string;
     hint?: string | null;
     card?: boolean;
+    more?: string | null;
     /** The control. */
     children: Snippet;
   } = $props();
 </script>
 
 <div class="row" class:card role="group" aria-label={label}>
-  <span class="name">{label}{#if hint}<small>{hint}</small>{/if}</span>
+  <span class="name">{label}{#if more}<MoreInfo {label} text={more} />{/if}{#if hint}<small>{hint}</small>{/if}</span>
   <span class="control">{@render children()}</span>
 </div>
 

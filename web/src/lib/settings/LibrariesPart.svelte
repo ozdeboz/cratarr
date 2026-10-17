@@ -6,6 +6,7 @@
   import FolderBrowser from './FolderBrowser.svelte';
   import { count, FORMATS, USES } from './editor.svelte';
   import Seg from '../Seg.svelte';
+  import MoreInfo from '../MoreInfo.svelte';
   import SettingRow from '../SettingRow.svelte';
 
   // Seg's choices: a use, a format.
@@ -220,12 +221,17 @@
 
     <details class="sub">
       <summary>Tag splitting</summary>
-      <p class="hint">How tags with several artists or genres in one value are read. The files are never changed.</p>
+      <p class="hint">
+        How tags with several artists or genres in one value are read <MoreInfo
+          label="Tag splitting"
+          text={"The files are never changed: this is only how Cratarr reads them.\n\nArtist separators: \"&\", \",\" and \"feat.\" are never split on, as they are part of credits. Separators are given with spaces between them; the names never split, one per line."}
+        />
+      </p>
       <div class="fields">
         <label>
           <span class="l">Artist separators</span>
           <input type="text" bind:value={ed.ruleText.artistSeps} spellcheck="false" />
-          <span class="hint">Separated by spaces. "&amp;", "," and "feat." are left alone: they are part of credits.</span>
+          <span class="hint">Separated by spaces</span>
         </label>
         <label>
           <span class="l">Genre separators</span>
@@ -234,7 +240,7 @@
         <label>
           <span class="l">Artists never split</span>
           <textarea rows="3" bind:value={ed.ruleText.artistKeep} spellcheck="false" placeholder="AC/DC"></textarea>
-          <span class="hint">One per line.</span>
+          <span class="hint">One per line</span>
         </label>
         <label>
           <span class="l">Genres never split</span>
