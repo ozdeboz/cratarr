@@ -19,6 +19,7 @@
 - Choices that shape the product or its data are written down first in [docs/decisions](docs/decisions)
   (`NNNN-slug.md`: status, date, context, decision, consequences); a later change to one is an amendment to it, dated.
   UI follows [docs/ui-conventions.md](docs/ui-conventions.md).
+- Big ideas not yet decided go in [docs/plans.md](docs/plans.md).
 
 ## Commits
 
