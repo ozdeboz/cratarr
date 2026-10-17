@@ -255,3 +255,29 @@ ANGLE on Direct3D 11 as Chrome, Edge and Brave draw on Windows), each frame wait
 second (the most the headless browser gives) at 512k x 3 into 1386 x 866; the lowest (16k x 1, 25 %) the same; the
 highest asked (2M x 16 at the whole screen) starts at 3.6 a second and has stepped itself down to 2M x 1 at 45 a second
 within five seconds.
+
+## Amendment, 2026-10-18: steady or in steps, less of a show rather than darker, the panel at the right
+
+The owner: "Per band, I want a slider for how continuous versus discrete the animations are. And I'm also not happy
+with the way the entire screen dims when there is little loudness. It's a very shitty way to achieve what I want, which
+is less show on less loudness." And: "I want the sliders to show in a panel on the right side instead of the centered
+sheet from the bottom."
+
+**Continuity, a band's own** (sub, mid, treble; 0 to 100 %, 50 % by default): it shares the band's motion and evolution
+between steady and steps. Steady, its transform turns at its speed and evolves as its loudness goes; in steps, it turns
+on the band's own transients (the beats, while those are not known), each step eased in over 80 ms and as large as the
+turning it stands for (the band's speed over its transients a second, on average; a strong transient further, a weak
+one less), and evolves to the band's loudness at that transient, held until the next. The beats' own steps for every
+band, as before, are gone: the sub band at 0 % steps on the kicks. Reduced motion: steady. Measured in the browser (a
+kick, snare and hats at 120 BPM): at 0 %, 76 % of each band's turning comes in the 100 ms after its own transients
+(10 to 20 % would, steady); at 100 %, as steady; at 50 %, between (48 % for the snare); the turning over the run the
+same either way (3.4 and 3.7 radians).
+
+**Less show, at full brightness:** the loudness no longer dims the picture (only pausing does). In silence or a fade
+the flame is drawn at half its size, with a third of its colour (towards its own grey), still (a tenth of the turning),
+unlit (no flash, swell or band lights) and plain (its bands' evolution follows the loudness too); all of it comes back
+with the loudness, linearly in dB from -45 to -10 LUFS as before. Measured: -55 LUFS, 50 % size and 35 % colour;
+-35, 65 % and 54 %; -15, 93 % and 91 %; -8, all; the brightness the same throughout.
+
+**The panel** is at the right, below the buttons, from top to bottom (340 pixels wide, nearly all a phone's width), and
+scrolls; each band its own group: Lighting, Evolution, Continuity.

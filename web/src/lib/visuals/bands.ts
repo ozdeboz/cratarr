@@ -17,10 +17,15 @@ export type Bands = {
   /** The loudness as heard (LUFS, EBU R128's momentary), `momentsRate` a second; null from a server before it. */
   moments: Float32Array | null;
   momentsRate: number;
+  /** Each band's transients a second, over the whole track, and their mean strength. */
+  perSecond: number[];
+  meanStrength: number[];
 };
 
-/** A band now: how loud it is, and how much its last transient still rings (0..1). */
-export type Band = { loud: number; hit: number };
+/** A band now: how loud it is, how much its last transient still rings (0..1), that transient (its place among the
+ *  band's, -1 before the first) and its strength against the band's mean (1: as strong as its transients are on
+ *  average), and the band's transients a second over the track. */
+export type Band = { loud: number; hit: number; index: number; weight: number; perSecond: number };
 
 /** The server could not work them out then: asked again after this long, at most this many times. */
 const AGAIN_MS = 15_000;
@@ -96,7 +101,18 @@ function decode(buffer: ArrayBuffer): Bands | null {
     moments = new Float32Array(n);
     for (let i = 0; i < n; i++) moments[i] = -70 + v.getUint8(at + i) / 3;
   }
-  return { rate, loudness, at: times, strength, moments, momentsRate };
+  const secs = frames / Math.max(1, rate);
+  const mean = (s: Float32Array) => (s.length ? s.reduce((a, b) => a + b, 0) / s.length : 1);
+  return {
+    rate,
+    loudness,
+    at: times,
+    strength,
+    moments,
+    momentsRate,
+    perSecond: times.map((t) => (secs > 0 ? t.length / secs : 0)),
+    meanStrength: strength.map(mean),
+  };
 }
 
 /** The loudness as heard at `t` seconds (LUFS, between its values); null where the server did not say. */
@@ -115,20 +131,23 @@ export function bandsAt(b: Bands, t: number, rings: readonly number[]): Band[] {
     const x = Math.min(Math.max(t * b.rate, 0), loud.length - 1);
     const f = Math.floor(x);
     const level = loud.length ? loud[f] + ((loud[Math.min(f + 1, loud.length - 1)] ?? loud[f]) - loud[f]) * (x - f) : 0;
-    return { loud: level, hit: ring(b.at[i], b.strength[i], t, rings[i]) };
+    const k = lastAt(b.at[i], t);
+    const since = k < 0 ? Infinity : t - b.at[i][k];
+    const strength = k < 0 ? 0 : b.strength[i][k];
+    const hit = since > rings[i] * 5 ? 0 : (0.3 + 0.7 * strength) * Math.exp(-since / rings[i]);
+    return { loud: level, hit, index: k, weight: strength / Math.max(0.05, b.meanStrength[i]), perSecond: b.perSecond[i] };
   });
 }
 
-/** The last transient at or before `t`, fading over `ring` seconds. */
-function ring(at: Float64Array, strength: Float32Array, t: number, ring: number): number {
+/** The last of `at` (in order) at or before `t`; -1 before the first. */
+function lastAt(at: Float64Array, t: number): number {
   let lo = 0;
   let hi = at.length - 1;
-  if (hi < 0 || !(t >= at[0])) return 0;
+  if (hi < 0 || !(t >= at[0])) return -1;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
     if (at[mid] <= t) lo = mid;
     else hi = mid - 1;
   }
-  const since = t - at[lo];
-  return since > ring * 5 ? 0 : (0.3 + 0.7 * strength[lo]) * Math.exp(-since / ring);
+  return lo;
 }

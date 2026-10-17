@@ -152,6 +152,7 @@ uniform sampler2D uBands;
 uniform vec3 uHit;
 uniform vec3 uBandRgb[3];
 uniform float uCeiling;
+uniform float uSaturation;
 out vec4 o;
 void main() {
   // A beat's swell: the picture drawn a little larger about its middle.
@@ -185,6 +186,8 @@ void main() {
   vec3 hit = uHit * share;
   vec3 shown = mix(flat_, vib, uVibrancy) * uFlash * (1.0 + 0.6 * (hit.x + hit.y + hit.z));
   shown += 0.2 * g * (hit.x * uBandRgb[0] + hit.y * uBandRgb[1] + hit.z * uBandRgb[2]);
+  // Less colour where the music is quiet (towards its grey of the same brightness).
+  shown = mix(vec3(dot(shown, vec3(0.299, 0.587, 0.114))), shown, uSaturation);
   // The most brightness shown, last: no flash or light goes past it.
   o = vec4(clamp(shown, 0.0, 1.0) * uCeiling, 1.0);
 }`;
@@ -208,6 +211,8 @@ export type Shown = {
   hits: [number, number, number];
   /** The most brightness shown (0..1), applied after everything else. */
   ceiling: number;
+  /** How much of its colour it shows (0: grey, 1: all). */
+  saturation: number;
 };
 
 export class FlameRenderer {
@@ -471,6 +476,7 @@ export class FlameRenderer {
     gl.uniform3f(this.u(this.show, 'uHit'), look.hits[0], look.hits[1], look.hits[2]);
     gl.uniform3fv(this.u(this.show, 'uBandRgb'), this.bandRgb);
     gl.uniform1f(this.u(this.show, 'uCeiling'), look.ceiling);
+    gl.uniform1f(this.u(this.show, 'uSaturation'), look.saturation);
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

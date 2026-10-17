@@ -1,6 +1,7 @@
 // The visuals' settings (decision 0046, amended): how much the device draws (points, steps, resolution, frame rate:
 // ceilings the automatic step-down stays under), how the show looks (intensity, speed, beat, bands, brightness), and
-// each band's times (sub, mid, treble: how long its light rings, how quickly its loudness evolves its transform).
+// each band's times (sub, mid, treble: how long its light rings, how quickly its loudness evolves its transform, and
+// how much of its motion comes in steps on its own transients).
 // Changed live from the visuals' panel and kept on this device (a phone and the tablet want different ones); a
 // browser that keeps nothing (a private window) starts from the defaults each time.
 
@@ -29,6 +30,8 @@ export type VisualSettings = {
   lighting: [number, number, number];
   /** Each band's loudness evolving its transform: how long it takes to follow (seconds). */
   evolution: [number, number, number];
+  /** Each band's motion and evolution: 0 in steps on its own transients, 1 steady, between them a share of each. */
+  continuity: [number, number, number];
 };
 
 const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
@@ -48,6 +51,7 @@ export const DEFAULTS: VisualSettings = {
   // A kick rings longer than a hat.
   lighting: [0.18, 0.14, 0.09],
   evolution: [0.25, 0.25, 0.25],
+  continuity: [0.5, 0.5, 0.5],
 };
 
 /** Each setting's range, as its slider has it (the bands' times in seconds, though their sliders double). A kept value
@@ -64,6 +68,7 @@ export const RANGES: Record<keyof VisualSettings, [number, number]> = {
   brightness: [0.1, 1],
   lighting: [0.02, 1],
   evolution: [0.02, 2],
+  continuity: [0, 1],
 };
 
 const within = (key: keyof VisualSettings, v: number) => Math.min(RANGES[key][1], Math.max(RANGES[key][0], v));
@@ -79,7 +84,12 @@ export function autoResolution(devicePixels: number): number {
 }
 
 /** The defaults, their lists their own (the settings change in place). */
-const fresh = (): VisualSettings => ({ ...DEFAULTS, lighting: [...DEFAULTS.lighting], evolution: [...DEFAULTS.evolution] });
+const fresh = (): VisualSettings => ({
+  ...DEFAULTS,
+  lighting: [...DEFAULTS.lighting],
+  evolution: [...DEFAULTS.evolution],
+  continuity: [...DEFAULTS.continuity],
+});
 
 function load(): VisualSettings {
   try {

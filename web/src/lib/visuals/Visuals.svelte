@@ -2,12 +2,12 @@
   // Full-screen visuals (decision 0046), from the full player's top bar: each track's own fractal flame
   // (lib/visuals/flame.ts, made from its id) drawn on the GPU (lib/visuals/render.ts), its transforms turning a step
   // and the picture flashing on each of the track's beats (lib/visuals/music.svelte.ts), blending into the next track's
-  // flame as it starts. The whole show is as intense as the music is loud as heard: brightness, size, motion and every
-  // light. Within that, each of its three transforms answers to a band of the sound (low, middle, high): the band's
+  // flame as it starts. The whole show is as intense as the music is loud as heard: its size, colour, motion and every
+  // light (not its brightness: a quiet passage is less of a show, not a darker screen). Within that, each of its three transforms answers to a band of the sound (low, middle, high): the band's
   // transients light that transform's colour, its loudness evolves that transform.
   // Over everything, on black. A tap or a mouse move shows the track, the close button, the sliders and the dice for a
   // few seconds; the dice show another flame at random, until the track changes or they are pressed again; the sliders
-  // open a panel of settings (lib/visuals/settings.svelte.ts), live. Esc, Back or a swipe down closes it. The screen
+  // open a panel of settings at the right (lib/visuals/settings.svelte.ts), live. Esc, Back or a swipe down closes it. The screen
   // stays on while it shows, where the browser allows that.
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
@@ -84,7 +84,7 @@
   }
 
   // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then the look.
-  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution'>;
+  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity'>;
   type Row = { key: One; label: string; step: number; text: (v: number) => string };
   const percent = (v: number) => `${Math.round(v * 100)}%`;
   const thousands = (log2: number) => {
@@ -115,6 +115,11 @@
   const seconds = (v: number) => (v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(1)} s`);
   function setTime(key: 'lighting' | 'evolution', band: number, log2: number) {
     s[key][band] = 2 ** log2;
+    saveVisualSettings();
+    showChrome();
+  }
+  function setContinuity(band: number, v: number) {
+    s.continuity[band] = v;
     saveVisualSettings();
     showChrome();
   }
@@ -184,9 +189,12 @@
     // bands known: as if each were half way).
     const turned = [0, 0, 0];
     const bandLoud = [0.5, 0.5, 0.5];
-    // Beats counted at the last frame (each eased: most of a beat's turn comes at its start), and a beat's flash and
-    // swell, 0..1.
-    let beatCount: number | null = null;
+    // Each band's steps: its last transient seen (or beat, where its transients are not known yet), its loudness then
+    // (what a stepping band evolves to), and the turn of its steps still to come (each eased in over 80 ms).
+    const lastHit: (number | null)[] = [null, null, null];
+    const held = [0.5, 0.5, 0.5];
+    const pending = [0, 0, 0];
+    // A beat's flash and swell, 0..1.
     let pulse = 0;
     // How intense the show is (the loudness as heard, followed over a fifth of a second; `lit`: as far as the
     // Intensity setting lets it count), and paused or not.
@@ -210,10 +218,6 @@
 
     // How much of the turning the music's loudness allows (nearly none in silence), and the Speed setting.
     const motion = () => (0.1 + 0.9 * lit) * s.speed;
-    // A turn of `by` (radians): each band's transform turns by it, further the louder its band.
-    const turnBands = (by: number) => {
-      for (let i = 0; i < BANDS; i++) turned[i] += by * (0.4 + 1.2 * bandLoud[i]);
-    };
 
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
@@ -254,42 +258,49 @@
         blendStart = now;
         blendMs = track ? BLEND_MS : ANOTHER_MS;
       }
-      // The transforms turn a step on every beat, most of it at once (once around in 32 beats), and each beat flashes
-      // and swells the picture, fading within a fifth of a second (sooner at a fast tempo), most on the track's strong
-      // beats. Between known beats (none worked out yet, no tempo, a break) they turn steadily at the tempo (once per
-      // 21 s without one); paused, they slow to a stop. Reduced motion: a quarter of the turning, no swell, a softer
-      // flash.
-      const still = reducedMotion();
-      const b = m.playing ? m.beat : null;
-      if (b) {
-        const f = Math.min(1, b.since / b.length);
-        const counted = b.index + (still ? f : 1 - (1 - f) ** 3);
-        const moved = beatCount === null ? 0 : counted - beatCount;
-        // Backwards or by more than two beats: a seek, not turned for.
-        if (moved > 0 && moved < 2) {
-          turnBands(STEP * moved * (still ? 0.25 : 1) * motion());
-          turn += STEP * 0.12 * moved * motion();
-        }
-        beatCount = counted;
-        speed = (STEP / b.length) * (still ? 0.25 : 1);
-        pulse = (0.35 + 0.65 * b.strength) * Math.exp(-b.since / Math.min(0.2, 0.35 * b.length));
-      } else {
-        beatCount = null;
-        const beats = (m.bpm ?? 90) / 60;
-        const want = m.playing ? STEP * beats * (still ? 0.25 : 1) : 0;
-        speed += (want - speed) * Math.min(1, dt * 1.5);
-        turnBands(speed * dt * motion());
-        turn += speed * 0.12 * dt * motion();
-        pulse *= Math.exp(-dt / 0.15);
-      }
-      // The whole show follows how loud the track is as heard: near dark and still in silence or a fade, all of it at
-      // the loudest. Dimmer while paused.
+      // The whole show follows how loud the track is as heard: small, still, pale and unlit in silence or a fade, all of
+      // it at the loudest. Dimmer while paused.
       intensity += (m.intensity - intensity) * Math.min(1, dt * 5);
       lit = 1 - s.intensity * (1 - intensity);
       glow += ((m.playing ? 1 : 0.55) - glow) * Math.min(1, dt * 2);
-      // The bands, within that: each one's loudness evolves its transform (turning further on each beat, larger, its
-      // variations given over to its band's own, its colour moved along the palette), its transients light its colour.
-      for (let i = 0; i < BANDS; i++) bandLoud[i] += ((m.bands?.[i].loud ?? 0.5) * lit - bandLoud[i]) * Math.min(1, dt / s.evolution[i]);
+      // The transforms turn once around in 32 beats on average, at the track's tempo (its beats' where they are known,
+      // 90 BPM without one), as far as the loudness allows; paused, they slow to a stop. Each beat flashes and swells the
+      // picture, fading within a fifth of a second (sooner at a fast tempo), most on the strong beats. Reduced motion: a
+      // quarter of the turning, all of it steady, no swell, softer lights.
+      const still = reducedMotion();
+      const b = m.playing ? m.beat : null;
+      const beatsASecond = b ? 1 / b.length : (m.bpm ?? 90) / 60;
+      const want = m.playing ? STEP * beatsASecond * (still ? 0.25 : 1) * motion() : 0;
+      speed += (want - speed) * Math.min(1, dt * 1.5);
+      turn += speed * 0.12 * dt;
+      pulse = b ? (0.35 + 0.65 * b.strength) * Math.exp(-b.since / Math.min(0.2, 0.35 * b.length)) : pulse * Math.exp(-dt / 0.15);
+      // Each band, within that: its loudness evolves its transform (larger, its variations given over to its band's own,
+      // its colour moved along the palette; and it turns further), its transients light its colour. Its Continuity
+      // setting shares its motion between steady (turning at its speed, evolving as its loudness goes) and steps on its
+      // own transients (or the beats, where those are not known yet): a step turns it by as much as it would have
+      // turned steadily since the band's last, on average (a strong transient further, a weak one less), and evolves it
+      // to its loudness at that moment, held until the next.
+      for (let i = 0; i < BANDS; i++) {
+        const band = m.playing ? m.bands?.[i] : undefined;
+        const c = still ? 1 : s.continuity[i];
+        const loud = (band?.loud ?? 0.5) * lit;
+        const rate = speed * (0.4 + 1.2 * bandLoud[i]);
+        const at = band ? band.index : b ? b.index : null;
+        if (at !== lastHit[i]) {
+          const was = lastHit[i];
+          // Backwards or by more than three: a seek or another track, not stepped for.
+          if (at !== null && was !== null && at > was && at - was <= 3) {
+            held[i] = loud;
+            const often = Math.max(0.5, band ? band.perSecond : beatsASecond);
+            pending[i] += ((1 - c) * rate * (band ? band.weight : 1)) / often;
+          }
+          lastHit[i] = at;
+        }
+        const eased = pending[i] * Math.min(1, dt / 0.08);
+        turned[i] += c * rate * dt + eased;
+        pending[i] -= eased;
+        bandLoud[i] += (c * loud + (1 - c) * held[i] - bandLoud[i]) * Math.min(1, dt / s.evolution[i]);
+      }
       const hits = [0, 1, 2].map((i) => (m.playing ? (m.bands?.[i].hit ?? 0) * lit * s.bands * (still ? 0.5 : 1) : 0)) as [number, number, number];
       const parts: Part[] = bandLoud.map((l, i) => ({
         turn: turned[i],
@@ -325,14 +336,17 @@
           gamma: 3,
           vibrancy: 1,
           turn,
-          // Smaller when quiet, its full size at the loudest; a beat's swell as loud as the music.
-          scale: 0.8 + 0.2 * lit,
+          // Smaller when quiet (half its size in silence), its full size at the loudest; a beat's swell as loud as the
+          // music.
+          scale: 0.5 + 0.5 * lit,
           zoom: 1 + (still ? 0 : 0.04) * pulse * lit * s.beat,
-          // Near dark in silence (after the gamma, so dark it is), all at the loudest; a beat's flash as loud as the
-          // music, smaller where the bands' own lights carry the beat.
-          flash: (0.03 + 0.97 * lit) * glow * (1 + (still ? 0.15 : m.bands ? 0.1 : 0.35) * pulse * lit * s.beat),
+          // As bright at any loudness (dimmer only while paused); a beat's flash as loud as the music, smaller where the
+          // bands' own lights carry the beat.
+          flash: glow * (1 + (still ? 0.15 : m.bands ? 0.1 : 0.35) * pulse * lit * s.beat),
           hits,
           ceiling: s.brightness,
+          // Paler when quiet: a third of its colour in silence.
+          saturation: 0.35 + 0.65 * lit,
         },
         w,
         h,
@@ -436,27 +450,30 @@
               {/each}
             </div>
           {/each}
-          <div class="times">
-            <span></span>
-            {#each TIMES as time (time.key)}<span class="head">{time.label}</span>{/each}
-            {#each BAND_ROWS as band, b (band)}
-              <span>{band}</span>
+          {#each BAND_ROWS as band, b (band)}
+            <div class="rows band">
+              <h3>{band}</h3>
               {#each TIMES as time (time.key)}
-                <label class="cell">
+                <label class="row">
+                  <span>{time.label}</span>
                   <input
                     type="range"
                     min={time.min}
                     max={time.max}
                     step="0.05"
                     value={Math.log2(s[time.key][b])}
-                    aria-label="{band} {time.label.toLowerCase()}"
                     oninput={(e) => setTime(time.key, b, Number(e.currentTarget.value))}
                   />
                   <output>{seconds(s[time.key][b])}</output>
                 </label>
               {/each}
-            {/each}
-          </div>
+              <label class="row">
+                <span>Continuity</span>
+                <input type="range" min={RANGES.continuity[0]} max={RANGES.continuity[1]} step="0.05" value={s.continuity[b]} oninput={(e) => setContinuity(b, Number(e.currentTarget.value))} />
+                <output>{percent(s.continuity[b])}</output>
+              </label>
+            </div>
+          {/each}
           <div class="foot">
             <span class="fps">{fps} fps · {thousands(Math.log2(Math.max(1, drawing.points)))} × {drawing.steps}</span>
             <button
@@ -563,12 +580,13 @@
 
   .panel {
     position: absolute;
-    left: 50%;
-    bottom: max(16px, env(safe-area-inset-bottom));
-    transform: translateX(-50%);
-    width: min(560px, calc(100% - 32px));
-    max-height: calc(100% - 96px);
+    top: calc(max(12px, env(safe-area-inset-top)) + 56px);
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    width: min(340px, calc(100% - 24px));
     overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 0.25) transparent;
     box-sizing: border-box;
     padding: 8px 16px 10px;
     border-radius: 14px;
@@ -579,10 +597,18 @@
     touch-action: pan-y;
   }
 
-  .rows.look {
+  .rows.look,
+  .rows.band {
     margin-top: 6px;
     padding-top: 6px;
     border-top: 1px solid rgb(255 255 255 / 0.12);
+  }
+
+  .rows h3 {
+    margin: 2px 0 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: rgb(255 255 255 / 0.6);
   }
 
   .row {
@@ -602,43 +628,6 @@
   }
 
   .row output {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    color: rgb(255 255 255 / 0.75);
-  }
-
-  .times {
-    display: grid;
-    grid-template-columns: 4.2em 1fr 1fr;
-    align-items: center;
-    gap: 2px 12px;
-    margin-top: 6px;
-    padding-top: 6px;
-    border-top: 1px solid rgb(255 255 255 / 0.12);
-    font-size: 0.92rem;
-  }
-
-  .times .head {
-    font-size: 0.8rem;
-    color: rgb(255 255 255 / 0.6);
-  }
-
-  .cell {
-    display: grid;
-    grid-template-columns: 1fr 3.6em;
-    align-items: center;
-    gap: 6px;
-    min-height: 38px;
-  }
-
-  .cell input {
-    width: 100%;
-    min-width: 0;
-    margin: 0;
-    accent-color: var(--accent);
-  }
-
-  .cell output {
     text-align: right;
     font-variant-numeric: tabular-nums;
     color: rgb(255 255 255 / 0.75);
