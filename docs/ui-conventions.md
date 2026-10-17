@@ -25,7 +25,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     the only way there), title, artist · album, the transport controls (shuffle, previous, play/pause as a rounded
     square, next, repeat), progress, and the bottom row (menu, heart, queue with its place under it; the label hangs
     below its icon so the icons line up). The top bar: close at the left; add to playlist (lit while the track is in a
-    playlist), the sleep timer (lit while one runs) and beside / over the page at the right, icons only. It lays itself out
+    playlist), the sleep timer (lit while one runs), the visuals (decision 0046: full screen over everything, on
+    black; a tap shows the close button and the track for a few seconds) and beside / over the page at the right,
+    icons only. It lays itself out
     for its space (`lib/playerLayout.ts`, a port of Finamp's layout): portrait or landscape, whichever gives the
     larger cover; spare room spreads its three groups (track name; chips, progress and buttons; the actions row);
     when short of height the large gaps, the large play button, the small gaps, the info chips, the

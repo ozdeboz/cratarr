@@ -21,6 +21,7 @@
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
+  import { visuals } from './visuals/shown.svelte';
   import { keepViewed, panel } from './panel.svelte';
   import { goToArtist, mainArtist } from './albums.svelte';
   import { artistFavorite } from './api';
@@ -176,7 +177,7 @@
   $effect(() => {
     if (place !== 'overlay') return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || menuAt) return;
+      if (e.key !== 'Escape' || menuAt || visuals.open) return;
       if (queueOpen) queueOpen = false;
       else close();
     };
@@ -312,7 +313,7 @@
   >
     <button class="corner left" aria-label={place === 'side' ? 'Fold the player' : 'Close the player'} onclick={close}><Icon name="collapse" size={26} /></button>
     <!-- Top right, icons only (what is on shows lit): the track's playlists (lit while it is in one), the sleep timer
-         (only where the page holds the queue; lit while one runs), and where the player goes. -->
+         (only where the page holds the queue; lit while one runs), the full-screen visuals, and where the player goes. -->
     <div class="corners">
       {#if np}
         <button class="corner" class:on={memberCount > 0} aria-label="Add to playlist; {inPlaylists}" aria-haspopup="menu" onclick={(e) => openMenu(e, 'lists')}
@@ -327,6 +328,9 @@
           aria-haspopup="dialog"
           onclick={() => (sleepOpen = true)}><Icon name="moon" size={22} /></button
         >
+      {/if}
+      {#if np}
+        <button class="corner" aria-label="Visuals" aria-haspopup="dialog" onclick={() => (visuals.open = true)}><Icon name="visuals" size={22} /></button>
       {/if}
       {#if place === 'side'}
         <button class="corner" aria-label="Over the page" onclick={maximise}><Icon name="expand" size={20} /></button>

@@ -10,6 +10,8 @@
   import { askDownloads, downloads, inApp } from './lib/app.svelte';
   import { reach } from './lib/reach.svelte';
   import { keepCoversAway } from './lib/coversAway.svelte';
+  import Visuals from './lib/visuals/Visuals.svelte';
+  import { visuals } from './lib/visuals/shown.svelte';
   import Crates from './Crates.svelte';
   import AboutSheet from './lib/AboutSheet.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
@@ -493,6 +495,9 @@
     </div>
   {/if}
 
+  {#if visuals.open}
+    <Visuals onclose={() => (visuals.open = false)} />
+  {/if}
   <Toasts />
 <LabelTip />
   <ProgressBar />
