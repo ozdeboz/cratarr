@@ -151,3 +151,10 @@ browser allows, kept to:
 - A connection refused is tried again after 5 s, doubling to a minute: never in a rush, as a proxy bans what keeps
   knocking.
 
+## Amendment (2026-10-17): the players as a stream
+
+`GET /api/events/players` sends `players` (server-sent events), the same JSON as `GET /api/players`, at once and on
+every change of a player; each carries `position_ms` with `position_at` (epoch ms), so a client counts on from there
+while `playing`. It is for clients that stay connected for good, Home Assistant's integration first: unlike the pages'
+`/api/events` it does not keep the servers' players watched. Signed in as any other API call (decision 0043: an API
+key). Not under `/api/players/`, where a player could be called `events`.
