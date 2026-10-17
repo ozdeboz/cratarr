@@ -112,10 +112,11 @@ Almost everything is set in Settings. The environment covers what has to be know
 
 - **The web app**: every page of Cratarr. It plays by itself, and over HTTPS it installs as an app.
 - **Android**: [android/](android) is a thin app around Cratarr's pages. It plays the music itself, stays reachable
-  for Play On with the screen locked, and keeps music on the device for offline play. It is not released yet: build
-  it from that folder.
+  for Play On with the screen locked while Stay ready is on (Settings → This device), and keeps music on the device
+  for offline play. It is not released yet: build it from that folder.
 - **Subsonic apps**: point them at Cratarr's address and sign in with your Cratarr account.
-- **Kodi**: added in Settings → Players, it becomes one of Cratarr's players.
+- **Kodi**: added in Settings → Players, it becomes one of Cratarr's players, driven over Kodi's own remote control
+  ("Allow remote control via HTTP"), with nothing installed on Kodi. In a group it follows and never leads.
 
 ## Documentation
 
