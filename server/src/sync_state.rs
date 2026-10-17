@@ -106,9 +106,8 @@ const SERVER_LEADS: &str = "newest";
 /// The meta key of the catalogue generation the agreed lists were made with (`follow_catalogue`).
 const CATALOGUE: &str = "catalogue";
 
-// temp_store: the image has no /tmp. journal_size_limit: as the catalogue's.
+// journal_size_limit: as the catalogue's. (Temporary storage in memory: crate::db.)
 const SCHEMA: &str = "
-PRAGMA temp_store = MEMORY;
 PRAGMA journal_mode = WAL;
 PRAGMA journal_size_limit = 8388608;
 CREATE TABLE IF NOT EXISTS links (
@@ -143,10 +142,7 @@ pub struct SyncState {
 
 impl SyncState {
     pub fn open(file: Option<&Path>) -> Result<Self> {
-        let conn = match file {
-            Some(f) => Connection::open(f).with_context(|| format!("opening {}", f.display()))?,
-            None => Connection::open_in_memory()?,
-        };
+        let conn = crate::db::open(file)?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         conn.execute_batch(SCHEMA).context("creating the playlist sync state")?;
         for (table, column) in ADDED_COLUMNS {

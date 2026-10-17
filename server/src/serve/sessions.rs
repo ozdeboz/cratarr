@@ -59,10 +59,7 @@ fn session(r: &rusqlite::Row) -> rusqlite::Result<Session> {
 impl Sessions {
     /// The sessions kept in `path` (`None`: in memory only).
     pub fn open(path: Option<&Path>) -> Result<Self> {
-        let db = match path {
-            Some(p) => Connection::open(p).with_context(|| format!("cannot open {}", p.display()))?,
-            None => Connection::open_in_memory()?,
-        };
+        let db = crate::db::open(path)?;
         #[cfg(unix)]
         if let Some(p) = path {
             use std::os::unix::fs::PermissionsExt;

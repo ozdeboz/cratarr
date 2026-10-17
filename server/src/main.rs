@@ -9,6 +9,7 @@ mod config;
 mod convert;
 mod covers;
 mod crates;
+mod db;
 mod export;
 mod folders;
 mod incoming;

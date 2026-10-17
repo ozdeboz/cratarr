@@ -28,7 +28,6 @@ const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA journal_size_limit = 8388608;
 PRAGMA synchronous = NORMAL;
-PRAGMA temp_store = MEMORY;
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS songs (
   n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, pid TEXT NOT NULL, folder INTEGER NOT NULL, rel TEXT NOT NULL, path TEXT NOT NULL,
@@ -249,10 +248,7 @@ pub fn fingerprint(folders: &[FolderRows]) -> String {
 impl Library {
     /// `file`: the database; `None` keeps it in memory.
     pub fn open(file: Option<&Path>) -> Result<Self> {
-        let conn = match file {
-            Some(f) => Connection::open(f).with_context(|| format!("opening {}", f.display()))?,
-            None => Connection::open_in_memory()?,
-        };
+        let conn = crate::db::open(file)?;
         conn.busy_timeout(Duration::from_secs(15))?;
         // Derived data: a library from an older layout is simply built again.
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;

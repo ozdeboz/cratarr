@@ -13,8 +13,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
-use rusqlite::{Connection, OpenFlags, params};
+use anyhow::Result;
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
@@ -649,8 +649,7 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
 }
 
 fn read_only(file: &Path) -> Result<Connection> {
-    let conn = Connection::open_with_flags(file, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .with_context(|| format!("opening {} to read", file.display()))?;
+    let conn = crate::db::open_read_only(file)?;
     conn.busy_timeout(Duration::from_secs(10))?;
     Ok(conn)
 }

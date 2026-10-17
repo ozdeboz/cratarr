@@ -231,10 +231,7 @@ fn imported_of(r: &rusqlite::Row) -> rusqlite::Result<Imported> {
 impl UserData {
     /// `file`: the database; `None` keeps it in memory.
     pub fn open(file: Option<&Path>) -> Result<Self> {
-        let conn = match file {
-            Some(f) => Connection::open(f).with_context(|| format!("opening {}", f.display()))?,
-            None => Connection::open_in_memory()?,
-        };
+        let conn = crate::db::open(file)?;
         conn.busy_timeout(Duration::from_secs(15))?;
         conn.execute_batch(SCHEMA).context("creating the user data tables")?;
         conn.execute_batch(tags::SCHEMA).context("creating the album tag table")?;

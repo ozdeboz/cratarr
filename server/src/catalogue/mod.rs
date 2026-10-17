@@ -36,11 +36,10 @@ const PASS_EVERY: Duration = Duration::from_secs(300);
 /// A full listing of each server library at least this often, to forget tracks the server dropped.
 const FULL_EVERY_SECS: i64 = 24 * 3600;
 
-// temp_store: the image has no /tmp, and building an index (or a large sort) needs temporary storage.
+// Temporary storage in memory: set where the connection is opened (crate::db).
 // journal_size_limit: a write-ahead log is folded in as it goes, but its file keeps the size of the largest burst (a full
 // pass, a vacuum: 86 MB seen on the NAS) unless it is cut back after each checkpoint; 8 MB.
 const SCHEMA: &str = "
-PRAGMA temp_store = MEMORY;
 PRAGMA journal_mode = WAL;
 PRAGMA journal_size_limit = 8388608;
 PRAGMA synchronous = NORMAL;
@@ -305,10 +304,7 @@ fn now() -> i64 {
 impl Catalogue {
     /// `file`: the database; `None` keeps it in memory (no data folder).
     pub fn open(file: Option<&Path>, folders: Vec<PathBuf>) -> Result<Self> {
-        let conn = match file {
-            Some(f) => Connection::open(f).with_context(|| format!("opening {}", f.display()))?,
-            None => Connection::open_in_memory()?,
-        };
+        let conn = crate::db::open(file)?;
         conn.busy_timeout(Duration::from_secs(10))?;
         conn.execute_batch(SCHEMA).context("creating the catalogue tables")?;
         for (table, column) in ADDED_COLUMNS {
@@ -1028,7 +1024,7 @@ impl Catalogue {
     /// (WAL lets it read beside the writer). `None` for a catalogue in memory.
     pub fn reader(&self) -> Option<Connection> {
         let file = self.file.as_ref()?;
-        let conn = Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()?;
+        let conn = crate::db::open_read_only(file).ok()?;
         conn.busy_timeout(Duration::from_secs(10)).ok()?;
         Some(conn)
     }
@@ -1856,9 +1852,11 @@ fn move_analysis_shapes(conn: &Connection) -> Result<()> {
     tx.commit()?;
     if mark.as_deref() != Some("apart") {
         tracing::info!("catalogue: vacuuming the file once, so it shrinks (about a minute for a large library)");
-        // In memory: the image has no temporary directory a vacuum could write to (FROM scratch, no /tmp).
+        // In the memory the connection keeps temporary storage in (crate::db): the image has no /tmp. Never set back to
+        // the default here: this is the connection the catalogue keeps, and every large sort after it failed (Crates,
+        // preview 50's first start, 2026-10-17).
         conn.execute_batch(
-            "PRAGMA temp_store = MEMORY; VACUUM; PRAGMA temp_store = DEFAULT;
+            "VACUUM;
              INSERT OR REPLACE INTO meta (key, value) VALUES ('analysis_shape', 'apart');",
         )?;
     }
@@ -2134,6 +2132,8 @@ mod tests {
             .query_row("SELECT (SELECT count(*) FROM analysis WHERE waveform IS NOT NULL OR blocks IS NOT NULL), (SELECT value FROM meta WHERE key = 'analysis_shape')", [], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap();
         assert_eq!((whole, mark.as_str()), (0, "apart"));
+        let temp_store: i64 = cat.db().query_row("PRAGMA temp_store", [], |r| r.get(0)).unwrap();
+        assert_eq!(temp_store, 2, "temporary storage stays in memory after the vacuum: the image has no /tmp");
         // The album's gain reads the moved blocks; the file as it is is analysed again only when changed.
         assert!(cat.unanalysed(10).unwrap().iter().all(|t| t.1 != one));
         let _ = (size, mtime);
