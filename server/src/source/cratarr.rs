@@ -52,16 +52,20 @@ fn is_audio(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).is_some_and(|e| AUDIO.iter().any(|a| a.eq_ignore_ascii_case(e)))
 }
 
-/// Up to `n` audio files under `dir`, breadth first in name order, reading at most `LOOK_LIMIT` entries. Hidden
-/// folders (a trash, a playlist folder) are not looked in.
+/// Up to `n` audio files under `dir`, depth first in name order (a folder's own files before its folders), reading at
+/// most `LOOK_LIMIT` entries. Depth first, a library's first album is a few reads away however many artists it holds:
+/// breadth first read every artist's folder before any album (seconds on a cold disk, Settings' placement waiting on
+/// it, 2026-10-17), and a large library could spend the whole limit on folders and find nothing. Hidden folders (a
+/// trash, a playlist folder) are not looked in.
 fn audio_under(dir: &Path, n: usize) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    let mut queue = std::collections::VecDeque::from([dir.to_path_buf()]);
+    let mut stack = vec![dir.to_path_buf()];
     let mut read = 0;
-    while let Some(d) = queue.pop_front() {
+    while let Some(d) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&d) else { continue };
         let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
         entries.sort_by_key(|e| e.file_name());
+        let mut dirs = Vec::new();
         for e in entries {
             read += 1;
             if read > LOOK_LIMIT || found.len() >= n {
@@ -73,11 +77,16 @@ fn audio_under(dir: &Path, n: usize) -> Vec<PathBuf> {
             }
             let p = e.path();
             match e.file_type() {
-                Ok(t) if t.is_dir() => queue.push_back(p),
+                Ok(t) if t.is_dir() => dirs.push(p),
                 Ok(t) if t.is_file() && is_audio(&p) => found.push(p),
                 _ => {}
             }
         }
+        if found.len() >= n {
+            return found;
+        }
+        // Its folders next, the first by name first.
+        stack.extend(dirs.into_iter().rev());
     }
     found
 }
@@ -762,6 +771,23 @@ mod tests {
         let found = library_folders(&mounts);
         assert_eq!(found, [root.join("media/Music"), root.join("media/lidarr-music"), root.join("music")], "films and hidden folders are not music");
         assert_eq!(audio_under(&root.join("media"), 5).len(), 2);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn samples_are_found_depth_first_a_folders_own_files_first() {
+        let root = std::env::temp_dir().join(format!("cratarr-dfs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // Many artists before any album breadth first; depth first the first album is three reads away.
+        for i in 0..50 {
+            std::fs::create_dir_all(root.join(format!("Artist {i:02}/Album"))).unwrap();
+        }
+        for (p, f) in [("Artist 00/Album", "01.flac"), ("Artist 00/Album", "02.flac"), ("Artist 01", "loose.mp3"), ("", "top.ogg")] {
+            std::fs::write(root.join(p).join(f), b"x").unwrap();
+        }
+        let names = |v: Vec<PathBuf>| v.iter().map(|p| p.strip_prefix(&root).unwrap().display().to_string().replace('\\', "/")).collect::<Vec<_>>();
+        assert_eq!(names(audio_under(&root, 3)), ["top.ogg", "Artist 00/Album/01.flac", "Artist 00/Album/02.flac"]);
+        assert_eq!(names(audio_under(&root, 4)).last().unwrap(), "Artist 01/loose.mp3");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
