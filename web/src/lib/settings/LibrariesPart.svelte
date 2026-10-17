@@ -2,7 +2,8 @@
   // Libraries: each server library's use and, for a used one, its format and dot (decision 0034); Music's names, the
   // trash, the catalogue and tag splitting. Saved with the Save bar.
   import { ed } from './editor.svelte';
-  import { getCatalogue } from '../api';
+  import { folderStatus, getCatalogue, type FolderStatus } from '../api';
+  import FolderBrowser from './FolderBrowser.svelte';
   import { count, FORMATS, USES } from './editor.svelte';
   import Seg from '../Seg.svelte';
   import SettingRow from '../SettingRow.svelte';
@@ -12,6 +13,47 @@
   const FORMAT_OPTIONS = FORMATS.map((f) => ({ value: f.id, label: f.label }));
 
   const many = $derived(ed.drafts.length > 1);
+  type Draft = (typeof ed.drafts)[number];
+
+  // Cratarr's own folders (decision 0044): the chosen ones, kept in its settings (`folders`); from before there was a
+  // choice, the libraries it found.
+  const chosenOf = (d: Draft): string[] =>
+    Array.isArray(d.values.folders) ? (d.values.folders as string[]) : (d.view?.server_libraries.map((l) => l.id) ?? []);
+  const folderName = (p: string) => p.split('/').filter(Boolean).pop() ?? p;
+  let browsing = $state<Draft | null>(null);
+
+  function addFolder(d: Draft, path: string) {
+    const now = chosenOf(d);
+    if (!now.includes(path)) d.values.folders = [...now, path];
+  }
+
+  function removeFolder(d: Draft, path: string) {
+    ed.setUse(d, path, 'unused');
+    d.values.folders = chosenOf(d).filter((p) => p !== path);
+  }
+
+  // Each chosen folder's state, asked for as the list shows.
+  let statuses = $state<Record<string, FolderStatus>>({});
+  $effect(() => {
+    const paths = ed.drafts.filter((d) => d.enabled && d.kind === 'cratarr').flatMap(chosenOf);
+    for (const p of paths) {
+      if (statuses[p]) continue;
+      folderStatus(p).then(
+        (st) => (statuses[p] = st),
+        () => {},
+      );
+    }
+  });
+
+  const size = (b: number) => (b >= 1e12 ? `${(b / 1e12).toFixed(1)} TB` : `${Math.round(b / 1e9)} GB`);
+  /** A folder's line: its tracks, its disk's free space, and read only where that matters. */
+  const statusLine = (st: FolderStatus, use: string) =>
+    [st.tracks ? `${count(st.tracks)} ${st.tracks === 1 ? 'track' : 'tracks'}` : null, st.free !== null ? `${size(st.free)} free` : null, !st.writable && use !== 'unused' ? 'read only' : null]
+      .filter(Boolean)
+      .join(' · ');
+  /** Another server's library: its path as the server sees it, and where that is in Cratarr's folders. */
+  const mapping = (l: { paths: string[]; folders: string[] }) =>
+    l.paths.length && l.paths.join(', ') !== l.folders.join(', ') ? `${l.paths.join(', ')} → ${l.folders.join(', ')}` : l.folders.join(', ');
 
   // The catalogue's progress, while this part shows.
   $effect(() => {
@@ -40,10 +82,64 @@
       waiting to be heard.
     </p>
 
+    {#snippet controls(d: Draft, id: string, name: string)}
+      {@const u = ed.useOf(d, id)}
+      <Seg label={`Use of ${name}`} options={USE_OPTIONS} bind:value={() => u, (v) => ed.setUse(d, id, v)} />
+      {#if u !== 'unused'}
+        {@const pol = ed.policyOf(d, id)}
+        <!-- Its own settings (decision 0034), a row each under it (lib/SettingRow). -->
+        <div class="policies">
+          <SettingRow label="Albums moved in">
+            <Seg label={`Albums moved into ${name}`} options={FORMAT_OPTIONS} bind:value={() => pol.format, (v) => ed.setPolicy(d, id, { format: v })} />
+          </SettingRow>
+          {#if u === 'incoming'}
+            <SettingRow label="Dot">
+              <div class="swatches" role="radiogroup" aria-label={`Colour of ${name}`}>
+                {#each ed.palette as c (c)}
+                  <button class="swatch" role="radio" aria-checked={pol.colour === c} aria-label={c} style:background={c} onclick={() => ed.setPolicy(d, id, { colour: c })}></button>
+                {/each}
+                <label class="swatch own" class:on={!!pol.colour && !ed.palette.includes(pol.colour)} style:background={pol.colour && !ed.palette.includes(pol.colour) ? pol.colour : null}>
+                  <span class="sr">Another colour</span>
+                  <input type="color" value={pol.colour ?? ed.palette[0] ?? '#e0a23a'} onchange={(e) => ed.setPolicy(d, id, { colour: e.currentTarget.value })} />
+                </label>
+              </div>
+            </SettingRow>
+          {/if}
+        </div>
+      {/if}
+    {/snippet}
+
     {#each ed.drafts.filter((d) => d.enabled) as d (d)}
       <div class="libs-of">
         {#if many}<h3>{ed.kindOf(d)?.label ?? d.kind}<small>{d.id}</small></h3>{/if}
-        {#if !d.view}
+        {#if d.kind === 'cratarr'}
+          <!-- Cratarr's own folders (decision 0044): chosen, each with its state; added in the browser. -->
+          <ul class="libs">
+            {#each chosenOf(d) as path (path)}
+              {@const st = statuses[path]}
+              {@const u = ed.useOf(d, path)}
+              <li>
+                <div class="where">
+                  <span>{folderName(path)}</span>
+                  <code class="hint">{path}</code>
+                  {#if st && !st.exists}
+                    <span class="hint warn">Not found. Mount it into Cratarr and restart it.</span>
+                  {:else if st}
+                    <span class="hint" class:warn={!st.writable && u !== 'unused'}>{statusLine(st, u)}</span>
+                  {/if}
+                </div>
+                {@render controls(d, path, folderName(path))}
+                <div class="row"><button onclick={() => removeFolder(d, path)}>Remove</button></div>
+              </li>
+            {:else}
+              <li class="hint">No folders yet.</li>
+            {/each}
+          </ul>
+          <div class="row"><button onclick={() => (browsing = d)}>Add folder</button></div>
+          {#if browsing === d}
+            <FolderBrowser chosen={chosenOf(d)} onadd={(p) => addFolder(d, p)} onclose={() => (browsing = null)} />
+          {/if}
+        {:else if !d.view}
           <p class="hint">Check the connection to see this server's libraries.</p>
         {:else}
           <ul class="libs">
@@ -53,7 +149,8 @@
                 <div class="where">
                   <span>{l.name}</span>
                   {#if l.folders.length}
-                    <code class="hint">{l.folders.join(', ')}</code>
+                    <!-- Where the server's path lies in Cratarr's folders (found by itself, decision 0009). -->
+                    <code class="hint">{mapping(l)}</code>
                     {#if l.read_only && u !== 'unused'}
                       <span class="hint warn">
                         Cratarr can't write here, so {u === 'music' ? 'playlists can’t be saved' : 'albums can’t be deleted'}. Mount it
@@ -67,36 +164,7 @@
                     </span>
                   {/if}
                 </div>
-                <Seg label={`Use of ${l.name}`} options={USE_OPTIONS} bind:value={() => u, (v) => ed.setUse(d, l.id, v)} />
-                {#if u !== 'unused'}
-                  {@const pol = ed.policyOf(d, l.id)}
-                  <!-- Its own settings (decision 0034), a row each under it (lib/SettingRow). -->
-                  <div class="policies">
-                  <SettingRow label="Albums moved in">
-                    <Seg label={`Albums moved into ${l.name}`} options={FORMAT_OPTIONS} bind:value={() => pol.format, (v) => ed.setPolicy(d, l.id, { format: v })} />
-                  </SettingRow>
-                  {#if u === 'incoming'}
-                    <SettingRow label="Dot">
-                      <div class="swatches" role="radiogroup" aria-label={`Colour of ${l.name}`}>
-                        {#each ed.palette as c (c)}
-                          <button
-                            class="swatch"
-                            role="radio"
-                            aria-checked={pol.colour === c}
-                            aria-label={c}
-                            style:background={c}
-                            onclick={() => ed.setPolicy(d, l.id, { colour: c })}
-                          ></button>
-                        {/each}
-                        <label class="swatch own" class:on={!!pol.colour && !ed.palette.includes(pol.colour)} style:background={pol.colour && !ed.palette.includes(pol.colour) ? pol.colour : null}>
-                          <span class="sr">Another colour</span>
-                          <input type="color" value={pol.colour ?? ed.palette[0] ?? '#e0a23a'} onchange={(e) => ed.setPolicy(d, l.id, { colour: e.currentTarget.value })} />
-                        </label>
-                      </div>
-                    </SettingRow>
-                  {/if}
-                  </div>
-                {/if}
+                {@render controls(d, l.id, l.name)}
               </li>
             {:else}
               <li class="hint">No music libraries on this server.</li>

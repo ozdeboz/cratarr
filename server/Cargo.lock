@@ -384,6 +384,7 @@ dependencies = [
  "getrandom 0.3.4",
  "image",
  "ldap3",
+ "libc",
  "lofty",
  "md-5",
  "opusic-sys",

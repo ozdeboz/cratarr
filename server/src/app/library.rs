@@ -289,6 +289,16 @@ impl Library {
         self.connected().into_iter().map(|(a, s)| (a.cfg.id.clone(), s)).collect()
     }
 
+    /// Cratarr's own chosen folders (decision 0044), as saved.
+    pub fn chosen_folders(&self) -> Vec<String> {
+        self.live()
+            .iter()
+            .filter(|a| a.cfg.kind == crate::source::cratarr::KIND.id)
+            .flat_map(|a| a.cfg.values.get("folders").and_then(|v| v.as_array()).cloned().unwrap_or_default())
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect()
+    }
+
     pub(super) fn live(&self) -> Arc<Vec<Arc<Active>>> {
         self.live.read().unwrap_or_else(|p| p.into_inner()).clone()
     }

@@ -10,6 +10,7 @@ mod convert;
 mod covers;
 mod crates;
 mod export;
+mod folders;
 mod incoming;
 mod insights;
 mod journal;
@@ -124,6 +125,19 @@ async fn main() -> Result<()> {
     };
     // Lidarr from LIDARR_URL / LIDARR_API_KEY until one is saved in Settings.
     let mut saved = saved;
+    // Cratarr's own folders were found by themselves before decision 0044; they are chosen now: today's, once.
+    let mut carried = false;
+    for s in saved.sources.iter_mut().filter(|s| s.kind == source::cratarr::KIND.id && !s.values.contains_key("folders")) {
+        let found: Vec<serde_json::Value> = source::cratarr::found_folders().into_iter().map(|p| serde_json::Value::String(p.display().to_string())).collect();
+        tracing::info!("folders: the {} music folders found are Cratarr's chosen folders now (decision 0044)", found.len());
+        s.values.insert("folders".into(), serde_json::Value::Array(found));
+        carried = true;
+    }
+    if carried && matches!(origin, settings::Origin::File)
+        && let Some(d) = &cfg.data_dir
+    {
+        settings::save(&std::path::Path::new(d).join("settings.json"), &saved)?;
+    }
     if saved.lidarr.is_none() {
         saved.lidarr = settings::lidarr_from_env(&env);
     }
