@@ -29,18 +29,22 @@
 
   const failed = (e: unknown) => (error = e instanceof Error ? e.message : String(e));
 
+  // Only the latest load's answer is shown (an older one may come after it).
+  let asked = 0;
   async function load(next = false) {
+    const mine = ++asked;
     busy = true;
     error = null;
     try {
       const before = next ? rows.at(-1)?.id : undefined;
       const r = await getLog({ place, area, level, before, limit: PAGE });
+      if (mine !== asked) return;
       rows = next ? [...rows, ...r.rows] : r.rows;
       more = r.rows.length === PAGE;
     } catch (e) {
-      failed(e);
+      if (mine === asked) failed(e);
     } finally {
-      busy = false;
+      if (mine === asked) busy = false;
     }
   }
 
