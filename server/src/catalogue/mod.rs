@@ -1411,11 +1411,13 @@ impl Catalogue {
     }
 
     /// Keeps a file's beats beside its analysis, which stays as it is, when that analysis is of the file as it was
-    /// (`size`, `mtime`) when the beats were worked out. Whether they were kept. Blocking.
+    /// (`size`, `mtime`) when the beats were worked out; an analysis without a shape row gets one holding only them.
+    /// Whether they were kept. Blocking.
     pub fn store_beats(&self, folder: i64, rel: &str, size: u64, mtime: i64, beats: &crate::analysis::Beats) -> Result<bool> {
         let n = self.db().execute(
-            "UPDATE analysis_shape SET beats = ?5 WHERE folder = ?1 AND rel = ?2
-               AND EXISTS (SELECT 1 FROM analysis a WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = ?3 AND a.mtime = ?4)",
+            "INSERT INTO analysis_shape (folder, rel, beats)
+               SELECT ?1, ?2, ?5 WHERE EXISTS (SELECT 1 FROM analysis a WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = ?3 AND a.mtime = ?4)
+             ON CONFLICT (folder, rel) DO UPDATE SET beats = excluded.beats",
             params![folder, rel, size as i64, mtime, beats.0],
         )?;
         Ok(n > 0)
@@ -2085,6 +2087,12 @@ mod tests {
         let none = crate::analysis::Analysis { beats: Some(crate::analysis::Beats::default()), ..an_analysis(-5.0, 480) };
         cat.store_analysis(two.0, &two.1, two.3, two.4, &none).unwrap();
         assert_eq!(cat.beats_of(two.0, &two.1), Some(Some(crate::analysis::Beats::default())));
+        // An analysis without a shape row (none is written so; an older build's might be) gets one for its beats.
+        cat.db().execute("DELETE FROM analysis_shape WHERE folder = ?1 AND rel = ?2", params![folder, one]).unwrap();
+        assert_eq!(cat.beats_of(folder, &one), Some(None));
+        assert!(!cat.store_beats(folder, &one, size, mtime + 1, &b).unwrap(), "still only for the file as analysed");
+        assert!(cat.store_beats(folder, &one, size, mtime, &b).unwrap());
+        assert_eq!(cat.beats_of(folder, &one), Some(Some(b.clone())));
         // A file changed since has none.
         std::fs::write(d.join(&one), b"changed").unwrap();
         cat.walk_all();
