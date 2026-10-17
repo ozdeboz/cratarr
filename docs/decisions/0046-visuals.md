@@ -192,3 +192,66 @@ intensity runs from nothing to all, followed over a fifth of a second, and scale
 **Measured** (a browser over test tracks): a ramp from -60 LUFS rising 2.5 dB a second shows at 3 % up to -45, 32 % at
 -35, 56 % at -25, 88 % at -15, all at -8. A quiet track at -28 LUFS shows at 51 %, levelled or not (its gain of +10 dB
 is never applied above full); a loud master at -9 LUFS at all unlevelled, 78 % levelled (its -9 dB bring it to -18).
+
+## Amendment, 2026-10-17: the settings panel, and what a frame costs
+
+The owner (in claude-5f's session): "I want a set of sliders to modify the visualization in real time. Especially
+important are a few sliders with which we can tune down the compute that is required"; then "some performance problems,
+and I'm currently running it on a laptop with a powerful GPU. And I want sliders, not presets. Make the controls look
+standard. And on top of the sliders that you already proposed, I also want to have a slider for maximum brightness."
+
+**The panel:** a sliders button beside the dice opens it over the lower part of the screen; it shows and fades with the
+other controls (eight seconds after the last touch while open). Native range inputs in the app's accent, as in
+Settings: a one-word label, the slider, its value. Every change shows at once and is kept on the device
+(`cratarr-visuals` in the browser's storage, so a phone and the tablet keep their own); Reset brings back the defaults.
+Under the sliders, the frames a second the device reaches and the points and steps it draws.
+
+| Setting | What it is | Range | Default |
+|---|---|---|---|
+| Points | the most points the chaos game runs | 16k to 2M | 512k |
+| Steps | the most steps of every point drawn a frame | 1 to 16 | 3 |
+| Resolution | the drawing's size against the screen's own pixels | 25 to 100 % | about a megapixel |
+| FPS | the most frames a second | 10 to 60 | 30 on touch screens, 60 elsewhere |
+| Intensity | how much the loudness sets the show's intensity | 0 to 100 % | 100 % |
+| Speed | the turning | 0 to 200 % | 100 % |
+| Beat | a beat's flash and swell | 0 to 200 % | 100 % |
+| Bands | the bands' lights | 0 to 200 % | 100 % |
+| Brightness | the most brightness shown, applied last (no flash goes past it) | 10 to 100 % | 100 % |
+| Lighting (sub, mid, treble) | how long a band's light rings after its transient | 20 ms to 1 s | 180, 140, 90 ms |
+| Evolution (sub, mid, treble) | how long a band's loudness takes to evolve its transform | 20 ms to 2 s | 250 ms each |
+
+Points and Steps are ceilings: the device's own pace still steps them down when it falls behind. The owner asked for the
+bands' times while this was being built ("band dependent time sliders … one for evolution, and one for lighting … so
+sub-evolution, sub-lighting, mid-evolution, mid-lighting, and so on"): a grid of three rows (sub, mid, treble) by two
+(lighting, evolution), on a doubling scale; their defaults are the times the bands had. Checked in the browser: each
+band's light fades over its own time (sub at 500 ms and treble at 30 ms when set so, in step with the expected fade
+frame by frame).
+
+**What a frame costs**, measured on this project's laptop (2560 x 1600 screen; its Intel UHD and its RTX 4060, through
+ANGLE on Direct3D 11 as Chrome, Edge and Brave draw on Windows), each frame waited for (a pixel read back):
+
+- The points are the cost: about 10 ns a point a step on the Intel, 2.5 on the RTX. Today's top (128k points, 12
+  steps) took 22 ms on the Intel (no 60 frames a second), 5.2 on the RTX.
+- The display pass drew every pixel of the screen (up to twice the CSS pixels): 5.5 ms of the Intel's 22 at
+  2560 x 1600, against 1 at half a megapixel; the buffer the points fall into barely matters (21 to 25 ms from 0.3 to
+  2.4 MP). The drawing is now about a megapixel by default (the Resolution setting), the screen scaling it up; the buffer
+  is still at most 0.6 MP.
+- Each step is a transform feedback, which ANGLE on Direct3D 11 flushes after (the owner's laptop reports it): the same
+  1.57 M points a frame in 3 steps rather than 12 took 4.0 ms against 4.8 on the RTX (the Intel the same). The defaults
+  are now 512k points in 3 steps.
+- 16-bit float buffers are 4 to 20 % quicker than 32-bit ones and half their memory; they are now the default wherever
+  a browser draws into them.
+- **WebGL's `powerPreference` does not choose the GPU in Chrome or Edge on Windows:** the browser draws on the one
+  Windows gives it when it starts (its per-app graphics setting), whatever a page asks. It is asked for all the same
+  (other systems heed it). The owner's laptop already draws on its GTX 1650 Max-Q.
+- **The step-down had a fault:** after its judgement, the count of quick frames went on, and every frame after added a
+  step back: from one step to the most within a second, then behind again, over and over (the load swung rather than
+  settled). Each window is now judged once and the next starts afresh; it is judged every second (or 30 frames), and a
+  device far behind (frames twice as long as they should be) gives up half its steps at once.
+- **Frames are paced to the display:** a frame is drawn every so many of the display's (measured), as many as keep it at
+  or under the FPS setting; a rate that is no whole part of the display's alternated between two frame lengths.
+
+**Measured in the browser** (the real component, the Intel, 1280 x 800 at twice the pixels): the defaults hold 56 frames a
+second (the most the headless browser gives) at 512k x 3 into 1386 x 866; the lowest (16k x 1, 25 %) the same; the
+highest asked (2M x 16 at the whole screen) starts at 3.6 a second and has stepped itself down to 2M x 1 at 45 a second
+within five seconds.

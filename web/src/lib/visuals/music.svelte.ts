@@ -12,6 +12,7 @@ import { paused, playing } from '../remote.svelte';
 import { loadWaveform, waveformOf } from '../waveforms.svelte';
 import { bandsAt, bandsOf, heardAt, type Band } from './bands';
 import { beatAt, beatsOf, type Beat } from './beats';
+import { visualSettings } from './settings.svelte';
 
 export type Music = {
   /** The playing track (`source/id`), or null. */
@@ -94,7 +95,7 @@ export function musicNow(at: number): Music {
     intensity,
     bpm: tempos.get(key) ?? null,
     beat: beats ? beatAt(beats, pos) : null,
-    bands: bands ? bandsAt(bands, pos) : null,
+    bands: bands ? bandsAt(bands, pos, visualSettings.lighting) : null,
     playing: on,
   };
 }

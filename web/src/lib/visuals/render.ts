@@ -151,6 +151,7 @@ uniform sampler2D uBands;
 // Each band's transient now (0..1), and its colour.
 uniform vec3 uHit;
 uniform vec3 uBandRgb[3];
+uniform float uCeiling;
 out vec4 o;
 void main() {
   // A beat's swell: the picture drawn a little larger about its middle.
@@ -184,7 +185,8 @@ void main() {
   vec3 hit = uHit * share;
   vec3 shown = mix(flat_, vib, uVibrancy) * uFlash * (1.0 + 0.6 * (hit.x + hit.y + hit.z));
   shown += 0.2 * g * (hit.x * uBandRgb[0] + hit.y * uBandRgb[1] + hit.z * uBandRgb[2]);
-  o = vec4(clamp(shown, 0.0, 1.0), 1.0);
+  // The most brightness shown, last: no flash or light goes past it.
+  o = vec4(clamp(shown, 0.0, 1.0) * uCeiling, 1.0);
 }`;
 
 export type Shown = {
@@ -204,6 +206,8 @@ export type Shown = {
   flash: number;
   /** Each band's transient now, low to high (0..1): its colour's points light up. */
   hits: [number, number, number];
+  /** The most brightness shown (0..1), applied after everything else. */
+  ceiling: number;
 };
 
 export class FlameRenderer {
@@ -227,8 +231,10 @@ export class FlameRenderer {
   private flame: Flame | null = null;
   private paletteKey = '';
   private loc = new Map<string, WebGLUniformLocation | null>();
-  /** The buffer's kind: 32-bit floats where they can be blended into, else 16-bit (a pixel stops counting near 2048
-   *  points, only in the densest cores, where the log display hardly shows it), else 8 bits (saturating soon). */
+  /** The buffer's kind: 16-bit floats wherever a browser can draw into them (a pixel stops counting near 2048 points,
+   *  only in the densest cores, where the log display hardly shows it; half the memory of 32-bit ones, and 4 to 20 %
+   *  quicker on this project's laptop, Intel and NVIDIA alike, measured 2026-10-17), else 8 bits (saturating soon). 32
+   *  only where a driver refuses 16 (`resize`'s fallback goes the other way, 16 to 8). */
   precision: 32 | 16 | 8;
   get halfFloat(): boolean {
     return this.precision !== 8;
@@ -238,13 +244,14 @@ export class FlameRenderer {
   width = 0;
   height = 0;
 
-  /** `points`: how many carry the chaos game at first. */
-  constructor(canvas: HTMLCanvasElement, points: number) {
-    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false });
+  /** `points`: how many carry the chaos game at first. `power`: which GPU a computer with two should draw on (the
+   *  fast one: by default a browser may take the one that saves power, several times slower). */
+  constructor(canvas: HTMLCanvasElement, points: number, power: WebGLPowerPreference = 'high-performance') {
+    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: power });
     if (!gl) throw new Error('WebGL2 is not available.');
     this.gl = gl;
     const floats = !!gl.getExtension('EXT_color_buffer_float');
-    this.precision = floats && gl.getExtension('EXT_float_blend') ? 32 : floats || gl.getExtension('EXT_color_buffer_half_float') ? 16 : 8;
+    this.precision = floats || gl.getExtension('EXT_color_buffer_half_float') ? 16 : 8;
     this.iterate = program(gl, ITERATE, PLOT, ['vState', 'vSeed']);
     this.plot = this.iterate;
     this.fade = program(gl, FULL, FADE);
@@ -463,6 +470,7 @@ export class FlameRenderer {
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform3f(this.u(this.show, 'uHit'), look.hits[0], look.hits[1], look.hits[2]);
     gl.uniform3fv(this.u(this.show, 'uBandRgb'), this.bandRgb);
+    gl.uniform1f(this.u(this.show, 'uCeiling'), look.ceiling);
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

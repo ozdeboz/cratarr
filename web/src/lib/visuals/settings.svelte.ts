@@ -1,0 +1,99 @@
+// The visuals' settings (decision 0046, amended): how much the device draws (points, steps, resolution, frame rate:
+// ceilings the automatic step-down stays under), how the show looks (intensity, speed, beat, bands, brightness), and
+// each band's times (sub, mid, treble: how long its light rings, how quickly its loudness evolves its transform).
+// Changed live from the visuals' panel and kept on this device (a phone and the tablet want different ones); a
+// browser that keeps nothing (a private window) starts from the defaults each time.
+
+const KEY = 'cratarr-visuals';
+
+export type VisualSettings = {
+  /** The most points the chaos game runs (log2: 14 is 16k, 21 is 2M). */
+  points: number;
+  /** The most steps of every point drawn per frame. */
+  steps: number;
+  /** The drawing's size against the screen's own pixels (0.25..1); null: this screen's default (`autoResolution`). */
+  resolution: number | null;
+  /** The most frames a second. */
+  fps: number;
+  /** How much the music's loudness sets the show's intensity (0: always all, 1: as loud as it is). */
+  intensity: number;
+  /** Motion: the turning and its steps (0..2). */
+  speed: number;
+  /** A beat's flash and swell (0..2). */
+  beat: number;
+  /** The bands' lights (0..2). */
+  bands: number;
+  /** The most brightness shown, after everything (0.1..1). */
+  brightness: number;
+  /** Each band's (sub, mid, treble) light after a transient: how long it rings (seconds). */
+  lighting: [number, number, number];
+  /** Each band's loudness evolving its transform: how long it takes to follow (seconds). */
+  evolution: [number, number, number];
+};
+
+const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+
+// Many points in few steps: each step is a transform feedback, which ANGLE on Direct3D 11 (Chrome and Edge on Windows)
+// flushes after; the same points a frame in 3 steps rather than 12 took 4.0 ms against 4.8 on an RTX 4060 (2026-10-17).
+export const DEFAULTS: VisualSettings = {
+  points: 19,
+  steps: 3,
+  resolution: null,
+  fps: touch ? 30 : 60,
+  intensity: 1,
+  speed: 1,
+  beat: 1,
+  bands: 1,
+  brightness: 1,
+  // A kick rings longer than a hat.
+  lighting: [0.18, 0.14, 0.09],
+  evolution: [0.25, 0.25, 0.25],
+};
+
+/** The pixels the display pass draws by default: about a megapixel. The points fall into a buffer of at most 0.6 MP
+ *  anyway; drawing that out to every pixel of a large screen cost the most of a frame on integrated graphics (5.5 ms of
+ *  22 at 2560 x 1600, measured 2026-10-17) and showed little more. */
+const AUTO_PIXELS = 1.2e6;
+
+/** This screen's default resolution: up to `AUTO_PIXELS` of its own pixels. */
+export function autoResolution(devicePixels: number): number {
+  return Math.min(1, Math.max(0.25, Math.sqrt(AUTO_PIXELS / Math.max(1, devicePixels))));
+}
+
+/** The defaults, their lists their own (the settings change in place). */
+const fresh = (): VisualSettings => ({ ...DEFAULTS, lighting: [...DEFAULTS.lighting], evolution: [...DEFAULTS.evolution] });
+
+function load(): VisualSettings {
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<VisualSettings>;
+    const out = fresh();
+    for (const k of Object.keys(DEFAULTS) as (keyof VisualSettings)[]) {
+      const v = saved[k];
+      if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = v;
+      else if (Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && x > 0)) (out as Record<string, unknown>)[k] = [...v];
+    }
+    return out;
+  } catch {
+    return fresh();
+  }
+}
+
+export const visualSettings = $state<VisualSettings>(load());
+
+/** Keeps them on this device. */
+export function saveVisualSettings() {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(visualSettings));
+  } catch {
+    /* kept for this visit only */
+  }
+}
+
+export function resetVisualSettings() {
+  Object.assign(visualSettings, fresh());
+  try {
+    localStorage.removeItem(KEY);
+  } catch {
+    /* nothing kept */
+  }
+}

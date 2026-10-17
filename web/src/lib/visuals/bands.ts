@@ -22,9 +22,6 @@ export type Bands = {
 /** A band now: how loud it is, and how much its last transient still rings (0..1). */
 export type Band = { loud: number; hit: number };
 
-/** How long a band's transient rings in the picture (seconds): a kick longer than a hat. */
-const RING = [0.18, 0.14, 0.09];
-
 /** The server could not work them out then: asked again after this long, at most this many times. */
 const AGAIN_MS = 15_000;
 const TRIES = 3;
@@ -111,13 +108,14 @@ export function heardAt(b: Bands, t: number): number | null {
   return m[i] + (m[Math.min(i + 1, m.length - 1)] - m[i]) * (x - i);
 }
 
-/** Each band at `t` seconds into the track: its loudness (between its frames) and its last transient's ring. */
-export function bandsAt(b: Bands, t: number): Band[] {
+/** Each band at `t` seconds into the track: its loudness (between its frames) and its last transient's ring, fading
+ *  over `rings[band]` seconds (the Lighting settings). */
+export function bandsAt(b: Bands, t: number, rings: readonly number[]): Band[] {
   return b.loudness.map((loud, i) => {
     const x = Math.min(Math.max(t * b.rate, 0), loud.length - 1);
     const f = Math.floor(x);
     const level = loud.length ? loud[f] + ((loud[Math.min(f + 1, loud.length - 1)] ?? loud[f]) - loud[f]) * (x - f) : 0;
-    return { loud: level, hit: ring(b.at[i], b.strength[i], t, RING[i]) };
+    return { loud: level, hit: ring(b.at[i], b.strength[i], t, rings[i]) };
   });
 }
 
