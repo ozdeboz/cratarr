@@ -90,8 +90,8 @@ The page shows the log as it is, with no prose; errors are one short line (ui-co
 
 - The log itself: the layer, its writer thread, the file, rows and counts, retention, queries and the download's
   contents (a new `server/src/diagnostics.rs`), its place in the server's logging setup with the area levels that
-  change at runtime (`main.rs`), and the events from the library, Subsonic and imports (`serve/`, `userdata/`,
-  `source/`): claude-a5.
-- The events from Play On and sync play (`app/playon.rs`, `snapcast/`), the refusals and the request ids (`api.rs`),
+  change at runtime (`main.rs`), and the events from the library, Subsonic, imports and sign-in, the refusals among
+  them (`serve/`: the sign-in requirement, the proxy's check, the sign-in page, Subsonic logins): claude-a5.
+- The events from Play On and sync play (`app/playon.rs`, `snapcast/`), the request ids (`api.rs`),
   the routes, the Android app's file, its upload and its link in its reports (`android/`), the page player's part, and
   the Diagnostics page: claude-5f.
