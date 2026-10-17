@@ -284,9 +284,11 @@
     ro.observe(head);
     return () => ro.disconnect();
   });
-  // What is shown changes the controls' height (a long title, the pill, a progress bar or none).
+  // What is shown changes the controls' height (a long title, the pill, a progress bar or none). As one value: `np` is
+  // new at every report, and laying out again at each would be many times a second.
+  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.showProgress, chips.length]));
   $effect(() => {
-    void [np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.showProgress, chips.length];
+    void shown;
     untrack(() => requestAnimationFrame(relayout));
   });
 </script>
@@ -557,8 +559,9 @@
     align-items: center;
     min-height: 0;
     padding: 53px 0 env(safe-area-inset-bottom);
-    overflow-y: auto;
-    overscroll-behavior: contain;
+    /* Never a scroll bar (the owner, 2026-10-17): what does not fit gives way instead (drop-*). A scroll bar would
+       narrow the player, which then fits, losing the bar, and so on many times a second on a desktop. */
+    overflow: hidden;
     text-align: center;
     touch-action: pan-x;
   }
@@ -879,6 +882,8 @@
     display: flex;
     align-items: center;
     justify-content: space-evenly;
+    /* Room for the label under a button (.labelled): counted when the player is fitted, so it is never cut off. */
+    padding-bottom: 12px;
   }
 
   .act {
