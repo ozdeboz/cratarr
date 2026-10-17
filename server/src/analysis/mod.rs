@@ -10,12 +10,12 @@
 //!   halved or doubled into it (on GiantSteps the exact tempo goes from 82 % to 88 % of the sure answers).
 //! - **Beats** (decision 0046): where there is a tempo, every beat's time and strength, by taktus's beat tracker at
 //!   that tempo; the visuals pulse on them.
-//! - **Bands** (decision 0046, amended), only when the visuals ask: the sound's loudness and transients in three
-//!   frequency bands (`bands`).
+//! - **Signals** (decision 0046, amended), only when the visuals ask: the sound in six bands and over the whole track,
+//!   every signal the show can be steered by (`signals`).
 //! Blocking and single-threaded: the pass runs several at once.
 
-pub mod bands;
 pub mod batch;
+pub mod signals;
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -317,13 +317,13 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
     Ok(analyse_inner(path, genres, false)?.0)
 }
 
-/// The analysis and the sound in bands (decision 0046, amended), from one decode: what the visuals ask for.
-pub fn analyse_with_bands(path: &Path, genres: &[String]) -> Result<(Analysis, bands::Bands)> {
+/// The analysis and the sound's signals (decision 0046, amended), from one decode: what the visuals ask for.
+pub fn analyse_with_signals(path: &Path, genres: &[String]) -> Result<(Analysis, signals::Signals)> {
     let (a, b) = analyse_inner(path, genres, true)?;
     Ok((a, b.unwrap_or_default()))
 }
 
-fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(Analysis, Option<bands::Bands>)> {
+fn analyse_inner(path: &Path, genres: &[String], with_signals: bool) -> Result<(Analysis, Option<signals::Signals>)> {
     let mut o = open(path)?;
     let ch = o.channels;
     let mut r128 = ebur128::EbuR128::new(ch as u32, o.rate, ebur128::Mode::I | ebur128::Mode::M | ebur128::Mode::SAMPLE_PEAK)
@@ -334,7 +334,7 @@ fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(An
     let mut pending: Vec<Vec<f32>> = vec![Vec::new(); ch];
     let mut hops = 0u64;
     let mut bins = vec![0u32; BINS];
-    // With the bands: the momentary loudness (400 ms) at each hop, the loudness as heard (decision 0046, amended).
+    // With the signals: the momentary loudness (400 ms) at each hop, the loudness as heard (decision 0046, amended).
     let mut moments: Vec<f32> = Vec::new();
     // The waveform: the mean square per hundredth of a second, binned at the end.
     let centi = (o.rate / 100).max(1) as usize;
@@ -342,7 +342,7 @@ fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(An
     let (mut square, mut in_centi) = (0f32, 0usize);
     // The tempo: taktus hears the mono sound.
     let mut ear = taktus::Ear::new(o.rate);
-    let mut in_bands = with_bands.then(|| bands::BandEar::new(o.rate));
+    let mut in_signals = with_signals.then(|| signals::SignalEar::new(o.rate));
     let mut onsets: Vec<f32> = Vec::new();
     let mut frames = 0u64;
     // How far the reader walked the stream (the end of its last packet), against which `frames` is measured.
@@ -363,7 +363,7 @@ fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(An
                     let i = (((m - LOWEST) / STEP) as usize).min(BINS - 1);
                     bins[i] += 1;
                 }
-                if with_bands {
+                if with_signals {
                     moments.push(m as f32);
                 }
             }
@@ -412,8 +412,10 @@ fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(An
             if let Some(onset) = ear.hear(mono) {
                 onsets.push(onset);
             }
-            if let Some(b) = in_bands.as_mut() {
-                b.hear(mono);
+            if let Some(s) = in_signals.as_mut() {
+                // The side: half the first two channels' difference (none in mono).
+                let side = if ch >= 2 { (scratch[0][i] - scratch[1][i]) * 0.5 } else { 0.0 };
+                s.hear(mono, side);
             }
             square += energy / ch as f32;
             in_centi += 1;
@@ -443,6 +445,7 @@ fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(An
     let beat = taktus::tempo_of(&onsets).map(|b| (b.bpm(), b.sure, b.catch));
     let (bpm, bpm_confidence) = tempo(beat, genres);
     let beats = beats_of(&onsets, bpm);
+    let beat_times: Vec<f64> = beats.each().map(|(t, _)| t).collect();
     let analysis = Analysis {
         version: VERSION,
         duration_secs: frames as f64 / f64::from(o.rate),
@@ -456,7 +459,7 @@ fn analyse_inner(path: &Path, genres: &[String], with_bands: bool) -> Result<(An
         complete: covered(frames, walked, o.time_base, o.rate),
         beats: Some(beats),
     };
-    Ok((analysis, in_bands.map(|b| b.finish(&moments))))
+    Ok((analysis, in_signals.map(|s| s.finish(&moments, &beat_times))))
 }
 
 /// The beats of a track at the tempo kept (none without one, so a slow-counted track's are the slow ones): taktus's
@@ -660,16 +663,16 @@ pub(crate) mod tests {
     fn the_loudness_as_heard_follows_the_sound_every_tenth_of_a_second() {
         // 3 s of a 1 kHz sine at 0.1 (about -20 LUFS, as above), then 3 s at 0.01 (20 dB down).
         let path = wav("moments", 6.0, |t| if t < 3.0 { 0.1 } else { 0.01 } * (2.0 * std::f64::consts::PI * 1000.0 * t).sin() as f32);
-        let (a, bands) = analyse_with_bands(&path, &[]).unwrap();
+        let (a, signals) = analyse_with_signals(&path, &[]).unwrap();
         std::fs::remove_file(&path).ok();
-        let r = bands.read().expect("reads back");
-        assert!(r.moments.len().abs_diff(60) <= 1, "ten a second: {}", r.moments.len());
-        let around = |secs: f64| r.moments[(secs * bands::MOMENTS_RATE as f64) as usize];
+        let moments = signals.loudness().expect("reads back");
+        assert!(moments.len().abs_diff(60) <= 1, "ten a second: {}", moments.len());
+        let around = |secs: f64| moments[(secs * signals::MOMENTS_RATE as f64) as usize];
         assert!((around(1.5) + 20.0).abs() < 0.7, "{}", around(1.5));
         assert!((around(4.5) + 40.0).abs() < 0.7, "{}", around(4.5));
         // A window by its middle: 200 ms either side of the step it is half way between the two.
         assert!(around(2.8) > -21.0 && around(3.2) < -39.0, "{} {}", around(2.8), around(3.2));
-        assert!((a.loudness_lufs - r.moments[15]).abs() < 4.0, "the same scale as the integrated loudness");
+        assert!((a.loudness_lufs - moments[15]).abs() < 4.0, "the same scale as the integrated loudness");
     }
 
     #[test]

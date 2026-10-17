@@ -467,20 +467,23 @@ async fn track_beats(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     for_visuals(app, source, id, headers, false).await
 }
 
-/// A track's sound in three frequency bands (decision 0046, amended), low (below 150 Hz), middle (300 Hz to 2.5 kHz)
-/// and high (above 5 kHz), as `analysis::bands::Bands` keeps it:
-/// - a format byte (2; another scale or layout is another format), the number of bands (3), band loudness values a
-///   second (20), loudness-as-heard values a second (10);
-/// - the number of loudness frames (u32, little-endian), then that many frames of one byte a band, low first: the
-///   band's level over that 50 ms in dB, 0 for 30 dB or more under the band's loudest in the track (its 98th
-///   percentile), 255 at it, linear in dB between;
-/// - for each band, low first: its number of transients (u32), then each one's time in milliseconds from the start
-///   (u32) and strength (u8; 255 for the band's strong ones);
-/// - the loudness as heard: its number of values (u32), then a byte each, EBU R128's momentary loudness (400 ms) around
-///   each tenth of a second, in thirds of a dB from -70 LUFS (0: -70 or quieter; 255: +15): the file's own, before
-///   any levelling (a player that levels plays it its gain louder or softer).
+/// A track's signals for the visuals (decision 0046, amended), as `analysis::signals::Signals` keeps them (format 3):
+/// a format byte (3) and the number of sections, then each section: its id, kind (0 series, 1 hits, 2 marks, 3 the
+/// band table), rate in tenths of Hz (0: a value a beat of `/beats`), channels, count (u32) and scale (10 bytes,
+/// numbers little-endian), and its bytes (series: `count` frames of a byte a channel; hits: for each channel its
+/// number (u32), then each one's time (ms, u32) and strength; marks: `count` times (ms, u32) with a byte each; the band
+/// table: each band's low and high edge, Hz, u16, 0 open). The sections:
+/// - 0 the bands (sub, bass, low-mid, mid, presence, air);
+/// - 1 the loudness as heard, 10 a second (EBU R128 momentary, thirds of a dB from -70 LUFS: the file's own, before
+///   any levelling);
+/// - each band: 2 level (20 a second), 3 flux (20), 4 hits, 5 percussive and 6 harmonic level (10), 7 percussive hits,
+///   8 crest (5), 9 width (5), 18 swell (10);
+/// - the whole track: 10 spectral centroid (10), 11 chroma (5 × 12), 12 harmonic change (10) and 13 its peaks, 14
+///   novelty (a value a beat, or 2 a second without beats) and 15 section boundaries, 16 each beat's place in its bar
+///   (with how sure, in its scale byte; none without enough beats), 17 swell and 19 build-up (10).
 ///
-/// Empty where the decode did not cover the whole file. Worked out and kept as `track_beats`, in the same decode.
+/// A page skips the sections it does not know. Empty where the decode did not cover the whole file. Worked out and kept
+/// as `track_beats`, in the same decode; served under its old name, `bands`.
 async fn track_bands(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
     for_visuals(app, source, id, headers, true).await
 }
@@ -499,14 +502,14 @@ async fn for_visuals(app: Arc<App>, source: String, id: String, headers: HeaderM
     let Some((folder, rel)) = file else { return StatusCode::NOT_FOUND.into_response() };
     // Not now: the file did not decode, or its turn or decode took too long; the page may ask again later.
     let got = if bands {
-        crate::app::analysis_pass::bands(cat.clone(), folder, rel.clone()).await.map(|b| b.0)
+        crate::app::analysis_pass::signals(cat.clone(), folder, rel.clone()).await.map(|b| b.0)
     } else {
         crate::app::analysis_pass::beats(cat.clone(), folder, rel.clone()).await.map(|b| b.0)
     };
     let Some(bytes) = got else { return StatusCode::SERVICE_UNAVAILABLE.into_response() };
     let stamp = tokio::task::spawn_blocking(move || cat.analysis_stamp(folder, &rel)).await.ok().flatten();
     // The bands' form in theirs: a copy kept from another form never answers for this one.
-    let kind = if bands { format!("s{}", crate::analysis::bands::FORMAT) } else { "b".to_string() };
+    let kind = if bands { format!("s{}", crate::analysis::signals::FORMAT) } else { "b".to_string() };
     let etag = stamp.map(|(at, version)| format!("\"{kind}-{version}-{at}\""));
     if etag.is_some() && headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == etag.as_deref() {
         return StatusCode::NOT_MODIFIED.into_response();

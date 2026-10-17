@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::analysis::Beats;
-use crate::analysis::bands::Bands;
+use crate::analysis::signals::Signals;
 use crate::catalogue::Catalogue;
 
 /// Before the first look: Cratarr has just started, and its catalogue is still catching up.
@@ -113,24 +113,24 @@ pub async fn beats(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Beat
     visual(cat, folder, rel, false).await.map(|(beats, _)| beats)
 }
 
-/// A file's sound in bands (decision 0046, amended): as kept, or worked out now, as `beats`.
-pub async fn bands(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Bands> {
-    visual(cat, folder, rel, true).await.map(|(_, bands)| bands)
+/// A file's sound in signals (decision 0046, amended): as kept, or worked out now, as `beats`.
+pub async fn signals(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Signals> {
+    visual(cat, folder, rel, true).await.map(|(_, signals)| signals)
 }
 
-/// What is kept of a file's beats and bands, as the file is now. Bands of an older form count as not worked out.
-fn kept(cat: &Catalogue, folder: i64, rel: &str) -> (Option<Beats>, Option<Bands>) {
-    let bands = cat.bands_of(folder, rel).flatten().filter(|b| b.0.first().is_none_or(|f| *f == crate::analysis::bands::FORMAT));
-    (cat.beats_of(folder, rel).flatten(), bands)
+/// What is kept of a file's beats and signals, as the file is now. Signals of an older form count as not worked out.
+fn kept(cat: &Catalogue, folder: i64, rel: &str) -> (Option<Beats>, Option<Signals>) {
+    let signals = cat.signals_of(folder, rel).flatten().filter(|b| b.0.first().is_none_or(|f| *f == crate::analysis::signals::FORMAT));
+    (cat.beats_of(folder, rel).flatten(), signals)
 }
 
-/// A file's beats and, when `with_bands`, its bands: as kept, or worked out now and kept. The page asks for both at
-/// once for a new track: whichever comes first decodes the file once for all that is missing (beats, bands or both)
+/// A file's beats and, when `with_signals`, its signals: as kept, or worked out now and kept. The page asks for both at
+/// once for a new track: whichever comes first decodes the file once for all that is missing (beats, signals or both)
 /// and keeps it, and the other finds it kept once it has its turn. What was kept stays as it was (byte for byte). A file
 /// without an analysis of it as it is now gets the whole analysis kept, as the pass would. A decode that does not cover
-/// the whole file gives no beats and no bands, kept as none, so it is not decoded again at every request.
-async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_bands: bool) -> Option<(Beats, Bands)> {
-    let enough = move |k: &(Option<Beats>, Option<Bands>)| k.0.is_some() && (!with_bands || k.1.is_some());
+/// the whole file gives no beats and no signals, kept as none, so it is not decoded again at every request.
+async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_signals: bool) -> Option<(Beats, Signals)> {
+    let enough = move |k: &(Option<Beats>, Option<Signals>)| k.0.is_some() && (!with_signals || k.1.is_some());
     let c = cat.clone();
     let r = rel.clone();
     let k = tokio::task::spawn_blocking(move || kept(&c, folder, &r)).await.ok()?;
@@ -139,55 +139,121 @@ async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_bands: bool)
     }
     // The permit is held here, not by the decode: a decode past its deadline goes on alone and lets the next one in.
     let _turn = tokio::time::timeout(TURN, ON_DEMAND.acquire()).await.ok()?.ok()?;
-    let work = tokio::task::spawn_blocking(move || -> anyhow::Result<(Beats, Bands)> {
-        // Kept while this one waited its turn.
-        let (had_beats, had_bands) = kept(&cat, folder, &rel);
-        if had_beats.is_some() && (!with_bands || had_bands.is_some()) {
-            return Ok((had_beats.unwrap_or_default(), had_bands.unwrap_or_default()));
-        }
-        let (path, size, mtime) = cat.file_to_analyse(folder, &rel).ok_or_else(|| anyhow::anyhow!("not in the library"))?;
-        let started = Instant::now();
-        let (a, bands) = crate::analysis::analyse_with_bands(&path, &cat.genres_of_file(folder, &rel))?;
-        #[cfg(test)]
-        DECODED.lock().unwrap().push(path.clone());
-        let whole = a.complete != Some(false);
-        let beats = match had_beats {
-            Some(b) => b,
-            None => {
-                let beats = if whole { a.beats.clone().unwrap_or_default() } else { Beats::default() };
-                if cat.analysis_of(folder, &rel).is_none() {
-                    cat.store_analysis(folder, &rel, size, mtime, &crate::analysis::Analysis { beats: Some(beats.clone()), ..a })?;
-                } else {
-                    cat.store_beats(folder, &rel, size, mtime, &beats)?;
-                }
-                beats
-            }
-        };
-        let bands = match had_bands {
-            Some(b) => b,
-            None => {
-                let bands = if whole { bands } else { Bands::default() };
-                cat.store_bands(folder, &rel, size, mtime, &bands)?;
-                bands
-            }
-        };
-        tracing::info!("analysis: {rel}'s beats and bands when asked for, in {:.1} s", started.elapsed().as_secs_f64());
-        Ok((beats, bands))
-    });
+    let work = tokio::task::spawn_blocking(move || work_out(&cat, folder, &rel, with_signals));
     match tokio::time::timeout(DECODE, work).await {
         Ok(Ok(Ok(got))) => Some(got),
         Ok(Ok(Err(e))) => {
-            tracing::warn!("analysis: beats and bands when asked for: {e:#}");
+            tracing::warn!("analysis: beats and signals when asked for: {e:#}");
             None
         }
         Ok(Err(e)) => {
-            tracing::warn!("analysis: beats and bands when asked for: {e}");
+            tracing::warn!("analysis: beats and signals when asked for: {e}");
             None
         }
         Err(_) => {
-            tracing::warn!("analysis: beats and bands when asked for took over {} s", DECODE.as_secs());
+            tracing::warn!("analysis: beats and signals when asked for took over {} s", DECODE.as_secs());
             None
         }
+    }
+}
+
+/// The decode for the visuals, blocking: whatever of the beats and signals is missing, worked out and kept (see `visual`).
+fn work_out(cat: &Catalogue, folder: i64, rel: &str, with_signals: bool) -> anyhow::Result<(Beats, Signals)> {
+    // Kept while this one waited its turn.
+    let (had_beats, had_signals) = kept(&cat, folder, &rel);
+    if had_beats.is_some() && (!with_signals || had_signals.is_some()) {
+        return Ok((had_beats.unwrap_or_default(), had_signals.unwrap_or_default()));
+    }
+    let (path, size, mtime) = cat.file_to_analyse(folder, &rel).ok_or_else(|| anyhow::anyhow!("not in the library"))?;
+    let started = Instant::now();
+    let (a, signals) = crate::analysis::analyse_with_signals(&path, &cat.genres_of_file(folder, &rel))?;
+    #[cfg(test)]
+    DECODED.lock().unwrap().push(path.clone());
+    let whole = a.complete != Some(false);
+    let beats = match had_beats {
+        Some(b) => b,
+        None => {
+            let beats = if whole { a.beats.clone().unwrap_or_default() } else { Beats::default() };
+            if cat.analysis_of(folder, &rel).is_none() {
+                cat.store_analysis(folder, &rel, size, mtime, &crate::analysis::Analysis { beats: Some(beats.clone()), ..a })?;
+            } else {
+                cat.store_beats(folder, &rel, size, mtime, &beats)?;
+            }
+            beats
+        }
+    };
+    let signals = match had_signals {
+        Some(b) => b,
+        None => {
+            let signals = if whole { signals } else { Signals::default() };
+            cat.store_signals(folder, &rel, size, mtime, &signals)?;
+            signals
+        }
+    };
+    tracing::info!("analysis: {rel}'s beats and signals when asked for, in {:.1} s", started.elapsed().as_secs_f64());
+    Ok((beats, signals))
+}
+
+/// Tracks ahead in a player's queue whose signals are worked out while the one before plays.
+const AHEAD: usize = 2;
+
+/// Look-ahead (decision 0046, amended): the next tracks in each playing or paused player's queue get their signals
+/// worked out before they play, so the visuals have them at once. On every change of a player (a queue being built
+/// settles first) and once a minute; only on a free turn, as a page waiting for a decode comes first.
+pub fn look_ahead(cat: Arc<Catalogue>, play_on: Arc<crate::app::playon::PlayOn>) {
+    tokio::spawn(async move {
+        let mut changes = play_on.subscribe();
+        loop {
+            if let Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) = tokio::time::timeout(Duration::from_secs(60), changes.recv()).await {
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            while changes.try_recv().is_ok() {}
+            let queues = play_on
+                .list()
+                .into_iter()
+                .filter(|p| p.playing || p.state == "paused")
+                .filter_map(|p| play_on.get(&p.name))
+                .map(|v| (v.index, v.queue.unwrap_or_default().into_iter().map(|t| (t.source, t.id)).collect::<Vec<_>>()))
+                .collect::<Vec<_>>();
+            for (source, id) in upcoming(&queues) {
+                let c = cat.clone();
+                let Ok(Some((folder, rel))) = tokio::task::spawn_blocking(move || c.track_of_source(&source, &id).and_then(|t| c.file_of(t))).await else {
+                    continue;
+                };
+                ahead(cat.clone(), folder, rel).await;
+            }
+        }
+    });
+}
+
+/// The next `AHEAD` tracks of each queue (its playing place, its tracks as source and id), each once.
+fn upcoming(queues: &[(i64, Vec<(String, String)>)]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (index, tracks) in queues {
+        let from = usize::try_from(index + 1).unwrap_or(0);
+        for t in tracks.iter().skip(from).take(AHEAD) {
+            if !out.contains(t) {
+                out.push(t.clone());
+            }
+        }
+    }
+    out
+}
+
+/// One track's beats and signals ahead of its turn, when they are not kept yet and no page is waiting for a decode.
+async fn ahead(cat: Arc<Catalogue>, folder: i64, rel: String) {
+    let (c, r) = (cat.clone(), rel.clone());
+    let Ok((beats, signals)) = tokio::task::spawn_blocking(move || kept(&c, folder, &r)).await else { return };
+    if beats.is_some() && signals.is_some() {
+        return;
+    }
+    let Ok(_turn) = ON_DEMAND.try_acquire() else { return };
+    let r = rel.clone();
+    match tokio::task::spawn_blocking(move || work_out(&cat, folder, &rel, true)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::warn!("analysis: {r}'s signals ahead of its turn: {e:#}"),
+        Err(e) => tracing::warn!("analysis: {r}'s signals ahead of its turn: {e}"),
     }
 }
 
@@ -209,29 +275,42 @@ mod tests {
         let decodes = || DECODED.lock().unwrap().iter().filter(|p| p.starts_with(&d)).count();
         let before = decodes();
 
-        // A new track, its beats and bands asked for at once: one decode, both kept.
-        let (beats_one, bands_one) = tokio::join!(beats(cat.clone(), 0, "one.wav".into()), bands(cat.clone(), 0, "one.wav".into()));
-        let (beats_one, bands_one) = (beats_one.unwrap(), bands_one.unwrap());
+        // A new track, its beats and signals asked for at once: one decode, both kept.
+        let (beats_one, signals_one) = tokio::join!(beats(cat.clone(), 0, "one.wav".into()), signals(cat.clone(), 0, "one.wav".into()));
+        let (beats_one, signals_one) = (beats_one.unwrap(), signals_one.unwrap());
         assert_eq!(decodes() - before, 1, "one decode for both");
-        assert!(beats_one.each().count() >= 55 && bands_one.read().is_some_and(|r| r.transients[2].len() >= 55));
-        assert_eq!((cat.beats_of(0, "one.wav"), cat.bands_of(0, "one.wav")), (Some(Some(beats_one.clone())), Some(Some(bands_one.clone()))));
+        assert!(beats_one.each().count() >= 55 && signals_one.hits(crate::analysis::signals::id::HITS).is_some_and(|h| h.iter().any(|band| band.len() >= 55)));
+        assert_eq!((cat.beats_of(0, "one.wav"), cat.signals_of(0, "one.wav")), (Some(Some(beats_one.clone())), Some(Some(signals_one.clone()))));
         // Asked again: kept, no decode.
-        assert_eq!(bands(cat.clone(), 0, "one.wav".into()).await, Some(bands_one));
+        assert_eq!(signals(cat.clone(), 0, "one.wav".into()).await, Some(signals_one));
         assert_eq!(decodes() - before, 1);
 
-        // A track whose beats are kept (here, other ones than its own would be) and its bands not yet: decoded for its
-        // bands alone, and its beats stay byte for byte.
+        // A track whose beats are kept (here, other ones than its own would be) and its signals not yet: decoded for its
+        // signals alone, and its beats stay byte for byte.
         let (path, size, mtime) = cat.file_to_analyse(0, "two.wav").unwrap();
         let kept = crate::analysis::Beats(vec![1, 2, 3, 4, 5]);
         let a = crate::analysis::analyse(&path, &[]).unwrap();
         cat.store_analysis(0, "two.wav", size, mtime, &crate::analysis::Analysis { beats: Some(kept.clone()), ..a }).unwrap();
-        let got = bands(cat.clone(), 0, "two.wav".into()).await.unwrap();
+        let got = signals(cat.clone(), 0, "two.wav".into()).await.unwrap();
         assert_eq!(decodes() - before, 2);
         assert!(got.read().is_some());
         assert_eq!(cat.beats_of(0, "two.wav"), Some(Some(kept.clone())));
         assert_eq!(beats(cat.clone(), 0, "two.wav".into()).await, Some(kept));
         assert_eq!(decodes() - before, 2, "beats kept: no decode");
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn the_next_tracks_of_each_queue_are_looked_ahead_to_once() {
+        let t = |id: &str| ("cratarr".to_string(), id.to_string());
+        let queues = vec![
+            (0, vec![t("a"), t("b"), t("c"), t("d")]),
+            // Nothing playing yet: its first two.
+            (-1, vec![t("c"), t("e"), t("f")]),
+            // At its end: none.
+            (1, vec![t("x"), t("y")]),
+        ];
+        assert_eq!(upcoming(&queues), vec![t("b"), t("c"), t("e")]);
     }
 
     #[test]

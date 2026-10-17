@@ -98,7 +98,8 @@ const ADDED_COLUMNS: [(&str, &str); 8] = [
     ("analysis", "complete INTEGER"),
     // Decision 0046: the track's beats (`analysis::Beats`; empty: no tempo; NULL: not worked out yet).
     ("analysis_shape", "beats BLOB"),
-    // Decision 0046, amended: the sound in bands (`analysis::bands::Bands`), kept only once the visuals asked for it.
+    // Decision 0046, amended: the sound's signals for the visuals (`analysis::signals::Signals`; the column kept its first
+    // name), kept only once the visuals asked for them.
     ("analysis_shape", "bands BLOB"),
 ];
 
@@ -1408,14 +1409,14 @@ impl Catalogue {
         self.store_shape_blob(folder, rel, size, mtime, "beats", &beats.0)
     }
 
-    /// A file's sound in bands (decision 0046, amended), as `beats_of`: `Some(None)` until the visuals first asked.
-    pub fn bands_of(&self, folder: i64, rel: &str) -> Option<Option<crate::analysis::bands::Bands>> {
-        self.shape_blob(folder, rel, "bands").map(|b| b.map(crate::analysis::bands::Bands))
+    /// A file's signals (decision 0046, amended), as `beats_of`: `Some(None)` until the visuals first asked.
+    pub fn signals_of(&self, folder: i64, rel: &str) -> Option<Option<crate::analysis::signals::Signals>> {
+        self.shape_blob(folder, rel, "bands").map(|b| b.map(crate::analysis::signals::Signals))
     }
 
-    /// Keeps a file's bands beside its analysis, as `store_beats` keeps beats (and leaves them as they are).
-    pub fn store_bands(&self, folder: i64, rel: &str, size: u64, mtime: i64, bands: &crate::analysis::bands::Bands) -> Result<bool> {
-        self.store_shape_blob(folder, rel, size, mtime, "bands", &bands.0)
+    /// Keeps a file's signals beside its analysis, as `store_beats` keeps beats (and leaves them as they are).
+    pub fn store_signals(&self, folder: i64, rel: &str, size: u64, mtime: i64, signals: &crate::analysis::signals::Signals) -> Result<bool> {
+        self.store_shape_blob(folder, rel, size, mtime, "bands", &signals.0)
     }
 
     /// One of the shape's blobs worked out apart (`beats`, `bands`), while the file is as it was analysed.

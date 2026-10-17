@@ -90,6 +90,21 @@ async fn main() -> Result<()> {
             }
         });
     }
+    // The visuals' signals of files, for measuring what they cost (decision 0046, amended): each file's length, the time
+    // its one decode took, and the bytes kept, by section.
+    if std::env::args().nth(1).as_deref() == Some("--signals") {
+        for path in std::env::args().skip(2) {
+            let started = std::time::Instant::now();
+            match analysis::analyse_with_signals(std::path::Path::new(&path), &[]) {
+                Ok((a, s)) => {
+                    let sections = s.read().map(|m| m.keys().map(u8::to_string).collect::<Vec<_>>().join(",")).unwrap_or_default();
+                    println!("{path}: {:.0} s of sound, {:.2} s, {} bytes ({:.1} KB a minute), sections {sections}", a.duration_secs, started.elapsed().as_secs_f64(), s.0.len(), s.0.len() as f64 / 1024.0 / (a.duration_secs / 60.0).max(1e-9));
+                }
+                Err(e) => println!("{path}: {e:#}"),
+            }
+        }
+        return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("--rewrite-playlists") {
         let args: Vec<String> = std::env::args().skip(2).collect();
         std::process::exit(match playlist_rewrite::run(&args) {
@@ -187,6 +202,8 @@ async fn main() -> Result<()> {
 
     // Decision 0035: the NAS keeps the analysis up to date (after the ThinkBook's first pass, or all of it).
     app::analysis_pass::run(app.library.catalogue(), app::analysis_pass::Mode::from_env(env("CRATARR_ANALYSIS").as_deref()));
+    // The visuals' signals for the next tracks in each queue, before they play (decision 0046, amended).
+    app::analysis_pass::look_ahead(app.library.catalogue(), app.play_on.clone());
 
     // The crates' favourites are asked for once at start, as the media server may take a minute (decision 0024).
     let warm = app.clone();

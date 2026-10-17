@@ -389,6 +389,7 @@ dependencies = [
  "lofty",
  "md-5",
  "opusic-sys",
+ "realfft",
  "reqwest",
  "rubato",
  "rusqlite",
