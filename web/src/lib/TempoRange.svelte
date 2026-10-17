@@ -2,7 +2,7 @@
   // The tempo selector (decision 0041), as the price filters people know: the spread (lib/Spread) over a slider with two
   // handles in 5-BPM steps, the bands inside lit, and how many tracks the range keeps. The whole scale is no range
   // (`value` null): every track, with or without a tempo. With a range, a track without a tempo is not kept.
-  import Spread, { BAND, HI, LO, within } from './Spread.svelte';
+  import Spread, { BAND, HI, LO, bandsOf, within } from './Spread.svelte';
   import SpreadScale from './SpreadScale.svelte';
 
   let { bpms, value = $bindable(null) }: { bpms: readonly (number | null | undefined)[]; value?: [number, number] | null } = $props();
@@ -17,7 +17,7 @@
 </script>
 
 <div class="tempo">
-  <div class="graph"><Spread {bpms} range={value} axis={false} /></div>
+  <div class="graph"><Spread series={[bandsOf(bpms)]} range={value} axis={false} /></div>
   <div class="handles">
     <input type="range" min={LO} max={HI} step={BAND} value={from} aria-label="Tempo from" oninput={(e) => set(Math.min(+e.currentTarget.value, to - BAND), to)} />
     <input type="range" min={LO} max={HI} step={BAND} value={to} aria-label="Tempo to" oninput={(e) => set(from, Math.max(+e.currentTarget.value, from + BAND))} />

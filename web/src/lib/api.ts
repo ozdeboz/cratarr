@@ -320,6 +320,14 @@ export const crateRows = (id: string, offset: number, limit: number, source?: st
   if (source) q.set('source', source);
   return quietly<{ source: string; total: number; rows: PlaylistRow[]; genres: string[] }>(`/api/crates/${encodeURIComponent(id)}/rows?${q}`);
 };
+/** A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, 60 to 180, counted on the server. */
+export type TempoBands = { bands: number[]; with_tempo: number; total: number };
+export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites) => {
+  const q = new URLSearchParams();
+  if (favourites) q.set('favourites', favourites);
+  if (source) q.set('source', source);
+  return quietly<TempoBands>(`/api/crates/${encodeURIComponent(id)}/tempo?${q}`);
+};
 /** Make playlist: the crate's tracks now, as its favourites toggle is set, as a new ordinary playlist (a snapshot). */
 export const crateToPlaylist = (id: string, name: string, source?: string) =>
   post<{ playlist: string; added: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/playlist${follow(source)}`, { name });

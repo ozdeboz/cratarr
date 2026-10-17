@@ -36,3 +36,17 @@ are counted as stored: dub and reggae at their slow count (0035).
 - No new data for a playlist: its rows carry their tempo.
 - A list with few tempos shows a thin spread; the count says so.
 - Loudness can have a spread of its own later; rows do not carry it yet.
+
+## Amended (2026-10-17, the owner): in the header of every panel with many tracks
+
+Mock-ups on real data (a playlist, a crate, a genre, an artist, three playlists together) settled it:
+
+- **Placement:** the spread sits in the panel's header, under its genres, for a playlist, a crate (genres too) and an
+  artist. Not for an album, whose ten-odd tracks make no spread worth reading. Info keeps its own.
+- **Several playlists selected:** one stacked spread, each playlist in its colour. Five colours, then one grey layer
+  for the rest. No legend: the colour shows as a dot on each playlist's section below, which already names it (the
+  owner).
+- **Counts:** missing tracks are not counted, so its line agrees with the header's.
+- **A crate:** its spread is counted on the server (`GET /api/crates/{id}/tempo`, as its favourites toggle is set),
+  since a genre holds thousands of tracks and its rows come a page at a time. The counting is one pure function
+  (`crates::tempo_bands`), for the crate editor's BPM axis later.

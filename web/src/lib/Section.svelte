@@ -10,6 +10,7 @@
     title,
     count,
     hint,
+    dot,
     open = $bindable(true),
     children,
     attach,
@@ -19,6 +20,8 @@
     count?: string;
     /** What the list is, under the heading while it is open. */
     hint?: string;
+    /** A colour dot before the title: the list's colour in a stacked tempo spread above (decision 0041). */
+    dot?: string;
     open?: boolean;
     children: Snippet;
     attach?: Attachment<HTMLElement>;
@@ -27,7 +30,7 @@
 
 <section class="sect" {@attach attach}>
   <button class="head" class:folded={!open} aria-expanded={open} onclick={() => (open = !open)}
-    ><span class="t">{title}</span>{#if count}<span class="c">{count}</span>{/if}<Icon name="chevronUp" size={20} /></button
+    >{#if dot}<i class="dot" style:background={dot} aria-hidden="true"></i>{/if}<span class="t">{title}</span>{#if count}<span class="c">{count}</span>{/if}<Icon name="chevronUp" size={20} /></button
   >
   {#if open}
     {#if hint}<p class="hint">{hint}</p>{/if}
@@ -54,6 +57,13 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+  }
+
+  .dot {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
   }
 
   .t {

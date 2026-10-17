@@ -25,6 +25,8 @@
     setArtistFavorite,
     coverUrl,
     crateRows,
+    crateTempo,
+    type TempoBands,
     crateToPlaylist,
     createCrate,
     createPlaylist,
@@ -92,7 +94,7 @@
   import Row from './Row.svelte';
   import TrackCover from './TrackCover.svelte';
   import Section from './Section.svelte';
-  import Spread, { within } from './Spread.svelte';
+  import Spread, { bandsOf, layerColor, within } from './Spread.svelte';
   import { fromAction } from 'svelte/attachments';
   import RepairTab from './RepairTab.svelte';
   import SyncTab from './SyncTab.svelte';
@@ -513,8 +515,53 @@
     return s && 'rows' in s ? s.rows.map((r) => r.bpm) : null;
   }
   $effect(() => {
-    if (tab !== 'info') return;
+    if (tab !== 'info' && !multi) return;
+    // Info's spread, and a selection's stacked one in the header (decision 0041).
     for (const pid of ids) untrack(() => loadSection(pid));
+  });
+  /** A crate's tempo spread, counted on the server (a genre holds thousands of tracks; its rows come a page at a time). */
+  let crateBands = $state<TempoBands | null>(null);
+  $effect(() => {
+    const c = crate;
+    void saved;
+    void undos.n;
+    crateBands = null;
+    if (!c || crateEditing) return;
+    const fav = untrack(() => (crates.list ? favouritesOf(c) : undefined));
+    crateTempo(c, prefs.source || undefined, fav).then(
+      (t) => {
+        if (crate === c) crateBands = t;
+      },
+      () => {
+        /* no spread without it */
+      },
+    );
+  });
+  /** The header's tempo spread (decision 0041): a playlist's, a crate's or an artist's, or a selection's stacked, one
+   *  series per playlist in its section's colour. Not an album's: its few tracks make no spread. */
+  const headTempo = $derived.by((): { series: number[][]; withTempo: number; total: number } | null => {
+    if (crateEditing || creating || album) return null;
+    let series: number[][];
+    let total: number;
+    if (multi) {
+      const loaded = ids.map((pid) => sections[pid]);
+      // Missing tracks are not counted: the header's counts leave them out too.
+      const rowsOf = loaded.flatMap((x) => (x && 'rows' in x ? [x.rows.filter((r) => !r.missing)] : []));
+      if (rowsOf.length < ids.length) return null;
+      series = rowsOf.map((r) => bandsOf(r.map((x) => x.bpm)));
+      total = rowsOf.reduce((n, r) => n + r.length, 0);
+    } else if (crate) {
+      if (!crateBands) return null;
+      series = [crateBands.bands];
+      total = crateBands.total;
+    } else {
+      if (!rows) return null;
+      const present = rows.filter((r) => !r.missing);
+      series = [bandsOf(present.map((r) => r.bpm))];
+      total = present.length;
+    }
+    const withTempo = series.flat().reduce((a, b) => a + b, 0);
+    return withTempo ? { series, withTempo, total } : null;
   });
   let folded = $state<Record<string, boolean>>({});
   // A playlist left out of the selection drops its section; the others keep theirs.
@@ -1300,6 +1347,12 @@
         {/if}
         <!-- A genre opens in the panel (its own crate). -->
         {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
+        {#if headTempo}
+          <div class="head-spread">
+            <Spread series={headTempo.series} />
+            <p class="details">{headTempo.withTempo.toLocaleString()} of {plural(headTempo.total, 'track')} have a tempo</p>
+          </div>
+        {/if}
         {#if p?.dead || chosenDead}<p class="details dead">{p?.dead || chosenDead} missing</p>{/if}
       </header>
     {/if}
@@ -1321,10 +1374,10 @@
     {:else if tab === 'sync'}
       <SyncTab {ids} />
     {:else if multi}
-      {#each ids as sid (sid)}
+      {#each ids as sid, k (sid)}
         {@const s = sections[sid]}
         {@const count = shownPlaylists().find((x) => x.id === sid)?.count ?? 0}
-        <Section title={sid} count={plural(count, 'track')} bind:open={() => !folded[sid], (v) => (folded[sid] = !v)} attach={fromAction(seen, () => sid)}>
+        <Section title={sid} dot={layerColor(k, ids.length)} count={plural(count, 'track')} bind:open={() => !folded[sid], (v) => (folded[sid] = !v)} attach={fromAction(seen, () => sid)}>
           {#if s && 'error' in s}
             <p class="error" role="alert">{s.error}</p>
           {:else if !s}
@@ -1467,7 +1520,7 @@
     <!-- Its tempo spread (decision 0041): only shown, never a filter. -->
     {#if tempos?.some(Boolean)}
       <div class="tempo">
-        <Spread bpms={tempos} />
+        <Spread series={[bandsOf(tempos)]} />
         <p class="note">{tempos.filter(Boolean).length} of {plural(tempos.length, 'track')} have a tempo</p>
       </div>
     {/if}
@@ -1960,6 +2013,17 @@
 
   .about {
     padding: 4px 0 8px;
+  }
+
+  /* The tempo spread in the header, under the genres (decision 0041). */
+  .head-spread {
+    align-self: stretch;
+    width: 100%;
+    margin: 12px 0 2px;
+  }
+
+  .head-spread .details {
+    margin-top: 4px;
   }
 
   /* The tempo spread at the head of Info (decision 0041). */

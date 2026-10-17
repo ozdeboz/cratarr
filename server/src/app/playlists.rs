@@ -1059,6 +1059,19 @@ impl PlaylistService {
         self.crate_page(&fav.with(&def.conditions), want, offset, limit).await
     }
 
+    /// A crate's tempo spread (decision 0041), its tracks chosen as its rows are (the favourites toggle `fav`, else as
+    /// saved): counted here, so a genre of thousands of tracks does not send them all to be counted.
+    pub async fn crate_tempo(&self, id: &str, want: Option<&str>, fav: Option<crates::Favourites>) -> Result<crates::TempoBands, ToggleError> {
+        let def = self.crate_def(id).await?;
+        let fav = match fav {
+            Some(f) => f,
+            None => self.crate_favourites(id).await?,
+        };
+        let (lib, lines) = self.crate_selection(&fav.with(&def.conditions), want).await?;
+        let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
+        Ok(crates::tempo_bands(lib.files.iter().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.bpm)))
+    }
+
     /// A crate's favourites toggle as set; a genre not set shows all its tracks (a crate not set shows no favourites).
     async fn crate_favourites(&self, id: &str) -> Result<crates::Favourites, ToggleError> {
         match self.crate_store.all_favourites().await?.get(id) {

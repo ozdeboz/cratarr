@@ -122,6 +122,34 @@ pub struct AxisView {
     pub known: usize,
 }
 
+/// The tempo spread (decision 0041): 5-BPM bands from 60 to 180 BPM, always the same scale; a tempo under 60 counts in
+/// the first band, one from 180 up in the last. The page's lib/Spread keeps the same scale.
+pub const TEMPO_LO: f64 = 60.0;
+pub const TEMPO_BAND: f64 = 5.0;
+pub const TEMPO_BANDS: usize = 24;
+
+/// How many tracks fall in each tempo band, how many have a tempo, and how many there are.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct TempoBands {
+    pub bands: Vec<u32>,
+    pub with_tempo: usize,
+    pub total: usize,
+}
+
+/// The spread of some tracks' tempos (`None`: no tempo, counted in `total` only). Pure, for a crate's tracks and, later,
+/// the crate editor's BPM axis over the whole library.
+pub fn tempo_bands(bpms: impl IntoIterator<Item = Option<f64>>) -> TempoBands {
+    let mut out = TempoBands { bands: vec![0; TEMPO_BANDS], ..TempoBands::default() };
+    for bpm in bpms {
+        out.total += 1;
+        let Some(b) = bpm.filter(|b| b.is_finite() && *b > 0.0) else { continue };
+        let band = ((b - TEMPO_LO) / TEMPO_BAND).floor().clamp(0.0, (TEMPO_BANDS - 1) as f64) as usize;
+        out.bands[band] += 1;
+        out.with_tempo += 1;
+    }
+    out
+}
+
 /// What the axes test about one Music file.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Facts {
@@ -554,5 +582,16 @@ mod tests {
         favourite_changes_held("test-a", held);
         assert_eq!(favourite_changes_since("test-a", before), vec![("t3".to_string(), true)]);
         assert_eq!(favourite_changes_since("test-b", before), vec![("t2".to_string(), true)]);
+    }
+
+    #[test]
+    fn tempos_fall_in_five_bpm_bands_from_60_to_180() {
+        let t = tempo_bands([Some(60.0), Some(64.9), Some(65.0), Some(119.5), Some(120.0), None, Some(0.0), Some(40.0), Some(181.0), Some(179.9)]);
+        assert_eq!((t.total, t.with_tempo), (10, 8), "no tempo and 0 are not counted in a band");
+        assert_eq!(t.bands.len(), TEMPO_BANDS);
+        assert_eq!((t.bands[0], t.bands[1]), (3, 1), "60, 64.9 and the 40 below the scale; 65");
+        assert_eq!((t.bands[11], t.bands[12]), (1, 1), "119.5; 120");
+        assert_eq!(t.bands[23], 2, "179.9 and the 181 above the scale");
+        assert_eq!(tempo_bands([]), TempoBands { bands: vec![0; TEMPO_BANDS], with_tempo: 0, total: 0 });
     }
 }
