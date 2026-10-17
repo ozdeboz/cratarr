@@ -20,11 +20,15 @@ import java.security.MessageDigest
 object Net {
     private const val TAG = "CratarrNet"
     /** How long a refusal holds the requests back. */
-    private const val REFUSED_MS = 10 * 60_000L
+    const val REFUSED_MS = 10 * 60_000L
 
     /** Per address of Cratarr's (decision 0043: a sign-in is asked for on each): the session refused there, and when.
      *  Another session (the page signed in again) is tried at once. */
     private val refusals = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+
+    /** The id of Play On's connection now (decision 0045): it goes with each of the app's own requests to Cratarr
+     *  (`X-Cratarr-Connection`), so Cratarr's log ties them to that connection. */
+    @Volatile var connection: String? = null
 
     private fun ours(prefs: Prefs, url: String) = Prefs.originOf(url)?.let { it in prefs.origins() } == true
     private fun session(url: String) = cookie(url).orEmpty()
@@ -51,12 +55,21 @@ object Net {
         return ours(Prefs(context), url) && refusedSession == session(url) && SystemClock.elapsedRealtime() - at < REFUSED_MS
     }
 
+    /** Until when (epoch ms, the device's clock) requests to this address of Cratarr's wait after a refusal; null: they
+     *  do not. */
+    fun heldUntil(context: Context, url: String): Long? {
+        if (!refused(context, url)) return null
+        val at = refusals[Prefs.originOf(url) ?: return null]?.second ?: return null
+        return System.currentTimeMillis() + (REFUSED_MS - (SystemClock.elapsedRealtime() - at))
+    }
+
     /** A connection to [url], with the session where there is one; none while it would be refused again ([refused]),
      *  unless [anyway] (Settings' test, which the owner asks for). */
     fun open(context: Context, url: String, anyway: Boolean = false): HttpURLConnection {
         if (!anyway && refused(context, url)) throw IOException("waiting: Cratarr refused the session")
         val c = URL(url).openConnection() as HttpURLConnection
         cookie(url)?.let { c.setRequestProperty("Cookie", it) }
+        connection?.let { if (ours(Prefs(context), url)) c.setRequestProperty("X-Cratarr-Connection", it) }
         return c
     }
 
@@ -67,7 +80,10 @@ object Net {
         val origin = Prefs.originOf(url)
         if (origin != null && ours(Prefs(context), url)) {
             if (code == 401 || code == 403) {
-                if (refusals[origin]?.first != session(url)) Log.w(TAG, "$origin refused the app ($code): waiting ${REFUSED_MS / 60_000} min")
+                if (refusals[origin]?.first != session(url)) {
+                    Log.w(TAG, "$origin refused the app ($code): waiting ${REFUSED_MS / 60_000} min")
+                    LinkLog.add(context, "warn", "signin", "refused", "address" to origin, "status" to code, "path" to c.url.path, "wait_min" to REFUSED_MS / 60_000)
+                }
                 refusals[origin] = session(url) to SystemClock.elapsedRealtime()
             } else if (code in 200..399) {
                 refusals.remove(origin)

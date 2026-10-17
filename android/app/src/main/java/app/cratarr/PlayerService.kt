@@ -50,7 +50,12 @@ class PlayerService : MediaSessionService() {
 
     /** The server's address or the player's name changed: Play On connects again with them. A sleep timer set: kept. */
     private val prefsChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == Prefs.IN_USE || key == Prefs.PLAYER_NAME || key == Prefs.STAY_READY || key == Prefs.SESSION_MARK) link?.reconnect()
+        when (key) {
+            Prefs.IN_USE -> link?.reconnect("address changed")
+            Prefs.PLAYER_NAME -> link?.reconnect("name changed")
+            Prefs.STAY_READY -> link?.reconnect("stay ready changed")
+            Prefs.SESSION_MARK -> link?.reconnect("session changed")
+        }
         // An address set: which of the two answers.
         if (key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PREFER_LOCAL || key == Prefs.SESSION_MARK) Reach.checkSoon(this)
         // Another server or name: Cratarr says the group again once connected.
@@ -74,6 +79,9 @@ class PlayerService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Its own log (decision 0045): the service's start, and a crash, written down.
+        LinkLog.catchCrashes(this)
+        LinkLog.add(this, "info", "playon", "service started")
         prefs = Prefs(this)
         notifications = getSystemService(NotificationManager::class.java)
         val music = AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build()
@@ -228,6 +236,7 @@ class PlayerService : MediaSessionService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        LinkLog.add(this, "info", "playon", "app swiped away")
         // The app swiped away: music that plays goes on, and so does a player that stays ready; otherwise it goes.
         val player = session?.player
         if (!prefs.stayReady && (player == null || !player.playWhenReady || player.mediaItemCount == 0)) stopSelf()
@@ -303,6 +312,7 @@ class PlayerService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        LinkLog.add(this, "info", "playon", "service stopped")
         main.removeCallbacksAndMessages(null)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)
         sync.release()

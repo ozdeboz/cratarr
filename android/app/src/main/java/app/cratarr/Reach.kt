@@ -144,6 +144,7 @@ object Reach {
         // Written down whenever it differs (an address just changed, too): who follows the address in use hears it.
         if (pick != prefs.inUse) {
             Log.i(TAG, "now on $pick")
+            LinkLog.add(context, "info", "playon", "address changed", "from" to prefs.inUse, "to" to pick)
             prefs.use(pick)
         }
         return pick

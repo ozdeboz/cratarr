@@ -65,6 +65,38 @@ const PAGE = (() => {
   }
 })();
 
+// Its own log while it is open (decision 0045, item 2), numbered, the newest 500 kept: what became of its connection.
+// Each time it connects, the lines Cratarr has not had yet go to it. A new log each time the page loads.
+const LOG = `${PAGE}-${Date.now().toString(36)}`;
+type Line = { seq: number; at: number; level: 'info' | 'warn'; area: 'playon'; what: string; fields: Record<string, unknown> };
+const lines: Line[] = [];
+let seq = 0;
+function note(level: Line['level'], what: string, fields: Record<string, unknown> = {}) {
+  lines.push({ seq: ++seq, at: Date.now(), level, area: 'playon', what, fields });
+  if (lines.length > 500) lines.shift();
+}
+
+/** The lines Cratarr has not had yet, to it. */
+async function sendLog(player: string) {
+  const base = `/api/players/${encodeURIComponent(player)}/log`;
+  try {
+    const held = await fetch(`${base}?log=${encodeURIComponent(LOG)}`);
+    if (!held.ok) return;
+    const last = ((await held.json()) as { last?: number }).last ?? 0;
+    const out = lines.filter((l) => l.seq > last);
+    if (out.length) await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ log: LOG, lines: out }) });
+  } catch {
+    /* sent with the next connection */
+  }
+}
+
+// The link as this page sees it, in its reports.
+let connectedSince = 0;
+let failed = 0;
+let lastError: string | null = null;
+let waitUntil = 0;
+let reportsThrough = true;
+
 let source: EventSource | null = null;
 let name: string | null = null;
 let version: number | undefined;
@@ -100,6 +132,13 @@ async function report(withQueue = false) {
     playing: local.index >= 0 && !local.paused,
     volume: pageVolume.level,
     ducked: pageVolume.ducked,
+    link: {
+      failed,
+      address: location.origin,
+      ...(connectedSince ? { connected_since: connectedSince } : {}),
+      ...(lastError ? { last_error: lastError } : {}),
+      ...(waitUntil > Date.now() ? { wait_until: waitUntil, wait_why: refusedFor() > 0 ? 'refused' : 'after a failure' } : {}),
+    },
     ...(queue
       ? {
           queue: local.queue.map((q) => ({
@@ -124,9 +163,19 @@ async function report(withQueue = false) {
     if (res.ok && queue) sentQueue = key;
     if (asksSignIn(res)) toSignIn();
     else if (res.status === 403 || res.status === 401) refused();
-  } catch {
+    reported(res.ok, `HTTP ${res.status}`);
+  } catch (e) {
     /* the next report tries again */
+    reported(false, e instanceof Error ? e.message : String(e));
   }
+}
+
+/** Whether reports get through: written down as it changes, not every report. */
+function reported(ok: boolean, error: string) {
+  if (ok === reportsThrough) return;
+  reportsThrough = ok;
+  if (ok) note('info', 'reports through');
+  else note('warn', 'reports failing', { error });
 }
 
 function reportSoon(withQueue = false) {
@@ -139,10 +188,17 @@ function connect() {
   name = nameToUse();
   const es = new EventSource(`/api/players/${encodeURIComponent(name)}/connect?kind=browser&page=${PAGE}`);
   source = es;
+  const player = name;
   es.onopen = () => {
+    note('info', 'connected', { address: location.origin, ...(failed ? { failed_before: failed } : {}) });
     target.connected = true;
+    connectedSince = Date.now();
+    failed = 0;
+    lastError = null;
+    waitUntil = 0;
     retry = RETRY_MS;
     report(true);
+    sendLog(player);
   };
   es.addEventListener('command', (e) => {
     let m: Record<string, unknown>;
@@ -167,10 +223,21 @@ function connect() {
     // Refused or gone for good (an error answer ends an EventSource): again later, never in a rush (a proxy bans
     // what keeps knocking).
     if (es.readyState === EventSource.CLOSED) {
+      // An EventSource says nothing of why: ended after it was open, or refused (or out of reach) before.
+      if (target.connected) note('info', 'connection ended');
+      else {
+        failed++;
+        lastError = navigator.onLine ? 'refused or out of reach' : 'offline';
+        if (failed === 1) note('warn', 'connection failed', { error: lastError });
+      }
       target.connected = false;
+      connectedSince = 0;
       clearTimeout(retryTimer);
       const later = () => {
-        retryTimer = setTimeout(() => want() && connect(), Math.max(retry, refusedFor()));
+        const wait = Math.max(retry, refusedFor());
+        waitUntil = Date.now() + wait;
+        if (refusedFor() > 0) note('warn', 'waiting', { until: waitUntil, why: 'refused' });
+        retryTimer = setTimeout(() => want() && connect(), wait);
         retry = Math.min(retry * 2, 60_000);
       };
       // Its name held by another page (another tab, another browser) or the app: the next free one ("… 2"), at once.

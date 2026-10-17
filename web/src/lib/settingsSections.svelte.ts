@@ -4,7 +4,7 @@
 import type { Settings } from './api';
 import type { IconName } from './Icon.svelte';
 
-export type SettingsSection = 'device' | 'network' | 'sync' | 'connections' | 'libraries' | 'players' | 'auth' | 'import' | 'display';
+export type SettingsSection = 'device' | 'network' | 'sync' | 'connections' | 'libraries' | 'players' | 'auth' | 'import' | 'display' | 'diagnostics';
 
 export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true }[] = [
   // In a browser too: its name as a Play On player.
@@ -17,6 +17,8 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
   { id: 'auth', title: 'Authentication', icon: 'user' },
   { id: 'import', title: 'Import', icon: 'intoBox' },
   { id: 'display', title: 'Display', icon: 'swatch' },
+  // What happened, as Cratarr keeps it (decision 0045).
+  { id: 'diagnostics', title: 'Diagnostics', icon: 'list' },
 ];
 
 export const settingsSaved = $state({ n: 0 });

@@ -21,6 +21,7 @@
   import SyncPart from './settings/SyncPart.svelte';
   import ImportPart from './settings/ImportPart.svelte';
   import LibrariesPart from './settings/LibrariesPart.svelte';
+  import DiagnosticsPart from './settings/DiagnosticsPart.svelte';
   import PlayersSettings from './PlayersSettings.svelte';
 
   let { section }: { section: SettingsSection } = $props();
@@ -58,6 +59,8 @@
       <DisplayPart />
     {:else if section === 'players'}
       <PlayersSettings />
+    {:else if section === 'diagnostics'}
+      <DiagnosticsPart />
     {:else if !ed.s}
       {#if !ed.loadError}<PageLoading />{/if}
     {:else if section === 'connections'}

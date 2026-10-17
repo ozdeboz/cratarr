@@ -71,7 +71,9 @@ object Downloads {
         return ResolvingDataSource.Factory(http) { spec ->
             val uri = Reach.rewrite(app, spec.uri)
             val signed = spec.withUri(uri)
-            Net.cookie(uri.toString())?.let { signed.withAdditionalHeaders(mapOf("Cookie" to it)) } ?: signed
+            // The session, and Play On's connection id (decision 0045), as the app's own requests carry them.
+            val headers = listOfNotNull(Net.cookie(uri.toString())?.let { "Cookie" to it }, Net.connection?.let { "X-Cratarr-Connection" to it }).toMap()
+            if (headers.isEmpty()) signed else signed.withAdditionalHeaders(headers)
         }
     }
 

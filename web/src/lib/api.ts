@@ -194,12 +194,49 @@ export type PlayOnPlayer = {
   /** `app` (the Android app), `kodi` (a Kodi Cratarr drives: it follows a group, never leads one) or `browser` (a page
    *  that plays in a browser, a player while it is open: never in a group). */
   kind?: 'app' | 'kodi' | 'browser';
+  /** Its link to Cratarr (decision 0045). */
+  link?: PlayerLink;
   track: QueueTrack | null;
   queue?: QueueTrack[];
 };
 
+/** A player's link as Cratarr knows it, and as the player last told (decision 0045); times epoch seconds, the
+ *  player's own epoch ms. */
+export type PlayerLink = {
+  offline_since: number | null;
+  ended: 'replaced' | 'gone quiet' | 'closed' | 'server stopping' | null;
+  ended_at: number | null;
+  own: { connected_since?: number; failed: number; last_error?: string; address?: string; wait_until?: number; wait_why?: string } | null;
+};
+
 export const getPlayers = () => quietly<{ players: PlayOnPlayer[] }>('/api/players');
 export const getPlayer = (name: string) => quietly<PlayOnPlayer>(`/api/players/${encodeURIComponent(name)}`);
+
+/** A row of Cratarr's diagnostics log (decision 0045): `at` and `last` epoch ms, `count` how often it came. */
+export type LogRow = {
+  id: number;
+  at: number;
+  last: number;
+  count: number;
+  level: 'error' | 'warn' | 'info' | 'debug' | 'trace';
+  area: string;
+  place: string;
+  what: string;
+  fields: Record<string, unknown>;
+  origin: 'server' | 'device';
+};
+/** Which rows, newest first: a place (a player, or "server"), an area, the least serious level, the page before a row. */
+export type LogQuery = { place?: string; area?: string; level?: string; before?: number; limit?: number };
+export const getLog = (q: LogQuery) => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== '') p.set(k, String(v));
+  return quietly<{ rows: LogRow[] }>(`/api/diagnostics?${p}`);
+};
+/** What is logged by area now: the areas, the levels, each area raised for a while (`now`), until when (epoch ms). */
+export type LogLevels = { areas: string[]; levels: string[]; now: Record<string, string>; until: number | null };
+export const getLogLevels = () => quietly<LogLevels>('/api/diagnostics/levels');
+export const setLogLevels = (areas: Record<string, string>, hours: number) =>
+  request<LogLevels>('/api/diagnostics/levels', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ areas, hours }) });
 /** A track's ReplayGain (decision 0035): gains in dB, peaks linear; what is not known is left out. */
 export type TrackGain = { trackGain?: number; albumGain?: number; trackPeak?: number; albumPeak?: number };
 export const getTrackGain = (source: string, id: string) => quietly<TrackGain>(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/gain`);

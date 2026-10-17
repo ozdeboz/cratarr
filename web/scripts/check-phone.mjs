@@ -16,7 +16,7 @@ const base = (process.argv[2] ?? 'http://localhost:5173').replace(/\/$/, '');
 const browser =
   process.env.BROWSER ?? (process.platform === 'win32' ? 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' : 'chromium');
 const port = 9300 + Math.floor(Math.random() * 600);
-const SETTINGS = ['connections', 'libraries', 'players', 'auth', 'import', 'display'];
+const SETTINGS = ['connections', 'libraries', 'players', 'auth', 'import', 'display', 'diagnostics'];
 const PAGES = ['library', 'playlists', 'crates', 'insights', 'health', 'settings'];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

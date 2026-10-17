@@ -66,6 +66,8 @@
         return [kept.known ? `${kept.items.length} kept` : null, appInfo.syncBudgetGb ? `${appInfo.syncBudgetGb} GB` : 'No limit'].filter(Boolean).join(' · ');
       case 'display':
         return THEME[prefs.theme];
+      case 'diagnostics':
+        return '';
     }
   }
 

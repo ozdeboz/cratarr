@@ -109,6 +109,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        LinkLog.catchCrashes(this)
         prefs = Prefs(this)
         openSettings = intent?.getBooleanExtra(EXTRA_SETTINGS, false) == true
         frame = FrameLayout(this)
