@@ -20,7 +20,7 @@
     <h3 id="dir-h">
       Directory <MoreInfo
         label="Directory"
-        text={"Asked first at sign-in; Cratarr's own account stays a way in.\n\nSet by whoever runs Cratarr, in ldap.json in its data folder, and never here: a page that could set it could send a file's contents anywhere, or sign anyone in."}
+        text={"Asked first at sign-in; Cratarr's own accounts stay a way in.\n\nSet by whoever runs Cratarr, in ldap.json in its data folder, and never here: a page that could set it could send a file's contents anywhere, or sign anyone in."}
       />
     </h3>
     <dl class="account">
