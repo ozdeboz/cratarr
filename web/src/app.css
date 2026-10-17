@@ -126,21 +126,39 @@ button.solid[aria-busy='true']::after {
   border-top-color: var(--accent-text);
 }
 
-/* An edge's handle (decisions 0018 and 0042): a line, with a handle in the middle that shows it can be dragged. The
-   edge between page and panel (App's .grip) and the navigation's edge (App's .nav-grip) wear the same. */
+/* An edge's handle (decisions 0018 and 0042): the edge's line itself, 1 px, so what is on either side fills right up to
+   it; the handle in its middle that shows it can be dragged, and the room to grab it, reach over both sides. The edge
+   between page and panel (App's .grip) and the navigation's edge (App's .nav-grip) wear the same; each places it
+   (sticky, absolute). The handle's size is the page's (--grip-w, --grip-h): the panel cuts itself away around it. Its
+   width is odd, so it sits exactly centred on the 1 px line, the same whole pixels on each side. */
+:root {
+  --grip-w: 5px;
+  --grip-h: 44px;
+}
+
 .edge-grip {
-  display: grid;
-  place-items: center;
+  z-index: 10;
+  width: 1px;
   cursor: col-resize;
   touch-action: none;
-  background: linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat;
+  background: var(--border);
+}
+
+.edge-grip::before {
+  content: '';
+  position: absolute;
+  inset: 0 -6px;
 }
 
 .edge-grip::after {
   content: '';
-  width: 6px;
-  height: 44px;
-  border-radius: 3px;
+  position: absolute;
+  /* Placed by arithmetic, not a translate: a translate lands it on half pixels. */
+  top: calc(50% - var(--grip-h) / 2);
+  left: calc(50% - var(--grip-w) / 2);
+  width: var(--grip-w);
+  height: var(--grip-h);
+  border-radius: calc(var(--grip-w) / 2);
   background: var(--muted);
   opacity: 0.6;
 }

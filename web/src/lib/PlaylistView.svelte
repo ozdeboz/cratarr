@@ -74,7 +74,7 @@
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
-  import { artistPictureId, goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
+  import { addedOn, artistPictureId, goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
   import ListHead from './ListHead.svelte';
@@ -95,6 +95,8 @@
   import TrackCover from './TrackCover.svelte';
   import Section from './Section.svelte';
   import Spread, { bandsOf, layerColor, within } from './Spread.svelte';
+  import type { Cell } from './Row.svelte';
+  import { fit } from './columns.svelte';
   import { fromAction } from 'svelte/attachments';
   import RepairTab from './RepairTab.svelte';
   import SyncTab from './SyncTab.svelte';
@@ -398,6 +400,40 @@
           { value: 'added', label: 'Added' },
         ] as { value: SortKey; label: string }[])),
   ]);
+  // Columns where the list has room (decision 0042): as many as its own width allows, in the owner's order; not on an
+  // album's numbered tracks.
+  let listWidth = $state(0);
+  const cols = $derived(album ? [] : fit('tracks', listWidth, (id) => sortFields.some((f) => f.value === id)));
+  const shows = (id: string) => cols.some((c) => c.id === id);
+  /** A track's value in a column. */
+  function cellText(id: string, r: PlaylistRow): string {
+    if (id === 'album') return r.album ?? '';
+    if (id === 'albumArtist') return r.album_artist ?? '';
+    if (id === 'tempo') return r.bpm ? String(Math.round(r.bpm)) : '';
+    if (id === 'plays') return r.play_count ? r.play_count.toLocaleString() : '';
+    if (id === 'year') return r.year ? String(r.year) : '';
+    if (id === 'lastPlayed') return r.last_played ? addedOn(r.last_played) : '';
+    if (id === 'added') return r.added ? addedOn(r.added) : '';
+    return '';
+  }
+  const cellsOf = (r: PlaylistRow): Cell[] | undefined =>
+    cols.length ? cols.map((c) => ({ ...c, text: cellText(c.id, r) })) : undefined;
+  /** The list's head: its column names, a tap orders by one, a second turns it round. Plays and dates start most and
+   *  newest first. */
+  const headCells = $derived<Cell[]>(
+    cols.map((c) => ({
+      ...c,
+      text: c.label,
+      on: sortKey === c.id,
+      onclick: () => {
+        if (sortKey === c.id) sortDown = !sortDown;
+        else {
+          sortKey = c.id as SortKey;
+          sortDown = ['plays', 'lastPlayed', 'added'].includes(c.id);
+        }
+      },
+    })),
+  );
   // The same order in the pill's View (lib/ViewSheet).
   const listOrder = $derived({
     fields: sortFields,
@@ -407,6 +443,7 @@
       sortKey = value as SortKey;
       sortDown = down;
     },
+    columns: { kind: 'tracks' as const, shown: cols.map((c) => c.id), offered: sortFields.map((f) => f.value) },
   });
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
   /** The rows as the list shows them, each with its place in the subject (`i`). */
@@ -1275,85 +1312,88 @@
       </div>
       {/if}
       <header class="meta">
-        {#if editing}
-        <!-- The name, editable where it is and looking the same; the pencil beside it says so (and puts the caret
-             in it too). -->
-        <div class="name-row">
-        <h2
-          bind:this={nameEl}
-          class="editable"
-          contenteditable="plaintext-only"
-          class:saving={editing.saving}
-          aria-label="Name"
-          data-placeholder="New playlist"
-          spellcheck="false"
-          bind:textContent={editing.name}
-          onkeydown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              e.currentTarget.blur();
-            }
-          }}
-          oninput={(e) => {
-            const el = e.currentTarget;
-            if ((el.textContent ?? '').length > 100) el.textContent = (el.textContent ?? '').slice(0, 100);
-          }}
-        ></h2>
-        <button class="name-pen" aria-label="Rename" title="Rename" disabled={editing.saving} onclick={editName}><Icon name="pencil" size={16} /></button>
+        <!-- What it is, and beside it on a wide panel its tempo spread (decision 0041). -->
+        <div class="meta-main">
+          {#if editing}
+          <!-- The name, editable where it is and looking the same; the pencil beside it says so (and puts the caret
+               in it too). -->
+          <div class="name-row">
+          <h2
+            bind:this={nameEl}
+            class="editable"
+            contenteditable="plaintext-only"
+            class:saving={editing.saving}
+            aria-label="Name"
+            data-placeholder="New playlist"
+            spellcheck="false"
+            bind:textContent={editing.name}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
+            oninput={(e) => {
+              const el = e.currentTarget;
+              if ((el.textContent ?? '').length > 100) el.textContent = (el.textContent ?? '').slice(0, 100);
+            }}
+          ></h2>
+          <button class="name-pen" aria-label="Rename" title="Rename" disabled={editing.saving} onclick={editName}><Icon name="pencil" size={16} /></button>
+          </div>
+          {:else if crateEditing && crateDraft}
+          <!-- A crate's name, as a playlist's in edit mode. -->
+          <div class="name-row">
+          <h2
+            bind:this={nameEl}
+            class="editable"
+            contenteditable="plaintext-only"
+            class:saving={crateSaving}
+            aria-label="Name"
+            data-placeholder="New crate"
+            spellcheck="false"
+            bind:textContent={crateDraft.name}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
+            oninput={(e) => {
+              const el = e.currentTarget;
+              if ((el.textContent ?? '').length > 100) el.textContent = (el.textContent ?? '').slice(0, 100);
+            }}
+          ></h2>
+          <button class="name-pen" aria-label="Rename" title="Rename" disabled={crateSaving} onclick={editName}><Icon name="pencil" size={16} /></button>
+          </div>
+          {#if permanentNames.includes(crateDraft.name.trim().toLowerCase())}<p class="details dead">That is a permanent crate's name.</p>{/if}
+          {:else}
+            <h2>{title}</h2>
+          {/if}
+          {#if details}<p class="details">{details}</p>{/if}
+          {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
+          {#if album && albumHead?.artist}
+            <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
+              >{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
+                  ><Icon name="heart" size={16} /></i
+                >{/if}</button
+            >
+          {:else if artist?.tracks}
+            <button class="chip" onclick={() => viewOver(artistSubject(artist.source, artist.name))}
+              >{#if heroArt[0]}<img src={heroArt[0]} alt="" />{/if}<span>{artist.name}</span>{#if artistHead?.favorite}<i class="liked" role="img" aria-label="Favourite"
+                  ><Icon name="heart" size={16} /></i
+                >{/if}</button
+            >
+          {/if}
+          <!-- A genre opens in the panel (its own crate). -->
+          {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
+          {#if p?.dead || chosenDead}<p class="details dead missing">{p?.dead || chosenDead} missing</p>{/if}
         </div>
-        {:else if crateEditing && crateDraft}
-        <!-- A crate's name, as a playlist's in edit mode. -->
-        <div class="name-row">
-        <h2
-          bind:this={nameEl}
-          class="editable"
-          contenteditable="plaintext-only"
-          class:saving={crateSaving}
-          aria-label="Name"
-          data-placeholder="New crate"
-          spellcheck="false"
-          bind:textContent={crateDraft.name}
-          onkeydown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              e.currentTarget.blur();
-            }
-          }}
-          oninput={(e) => {
-            const el = e.currentTarget;
-            if ((el.textContent ?? '').length > 100) el.textContent = (el.textContent ?? '').slice(0, 100);
-          }}
-        ></h2>
-        <button class="name-pen" aria-label="Rename" title="Rename" disabled={crateSaving} onclick={editName}><Icon name="pencil" size={16} /></button>
-        </div>
-        {#if permanentNames.includes(crateDraft.name.trim().toLowerCase())}<p class="details dead">That is a permanent crate's name.</p>{/if}
-        {:else}
-          <h2>{title}</h2>
-        {/if}
-        {#if details}<p class="details">{details}</p>{/if}
-        {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
-        {#if album && albumHead?.artist}
-          <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
-            >{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
-                ><Icon name="heart" size={16} /></i
-              >{/if}</button
-          >
-        {:else if artist?.tracks}
-          <button class="chip" onclick={() => viewOver(artistSubject(artist.source, artist.name))}
-            >{#if heroArt[0]}<img src={heroArt[0]} alt="" />{/if}<span>{artist.name}</span>{#if artistHead?.favorite}<i class="liked" role="img" aria-label="Favourite"
-                ><Icon name="heart" size={16} /></i
-              >{/if}</button
-          >
-        {/if}
-        <!-- A genre opens in the panel (its own crate). -->
-        {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
         {#if headTempo}
           <div class="head-spread">
             <Spread series={headTempo.series} />
             <p class="details">{headTempo.withTempo.toLocaleString()} of {plural(headTempo.total, 'track')} have a tempo</p>
           </div>
         {/if}
-        {#if p?.dead || chosenDead}<p class="details dead">{p?.dead || chosenDead} missing</p>{/if}
       </header>
     {/if}
 
@@ -1374,6 +1414,8 @@
     {:else if tab === 'sync'}
       <SyncTab {ids} />
     {:else if multi}
+      <!-- Their columns' names once over all of them; each keeps its own order, so the names do not order. -->
+      {#if cols.length}{@render columnHead(false)}{/if}
       {#each ids as sid, k (sid)}
         {@const s = sections[sid]}
         {@const count = shownPlaylists().find((x) => x.id === sid)?.count ?? 0}
@@ -1385,7 +1427,7 @@
           {:else if !s.rows.length}
             <p class="empty">No tracks yet.</p>
           {:else}
-            <ol class="rows">
+            <ol class="rows" bind:clientWidth={listWidth}>
               {#each s.rows as r, i (i)}{#if (!panel.hideMissing || (r.id && !r.missing)) && within(r.bpm, panel.tempo)}{@render trackRow(r, s.source, sid, s.rows)}{/if}{/each}
             </ol>
           {/if}
@@ -1457,7 +1499,7 @@
         ontracks={() => viewOver(artistSubject(artist.source, artist.name, true))}
       />
       {#snippet topList()}
-        <ol class="rows">{#each topRows as r (r.id)}{@render trackRow(r, source, title, topRows)}{/each}</ol>
+        <ol class="rows">{#each topRows as r (r.id)}{@render trackRow(r, source, title, topRows, null, false)}{/each}</ol>
       {/snippet}
     {:else if rows && !rows.length}
       <p class="empty">No tracks yet.</p>
@@ -1471,7 +1513,8 @@
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
       />
-      <ol class="rows" class:numbered={!!album} class:selecting={!!selecting}>
+      {#if cols.length}{@render columnHead()}{/if}
+      <ol class="rows" class:numbered={!!album} class:selecting={!!selecting} bind:clientWidth={listWidth}>
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
       </ol>
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
@@ -1554,7 +1597,19 @@
 
 <!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe left plays it next, a long-press is its
      menu, the heart adds it to playlists. -->
-{#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[], i: number | null = null)}
+<!-- The list's column names over its tracks (decision 0042): a row of the same shape, so they line up. A tap on one
+     orders the list by it where the list has an order of its own to change (`sorts`). -->
+{#snippet columnHead(sorts = true)}
+  <div class="column-head">
+    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))}>
+      {#snippet lead()}<span class="cover-space"></span>{/snippet}
+      {#snippet action()}<span></span>{/snippet}
+    </Row>
+  </div>
+{/snippet}
+
+<!-- `columns`: its list's columns where it has room (a short list of top tracks has none). -->
+{#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[], i: number | null = null, columns = true)}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
   <li class:now={here} class:ticked={!!selecting && i !== null && selecting.has(i)}>
@@ -1563,6 +1618,7 @@
       size="large"
       title={r.name ?? r.file}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
+      cells={columns ? cellsOf(r) : undefined}
       off={!ok}
       disabled={!ok}
       onclick={() => (selecting && i !== null ? tick(i) : playFrom(name, src, list, r))}
@@ -1576,7 +1632,7 @@
     >
       {#snippet lead()}{@render cover(r, src, here)}{/snippet}
       {#snippet sub()}
-        {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else if artist}<span class="artist">{r.album ?? ''}</span>{#if r.year}<span class="album">{r.year}</span>{/if}{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album}<span class="album">{r.album}</span>{/if}{/if}
+        {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else if artist}{#if !(columns && shows('album'))}<span class="artist">{r.album ?? ''}</span>{/if}{#if r.year && !(columns && shows('year'))}<span class="album">{r.year}</span>{/if}{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album && !(columns && shows('album'))}<span class="album">{r.album}</span>{/if}{/if}
       {/snippet}
       {#snippet action()}{#if ok}{@render rowEnd(r, src, i)}{/if}{/snippet}
     </Row>
@@ -2015,11 +2071,49 @@
     padding: 4px 0 8px;
   }
 
-  /* The tempo spread in the header, under the genres (decision 0041). */
+  /* The list's column names (decision 0042): in from the sides as a track's row is, a cover's room in front. */
+  .column-head {
+    padding: 0 8px;
+  }
+
+  .cover-space {
+    display: block;
+    width: 60px;
+  }
+
+  /* The tempo spread in the header, under the genres (decision 0041); what is missing stays under it. */
   .head-spread {
     align-self: stretch;
     width: 100%;
     margin: 12px 0 2px;
+  }
+
+  .meta-main {
+    display: contents;
+  }
+
+  .meta .missing {
+    order: 1;
+  }
+
+  /* A wide panel (one over the page, or dragged wide): the spread at the header's right, its top level with the name's,
+     so the header is no taller than what it says; it narrows with the panel (its widest: lib/Spread). */
+  @container (min-width: 640px) {
+    .meta:has(.head-spread) {
+      grid-template-columns: minmax(0, 1fr) clamp(280px, 45cqi, 480px);
+      align-items: start;
+      column-gap: 32px;
+    }
+
+    .meta-main {
+      display: grid;
+      justify-items: start;
+      gap: 8px;
+    }
+
+    .head-spread {
+      margin: 4px 0 0;
+    }
   }
 
   .head-spread .details {

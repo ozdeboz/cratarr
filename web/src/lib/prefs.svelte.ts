@@ -37,6 +37,8 @@ export type Prefs = {
   sidebar: boolean;
   /** The navigation folded to a strip of icons on a wide window (decision 0042). */
   navFolded: boolean;
+  /** Each kind of list's columns in the owner's order (decision 0042, lib/columns), by id. */
+  columns: Partial<Record<string, string[]>>;
   /** Where music plays (decisions 0019, 0022, 0031): on a server's player (`remote`), in this browser or app (`local`),
    *  or on one of Cratarr's own players by name (`player:Salon tablet`). */
   output: 'remote' | 'local' | `player:${string}`;
@@ -87,6 +89,7 @@ export const DEFAULTS: Prefs = {
   playerWidth: 400,
   sidebar: true,
   navFolded: false,
+  columns: {},
   // This browser (it falls back to a player where a browser cannot play): Cratarr's own source has no server-side
   // player, which a page's first play went to, and failed (2026-10-16).
   output: 'local',
@@ -137,6 +140,9 @@ function read(): Prefs {
       if (Number.isFinite(saved.playerWidth) && saved.playerWidth >= 275) p.playerWidth = saved.playerWidth;
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;
       if (typeof saved.navFolded === 'boolean') p.navFolded = saved.navFolded;
+      if (saved.columns && typeof saved.columns === 'object')
+        for (const [k, v] of Object.entries(saved.columns))
+          if (Array.isArray(v)) p.columns[k] = v.filter((x: unknown): x is string => typeof x === 'string');
       if (saved.output === 'remote' || saved.output === 'local' || (typeof saved.output === 'string' && saved.output.startsWith('player:')))
         p.output = saved.output;
       if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');

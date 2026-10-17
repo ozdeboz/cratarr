@@ -91,10 +91,12 @@
 </div>
 
 <style>
+  /* Read at a glance: on a wide panel it keeps a chart's width, not the panel's (a selector's handles keep it too). */
   .spread {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    max-width: 480px;
   }
 
   svg {
