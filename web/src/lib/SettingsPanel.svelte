@@ -45,7 +45,11 @@
   <div class="bar">
     <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
     <h2 class="title">{title}</h2>
-    <span class="end"><PanelPlace /></span>
+    <span class="end">
+      <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
+      {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
+      <PanelPlace />
+    </span>
   </div>
   <div class="scroll">
     {#if ed.loadError}<Notice text={ed.loadError} />{/if}
@@ -115,6 +119,7 @@
   .end {
     display: flex;
     align-items: center;
+    gap: 8px;
   }
 
   .navpill {
@@ -127,7 +132,8 @@
     box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
-  .navpill button {
+  .navpill button,
+  .navpill a {
     display: grid;
     place-items: center;
     width: 44px;

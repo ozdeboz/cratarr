@@ -1,8 +1,11 @@
 <script lang="ts">
-  // Diagnostics (decision 0045): what happened, as Cratarr keeps it. Each player's link as Cratarr knows it and as the
-  // player last told; the log, newest first, by player, area and level; how much is logged by area, for an hour or a
-  // day and then back by itself; and the log as one file for a bug report. The log as it is, no prose.
+  // Diagnostics (decision 0045): what happened, as Cratarr keeps it, laid out as Finamp lays out its logs (the owner,
+  // 2026-10-17: "we learn from the way Finamp presents settings and deeper settings"): one switch on top for more
+  // detail, a day long, with the areas one by one under it only while it is on; each player's link as Cratarr knows it
+  // and as the player last told; then the log, newest first, by player, area and level. The file for a bug report is
+  // the bar's Download. The log as it is, no prose.
   import { getLog, getLogLevels, getPlayers, setLogLevels, type LogLevels, type LogRow, type PlayOnPlayer } from '../api';
+  import Switch from '../Switch.svelte';
 
   const AREA_NAMES: Record<string, string> = {
     playon: 'Play On',
@@ -25,7 +28,8 @@
   let more = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
-  let hours = $state(1);
+  /** More detail lasts this long, then goes back by itself. */
+  const HOURS = 24;
 
   const failed = (e: unknown) => (error = e instanceof Error ? e.message : String(e));
 
@@ -62,18 +66,27 @@
     () => (levels = null),
   );
 
-  async function raise(a: string, to: string) {
-    if (!levels) return;
+  async function setLevels(now: Record<string, string>) {
     error = null;
-    const now = { ...levels.now };
-    if (to === 'info') delete now[a];
-    else now[a] = to;
     try {
-      levels = await setLogLevels(now, hours);
+      levels = await setLogLevels(now, HOURS);
     } catch (e) {
       failed(e);
     }
   }
+
+  /** One area more (or less) than the rest. */
+  function raise(a: string, to: string) {
+    if (!levels) return;
+    const now = { ...levels.now };
+    if (to === 'info') delete now[a];
+    else now[a] = to;
+    setLevels(now);
+  }
+
+  const detailed = $derived(!!levels && Object.keys(levels.now).length > 0);
+  /** More detail: every area, or back to normal. */
+  const detail = (on: boolean) => levels && setLevels(on ? Object.fromEntries(levels.areas.map((a) => [a, 'debug'])) : {});
 
   const today = new Date().toDateString();
   /** The time, with the day when it is not today. */
@@ -93,6 +106,29 @@
 
   const places = $derived(['server', ...players.map((p) => p.name)]);
 </script>
+
+{#if levels}
+  <section aria-labelledby="detail-h">
+    <h2 id="detail-h">Diagnostics</h2>
+    <div class="pref">
+      <Switch label="More detail" hint={levels.until ? `Until ${time(levels.until, false)}` : null} hintWhenOn checked={detailed} onchange={detail} />
+    </div>
+    {#if detailed}
+      <ul class="list">
+        {#each levels.areas as a (a)}
+          <li>
+            <span class="what">{areaName(a)}</span>
+            <select value={levels.now[a] ?? 'info'} aria-label={`${areaName(a)}: how much`} onchange={(e) => raise(a, e.currentTarget.value)}>
+              <option value="info">Normal</option>
+              <option value="debug">More</option>
+              <option value="trace">Everything</option>
+            </select>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+{/if}
 
 <section aria-labelledby="players-h">
   <h2 id="players-h">Players</h2>
@@ -135,7 +171,6 @@
       <option value="warn">Warnings</option>
       <option value="error">Errors</option>
     </select>
-    <a class="button" href="/api/diagnostics/download" download>Download</a>
   </div>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   <ol class="log" aria-busy={busy}>
@@ -154,31 +189,6 @@
   </ol>
   {#if more}<button disabled={busy} onclick={() => load(true)}>More</button>{/if}
 </section>
-
-{#if levels}
-  <section aria-labelledby="levels-h">
-    <h2 id="levels-h">Logged</h2>
-    <ul class="list">
-      {#each levels.areas as a (a)}
-        <li>
-          <span class="what">{areaName(a)}</span>
-          <select value={levels.now[a] ?? 'info'} aria-label={`${areaName(a)}: how much`} onchange={(e) => raise(a, e.currentTarget.value)}>
-            <option value="info">Normal</option>
-            <option value="debug">More</option>
-            <option value="trace">Everything</option>
-          </select>
-        </li>
-      {/each}
-    </ul>
-    <div class="filters">
-      <select bind:value={hours} aria-label="For how long">
-        <option value={1}>For an hour</option>
-        <option value={24}>For a day</option>
-      </select>
-      {#if levels.until}<span class="when">Until {time(levels.until, false)}</span>{/if}
-    </div>
-  </section>
-{/if}
 
 <style>
   .list {
