@@ -3,9 +3,11 @@
 //! Tracks are `tr-<n>` and albums `al-…`, as the OpenSubsonic API hands them out; paths are the files' own, as the
 //! container sees them. Favourites, plays and ratings are the owner account's (the first Subsonic account).
 //!
-//! Its libraries are the folders Cratarr has mounted (as Settings offers music folders, decision 0009): within a mount
-//! that holds other mounts, each folder with audio; any other mount with audio, itself (see `library_folders`). A
-//! library's id is its folder's path.
+//! Its libraries are the folders chosen in Settings (decision 0044, as the *arr apps' root folders), in their order:
+//! `values["folders"]`. A library's id is its folder's path. The music folders found under the mounts (decision 0009:
+//! within a mount that holds other mounts, each folder with audio; any other mount with audio, itself; see
+//! `library_folders`) are what an install from before had, and what Settings suggests (`found_folders`,
+//! `suggested_folders`).
 //!
 //! The player side (what plays, the controls, Play On) is decision 0031's and not here.
 
@@ -26,8 +28,18 @@ fn fields() -> Vec<Field> {
     Vec::new()
 }
 
-fn connect(_values: &Values, _partial: bool) -> Result<Box<dyn Source>> {
-    Ok(Box::new(CratarrSource))
+fn connect(values: &Values, _partial: bool) -> Result<Box<dyn Source>> {
+    Ok(Box::new(CratarrSource { folders: folders_of(values) }))
+}
+
+/// The chosen folders (decision 0044), in their order: `values["folders"]`, a list of paths. None before any are chosen
+/// (an install from before has them filled once, at load, from `found_folders`).
+fn folders_of(values: &Values) -> Vec<PathBuf> {
+    values
+        .get("folders")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str()).filter(|x| !x.trim().is_empty()).map(PathBuf::from).collect())
+        .unwrap_or_default()
 }
 
 /// Audio file extensions a library is recognised by.
@@ -93,7 +105,29 @@ pub fn library_folders(mounts: &[String]) -> Vec<PathBuf> {
     out
 }
 
-struct CratarrSource;
+/// The music folders found under Cratarr's mounts (its own data folder left out): the libraries before folders were
+/// chosen (decision 0044), so an install from before keeps them. Reads the disk: call it off the async threads.
+pub fn found_folders() -> Vec<PathBuf> {
+    let exclude: Vec<String> = data_dir().into_iter().collect();
+    let exclude: Vec<&str> = exclude.iter().map(String::as_str).collect();
+    library_folders(&crate::mounts::list(&exclude))
+}
+
+/// The found music folders Settings offers to add: those not chosen yet, nor inside a chosen one, nor holding one (two
+/// libraries over the same files). Reads the disk: call it off the async threads.
+pub fn suggested_folders(chosen: &[String]) -> Vec<PathBuf> {
+    suggest(found_folders(), chosen)
+}
+
+fn suggest(found: Vec<PathBuf>, chosen: &[String]) -> Vec<PathBuf> {
+    let chosen: Vec<PathBuf> = chosen.iter().map(PathBuf::from).collect();
+    found.into_iter().filter(|f| !chosen.iter().any(|c| f.starts_with(c) || c.starts_with(f))).collect()
+}
+
+struct CratarrSource {
+    /// The chosen folders, in their order (decision 0044).
+    folders: Vec<PathBuf>,
+}
 
 /// The player Cratarr follows, by name (any online one when none has anything loaded).
 fn followed() -> Result<(Arc<PlayOn>, String)> {
@@ -180,23 +214,18 @@ impl Source for CratarrSource {
     }
 
     fn libraries(&self) -> Fut<'_, Vec<Library>> {
-        Box::pin(async move {
-            // From the mounts alone: answered also while the server starts (the app asks first thing).
-            let exclude: Vec<String> = data_dir().into_iter().collect();
-            blocking(move || {
-                let exclude: Vec<&str> = exclude.iter().map(String::as_str).collect();
-                let mounts = crate::mounts::list(&exclude);
-                Ok(library_folders(&mounts)
-                    .into_iter()
-                    .map(|p| {
-                        let id = p.display().to_string();
-                        let name = p.file_name().map_or_else(|| id.clone(), |n| n.to_string_lossy().into_owned());
-                        Library { id: id.clone(), name, paths: vec![id] }
-                    })
-                    .collect())
+        // The chosen folders, as they are: answered also while the server starts (the app asks first thing). A chosen
+        // folder that is missing now (unmounted) is still listed, so its use and policy stay; Settings shows it missing.
+        let libraries = self
+            .folders
+            .iter()
+            .map(|p| {
+                let id = p.display().to_string();
+                let name = p.file_name().map_or_else(|| id.clone(), |n| n.to_string_lossy().into_owned());
+                Library { id: id.clone(), name, paths: vec![id] }
             })
-            .await
-        })
+            .collect();
+        Box::pin(async move { Ok(libraries) })
     }
 
     fn sample_paths<'a>(&'a self, library_id: &'a str, n: usize) -> Fut<'a, Vec<String>> {
@@ -736,9 +765,28 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    #[tokio::test]
+    async fn libraries_are_the_chosen_folders_in_their_order() {
+        let values: Values = [("folders".to_string(), serde_json::json!(["/media/Music", "/media/Incoming", "/gone/Old", ""]))].into();
+        let s = connect(&values, false).unwrap();
+        let libs = s.libraries().await.unwrap();
+        let ids: Vec<&str> = libs.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(ids, ["/media/Music", "/media/Incoming", "/gone/Old"], "a missing folder stays; an empty entry is no folder");
+        assert_eq!((libs[1].name.as_str(), libs[1].paths.as_slice()), ("Incoming", ["/media/Incoming".to_string()].as_slice()));
+        let none = connect(&Values::new(), false).unwrap();
+        assert!(none.libraries().await.unwrap().is_empty(), "none chosen yet: no libraries (the load fills them once)");
+    }
+
+    #[test]
+    fn suggestions_leave_out_the_chosen_and_what_overlaps_them() {
+        let found = ["/media/Music", "/media/Incoming", "/media/lidarr-music", "/music"].map(PathBuf::from).to_vec();
+        let chosen = ["/media/Music".to_string(), "/media/lidarr-music/Jazz".to_string(), "/srv".to_string()];
+        assert_eq!(suggest(found, &chosen), [PathBuf::from("/media/Incoming"), PathBuf::from("/music")]);
+    }
+
     #[test]
     fn combined_play_data_adds_up() {
-        let s = CratarrSource;
+        let s = CratarrSource { folders: Vec::new() };
         let a = serde_json::json!({ "play_count": 2, "play_date": 100, "rating": 0, "starred_at": null });
         let b = serde_json::json!({ "play_count": 3, "play_date": 50, "rating": 4, "starred_at": 7 });
         let c = annotation_of(&s.combine_user_data(&a, &b));
