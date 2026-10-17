@@ -21,6 +21,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/health", get(health))
         .route("/api/state", get(state))
         .route("/api/events", get(events))
+        .route("/api/events/players", get(players_events))
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/stream/{source}/{id}", get(stream))
         .route("/api/file/{source}/{id}", get(file))
@@ -150,6 +151,37 @@ async fn events(
     let rx = crate::app::events(&app, f.source);
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
         .map(|m| Ok(axum::response::sse::Event::default().event(m.name).data(m.data)));
+    axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+}
+
+/// Cratarr's own players (Play On) as server-sent events: `players`, the same JSON as `GET /api/players`, at once and on
+/// every change. Unlike `/api/events` it leaves the servers' players unwatched, so a client that stays connected for
+/// good (Home Assistant) costs nothing while nothing changes.
+async fn players_events(
+    State(app): State<Arc<App>>,
+) -> axum::response::sse::Sse<impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+    use tokio::sync::broadcast::error::RecvError;
+    use tokio_stream::StreamExt;
+    let mut changed = app.play_on.subscribe();
+    let (out, rx) = tokio::sync::mpsc::channel::<String>(4);
+    tokio::spawn(async move {
+        let mut sent = String::new();
+        loop {
+            let now = json!({ "players": app.play_on.list() }).to_string();
+            if now != sent {
+                if out.send(now.clone()).await.is_err() {
+                    return;
+                }
+                sent = now;
+            }
+            // Behind (`Lagged`): the list now says it all.
+            tokio::select! {
+                r = changed.recv() => if matches!(r, Err(RecvError::Closed)) { return },
+                () = out.closed() => return,
+            }
+        }
+    });
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|d| Ok(axum::response::sse::Event::default().event("players").data(d)));
     axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15)))
 }
 
