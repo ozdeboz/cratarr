@@ -5,14 +5,19 @@
 //! A sign-in looks the name up as a read-only service account (its password read from a file at each use, never kept,
 //! logged or shown), within the base and, when one is set, the group; then binds as the user found with the password
 //! typed. A directory name signs in as the Cratarr account of the same name, or the one mapped to it; that account
-//! must exist. Every exchange has a short timeout. While the directory cannot be reached, a sign-in it accepted in the
-//! last 30 days still works through a slow hash of its password (Argon2id, owner-only file); a refusal by the directory
+//! must exist. Every exchange has a short timeout. While the directory cannot be reached (no connection, no answer in
+//! time; not when it refuses Cratarr's service account, which fails closed), a sign-in it accepted in the last 30 days
+//! still works through a slow hash of its password (Argon2id, owner-only file); a refusal by the directory
 //! deletes that hash at once, so a password changed or a user removed there stops working here too.
 //!
 //! An empty password is refused before any exchange (a bind with one is an anonymous bind, which succeeds), and so is
 //! a name with control characters. Names and group go into the search filter escaped (RFC 4515). Plain LDAP is
 //! accepted only to a host on this machine's networks (a container name, localhost, a private address); anything
 //! further needs `ldaps://` or StartTLS.
+//!
+//! The settings are the operator's: `ldap.json` in the data folder, read and checked at start. The page shows them and
+//! never sets them, as a page that could set the address or the password file could send any file's contents to any
+//! server, or sign anyone in as the owner through a directory of its own.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -22,9 +27,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use axum::Router;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -146,8 +150,35 @@ enum Answer {
     Yes(String),
     /// Refused: no such user (in the group), or the wrong password.
     No,
-    /// Not reachable, or not answering as it should (the service account refused, a timeout).
+    /// Not reachable: no connection, or no answer in time. A recent sign-in's kept hash may stand in.
     Unreachable,
+    /// Reachable but refusing Cratarr itself: the service account refused, its password file unreadable, the search
+    /// refused. A misconfiguration, or the service account disabled on purpose: no kept hash stands in (fail closed),
+    /// though none is deleted either; Cratarr's own accounts still sign in.
+    Misconfigured,
+}
+
+/// Why an exchange failed, for the sign-in (which fails closed on a misconfiguration) and Settings' Test.
+#[derive(Debug)]
+enum Failure {
+    Unreachable(String),
+    Misconfigured(String),
+}
+
+impl Failure {
+    fn answer(&self) -> Answer {
+        match self {
+            Failure::Unreachable(_) => Answer::Unreachable,
+            Failure::Misconfigured(_) => Answer::Misconfigured,
+        }
+    }
+
+    fn why(&self) -> &str {
+        match self {
+            Failure::Unreachable(r) | Failure::Misconfigured(r) => r,
+        }
+    }
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,10 +205,14 @@ impl Directory {
     pub fn open(data_dir: Option<&Path>) -> Result<Self> {
         let config_file = data_dir.map(|d| d.join("ldap.json"));
         let verifier_file = data_dir.map(|d| d.join("ldap-verifiers.json"));
-        let config = match &config_file {
+        let mut config: Config = match &config_file {
             Some(f) if f.exists() => serde_json::from_str(&std::fs::read_to_string(f)?).with_context(|| format!("reading {}", f.display()))?,
             _ => Config::default(),
         };
+        if let Err(e) = config.check() {
+            tracing::warn!("ldap: ldap.json is not used: {e:#}");
+            config.enabled = false;
+        }
         let verifiers = match &verifier_file {
             Some(f) if f.exists() => serde_json::from_str(&std::fs::read_to_string(f)?).unwrap_or_default(),
             _ => HashMap::new(),
@@ -189,7 +224,9 @@ impl Directory {
         self.config.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
-    /// New settings, checked and kept. Kept hashes go when the directory or its base changes.
+    /// New settings, checked and kept. Kept hashes go when the directory or its base changes. Not reachable from the
+    /// page (decision 0040): the operator writes `ldap.json`.
+    #[cfg(test)]
     pub fn set_config(&self, new: Config) -> Result<()> {
         new.check()?;
         let old = self.config();
@@ -229,6 +266,7 @@ impl Directory {
                 tracing::warn!("ldap: the directory cannot be reached; a recent sign-in of {name:?} is tried");
                 self.recalls(name, password, now).await.and_then(|spelled| account(&spelled))
             }
+            Answer::Misconfigured => None,
         }
     }
 
@@ -266,50 +304,39 @@ impl Directory {
             tracing::warn!("ldap: could not keep the sign-ins' hashes: {e:#}");
         }
     }
-
-    /// Whether the service account can bind, and (with a name) whether that user is found: for Settings' Test.
-    pub async fn test(&self, config: &Config, name: Option<&str>) -> std::result::Result<Option<bool>, String> {
-        config.check().map_err(|e| format!("{e:#}"))?;
-        let (mut ldap, _) = connect(config).await?;
-        let found = match name.filter(|n| !n.is_empty()) {
-            Some(n) => Some(find(&mut ldap, config, n).await?.is_some()),
-            None => None,
-        };
-        let _ = ldap.unbind().await;
-        Ok(found)
-    }
 }
 
 /// Connected and bound as the service account; the error is the reason, for Settings.
-async fn connect(config: &Config) -> std::result::Result<(ldap3::Ldap, ()), String> {
-    let password = std::fs::read_to_string(&config.bind_password_file).map_err(|_| "The service account's password file cannot be read.".to_string())?;
+async fn connect(config: &Config) -> std::result::Result<(ldap3::Ldap, ()), Failure> {
+    let password = std::fs::read_to_string(&config.bind_password_file)
+        .map_err(|_| Failure::Misconfigured("The service account's password file cannot be read.".into()))?;
     let password = password.trim_end_matches(['\n', '\r']);
     let settings = ldap3::LdapConnSettings::new().set_conn_timeout(TIMEOUT).set_starttls(config.starttls);
     let (conn, mut ldap) = ldap3::LdapConnAsync::with_settings(settings, &config.url).await.map_err(|e| {
         tracing::debug!("ldap: connecting: {e}");
-        "The directory cannot be reached.".to_string()
+        Failure::Unreachable("The directory cannot be reached.".into())
     })?;
     ldap3::drive!(conn);
     match ldap.with_timeout(TIMEOUT).simple_bind(&config.bind_dn, password).await {
         Ok(r) if r.rc == 0 => Ok((ldap, ())),
         Ok(r) => {
             let _ = ldap.unbind().await;
-            Err(format!("The directory refused the service account ({}).", r.rc))
+            Err(Failure::Misconfigured(format!("The directory refused the service account ({}).", r.rc)))
         }
-        Err(_) => Err("The directory did not answer.".to_string()),
+        Err(_) => Err(Failure::Unreachable("The directory did not answer.".into())),
     }
 }
 
 /// The DN and directory name of the user with this name (in the group); `None`: not found.
-async fn find(ldap: &mut ldap3::Ldap, config: &Config, name: &str) -> std::result::Result<Option<(String, String)>, String> {
+async fn find(ldap: &mut ldap3::Ldap, config: &Config, name: &str) -> std::result::Result<Option<(String, String)>, Failure> {
     let attribute = config.attribute();
     let found = ldap
         .with_timeout(TIMEOUT)
         .search(&config.base_dn, ldap3::Scope::Subtree, &filter(attribute, name, &config.group), vec![attribute])
         .await
-        .map_err(|_| "The directory did not answer the search.".to_string())?
+        .map_err(|_| Failure::Unreachable("The directory did not answer the search.".into()))?
         .success()
-        .map_err(|e| format!("The search was refused: {e}"))?
+        .map_err(|e| Failure::Misconfigured(format!("The search was refused: {e}")))?
         .0;
     if found.len() != 1 {
         return Ok(None);
@@ -324,14 +351,14 @@ async fn ask(config: &Config, name: &str, password: &str) -> Answer {
         let (mut ldap, _) = match connect(config).await {
             Ok(c) => c,
             Err(why) => {
-                tracing::warn!("ldap: {why}");
-                return Answer::Unreachable;
+                tracing::warn!("ldap: {}", why.why());
+                return why.answer();
             }
         };
         let answer = match find(&mut ldap, config, name).await {
             Err(why) => {
-                tracing::warn!("ldap: {why}");
-                Answer::Unreachable
+                tracing::warn!("ldap: {}", why.why());
+                why.answer()
             }
             Ok(None) => Answer::No,
             Ok(Some((dn, spelled))) => match ldap.with_timeout(TIMEOUT).simple_bind(&dn, password).await {
@@ -383,11 +410,9 @@ fn write_private(path: &Path, text: &str) -> Result<()> {
 
 // --- Settings, Authentication ---
 
+/// Read-only: the page shows the directory settings, never sets them (see `Directory::open`).
 pub fn router(serve: Arc<Serve>) -> Router {
-    Router::new()
-        .route("/api/auth/ldap", get(settings).put(save))
-        .route("/api/auth/ldap/test", post(test))
-        .with_state(serve)
+    Router::new().route("/api/auth/ldap", get(settings)).with_state(serve)
 }
 
 /// The settings, and whether the service account's password file can be read (never its contents).
@@ -399,28 +424,6 @@ fn view(config: &Config) -> serde_json::Value {
 
 async fn settings(State(serve): State<Arc<Serve>>) -> Response {
     axum::Json(view(&serve.directory.config())).into_response()
-}
-
-async fn save(State(serve): State<Arc<Serve>>, axum::Json(config): axum::Json<Config>) -> Response {
-    match serve.directory.set_config(config) {
-        Ok(()) => axum::Json(view(&serve.directory.config())).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": format!("{e:#}") }))).into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-struct Test {
-    config: Config,
-    #[serde(default)]
-    name: String,
-}
-
-async fn test(State(serve): State<Arc<Serve>>, axum::Json(t): axum::Json<Test>) -> Response {
-    let config = Config { enabled: true, ..t.config };
-    match serve.directory.test(&config, Some(t.name.trim())).await {
-        Ok(found) => axum::Json(json!({ "ok": true, "found": found })).into_response(),
-        Err(why) => axum::Json(json!({ "ok": false, "error": why })).into_response(),
-    }
 }
 
 #[cfg(test)]
@@ -522,6 +525,15 @@ mod tests {
         again.forget("OSKAR");
         assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await, None, "gone after a refusal");
         again.remember("oskar", "secret", 1_000).await;
+        // A misconfiguration (the service account's password file unreadable) fails closed: no kept hash stands in,
+        // and none is deleted.
+        let mut broken = again.config();
+        broken.bind_password_file = d.join("missing").display().to_string();
+        again.set_config(broken.clone()).unwrap();
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await, None, "fails closed");
+        broken.bind_password_file = pw.display().to_string();
+        again.set_config(broken).unwrap();
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await.as_deref(), Some("owner"), "kept, not deleted");
         // After 30 days it is gone.
         assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 1_000 + KEEP_SECS + 1).await, None);
         assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await, None, "and stays gone");

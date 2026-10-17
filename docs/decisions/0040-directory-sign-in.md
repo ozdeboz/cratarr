@@ -16,12 +16,17 @@ directory never gives out.
 
 `Serve::sign_in` asks the directory first, when one is set, and Cratarr's own accounts after.
 
-- **Settings** (Settings → Authentication → Directory, kept in `ldap.json` in the data folder, owner-only): the address
+- **Settings** are the operator's: `ldap.json` in the data folder (owner-only), read and checked at start (settings
+  that fail the checks below leave the directory off). Settings → Authentication shows them, read-only: the address
   (`ldap://` or `ldaps://`), StartTLS, the base users are under, the name attribute (`uid`; `sAMAccountName` for Active
   Directory), a group the user must be a member of (optional), the read-only service account the lookup binds as, the
   path of the file holding its password, and directory names that sign in as a differently named account. Nothing is
   assumed: no install's values in the code. The password file is read at each use, never kept, logged or shown: the
-  page sees only "set", "not set" or "unreadable". A Test binds as the service account and can look a name up.
+  page sees only "set", "not set" or "unreadable". The page cannot set them (claude-5f's review): whoever reaches
+  Settings (anyone on the home network) could otherwise point the address at a server of theirs and the password file
+  at any file Cratarr can read (its own accounts' passwords), and receive it at the next sign-in; or name a directory of
+  their own that accepts anything, mapped to the owner's account. Setting and testing from the page come back behind
+  re-authentication with the account's current password, as changing a password has it (a follow-up).
 - **A sign-in** binds as the service account, searches the base for the name typed (and the group), and binds as the
   one user found with the password typed. Each exchange has a 3 s timeout. The directory name, as the directory spells
   it, signs in as the Cratarr account of that name or the one mapped to it, which must exist: sessions, the
@@ -30,13 +35,16 @@ directory never gives out.
   a name with control characters or over 256 bytes. The name and the group go into the filter escaped (RFC 4515).
 - **Plain LDAP** only to this machine's networks (a container name, localhost, a private or loopback address);
   anything further needs `ldaps://` or StartTLS (rustls). Saving refuses otherwise.
-- **While the directory cannot be reached** (no connection, a timeout, the service account refused), a sign-in the
+- **While the directory cannot be reached** (no connection, no answer in time), a sign-in the
   directory accepted in the last 30 days still works: each accepted sign-in keeps an Argon2id hash of the password
   (OWASP's minimum: 19 MiB, two passes, one lane; one hash at a time) in `ldap-verifiers.json` (owner-only), never the
   password, filed under the name in lower case (directories match names regardless of case) with the directory's own
   spelling kept for the account it maps to. A refusal by the directory (no such user in the group, or invalidCredentials)
   deletes that name's hash at once, so a password changed or a user removed there stops working here too; a change of address, base or group
-  deletes them all. This keeps 0030: Cratarr never needs the directory to let its owner in.
+  deletes them all. This keeps 0030: Cratarr never needs the directory to let its owner in. **A directory that answers but refuses
+  Cratarr** (the service account refused, its password file unreadable, the search refused) is a misconfiguration or
+  the service account disabled on purpose: then no kept hash stands in (fail closed; claude-5f's review), though none
+  is deleted, and Cratarr's own accounts still sign in.
 - **The answer** is the same for an unknown name, a wrong password and the directory being down; the sign-in throttle
   (0039) stays in front of it all.
 - **Cratarr's own accounts** sign in as before when the directory does not accept the name and password, and remain
