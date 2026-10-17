@@ -60,6 +60,12 @@ CREATE TABLE IF NOT EXISTS analysis (
   duration_secs REAL, loudness_lufs REAL, track_gain_db REAL, track_peak REAL, bpm REAL, bpm_confidence REAL,
   waveform BLOB, blocks TEXT, analysed_at INTEGER NOT NULL,
   PRIMARY KEY (folder, rel)) WITHOUT ROWID;
+-- The analysis' large parts, read only for an album's gain and the seekbar's waveform: apart from the small numbers
+-- every list reads (decision 0035, amendment 2026-10-17), so those stay a few pages (as one table with the 512-byte
+-- waveform and the gating blocks, its 30,000 rows overflowed: 132 MB, read through by every scan).
+CREATE TABLE IF NOT EXISTS analysis_shape (
+  folder INTEGER NOT NULL, rel TEXT NOT NULL, waveform BLOB, blocks BLOB,
+  PRIMARY KEY (folder, rel));
 ";
 
 /// A file the catalogue counts: neither gone (no longer where it was, waiting to be recognised elsewhere) nor in the
@@ -320,6 +326,7 @@ impl Catalogue {
         if slim.as_deref() != Some("named") {
             conn.execute_batch("DELETE FROM tags WHERE name IS NULL; INSERT OR REPLACE INTO meta (key, value) VALUES ('tags', 'named');")?;
         }
+        move_analysis_shapes(&conn)?;
         let cat = Self {
             db: Mutex::new(conn),
             folders: RwLock::new(Vec::new()),
@@ -1199,6 +1206,7 @@ impl Catalogue {
             )?;
             tx.execute("UPDATE tags SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
             tx.execute("UPDATE analysis SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
+            tx.execute("UPDATE analysis_shape SET folder = ?3, rel = ?4 WHERE folder = ?1 AND rel = ?2", params![from_folder, rel, to_folder, new_rel])?;
         }
         tx.commit()?;
         Ok(rels.len())
@@ -1359,7 +1367,7 @@ impl Catalogue {
         let db = self.db();
         db.query_row(
             &format!(
-                "SELECT {ANALYSIS_COLS} FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+                "SELECT {ANALYSIS_COLS} FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel {SHAPE_JOIN}
                  WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime"
             ),
             params![folder, rel],
@@ -1746,8 +1754,11 @@ pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
 }
 
 // The analysis' columns as `analysis_row` reads them (the struct's order).
+/// The shape's columns come from `analysis_shape s`, joined by every query that names these.
 const ANALYSIS_COLS: &str =
-    "a.version, a.duration_secs, a.loudness_lufs, a.track_gain_db, a.track_peak, a.blocks, a.bpm, a.bpm_confidence, a.waveform, a.complete";
+    "a.version, a.duration_secs, a.loudness_lufs, a.track_gain_db, a.track_peak, s.blocks, a.bpm, a.bpm_confidence, s.waveform, a.complete";
+/// The join `ANALYSIS_COLS` needs, after `analysis a`.
+const SHAPE_JOIN: &str = "LEFT JOIN analysis_shape s ON s.folder = a.folder AND s.rel = a.rel";
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -1757,7 +1768,7 @@ fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64
     db.prepare_cached(
         "INSERT OR REPLACE INTO analysis (folder, rel, size, mtime, version, duration_secs, loudness_lufs, track_gain_db,
            track_peak, bpm, bpm_confidence, waveform, blocks, analysed_at, complete)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, NULL, ?12, ?13)",
     )?
     .execute(params![
         folder,
@@ -1771,11 +1782,11 @@ fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64
         a.track_peak,
         a.bpm,
         a.bpm_confidence,
-        a.waveform,
-        serde_json::to_string(&a.blocks)?,
         now,
         a.complete
     ])?;
+    db.prepare_cached("INSERT OR REPLACE INTO analysis_shape (folder, rel, waveform, blocks) VALUES (?1, ?2, ?3, ?4)")?
+        .execute(params![folder, rel, a.waveform, blocks_bytes(&a.blocks)])?;
     Ok(())
 }
 
@@ -1783,16 +1794,85 @@ fn analysis_row(r: &rusqlite::Row) -> rusqlite::Result<crate::analysis::Analysis
     analysis_row_at(r, 0)
 }
 
-/// An analysis from `ANALYSIS_COLS` starting at column `at`. Blocks that do not parse read as none.
+/// The first byte of the stored gating blocks: their format (1: six bytes a bin follow).
+const BLOCKS_FORMAT: u8 = 1;
+
+/// The gating blocks as stored: a format byte, then six bytes a bin (its index, then its count, little-endian).
+fn blocks_bytes(blocks: &crate::analysis::Loudness) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + blocks.0.len() * 6);
+    out.push(BLOCKS_FORMAT);
+    for (bin, count) in &blocks.0 {
+        out.extend_from_slice(&bin.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+    }
+    out
+}
+
+/// The gating blocks from their stored form: bytes, or (kept before the shape moved apart) JSON text.
+fn blocks_from(value: rusqlite::types::ValueRef) -> crate::analysis::Loudness {
+    use rusqlite::types::ValueRef;
+    match value {
+        ValueRef::Blob([BLOCKS_FORMAT, b @ ..]) => crate::analysis::Loudness(
+            b.chunks_exact(6)
+                .map(|c| (u16::from_le_bytes([c[0], c[1]]), u32::from_le_bytes([c[2], c[3], c[4], c[5]])))
+                .collect(),
+        ),
+        ValueRef::Text(t) => std::str::from_utf8(t).ok().and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default(),
+        _ => Default::default(),
+    }
+}
+
+/// The waveforms and gating blocks kept in `analysis` itself move to `analysis_shape` (the blocks re-encoded), and are
+/// cleared there: at every start, which finds nothing to do but after the first (or after an older build kept some there,
+/// a rollback). The first time, the file is vacuumed too, so it shrinks: the move is one transaction, marked `moved`;
+/// the vacuum after it, marked `apart`; a start that finds `moved` (stopped while vacuuming) vacuums again. Runs before
+/// the catalogue is shared, on its only connection.
+fn move_analysis_shapes(conn: &Connection) -> Result<()> {
+    let mark: Option<String> = conn.query_row("SELECT value FROM meta WHERE key = 'analysis_shape'", [], |r| r.get(0)).optional()?;
+    let tx = conn.unchecked_transaction()?;
+    let rows: Vec<(i64, String, Option<Vec<u8>>, crate::analysis::Loudness)> = {
+        let mut st = tx.prepare("SELECT folder, rel, waveform, blocks FROM analysis WHERE waveform IS NOT NULL OR blocks IS NOT NULL")?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, blocks_from(r.get_ref(3)?))))?.collect::<rusqlite::Result<_>>()?
+    };
+    if rows.is_empty() && mark.as_deref() == Some("apart") {
+        return Ok(());
+    }
+    let started = std::time::Instant::now();
+    if !rows.is_empty() {
+        tracing::info!("catalogue: moving {} analyses' waveforms and gating blocks apart (decision 0035)", rows.len());
+        let mut put = tx.prepare("INSERT OR REPLACE INTO analysis_shape (folder, rel, waveform, blocks) VALUES (?1, ?2, ?3, ?4)")?;
+        for (folder, rel, waveform, blocks) in &rows {
+            put.execute(params![folder, rel, waveform, blocks_bytes(blocks)])?;
+        }
+        drop(put);
+        tx.execute("UPDATE analysis SET waveform = NULL, blocks = NULL WHERE waveform IS NOT NULL OR blocks IS NOT NULL", [])?;
+    }
+    if mark.as_deref() != Some("apart") {
+        tx.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('analysis_shape', 'moved')", [])?;
+    }
+    tx.commit()?;
+    if mark.as_deref() != Some("apart") {
+        tracing::info!("catalogue: vacuuming the file once, so it shrinks (about a minute for a large library)");
+        // In memory: the image has no temporary directory a vacuum could write to (FROM scratch, no /tmp).
+        conn.execute_batch(
+            "PRAGMA temp_store = MEMORY; VACUUM; PRAGMA temp_store = DEFAULT;
+             INSERT OR REPLACE INTO meta (key, value) VALUES ('analysis_shape', 'apart');",
+        )?;
+    }
+    tracing::info!("catalogue: analyses' shapes apart ({} moved) in {:.1} s", rows.len(), started.elapsed().as_secs_f64());
+    Ok(())
+}
+
+/// An analysis from `ANALYSIS_COLS` starting at column `at`.
 fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::analysis::Analysis> {
-    let blocks: Option<String> = r.get(at + 5)?;
+    let blocks = blocks_from(r.get_ref(at + 5)?);
     Ok(crate::analysis::Analysis {
         version: r.get(at)?,
         duration_secs: r.get::<_, Option<f64>>(at + 1)?.unwrap_or(0.0),
         loudness_lufs: r.get::<_, Option<f64>>(at + 2)?.unwrap_or(0.0) as f32,
         track_gain_db: r.get::<_, Option<f64>>(at + 3)?.unwrap_or(0.0) as f32,
         track_peak: r.get::<_, Option<f64>>(at + 4)?.unwrap_or(0.0) as f32,
-        blocks: blocks.and_then(|b| serde_json::from_str(&b).ok()).unwrap_or_default(),
+        blocks,
         bpm: r.get::<_, Option<f64>>(at + 6)?.map(|b| b as f32),
         bpm_confidence: r.get::<_, Option<f64>>(at + 7)?.unwrap_or(0.0) as f32,
         waveform: r.get::<_, Option<Vec<u8>>>(at + 8)?.unwrap_or_default(),
@@ -1805,6 +1885,7 @@ pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32,
     let mut st = db.prepare(&format!(
         "SELECT f.rel, {ANALYSIS_COLS} FROM files f
            LEFT JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
+           {SHAPE_JOIN}
          WHERE {PRESENT_F} AND f.folder = ?1 AND f.state = ?2"
     ))?;
     let mut dirs: HashMap<String, Option<Vec<crate::analysis::Analysis>>> = HashMap::new();
@@ -1993,6 +2074,61 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         assert_ne!(Catalogue::open(Some(&file), Vec::new()).unwrap().generation(), first);
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn analyses_kept_whole_move_their_shape_apart_once_and_read_the_same() {
+        let d = music();
+        let file = d.join("catalogue.sqlite");
+        let (folder, one, size, mtime) = {
+            let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+            cat.walk_all();
+            read_as_audio(&cat);
+            let (folder, one, _, size, mtime) = cat.unanalysed(10).unwrap().into_iter().find(|t| t.1.ends_with("One.mp3")).unwrap();
+            cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
+            let (shape_waveform, kept_whole): (Vec<u8>, Option<Vec<u8>>) = cat
+                .db()
+                .query_row("SELECT s.waveform, a.waveform FROM analysis a JOIN analysis_shape s USING (folder, rel) WHERE a.rel = ?1", [&one], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap();
+            assert_eq!((shape_waveform.len(), kept_whole), (crate::analysis::WAVEFORM_BINS, None), "kept apart from the start");
+            // As a build before the move kept it: whole, the blocks as JSON, no shape row, no mark.
+            cat.db()
+                .execute_batch(&format!(
+                    "UPDATE analysis SET waveform = x'{}', blocks = '[[500,40],[501,2]]';
+                     DELETE FROM analysis_shape; DELETE FROM meta WHERE key = 'analysis_shape';",
+                    "07".repeat(crate::analysis::WAVEFORM_BINS)
+                ))
+                .unwrap();
+            (folder, one, size, mtime)
+        };
+        let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+        let a = cat.analysis_of(folder, &one).unwrap();
+        assert_eq!((a.waveform.len(), a.waveform[0], a.blocks.0.clone()), (crate::analysis::WAVEFORM_BINS, 7, vec![(500, 40), (501, 2)]));
+        let (whole, mark): (i64, String) = cat
+            .db()
+            .query_row("SELECT (SELECT count(*) FROM analysis WHERE waveform IS NOT NULL OR blocks IS NOT NULL), (SELECT value FROM meta WHERE key = 'analysis_shape')", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((whole, mark.as_str()), (0, "apart"));
+        // The album's gain reads the moved blocks; the file as it is is analysed again only when changed.
+        assert!(cat.unanalysed(10).unwrap().iter().all(|t| t.1 != one));
+        let _ = (size, mtime);
+        drop(cat);
+        // Opened again: nothing to do.
+        let again = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+        assert_eq!(again.analysis_of(folder, &one).unwrap().blocks.0, vec![(500, 40), (501, 2)]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn blocks_keep_their_format_byte_and_older_json_still_reads() {
+        use rusqlite::types::ValueRef;
+        let blocks = crate::analysis::Loudness(vec![(0, 1), (700, 70_000), (u16::MAX, u32::MAX)]);
+        let bytes = blocks_bytes(&blocks);
+        assert_eq!((bytes[0], bytes.len()), (BLOCKS_FORMAT, 1 + 3 * 6));
+        assert_eq!(blocks_from(ValueRef::Blob(&bytes)).0, blocks.0);
+        assert_eq!(blocks_from(ValueRef::Text(b"[[500,40]]")).0, vec![(500, 40)]);
+        assert!(blocks_from(ValueRef::Blob(&[9, 1, 2, 3, 4, 5, 6])).0.is_empty(), "an unknown format reads as none");
+        assert!(blocks_from(ValueRef::Null).0.is_empty());
     }
 
     fn retired(cat: &Catalogue, track: i64) -> bool {
