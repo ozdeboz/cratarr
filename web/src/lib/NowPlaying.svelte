@@ -22,10 +22,33 @@
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { keepViewed, panel } from './panel.svelte';
+  import { goToArtist, mainArtist } from './albums.svelte';
+  import { artistFavorite } from './api';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
   const np = $derived(playing());
+
+  // The artist as a chip (the owner, 2026-10-17): it opens their panel, the player closing (lib/albums goToArtist); a
+  // "feat." credit goes to the main artist, as the track menu's Go to artist. A favourite artist's chip has a heart.
+  const by = $derived(mainArtist(np?.artist));
+  // Apart from `np`, which is new at each report: asked once per artist, not at every tick.
+  const bySource = $derived(np?.source ?? null);
+  let byFavorite = $state<boolean | null>(null);
+  $effect(() => {
+    const source = bySource;
+    const name = by;
+    byFavorite = null;
+    if (!source || !name) return;
+    let live = true;
+    artistFavorite(source, name).then(
+      (r) => live && (byFavorite = r.favorite),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  });
   const memberCount = $derived(shownPlaylists().filter((p) => p.member).length);
   const src = $derived(shownCover());
   // The backdrop list: the current blurred cover, and while it fades in, the one before it.
@@ -342,7 +365,11 @@
             ><Icon name="speaker" size={14} />{#if np.player}<span>{np.player}</span>{/if}</button
           >
           <div class="title">{np.name}</div>
-          <div class="sub">{[np.artist, np.album].filter(Boolean).join(' · ')}</div>
+          <div class="sub">
+            {#if np.artist}<button class="artist" disabled={!by} onclick={() => by && goToArtist(np.source, by)}
+                ><span>{np.artist}</span>{#if byFavorite}<i class="liked" role="img" aria-label="Favourite"><Icon name="heart" size={14} /></i>{/if}</button
+              >{/if}{#if np.artist && np.album}{' · '}{/if}{np.album ?? ''}
+          </div>
         {:else}
           <div class="title idle">Nothing is playing</div>
         {/if}
@@ -693,6 +720,40 @@
     font-size: 1.05rem;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* The artist: a chip in the line (as the panel's artist chip), the album after it as text. */
+  .sub .artist {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 1px 10px;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 9%, transparent);
+    color: var(--text);
+    font: inherit;
+    vertical-align: baseline;
+    cursor: pointer;
+  }
+
+  .sub .artist:disabled {
+    cursor: default;
+  }
+
+  .sub .artist span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .sub .liked {
+    display: flex;
+    flex: none;
+  }
+
+  .sub .liked :global(svg) {
+    fill: currentColor;
   }
 
   .progress {
