@@ -13,4 +13,5 @@
     <string name="ready">Ready</string>
     <string name="grouped">With %1$s</string>
     <string name="downloads">Downloads</string>
+    <string name="sign_in">Sign in to Cratarr</string>
 </resources>

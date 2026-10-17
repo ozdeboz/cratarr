@@ -29,6 +29,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -94,7 +95,7 @@ class PlayerService : MediaSessionService() {
             // Previous restarts the track after this long in, as the page's player does (Finamp: 5 s).
             .setMaxSeekToPreviousPositionMs(RESTART_AFTER_MS)
             // Through the device's store first: downloads and the next tracks play from there.
-            .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playback(this)))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playback(this)).setLoadErrorHandlingPolicy(Patience()))
             .build()
         player.addListener(Keeper(player))
         sync.attach(player)
@@ -302,11 +303,29 @@ class PlayerService : MediaSessionService() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            // As a player does: what cannot play (gone, or out of reach offline) is skipped, unless it was the last.
-            if (player.hasNextMediaItem()) {
-                player.seekToNextMediaItem()
-                player.prepare()
-                player.play()
+            val cause = error.cause
+            val status = (cause as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+            // Cratarr still out of reach after a minute of asking (Patience): the same track again in a while, where it
+            // was. Refused (sign in again): every track would be, so it waits for the sign-in (Net tells the owner).
+            // Otherwise, as a player does: what cannot play (gone, or out of reach offline) is skipped, unless it was
+            // the last.
+            val action = when {
+                Patience.refused(cause) -> "wait for sign-in"
+                Patience.waitFor(cause) -> "again"
+                player.hasNextMediaItem() -> "skip"
+                else -> "stop"
+            }
+            LinkLog.add(
+                this@PlayerService, "warn", "playon", "track failed",
+                "track" to player.currentMediaItem?.mediaId, "error" to error.errorCodeName, "status" to status, "action" to action,
+            )
+            when (action) {
+                "again" -> main.postDelayed({ if (player.playerError != null) player.prepare() }, AGAIN_MS)
+                "skip" -> {
+                    player.seekToNextMediaItem()
+                    player.prepare()
+                    player.play()
+                }
             }
         }
     }
@@ -348,6 +367,8 @@ class PlayerService : MediaSessionService() {
     companion object {
         private const val TAG = "CratarrPlayer"
         private const val RESTART_AFTER_MS = 5_000L
+        /** A track Cratarr could not give for a minute: asked for again after this long. */
+        private const val AGAIN_MS = 15_000L
         /** How often the playing track is looked at for counting. */
         private const val COUNT_EVERY_MS = 5_000L
         private const val READY_CHANNEL = "ready"

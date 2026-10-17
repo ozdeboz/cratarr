@@ -8,7 +8,12 @@
  */
 package app.cratarr
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.os.SystemClock
 import android.util.Log
 import android.webkit.CookieManager
@@ -82,13 +87,52 @@ object Net {
             if (code == 401 || code == 403) {
                 if (refusals[origin]?.first != session(url)) {
                     Log.w(TAG, "$origin refused the app ($code): waiting ${REFUSED_MS / 60_000} min")
-                    LinkLog.add(context, "warn", "signin", "refused", "address" to origin, "status" to code, "path" to c.url.path, "wait_min" to REFUSED_MS / 60_000)
+                    LinkLog.add(
+                        context, "warn", "signin", "refused",
+                        "address" to origin, "status" to code, "path" to c.url.path, "wait_min" to REFUSED_MS / 60_000, "session" to (cookie(url) != null),
+                    )
+                    askSignIn(context, origin)
                 }
                 refusals[origin] = session(url) to SystemClock.elapsedRealtime()
             } else if (code in 200..399) {
-                refusals.remove(origin)
+                if (refusals.remove(origin) != null) signedIn(context)
             }
         }
         return code
+    }
+
+    private const val SIGN_IN_CHANNEL = "signin"
+    private const val SIGN_IN_NOTIFICATION = 9
+
+    /** Refused: the owner is asked to sign in there, as the music may have stopped with nothing on the screen to say
+     *  why (the phone away from home with no session on the public address, 2026-10-17). The page signs in; the wait
+     *  above ends as the session changes. */
+    private fun askSignIn(context: Context, origin: String) {
+        val app = context.applicationContext
+        val notes = app.getSystemService(NotificationManager::class.java) ?: return
+        notes.createNotificationChannel(NotificationChannel(SIGN_IN_CHANNEL, app.getString(R.string.sign_in), NotificationManager.IMPORTANCE_LOW))
+        val open = PendingIntent.getActivity(
+            app,
+            0,
+            Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val note = Notification.Builder(app, SIGN_IN_CHANNEL)
+            .setSmallIcon(R.drawable.media3_notification_small_icon)
+            .setContentTitle(app.getString(R.string.sign_in))
+            .setContentText(origin)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        try {
+            notes.notify(SIGN_IN_NOTIFICATION, note)
+        } catch (e: SecurityException) {
+            // Notifications not allowed: the log line above is all there is.
+        }
+    }
+
+    /** Let in again: the ask goes. */
+    private fun signedIn(context: Context) {
+        context.applicationContext.getSystemService(NotificationManager::class.java)?.cancel(SIGN_IN_NOTIFICATION)
     }
 }
