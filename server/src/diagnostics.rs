@@ -680,6 +680,23 @@ pub fn set_levels(added: &str, holds: Duration) -> Result<LevelsNow> {
     l.set(added, holds.min(LONGEST))
 }
 
+/// A test's own logging: `subscriber` as this thread's default until it is dropped, with a second dispatcher registered
+/// beside it. With only one dispatcher registered, tracing-core (0.1.36, `has_just_one`) takes a callsite's interest
+/// from the default of whichever thread reaches the callsite first, and keeps it for every thread: a test running at
+/// the same moment without a subscriber switched "request refused" off for the test that logged it (lost in 2 of 4
+/// full runs, never alone). With two, the interest comes from every registered dispatcher.
+#[cfg(test)]
+pub(crate) fn log_here<S: Subscriber + Send + Sync + 'static>(subscriber: S) -> TestLogging {
+    let beside = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    TestLogging { _default: tracing::subscriber::set_default(subscriber), _beside: beside }
+}
+
+#[cfg(test)]
+pub(crate) struct TestLogging {
+    _default: tracing::subscriber::DefaultGuard,
+    _beside: tracing::Dispatch,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,7 +706,10 @@ mod tests {
     fn logged(f: impl FnOnce()) -> Arc<Diagnostics> {
         let (layer, pending) = layer();
         let d = Diagnostics::start(None, pending).unwrap();
-        tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), f);
+        {
+            let _logging = log_here(tracing_subscriber::registry().with(layer));
+            f();
+        }
         d.flush();
         d
     }

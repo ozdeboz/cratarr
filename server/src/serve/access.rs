@@ -385,7 +385,7 @@ mod tests {
         let s = served(true);
         let (layer, pending) = crate::diagnostics::layer();
         let log = crate::diagnostics::Diagnostics::start(None, pending).unwrap();
-        let _logging = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
+        let _logging = crate::diagnostics::log_here(tracing_subscriber::registry().with(layer));
         let linked = HttpRequest::get("/api/library?exp=1&sig=abc").header("x-forwarded-for", "84.1.2.3").body(Body::empty()).unwrap();
         assert_eq!(status(&s, linked).await.0, StatusCode::UNAUTHORIZED);
         let keyed = HttpRequest::get("/api/library").header("authorization", "Bearer cratarr_0000").body(Body::empty()).unwrap();
