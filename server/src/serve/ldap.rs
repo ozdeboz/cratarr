@@ -192,6 +192,8 @@ struct Verifier {
 }
 
 pub struct Directory {
+    /// Where `set_config` keeps new settings; only tests set them (decision 0040).
+    #[cfg(test)]
     config_file: Option<PathBuf>,
     verifier_file: Option<PathBuf>,
     config: RwLock<Config>,
@@ -217,7 +219,14 @@ impl Directory {
             Some(f) if f.exists() => serde_json::from_str(&std::fs::read_to_string(f)?).unwrap_or_default(),
             _ => HashMap::new(),
         };
-        Ok(Self { config_file, verifier_file, config: RwLock::new(config), verifiers: Mutex::new(verifiers), hashing: tokio::sync::Semaphore::new(1) })
+        Ok(Self {
+            #[cfg(test)]
+            config_file,
+            verifier_file,
+            config: RwLock::new(config),
+            verifiers: Mutex::new(verifiers),
+            hashing: tokio::sync::Semaphore::new(1),
+        })
     }
 
     pub fn config(&self) -> Config {
