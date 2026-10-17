@@ -4,7 +4,7 @@
 
 import { prefs } from './prefs.svelte';
 
-export type ColumnKind = 'tracks' | 'albums';
+export type ColumnKind = 'tracks' | 'albums' | 'playlists';
 export type Column = { id: string; label: string; width: number; end?: boolean; grow?: boolean };
 
 /** A kind's columns in their first order; `width` is the least each needs (px). A number is set to the end (`end`); a
@@ -29,10 +29,18 @@ export const COLUMNS: Record<ColumnKind, readonly Column[]> = {
     { id: 'format', label: 'Format', width: 120 },
     { id: 'rating', label: 'Rating', width: 76 },
   ],
+  // The Playlists page's Table; how many tracks stays at a line's end, as a track's length does.
+  playlists: [
+    { id: 'length', label: 'Length', width: 72, end: true },
+    { id: 'genres', label: 'Genres', width: 180, grow: true },
+    { id: 'lastPlayed', label: 'Last played', width: 96 },
+    { id: 'changed', label: 'Changed', width: 96 },
+    { id: 'unplayed', label: 'Unplayed', width: 72, end: true },
+  ],
 };
 
 /** What a row keeps for itself before any column: its cover, its title at a readable width, its time and its menu. */
-const OWN: Record<ColumnKind, number> = { tracks: 60 + 280 + 52 + 40 + 40, albums: 48 + 280 + 40 + 30 };
+const OWN: Record<ColumnKind, number> = { tracks: 60 + 280 + 52 + 40 + 40, albums: 48 + 280 + 40 + 30, playlists: 240 + 52 + 40 + 30 };
 /** Between two columns. */
 export const COLUMN_GAP = 16;
 

@@ -328,6 +328,10 @@ export const crateTempo = (id: string, source?: string, favourites?: CrateFavour
   if (source) q.set('source', source);
   return quietly<TempoBands>(`/api/crates/${encodeURIComponent(id)}/tempo?${q}`);
 };
+/** A playlist's facts for the Playlists page's table (decision 0042): its length, top genres, how much the owner never
+ *  played (null: no owner account) and when they last played any of it, and when its file last changed (epoch s). */
+export type PlaylistStats = { seconds: number; genres: string[]; unplayed: number | null; last_played: number | null; changed: number };
+export const playlistStats = () => quietly<Record<string, PlaylistStats>>('/api/playlists/stats');
 /** Make playlist: the crate's tracks now, as its favourites toggle is set, as a new ordinary playlist (a snapshot). */
 export const crateToPlaylist = (id: string, name: string, source?: string) =>
   post<{ playlist: string; added: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/playlist${follow(source)}`, { name });
