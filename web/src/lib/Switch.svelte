@@ -129,6 +129,8 @@
 
   .with-more {
     position: relative;
+    flex: 1 1 100%;
+    min-width: 0;
   }
 
   .more {

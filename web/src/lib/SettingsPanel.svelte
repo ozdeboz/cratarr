@@ -5,6 +5,7 @@
   // all of them and survives going from one to another. Authentication's account, Import, this device's settings and
   // Display act at once.
   import Icon from './Icon.svelte';
+  import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
@@ -96,13 +97,9 @@
 
     {#if resetting && partReset.run}
       <MenuSheet label="Reset" icon="reset" title={`Reset ${title}`} onclose={() => (resetting = false)}>
-        <div class="reset">
-          <p>{partReset.what}</p>
-          <div class="row">
-            <button class="primary" disabled={resetBusy} aria-busy={resetBusy} onclick={reset}>Reset</button>
-            <button disabled={resetBusy} onclick={() => (resetting = false)}>Cancel</button>
-          </div>
-        </div>
+        <p class="reset">{partReset.what}</p>
+        <MenuEntry icon="reset" label="Reset" danger busy={resetBusy} disabled={resetBusy} onclick={reset} />
+        <MenuEntry icon="close" label="Cancel" disabled={resetBusy} onclick={() => (resetting = false)} />
       </MenuSheet>
     {/if}
 
@@ -153,17 +150,9 @@
 
   /* Padding, not margin: the sheet measures its content's height. */
   .reset {
-    padding: 4px 24px 20px;
-  }
-
-  .reset p {
-    margin: 0 0 16px;
+    margin: 0;
+    padding: 4px 24px 12px;
     color: var(--muted);
-  }
-
-  .reset .row {
-    display: flex;
-    gap: 12px;
   }
 
   .navpill {
@@ -539,7 +528,8 @@
     width: auto;
   }
 
-  .scroll :global(button) {
+  /* Every button of a part, except an (i) (lib/MoreInfo), which is an icon on its own. */
+  .scroll :global(button:not(.info)) {
     min-height: 44px;
     padding: 0 14px;
     background: var(--bg);
@@ -550,7 +540,7 @@
     cursor: pointer;
   }
 
-  .scroll :global(.server button) {
+  .scroll :global(.server button:not(.info)) {
     background: var(--surface);
   }
 
