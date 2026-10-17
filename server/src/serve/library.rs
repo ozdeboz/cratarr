@@ -228,7 +228,7 @@ fn song<'a>(row: &'a ServedRow, folder: i64, rules: &Rules) -> Song<'a> {
 }
 
 /// What these files say, cheaply: when it differs from what the library was built from, it is built again (tests;
-/// the server checks the catalogue itself, `refresh_from`).
+/// the server checks the catalogue itself, `change` and `build_from`).
 #[cfg(test)]
 pub fn fingerprint(folders: &[FolderRows]) -> String {
     let mut h = md5::Md5::default();
@@ -295,7 +295,9 @@ impl Library {
 
     /// Builds the library again from the catalogue when its files changed (a cheap check first), reading through a
     /// connection of its own so the catalogue is not held up meanwhile (a full read takes seconds). Returns whether it
-    /// was built. Blocking.
+    /// was built. Blocking. The server does it in its two steps (`change`, then `build_from`), to tell new analyses from
+    /// changed songs; this is the timing test's.
+    #[cfg(test)]
     pub fn refresh_from(&self, cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<bool> {
         let (change, print) = self.change(cat, rules)?;
         if change == Change::None {

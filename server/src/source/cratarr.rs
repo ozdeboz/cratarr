@@ -35,11 +35,7 @@ fn connect(values: &Values, _partial: bool) -> Result<Box<dyn Source>> {
 /// The chosen folders (decision 0044), in their order: `values["folders"]`, a list of paths. None before any are chosen
 /// (an install from before has them filled once, at load, from `found_folders`).
 fn folders_of(values: &Values) -> Vec<PathBuf> {
-    values
-        .get("folders")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str()).filter(|x| !x.trim().is_empty()).map(PathBuf::from).collect())
-        .unwrap_or_default()
+    super::list(values, "folders").into_iter().filter(|x| !x.trim().is_empty()).map(PathBuf::from).collect()
 }
 
 /// Audio file extensions a library is recognised by.
