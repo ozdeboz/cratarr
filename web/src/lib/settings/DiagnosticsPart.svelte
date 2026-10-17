@@ -98,7 +98,7 @@
         {@const l = p.link}
         <li>
           <span class="what">
-            <span class="dot" class:on={p.online}></span>{p.name}
+            {p.name}
             {#if l?.own && (l.own.failed || l.own.wait_until)}
               <small>
                 {#if l.own.failed}{l.own.failed} failed{#if l.own.last_error}: {l.own.last_error}{/if}{/if}
@@ -144,7 +144,7 @@
           {#if r.origin === 'device'}<span class="area">its log</span>{/if}
         </span>
         <span class="msg">{r.what}{#if r.count > 1}<span class="count">×{r.count}, last {time(r.last)}</span>{/if}</span>
-        {#if Object.keys(r.fields).length}<span class="fields">{#each details(r.fields) as d (d)}<span>{d}</span>{/each}</span>{/if}
+        {#if Object.keys(r.fields).length}<span class="fields">{details(r.fields).join(' · ')}</span>{/if}
       </li>
     {/each}
   </ol>
@@ -208,20 +208,6 @@
     text-align: right;
   }
 
-  .dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    margin-right: 8px;
-    border-radius: 50%;
-    background: var(--muted);
-    vertical-align: middle;
-  }
-
-  .dot.on {
-    background: var(--accent);
-  }
-
   .filters {
     display: flex;
     flex-wrap: wrap;
@@ -277,9 +263,6 @@
   }
 
   .fields {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 12px;
     color: var(--muted);
     font-size: 13px;
     overflow-wrap: anywhere;
