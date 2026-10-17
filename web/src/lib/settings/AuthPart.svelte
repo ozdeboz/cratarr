@@ -120,7 +120,7 @@
     <h2 id="auth-h">Authentication</h2>
     <p class="lede">
       Your account for Cratarr and Subsonic apps: <code>{location.origin}</code>
-      <MoreInfo label="Authentication" text="Sign in to these pages with it. Subsonic apps (Symfonium, Feishin…) take this address with the same name and password." />
+      <MoreInfo label="Authentication" text="Sign in to these pages with it. Subsonic apps take this address with this account's own name and password (never a directory's)." />
     </p>
     {#if ed.sub.accounts.length === 0}
       <div class="fields">
@@ -159,7 +159,7 @@
         <div class="pref">
           <Switch
             label="Sign-in required everywhere"
-            more={"On, Cratarr asks every request for a sign-in, an API key or a signed link, on the home network too. Off, it asks none itself: a proxy in front of it may.\n\nSwitching it asks for the password again."}
+            more={"On, every page and API request needs a sign-in, an API key or a signed link, on the home network too. Off, Cratarr asks none itself: a proxy in front of it may. Subsonic apps always sign in with their name and password.\n\nSwitching it asks for the password again."}
             checked={switching ?? required}
             disabled={busy}
             onchange={(on) => (switching = on === required ? null : on)}
