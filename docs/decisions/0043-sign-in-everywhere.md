@@ -85,3 +85,10 @@ its first account made on the page.
 - Home Assistant's calls with the key (a header on each `rest_command`, the key in its secrets), and the proxy, if it
   changes: the Home Assistant session. The analysis imports' key: claude-a5.
 - The devices list's naming and times (asked for the same night): with this, in the same pass.
+
+## Amendment (2026-10-17): sessions.sqlite is backed up
+
+It holds the API keys (their hashes), the signed links' secret and whether the requirement is on, not only sessions
+(0039 left it out of the backups on purpose). Without it a restore would come back with the requirement reset to off
+for an install from before and every key unknown, so the backups dump it with the other databases from now on; it holds
+hashes only.
