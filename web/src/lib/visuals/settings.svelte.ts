@@ -26,6 +26,8 @@ export type VisualSettings = {
   bands: number;
   /** The most brightness shown, after everything (0.1..1). */
   brightness: number;
+  /** How purely each band's part is its own colour (0: points blend their bands' colours, 1: each its band's alone). */
+  purity: number;
   /** Each band's (sub, mid, treble) light after a transient: how long it rings (seconds). */
   lighting: [number, number, number];
   /** Each band's loudness evolving its transform: how long it takes to follow (seconds). */
@@ -48,6 +50,7 @@ export const DEFAULTS: VisualSettings = {
   beat: 1,
   bands: 1,
   brightness: 1,
+  purity: 0.5,
   // A kick rings longer than a hat.
   lighting: [0.18, 0.14, 0.09],
   evolution: [0.25, 0.25, 0.25],
@@ -66,6 +69,7 @@ export const RANGES: Record<keyof VisualSettings, [number, number]> = {
   beat: [0, 2],
   bands: [0, 2],
   brightness: [0.1, 1],
+  purity: [0, 1],
   lighting: [0.02, 1],
   evolution: [0.02, 2],
   continuity: [0, 1],

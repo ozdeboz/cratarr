@@ -15,7 +15,7 @@
   import { reducedMotion } from '../motion';
   import { playing } from '../remote.svelte';
   import { BANDS } from './bands';
-  import { between, evolved, flameFrom, seedOf, type Flame, type Part } from './flame';
+  import { between, evolved, flameFrom, measure, seedOf, type Flame, type Part } from './flame';
   import { musicNow } from './music.svelte';
   import { FlameRenderer } from './render';
   import { autoResolution, RANGES, resetVisualSettings, saveVisualSettings, visualSettings as s, type VisualSettings } from './settings.svelte';
@@ -29,7 +29,7 @@
   // automatic step-down may keep them under the settings).
   let panel = $state(false);
   let fps = $state(0);
-  let drawing = $state({ points: 0, steps: 0 });
+  let drawing = $state({ points: 0, steps: 0, cleared: 0 });
   const np = $derived(playing());
 
   // The controls show for a few seconds after a tap or a move.
@@ -103,6 +103,7 @@
     { key: 'beat', label: 'Beat', step: 0.05, text: percent },
     { key: 'bands', label: 'Bands', step: 0.05, text: percent },
     { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
+    { key: 'purity', label: 'Purity', step: 0.05, text: percent },
   ];
   // Each band's times, on a doubling scale.
   const BAND_ROWS = ['Sub', 'Mid', 'Treble'];
@@ -210,10 +211,22 @@
     let refresh = 1000 / 60;
     let lastTick = performance.now();
     // Frame times over the last second, to adapt the load; frames drawn, for the panel's figure.
-    let slow = 0;
-    let quick = 0;
+    // The device's pace: each second's frames late for their slot; the step-down's state (see the end of the loop).
+    let late = 0;
+    let drawn = 0;
     let worst = 0;
     let judged = performance.now();
+    // The resolution the step-down gives up before points (a share of the Resolution setting's).
+    let fit = 1;
+    // Seconds in a row with no late frame needed before a step back up; doubled each time a step up was soon taken
+    // back, so the load settles instead of swinging (back to 3 after a minute with nothing taken back).
+    let calm = 0;
+    let wait = 3;
+    let steppedUp = 0;
+    let steppedDown = 0;
+    // The framing and exposure, measured from the flame twice a second and followed over a second and a half.
+    let frame: { center: [number, number]; size: number; coverage: number } | null = null;
+    let measured = 0;
     let counted = { since: performance.now(), frames: 0 };
 
     // How much of the turning the music's loudness allows (nearly none in silence), and the Speed setting.
@@ -234,7 +247,7 @@
       if (now - counted.since >= 1000) {
         fps = Math.round((counted.frames * 1000) / (now - counted.since));
         counted = { since: now, frames: 0 };
-        drawing = { points: renderer.pointCount, steps: passes };
+        drawing = { points: renderer.pointCount, steps: passes, cleared: renderer.scrubbed };
       }
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
@@ -313,12 +326,28 @@
       const k = from ? Math.min(1, (now - blendStart) / blendMs) : 1;
       shown = from && k < 1 ? between(from, to, k * k * (3 - 2 * k)) : to;
       if (k >= 1) from = null;
-      renderer.setFlame(evolved(shown, parts));
+      const drawnFlame = evolved(shown, parts, s.purity);
+      if (now - measured > 500) {
+        measured = now;
+        const seen = measure(drawnFlame);
+        if (seen) {
+          if (!frame) frame = seen;
+          else {
+            const k = 1 - Math.exp(-0.5 / 1.5);
+            frame = {
+              center: [frame.center[0] + (seen.center[0] - frame.center[0]) * k, frame.center[1] + (seen.center[1] - frame.center[1]) * k],
+              size: Math.exp(Math.log(frame.size) + (Math.log(seen.size) - Math.log(frame.size)) * k),
+              coverage: frame.coverage + (seen.coverage - frame.coverage) * k,
+            };
+          }
+        }
+      }
+      renderer.setFlame(frame ? { ...drawnFlame, center: frame.center, size: frame.size } : drawnFlame);
 
       // The Resolution setting (by default about a megapixel, `autoResolution`) of the screen's own pixels; the screen
       // scales it up.
       const dpr = Math.min(devicePixelRatio || 1, 2);
-      const r = s.resolution ?? autoResolution(canvas.clientWidth * canvas.clientHeight * dpr * dpr);
+      const r = (s.resolution ?? autoResolution(canvas.clientWidth * canvas.clientHeight * dpr * dpr)) * fit;
       const w = Math.max(1, Math.round(canvas.clientWidth * dpr * r));
       const h = Math.max(1, Math.round(canvas.clientHeight * dpr * r));
       if (canvas.width !== w || canvas.height !== h) {
@@ -347,34 +376,48 @@
           ceiling: s.brightness,
           // Paler when quiet: a third of its colour in silence.
           saturation: 0.35 + 0.65 * lit,
+          // The whole picture as bright however much of its frame the flame covers: a flame spread over most of it is
+          // shown dimmer, one gathered into a few cells brighter (against one covering a third of its frame), so its
+          // shape's changes are not flares.
+          exposure: frame ? Math.min(1.5, Math.max(0.4, 0.33 / Math.max(0.05, frame.coverage))) : 1,
         },
         w,
         h,
       );
 
-      // Adapting, under the Points and Steps settings: each second (or 30 frames, if sooner), a third of them late takes
-      // a step away (half of them where the frames took over twice as long as they should; then points, halved), 28
-      // quick ones of 30 add a step back (then points), never past the settings. Each window is judged once and the
-      // next starts afresh: a count of quick frames kept on past its judgement added a step at every frame after it,
-      // from one step to the most within a second, and the device fell behind again (until 2026-10-17).
+      // Adapting, under the Points, Steps and Resolution settings, to hold the FPS setting rather than settle under it.
+      // Each second: if more than a fifth of its frames came late for their slot, a step down (steps, then resolution to
+      // 60 % of the setting's, then points, halved; several at once where frames took over twice their slot). A step
+      // back up (points, then resolution, then steps) only after `wait` seconds in a row with no late frame; a step up
+      // taken back within five seconds doubles the wait (up to a minute), so the load settles instead of swinging. The
+      // step-down judged its window of frames once per frame after it filled until 2026-10-17 (from one step to the most
+      // within a second, behind again, over and over).
       const most = Math.round(2 ** s.points);
       if (renderer.pointCount > most) renderer.setPoints(most);
       passes = Math.min(passes, s.steps);
-      if (spent > frameMs * 1.35) slow++;
-      else if (spent < frameMs * 1.1) quick++;
+      drawn++;
+      if (spent > frameMs * 1.08 + 2) late++;
       worst = Math.max(worst, spent);
-      if (slow + quick >= 30 || (now - judged >= 1000 && slow + quick >= 2)) {
-        if (slow * 3 > slow + quick) {
-          const far = worst > frameMs * 2;
-          if (passes > 1) passes = far ? Math.max(1, passes >> 1) : passes - 1;
-          else if (renderer.pointCount > MIN_POINTS) renderer.setPoints(Math.max(MIN_POINTS, renderer.pointCount >> (far ? 2 : 1)));
-          quick = 0;
-        } else if (quick >= 28) {
-          if (passes < s.steps) passes++;
-          else if (renderer.pointCount < most) renderer.setPoints(Math.min(most, renderer.pointCount * 2));
+      if (now - judged >= 1000) {
+        if (late * 5 > drawn) {
+          calm = 0;
+          if (now - steppedUp < 5000) wait = Math.min(60, wait * 2);
+          steppedDown = now;
+          for (let n = worst > frameMs * 2 ? 2 : 1; n > 0; n--) {
+            if (passes > 1) passes--;
+            else if (fit > 0.6) fit = Math.max(0.6, fit * 0.85);
+            else if (renderer.pointCount > MIN_POINTS) renderer.setPoints(Math.max(MIN_POINTS, renderer.pointCount >> 1));
+          }
+        } else if (late === 0 && ++calm >= wait) {
+          calm = 0;
+          steppedUp = now;
+          if (renderer.pointCount < most) renderer.setPoints(Math.min(most, renderer.pointCount * 2));
+          else if (fit < 1) fit = Math.min(1, fit / 0.85);
+          else if (passes < s.steps) passes++;
         }
-        slow = 0;
-        quick = 0;
+        if (now - steppedDown > 60_000) wait = 3;
+        late = 0;
+        drawn = 0;
         worst = 0;
         judged = now;
       }
@@ -475,7 +518,9 @@
             </div>
           {/each}
           <div class="foot">
-            <span class="fps">{fps} fps · {thousands(Math.log2(Math.max(1, drawing.points)))} × {drawing.steps}</span>
+            <span class="fps"
+              >{fps} fps · {thousands(Math.log2(Math.max(1, drawing.points)))} × {drawing.steps}{drawing.cleared ? ` · ${drawing.cleared} cleared` : ''}</span
+            >
             <button
               class="reset"
               onclick={() => {

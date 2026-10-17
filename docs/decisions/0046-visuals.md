@@ -281,3 +281,46 @@ with the loudness, linearly in dB from -45 to -10 LUFS as before. Measured: -55 
 
 **The panel** is at the right, below the buttons, from top to bottom (340 pixels wide, nearly all a phone's width), and
 scrolls; each band its own group: Lighting, Evolution, Continuity.
+
+## Amendment, 2026-10-18: flares, specks and colours
+
+Three problems the owner saw (with claude-5f): "seemingly at random big flares fill the entire screen, on some
+patterns"; "less congruence between the colours and the bands than I would wish, another slider maybe"; black specks
+appearing after playing a while on the MSI (GTX 1650), "maybe since 56", never on the tablet.
+
+**Measured first** (the real component in a lab page, steady test music, on the RTX 4060 through ANGLE on Direct3D 11,
+as Chrome draws on the MSI; three minutes each in 16-bit and 32-bit buffers, both scanned every 30 s):
+
+- **The flares are the flame's geometry:** measured on the CPU each second as drawn, the flame's extent (the frame that
+  holds 96 % of its points) went from 0.63 to 3.1 times the frame it was given, as its transforms turned; the screen's
+  brightness followed it (correlation 0.72), not the music.
+- **The specks:** no value not a number or infinite in either kind of buffer on the RTX. In 32-bit ones the densest
+  pixels reach some 60,000 points, near a 16-bit float's largest (65,504); in 16-bit ones they stop at 2048, as rounding
+  to nearest makes them. A GPU whose half-float blending rounds up (Direct3D allows it) carries them on into infinity,
+  which a fade only multiplies: black for good. That fits all three clues: the 16-bit default came with 56; the MSI's
+  GPU; the tablet's (16-bit, rounding to nearest) never. Not reproduced here, so made impossible rather than chased.
+
+**Now:**
+
+- **Framing and exposure follow the flame:** twice a second its points are measured on the CPU (6,000 steps) and the
+  camera follows their middle and size over a second and a half; the display's exposure follows how much of the frame
+  they cover (a flame spread over most of it shown dimmer, one gathered into a few cells brighter, against a third),
+  so its shape's changes do not show as light. Every turning transform's linear part is kept from stretching anything
+  more than 0.95 (its larger singular value), so turning and growing never carry it through a shape that flies apart.
+  Measured with the lights off: the extent 0.67 to 1.34 of the frame, the screen's brightness within 0.23 to 0.39 and
+  never near white; with the lights on the brightness no longer follows the extent (correlation 0.33).
+- **32-bit buffers again wherever a GPU can blend into them** (16-bit only where not, as on the tablet). Every two to
+  four seconds both buffers are copied through a pass that turns anything not a number into nothing and anything
+  infinite into the most a 16-bit float holds; the display reads every sample through the same test; points' places and
+  colours are tested from their bits, not with isnan (which a compiler may assume away). Should the scrub find any, the
+  panel's figure says how many times ("· 3 cleared"), which on the MSI would confirm the cause.
+- **Colours:** each of the flame's band transforms has its own hue, evenly round the colour wheel from a random start,
+  at one lightness and chroma (OKLCH, the perceptual scale). A point's colour is a place in the colour plane, not on a
+  line as before: one moving between two bands' colours goes paler on the way, never through a third band's, as it did.
+  **Purity** (0 to 100 %, 50 % by default, in the panel's look): how far each band's transform takes a point's colour
+  to its own; at 100 % each band's part of the flame is its colour alone.
+- **The step-down holds the FPS setting** rather than settling under it (the tablet settled at 24 to 25 of 30): a frame
+  more than 8 % late for its slot counts late; more than a fifth of a second's frames late takes a step down (steps,
+  then the resolution down to 60 % of the setting's, then points); a step back up only after seconds in a row with no
+  late frame (3 at first, doubled whenever a step up is taken back within five seconds, up to a minute). New points
+  take 30 steps unseen (was 20).

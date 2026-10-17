@@ -1,14 +1,16 @@
 // Drawing fractal flames on the GPU (decision 0046; the flames themselves are lib/visuals/flame.ts), in WebGL2:
-// - points run the chaos game in a vertex shader, one step per pass, their state (position, colour coordinate, random
-//   seed) carried from pass to pass by transform feedback;
-// - each pass also draws them, one pixel each, adding their palette colour into a half-float buffer that fades a
+// - points run the chaos game in a vertex shader, one step per pass, their state (position, colour: a place in the
+//   colour plane, random seed) carried from pass to pass by transform feedback;
+// - each pass also draws them, one pixel each, adding their colour into a half-float buffer that fades a
 //   little every frame: the picture is the last second or so of points, which gives the many samples a flame needs
 //   without drawing them all every frame, and a little motion blur;
 // - the screen shows that buffer by the paper's log-density display: brightness from the log of how many points fell
 //   on a pixel, colour from their average, then gamma and vibrancy (its section 4), with a little blur where few fell;
 // - beside the colours, a second buffer counts how many of a pixel's points are of each of the music's bands' colours
-//   (decision 0046, amended), so a band's transient lights its own colour where it lies.
-import { paletteAt, type Flame } from './flame';
+//   (decision 0046, amended), so a band's transient lights its own colour where it lies;
+// - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
+//   fade only multiplies, so one such value, once in, would stay a black speck for good.
+import { colourOf, type Flame } from './flame';
 
 const MAX_XFORMS = 12;
 const SLOTS = 8;
@@ -16,9 +18,9 @@ const SLOTS = 8;
 const ITERATE = `#version 300 es
 precision highp float;
 precision highp int;
-layout(location = 0) in vec3 aState;
+layout(location = 0) in vec4 aState;
 layout(location = 1) in uint aSeed;
-out vec3 vState;
+out vec4 vState;
 flat out uint vSeed;
 out vec3 vColor;
 out vec3 vBand;
@@ -30,10 +32,28 @@ uniform ivec4 uVarId[${MAX_XFORMS * 2}];
 uniform vec4 uVarW[${MAX_XFORMS * 2}];
 uniform vec4 uCamera;
 uniform vec2 uTurn;
-uniform sampler2D uPalette;
-// Where on the palette each band's transform has its colour.
-uniform vec3 uBandColor;
+// The flame's colours: one lightness and chroma (OKLCH); each band's transform's hue as a point on the unit circle.
+uniform float uLight;
+uniform float uChroma;
+uniform vec2 uBandHue[3];
 const float PI = 3.14159265358979;
+
+// Not a number, or infinite: from the bits, which no compiler's fast arithmetic can assume away (isnan can be).
+bool bad(float x) { return (floatBitsToUint(x) & 0x7f800000u) == 0x7f800000u; }
+
+// OKLab to sRGB (each 0..1), as flame.ts's colourOf.
+vec3 srgb(vec3 lab) {
+  float l = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+  float m = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+  float s = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
+  l = l * l * l;
+  m = m * m * m;
+  s = s * s * s;
+  vec3 lin = vec3(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+                  -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+                  -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s);
+  return pow(clamp(lin, 0.0, 1.0), vec3(1.0 / 2.2));
+}
 
 uint next(inout uint s) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
 float rnd(inout uint s) { return float(next(s) >> 8) * (1.0 / 16777216.0); }
@@ -94,19 +114,21 @@ void main() {
     if (w == 0.0) continue;
     p += w * variation(uVarId[i * 2 + k / 4][k % 4], q, r2, r, th, s);
   }
-  float c = mix(aState.z, uMeta[i].y, uMeta[i].z);
-  bool lost = any(isnan(p)) || any(isinf(p)) || abs(p.x) > 1e5 || abs(p.y) > 1e5;
+  // The colour moves towards the transform's hue (uMeta.zw) by its speed (uMeta.y).
+  vec2 c = mix(aState.zw, uMeta[i].zw, uMeta[i].y);
+  bool lost = bad(p.x) || bad(p.y) || abs(p.x) > 1e5 || abs(p.y) > 1e5;
   if (lost) {
     // Back in at random; not drawn this time, as flam3 lets a new point settle before plotting it.
     p = vec2(rnd(s), rnd(s)) * 2.0 - 1.0;
-    c = rnd(s);
+    c = vec2(0.0);
   }
-  vState = vec3(p, c);
+  // A colour that is not a number would stay one, and in the picture for good: grey again.
+  if (bad(c.x) || bad(c.y) || dot(c, c) > 4.0) c = vec2(0.0);
+  vState = vec4(p, c);
   vSeed = s;
-  vColor = texture(uPalette, vec2(c, 0.5)).rgb;
-  // How much of each band's colour the point is: by how near its colour coordinate is to each band's, shares of one.
-  vec3 d = c - uBandColor;
-  vec3 near = exp(-d * d * 50.0);
+  vColor = srgb(vec3(uLight, uChroma * c));
+  // How much of each band's colour the point is: by how near its colour is to each band's hue, shares of one.
+  vec3 near = exp(-4.0 * vec3(dot(c - uBandHue[0], c - uBandHue[0]), dot(c - uBandHue[1], c - uBandHue[1]), dot(c - uBandHue[2], c - uBandHue[2])));
   vBand = near / max(near.x + near.y + near.z, 1e-6);
   // The camera: centred, the flame's size to the shorter side, turned slowly as a whole.
   vec2 v = (p - uCamera.xy) * uCamera.z;
@@ -137,6 +159,46 @@ layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 band;
 void main() { o = vec4(0.0, 0.0, 0.0, uKeep); band = o; }`;
 
+// Not a number, or infinite, from the bits (see ITERATE's).
+// A value not a number is nothing; an infinite one, the most a 16-bit float holds short of infinity.
+const BAD = `bool bad(float x) { return (floatBitsToUint(x) & 0x7f800000u) == 0x7f800000u; }
+float clean1(float x) {
+  uint b = floatBitsToUint(x);
+  if ((b & 0x7f800000u) != 0x7f800000u) return clamp(x, 0.0, 60000.0);
+  return (b & 0x007fffffu) != 0u || (b & 0x80000000u) != 0u ? 0.0 : 60000.0;
+}
+vec4 clean(vec4 v) { return vec4(clean1(v.x), clean1(v.y), clean1(v.z), clean1(v.w)); }`;
+
+// The scrub: both buffers copied, each value not a number or infinite made nothing (and the largest kept under what a
+// 16-bit float holds).
+const SCRUB = `#version 300 es
+precision highp float;
+uniform sampler2D uAcc;
+uniform sampler2D uBands;
+layout(location = 0) out vec4 o;
+layout(location = 1) out vec4 band;
+${BAD}
+void main() {
+  ivec2 at = ivec2(gl_FragCoord.xy);
+  o = clean(texelFetch(uAcc, at, 0));
+  band = clean(texelFetch(uBands, at, 0));
+}`;
+
+// Finds whether a buffer holds any such value: only those pixels pass (counted by an occlusion query).
+const FIND = `#version 300 es
+precision highp float;
+uniform sampler2D uAcc;
+uniform sampler2D uBands;
+out vec4 o;
+${BAD}
+void main() {
+  ivec2 at = ivec2(gl_FragCoord.xy);
+  vec4 a = texelFetch(uAcc, at, 0);
+  vec4 b = texelFetch(uBands, at, 0);
+  if (!(bad(a.x) || bad(a.y) || bad(a.z) || bad(a.w) || bad(b.x) || bad(b.y) || bad(b.z) || bad(b.w))) discard;
+  o = vec4(1.0);
+}`;
+
 const SHOW = `#version 300 es
 precision highp float;
 uniform sampler2D uAcc;
@@ -154,22 +216,25 @@ uniform vec3 uBandRgb[3];
 uniform float uCeiling;
 uniform float uSaturation;
 out vec4 o;
+${BAD}
+// A sample of the buffer, none of it anything but a number (whatever a driver did to it before the scrub came by).
+vec4 at(vec2 uv) { return clean(texture(uAcc, uv)); }
 void main() {
   // A beat's swell: the picture drawn a little larger about its middle.
   vec2 uv = 0.5 + (gl_FragCoord.xy / uView - 0.5) / uZoom;
   vec2 px = 1.0 / vec2(textureSize(uAcc, 0));
-  vec4 a = texture(uAcc, uv);
+  vec4 a = at(uv);
   // The pixel's points by band: shares of one.
-  vec3 share = texture(uBands, uv).rgb / max(a.a, 1e-6);
+  vec3 share = clamp(clean(texture(uBands, uv)).rgb / max(a.a, 1e-6), 0.0, 1.0);
   // The paper's density estimation, cheaply: where few points fell, the pixel is the mean of a wider ring around it
   // (up to three pixels out), where many fell it stays sharp.
   float radius = 3.0 / (1.0 + sqrt(a.a * uK2) * 2.0);
   if (radius > 0.4) {
     vec2 d = px * radius;
-    vec4 ring = texture(uAcc, uv + vec2(d.x, 0.0)) + texture(uAcc, uv - vec2(d.x, 0.0))
-              + texture(uAcc, uv + vec2(0.0, d.y)) + texture(uAcc, uv - vec2(0.0, d.y))
-              + texture(uAcc, uv + d * 0.7071) + texture(uAcc, uv - d * 0.7071)
-              + texture(uAcc, uv + vec2(d.x, -d.y) * 0.7071) + texture(uAcc, uv + vec2(-d.x, d.y) * 0.7071);
+    vec4 ring = at(uv + vec2(d.x, 0.0)) + at(uv - vec2(d.x, 0.0))
+              + at(uv + vec2(0.0, d.y)) + at(uv - vec2(0.0, d.y))
+              + at(uv + d * 0.7071) + at(uv - d * 0.7071)
+              + at(uv + vec2(d.x, -d.y) * 0.7071) + at(uv + vec2(-d.x, d.y) * 0.7071);
     a = (a + ring) / 9.0;
   }
   if (a.a <= 0.0) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
@@ -211,6 +276,8 @@ export type Shown = {
   hits: [number, number, number];
   /** The most brightness shown (0..1), applied after everything else. */
   ceiling: number;
+  /** The display's exposure against the points' mean density (1: as the paper has it): the visuals' auto-exposure. */
+  exposure: number;
   /** How much of its colour it shows (0: grey, 1: all). */
   saturation: number;
 };
@@ -224,28 +291,39 @@ export class FlameRenderer {
   private buffers: WebGLBuffer[] = [];
   private vaos: WebGLVertexArrayObject[] = [];
   private feedback: WebGLTransformFeedback;
+  /** The buffers, two sets: the one in use (`cur`) and the one the next scrub copies into. */
+  private accs: WebGLTexture[] = [];
+  private bandSets: WebGLTexture[] = [];
+  private fbos: WebGLFramebuffer[] = [];
+  private cur = 0;
+  private scrubbing: WebGLProgram;
+  private finding: WebGLProgram;
+  private query: WebGLQuery | null = null;
+  private frames = 0;
+  /** How many scrubs found anything not a number or infinite in the buffers (the black specks' cause, if they come). */
+  scrubbed = 0;
   private acc: WebGLTexture | null = null;
   /** Beside `acc`: each pixel's points by band. */
   private bands: WebGLTexture | null = null;
   private bandRgb = new Float32Array(9);
   private accFbo: WebGLFramebuffer | null = null;
-  private palette: WebGLTexture;
   private empty: WebGLVertexArrayObject;
   private flip = 0;
   private count = 0;
   private flame: Flame | null = null;
-  private paletteKey = '';
   private loc = new Map<string, WebGLUniformLocation | null>();
-  /** The buffer's kind: 16-bit floats wherever a browser can draw into them (a pixel stops counting near 2048 points,
-   *  only in the densest cores, where the log display hardly shows it; half the memory of 32-bit ones, and 4 to 20 %
-   *  quicker on this project's laptop, Intel and NVIDIA alike, measured 2026-10-17), else 8 bits (saturating soon). 32
-   *  only where a driver refuses 16 (`resize`'s fallback goes the other way, 16 to 8). */
+  /** The buffer's kind: 32-bit floats where they can be blended into, else 16-bit (a pixel stops counting near 2048
+   *  points, only in the densest cores, where the log display hardly shows it), else 8 bits (saturating soon). 16-bit
+   *  ones were the default in preview 56 (4 to 20 % quicker): the densest pixels reach some 60,000 points (measured in
+   *  32-bit ones, 2026-10-18), against a 16-bit float's 65,504, and a GPU whose blending rounds up (Direct3D allows it)
+   *  carries them over into infinity, black for good: the owner's GTX 1650 showed such specks from 56 on, his tablet
+   *  (16-bit, a GPU that rounds to nearest, stuck at 2048) never did. */
   precision: 32 | 16 | 8;
   get halfFloat(): boolean {
     return this.precision !== 8;
   }
   /** Steps every point takes unseen before it is drawn (flam3's fuse): a new point is not on the flame yet. */
-  private fuse = 20;
+  private fuse = 30;
   width = 0;
   height = 0;
 
@@ -256,14 +334,15 @@ export class FlameRenderer {
     if (!gl) throw new Error('WebGL2 is not available.');
     this.gl = gl;
     const floats = !!gl.getExtension('EXT_color_buffer_float');
-    this.precision = floats || gl.getExtension('EXT_color_buffer_half_float') ? 16 : 8;
+    this.precision = floats && gl.getExtension('EXT_float_blend') ? 32 : floats || gl.getExtension('EXT_color_buffer_half_float') ? 16 : 8;
     this.iterate = program(gl, ITERATE, PLOT, ['vState', 'vSeed']);
     this.plot = this.iterate;
     this.fade = program(gl, FULL, FADE);
     this.show = program(gl, FULL, SHOW);
+    this.scrubbing = program(gl, FULL, SCRUB);
+    this.finding = program(gl, FULL, FIND);
     this.empty = gl.createVertexArray()!;
     this.feedback = gl.createTransformFeedback()!;
-    this.palette = gl.createTexture()!;
     this.seed(points);
   }
 
@@ -276,7 +355,7 @@ export class FlameRenderer {
     this.buffers = [];
     this.vaos = [];
     this.flip = 0;
-    this.fuse = 20;
+    this.fuse = 30;
     this.seed(n);
   }
 
@@ -287,14 +366,14 @@ export class FlameRenderer {
   /** The points, at random in the square, each with its own seed. */
   private seed(n: number) {
     const gl = this.gl;
-    const data = new ArrayBuffer(n * 16);
+    // Five numbers a point: its place, its colour (grey to start with), its random seed.
+    const data = new ArrayBuffer(n * 20);
     const f = new Float32Array(data);
     const u = new Uint32Array(data);
     for (let i = 0; i < n; i++) {
-      f[i * 4] = Math.random() * 2 - 1;
-      f[i * 4 + 1] = Math.random() * 2 - 1;
-      f[i * 4 + 2] = Math.random();
-      u[i * 4 + 3] = (Math.random() * 0xfffffffe + 1) >>> 0;
+      f[i * 5] = Math.random() * 2 - 1;
+      f[i * 5 + 1] = Math.random() * 2 - 1;
+      u[i * 5 + 4] = (Math.random() * 0xfffffffe + 1) >>> 0;
     }
     for (let k = 0; k < 2; k++) {
       const b = gl.createBuffer()!;
@@ -303,9 +382,9 @@ export class FlameRenderer {
       const vao = gl.createVertexArray()!;
       gl.bindVertexArray(vao);
       gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 16, 0);
+      gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 20, 0);
       gl.enableVertexAttribArray(1);
-      gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 16, 12);
+      gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 20, 16);
       this.buffers.push(b);
       this.vaos.push(vao);
     }
@@ -320,9 +399,11 @@ export class FlameRenderer {
     const gl = this.gl;
     this.width = width;
     this.height = height;
-    if (this.acc) gl.deleteTexture(this.acc);
-    if (this.bands) gl.deleteTexture(this.bands);
-    if (this.accFbo) gl.deleteFramebuffer(this.accFbo);
+    for (const x of [...this.accs, ...this.bandSets]) gl.deleteTexture(x);
+    for (const f of this.fbos) gl.deleteFramebuffer(f);
+    this.accs = [];
+    this.bandSets = [];
+    this.fbos = [];
     // 32-bit float textures filter only with an extension; without it the screen reads them nearest.
     const smooth = this.precision !== 32 || !!gl.getExtension('OES_texture_float_linear');
     const texture = () => {
@@ -337,46 +418,84 @@ export class FlameRenderer {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       return tex;
     };
-    this.acc = texture();
-    this.bands = texture();
-    this.accFbo = gl.createFramebuffer()!;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.acc, 0);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.bands, 0);
-    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
-    // A driver may still refuse the kind it offered: one step down, and again.
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE && this.precision !== 8) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      this.precision = this.precision === 32 ? 16 : 8;
-      this.width = 0;
-      this.resize(width, height);
-      return;
+    for (let k = 0; k < 2; k++) {
+      this.accs.push(texture());
+      this.bandSets.push(texture());
+      const fbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.accs[k], 0);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.bandSets[k], 0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      // A driver may still refuse the kind it offered: one step down, and again.
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE && this.precision !== 8) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.deleteFramebuffer(fbo);
+        this.precision = this.precision === 32 ? 16 : 8;
+        this.width = 0;
+        this.resize(width, height);
+        return;
+      }
+      this.fbos.push(fbo);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
     }
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    this.cur = 0;
+    this.use();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  /** The flame to draw from now on (its palette as a texture, its transforms as uniforms). */
+  /** The set in use as `acc`, `bands` and `accFbo`. */
+  private use() {
+    this.acc = this.accs[this.cur];
+    this.bands = this.bandSets[this.cur];
+    this.accFbo = this.fbos[this.cur];
+  }
+
+  /** Copies the buffers into the other set, clearing anything not a number or infinite; first asks the GPU whether
+   *  there is any (answered a few frames later). */
+  private scrub() {
+    const gl = this.gl;
+    const other = 1 - this.cur;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbos[other]);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.bindVertexArray(this.empty);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.accs[this.cur]);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.bandSets[this.cur]);
+    if (!this.query) {
+      this.query = gl.createQuery();
+      gl.useProgram(this.finding);
+      gl.uniform1i(gl.getUniformLocation(this.finding, 'uAcc'), 0);
+      gl.uniform1i(gl.getUniformLocation(this.finding, 'uBands'), 1);
+      gl.colorMask(false, false, false, false);
+      gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, this.query!);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.endQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE);
+      gl.colorMask(true, true, true, true);
+    }
+    gl.useProgram(this.scrubbing);
+    gl.uniform1i(gl.getUniformLocation(this.scrubbing, 'uAcc'), 0);
+    gl.uniform1i(gl.getUniformLocation(this.scrubbing, 'uBands'), 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.activeTexture(gl.TEXTURE0);
+    this.cur = other;
+    this.use();
+  }
+
+  /** The answer to the last scrub's question, once the GPU has it. */
+  private heard() {
+    const gl = this.gl;
+    if (!this.query || !gl.getQueryParameter(this.query, gl.QUERY_RESULT_AVAILABLE)) return;
+    if (gl.getQueryParameter(this.query, gl.QUERY_RESULT)) this.scrubbed++;
+    gl.deleteQuery(this.query);
+    this.query = null;
+  }
+
+  /** The flame to draw from now on (its transforms and colours as uniforms). */
   setFlame(flame: Flame) {
     const gl = this.gl;
     this.flame = flame;
-    // The palette again only when it changed (while two flames blend, every frame).
-    const key = JSON.stringify(flame.palette);
-    if (key !== this.paletteKey) {
-      this.paletteKey = key;
-      const pixels = new Uint8Array(256 * 4);
-      for (let i = 0; i < 256; i++) {
-        const [r, g, b] = paletteAt(flame.palette, i / 255);
-        pixels.set([r * 255, g * 255, b * 255, 255], i * 4);
-      }
-      gl.bindTexture(gl.TEXTURE_2D, this.palette);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    }
-
     const xs = flame.xforms.slice(0, MAX_XFORMS);
     const total = xs.reduce((s, x) => s + x.weight, 0) || 1;
     const abc = new Float32Array(MAX_XFORMS * 3);
@@ -390,7 +509,7 @@ export class FlameRenderer {
       abc.set([a, b, c], i * 3);
       def.set([d, e, f], i * 3);
       run += x.weight / total;
-      meta.set([i === xs.length - 1 ? 1.0001 : run, x.color, x.colorSpeed, 0], i * 4);
+      meta.set([i === xs.length - 1 ? 1.0001 : run, x.colorSpeed, Math.cos(2 * Math.PI * x.color), Math.sin(2 * Math.PI * x.color)], i * 4);
       [...x.variations].slice(0, SLOTS).forEach(([v, w], k) => {
         ids[i * SLOTS + k] = v;
         ws[i * SLOTS + k] = w;
@@ -404,9 +523,11 @@ export class FlameRenderer {
     gl.uniform4iv(this.u(this.iterate, 'uVarId'), ids);
     gl.uniform4fv(this.u(this.iterate, 'uVarW'), ws);
     // The bands' transforms are the first three (flame.ts).
-    const bandColor = [0, 1, 2].map((b) => xs[b]?.color ?? b / 3);
-    gl.uniform3f(this.u(this.iterate, 'uBandColor'), bandColor[0], bandColor[1], bandColor[2]);
-    bandColor.forEach((c, b) => this.bandRgb.set(paletteAt(flame.palette, c), b * 3));
+    const hues = [0, 1, 2].map((b) => xs[b]?.color ?? b / 3);
+    gl.uniform1f(this.u(this.iterate, 'uLight'), flame.colours.light);
+    gl.uniform1f(this.u(this.iterate, 'uChroma'), flame.colours.chroma);
+    gl.uniform2fv(this.u(this.iterate, 'uBandHue'), hues.flatMap((h) => [Math.cos(2 * Math.PI * h), Math.sin(2 * Math.PI * h)]));
+    hues.forEach((h, b) => this.bandRgb.set(colourOf(flame.colours.light, flame.colours.chroma, h), b * 3));
   }
 
   /** One frame: the old picture fades by `look.keep`, `passes` more steps of every point fall into it, and it shows. */
@@ -414,6 +535,9 @@ export class FlameRenderer {
     const gl = this.gl;
     const flame = this.flame;
     if (!flame || !this.acc || !this.accFbo) return;
+    // Every 120 frames (two to four seconds), the scrub.
+    this.heard();
+    if (++this.frames % 120 === 0) this.scrub();
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
     gl.viewport(0, 0, this.width, this.height);
     gl.enable(gl.BLEND);
@@ -429,9 +553,6 @@ export class FlameRenderer {
     gl.useProgram(this.iterate);
     gl.uniform4f(this.u(this.iterate, 'uCamera'), flame.center[0], flame.center[1], look.scale / flame.size, this.width / this.height);
     gl.uniform2f(this.u(this.iterate, 'uTurn'), Math.cos(look.turn), Math.sin(look.turn));
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.palette);
-    gl.uniform1i(this.u(this.iterate, 'uPalette'), 0);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.feedback);
     const unseen = this.fuse;
@@ -464,7 +585,7 @@ export class FlameRenderer {
     const held = (this.count * passes) / Math.max(0.02, 1 - look.keep);
     const perPixel = held / (this.width * this.height);
     gl.uniform1f(this.u(this.show, 'uK1'), look.brightness);
-    gl.uniform1f(this.u(this.show, 'uK2'), (this.precision === 8 ? 255 : 4) / perPixel);
+    gl.uniform1f(this.u(this.show, 'uK2'), ((this.precision === 8 ? 255 : 4) * look.exposure) / perPixel);
     gl.uniform1f(this.u(this.show, 'uGamma'), look.gamma);
     gl.uniform1f(this.u(this.show, 'uVibrancy'), look.vibrancy);
     gl.uniform1f(this.u(this.show, 'uZoom'), look.zoom);
@@ -493,11 +614,10 @@ export class FlameRenderer {
     for (const v of this.vaos) gl.deleteVertexArray(v);
     gl.deleteVertexArray(this.empty);
     gl.deleteTransformFeedback(this.feedback);
-    gl.deleteTexture(this.palette);
-    if (this.acc) gl.deleteTexture(this.acc);
-    if (this.bands) gl.deleteTexture(this.bands);
-    if (this.accFbo) gl.deleteFramebuffer(this.accFbo);
-    for (const p of new Set([this.iterate, this.plot, this.fade, this.show])) gl.deleteProgram(p);
+    for (const x of [...this.accs, ...this.bandSets]) gl.deleteTexture(x);
+    for (const f of this.fbos) gl.deleteFramebuffer(f);
+    if (this.query) gl.deleteQuery(this.query);
+    for (const p of new Set([this.iterate, this.plot, this.fade, this.show, this.scrubbing, this.finding])) gl.deleteProgram(p);
     gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 

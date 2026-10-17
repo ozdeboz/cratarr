@@ -43,19 +43,21 @@ export type Xform = {
   variations: Map<Variation, number>;
   /** How often it is chosen, against the others' weights. */
   weight: number;
-  /** Its place on the palette, 0..1, and how far a point's colour moves towards it each time (0..1). */
+  /** Its hue, a turn of the colour wheel (0..1), and how far a point's colour moves towards it each time (0..1). A
+   *  point's colour is a place in the colour plane (OKLab's a and b), not on a line: one moving between two hues goes
+   *  paler on the way, never through a third. */
   color: number;
   colorSpeed: number;
   /** Turned by the animation (a symmetry's rotations are not). */
   turns: boolean;
 };
 
-/** A palette as Inigo Quilez's cosine palettes: colour(t) = a + b·cos(2π(c·t + d)), each per channel. */
-export type Palette = { a: number[]; b: number[]; c: number[]; d: number[] };
+/** The lightness and chroma of a flame's colours (OKLCH); each transform has its own hue. */
+export type Colours = { light: number; chroma: number };
 
 export type Flame = {
   xforms: Xform[];
-  palette: Palette;
+  colours: Colours;
   /** Where its points fall, for the camera: centre and the half-size that holds most of them. */
   center: [number, number];
   size: number;
@@ -171,19 +173,10 @@ function symmetry(order: number, weight: number): Xform[] {
   return out;
 }
 
-function randomPalette(rnd: () => number): Palette {
-  // Saturated sweeps across two or three hues: the channels swing alike (a mid-grey offset, a strong swing, the same
-  // number of turns across the palette) but out of step, by a third of a turn for a full rainbow down to a tenth for
-  // a sweep between neighbouring hues.
-  const turns = 0.6 + rnd() * 0.7;
-  const step = 0.1 + rnd() * 0.23;
-  const start = rnd();
-  return {
-    a: [0, 1, 2].map(() => 0.48 + rnd() * 0.08),
-    b: [0, 1, 2].map(() => 0.45 + rnd() * 0.1),
-    c: [0, 1, 2].map(() => turns * (0.95 + rnd() * 0.1)),
-    d: [0, 1, 2].map((i) => (start + i * step) % 1),
-  };
+/** A flame's colours (OKLCH, the perceptual lightness, chroma and hue): every transform's at one lightness and one
+ *  chroma, so they differ in hue alone. */
+function randomColours(rnd: () => number): Colours {
+  return { light: 0.7 + rnd() * 0.1, chroma: 0.12 + rnd() * 0.05 };
 }
 
 /** The flame of a seed: made at random from it until one passes the check, then framed. */
@@ -194,13 +187,14 @@ export function flameFrom(seed: number): Flame {
     // Three transforms, one for each of the music's bands, low to high (decision 0046, amended: `evolved`).
     const count = BANDS;
     const xforms = Array.from({ length: count }, () => randomXform(rnd));
-    // Each transform its own stretch of the palette, so the parts of the flame (and the bands) differ in colour.
+    // Each transform its own hue, evenly round the wheel from a random start (a little off even, by the seed), so the
+    // parts of the flame, and the bands, are as far apart in colour as they can be.
     const offset = rnd();
-    xforms.forEach((x, i) => (x.color = (offset + i / count) % 1));
+    xforms.forEach((x, i) => (x.color = (offset + i / count + (rnd() - 0.5) * 0.04 + 1) % 1));
     const order = rnd() < 0.45 ? 1 : 2 + Math.floor(rnd() * 5);
     const mean = xforms.reduce((s, x) => s + x.weight, 0) / count;
     xforms.push(...symmetry(order, mean));
-    const flame: Flame = { xforms, palette: randomPalette(rnd), center: [0, 0], size: 1 };
+    const flame: Flame = { xforms, colours: randomColours(rnd), center: [0, 0], size: 1 };
     const look = survey(flame, seed + attempt);
     if (!look) continue;
     flame.center = look.center;
@@ -216,11 +210,11 @@ function fallback(): Flame {
   return {
     xforms: [
       { affine: [0.6, -0.3, 0.2, 0.3, 0.6, 0.1], variations: new Map([[VARIATIONS.spherical, 0.6], [VARIATIONS.swirl, 0.4]]), weight: 1, color: 0.1, colorSpeed: 0.5, turns: true },
-      { affine: [0.5, 0.4, -0.5, -0.4, 0.5, 0.3], variations: new Map([[VARIATIONS.julia, 1]]), weight: 0.7, color: 0.8, colorSpeed: 0.5, turns: true },
-      { affine: [0.4, 0, 0.4, 0, 0.4, -0.4], variations: new Map([[VARIATIONS.sinusoidal, 1]]), weight: 0.6, color: 0.45, colorSpeed: 0.5, turns: true },
+      { affine: [0.5, 0.4, -0.5, -0.4, 0.5, 0.3], variations: new Map([[VARIATIONS.julia, 1]]), weight: 0.7, color: 0.43, colorSpeed: 0.5, turns: true },
+      { affine: [0.4, 0, 0.4, 0, 0.4, -0.4], variations: new Map([[VARIATIONS.sinusoidal, 1]]), weight: 0.6, color: 0.77, colorSpeed: 0.5, turns: true },
       ...symmetry(4, 0.77),
     ],
-    palette: { a: [0.5, 0.5, 0.5], b: [0.5, 0.5, 0.5], c: [1, 1, 1], d: [0, 0.33, 0.67] },
+    colours: { light: 0.75, chroma: 0.14 },
     center: [0, 0],
     size: 1.6,
   };
@@ -289,6 +283,47 @@ function survey(flame: Flame, seed: number): { center: [number, number]; size: n
   const structured = Math.min(1, unevenness / 0.6);
   const clear = haze > 0.35 ? Math.max(0, (0.6 - haze) / 0.25) : 1;
   return { center: [cx, cy], size: size * 1.1, score: fits * structured * clear };
+}
+
+/** Where a flame's points fall now (as it is drawn: turned, evolved), on the CPU: the middle and half-size of the
+ *  frame that holds 96 % of them, and how much of that frame's 32 x 32 cells they reach. The visuals measure their flame
+ *  so twice a second and follow it slowly with their framing and exposure: a flame whose transforms turn passes through
+ *  shapes three times as large as its own and back (measured: 0.63 to 3.1, 2026-10-18), which showed as flares the
+ *  music had no part in. */
+export function measure(flame: Flame, steps = 6000): { center: [number, number]; size: number; coverage: number } | null {
+  const rnd = randomFrom(0x51ced);
+  const pick = picker(flame.xforms);
+  const xs: number[] = [];
+  const ys: number[] = [];
+  let x = rnd() * 2 - 1;
+  let y = rnd() * 2 - 1;
+  for (let i = 0; i < steps; i++) {
+    const p = apply(flame.xforms[pick(rnd())], x, y, rnd);
+    if (!Number.isFinite(p[0]) || !Number.isFinite(p[1]) || Math.abs(p[0]) > 1e4 || Math.abs(p[1]) > 1e4) {
+      x = rnd() * 2 - 1;
+      y = rnd() * 2 - 1;
+      continue;
+    }
+    [x, y] = p;
+    if (i >= 20) {
+      xs.push(x);
+      ys.push(y);
+    }
+  }
+  if (xs.length < steps / 4) return null;
+  const sx = [...xs].sort((a, b) => a - b);
+  const sy = [...ys].sort((a, b) => a - b);
+  const q = (s: number[], f: number) => s[Math.floor(f * (s.length - 1))];
+  const center: [number, number] = [(q(sx, 0.02) + q(sx, 0.98)) / 2, (q(sy, 0.02) + q(sy, 0.98)) / 2];
+  const size = (Math.max(q(sx, 0.98) - q(sx, 0.02), q(sy, 0.98) - q(sy, 0.02)) / 2) * 1.1;
+  if (!(size > 1e-4)) return null;
+  const cells = new Uint8Array(32 * 32);
+  for (let i = 0; i < xs.length; i++) {
+    const gx = Math.floor(((xs[i] - center[0]) / size / 2 + 0.5) * 32);
+    const gy = Math.floor(((ys[i] - center[1]) / size / 2 + 0.5) * 32);
+    if (gx >= 0 && gx < 32 && gy >= 0 && gy < 32) cells[gy * 32 + gx] = 1;
+  }
+  return { center, size, coverage: cells.reduce((s, c) => s + c, 0) / cells.length };
 }
 
 /** Chooses a transform by weight, given a number in 0..1. */
@@ -367,12 +402,18 @@ export function apply(t: Xform, px: number, py: number, rnd: () => number): [num
 const BAND_VARIATIONS: Variation[] = [VARIATIONS.bubble, VARIATIONS.swirl, VARIATIONS.sinusoidal];
 
 /** How a band's transform has evolved: turned by `turn` (radians, as Electric Sheep's loops turn the linear part), that
- *  part scaled by `size`, `morph` (0..1) of its variations given over to its band's own, and its colour moved along the
- *  palette by `hue`. */
+ *  part scaled by `size`, `morph` (0..1) of its variations given over to its band's own, and its hue moved by `hue` (a
+ *  turn of the wheel). */
 export type Part = { turn: number; size: number; morph: number; hue: number };
 
-/** The flame with each band's transform evolved by its part (the symmetry's rotations stay as they are). */
-export function evolved(flame: Flame, parts: Part[]): Flame {
+/** The most a transform's linear part may stretch anything (its larger singular value): under 1, every transform pulls
+ *  points together, so turning and growing never carry the flame through a shape that flies apart over the screen. */
+const STRETCH = 0.95;
+
+/** The flame with each band's transform evolved by its part (the symmetry's rotations stay as they are). `purity` (0..1):
+ *  how far each band's transform takes a point's colour all the way to its own (1: every point its last transform's
+ *  colour, so each band's part is its colour alone). */
+export function evolved(flame: Flame, parts: Part[], purity = 0): Flame {
   return {
     ...flame,
     xforms: flame.xforms.map((t, i) => {
@@ -387,11 +428,13 @@ export function evolved(flame: Flame, parts: Part[]): Flame {
         const own = BAND_VARIATIONS[i];
         variations.set(own, (variations.get(own) ?? 0) + p.morph);
       }
+      const linear = contracted(cos * a - sin * d, cos * b - sin * e, sin * a + cos * d, sin * b + cos * e);
       return {
         ...t,
-        affine: [cos * a - sin * d, cos * b - sin * e, c, sin * a + cos * d, sin * b + cos * e, f],
+        affine: [linear[0], linear[1], c, linear[2], linear[3], f],
         variations,
-        color: Math.min(1, Math.max(0, t.color + p.hue)),
+        color: (((t.color + p.hue) % 1) + 1) % 1,
+        colorSpeed: t.colorSpeed + purity * (1 - t.colorSpeed),
       };
     }),
   };
@@ -415,21 +458,33 @@ export function between(from: Flame, to: Flame, k: number): Flame {
       affine: blendAffine(p.affine, q.affine, k),
       variations,
       weight: mix(p.weight, q.weight, k),
-      color: mix(p.color, q.color, k),
+      color: mixTurn(p.color, q.color, k),
       colorSpeed: mix(p.colorSpeed, q.colorSpeed, k),
       turns: k < 0.5 ? p.turns : q.turns,
     });
   }
-  const pal = (key: keyof Palette) => from.palette[key].map((v, i) => mix(v, to.palette[key][i], k));
   return {
     xforms,
-    palette: { a: pal('a'), b: pal('b'), c: pal('c'), d: pal('d') },
+    colours: { light: mix(from.colours.light, to.colours.light, k), chroma: mix(from.colours.chroma, to.colours.chroma, k) },
     center: [mix(from.center[0], to.center[0], k), mix(from.center[1], to.center[1], k)],
     size: Math.exp(mix(Math.log(from.size), Math.log(to.size), k)),
   };
 }
 
 const mix = (a: number, b: number, k: number) => a + (b - a) * k;
+/** Between two turns of the wheel, the short way round. */
+const mixTurn = (a: number, b: number, k: number) => {
+  const d = b - a - Math.round(b - a);
+  return (((a + d * k) % 1) + 1) % 1;
+};
+
+/** A 2 x 2 linear part (a, b; d, e), scaled down where it stretches anything more than `STRETCH`. */
+function contracted(a: number, b: number, d: number, e: number): [number, number, number, number] {
+  // The larger singular value, from the sums and differences of the matrix's entries.
+  const s = Math.hypot(a + e, d - b) / 2 + Math.hypot(a - e, d + b) / 2;
+  const k = s > STRETCH ? STRETCH / s : 1;
+  return [a * k, b * k, d * k, e * k];
+}
 
 function blendAffine(p: Xform['affine'], q: Xform['affine'], k: number): Xform['affine'] {
   // Columns (a, d) and (b, e) in polar form; the offset (c, f) straight.
@@ -447,8 +502,18 @@ function blendAffine(p: Xform['affine'], q: Xform['affine'], k: number): Xform['
   return [a, b, mix(p[2], q[2], k), d, e, mix(p[5], q[5], k)];
 }
 
-/** The palette's colour at t (0..1), each channel 0..1. */
-export function paletteAt(p: Palette, t: number): [number, number, number] {
-  const ch = (i: number) => Math.min(1, Math.max(0, p.a[i] + p.b[i] * Math.cos(2 * Math.PI * (p.c[i] * t + p.d[i]))));
-  return [ch(0), ch(1), ch(2)];
+/** A colour (sRGB, 0..1 each) from OKLCH: its lightness, chroma and hue (a turn of the wheel). The shader in render.ts
+ *  does the same. */
+export function colourOf(light: number, chroma: number, hue: number): [number, number, number] {
+  const a = chroma * Math.cos(2 * Math.PI * hue);
+  const b = chroma * Math.sin(2 * Math.PI * hue);
+  const l = (light + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (light - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (light - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  const linear = [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ];
+  return linear.map((v) => Math.min(1, Math.max(0, v)) ** (1 / 2.2)) as [number, number, number];
 }
