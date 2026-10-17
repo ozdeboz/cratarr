@@ -499,6 +499,8 @@ struct Entry {
     fresh: bool,
     /// The queue's version in the last edit told to the player: what a report must have seen to be taken.
     told: u64,
+    /// Its queue was given back on this connection, and it has not reported since with the version that came with it.
+    giving_back: bool,
     /// The entries of a queue handed over from it while it was offline (the handover's stop could not reach it): back
     /// and still playing one of them, it is stopped then.
     moved: Vec<String>,
@@ -547,6 +549,7 @@ impl Entry {
             at: Instant::now(),
             fresh: false,
             told: 0,
+            giving_back: false,
             moved: Vec::new(),
             leader: None,
             joined: 0,
@@ -1013,6 +1016,7 @@ impl PlayOn {
             e.seen = SystemTime::now();
             e.heard = Instant::now();
             e.fresh = true;
+            e.giving_back = false;
             replaced
         };
         if let Some(old) = replaced {
@@ -1085,9 +1089,17 @@ impl PlayOn {
             report.entry.as_deref().map_or(report.index >= 0, |x| moved.iter().any(|m| m == x))
         };
         let mut adopted = None;
+        // Given its queue back, a player reports without a version until that queue reaches it: it says what it held
+        // before, nothing, and neither empties Cratarr's queue nor stands for what it plays (the tablet's queue was taken
+        // as empty for 0.75 s after its app was updated, 2026-10-17). Its first report with that version counts again.
+        let before_given = e.giving_back && report.version.is_none();
+        if report.version.is_some_and(|v| v >= e.told) {
+            e.giving_back = false;
+        }
         if give_back.is_some() {
+            e.giving_back = true;
             e.at = Instant::now();
-        } else {
+        } else if !before_given {
             // Taken as the player holds it, unless it was made before Cratarr's latest edit reached the player: that edit
             // is on its way, and the player reports again once it has it (no flip back and forth).
             if report.version.is_none_or(|v| v >= e.told) {
@@ -1131,7 +1143,12 @@ impl PlayOn {
         drop(entries);
         if let (Some(c), Some((tracks, playing))) = (give_back, given) {
             tracing::info!(target: "playon", player = name, tracks, playing, "queue given back");
-            let _ = self.send(name, &c);
+            // Not sent, nothing is on its way: its reports count as they come.
+            if self.send(name, &c).is_err()
+                && let Some(e) = self.entries().get_mut(name)
+            {
+                e.giving_back = false;
+            }
         }
         if let Some((tracks, version)) = adopted {
             tracing::info!(target: "playon", player = name, tracks, version, "queue adopted");
@@ -1902,6 +1919,31 @@ mod tests {
         let back = told(&mut again);
         let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
         assert_eq!((play["tracks"].as_array().unwrap().len(), play["index"].as_u64()), (2, Some(1)));
+    }
+
+    #[tokio::test]
+    async fn a_player_given_its_queue_back_is_not_emptied_by_what_it_said_before_it_had_it() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let tablet = p.connect("tablet").unwrap();
+        p.command("tablet", Command::play(vec![t("tr-1"), t("tr-2"), t("tr-3")], 1, 0)).await.unwrap();
+        let version = p.get("tablet").unwrap().queue_version;
+        p.report("tablet", Report { index: 1, version: Some(version), ..Report::default() }).unwrap();
+
+        // Its app is updated: back without a queue, it is given Cratarr's, and reports once more before that reaches it.
+        drop(tablet);
+        let mut tablet = p.connect("tablet").unwrap();
+        said(&mut tablet);
+        p.report("tablet", Report { index: -1, ..Report::default() }).unwrap();
+        let back = told(&mut tablet);
+        let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
+        p.report("tablet", Report { index: -1, queue: Some(Vec::new()), ..Report::default() }).unwrap();
+        let v = p.get("tablet").unwrap();
+        assert_eq!((v.queue_length, v.index), (3, 1), "not emptied, and still where it was");
+
+        // Once it has it, its reports count again: the queue as it holds it, emptied too.
+        p.report("tablet", Report { index: -1, queue: Some(Vec::new()), version: play["version"].as_u64(), ..Report::default() }).unwrap();
+        assert_eq!(p.get("tablet").unwrap().queue_length, 0);
     }
 
     #[tokio::test]
