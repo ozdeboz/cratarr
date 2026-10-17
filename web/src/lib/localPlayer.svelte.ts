@@ -783,6 +783,14 @@ function hand(op: string, args: Record<string, unknown> = {}) {
   playerCommand(driven, command).catch((e) => (local.error = e instanceof Error ? e.message : String(e)));
 }
 
+/** The position now, to the frame (the visuals' beats, decision 0046), where `local.position` moves four times a
+ *  second: counted on from the playing player's last report, or read from this page's own audio. */
+export function positionNow(): number {
+  if (!handed()) return where()?.offset ?? local.position;
+  const p = (reported.positionMs + (local.paused ? 0 : performance.now() - reported.at)) / 1000;
+  return local.duration ? Math.min(p, local.duration) : p;
+}
+
 if (inApp) onApp('player', (m) => driven === null && reportedBy(m as Parameters<typeof reportedBy>[0]));
 if (typeof window !== 'undefined') {
   setInterval(() => {

@@ -262,3 +262,19 @@ walked (the end of its last packet; not the header's length, which is what lies 
 as not known, and only a complete analysis serves anything (length, gain, BPM, waveform; an album waits for it). The
 seven MP3s were analysed again from ffmpeg's whole decode (2026-10-17); the damaged album stays incomplete until it is
 replaced.
+
+## Amendment, 2026-10-17: beats
+
+For the visuals (decision 0046, amended), the analysis also keeps **every beat**: taktus's `beats_of` over the onsets
+it already makes, at the tempo kept (after the slow count and the dance fold), with each beat's strength (its onset
+against the track's strong beats). A track without a tempo has none, kept as none.
+
+- **Kept** in `analysis_shape.beats` (a column added at start): five bytes a beat, its time in milliseconds (u32,
+  little-endian) then its strength (0–255): about 3 KB for a five-minute track at 120 BPM. NULL: not worked out (an
+  analysis from before); an empty value: none. In an analysis' JSON line (the ThinkBook's pass, the import), base64.
+- **No version change,** so nothing is analysed again in bulk. The NAS's pass keeps beats for what it analyses from
+  now on; an older analysis gets them when they are first asked for: decoded at once (one at a time, a turn of at most
+  20 s, a decode of at most 60 s) and kept beside the analysis, which stays as it is, while the file is as it was. A
+  decode that does not cover the whole file gives none, kept as none, so a damaged file is not decoded at every request.
+- **Served** at `GET /api/track/{source}/{id}/beats`, beside `/waveform`: the bytes as kept, an ETag of the analysis,
+  kept a month; 404 for a track whose file Cratarr does not keep, 503 when they cannot be worked out now.

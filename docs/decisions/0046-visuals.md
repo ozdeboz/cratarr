@@ -63,7 +63,52 @@ What was researched (2026-10-17), and what came of it:
 - Nothing is downloaded or bundled for it; it works offline with downloads as with anything else.
 - On the PC's integrated graphics (Intel UHD) it draws 786,000 points a frame at 57 frames a second. The tablet's GPU
   is far weaker; the load adapts to it, and how it looks there is to be checked on the tablet.
-- Without a confident tempo the turning is a steady default; beats themselves (their times, not only the tempo) would
-  let it pulse on them, which the analysis does not keep yet.
+- Without a confident tempo the turning is a steady default. (Beats themselves, which the analysis did not keep at
+  first: the amendment below.)
 - Some seeds still give a flame that fills the screen with haze; the check is a heuristic and can be tightened.
 - The name Electric Sheep is not used in the interface ("Visuals").
+
+## Amendment, 2026-10-17: on the beat
+
+The owner, on the tablet: "My main problem is that the visualizations do not sync with the beat of the song. Fix
+that please!"
+
+**Why they did not:** the visuals knew a track's tempo, never where its beats fall. Turning at the tempo has the
+beat's speed but no phase: it cannot land on a beat. The loudness came from the waveform, whose 512 bins are about
+half a second each in a four-minute track, as long as a beat; nothing in it pulses with the music. The position
+between the player's reports was moved on with the frame clock and set back at each report, a jump of up to a frame.
+
+**Now:**
+
+- **The server keeps every beat** (decision 0035, amended the same day): taktus's beat tracker (Ellis 2007's dynamic
+  programming: the path through the onsets that lands on the most while keeping its steps even) at the tempo the
+  analysis keeps, so a track counted slow pulses on its slow beats, and one without a tempo has none. With each beat
+  its strength: the onset there, against the track's strong beats. The page reads them from
+  `GET /api/track/{source}/{id}/beats`, for the playing track and the next one.
+- **The position to the frame:** in the app, the app's last report (once a second) and the time since it; in a
+  browser playing itself, its audio's own clock; from another player, its reports through the server, eased toward
+  rather than jumped to. The picture is drawn 50 ms ahead of that: a frame reaches the screen a frame or two after it
+  is drawn, and a flash a little early reads as on the beat, a little late as after it.
+- **Each beat:** the picture flashes (up to 35 % brighter, after the gamma, so the faint parts show it too) and swells
+  (4 % larger about its middle), fading within a fifth of a second (sooner at a fast tempo); a strong beat fully, a
+  weak one at about a third. The transforms turn a step on each beat (once around in 32 beats), half of the step in
+  its first fifth. Between known beats (before they arrive, a break, no tempo) they turn steadily at the tempo as
+  before. Reduced motion: a quarter of the turning, spread evenly, no swell, a softer flash.
+
+**Measured:**
+
+- Click tracks through the whole analysis (decode, onsets, tracker): every beat within 15 ms of its click at 120 BPM,
+  after 8 s of silence (no beat in the silence), and through a tempo rising evenly from 120 to 126; an accented click
+  comes out stronger.
+- The visuals in a browser over a 120 BPM grid: every frame's flash was the one its beat calls for, apart from frames
+  within 2 ms of a beat (the lab's own clock); the first frame after a beat came 8 ms after it on average, 17 at most
+  (60 frames a second; up to 33 at the tablet's 30).
+
+**Consequences:**
+
+- A track's beats are worked out when first asked for, where its analysis has none (every analysis made before this):
+  about a second on the NAS, one at a time, then kept. Until they come, the turning is steady.
+- About a third of the tracks the tempo was checked on have no confident tempo (half of the ambient ones), so no beats:
+  steady turning, as before.
+- What the player reports is what the visuals follow. Delay after the player (Bluetooth speakers, an amplifier's own
+  processing) is not counted unless the player counts it.

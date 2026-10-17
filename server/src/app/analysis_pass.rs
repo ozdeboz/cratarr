@@ -95,6 +95,58 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
     });
 }
 
+/// Beats worked out when they are asked for (decision 0046): one decode at a time, beside the pass.
+static ON_DEMAND: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+/// How long a request waits for its turn, and then for its decode (a 40-minute track takes about 7 s on the NAS).
+const TURN: Duration = Duration::from_secs(20);
+const DECODE: Duration = Duration::from_secs(60);
+
+/// A file's beats (decision 0046): as kept, or worked out now and kept: from an analysis of the file as it is now (a
+/// file without one gets the whole analysis kept, as the pass would). A decode that does not cover the whole file
+/// gives no beats, kept as none, so it is not decoded again at every request. `None`: the file cannot be analysed, or
+/// its turn or its decode took too long (its result is still kept when it comes).
+pub async fn beats(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<crate::analysis::Beats> {
+    let c = cat.clone();
+    let r = rel.clone();
+    if let Some(Some(b)) = tokio::task::spawn_blocking(move || c.beats_of(folder, &r)).await.ok()? {
+        return Some(b);
+    }
+    // The permit is held here, not by the decode: a decode past its deadline goes on alone and lets the next one in.
+    let _turn = tokio::time::timeout(TURN, ON_DEMAND.acquire()).await.ok()?.ok()?;
+    let work = tokio::task::spawn_blocking(move || -> anyhow::Result<crate::analysis::Beats> {
+        // Kept while this one waited its turn.
+        if let Some(Some(b)) = cat.beats_of(folder, &rel) {
+            return Ok(b);
+        }
+        let (path, size, mtime) = cat.file_to_analyse(folder, &rel).ok_or_else(|| anyhow::anyhow!("not in the library"))?;
+        let started = Instant::now();
+        let a = crate::analysis::analyse(&path, &cat.genres_of_file(folder, &rel))?;
+        let beats = if a.complete == Some(false) { crate::analysis::Beats::default() } else { a.beats.clone().unwrap_or_default() };
+        if cat.analysis_of(folder, &rel).is_none() {
+            cat.store_analysis(folder, &rel, size, mtime, &crate::analysis::Analysis { beats: Some(beats.clone()), ..a })?;
+        } else {
+            cat.store_beats(folder, &rel, size, mtime, &beats)?;
+        }
+        tracing::info!("analysis: {rel}'s beats when asked for, {} of them, in {:.1} s", beats.each().count(), started.elapsed().as_secs_f64());
+        Ok(beats)
+    });
+    match tokio::time::timeout(DECODE, work).await {
+        Ok(Ok(Ok(b))) => Some(b),
+        Ok(Ok(Err(e))) => {
+            tracing::warn!("analysis: beats when asked for: {e:#}");
+            None
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("analysis: beats when asked for: {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("analysis: beats when asked for took over {} s", DECODE.as_secs());
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

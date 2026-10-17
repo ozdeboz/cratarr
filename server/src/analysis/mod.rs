@@ -8,6 +8,8 @@
 //!   wrong one; beatless and ambient music gets none). Reggae, dub, roots and dancehall get the slow count (the owner):
 //!   an estimate above 110 is halved. Dance music is counted between 90 and 180 (the owner): an estimate outside is
 //!   halved or doubled into it (on GiantSteps the exact tempo goes from 82 % to 88 % of the sure answers).
+//! - **Beats** (decision 0046): where there is a tempo, every beat's time and strength, by taktus's beat tracker at
+//!   that tempo; the visuals pulse on them.
 //! Blocking and single-threaded: the pass runs several at once.
 
 pub mod batch;
@@ -75,6 +77,51 @@ pub struct Analysis {
     /// part. `None`: not known (analysed before this was recorded, or the stream has no time base).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub complete: Option<bool>,
+    /// Every beat (decision 0046), at the tempo kept: none (empty) without a tempo. `None`: not worked out (an analysis
+    /// from before beats were kept). The catalogue keeps them apart and reads them alone (`Catalogue::beats_of`): an
+    /// analysis read from it has `None` here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beats: Option<Beats>,
+}
+
+/// A track's beats as kept and served (decision 0046): five bytes a beat, its time in milliseconds from the start of the
+/// sound (u32, little-endian), then how strongly it starts (0..=255, 255 for the track's strong beats). Empty for a
+/// track without a tempo. In an analysis' JSON line, base64.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Beats(pub Vec<u8>);
+
+impl Beats {
+    /// Bytes a beat.
+    pub const SIZE: usize = 5;
+
+    fn of(times: &[f64], strengths: &[u8]) -> Self {
+        let mut out = Vec::with_capacity(times.len() * Self::SIZE);
+        for (t, s) in times.iter().zip(strengths) {
+            out.extend_from_slice(&((t.max(0.0) * 1000.0).round() as u32).to_le_bytes());
+            out.push(*s);
+        }
+        Beats(out)
+    }
+
+    /// Each beat: its time (seconds) and strength.
+    pub fn each(&self) -> impl Iterator<Item = (f64, u8)> + '_ {
+        self.0.chunks_exact(Self::SIZE).map(|c| (f64::from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])) / 1000.0, c[4]))
+    }
+}
+
+impl Serialize for Beats {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use base64::Engine as _;
+        s.serialize_str(&base64::engine::general_purpose::STANDARD.encode(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for Beats {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        use base64::Engine as _;
+        let text = String::deserialize(d)?;
+        base64::engine::general_purpose::STANDARD.decode(text).map(Beats).map_err(serde::de::Error::custom)
+    }
 }
 
 /// The share of the walked stream the decoded sound must cover to count as complete. Below 1 for what decoders
@@ -372,6 +419,7 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
     let waveform = bin_waveform(&squares);
     let beat = taktus::tempo_of(&onsets).map(|b| (b.bpm(), b.sure, b.catch));
     let (bpm, bpm_confidence) = tempo(beat, genres);
+    let beats = beats_of(&onsets, bpm);
     Ok(Analysis {
         version: VERSION,
         duration_secs: frames as f64 / f64::from(o.rate),
@@ -383,7 +431,31 @@ pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
         bpm_confidence,
         waveform,
         complete: covered(frames, walked, o.time_base, o.rate),
+        beats: Some(beats),
     })
+}
+
+/// The beats of a track at the tempo kept (none without one, so a slow-counted track's are the slow ones): taktus's
+/// beat tracker over its onsets, each beat with the strongest onset at it, against the track's strong beats (the tenth
+/// strongest of them and up are 255).
+fn beats_of(onsets: &[f32], bpm: Option<f32>) -> Beats {
+    let Some(bpm) = bpm.filter(|b| *b > 0.0) else { return Beats::default() };
+    let times = taktus::beats_of(onsets, 60.0 / f64::from(bpm));
+    // The onset a beat was found at: taktus's time is its onset's index from LEAD on, less the ear's lateness (22 ms,
+    // two onsets); the strongest within two onsets of that.
+    let raw: Vec<f32> = times
+        .iter()
+        .map(|t| {
+            let at = ((t - taktus::LEAD) * taktus::RATE as f64).round() as i64 + 2;
+            (at - 2..=at + 2).filter_map(|i| usize::try_from(i).ok().and_then(|i| onsets.get(i))).copied().fold(0.0, f32::max)
+        })
+        .collect();
+    let mut sorted: Vec<f32> = raw.iter().copied().filter(|v| v.is_finite()).collect();
+    sorted.sort_by(f32::total_cmp);
+    let strong = sorted.get(sorted.len() * 9 / 10).copied().unwrap_or(0.0);
+    let strengths: Vec<u8> =
+        raw.iter().map(|v| if strong > 0.0 { (v / strong * 255.0).clamp(0.0, 255.0).round() as u8 } else { 255 }).collect();
+    Beats::of(&times, &strengths)
 }
 
 /// The hundredths' mean squares in `WAVEFORM_BINS` bins, each its RMS, as 0..=255 of the loudest bin's. RMS, not the
@@ -518,6 +590,104 @@ mod tests {
         let bpm = a.bpm.expect("a tempo for a steady click");
         assert!((bpm - 120.0).abs() < 2.0, "{bpm}");
         assert!((b.bpm.unwrap() - 60.0).abs() < 1.0, "reggae above 110 is halved: {:?}", b.bpm);
+    }
+
+    /// Short noise bursts at `clicks` (seconds), each `loud(k)` (0..=1), over `secs` seconds.
+    fn click_track(name: &str, secs: f64, clicks: &[f64], loud: impl Fn(usize) -> f32) -> std::path::PathBuf {
+        let clicks = clicks.to_vec();
+        wav(name, secs, move |t| {
+            let k = clicks.partition_point(|c| *c <= t);
+            if k == 0 {
+                return 0.0;
+            }
+            let into = t - clicks[k - 1];
+            if into >= 0.02 {
+                return 0.0;
+            }
+            (((t * 12_345.678).sin() * 43_758.545).fract() as f32 - 0.5) * 1.6 * (1.0 - into as f32 / 0.02) * loud(k - 1)
+        })
+    }
+
+    /// How far each beat is from the nearest click (seconds), and how many clicks have a beat within `near` of them.
+    fn against(beats: &Beats, clicks: &[f64], near: f64) -> (Vec<f64>, usize) {
+        let off: Vec<f64> = beats.each().map(|(b, _)| clicks.iter().map(|c| (b - c).abs()).fold(f64::MAX, f64::min)).collect();
+        let caught = clicks.iter().filter(|c| beats.each().any(|(b, _)| (b - *c).abs() <= near)).count();
+        (off, caught)
+    }
+
+    #[test]
+    fn the_beats_fall_on_the_clicks() {
+        // 120 BPM from 0.25 s on, for 30 s.
+        let clicks: Vec<f64> = (0..60).map(|k| 0.25 + 0.5 * k as f64).collect();
+        let path = click_track("beats", 30.0, &clicks, |_| 1.0);
+        let a = analyse(&path, &[]).unwrap();
+        std::fs::remove_file(&path).ok();
+        let beats = a.beats.clone().expect("worked out");
+        let (off, caught) = against(&beats, &clicks, 0.015);
+        assert!(off.iter().all(|o| *o <= 0.015), "every beat within 15 ms of a click: {off:?}");
+        assert!(caught >= 57, "{caught} of 60 clicks have their beat");
+        assert!(beats.each().all(|(_, s)| s >= 200), "even clicks are all strong: {:?}", beats.each().map(|b| b.1).collect::<Vec<_>>());
+        // It goes into an analysis' line and back.
+        let line = serde_json::to_string(&Analysis { beats: Some(beats.clone()), ..a.clone() }).unwrap();
+        assert_eq!(serde_json::from_str::<Analysis>(&line).unwrap().beats, Some(beats));
+    }
+
+    #[test]
+    fn no_tempo_no_beats() {
+        let path = wav("no-beats", 10.0, |t| 0.1 * (2.0 * std::f64::consts::PI * 1000.0 * t).sin() as f32);
+        let a = analyse(&path, &[]).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!((a.bpm, a.beats), (None, Some(Beats::default())));
+    }
+
+    #[test]
+    fn after_a_silent_intro_the_beats_start_with_the_music() {
+        // 8 s of nothing, then 128 BPM for 30 s.
+        let clicks: Vec<f64> = (0..64).map(|k| 8.0 + 60.0 / 128.0 * k as f64).collect();
+        let path = click_track("intro", 38.0, &clicks, |_| 1.0);
+        let a = analyse(&path, &[]).unwrap();
+        std::fs::remove_file(&path).ok();
+        let beats = a.beats.expect("worked out");
+        assert!(beats.each().all(|(b, _)| b > 7.9), "no beat in the silence: {:?}", beats.each().take(4).collect::<Vec<_>>());
+        let (off, caught) = against(&beats, &clicks, 0.015);
+        assert!(off.iter().all(|o| *o <= 0.015), "{off:?}");
+        assert!(caught >= 60, "{caught} of 64");
+    }
+
+    #[test]
+    fn the_beats_follow_a_tempo_that_drifts() {
+        // 120 BPM speeding up evenly to 126 over 40 s, as a band does.
+        let mut clicks = vec![0.3];
+        while *clicks.last().unwrap() < 39.5 {
+            let t = *clicks.last().unwrap();
+            clicks.push(t + 60.0 / (120.0 + 6.0 * t / 40.0));
+        }
+        let path = click_track("drift", 40.0, &clicks, |_| 1.0);
+        let a = analyse(&path, &[]).unwrap();
+        std::fs::remove_file(&path).ok();
+        let beats = a.beats.expect("worked out");
+        let (off, caught) = against(&beats, &clicks, 0.015);
+        assert!(off.iter().all(|o| *o <= 0.015), "{off:?}");
+        assert!(caught * 100 >= clicks.len() * 95, "{caught} of {}", clicks.len());
+    }
+
+    #[test]
+    fn an_accented_beat_is_stronger() {
+        // 120 BPM, every fourth click at full strength, the others at a quarter.
+        let clicks: Vec<f64> = (0..60).map(|k| 0.25 + 0.5 * k as f64).collect();
+        let path = click_track("accents", 30.0, &clicks, |k| if k % 4 == 0 { 1.0 } else { 0.25 });
+        let a = analyse(&path, &[]).unwrap();
+        std::fs::remove_file(&path).ok();
+        let beats = a.beats.expect("worked out");
+        let strength = |accented: bool| {
+            let s: Vec<f64> = beats
+                .each()
+                .filter(|(b, _)| clicks.iter().position(|c| (b - c).abs() <= 0.015).is_some_and(|k| (k % 4 == 0) == accented))
+                .map(|(_, s)| f64::from(s))
+                .collect();
+            s.iter().sum::<f64>() / s.len().max(1) as f64
+        };
+        assert!(strength(true) > strength(false) + 30.0, "{} against {}", strength(true), strength(false));
     }
 
     #[test]

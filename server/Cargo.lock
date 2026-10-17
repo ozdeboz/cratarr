@@ -379,6 +379,7 @@ dependencies = [
  "anyhow",
  "argon2",
  "axum",
+ "base64 0.22.1",
  "ebur128",
  "flacenc",
  "getrandom 0.3.4",

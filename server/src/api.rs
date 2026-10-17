@@ -46,6 +46,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/playlists", get(track_state))
         .route("/api/track/{source}/{id}/details", get(track_details))
         .route("/api/track/{source}/{id}/waveform", get(track_waveform))
+        .route("/api/track/{source}/{id}/beats", get(track_beats))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
         .route("/api/track/{source}/{id}/favorite", post(track_favorite))
@@ -451,6 +452,40 @@ async fn track_waveform(State(app): State<Arc<App>>, Path((source, id)): Path<(S
     let h = res.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=2592000"));
     if let Ok(v) = HeaderValue::from_str(&etag) {
+        h.insert(header::ETAG, v);
+    }
+    res
+}
+
+/// A track's beats (decision 0046): five bytes a beat, its time in milliseconds from the start (u32, little-endian), then
+/// its strength (0..=255); none for a track without a tempo. Worked out when first asked for, where its analysis has
+/// none yet (about a second; `app::analysis_pass::beats`). 404 for a track Cratarr does not keep the file of; 503 when
+/// they cannot be worked out now. It changes only with a new analysis: an ETag of when that was made, and kept a long
+/// time.
+async fn track_beats(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+    let cat = app.library.catalogue();
+    let c = cat.clone();
+    let file = tokio::task::spawn_blocking(move || {
+        let track = c.track_of_source(&source, &id)?;
+        c.file_of(track)
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some((folder, rel)) = file else { return StatusCode::NOT_FOUND.into_response() };
+    // Not now: the file did not decode, or its turn or decode took too long; the page may ask again later.
+    let Some(beats) = crate::app::analysis_pass::beats(cat.clone(), folder, rel.clone()).await else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let stamp = tokio::task::spawn_blocking(move || cat.analysis_stamp(folder, &rel)).await.ok().flatten();
+    let etag = stamp.map(|(at, version)| format!("\"b{version}-{at}\""));
+    if etag.is_some() && headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == etag.as_deref() {
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+    let mut res = ([(header::CONTENT_TYPE, "application/octet-stream")], beats.0).into_response();
+    let h = res.headers_mut();
+    if let Some(v) = etag.and_then(|e| HeaderValue::from_str(&e).ok()) {
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=2592000"));
         h.insert(header::ETAG, v);
     }
     res

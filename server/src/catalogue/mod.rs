@@ -87,7 +87,7 @@ const GENERATION: &str = "generation";
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 6] = [
+const ADDED_COLUMNS: [(&str, &str); 7] = [
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
@@ -96,6 +96,8 @@ const ADDED_COLUMNS: [(&str, &str); 6] = [
     ("files", "trashed TEXT"),
     // Decision 0035: whether the analysis decoded the whole stream (NULL: not known, analysed before it was recorded).
     ("analysis", "complete INTEGER"),
+    // Decision 0046: the track's beats (`analysis::Beats`; empty: no tempo; NULL: not worked out yet).
+    ("analysis_shape", "beats BLOB"),
 ];
 
 /// File states.
@@ -1391,6 +1393,48 @@ impl Catalogue {
             .flatten()
     }
 
+    /// A file's beats (decision 0046), while it is as it was analysed: `None` without such an analysis, `Some(None)`
+    /// when that analysis has none worked out yet (it is from before they were kept). Blocking.
+    pub fn beats_of(&self, folder: i64, rel: &str) -> Option<Option<crate::analysis::Beats>> {
+        self.db()
+            .query_row(
+                &format!(
+                    "SELECT s.beats FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel {SHAPE_JOIN}
+                     WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = f.size AND a.mtime = f.mtime"
+                ),
+                params![folder, rel],
+                |r| Ok(r.get::<_, Option<Vec<u8>>>(0)?.map(crate::analysis::Beats)),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// Keeps a file's beats beside its analysis, which stays as it is, when that analysis is of the file as it was
+    /// (`size`, `mtime`) when the beats were worked out. Whether they were kept. Blocking.
+    pub fn store_beats(&self, folder: i64, rel: &str, size: u64, mtime: i64, beats: &crate::analysis::Beats) -> Result<bool> {
+        let n = self.db().execute(
+            "UPDATE analysis_shape SET beats = ?5 WHERE folder = ?1 AND rel = ?2
+               AND EXISTS (SELECT 1 FROM analysis a WHERE a.folder = ?1 AND a.rel = ?2 AND a.size = ?3 AND a.mtime = ?4)",
+            params![folder, rel, size as i64, mtime, beats.0],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// A present file's path, size and mtime (an analysis worked out when it is asked for). Blocking.
+    pub fn file_to_analyse(&self, folder: i64, rel: &str) -> Option<(PathBuf, u64, i64)> {
+        let root = usize::try_from(folder).ok().and_then(|i| self.folders().get(i).cloned())?;
+        let (size, mtime): (i64, i64) = self
+            .db()
+            .query_row(&format!("SELECT size, mtime FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()
+            .ok()
+            .flatten()?;
+        Some((root.join(rel), size.max(0) as u64, mtime))
+    }
+
     /// Present files that want an analysis: none yet, the file changed since (size or mtime), or an older version;
     /// newest first (by when the track was first seen), at most `limit`: (folder, rel, path, size, mtime). Blocking.
     pub fn unanalysed(&self, limit: usize) -> Result<Vec<(i64, String, PathBuf, u64, i64)>> {
@@ -1784,8 +1828,8 @@ fn store_analysis(db: &Connection, folder: i64, rel: &str, size: u64, mtime: i64
         now,
         a.complete
     ])?;
-    db.prepare_cached("INSERT OR REPLACE INTO analysis_shape (folder, rel, waveform, blocks) VALUES (?1, ?2, ?3, ?4)")?
-        .execute(params![folder, rel, a.waveform, blocks_bytes(&a.blocks)])?;
+    db.prepare_cached("INSERT OR REPLACE INTO analysis_shape (folder, rel, waveform, blocks, beats) VALUES (?1, ?2, ?3, ?4, ?5)")?
+        .execute(params![folder, rel, a.waveform, blocks_bytes(&a.blocks), a.beats.as_ref().map(|b| b.0.as_slice())])?;
     Ok(())
 }
 
@@ -1878,6 +1922,8 @@ fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::anal
         bpm_confidence: r.get::<_, Option<f64>>(at + 7)?.unwrap_or(0.0) as f32,
         waveform: r.get::<_, Option<Vec<u8>>>(at + 8)?.unwrap_or_default(),
         complete: r.get(at + 9)?,
+        // Read apart (`Catalogue::beats_of`): a few kilobytes no list needs.
+        beats: None,
     })
 }
 
@@ -2007,7 +2053,44 @@ mod tests {
             bpm_confidence: 0.9,
             waveform: vec![7; crate::analysis::WAVEFORM_BINS],
             complete: Some(true),
+            beats: None,
         }
+    }
+
+    #[test]
+    fn beats_are_kept_beside_their_analysis_and_only_for_the_file_as_it_was() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let todo = cat.unanalysed(10).unwrap();
+        let (folder, one, path, size, mtime) = todo.iter().find(|t| t.1.ends_with("One.mp3")).unwrap().clone();
+        let two = todo.iter().find(|t| t.1.ends_with("Two.flac")).unwrap().clone();
+        assert_eq!(cat.file_to_analyse(folder, &one), Some((path, size, mtime)));
+        assert_eq!(cat.beats_of(folder, &one), None, "no analysis");
+        // An analysis from before beats were kept: none worked out.
+        cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
+        assert_eq!(cat.beats_of(folder, &one), Some(None));
+        // Not for the file as it was before: nothing kept.
+        let b = crate::analysis::Beats(vec![244, 1, 0, 0, 255, 232, 3, 0, 0, 128]);
+        assert!(!cat.store_beats(folder, &one, size + 1, mtime, &b).unwrap());
+        assert_eq!(cat.beats_of(folder, &one), Some(None));
+        assert!(cat.store_beats(folder, &one, size, mtime, &b).unwrap());
+        assert_eq!(cat.beats_of(folder, &one), Some(Some(b.clone())));
+        assert_eq!(b.each().collect::<Vec<_>>(), vec![(0.5, 255), (1.0, 128)]);
+        // The rest of the analysis is as it was; its reads leave the beats out.
+        let back = cat.analysis_of(folder, &one).unwrap();
+        assert_eq!((back.track_gain_db, back.waveform.len(), back.beats), (-3.0, 512, None));
+        // None (no tempo) is an answer, not "not worked out"; and a whole analysis keeps its beats too.
+        let none = crate::analysis::Analysis { beats: Some(crate::analysis::Beats::default()), ..an_analysis(-5.0, 480) };
+        cat.store_analysis(two.0, &two.1, two.3, two.4, &none).unwrap();
+        assert_eq!(cat.beats_of(two.0, &two.1), Some(Some(crate::analysis::Beats::default())));
+        // A file changed since has none.
+        std::fs::write(d.join(&one), b"changed").unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert_eq!(cat.beats_of(folder, &one), None);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

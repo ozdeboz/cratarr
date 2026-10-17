@@ -1,8 +1,8 @@
 <script lang="ts">
   // Full-screen visuals (decision 0046), from the full player's top bar: each track's own fractal flame
-  // (lib/visuals/flame.ts, made from its id) drawn on the GPU (lib/visuals/render.ts), its transforms turning at the
-  // track's tempo, brighter where the track is loud (lib/visuals/music.svelte.ts), blending into the next track's flame
-  // as it starts. Over everything, on black. A tap or a mouse move shows the track and the close button for a few
+  // (lib/visuals/flame.ts, made from its id) drawn on the GPU (lib/visuals/render.ts), its transforms turning a step
+  // and the picture flashing on each of the track's beats, brighter where the track is loud (lib/visuals/music.svelte.ts),
+  // blending into the next track's flame as it starts. Over everything, on black. A tap or a mouse move shows the track and the close button for a few
   // seconds; Esc, Back or a swipe down closes it. The screen stays on while it shows, where the browser allows that.
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
@@ -58,6 +58,8 @@
   const MAX_PASSES = 12;
   // A new track's flame blends in over this long.
   const BLEND_MS = 6000;
+  // A beat's turn of the transforms: once around in 32 beats.
+  const STEP = (2 * Math.PI) / 32;
 
   onMount(() => {
     showChrome();
@@ -102,6 +104,10 @@
     let angle = 0;
     let turn = 0;
     let speed = 0;
+    // Beats counted at the last frame (each eased: most of a beat's turn comes at its start), and a beat's flash and
+    // swell, 0..1.
+    let beatCount: number | null = null;
+    let pulse = 0;
     let loud = 0.6;
     let glow = 1;
     let passes = 4;
@@ -134,13 +140,34 @@
         shown = to;
         blendStart = now;
       }
-      // The transforms turn once per 32 beats at the track's tempo (once per 21 s without one); paused, they slow to
-      // a stop. Reduced motion: a quarter of that.
-      const beats = (m.bpm ?? 90) / 60;
-      const want = m.playing ? ((2 * Math.PI) / 32) * beats * (reducedMotion() ? 0.25 : 1) : 0;
-      speed += (want - speed) * Math.min(1, dt * 1.5);
-      angle += speed * dt;
-      turn += speed * 0.12 * dt;
+      // The transforms turn a step on every beat, most of it at once (once around in 32 beats), and each beat flashes
+      // and swells the picture, fading within a fifth of a second (sooner at a fast tempo), most on the track's strong
+      // beats. Between known beats (none worked out yet, no tempo, a break) they turn steadily at the tempo (once per
+      // 21 s without one); paused, they slow to a stop. Reduced motion: a quarter of the turning, no swell, a softer
+      // flash.
+      const still = reducedMotion();
+      const b = m.playing ? m.beat : null;
+      if (b) {
+        const f = Math.min(1, b.since / b.length);
+        const counted = b.index + (still ? f : 1 - (1 - f) ** 3);
+        const moved = beatCount === null ? 0 : counted - beatCount;
+        // Backwards or by more than two beats: a seek, not turned for.
+        if (moved > 0 && moved < 2) {
+          angle += STEP * moved * (still ? 0.25 : 1);
+          turn += STEP * 0.12 * moved;
+        }
+        beatCount = counted;
+        speed = (STEP / b.length) * (still ? 0.25 : 1);
+        pulse = (0.35 + 0.65 * b.strength) * Math.exp(-b.since / Math.min(0.2, 0.35 * b.length));
+      } else {
+        beatCount = null;
+        const beats = (m.bpm ?? 90) / 60;
+        const want = m.playing ? STEP * beats * (still ? 0.25 : 1) : 0;
+        speed += (want - speed) * Math.min(1, dt * 1.5);
+        angle += speed * dt;
+        turn += speed * 0.12 * dt;
+        pulse *= Math.exp(-dt / 0.15);
+      }
       // Brighter where the track is loud, following it quickly; dimmer while paused.
       loud += ((m.energy ?? 0.6) - loud) * Math.min(1, dt * 6);
       glow += ((m.playing ? 1 : 0.55) - glow) * Math.min(1, dt * 2);
@@ -161,7 +188,12 @@
       // The points fall into a buffer of at most about 0.6 megapixels; the screen scales it up (softer, and cheaper).
       const scale = Math.min(1, Math.sqrt(600_000 / (w * h)));
       renderer.resize(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)));
-      renderer.frame(passes, { brightness: (0.6 + 0.5 * loud) * glow, keep: 0.93, gamma: 3, vibrancy: 1, turn }, w, h);
+      renderer.frame(
+        passes,
+        { brightness: (0.6 + 0.5 * loud) * glow, keep: 0.93, gamma: 3, vibrancy: 1, turn, zoom: 1 + (still ? 0 : 0.04) * pulse, flash: 1 + (still ? 0.15 : 0.35) * pulse },
+        w,
+        h,
+      );
 
       // Adapting: a second of late frames takes passes (then points) away, a few seconds of quick ones add them back.
       if (spent > FRAME_MS * 1.35) slow++;

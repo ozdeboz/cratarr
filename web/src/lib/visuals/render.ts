@@ -133,9 +133,12 @@ uniform float uK1;
 uniform float uK2;
 uniform float uGamma;
 uniform float uVibrancy;
+uniform float uZoom;
+uniform float uFlash;
 out vec4 o;
 void main() {
-  vec2 uv = gl_FragCoord.xy / uView;
+  // A beat's swell: the picture drawn a little larger about its middle.
+  vec2 uv = 0.5 + (gl_FragCoord.xy / uView - 0.5) / uZoom;
   vec2 px = 1.0 / vec2(textureSize(uAcc, 0));
   vec4 a = texture(uAcc, uv);
   // The paper's density estimation, cheaply: where few points fell, the pixel is the mean of a wider ring around it
@@ -158,7 +161,8 @@ void main() {
   float g = alpha < T ? alpha / T * pow(T, 1.0 / uGamma) : pow(min(alpha, 1.0), 1.0 / uGamma);
   vec3 vib = c * (g / max(alpha, 1e-6));
   vec3 flat_ = pow(max(c, 0.0), vec3(1.0 / uGamma));
-  o = vec4(clamp(mix(flat_, vib, uVibrancy), 0.0, 1.0), 1.0);
+  // A beat's flash, after the gamma, so it shows as much in the faint parts as in the bright ones.
+  o = vec4(clamp(mix(flat_, vib, uVibrancy) * uFlash, 0.0, 1.0), 1.0);
 }`;
 
 export type Shown = {
@@ -170,6 +174,10 @@ export type Shown = {
   vibrancy: number;
   /** The whole picture's turn, radians. */
   turn: number;
+  /** How much larger it shows about its middle (a beat's swell): 1 for none. */
+  zoom: number;
+  /** Brighter by this much as shown (a beat's flash): 1 for none. */
+  flash: number;
 };
 
 export class FlameRenderer {
@@ -406,6 +414,8 @@ export class FlameRenderer {
     gl.uniform1f(this.u(this.show, 'uK2'), (this.precision === 8 ? 255 : 4) / perPixel);
     gl.uniform1f(this.u(this.show, 'uGamma'), look.gamma);
     gl.uniform1f(this.u(this.show, 'uVibrancy'), look.vibrancy);
+    gl.uniform1f(this.u(this.show, 'uZoom'), look.zoom);
+    gl.uniform1f(this.u(this.show, 'uFlash'), look.flash);
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
