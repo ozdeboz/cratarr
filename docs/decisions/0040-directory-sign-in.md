@@ -33,8 +33,9 @@ directory never gives out.
 - **While the directory cannot be reached** (no connection, a timeout, the service account refused), a sign-in the
   directory accepted in the last 30 days still works: each accepted sign-in keeps an Argon2id hash of the password
   (OWASP's minimum: 19 MiB, two passes, one lane; one hash at a time) in `ldap-verifiers.json` (owner-only), never the
-  password. A refusal by the directory (no such user in the group, or invalidCredentials) deletes that name's hash at
-  once, so a password changed or a user removed there stops working here too; a change of address, base or group
+  password, filed under the name in lower case (directories match names regardless of case) with the directory's own
+  spelling kept for the account it maps to. A refusal by the directory (no such user in the group, or invalidCredentials)
+  deletes that name's hash at once, so a password changed or a user removed there stops working here too; a change of address, base or group
   deletes them all. This keeps 0030: Cratarr never needs the directory to let its owner in.
 - **The answer** is the same for an unknown name, a wrong password and the directory being down; the sign-in throttle
   (0039) stays in front of it all.

@@ -128,6 +128,12 @@ fn filter(attribute: &str, name: &str, group: &str) -> String {
     if group.trim().is_empty() { user } else { format!("(&{user}(memberOf={}))", escape(group.trim())) }
 }
 
+/// The one form a name's kept hash is filed under: directories match names regardless of case, so a refusal for
+/// "OSKAR" must delete what an earlier sign-in kept for "oskar".
+fn key(name: &str) -> String {
+    name.to_lowercase()
+}
+
 /// Whether a name and password may be put to the directory at all.
 fn acceptable(name: &str, password: &str) -> bool {
     !password.is_empty() && !name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_control)
@@ -146,6 +152,8 @@ enum Answer {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Verifier {
+    /// The name as the directory spells it (what `accounts` maps); kept under `key(name)`.
+    name: String,
     /// Argon2id, as a PHC string (its salt and parameters in it).
     hash: String,
     /// When the directory last accepted this name's sign-in (seconds).
@@ -219,7 +227,7 @@ impl Directory {
             }
             Answer::Unreachable => {
                 tracing::warn!("ldap: the directory cannot be reached; a recent sign-in of {name:?} is tried");
-                if self.recalls(name, password, now).await { account(name) } else { None }
+                self.recalls(name, password, now).await.and_then(|spelled| account(&spelled))
             }
         }
     }
@@ -228,26 +236,27 @@ impl Directory {
         let Ok(_one) = self.hashing.acquire().await else { return };
         let password = password.to_string();
         let Ok(Ok(hash)) = tokio::task::spawn_blocking(move || hash(&password)).await else { return };
-        self.verifiers.lock().unwrap_or_else(|p| p.into_inner()).insert(name.to_string(), Verifier { hash, at: now });
+        self.verifiers.lock().unwrap_or_else(|p| p.into_inner()).insert(key(name), Verifier { name: name.to_string(), hash, at: now });
         self.save_verifiers();
     }
 
     fn forget(&self, name: &str) {
-        let gone = self.verifiers.lock().unwrap_or_else(|p| p.into_inner()).remove(name).is_some();
+        let gone = self.verifiers.lock().unwrap_or_else(|p| p.into_inner()).remove(&key(name)).is_some();
         if gone {
             self.save_verifiers();
         }
     }
 
-    async fn recalls(&self, name: &str, password: &str, now: i64) -> bool {
-        let Some(v) = self.verifiers.lock().unwrap_or_else(|p| p.into_inner()).get(name).cloned() else { return false };
+    /// The directory's spelling of the name, when a recent sign-in kept for it matches this password.
+    async fn recalls(&self, name: &str, password: &str, now: i64) -> Option<String> {
+        let v = self.verifiers.lock().unwrap_or_else(|p| p.into_inner()).get(&key(name)).cloned()?;
         if now - v.at > KEEP_SECS {
             self.forget(name);
-            return false;
+            return None;
         }
-        let Ok(_one) = self.hashing.acquire().await else { return false };
-        let password = password.to_string();
-        tokio::task::spawn_blocking(move || verify(&v.hash, &password)).await.unwrap_or(false)
+        let _one = self.hashing.acquire().await.ok()?;
+        let (hash, password) = (v.hash, password.to_string());
+        tokio::task::spawn_blocking(move || verify(&hash, &password)).await.unwrap_or(false).then_some(v.name)
     }
 
     fn save_verifiers(&self) {
@@ -507,6 +516,12 @@ mod tests {
         again.set_config(mapped).unwrap();
         assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await.as_deref(), Some("owner"));
         assert_eq!(again.sign_in("oskar", "secret", &|_: &str| false, 3_000).await, None);
+        // A refusal for the name in another case deletes it (directories match names regardless of case), and the
+        // name typed in another case finds the directory's spelling for the mapping.
+        assert_eq!(again.sign_in("OSKAR", "secret", &|a: &str| a == "owner", 3_000).await.as_deref(), Some("owner"));
+        again.forget("OSKAR");
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await, None, "gone after a refusal");
+        again.remember("oskar", "secret", 1_000).await;
         // After 30 days it is gone.
         assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 1_000 + KEEP_SECS + 1).await, None);
         assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await, None, "and stays gone");
