@@ -10,6 +10,7 @@ mod convert;
 mod covers;
 mod crates;
 mod db;
+mod diagnostics;
 mod export;
 mod folders;
 mod incoming;
@@ -44,7 +45,8 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// `cratarr-server --healthcheck`: for the container's health check (the image has no curl). Exit code 0 when
 /// the local server answers its health endpoint with 200.
@@ -98,17 +100,19 @@ async fn main() -> Result<()> {
             }
         });
     }
-    tracing_subscriber::fmt()
-        // The tag reader warns about every MP3 whose length it has to estimate; that is normal and would flood the log.
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"))
-                .add_directive("lofty=error".parse().expect("a valid directive")),
-        )
-        .init();
+    // What is logged (RUST_LOG, else info) governs both what is printed and the diagnostics log, and can change while
+    // Cratarr runs (decision 0045); the log itself opens once the data folder is known, keeping what came before.
+    let base = diagnostics::base_directives();
+    let (filter, reload) = tracing_subscriber::reload::Layer::new(diagnostics::filter(&base).expect("a valid filter"));
+    let (kept, pending) = diagnostics::layer();
+    tracing_subscriber::registry().with(filter).with(tracing_subscriber::fmt::layer()).with(kept).init();
+    diagnostics::keep_levels(base, move |f| reload.reload(f).map_err(|e| e.to_string()));
 
     let env = |k: &str| std::env::var(k).ok();
     let cfg = config::Config::from_lookup(env)?;
+    let kept_log = diagnostics::start_global(cfg.data_dir.as_deref().map(|d| std::path::Path::new(d).join("diagnostics.sqlite")).as_deref(), pending)
+        .context("cannot start the diagnostics log")?;
+    tracing::info!(target: "server", version = env!("CARGO_PKG_VERSION"), "started");
     for retired in config::RETIRED {
         if env(retired).is_some() {
             tracing::warn!("{retired} is no longer used and can be removed (decision 0005)");
@@ -222,5 +226,7 @@ async fn main() -> Result<()> {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
+    tracing::info!(target: "server", "stopping");
+    kept_log.flush();
     Ok(())
 }

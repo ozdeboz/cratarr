@@ -245,11 +245,11 @@ impl Serve {
         *self.built_at.write().unwrap_or_else(|p| p.into_inner()) = at;
         let moved = self.userdata.follow_pids(&self.library.pids()?)?;
         if moved > 0 {
-            tracing::info!("subsonic: {moved} songs' plays and stars followed them to new ids");
+            tracing::info!(target: "library", moved, "plays and stars followed songs to new ids");
         }
         let (songs, albums, artists) = self.library.counts()?;
         let why = if change == library::Change::Analyses { "new analyses" } else { "files, tags or rules changed" };
-        tracing::info!("subsonic: library built ({why}), {songs} songs, {albums} albums, {artists} artists");
+        tracing::info!(target: "library", why, songs, albums, artists, "library built");
         // The built-in Cratarr source's ids are this library's: have the catalogue link them now (new analyses change no
         // id, and a poke is a full pass of the folders), and tell those who keep what it listed.
         if change == library::Change::Songs {
@@ -274,8 +274,8 @@ impl Serve {
             loop {
                 let s = me.clone();
                 match tokio::task::spawn_blocking(move || s.refresh()).await {
-                    Ok(Err(e)) => tracing::warn!("subsonic: could not build the library: {e:#}"),
-                    Err(e) => tracing::warn!("subsonic: the library build stopped: {e}"),
+                    Ok(Err(e)) => tracing::error!(target: "library", reason = %format!("{e:#}"), "library not built"),
+                    Err(e) => tracing::error!(target: "library", reason = %e, "library build stopped"),
                     // Once ready after a start, the catalogue links the built-in source's ids without waiting for its
                     // next pass (a build pokes it too).
                     Ok(Ok(built)) if first && !built => me.catalogue().poke(),

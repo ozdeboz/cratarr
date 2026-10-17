@@ -358,13 +358,13 @@ async fn sign_in(State(serve): State<Arc<Serve>>, request: Request) -> Response 
     let client = client(&headers, parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0));
     let keys = [format!("client {client}"), format!("account {name}")];
     if let Some(wait) = serve.throttle.wait(&keys, now) {
-        tracing::warn!("sign-in: too many tries from {client} or for {name:?}; {wait} s to wait");
+        tracing::warn!(target: "signin", client = %client, user = name, wait, status = 429u16, "sign-in throttled");
         let error = format!("Too many tries. Try again in {} min.", (wait + 59) / 60);
         return page_response(StatusCode::TOO_MANY_REQUESTS, &next, name, Some(&error), Some(wait));
     }
     let Some(user) = serve.sign_in(name, &form.password).await else {
         serve.throttle.failed(&keys, now);
-        tracing::warn!("sign-in: refused for {name:?} from {client}");
+        tracing::warn!(target: "signin", client = %client, user = name, status = 401u16, "sign-in refused");
         let error = if serve.users.names().is_empty() { NO_ACCOUNT } else { "Wrong user name or password." };
         return page_response(StatusCode::UNAUTHORIZED, &next, name, Some(error), None);
     };
@@ -376,7 +376,7 @@ async fn sign_in(State(serve): State<Arc<Serve>>, request: Request) -> Response 
     let device = device_of(&headers, Some(form.browser.as_str()).filter(|b| *b == "Brave"));
     match serve.sessions.create(&user, &device, now) {
         Ok((token, _)) => {
-            tracing::info!("sign-in: {user} on {device} from {client}");
+            tracing::info!(target: "signin", client = %client, user = %user, device = %device, "signed in");
             let mut r = go(&next);
             r.headers_mut().append(header::SET_COOKIE, set_cookie(&token, over_https(&headers)));
             r

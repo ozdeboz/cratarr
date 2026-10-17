@@ -127,12 +127,25 @@ async fn change_password(State(serve): State<Arc<Serve>>, headers: HeaderMap, ax
     }
 }
 
-async fn rest(State(serve): State<Arc<Serve>>, Path(method): Path<String>, RawQuery(query): RawQuery, headers: HeaderMap, body: Bytes) -> Response {
+async fn rest(
+    State(serve): State<Arc<Serve>>,
+    Path(method): Path<String>,
+    RawQuery(query): RawQuery,
+    headers: HeaderMap,
+    peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    body: Bytes,
+) -> Response {
     let params = Params::parse(query.as_deref(), if is_form(&headers) { &body } else { &[] });
     let method = method.strip_suffix(".view").unwrap_or(&method).to_string();
     let user = match serve.users.check(params.get("u"), params.get("t"), params.get("s"), params.get("p")) {
         Ok(u) => u,
-        Err(refused) => return json_response(api::error(refused.code(), refused.message())),
+        Err(refused) => {
+            // A Subsonic app with a wrong or missing login (decision 0045): the app's own name (`c`), never what it sent.
+            let client = super::signin::client(&headers, peer.map(|p| p.0.0));
+            let (user, app) = (params.get("u").unwrap_or(""), params.get("c").unwrap_or(""));
+            tracing::warn!(target: "subsonic", client, path = %format!("/rest/{method}"), user, app, code = refused.code(), reason = refused.message(), "login refused");
+            return json_response(api::error(refused.code(), refused.message()));
+        }
     };
     match handle(&serve, &user, &method, &params, &headers).await {
         Ok(Answer::Json(body)) => json_response(api::ok(body)),
@@ -231,7 +244,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let (lib, wanted) = (s.library.clone(), id.clone());
             let artist = blocking(move || lib.artist(&wanted)).await?.ok_or_else(|| not_found("Artist"))?;
             let similar = crate::app::radio::similar_artists(&id, count).await.unwrap_or_else(|e| {
-                tracing::warn!("similar artists of {id}: {e}");
+                tracing::warn!(target: "subsonic", id = %id, reason = %e, "similar artists failed");
                 Vec::new()
             });
             let lib = s.library.clone();
@@ -270,7 +283,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
             let count = p.size("count", 50, 50);
             let ids = crate::app::radio::similar_songs(&id, count).await.unwrap_or_else(|e| {
-                tracing::warn!("songs similar to {id}: {e}");
+                tracing::warn!(target: "subsonic", id = %id, reason = %e, "similar songs failed");
                 Vec::new()
             });
             let mut songs = blocking(move || s.library.songs_by_id(&ids)).await?;
@@ -593,7 +606,7 @@ async fn write_held(service: &crate::app::PlaylistService, name: &str, held: Opt
     if let Some(e) = held
         && let Err(err) = service.set_entries(name, &e.before, &e.after).await
     {
-        tracing::warn!("subsonic: emptying {name} not written: {err}");
+        tracing::warn!(target: "subsonic", playlist = %name, reason = %err, "emptied playlist not written");
     }
 }
 

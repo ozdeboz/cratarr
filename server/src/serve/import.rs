@@ -503,7 +503,7 @@ async fn ask<'a, T>(pace: &Pace, mut page: impl FnMut() -> Fut<'a, T>) -> Result
             Ok(v) => return Ok(v),
             Err(e) => match waits.next() {
                 Some(w) => {
-                    tracing::warn!("import: {e:#}; asking again in {} s", w.as_secs());
+                    tracing::warn!(target: "imports", reason = %format!("{e:#}"), again_in_s = w.as_secs(), "import page failed");
                     tokio::time::sleep(*w).await;
                 }
                 None => return Err(e),
@@ -595,14 +595,14 @@ async fn import(serve: &Arc<Serve>, source: &dyn Source, req: &Request, pace: &P
 pub async fn run(serve: Arc<Serve>, source: Arc<dyn Source>, req: Request, pace: Pace) {
     let result = import(&serve, &*source, &req, &pace).await;
     if let Err(e) = &result {
-        tracing::warn!("import from {} into {}: {e:#}", req.source, req.account);
+        tracing::warn!(target: "imports", source = %req.source, account = %req.account, reason = %format!("{e:#}"), "import failed");
     }
     serve.import.update(|j| {
         j.finished = Some(now());
         j.step = None;
         j.error = result.err().map(|e| format!("{e:#}"));
         if !j.request.preview {
-            tracing::info!("import from {} into {}: {:?}", j.request.source, j.request.account, j.counts);
+            tracing::info!(target: "imports", source = %j.request.source, account = %j.request.account, counts = ?j.counts, "import done");
         }
     });
 }
@@ -656,7 +656,7 @@ pub async fn start(State(serve): State<Arc<Serve>>, axum::Json(req): axum::Json<
     let (ud, choice) = (serve.userdata.clone(), Request { preview: false, ..req.clone() });
     let kept = tokio::task::spawn_blocking(move || -> Result<()> { ud.set_import_choice(&choice.source, &serde_json::to_string(&choice)?) }).await;
     if let Ok(Err(e)) = kept {
-        tracing::warn!("import: could not keep the choices: {e:#}");
+        tracing::warn!(target: "imports", reason = %format!("{e:#}"), "import choices not kept");
     }
     tokio::spawn(run(serve.clone(), source, req, Pace::default()));
     (StatusCode::ACCEPTED, axum::Json(json!({ "job": job }))).into_response()

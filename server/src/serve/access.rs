@@ -72,6 +72,32 @@ pub fn refuse(method: &str, headers: &HeaderMap, uri: &str) -> Response {
     r
 }
 
+/// Why a request may not pass, for the diagnostics log (decision 0045): which way in it tried, never what it carried.
+fn refused_why(headers: &HeaderMap, query: Option<&str>) -> &'static str {
+    if key_of(headers).is_some() {
+        "key not valid"
+    } else if super::signin::token_of(headers).is_some() {
+        "session not valid"
+    } else if query.is_some_and(|q| q.contains("sig=")) {
+        "link not valid"
+    } else {
+        "not signed in"
+    }
+}
+
+/// A refusal in the diagnostics log: who asked for what (the path only: a query can carry a link's signature), why, and
+/// whether Cratarr refused it itself or answered a proxy's check (`by`). A page load sent to the sign-in page is not
+/// trouble; anything else refused is.
+pub(super) fn note_refused(r: &Response, headers: &HeaderMap, peer: Option<std::net::SocketAddr>, path: &str, query: Option<&str>, by: &str) {
+    let client = super::signin::client(headers, peer);
+    let (status, reason) = (r.status().as_u16(), refused_why(headers, query));
+    if r.status() == StatusCode::SEE_OTHER {
+        tracing::info!(target: "signin", client, path, status, reason, by, "sent to sign in");
+    } else {
+        tracing::warn!(target: "signin", client, path, status, reason, by, "request refused");
+    }
+}
+
 /// The API key a request carries (`Authorization: Bearer …`).
 pub fn key_of(headers: &HeaderMap) -> Option<&str> {
     let (scheme, key) = text(headers, "authorization")?.split_once(' ')?;
@@ -153,7 +179,10 @@ pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Ne
         return next.run(request).await;
     }
     let shown = uri.path_and_query().map_or("/", |p| p.as_str()).to_string();
-    refuse(&method, request.headers(), &shown)
+    let r = refuse(&method, request.headers(), &shown);
+    let peer = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
+    note_refused(&r, request.headers(), peer, uri.path(), uri.query(), "cratarr");
+    r
 }
 
 // --- Settings, Authentication: the requirement and the API keys ---
@@ -184,7 +213,7 @@ async fn reauthenticate(serve: &Serve, headers: &HeaderMap, password: &str) -> R
         }
         None => {
             serve.throttle.failed(&keys, now());
-            tracing::warn!("access: a wrong password for {name:?} in Settings → Authentication");
+            tracing::warn!(target: "signin", user = %name, status = 403u16, "wrong password in Settings");
             Err((StatusCode::FORBIDDEN, axum::Json(json!({ "error": "Wrong password." }))).into_response())
         }
     }
@@ -206,7 +235,7 @@ async fn set_required(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum:
     }
     match serve.sessions.set_required(s.on) {
         Ok(()) => {
-            tracing::info!("access: sign-in {} everywhere", if s.on { "required" } else { "no longer required" });
+            tracing::info!(target: "signin", required = s.on, "sign-in requirement changed");
             axum::Json(json!({ "required": s.on })).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({ "error": format!("{e:#}") }))).into_response(),
@@ -237,7 +266,7 @@ async fn new_key(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json
     }
     match serve.sessions.new_key(name, now()) {
         Ok((key, made)) => {
-            tracing::info!("access: a key made for {:?}", made.name);
+            tracing::info!(target: "signin", name = %made.name, "API key made");
             let mut r = axum::Json(json!({ "key": key, "id": made.id, "name": made.name })).into_response();
             r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             r
@@ -348,6 +377,25 @@ mod tests {
 
     fn get_(uri: &str) -> HttpRequest<Body> {
         HttpRequest::get(uri).body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_refusal_is_in_the_diagnostics_log_with_why_and_without_what_it_carried() {
+        use tracing_subscriber::layer::SubscriberExt;
+        let s = served(true);
+        let (layer, pending) = crate::diagnostics::layer();
+        let log = crate::diagnostics::Diagnostics::start(None, pending).unwrap();
+        let _logging = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
+        let linked = HttpRequest::get("/api/library?exp=1&sig=abc").header("x-forwarded-for", "84.1.2.3").body(Body::empty()).unwrap();
+        assert_eq!(status(&s, linked).await.0, StatusCode::UNAUTHORIZED);
+        let keyed = HttpRequest::get("/api/library").header("authorization", "Bearer cratarr_0000").body(Body::empty()).unwrap();
+        assert_eq!(status(&s, keyed).await.0, StatusCode::UNAUTHORIZED);
+        log.flush();
+        let rows = log.query(&crate::diagnostics::Query::default()).unwrap();
+        let seen: Vec<_> = rows.iter().map(|r| (r.what.as_str(), r.fields["path"].as_str().unwrap(), r.fields["reason"].as_str().unwrap(), r.fields["status"].as_u64().unwrap())).collect();
+        assert_eq!(seen, [("request refused", "/api/library", "key not valid", 401), ("request refused", "/api/library", "link not valid", 401)]);
+        assert_eq!((rows[0].fields["client"].as_str(), rows[1].fields["client"].as_str()), (Some("unknown"), Some("84.1.2.3")));
+        assert!(rows.iter().all(|r| !r.fields.to_string().contains("abc") && !r.fields.to_string().contains("cratarr_0000")), "neither the signature nor the key");
     }
 
     #[tokio::test]

@@ -17,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
 use super::Serve;
-use super::access::{admitted, refuse};
+use super::access::{admitted, note_refused, refuse};
 use super::signin::session_of;
 
 pub fn router(serve: Arc<Serve>) -> Router {
@@ -38,7 +38,10 @@ async fn check(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response 
     if admitted(&serve, method, &headers, path, query) {
         return StatusCode::NO_CONTENT.into_response();
     }
-    refuse(method, &headers, uri)
+    let r = refuse(method, &headers, uri);
+    // The client as the proxy names it (X-Forwarded-For).
+    note_refused(&r, &headers, None, path, query, "proxy");
+    r
 }
 
 #[cfg(test)]

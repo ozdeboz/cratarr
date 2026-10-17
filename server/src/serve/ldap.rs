@@ -263,7 +263,7 @@ impl Directory {
                 None
             }
             Answer::Unreachable => {
-                tracing::warn!("ldap: the directory cannot be reached; a recent sign-in of {name:?} is tried");
+                tracing::warn!(target: "signin", user = %name, reason = "directory unreachable", "directory sign-in: a recent one tried");
                 self.recalls(name, password, now).await.and_then(|spelled| account(&spelled))
             }
             Answer::Misconfigured => None,
@@ -351,13 +351,13 @@ async fn ask(config: &Config, name: &str, password: &str) -> Answer {
         let (mut ldap, _) = match connect(config).await {
             Ok(c) => c,
             Err(why) => {
-                tracing::warn!("ldap: {}", why.why());
+                tracing::warn!(target: "signin", reason = %why.why(), "directory not usable");
                 return why.answer();
             }
         };
         let answer = match find(&mut ldap, config, name).await {
             Err(why) => {
-                tracing::warn!("ldap: {}", why.why());
+                tracing::warn!(target: "signin", reason = %why.why(), "directory not usable");
                 why.answer()
             }
             Ok(None) => Answer::No,
