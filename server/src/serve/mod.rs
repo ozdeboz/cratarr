@@ -33,6 +33,10 @@ use crate::userdata::UserData;
 
 /// How often the library is checked against the catalogue (a cheap check; it is built again only when files changed).
 const CHECK_EVERY: Duration = Duration::from_secs(60);
+/// New analyses alone build the library again at most this often (s): the analyser works through new albums a few
+/// tracks a minute, and each full build is seconds of work and a full pass of the catalogue's file (2026-10-17: six
+/// builds for four albums). Changed songs build at the next check.
+const ANALYSES_EVERY: i64 = 600;
 /// The first check after Cratarr starts.
 const FIRST_AFTER: Duration = Duration::from_secs(90);
 
@@ -222,30 +226,37 @@ impl Serve {
         // The catalogue is only looked at after it finished a pass (or the rules or added dates changed): reading its
         // files' summary every minute kept its 200 MB file in memory for nothing.
         let inputs = (self.catalogue().last_pass(), format!("{}|{}", serde_json::to_string(&rules)?, added.len() as i64 + added.values().sum::<i64>()));
-        {
-            let mut last = self.checked.lock().unwrap_or_else(|p| p.into_inner());
-            if last.as_ref() == Some(&inputs) {
-                return Ok(false);
-            }
-            *last = Some(inputs);
+        if self.checked.lock().unwrap_or_else(|p| p.into_inner()).as_ref() == Some(&inputs) {
+            return Ok(false);
         }
         self.library.set_added(added);
-        let built = self.library.refresh_from(self.catalogue(), &rules)?;
-        if built {
-            let at = now();
-            *self.built_at.write().unwrap_or_else(|p| p.into_inner()) = at;
-            let moved = self.userdata.follow_pids(&self.library.pids()?)?;
-            if moved > 0 {
-                tracing::info!("subsonic: {moved} songs' plays and stars followed them to new ids");
-            }
-            let (songs, albums, artists) = self.library.counts()?;
-            tracing::info!("subsonic: library built, {songs} songs, {albums} albums, {artists} artists");
-            // The built-in Cratarr source's ids are this library's: have the catalogue link them now, and tell those
-            // who keep what it listed.
-            self.catalogue().poke();
-            self.built.send_replace(at);
+        let (change, print) = self.library.change(self.catalogue(), &rules)?;
+        // New analyses alone wait for their gap: not noted as checked, so the next check looks again, and builds once
+        // the gap has passed (with every analysis that came meanwhile).
+        if change == library::Change::Analyses && now() - self.built_at() < ANALYSES_EVERY {
+            return Ok(false);
         }
-        Ok(built)
+        *self.checked.lock().unwrap_or_else(|p| p.into_inner()) = Some(inputs);
+        if change == library::Change::None {
+            return Ok(false);
+        }
+        self.library.build_from(self.catalogue(), &rules, &print)?;
+        let at = now();
+        *self.built_at.write().unwrap_or_else(|p| p.into_inner()) = at;
+        let moved = self.userdata.follow_pids(&self.library.pids()?)?;
+        if moved > 0 {
+            tracing::info!("subsonic: {moved} songs' plays and stars followed them to new ids");
+        }
+        let (songs, albums, artists) = self.library.counts()?;
+        let why = if change == library::Change::Analyses { "new analyses" } else { "files, tags or rules changed" };
+        tracing::info!("subsonic: library built ({why}), {songs} songs, {albums} albums, {artists} artists");
+        // The built-in Cratarr source's ids are this library's: have the catalogue link them now (new analyses change no
+        // id, and a poke is a full pass of the folders), and tell those who keep what it listed.
+        if change == library::Change::Songs {
+            self.catalogue().poke();
+        }
+        self.built.send_replace(at);
+        Ok(true)
     }
 
     /// Keeps the library in step with the catalogue, in the background. The first check waits a little, so it does not

@@ -519,12 +519,22 @@ impl Library {
         Ok(st.exists([id])?)
     }
 
-    /// Every song's (persistent id, id), for user data to follow a rebuilt catalogue.
+    /// Every persistent id with the song that carries its user data, for that data to follow a rebuilt catalogue. A
+    /// track in two folders (an album in Music and again in Incoming) is one persistent id with two songs: its data
+    /// goes to the first folder's (Music's, the library's own file), not back and forth between them on every build.
     pub fn pids(&self) -> Result<Vec<(String, String)>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT pid, id FROM songs")?;
-        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let mut st = db.prepare("SELECT pid, id FROM songs ORDER BY folder, n")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for row in rows {
+            let (pid, id) = row?;
+            if seen.insert(pid.clone()) {
+                out.push((pid, id));
+            }
+        }
+        Ok(out)
     }
 }
 
