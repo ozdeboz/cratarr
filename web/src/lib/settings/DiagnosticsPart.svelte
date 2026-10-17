@@ -211,7 +211,8 @@
     overflow-wrap: anywhere;
   }
 
-  .list select {
+  /* Its own width, not the panel's whole row (SettingsPanel's selects); one element more to outweigh that rule. */
+  .list li select {
     flex: none;
     width: auto;
   }
