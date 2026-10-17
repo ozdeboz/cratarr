@@ -1,10 +1,14 @@
 <script lang="ts" module>
-  /** A list's order shown in View when it is not a page's (the panel's track list). */
+  import type { ColumnKind } from './columns.svelte';
+
+  /** A list's order shown in View when it is not a page's (the panel's track list); `columns`: its columns where it is
+   *  wide enough for any (decision 0042), the ones shown now and the ones it has values for. */
   export type ListOrder = {
     fields: { value: string; label: string }[];
     value: string;
     down: boolean;
     set: (value: string, down: boolean) => void;
+    columns?: { kind: ColumnKind; shown: readonly string[]; offered: readonly string[] };
   };
 </script>
 
@@ -13,6 +17,7 @@
   // same as its list header's), then for playlists the size, for albums rows or covers and the size.
   import Card from './Card.svelte';
   import ChoiceList from './ChoiceList.svelte';
+  import ColumnOrder from './ColumnOrder.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, CRATE_ORDERS, DATES, DIRECTIONS, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
   import { prefs } from './prefs.svelte';
@@ -35,6 +40,7 @@
       <SettingRow card label="Direction">
         <Seg label="Direction" options={DIRECTIONS} bind:value={() => o.down, (d) => o.set(o.value, d)} />
       </SettingRow>
+      {#if o.columns?.shown.length}<ColumnOrder {...o.columns} />{/if}
     {:else if page === 'playlists'}
       <SettingRow card label="Order"><Seg label="Order" options={PLAYLIST_ORDERS} bind:value={prefs.playlistOrder} /></SettingRow>
       <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.playlistDown} /></SettingRow>

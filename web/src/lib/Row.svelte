@@ -1,3 +1,8 @@
+<script module lang="ts">
+  /** One column's value in a row (decision 0042); in a list's head, its name, a tap to order by it. */
+  export type Cell = { id: string; text: string; width: number; end?: boolean; grow?: boolean; onclick?: () => void; on?: boolean };
+</script>
+
 <script lang="ts">
   // The one row (docs/ui-conventions.md → Rows): every list of things is built from it, in four sizes with one layout,
   // the title on the left and the action on the right. Large in the panel's Tracks, Info, Repair and Sync tabs (and a
@@ -11,8 +16,11 @@
   // (a cover, a checkbox), the title with its `badges` after it (and `sub`, a second line,
   // under it), at the end of the text its `count` (a number, a duration: muted) and `meta` (its flags), then `action`. The text (with the lead) is the row's
   // own tap target when `onclick` is given, a label with `as="label"` (its checkbox toggles).
+  // `cells`: the list's columns where there is room (decision 0042, lib/columns), between the text and its end; in a
+  // list's `head` row they are its column names, a tap orders the list by one.
   import type { Snippet } from 'svelte';
   import type { Attachment } from 'svelte/attachments';
+  import { COLUMN_GAP } from './columns.svelte';
 
   let {
     size,
@@ -37,6 +45,8 @@
     style,
     attach,
     attachMain,
+    cells,
+    head = false,
   }: {
     size: 'small' | 'medium' | 'large' | 'xl';
     title: string;
@@ -70,9 +80,21 @@
     attach?: Attachment<HTMLElement>;
     /** On the text part (a long-press on a track's row). */
     attachMain?: Attachment<HTMLElement>;
+    /** The list's columns shown (decision 0042). */
+    cells?: readonly Cell[];
+    /** The list's head: its column names over its rows, muted. */
+    head?: boolean;
   } = $props();
 
   const tag = $derived(as ?? (onclick ? 'button' : 'div'));
+  // A name (an album) grows with the title into the room the columns leave; a number or a date keeps its width. The
+  // columns together start from their widths, never from what a row's text holds, so they line up from row to row.
+  const basis = (c: Cell) => (c.grow ? `1 1 ${c.width}px` : `0 0 ${c.width}px`);
+  const cellsFlex = $derived(
+    cells?.length
+      ? `${cells.filter((c) => c.grow).length} 1 ${cells.reduce((w, c) => w + c.width, 0) + COLUMN_GAP * (cells.length - 1)}px`
+      : undefined,
+  );
   const plain = $derived(size === 'large' || size === 'xl');
   const tinted = $derived(!plain);
 </script>
@@ -86,6 +108,8 @@
   class:off
   class:wrap
   class:led={!!lead || !!front}
+  class:has-cells={!!cells?.length}
+  class:head
   class:press={tinted && !!onclick && !disabled}
   title={tooltip}
   {style}
@@ -111,10 +135,87 @@
     <span class="line"><span class="title">{title}</span>{@render badges?.()}</span>
     {#if typeof sub === 'string'}<span class="sub">{sub}</span>{:else if sub}<span class="sub">{@render sub()}</span>{/if}
   </span>
+  {#if cells?.length}
+    <span class="cells" style:flex={cellsFlex} style:gap="{COLUMN_GAP}px">
+      {#each cells as c (c.id)}
+        {#if c.onclick}
+          <button type="button" class="cell" class:end={c.end} class:on={c.on} style:flex={basis(c)} onclick={c.onclick}>{c.text}</button>
+        {:else}
+          <span class="cell" class:end={c.end} style:flex={basis(c)}>{c.text}</span>
+        {/if}
+      {/each}
+    </span>
+  {/if}
   {#if count !== undefined || meta}<span class="meta">{#if count !== undefined}<span class="n">{count}</span>{/if}{@render meta?.()}</span>{/if}
 {/snippet}
 
 <style>
+  /* The columns (decision 0042): each from its width, so they line up from row to row; the room left over goes to the
+     title (twice a column's share, from the title's own room in lib/columns: 280 px) and the names among them. The
+     row's end keeps a fixed width with them, a time or a menu or none. */
+  .has-cells .text {
+    flex: 2 1 280px;
+  }
+
+  .cells {
+    min-width: 0;
+    display: flex;
+  }
+
+  .cell {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.88rem;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .cell.end {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  button.cell {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  button.cell.end {
+    text-align: right;
+  }
+
+  button.cell:hover,
+  button.cell.on {
+    color: var(--text);
+  }
+
+  .has-cells .meta {
+    min-width: 52px;
+    justify-content: flex-end;
+  }
+
+  .has-cells .act {
+    min-width: 40px;
+  }
+
+  .large.head {
+    min-height: 32px;
+  }
+
+  .head .title,
+  .head .meta {
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
   .row {
     /* Over anything behind it (a track's swipe shows what it does there). */
     position: relative;

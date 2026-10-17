@@ -27,11 +27,13 @@
 </div>
 
 <style>
+  /* As wide as the spread gets (lib/Spread) and the handles' overhang: the handles stay over its bands. */
   .tempo {
     --thumb: 22px;
     display: flex;
     flex-direction: column;
     gap: 6px;
+    max-width: calc(480px + var(--thumb));
   }
 
   /* The bands' edges under the handles' centres: the spread is inset by half a handle on each side. */
