@@ -18,6 +18,7 @@
     view = false,
     device = true,
     order = null,
+    tempos = null,
   }: {
     /** The page it is on (its search, its own filters and View), or null in the panel. */
     page?: string | null;
@@ -25,6 +26,8 @@
     device?: boolean;
     /** The panel list's order, for its View. */
     order?: ListOrder | null;
+    /** The panel list's tempos, for its filter's tempo selector (decision 0041). */
+    tempos?: readonly (number | null | undefined)[] | null;
   } = $props();
   let filterOpen = $state(false);
   let viewOpen = $state(false);
@@ -43,8 +46,10 @@
     searching = false;
   });
   // A filter leaves something out of what shows: a library switched off (remembered, so it is said here), Playlists'
-  // Favourites only, the panel's Hide missing tracks.
-  const filtering = $derived(page ? pageView.narrowed || pageView.favouritesOnly || pageView.upgradesOnly || pageView.unplayedOnly || pageView.topRatedOnly : panel.hideMissing);
+  // Favourites only, the panel's Hide missing tracks and tempo range.
+  const filtering = $derived(
+    page ? pageView.narrowed || pageView.favouritesOnly || pageView.upgradesOnly || pageView.unplayedOnly || pageView.topRatedOnly : panel.hideMissing || panel.tempo !== null,
+  );
   function clear() {
     pageView.query = '';
     searching = false;
@@ -86,7 +91,7 @@
   </div>
 {/if}
 {#if filterOpen}
-  <FilterSheet {page} onclose={() => (filterOpen = false)} />
+  <FilterSheet {page} {tempos} onclose={() => (filterOpen = false)} />
 {/if}
 {#if viewOpen && (page || order)}
   <ViewSheet {page} {order} onclose={() => (viewOpen = false)} />

@@ -63,6 +63,9 @@ export const panel = $state({
   /** The filter's Hide missing tracks, for what is viewed only: off again when something else is (not remembered,
    *  as no filter but the server is, decided 2026-10-16). */
   hideMissing: false,
+  /** The filter's tempo range (decision 0041), band edges in BPM; null keeps every track. For what is viewed only, as
+   *  Hide missing tracks. */
+  tempo: null as [number, number] | null,
 });
 
 const query = () => new URLSearchParams(location.hash.split('?')[1] ?? '');
@@ -93,6 +96,7 @@ function read() {
   if (first !== panel.viewed || viewed.join('\n') !== panel.selection.join('\n')) {
     panel.playerTop = false;
     panel.hideMissing = false;
+    panel.tempo = null;
   }
   panel.viewed = first;
   panel.selection = first && !isSingleSubject(first) ? viewed : [];

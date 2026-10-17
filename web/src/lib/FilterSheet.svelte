@@ -8,6 +8,7 @@
   // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
   // has no per-library visibility, and a use is set only in Settings (decision 0009).
   import Switch from './Switch.svelte';
+  import TempoRange from './TempoRange.svelte';
   import { pageView } from './pageView.svelte';
   import { panel } from './panel.svelte';
   import { getSettings, getStatus, type LibraryUse, type Settings } from './api';
@@ -18,8 +19,12 @@
   import { toast } from './toast.svelte';
 
   // `page`: the page it was opened on, whose own filters it shows (Playlists: favourites only); null in the panel
-  // (Hide missing tracks).
-  let { page = null, onclose }: { page?: string | null; onclose: () => void } = $props();
+  // (Hide missing tracks, and the tempo range over the list's `tempos`, decision 0041).
+  let {
+    page = null,
+    tempos = null,
+    onclose,
+  }: { page?: string | null; tempos?: readonly (number | null | undefined)[] | null; onclose: () => void } = $props();
 
   // The servers: the status call fills the list when no playlist poll has yet.
   $effect(() => {
@@ -87,6 +92,9 @@
       <div class="toggles">
         <Switch card label="Hide missing tracks" checked={panel.hideMissing} onchange={(on) => (panel.hideMissing = on)} />
       </div>
+      {#if tempos?.some(Boolean)}
+        <div class="tempo-card"><TempoRange bpms={tempos} bind:value={panel.tempo} /></div>
+      {/if}
     {/if}
 
     {#each cards as c (c.id)}
@@ -143,6 +151,13 @@
   .toggles {
     display: grid;
     gap: 3px;
+  }
+
+  /* The tempo selector, a card as the switches are. */
+  .tempo-card {
+    padding: 14px 16px 12px;
+    border-radius: 20px;
+    background: var(--card);
   }
 
 

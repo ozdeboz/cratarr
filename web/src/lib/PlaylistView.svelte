@@ -92,6 +92,7 @@
   import Row from './Row.svelte';
   import TrackCover from './TrackCover.svelte';
   import Section from './Section.svelte';
+  import Spread, { within } from './Spread.svelte';
   import { fromAction } from 'svelte/attachments';
   import RepairTab from './RepairTab.svelte';
   import SyncTab from './SyncTab.svelte';
@@ -404,7 +405,7 @@
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
     if (!rows) return null;
-    const list = rows.map((r, i) => ({ r, i })).filter((x) => !panel.hideMissing || (x.r.id && !x.r.missing));
+    const list = rows.map((r, i) => ({ r, i })).filter((x) => (!panel.hideMissing || (x.r.id && !x.r.missing)) && within(x.r.bpm, panel.tempo));
     const text = (r: PlaylistRow) =>
       sortKey === 'title' ? (r.name ?? r.file) : sortKey === 'artist' ? (r.artist ?? '') : sortKey === 'albumArtist' ? (r.album_artist ?? '') : (r.album ?? '');
     // A number to order by; none (a value the file or the plays do not have) comes first, in the playlist's order.
@@ -495,6 +496,21 @@
 
   // Several playlists: each section's rows, asked for when it comes into view; a section folds.
   let sections = $state<Record<string, { rows: PlaylistRow[]; source: string } | { error: string }>>({});
+  /** The tempos of what is viewed (decision 0041): the filter's spread. A selection counts its loaded sections. */
+  const listTempos = $derived(
+    multi ? Object.values(sections).flatMap((s) => ('rows' in s ? s.rows.map((r) => r.bpm) : [])) : (rows?.map((r) => r.bpm) ?? null),
+  );
+  /** A playlist's tempos for its Info: the viewed rows where they are loaded, else its own section's, which Info asks
+   *  for (the Tracks tab's rows are not loaded behind another tab). */
+  function temposOf(pid: string): (number | null | undefined)[] | null {
+    if (!multi && pid === id && rows) return rows.map((r) => r.bpm);
+    const s = sections[pid];
+    return s && 'rows' in s ? s.rows.map((r) => r.bpm) : null;
+  }
+  $effect(() => {
+    if (tab !== 'info') return;
+    for (const pid of ids) untrack(() => loadSection(pid));
+  });
   let folded = $state<Record<string, boolean>>({});
   // A playlist left out of the selection drops its section; the others keep theirs.
   const sectionsAsked = new Set<string>();
@@ -1063,7 +1079,7 @@
         {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
         <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
       </span>
-      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} />{/if}<PanelPlace /></span>
+      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} tempos={listTempos} />{/if}<PanelPlace /></span>
     </div>
   {/if}
 
@@ -1312,7 +1328,7 @@
             <p class="empty">No tracks yet.</p>
           {:else}
             <ol class="rows">
-              {#each s.rows as r, i (i)}{#if !panel.hideMissing || (r.id && !r.missing)}{@render trackRow(r, s.source, sid, s.rows)}{/if}{/each}
+              {#each s.rows as r, i (i)}{#if (!panel.hideMissing || (r.id && !r.missing)) && within(r.bpm, panel.tempo)}{@render trackRow(r, s.source, sid, s.rows)}{/if}{/each}
             </ol>
           {/if}
         </Section>
@@ -1441,7 +1457,15 @@
   {@const i = insights.indexOf(pid)}
   {@const pt = i >= 0 ? insights.shown!.playlists[i] : null}
   {@const near = insights.closest(i)}
+  {@const tempos = temposOf(pid)}
   <div class="about" aria-label={`About ${pid}`}>
+    <!-- Its tempo spread (decision 0041): only shown, never a filter. -->
+    {#if tempos?.some(Boolean)}
+      <div class="tempo">
+        <Spread bpms={tempos} />
+        <p class="note">{tempos.filter(Boolean).length} of {plural(tempos.length, 'track')} have a tempo</p>
+      </div>
+    {/if}
     {#if !pt}
       {#if insights.shown}<p class="note">Nothing is known about it yet.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
     {:else}
@@ -1931,6 +1955,15 @@
 
   .about {
     padding: 4px 0 8px;
+  }
+
+  /* The tempo spread at the head of Info (decision 0041). */
+  .about .tempo {
+    padding: 8px 8px 4px;
+  }
+
+  .about .tempo .note {
+    margin: 6px 0 0;
   }
 
   .note {
