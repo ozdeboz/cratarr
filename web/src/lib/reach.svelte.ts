@@ -37,7 +37,7 @@ export function refused() {
 }
 
 /** Whether an answer is Cratarr asking for its sign-in (decision 0039: away from home, no session, or one that ended). */
-export const asksSignIn = (res: Response) => res.status === 401 && /^Cookie.*realm="Cratarr"/i.test(res.headers.get('WWW-Authenticate') ?? '');
+export const asksSignIn = (res: Response) => res.status === 401 && /^Cookie\b.*realm="Cratarr"/i.test(res.headers.get('WWW-Authenticate') ?? '');
 
 let leaving = false;
 
