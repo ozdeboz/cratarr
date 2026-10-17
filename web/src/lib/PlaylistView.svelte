@@ -123,6 +123,11 @@
   let crateImage = $state<{ file: Blob; url: string } | 'remove' | null>(null);
   /** The viewed crate's id, when a crate is viewed (not a playlist), or changed. */
   const crate = $derived(crateOf(panel.viewed) ?? builder?.id ?? null);
+  // Its name comes from the crates' list, read on the Crates page: opened by a link or after a reload, it is read here
+  // (or the title would be the crate's id).
+  $effect(() => {
+    if (crate && crates.list === null) untrack(() => loadCrates());
+  });
   /** The viewed album (an Incoming one, or a track's), when an album is viewed. */
   const album = $derived(albumOf(panel.viewed));
   /** The viewed artist (their page), or all their tracks (`tracks`: their Top tracks' ›), when an artist is viewed. */
