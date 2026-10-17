@@ -28,31 +28,47 @@ it needs to explain itself has to come with it, and nothing may leave the instal
 1. **Cratarr keeps a diagnostics log of its own**, in its data folder (`diagnostics.sqlite`), apart from the undo
    journal (0011, 0026). One row per event: when, where it happened (the server, or a player by name), the area (Play On,
    sync play, sign-in, library, Subsonic, imports), what, and its details. Recorded:
-   - a player connecting and disconnecting, and why it ended (closed by the player, a write that failed, replaced by
-     a newer connection, gone quiet);
-   - a request refused (401, 403), with the address and the client it came from;
+   - a player connecting and disconnecting, and how its connection ended: replaced by a newer one, gone quiet (its
+     lease ran out), closed (by the player or the network; the server cannot tell which, the player's own log can),
+     or the server stopping;
+   - a request Cratarr refuses (401, 403) in its sign-in layer, and what it answers a proxy asking it to check a
+     sign-in, with the client and the address asked for. A refusal made in front of Cratarr (a proxy's own rules, a
+     bouncer) never reaches it and is not in this log;
    - a command that could not be delivered, and to whom;
    - handovers, joins and leaves, queues given back, and queues adopted from a player;
    - library rebuilds and why, imports, restarts with their version.
 
-   Kept 14 days, at most 100,000 rows, the oldest going first. No secrets in it: keys, passwords and sessions are left
-   out, not masked.
+   The same event again within a minute (the same client, address and answer for a refusal; the same warning) adds to
+   a count on its row instead of a new row, so one prober or one stuck device cannot fill the log. Kept 14 days, at
+   most 100,000 rows, the oldest going first. No secrets in it: keys, passwords and sessions are left out, not
+   masked.
+
+   The log is fed by the server's own logging (`tracing`): the places that log events with their area and fields, and
+   the log takes them through one layer that writes on a thread of its own, never on the caller's. What the log keeps,
+   by area, is the same setting as what the server prints (item 5).
 2. **The apps keep their own small log and hand it to Cratarr.** The Android app writes its link and service events to a
-   file on the device (the last 2,000 lines): each connection attempt with the address used and how it went, waits and
-   why (the ten minutes after a refusal among them), switches between the home and public address, the player
-   service starting and stopping, and crashes. On every connect it sends what Cratarr has not had yet; Cratarr adds it
-   to the log under that player, its times put on Cratarr's clock (the offset sync play keeps). The page's own player
-   does the same with what it keeps while open. Nothing goes to anyone else.
-3. **A player's link is part of what it reports**: connected since, attempts that failed since then, the last error,
-   the address in use, and a wait it is in (until when, and why). `GET /api/players` shows it, so Home Assistant and the
-   page see a player in trouble while it is.
-4. **One id per connection**: the app makes one for each Play On connection and sends it with every request
-   (`X-Cratarr-Connection`); Cratarr writes it with that player's events and sends a request id back on every answer
-   (`X-Request-Id`). A proxy that logs these headers lines its log up with Cratarr's; setting that up is the install's
-   (for the owner's: nas-infra), not Cratarr's.
-5. **Settings → Diagnostics**: the log, newest first, by player and area; each player's link as it is now; how much is
-   logged by area (more for an hour or a day, then back by itself, without a restart); and **Download**, one file of the
-   log, the players and the settings without secrets, for a bug report.
+   file on the device (the last 2,000 lines, numbered): each connection attempt with the address used and how it went,
+   waits and why (the ten minutes after a refusal among them), switches between the home and public address, the
+   player service starting and stopping, which side closed a connection, and crashes. On every connect it sends the
+   lines Cratarr has not had yet; Cratarr answers with the last number it holds, so sending again adds nothing twice.
+   Cratarr adds them to the log under that player, their times put on Cratarr's clock (the offset sync play keeps; lines
+   from before the first measurement get the offset known at sending). The page's own player does the same with what it
+   keeps while open. Nothing goes to anyone else.
+3. **A player's link as Cratarr knows it** is part of `GET /api/players`: online, offline since, last heard from, and how
+   its last connection ended. While its reports still get through (its command stream down, say) it adds its own
+   view: connected since, attempts that failed since, the last error, the address in use, and a wait it is in (until
+   when, and why). A player that cannot reach Cratarr at all cannot say more; its side arrives with its log once it is
+   back (item 2). So Home Assistant and the page see a player go missing while it is, and why, afterwards.
+4. **Ids that tie the logs together**: the app makes an id for each Play On connection and sends it with every request
+   of its own (`X-Cratarr-Connection`); the page's player sends its own id with its reports (a page's requests cannot
+   carry a header the app sets). Cratarr writes the id with that player's events, and answers every request with a
+   request id (`X-Request-Id`): the one a proxy sent, else one of its own. A proxy that logs these headers lines its log
+   up with Cratarr's; setting that up is the install's (for the owner's: nas-infra), not Cratarr's. Sync play's sound
+   is not HTTP and carries none; its events have the player's name.
+5. **Settings → Diagnostics**: the log, newest first, by player and area; each player's link as Cratarr knows it; how
+   much is logged by area (more for an hour or a day, then back by itself, without a restart; the same setting governs
+   the log and what the server prints); and **Download**, one file of the log, the players and the settings without
+   secrets, with client addresses masked, for a bug report.
 6. **Not now:** Prometheus metrics (`/metrics`, off by default) wait until someone asks; a monitoring stack (OpenTelemetry,
    Grafana, Loki) and outside crash or telemetry services are not part of Cratarr. Whether Cratarr is up stays with the
    install's own monitoring (for the owner's: the NAS monitor and Home Assistant).
@@ -62,17 +78,20 @@ The page shows the log as it is, with no prose; errors are one short line (ui-co
 ## Consequences
 
 - The next "why did that happen" is read on one page, across server, phone and tablet, days later and after a deploy.
-- A player stuck waiting or failing to connect shows in `/api/players` and Home Assistant while it lasts; an alert on
-  it is the install's choice (ha-infra).
+- A player that goes missing shows in `/api/players` and Home Assistant while it is gone; why shows once it is back.
+  An alert on it is the install's choice (ha-infra).
 - A bug report from someone else's install can carry what happened, without them reading logs.
 - The log stays small: by estimate a few thousand rows a day, so a few MB at the 14 days' end; the phone's file is
   bounded by its 2,000 lines.
+- Adding an event is one logging line where it happens; no part of Cratarr calls the log directly.
 - The app's lines missing from logcat get found and fixed on the way (item 2's file must not depend on logcat).
 
 ## Who builds what
 
-- The log itself: its file, rows, retention, queries and the download's contents (a new `server/src/diagnostics.rs`),
-  and the events from the library, Subsonic and imports (`serve/`, `userdata/`, `source/`): claude-a5.
+- The log itself: the layer, its writer thread, the file, rows and counts, retention, queries and the download's
+  contents (a new `server/src/diagnostics.rs`), its place in the server's logging setup with the area levels that
+  change at runtime (`main.rs`), and the events from the library, Subsonic and imports (`serve/`, `userdata/`,
+  `source/`): claude-a5.
 - The events from Play On and sync play (`app/playon.rs`, `snapcast/`), the refusals and the request ids (`api.rs`),
-  the routes, area log levels at runtime (`main.rs`), the Android app's file, its upload and the link in its reports
-  (`android/`), the page player's part and the Diagnostics page: claude-5f.
+  the routes, the Android app's file, its upload and its link in its reports (`android/`), the page player's part, and
+  the Diagnostics page: claude-5f.
