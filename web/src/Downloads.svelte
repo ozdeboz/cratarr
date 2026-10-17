@@ -12,7 +12,7 @@
   import Icon from './lib/Icon.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { askDownloads, downloads, removeDownloads, type DownloadedTrack } from './lib/app.svelte';
-  import { library, readLibrary } from './lib/albums.svelte';
+  import { albumOfDownload, library, readLibrary } from './lib/albums.svelte';
   import { playQueue } from './lib/localPlayer.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { inApp } from './lib/app.svelte';
@@ -25,11 +25,12 @@
   if (!library.view) readLibrary(false).catch(() => {});
 
   type Group = { source: string; id: string; tracks: DownloadedTrack[] };
-  // The downloads by album: an album's id where the track has one, else its name and artist.
+  // The downloads by album: its album in the Library where that is known (one compilation is one album, whatever its
+  // tracks' artists), else its name and artist.
   const groups = $derived.by(() => {
     const by = new Map<string, Group>();
     for (const t of downloads.tracks) {
-      const id = t.album_id ?? `${t.album ?? ''}\n${t.artist ?? ''}`;
+      const id = albumOfDownload(t) ?? `${t.album ?? ''}\n${t.artist ?? ''}`;
       const key = `${t.source}/${id}`;
       const g = by.get(key) ?? { source: t.source, id, tracks: [] };
       g.tracks.push(t);

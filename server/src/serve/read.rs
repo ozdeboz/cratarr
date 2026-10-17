@@ -457,6 +457,19 @@ impl Library {
         Ok((songs as u64, albums as u64))
     }
 
+    /// The album of each of these songs, by song id; a song not in the library is left out.
+    pub fn albums_of(&self, songs: &[String]) -> Result<HashMap<String, String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album_id FROM songs WHERE id = ?1")?;
+        let mut out = HashMap::new();
+        for id in songs {
+            if let Some(album) = st.query_map([id], |r| r.get::<_, String>(0))?.next().transpose()? {
+                out.insert(id.clone(), album);
+            }
+        }
+        Ok(out)
+    }
+
     /// Where a song's file is: (catalogue folder, path in it).
     pub fn file_of(&self, song: &str) -> Result<Option<(i64, String)>> {
         let db = self.db();

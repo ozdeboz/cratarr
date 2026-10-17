@@ -710,6 +710,20 @@ mod tests {
     }
 
     #[test]
+    fn a_songs_album_is_found_by_the_songs_id() {
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&sample(), &Rules::default()).unwrap();
+        let all: HashMap<String, String> = {
+            let db = lib.db();
+            let mut st = db.prepare("SELECT id, album_id FROM songs").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(all.values().collect::<std::collections::HashSet<_>>().len(), 2);
+        let asked: Vec<String> = all.keys().cloned().chain(["tr-none".to_string()]).collect();
+        assert_eq!(lib.albums_of(&asked).unwrap(), all, "each song with its album; one not in the library left out");
+    }
+
+    #[test]
     fn gains_come_from_the_analysis_once_there_else_from_the_files_tags() {
         let tagged = row(1, "A/X/01 t.flac", &[("replaygain_track_gain", "-6.53 dB"), ("replaygain_track_peak", "0.988123"), ("replaygain_album_gain", "-7 dB")]);
         assert_eq!(gains(&tagged), Gains { track_gain: Some(-6.53), track_peak: Some(0.988123), album_gain: Some(-7.0), album_peak: None });

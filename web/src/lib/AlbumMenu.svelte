@@ -55,7 +55,7 @@
     type KeepPreview,
     type ReplacePreview,
   } from './api';
-  import { albumPlay, albumRatings, goToArtist as showArtist, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum } from './albums.svelte';
+  import { albumOfDownload, albumPlay, albumRatings, goToArtist as showArtist, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum } from './albums.svelte';
   import RatingStars from './RatingStars.svelte';
   import { download, downloads, inApp, removeDownloads } from './app.svelte';
   import { viewGenre } from './crates.svelte';
@@ -137,7 +137,7 @@
   });
   const tracks = $derived(givenTracks ?? read?.tracks ?? null);
   /** Its tracks kept on this device (the app's downloads): Remove from this device. */
-  const kept = $derived(inApp ? downloads.tracks.filter((t) => t.source === source && t.album_id === a.id) : []);
+  const kept = $derived(inApp ? downloads.tracks.filter((t) => t.source === source && albumOfDownload(t) === a.id) : []);
   const ids = $derived(tracks?.map((t) => t.id) ?? []);
   const genres = $derived((givenGenres ?? read?.genres ?? []).slice(0, 2));
 

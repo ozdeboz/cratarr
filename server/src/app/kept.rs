@@ -83,7 +83,7 @@ pub async fn ask(app: &App, ask: Ask) -> Vec<Answer> {
         let key = item.key();
         match rows_of(app, &item).await {
             Ok((source, rows)) => {
-                let ids: Vec<&str> = rows.iter().filter(|r| !r.missing).filter_map(|r| r.id.as_deref()).collect();
+                let ids: Vec<(&str, Option<&str>)> = rows.iter().filter(|r| !r.missing).filter_map(|r| Some((r.id.as_deref()?, r.album_id.as_deref()))).collect();
                 let version = version_of(&source, &ids);
                 let tracks = (ask.versions.get(&key) != Some(&version)).then(|| tracks_of(&source, &rows));
                 out.push(Answer { key, version: Some(version), tracks, error: None });
@@ -105,7 +105,8 @@ async fn rows_of(app: &App, item: &Item) -> Result<(String, Vec<PlaylistRow>), S
     }
 }
 
-fn version_of(source: &str, ids: &[&str]) -> String {
+/// An item's version: its tracks and their albums (a track whose album becomes known is told to the app again).
+fn version_of(source: &str, ids: &[(&str, Option<&str>)]) -> String {
     let mut h = DefaultHasher::new();
     source.hash(&mut h);
     ids.hash(&mut h);
@@ -173,8 +174,10 @@ mod tests {
     fn keys_versions_and_what_counts_as_lossless() {
         let item: Item = serde_json::from_str(r#"{"kind":"crate","source":"cratarr","id":"c1"}"#).unwrap();
         assert_eq!(item.key(), "crate:cratarr/c1");
-        assert_eq!(version_of("cratarr", &["a", "b"]), version_of("cratarr", &["a", "b"]));
-        assert_ne!(version_of("cratarr", &["a", "b"]), version_of("cratarr", &["b", "a"]), "the order counts (a cap keeps the first)");
+        let (a, b) = (("a", None), ("b", Some("al-1")));
+        assert_eq!(version_of("cratarr", &[a, b]), version_of("cratarr", &[a, b]));
+        assert_ne!(version_of("cratarr", &[a, b]), version_of("cratarr", &[b, a]), "the order counts (a cap keeps the first)");
+        assert_ne!(version_of("cratarr", &[a, b]), version_of("cratarr", &[a, ("b", None)]), "an album found is told again");
         assert!(lossless(Some("FLAC"), None) && lossless(Some("m4a"), Some(900)) && !lossless(Some("m4a"), Some(256)) && !lossless(Some("mp3"), Some(320)));
     }
 

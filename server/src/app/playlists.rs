@@ -238,7 +238,7 @@ pub struct PlaylistRow {
     /// and when the entry came into the playlist (none for one held before Cratarr kept that).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added: Option<i64>,
-    /// Its album's id, where the rows are of several albums (an artist's).
+    /// Its album's id where it is known: an artist's rows, and a playlist's or a crate's on Cratarr's own source.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub album_id: Option<String>,
     /// No such file in the Music folder.
@@ -953,11 +953,21 @@ impl PlaylistService {
         let (c, sid, music) = (self.lib.catalogue(), source.to_string(), self.lib.music());
         let rows = tokio::task::spawn_blocking(move || -> Result<Vec<PlaylistRow>> {
             let facts = c.line_rows(&sid, &entries)?;
+            // Cratarr's own tracks with their album, as the library has it (the app's downloads are told it, and find
+            // their album and its cover by it).
+            let albums = match crate::serve::instance() {
+                Some(serve) if sid == crate::source::cratarr::KIND.id => {
+                    let ids: Vec<String> = facts.iter().filter_map(|f| f.track_id.clone()).collect();
+                    serve.library.albums_of(&ids)?
+                }
+                _ => Default::default(),
+            };
             let dir = music.map(std::path::PathBuf::from);
             Ok(entries
                 .into_iter()
                 .zip(facts)
                 .map(|(entry, f)| PlaylistRow {
+                    album_id: f.track_id.as_ref().and_then(|t| albums.get(t).cloned()),
                     missing: !dir.as_deref().is_some_and(|d| crate::playlists::entry_exists(d, &entry)),
                     file: entry.rsplit('/').next().unwrap_or(&entry).to_string(),
                     entry,
@@ -974,7 +984,6 @@ impl PlaylistService {
                     play_count: None,
                     last_played: None,
                     added: None,
-                    album_id: None,
                 })
                 .collect())
         })

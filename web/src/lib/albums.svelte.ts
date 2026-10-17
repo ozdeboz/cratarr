@@ -11,6 +11,7 @@ import {
   type AlbumUse,
   type ListedAlbum,
 } from './api';
+import type { DownloadedTrack } from './app.svelte';
 import { player, refresh, untilNewTrack } from './live.svelte';
 import { enqueue, type LocalTrack } from './localPlayer.svelte';
 import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
@@ -28,6 +29,35 @@ export function readLibrary(fresh: boolean): Promise<void> {
     .then((v) => void (library.view = v))
     .finally(() => (reading = null));
   return reading;
+}
+
+// The Library's albums by server: their ids, and the albums of each title. Made once per list read (the downloads
+// look theirs up on every report of the app's).
+type Index = Map<string, { ids: Set<string>; titled: Map<string, ListedAlbum[]> }>;
+const indexes = new WeakMap<AlbumsView, Index>();
+function indexOf(view: AlbumsView): Index {
+  let index = indexes.get(view);
+  if (!index) {
+    index = new Map();
+    for (const s of view.sources) {
+      const titled = new Map<string, ListedAlbum[]>();
+      for (const a of s.albums) titled.set(a.title, [...(titled.get(a.title) ?? []), a]);
+      index.set(s.id, { ids: new Set(s.albums.map((a) => a.id)), titled });
+    }
+    indexes.set(view, index);
+  }
+  return index;
+}
+
+/** A track downloaded in the app: its album in the Library. A download's own album id where the Library lists it;
+ *  else (a download from before a playlist's rows said their albums, or an album since moved) the Library's album of
+ *  that name on its server, the track's artist's when several have the name. Else its own id, or null. */
+export function albumOfDownload(t: DownloadedTrack): string | null {
+  const listed = library.view && indexOf(library.view).get(t.source);
+  if (!listed || (t.album_id && listed.ids.has(t.album_id)) || !t.album) return t.album_id;
+  const named = listed.titled.get(t.album) ?? [];
+  const found = named.length > 1 ? named.filter((a) => a.artist === t.artist || (!!t.artist && !!a.artists?.includes(t.artist))) : named;
+  return found.length === 1 ? found[0].id : t.album_id;
 }
 
 /** The album being started (its Play buttons wait meanwhile). */
