@@ -82,7 +82,7 @@
   $effect(() => {
     if (!peek) return;
     const away = (e: PointerEvent) => {
-      if (!(e.target as Element | null)?.closest('.sidebar')) peek = false;
+      if (!(e.target as Element | null)?.closest('.nav-col')) peek = false;
     };
     addEventListener('pointerdown', away, true);
     return () => removeEventListener('pointerdown', away, true);
@@ -353,15 +353,41 @@
 </script>
 
 <div class="shell" class:folded={navFoldedNow} style:--nav-w={navDrag !== null ? `${navDrag}px` : undefined}>
-  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-  <aside
-    class="sidebar"
+  <!-- The navigation's column: the sidebar, which scrolls (and so would cut off anything past its edge), and the handle
+       on its edge. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div
+    class="nav-col"
     class:peek
     onclickcapture={collapse}
     onclick={stripTap}
     onpointerenter={(e) => prefs.navFolded && navDrag === null && e.pointerType === 'mouse' && (peek = true)}
     onpointerleave={(e) => e.pointerType === 'mouse' && navDrag === null && (peek = false)}
   >
+    <aside class="sidebar" class:peek>
+      <div class="brand">
+        <span class="logo"><Mark /></span>
+        <span class="name">Cratarr</span>
+      </div>
+      {#if connection}
+        <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
+      {/if}
+
+      <nav aria-label="Pages">
+        {#each MAIN as p (p.id)}
+          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}
+            ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
+          >
+        {/each}
+      </nav>
+
+      <div class="foot">
+        {#each APART as p (p.id)}
+          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
+        {/each}
+        {#if status}<div class="version">Cratarr {status.version}</div>{/if}
+      </div>
+    </aside>
     <button
       class="nav-grip edge-grip"
       aria-label={prefs.navFolded && !peek ? 'Unfold the navigation' : 'Fold the navigation'}
@@ -370,29 +396,7 @@
       onpointerdown={navGrip}
       onclick={navTap}
     ></button>
-    <div class="brand">
-      <span class="logo"><Mark /></span>
-      <span class="name">Cratarr</span>
-    </div>
-    {#if connection}
-      <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
-    {/if}
-
-    <nav aria-label="Pages">
-      {#each MAIN as p (p.id)}
-        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}
-          ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
-        >
-      {/each}
-    </nav>
-
-    <div class="foot">
-      {#each APART as p (p.id)}
-        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
-      {/each}
-      {#if status}<div class="version">Cratarr {status.version}</div>{/if}
-    </div>
-  </aside>
+  </div>
 
   <div class="content" class:with-side={sidebar} style:--player-w="{playerWidth}px" bind:this={contentEl}>
     <div class="page" class:under-row={pageRow} bind:this={pageEl}>
@@ -513,7 +517,7 @@
 <style>
   /* Phone first: content full width, navigation in a bar at the bottom. From 1024 px (as seerr does) a fixed
      sidebar takes over and the bar goes away. */
-  .sidebar {
+  .nav-col {
     display: none;
   }
 
@@ -628,7 +632,7 @@
      bottom bar and staying in place while the page scrolls. */
   .content.with-side {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 10px var(--player-w);
+    grid-template-columns: minmax(0, 1fr) 1px var(--player-w);
     align-items: start;
   }
 
@@ -657,6 +661,19 @@
     overscroll-behavior: contain;
     container-type: inline-size;
     background: var(--bg);
+  }
+
+  /* Where the edge's handle reaches over the panel (app.css .edge-grip, centred on the line just left of it), the panel
+     is cut away around it with a pixel clear all round, so the handle never sits on its art. The cut's shape is the
+     handle's grown by that pixel (its size here, 7 by 46, follows --grip-w and --grip-h). */
+  .player-side {
+    --notch-w: calc(var(--grip-w) + 2px);
+    --notch-h: calc(var(--grip-h) + 2px);
+    mask:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 7 46' preserveAspectRatio='none'%3E%3Crect width='7' height='46' rx='3.5'/%3E%3C/svg%3E")
+        calc(-0.5px - var(--notch-w) / 2) 50% / var(--notch-w) var(--notch-h) no-repeat,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
   }
 
   /* Same place and look as a page's own empty state. */
@@ -797,10 +814,18 @@
       grid-column: 2;
     }
 
-    .sidebar {
+    /* Over the page beside it: its handle reaches over the page's edge. */
+    .nav-col {
       position: sticky;
       top: 0;
+      z-index: 10;
       height: var(--app-h, 100dvh);
+      display: flex;
+    }
+
+    .sidebar {
+      flex: 1;
+      min-width: 0;
       display: flex;
       flex-direction: column;
       padding: 20px 14px calc(14px + env(safe-area-inset-bottom));
@@ -808,7 +833,6 @@
       /* Never cut off: on a window too low for all of it, it scrolls. */
       overflow-y: auto;
       background: var(--surface);
-      border-right: 1px solid var(--border);
     }
 
     .grip,
@@ -901,7 +925,7 @@
     font-size: 0.75rem;
   }
 
-  /* The navigation's edge: the panel's handle (app.css .edge-grip) over its right border, a tap or a drag. */
+  /* The navigation's edge: the panel's handle (app.css .edge-grip) as its right border, a tap or a drag. */
   .nav-grip {
     display: none;
   }
@@ -946,26 +970,17 @@
     }
 
     .nav-grip {
-      display: grid;
+      display: block;
       position: absolute;
       top: 0;
       right: 0;
       bottom: 0;
-      width: 12px;
       padding: 0;
       border: 0;
-      background-color: transparent;
-      /* Over the border it replaces: the handle draws the line. */
-      background-position: right;
-      z-index: 1;
-    }
-
-    .sidebar {
-      border-right: 0;
     }
 
     /* Shown whole over the page: the page keeps its place beside the strip. */
-    .sidebar.peek {
+    .nav-col.peek {
       position: fixed;
       left: 0;
       top: 0;
