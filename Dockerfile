@@ -24,5 +24,7 @@ COPY --from=server /cratarr-server /cratarr-server
 ENV CRATARR_BIND=0.0.0.0:8080
 USER 1010:1001
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/cratarr-server", "--healthcheck"]
+# Five minutes to start before a failed check counts: a first start that moves a database (the analysis side table,
+# 2026-10-17: about 4.5 min from the RAID) must not be marked unhealthy halfway.
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=300s CMD ["/cratarr-server", "--healthcheck"]
 ENTRYPOINT ["/cratarr-server"]
