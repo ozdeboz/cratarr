@@ -30,8 +30,9 @@ title and its end: a page in its new Table layout, and the panel's track lists w
 **A Table layout for the pages.** Next to Rows and Covers (decision 0028), Table shows one item per line over the full
 width, with columns. Rows and Covers stay as they are.
 
-**The navigation folds (wide windows).** A toggle at its foot folds it to a strip of icons and unfolds it again,
-remembered per browser. Folded:
+**The navigation folds (wide windows).** Its edge is the same handle as the panel's: a tap folds it to a strip of icons
+or unfolds it, a drag follows the pointer and snaps to one of the two on release (never a width between), as Spotify's
+library and VS Code's sidebar do. Remembered per browser. Folded:
 - a tap on an icon goes there at once;
 - hovering over the strip, or a tap on the strip outside an icon, shows the whole navigation over the page without
   pushing it aside; it folds again when the pointer leaves or after a tap elsewhere.
