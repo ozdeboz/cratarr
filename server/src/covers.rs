@@ -1,6 +1,6 @@
-//! Album covers, read straight from the album folder in the music library. The folder is derived from the playing
-//! track's library entry (never from anything the client sends), only a fixed list of file names is ever read, and
-//! nothing outside the music folder is served, symlinks included.
+//! Album covers, read straight from the album folder in the music library, else the picture embedded in the track. The
+//! folder is derived from the playing track's library entry (never from anything the client sends), only a fixed list
+//! of file names is ever read, and nothing outside the music folder is served, symlinks included.
 
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -86,7 +86,7 @@ pub async fn resolve(music_root: &Path, entry: &str, if_none_match: Option<&str>
     if !dir.starts_with(&root) {
         return Outcome::NotFound;
     }
-    let Some(found) = pick_cover(&dir).await else { return Outcome::NotFound };
+    let Some(found) = pick_cover(&dir).await else { return embedded_cover(&root, entry, if_none_match).await };
     // A cover that is a symlink must still end up inside the library.
     let Ok(file) = tokio::fs::canonicalize(&found).await else { return Outcome::NotFound };
     if !file.starts_with(&root) {
@@ -105,6 +105,33 @@ pub async fn resolve(music_root: &Path, entry: &str, if_none_match: Option<&str>
         Ok(bytes) if bytes.len() as u64 <= MAX_BYTES => Outcome::Image { content_type: ct, etag, bytes },
         _ => Outcome::NotFound,
     }
+}
+
+/// Embedded pictures read at a time, at most: each may be megabytes, a screen of covers asks for dozens at once, and
+/// the container's memory is small.
+static EMBEDDED: std::sync::LazyLock<tokio::sync::Semaphore> = std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(2));
+
+/// No cover file in the album folder: the picture embedded in the track itself (many albums carry their art only
+/// there), as the OpenSubsonic API's covers have it (`serve::art`). Its fingerprint is the track's: it changes with it.
+async fn embedded_cover(root: &Path, entry: &str, if_none_match: Option<&str>) -> Outcome {
+    let Ok(track) = tokio::fs::canonicalize(root.join(entry)).await else { return Outcome::NotFound };
+    if !track.starts_with(root) {
+        return Outcome::NotFound;
+    }
+    let Ok(meta) = tokio::fs::metadata(&track).await else { return Outcome::NotFound };
+    if !meta.is_file() {
+        return Outcome::NotFound;
+    }
+    let etag = etag(meta.modified().unwrap_or(UNIX_EPOCH), meta.len());
+    if if_none_match.is_some_and(|h| etag_matches(h, &etag)) {
+        return Outcome::NotModified { etag };
+    }
+    let Ok(_turn) = EMBEDDED.acquire().await else { return Outcome::NotFound };
+    let Some((ct, bytes)) = tokio::task::spawn_blocking(move || crate::serve::art::embedded(&track)).await.ok().flatten() else {
+        return Outcome::NotFound;
+    };
+    let Some(content_type) = ["image/jpeg", "image/png", "image/webp", "image/gif"].into_iter().find(|t| *t == ct) else { return Outcome::NotFound };
+    Outcome::Image { content_type, etag, bytes }
 }
 
 /// Jellyfin item ids are hex GUIDs; anything else is not even looked up.
@@ -246,6 +273,48 @@ mod tests {
         for entry in ["NoCover/a.mp3", "Other/a.mp3", "Missing/a.mp3", "a.mp3", "../a/b.mp3", "/x/y.mp3", ""] {
             assert_eq!(resolve(&d.0, entry, None).await, Outcome::NotFound, "{entry:?}");
         }
+    }
+
+    /// A short silent WAV with `picture` embedded as its front cover (an ID3v2 chunk).
+    fn wav_with_picture(path: &Path, picture: &[u8]) {
+        use lofty::picture::{MimeType, Picture, PictureType};
+        use lofty::prelude::*;
+        use lofty::tag::{Tag, TagType};
+        let (rate, samples) = (8000u32, 800u32);
+        let mut w = Vec::new();
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + samples * 2).to_le_bytes());
+        w.extend_from_slice(b"WAVEfmt ");
+        w.extend_from_slice(&16u32.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes());
+        w.extend_from_slice(&rate.to_le_bytes());
+        w.extend_from_slice(&(rate * 2).to_le_bytes());
+        w.extend_from_slice(&2u16.to_le_bytes());
+        w.extend_from_slice(&16u16.to_le_bytes());
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&(samples * 2).to_le_bytes());
+        w.resize(w.len() + samples as usize * 2, 0);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, w).unwrap();
+        let mut file = lofty::read_from_path(path).unwrap();
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.push_picture(Picture::unchecked(picture.to_vec()).pic_type(PictureType::CoverFront).mime_type(MimeType::Png).build());
+        file.insert_tag(tag);
+        file.save_to_path(path, lofty::config::WriteOptions::default()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn without_a_cover_file_the_tracks_embedded_picture() {
+        let d = Dir::new();
+        let png = b"\x89PNG\r\n\x1a\nembedded".to_vec();
+        wav_with_picture(&d.0.join("Embedded/01 a.wav"), &png);
+        let (ct, etag, bytes) = image(resolve(&d.0, "Embedded/01 a.wav", None).await);
+        assert_eq!((ct, bytes), ("image/png", png.clone()));
+        assert_eq!(resolve(&d.0, "Embedded/01 a.wav", Some(&etag)).await, Outcome::NotModified { etag });
+        // A cover file in the folder still comes first.
+        d.write("Embedded/cover.jpg", b"folder cover");
+        assert_eq!(image(resolve(&d.0, "Embedded/01 a.wav", None).await).2, b"folder cover");
     }
 
     #[tokio::test]
