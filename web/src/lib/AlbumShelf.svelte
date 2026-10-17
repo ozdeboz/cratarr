@@ -1,7 +1,7 @@
 <script lang="ts">
   // An album list (Incoming, Collection), filtered by the pill's search: each server's albums in columns as the playlist chips are,
   // in the order, layout and size chosen in the pill's View (lib/ViewSheet, decided 2026-10-15). Rows are extra large rows (Row),
-  // the grid is tiles (Tile). A tap views the album in the panel, its cover's play icon plays it, a row's ⋮ opens its
+  // the grid is tiles (Tile), the table one album a line with its columns where there is room (decision 0042). A tap views the album in the panel, its cover's play icon plays it, a row's ⋮ opens its
   // menu (lib/AlbumMenu, the page's: `onmenu`). Select (decided 2026-10-16, as the panel's track lists and
   // Playlists): the list header's icon or a long-press ticks albums, a tap then ticks too, and the select bar
   // (lib/SelectBar) plays, puts next, queues, favours or downloads the ticked ones, one album after another, or opens
@@ -25,6 +25,8 @@
   import { ALBUM_ORDERS, ALBUM_WIDTHS, howMany, pageView, USE_ORDERS } from './pageView.svelte';
   import { libraryShown } from './sources.svelte';
   import Tile from './Tile.svelte';
+  import type { Cell } from './Row.svelte';
+  import { fit } from './columns.svelte';
 
   let {
     sources,
@@ -68,10 +70,12 @@
   // is within a screen of what shows, else it is an empty box as tall as it was when last made (an estimate before
   // that), so the page keeps its length and the scroll does not jump. Watched against the box that scrolls (a margin
   // reaches no further than the box that clips it).
-  const GAP = 10;
+  const table = $derived(prefs.albumLayout === 'table');
+  // A table's lines touch, as a table's do.
+  const GAP = $derived(table ? 0 : 10);
   const ROWS_PER_BLOCK = 8;
-  const minPx = $derived(ALBUM_WIDTHS[prefs.albumLayout][prefs.albumZoom]);
-  const cols = $derived(Math.max(1, Math.floor((width + GAP) / (minPx + GAP))));
+  const minPx = $derived(table ? width : ALBUM_WIDTHS[prefs.albumLayout][prefs.albumZoom]);
+  const cols = $derived(table ? 1 : Math.max(1, Math.floor((width + GAP) / (minPx + GAP))));
   const perBlock = $derived(cols * ROWS_PER_BLOCK);
   // An album's library as a dot in its colour (decision 0034): none for the primary (Music), and none while only one
   // of the server's libraries shows (every album would carry the same).
@@ -102,7 +106,7 @@
       n += rowsOf[key];
     }
     if (n) return h / n;
-    return prefs.albumLayout === 'grid' ? (width - GAP * (cols - 1)) / cols + 64 : 90;
+    return prefs.albumLayout === 'grid' ? (width - GAP * (cols - 1)) / cols + 64 : table ? 64 : 90;
   });
   const estimate = (n: number) => {
     const rows = Math.ceil(n / cols);
@@ -214,6 +218,48 @@
   };
   const openMenu = (s: ShelfSource, a: ListedAlbum, anchor: DOMRect) => onmenu(s, a, anchor);
 
+  // The table's columns (decision 0042): as many as the list's width allows, in the owner's order (View).
+  const tableCols = $derived(table ? fit('albums', width) : []);
+  // The ones that order the list, by the order they stand for; Plays, dates and Rating start most and newest first.
+  const ORDER_OF: Partial<Record<string, CollectionOrder>> = { year: 'year', added: 'added', plays: 'plays', lastPlayed: 'played', rating: 'rating' };
+  // How you used them, read while a column shows it.
+  $effect(() => {
+    if (!tableCols.some((c) => c.id === 'plays' || c.id === 'lastPlayed' || c.id === 'rating')) return;
+    for (const s of untrack(() => sources)) loadAlbumUses(s.id);
+  });
+  function cellText(s: ShelfSource, a: ListedAlbum, id: string): string {
+    const u = id === 'plays' || id === 'lastPlayed' || id === 'rating' ? useOf(s.id, a.id) : null;
+    if (id === 'year') return a.year ? String(a.year) : '';
+    if (id === 'tracks') return String(a.tracks);
+    if (id === 'added') return a.added ? addedOn(a.added) : '';
+    if (id === 'plays') return u?.plays ? u.plays.toLocaleString() : '';
+    if (id === 'lastPlayed') return u?.played ? addedOn(u.played) : '';
+    if (id === 'format') return quality(a);
+    if (id === 'rating') return u?.rating ? '★'.repeat(u.rating) : '';
+    return '';
+  }
+  const cellsOf = (s: ShelfSource, a: ListedAlbum): Cell[] =>
+    tableCols.map((c) => ({ ...c, text: cellText(s, a, c.id), warn: c.id === 'format' && weak(a) }));
+  const headCells = $derived<Cell[]>(
+    tableCols.map((c) => {
+      const o = ORDER_OF[c.id];
+      return {
+        ...c,
+        text: c.label,
+        on: !!o && o === order,
+        onclick: o
+          ? () => {
+              if (order === o) down = !down;
+              else {
+                order = o;
+                down = o !== 'year';
+              }
+            }
+          : undefined,
+      };
+    }),
+  );
+
   // Select: the ticked albums by `source/id`; null while not selecting.
   let selecting = $state<Set<string> | null>(null);
   const keyOf = (s: ShelfSource, a: ListedAlbum) => `${s.id}/${a.id}`;
@@ -297,7 +343,7 @@
   }
 </script>
 
-<div class="lists" bind:clientWidth={width}>
+<div class="lists" class:table bind:clientWidth={width}>
   {#each shown as { s, albums } (s.id)}
     {#if sources.length > 1}<h2>{s.label}</h2>{/if}
     {#if !s.supported}
@@ -315,6 +361,13 @@
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
       />
+      {#if tableCols.length}
+        <!-- The table's column names, a row of the same shape so they line up; a tap on one orders by it. -->
+        <Row size="large" as="div" head title="Title" cells={headCells}>
+          {#snippet front()}<span class="cover-space"></span>{/snippet}
+          {#snippet action()}<span></span>{/snippet}
+        </Row>
+      {/if}
       {#each blocksOf(albums) as block, bi (`${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`)}
         {@const key = `${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`}
         {@const made = near[key] ?? bi === 0}
@@ -344,6 +397,30 @@
                 {/snippet}
                 {#snippet action()}{#if selecting}{@render tickOf(s, a)}{:else}{@render play(s, a)}{/if}{/snippet}
               </Tile>
+            {:else if table}
+              <Row
+                size="large"
+                title={a.title}
+                cells={tableCols.length ? cellsOf(s, a) : undefined}
+                label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.title}` : `View ${a.title}`}
+                active={viewed}
+                onclick={() => (selecting ? tick(s, a) : view(s.id, a))}
+                attach={longPress(s, a)}
+              >
+                {#snippet front()}{@render playCover(s, a)}{/snippet}
+                {#snippet badges()}
+                  {@const dot = dotOf(s, a)}
+                  {#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}
+                {/snippet}
+                {#snippet sub()}{a.artist ?? 'Unknown artist'}{#if here}<span class="now"> · playing</span>{/if}{/snippet}
+                {#snippet action()}
+                  {#if selecting}{@render tickOf(s, a)}{:else}
+                    <button class="icon" aria-label="Menu of {a.title}" title="Menu" onclick={(e) => openMenu(s, a, e.currentTarget.getBoundingClientRect())}
+                      ><Icon name="moreVert" size={22} /></button
+                    >
+                  {/if}
+                {/snippet}
+              </Row>
             {:else}
               <Row
                 size="xl"
@@ -495,6 +572,42 @@
 
   .block + .block {
     margin-top: 10px;
+  }
+
+  /* A table (decision 0042): one album a line, the lines touching, a smaller cover in front. */
+  ul.table {
+    display: block;
+  }
+
+  .table .block + .block {
+    margin-top: 0;
+  }
+
+  ul.table .cover,
+  .cover-space {
+    width: 48px;
+    height: 48px;
+    /* As far from the title as a track's cover is (lib/Row's large gap and this make its 10 px). */
+    margin-right: 6px;
+  }
+
+  .cover-space {
+    display: block;
+    height: 0;
+  }
+
+  ul.table .cover.plays .corner {
+    right: 2px;
+    bottom: 2px;
+    width: 20px;
+    height: 20px;
+  }
+
+  /* With a mouse, a line's play shows on the line pointed at (a table is many small covers); by touch it stays. */
+  @media (hover: hover) {
+    ul.table li:not(:hover) .cover.plays:not(:focus-visible) .corner {
+      opacity: 0;
+    }
   }
 
   .cover {
@@ -650,7 +763,8 @@
     border-radius: 999px;
   }
 
-  ul.rows li.playing {
+  ul.rows li.playing,
+  ul.table li.playing {
     border-radius: 12px;
     background: color-mix(in srgb, var(--accent) 12%, transparent);
   }

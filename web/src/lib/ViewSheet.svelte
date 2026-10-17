@@ -18,6 +18,7 @@
   import Card from './Card.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import ColumnOrder from './ColumnOrder.svelte';
+  import { COLUMNS, fit } from './columns.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, CRATE_ORDERS, DATES, DIRECTIONS, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
   import { prefs } from './prefs.svelte';
@@ -62,7 +63,12 @@
 
 {#snippet albums()}
   <SettingRow card label="Layout"><Seg label="Layout" options={ALBUM_LAYOUTS} bind:value={prefs.albumLayout} /></SettingRow>
-  <SettingRow card label="Size"><SizeControl widths={ALBUM_WIDTHS[prefs.albumLayout]} width={pageView.width} bind:value={prefs.albumZoom} /></SettingRow>
+  {#if prefs.albumLayout === 'table'}
+    <!-- A table has no sizes; its columns, as many as the page has room for, in the order dragged here (decision 0042). -->
+    <ColumnOrder kind="albums" shown={fit('albums', pageView.width).map((c) => c.id)} offered={COLUMNS.albums.map((c) => c.id)} />
+  {:else}
+    <SettingRow card label="Size"><SizeControl widths={ALBUM_WIDTHS[prefs.albumLayout]} width={pageView.width} bind:value={prefs.albumZoom} /></SettingRow>
+  {/if}
   <SettingRow card label="Dates"><Seg label="Dates" options={DATES} bind:value={prefs.relativeDates} /></SettingRow>
 {/snippet}
 
