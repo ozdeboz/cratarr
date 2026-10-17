@@ -106,10 +106,11 @@ const SERVER_LEADS: &str = "newest";
 /// The meta key of the catalogue generation the agreed lists were made with (`follow_catalogue`).
 const CATALOGUE: &str = "catalogue";
 
-// temp_store: the image has no /tmp.
+// temp_store: the image has no /tmp. journal_size_limit: as the catalogue's.
 const SCHEMA: &str = "
 PRAGMA temp_store = MEMORY;
 PRAGMA journal_mode = WAL;
+PRAGMA journal_size_limit = 8388608;
 CREATE TABLE IF NOT EXISTS links (
   source TEXT NOT NULL, user TEXT NOT NULL, name TEXT NOT NULL, remote TEXT NOT NULL, remote_name TEXT NOT NULL,
   stamp TEXT, base TEXT NOT NULL,

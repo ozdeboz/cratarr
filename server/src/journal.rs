@@ -149,10 +149,11 @@ pub struct Entry {
     pub applied: bool,
 }
 
-// temp_store: the image has no /tmp.
+// temp_store: the image has no /tmp. journal_size_limit: as the catalogue's.
 const SCHEMA: &str = "
 PRAGMA temp_store = MEMORY;
 PRAGMA journal_mode = WAL;
+PRAGMA journal_size_limit = 8388608;
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, event TEXT NOT NULL, undone_at INTEGER);
 CREATE TABLE IF NOT EXISTS handled (

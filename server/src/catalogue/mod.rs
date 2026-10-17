@@ -37,9 +37,12 @@ const PASS_EVERY: Duration = Duration::from_secs(300);
 const FULL_EVERY_SECS: i64 = 24 * 3600;
 
 // temp_store: the image has no /tmp, and building an index (or a large sort) needs temporary storage.
+// journal_size_limit: a write-ahead log is folded in as it goes, but its file keeps the size of the largest burst (a full
+// pass, a vacuum: 86 MB seen on the NAS) unless it is cut back after each checkpoint; 8 MB.
 const SCHEMA: &str = "
 PRAGMA temp_store = MEMORY;
 PRAGMA journal_mode = WAL;
+PRAGMA journal_size_limit = 8388608;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS folders (id INTEGER PRIMARY KEY, path TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS files (
@@ -1942,6 +1945,28 @@ mod tests {
         std::fs::write(d.join("A - B (2020)/01 One.mp3"), b"not really an mp3").unwrap();
         std::fs::write(d.join("A - B (2020)/02 Two.flac"), b"nor a flac").unwrap();
         d
+    }
+
+    #[test]
+    fn the_write_ahead_log_is_cut_back_after_a_burst() {
+        let d = music();
+        let file = d.join("catalogue.sqlite");
+        let cat = Catalogue::open(Some(&file), vec![d.clone()]).unwrap();
+        let wal = || std::fs::metadata(d.join("catalogue.sqlite-wal")).map(|m| m.len()).unwrap_or(0);
+        // About 26 MB in one transaction, far over the limit.
+        cat.db()
+            .execute_batch(
+                "CREATE TABLE burst (b BLOB);
+                 WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 400)
+                 INSERT INTO burst SELECT randomblob(65536) FROM n;",
+            )
+            .unwrap();
+        assert!(wal() > 20 << 20, "the burst went through the log: {} bytes", wal());
+        cat.db().execute_batch("PRAGMA wal_checkpoint(PASSIVE); DELETE FROM burst; INSERT INTO meta (key, value) VALUES ('x', '1');").unwrap();
+        cat.db().execute_batch("PRAGMA wal_checkpoint(PASSIVE); INSERT OR REPLACE INTO meta (key, value) VALUES ('x', '2');").unwrap();
+        assert!(wal() <= 8 << 20, "cut back to the limit: {} bytes", wal());
+        drop(cat);
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]
