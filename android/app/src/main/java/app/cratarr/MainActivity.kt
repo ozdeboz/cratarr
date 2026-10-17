@@ -218,6 +218,9 @@ class MainActivity : AppCompatActivity() {
             // Play On starts music with nobody touching the screen.
             mediaPlaybackRequiresUserGesture = false
             setSupportMultipleWindows(true)
+            // Its sign-ins are named for the app and its player in Settings → Authentication (decision 0043), not as
+            // the Chrome its WebView says it is.
+            userAgentString = "$userAgentString CratarrApp/${BuildConfig.VERSION_NAME} (name=${Uri.encode(prefs.playerName)})"
         }
         // The page keeps its priority when not in view: it is the player.
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)

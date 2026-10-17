@@ -22,12 +22,12 @@ object Net {
     /** How long a refusal holds the requests back. */
     private const val REFUSED_MS = 10 * 60_000L
 
-    @Volatile private var refusedAt = 0L
-    /** The address and session that were refused; another one is tried at once. */
-    @Volatile private var refusedFor: String? = null
+    /** Per address of Cratarr's (decision 0043: a sign-in is asked for on each): the session refused there, and when.
+     *  Another session (the page signed in again) is tried at once. */
+    private val refusals = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
 
-    private fun session(prefs: Prefs) = "${prefs.publicAddress}\n${prefs.publicAddress?.let { cookie(it) }}"
-    private fun toPublic(prefs: Prefs, url: String) = prefs.publicAddress?.let(Prefs::originOf)?.let { it == Prefs.originOf(url) } == true
+    private fun ours(prefs: Prefs, url: String) = Prefs.originOf(url)?.let { it in prefs.origins() } == true
+    private fun session(url: String) = cookie(url).orEmpty()
 
     /** The WebView's cookies for [url] (its session, once signed in there); null without any, or without a WebView. */
     fun cookie(url: String): String? = try {
@@ -36,17 +36,19 @@ object Net {
         null
     }
 
-    /** A fingerprint of the session on the public address (never the cookie itself): it changes as the page signs in
-     *  or out. */
+    /** A fingerprint of the session on the address in use (never the cookie itself): it changes as the page signs in
+     *  or out there, or as another address is taken into use. */
     fun sessionMark(context: Context): String {
-        val cookie = Prefs(context).publicAddress?.let { cookie(it) } ?: return ""
+        val url = Prefs(context).serverUrl ?: return ""
+        val cookie = "$url\n${cookie(url).orEmpty()}"
         return MessageDigest.getInstance("SHA-256").digest(cookie.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
-    /** Whether the public address refused this session a short while ago (requests to it wait meanwhile). */
+    /** Whether this address of Cratarr's refused this session a short while ago (requests to it wait meanwhile). */
     fun refused(context: Context, url: String): Boolean {
-        val prefs = Prefs(context)
-        return toPublic(prefs, url) && refusedFor == session(prefs) && SystemClock.elapsedRealtime() - refusedAt < REFUSED_MS
+        val origin = Prefs.originOf(url) ?: return false
+        val (refusedSession, at) = refusals[origin] ?: return false
+        return ours(Prefs(context), url) && refusedSession == session(url) && SystemClock.elapsedRealtime() - at < REFUSED_MS
     }
 
     /** A connection to [url], with the session where there is one; none while it would be refused again ([refused]),
@@ -58,17 +60,17 @@ object Net {
         return c
     }
 
-    /** The answer's status, noted: a refusal from the public address holds its requests back, an answer lifts that. */
+    /** The answer's status, noted: a refusal from an address of Cratarr's holds its requests back, an answer lifts that. */
     fun code(context: Context, c: HttpURLConnection): Int {
         val code = c.responseCode
-        val prefs = Prefs(context)
-        if (toPublic(prefs, c.url.toString())) {
+        val url = c.url.toString()
+        val origin = Prefs.originOf(url)
+        if (origin != null && ours(Prefs(context), url)) {
             if (code == 401 || code == 403) {
-                if (refusedFor != session(prefs)) Log.w(TAG, "the public address refused the app ($code): waiting ${REFUSED_MS / 60_000} min")
-                refusedFor = session(prefs)
-                refusedAt = SystemClock.elapsedRealtime()
+                if (refusals[origin]?.first != session(url)) Log.w(TAG, "$origin refused the app ($code): waiting ${REFUSED_MS / 60_000} min")
+                refusals[origin] = session(url) to SystemClock.elapsedRealtime()
             } else if (code in 200..399) {
-                refusedFor = null
+                refusals.remove(origin)
             }
         }
         return code

@@ -223,7 +223,8 @@ impl Driver {
     async fn open_group(&mut self) -> Result<()> {
         let Some(leader) = self.following.clone() else { return Ok(()) };
         self.opened = Some(std::time::Instant::now());
-        let file = self.listen_address(&leader);
+        // Signed: Kodi sends no sign-in (decision 0043).
+        let file = crate::serve::access::signed(&self.listen_address(&leader));
         self.rpc.call("Player.Open", json!({ "item": { "file": file } })).await.map(|_| ())
     }
 
@@ -259,7 +260,7 @@ impl Driver {
     }
 
     fn items(&self, tracks: &[QueueTrack]) -> Value {
-        Value::Array(tracks.iter().map(|t| json!({ "file": address(&self.stream_from, t) })).collect())
+        Value::Array(tracks.iter().map(|t| json!({ "file": crate::serve::access::signed(&address(&self.stream_from, t)) })).collect())
     }
 
     /// Whether Kodi's playlist still lacks some of the queue.
@@ -330,7 +331,7 @@ impl Driver {
                 // Into what Kodi holds; at or past its end, the fill adds them in their turn.
                 if place < self.held {
                     for (i, t) in tracks.iter().enumerate() {
-                        let item = json!({ "file": address(&self.stream_from, t) });
+                        let item = json!({ "file": crate::serve::access::signed(&address(&self.stream_from, t)) });
                         self.rpc.call("Playlist.Insert", json!({ "playlistid": PLAYLIST, "position": place + i, "item": item })).await?;
                         self.held += 1;
                     }
@@ -520,7 +521,9 @@ impl Driver {
             return Ok(now);
         }
         let index = p.get("position").and_then(Value::as_i64).unwrap_or(-1);
-        let ours = usize::try_from(index).ok().and_then(|i| self.queue.get(i)).is_some_and(|t| address(&self.stream_from, t) == file);
+        // Its address without the signature (decision 0043), which differs each time one is handed out.
+        let unsigned = file.split('?').next().unwrap_or(file);
+        let ours = usize::try_from(index).ok().and_then(|i| self.queue.get(i)).is_some_and(|t| address(&self.stream_from, t) == unsigned);
         if !ours {
             return Ok(now);
         }

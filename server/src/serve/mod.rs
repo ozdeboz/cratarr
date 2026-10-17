@@ -1,6 +1,7 @@
 //! Cratarr as an OpenSubsonic server (decision 0030): the library the API shows, its ids, who may log in, and the
 //! `/rest` endpoints. Copied and translated code keeps a notice naming where it came from.
 
+pub mod access;
 pub mod api;
 pub mod art;
 pub mod auth_check;
@@ -103,8 +104,14 @@ impl Serve {
     pub fn open(data_dir: Option<&std::path::Path>, rules: Rules, env: &dyn Fn(&str) -> Option<String>) -> Result<Arc<Self>> {
         let library = Arc::new(library::Library::open(data_dir.map(|d| d.join("library.sqlite")).as_deref())?);
         let userdata = Arc::new(UserData::open(data_dir.map(|d| d.join("userdata.sqlite")).as_deref())?);
+        // A new install (no logins kept yet) requires a sign-in everywhere from the start; one from before decision 0043
+        // keeps it off until the owner switches it on, once its clients have their keys.
+        let fresh = data_dir.is_some_and(|d| !d.join("subsonic-users.json").exists());
         let users = users::Users::open(data_dir)?;
         let sessions = sessions::Sessions::open(data_dir.map(|d| d.join("sessions.sqlite")).as_deref())?;
+        if sessions.required().is_none() {
+            sessions.set_required(fresh)?;
+        }
         if let (Some(u), Some(p)) = (env("CRATARR_SUBSONIC_USER"), env("CRATARR_SUBSONIC_PASSWORD"))
             && !u.trim().is_empty()
             && !p.is_empty()
@@ -144,6 +151,12 @@ impl Serve {
             return Some(account);
         }
         self.users.sign_in(name, password).map(|u| u.name)
+    }
+
+    /// Whether every request needs a sign-in now (decision 0043): when switched on, and once there is an account to
+    /// sign in with.
+    pub fn sign_in_required(&self) -> bool {
+        self.sessions.required().unwrap_or(false) && !self.users.names().is_empty()
     }
 
     pub fn attach_catalogue(&self, catalogue: Arc<Catalogue>) {

@@ -50,7 +50,7 @@ impl Throttle {
     }
 
     /// Seconds until `keys` may try again; none: now.
-    fn wait(&self, keys: &[String], now: i64) -> Option<i64> {
+    pub(super) fn wait(&self, keys: &[String], now: i64) -> Option<i64> {
         let mut failed = self.lock();
         failed.retain(|_, times| {
             times.retain(|t| now - t < WINDOW);
@@ -59,7 +59,7 @@ impl Throttle {
         keys.iter().filter_map(|k| failed.get(k)).filter(|t| t.len() >= LIMIT).map(|t| (t[t.len() - LIMIT] + WINDOW - now).max(1)).max()
     }
 
-    fn failed(&self, keys: &[String], now: i64) {
+    pub(super) fn failed(&self, keys: &[String], now: i64) {
         let mut failed = self.lock();
         for k in keys {
             let times = failed.entry(k.clone()).or_default();
@@ -70,7 +70,7 @@ impl Throttle {
         }
     }
 
-    fn succeeded(&self, keys: &[String]) {
+    pub(super) fn succeeded(&self, keys: &[String]) {
         let mut failed = self.lock();
         for k in keys {
             failed.remove(k);
@@ -115,7 +115,7 @@ fn over_https(headers: &HeaderMap) -> bool {
 }
 
 /// The client, as the nearest proxy saw it (the last `X-Forwarded-For`), else as Cratarr does.
-fn client(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
+pub(super) fn client(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
     text(headers, "x-forwarded-for")
         .and_then(|f| f.rsplit(',').next())
         .map(|ip| ip.trim().to_string())
@@ -151,12 +151,26 @@ pub fn safe_next(next: Option<&str>) -> String {
     if ok { n.to_string() } else { "/".into() }
 }
 
-/// What signed in, from its browser's User-Agent ("Firefox on Windows"); the app's WebView is the Cratarr app.
-fn device_of(headers: &HeaderMap) -> String {
+/// The player's name the Cratarr app adds to its page's User-Agent (`CratarrApp/<version> (name=<encoded>)`).
+fn app_player(ua: &str) -> Option<String> {
+    let encoded = ua.split("CratarrApp/").nth(1)?.split("name=").nth(1)?.split([')', ' ', ';']).next()?;
+    let pairs: Vec<(String, String)> = serde_urlencoded::from_str(&format!("n={encoded}")).ok()?;
+    let name: String = pairs.into_iter().next()?.1.chars().filter(|c| !c.is_control()).take(40).collect();
+    Some(name.trim().to_string()).filter(|n| !n.is_empty())
+}
+
+/// What signed in, from its browser's User-Agent ("Firefox on Windows"), and what its page could tell (`browser`:
+/// Brave, which says it is Chrome); the Cratarr app by its player's name ("Cratarr app · Salon tablet").
+fn device_of(headers: &HeaderMap, browser: Option<&str>) -> String {
     let ua = text(headers, "user-agent").unwrap_or("");
+    if ua.contains("CratarrApp/") {
+        return app_player(ua).map_or_else(|| "Cratarr app".to_string(), |n| format!("Cratarr app · {n}"));
+    }
     let app = text(headers, "x-requested-with").is_some_and(|w| w.starts_with("app.cratarr")) || ua.contains("; wv)");
     let what = if app {
         "Cratarr app"
+    } else if browser == Some("Brave") {
+        "Brave"
     } else if ua.contains("Edg/") {
         "Edge"
     } else if ua.contains("Firefox/") {
@@ -257,7 +271,7 @@ fn page_html(next: &str, user: &str, error: Option<&str>, nonce: &str) -> String
 <main>
 <header><img src="/icons/icon-192.png" alt=""><h1>Cratarr</h1></header>
 <form method="post" action="/signin">
-{error}<input type="hidden" name="next" value="{next}">
+{error}<input type="hidden" name="next" value="{next}"><input type="hidden" name="browser" value="">
 <label>User name<input name="username" value="{user}" autocomplete="username" autocapitalize="none" spellcheck="false" required{user_focus}></label>
 <label>Password<input name="password" type="password" autocomplete="current-password" required{password_focus}></label>
 <button>Sign in</button>
@@ -266,6 +280,7 @@ fn page_html(next: &str, user: &str, error: Option<&str>, nonce: &str) -> String
 <script nonce="{nonce}">
   const next = document.querySelector('input[name=next]');
   if (location.hash && !next.value.includes('#')) next.value += location.hash;
+  if (navigator.brave) document.querySelector('input[name=browser]').value = 'Brave';
 </script>
 </body>
 </html>
@@ -325,6 +340,8 @@ struct SignIn {
     username: String,
     password: String,
     next: String,
+    /// What the page could tell of its browser (`Brave`, which says it is Chrome).
+    browser: String,
 }
 
 async fn sign_in(State(serve): State<Arc<Serve>>, request: Request) -> Response {
@@ -356,7 +373,7 @@ async fn sign_in(State(serve): State<Arc<Serve>>, request: Request) -> Response 
     if let Some(old) = token_of(&headers) {
         let _ = serve.sessions.end(&old);
     }
-    let device = device_of(&headers);
+    let device = device_of(&headers, Some(form.browser.as_str()).filter(|b| *b == "Brave"));
     match serve.sessions.create(&user, &device, now) {
         Ok((token, _)) => {
             tracing::info!("sign-in: {user} on {device} from {client}");
@@ -645,7 +662,7 @@ mod tests {
             if let Some(w) = with {
                 m.insert("x-requested-with", HeaderValue::from_static(w));
             }
-            device_of(&m)
+            device_of(&m, None)
         };
         assert_eq!(h(FIREFOX, None), "Firefox on Windows");
         let edge = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0";
@@ -657,5 +674,11 @@ mod tests {
         assert_eq!(h(chrome, None), "Chrome on Android");
         let iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
         assert_eq!(h(iphone, None), "Safari on iOS");
+        let app = "Mozilla/5.0 (Linux; Android 14; K; wv) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36 CratarrApp/0.1.0 (name=Salon%20tablet)";
+        assert_eq!(h(app, None), "Cratarr app · Salon tablet");
+        assert_eq!(h("x CratarrApp/0.1.0 (name=)", None), "Cratarr app");
+        let mut m = HeaderMap::new();
+        m.insert("user-agent", HeaderValue::from_static("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36"));
+        assert_eq!(device_of(&m, Some("Brave")), "Brave on Android", "Brave says it is Chrome; its page tells");
     }
 }

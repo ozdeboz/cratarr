@@ -31,6 +31,8 @@ pub struct Session {
 
 pub struct Sessions {
     db: Mutex<Connection>,
+    /// The requirement (decision 0043) as kept, read at every request: kept here too.
+    required: std::sync::RwLock<Option<bool>>,
 }
 
 /// `bytes` from the operating system's random source, in hex.
@@ -74,9 +76,24 @@ impl Sessions {
                 device TEXT NOT NULL,
                 created INTEGER NOT NULL,
                 last_used INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                key_hash TEXT NOT NULL UNIQUE,
+                created INTEGER NOT NULL,
+                last_used INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                name TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )",
         )?;
-        Ok(Self { db: Mutex::new(db) })
+        let required = db
+            .query_row("SELECT value FROM settings WHERE name = 'sign_in_required'", [], |r| r.get::<_, String>(0))
+            .optional()?
+            .map(|v| v == "1");
+        Ok(Self { db: Mutex::new(db), required: std::sync::RwLock::new(required) })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -144,6 +161,95 @@ impl Sessions {
     pub fn revoke_user(&self, user: &str, keep: Option<&str>) -> Result<usize> {
         Ok(self.db().execute("DELETE FROM sessions WHERE user = ?1 AND id IS NOT ?2", params![user, keep])?)
     }
+
+    /// A new API key named `name` (decision 0043): the key (shown once, never kept) and its entry.
+    pub fn new_key(&self, name: &str, now: i64) -> Result<(String, ApiKey)> {
+        let key = format!("{KEY_PREFIX}{}", random_hex(32));
+        let k = ApiKey { id: random_hex(8), name: name.trim().to_string(), created: now, last_used: None };
+        self.db().execute(
+            "INSERT INTO api_keys (id, name, key_hash, created) VALUES (?1, ?2, ?3, ?4)",
+            params![k.id, k.name, hash(&key), now],
+        )?;
+        Ok((key, k))
+    }
+
+    /// The API key `key` is, while it is not revoked; its use is noted.
+    pub fn check_key(&self, key: &str, now: i64) -> Option<ApiKey> {
+        if !key.starts_with(KEY_PREFIX) {
+            return None;
+        }
+        let db = self.db();
+        let found = db
+            .query_row("SELECT id, name, created, last_used FROM api_keys WHERE key_hash = ?1", params![hash(key)], api_key)
+            .optional()
+            .unwrap_or_else(|e| {
+                tracing::warn!("sessions: cannot read the keys: {e}");
+                None
+            })?;
+        if found.last_used.is_none_or(|t| now - t >= TOUCH_EVERY) {
+            let _ = db.execute("UPDATE api_keys SET last_used = ?2 WHERE id = ?1", params![found.id, now]);
+        }
+        Some(found)
+    }
+
+    /// The API keys, the newest first.
+    pub fn keys(&self) -> Result<Vec<ApiKey>> {
+        let db = self.db();
+        let mut q = db.prepare("SELECT id, name, created, last_used FROM api_keys ORDER BY created DESC")?;
+        Ok(q.query_map([], api_key)?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Revokes the API key with this id; whether there was one.
+    pub fn revoke_key(&self, id: &str) -> Result<bool> {
+        Ok(self.db().execute("DELETE FROM api_keys WHERE id = ?1", params![id])? > 0)
+    }
+
+    fn setting(&self, name: &str) -> Option<String> {
+        self.db().query_row("SELECT value FROM settings WHERE name = ?1", params![name], |r| r.get(0)).optional().ok().flatten()
+    }
+
+    fn set_setting(&self, name: &str, value: &str) -> Result<()> {
+        self.db().execute("INSERT INTO settings (name, value) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET value = ?2", params![name, value])?;
+        Ok(())
+    }
+
+    /// Whether a sign-in is required on every request (decision 0043); `None` before it was ever set.
+    pub fn required(&self) -> Option<bool> {
+        *self.required.read().unwrap_or_else(|p| p.into_inner())
+    }
+
+    pub fn set_required(&self, on: bool) -> Result<()> {
+        self.set_setting("sign_in_required", if on { "1" } else { "0" })?;
+        *self.required.write().unwrap_or_else(|p| p.into_inner()) = Some(on);
+        Ok(())
+    }
+
+    /// The secret signed links are signed with (decision 0043): made once, from the operating system's random source.
+    pub fn link_secret(&self) -> Result<Vec<u8>> {
+        if let Some(s) = self.setting("link_secret") {
+            return Ok(s.into_bytes());
+        }
+        let s = random_hex(32);
+        self.set_setting("link_secret", &s)?;
+        Ok(s.into_bytes())
+    }
+}
+
+/// Every API key starts with this, so one is known for what it is wherever it turns up.
+pub const KEY_PREFIX: &str = "cratarr_";
+
+/// An API key's entry (never the key).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ApiKey {
+    pub id: String,
+    /// What it is for ("Home Assistant").
+    pub name: String,
+    pub created: i64,
+    pub last_used: Option<i64>,
+}
+
+fn api_key(r: &rusqlite::Row) -> rusqlite::Result<ApiKey> {
+    Ok(ApiKey { id: r.get(0)?, name: r.get(1)?, created: r.get(2)?, last_used: r.get(3)? })
 }
 
 #[cfg(test)]
@@ -201,6 +307,37 @@ mod tests {
         assert!(s.check(&d, NOW + 6).is_none());
         assert_eq!(s.revoke_user("me", None).unwrap(), 1);
         assert!(s.list(NOW + 7).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_api_key_is_kept_as_its_hash_used_and_revoked_alone() {
+        let s = Sessions::open(None).unwrap();
+        let (key, made) = s.new_key(" Home Assistant ", NOW).unwrap();
+        assert!(key.starts_with(KEY_PREFIX) && key.len() == KEY_PREFIX.len() + 64);
+        assert_eq!(made.name, "Home Assistant");
+        let (other, _) = s.new_key("scripts", NOW).unwrap();
+        assert_eq!(s.check_key(&key, NOW + 5).map(|k| k.id), Some(made.id.clone()));
+        assert_eq!(s.keys().unwrap().iter().find(|k| k.id == made.id).unwrap().last_used, Some(NOW + 5));
+        assert!(s.check_key("cratarr_nothing", NOW).is_none());
+        assert!(s.check_key(&key[KEY_PREFIX.len()..], NOW).is_none(), "the bare hex is no key");
+        let kept: Vec<String> = s.db().prepare("SELECT key_hash FROM api_keys").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert!(!kept.contains(&key) && kept.contains(&hash(&key)));
+        assert!(s.revoke_key(&made.id).unwrap());
+        assert!(s.check_key(&key, NOW + 6).is_none());
+        assert!(s.check_key(&other, NOW + 6).is_some(), "the other key still works");
+    }
+
+    #[test]
+    fn the_requirement_and_the_link_secret_are_kept() {
+        let s = Sessions::open(None).unwrap();
+        assert_eq!(s.required(), None);
+        s.set_required(true).unwrap();
+        assert_eq!(s.required(), Some(true));
+        s.set_required(false).unwrap();
+        assert_eq!(s.required(), Some(false));
+        let secret = s.link_secret().unwrap();
+        assert_eq!(secret.len(), 64);
+        assert_eq!(s.link_secret().unwrap(), secret, "made once");
     }
 
     #[test]

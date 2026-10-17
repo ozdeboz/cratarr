@@ -658,6 +658,17 @@ export const getSignedIn = () => quietly<{ sessions: SignedIn[] }>('/api/auth/se
 /** Signs that device out: its next request goes to the sign-in page. */
 export const signOutDevice = (id: string) => request<void>(`/api/auth/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
+/** Sign-in everywhere (decision 0043): whether every request needs a sign-in, and switching it (the password again). */
+export const getSignInRequired = () => quietly<{ required: boolean }>('/api/auth/required');
+export const setSignInRequired = (on: boolean, password: string) =>
+  request<{ required: boolean }>('/api/auth/required', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on, password }) });
+/** An API key (decision 0043), for what cannot sign in on a page (Home Assistant, scripts): never the key itself. */
+export type ApiKey = { id: string; name: string; created: number; last_used: number | null };
+export const getApiKeys = () => quietly<{ keys: ApiKey[] }>('/api/auth/keys');
+/** A new key: `key` is shown in this answer only, never again. */
+export const newApiKey = (name: string, password: string) => post<{ key: string; id: string; name: string }>('/api/auth/keys', { name, password });
+export const revokeApiKey = (id: string) => request<void>(`/api/auth/keys/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
 /** A directory (LDAP) asked first at sign-in (decision 0040): set by the operator in `ldap.json`, shown read-only. */
 export type DirectoryConfig = {
   enabled: boolean;
