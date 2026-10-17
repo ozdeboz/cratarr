@@ -669,7 +669,7 @@ async fn crate_tempo(State(app): State<Arc<App>>, Path(id): Path<String>, Query(
 }
 
 /// Every playlist's facts for the Playlists page's table (decision 0042), by id.
-async fn playlist_stats(State(app): State<Arc<App>>) -> Result<Json<std::collections::BTreeMap<String, crate::app::playlists::PlaylistStats>>, ApiError> {
+async fn playlist_stats(State(app): State<Arc<App>>) -> Result<Json<std::collections::BTreeMap<String, crate::app::PlaylistStats>>, ApiError> {
     Ok(Json(app.playlists.playlist_stats().await?))
 }
 
