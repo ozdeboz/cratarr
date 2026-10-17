@@ -142,6 +142,10 @@ pub fn admitted(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, qu
 /// The requirement, around every route (`main`): a request without a way in is refused.
 pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Next) -> Response {
     if !serve.sign_in_required() {
+        // Off, a key still counts as used: before the switch, Settings shows that a client sends its key.
+        if let Some(key) = key_of(request.headers()) {
+            let _ = serve.sessions.check_key(key, now());
+        }
         return next.run(request).await;
     }
     let (method, uri) = (request.method().as_str().to_string(), request.uri().clone());
@@ -350,6 +354,11 @@ mod tests {
     async fn while_it_is_off_or_there_is_no_account_everything_passes() {
         let s = served(false);
         assert_eq!(status(&s, get_("/api/library")).await.0, StatusCode::OK);
+        // A key sent while it is off still shows as used: the check before switching on.
+        let (key, made) = s.sessions.new_key("Home Assistant", now()).unwrap();
+        let keyed = HttpRequest::get("/api/library").header("authorization", format!("Bearer {key}")).body(Body::empty()).unwrap();
+        assert_eq!(status(&s, keyed).await.0, StatusCode::OK);
+        assert!(s.sessions.keys().unwrap().iter().find(|k| k.id == made.id).unwrap().last_used.is_some());
         let fresh = Serve::open(None, Rules::default(), &|_| None).unwrap();
         fresh.sessions.set_required(true).unwrap();
         assert_eq!(status(&fresh, get_("/api/library")).await.0, StatusCode::OK, "no account to sign in with yet");
