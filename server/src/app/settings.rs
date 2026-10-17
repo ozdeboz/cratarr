@@ -377,6 +377,9 @@ impl SettingsService {
         let merged = settings::merge(&saved, drafts)?;
         let mut next = Vec::with_capacity(merged.len());
         for cfg in merged.iter().cloned() {
+            if cfg.kind == crate::source::cratarr::KIND.id {
+                chosen_folders_ok(&cfg)?;
+            }
             let a = Active::start(cfg, &places).await;
             if a.cfg.enabled {
                 let bad = |why: String| ToggleError::BadSettings(format!("{}: {why}", a.cfg.id));
@@ -435,5 +438,43 @@ impl SettingsService {
         tracing::info!("settings saved and applied");
         drop(_one_at_a_time);
         Ok(self.view().await?)
+    }
+}
+
+/// Cratarr's chosen folders (decision 0044): each a plain absolute path inside its mounts (one gone since may stay, as
+/// long as it lies there; its row says it is not found).
+fn chosen_folders_ok(cfg: &SourceConfig) -> Result<(), ToggleError> {
+    let Some(v) = cfg.values.get("folders") else { return Ok(()) };
+    let list = v.as_array().ok_or_else(|| ToggleError::BadSettings("Folders: not a list of folders".into()))?;
+    let roots = crate::folders::roots();
+    for f in list {
+        let p = f.as_str().ok_or_else(|| ToggleError::BadSettings("Folders: not a list of folders".into()))?;
+        if !folder_in(p, &roots) {
+            return Err(ToggleError::BadSettings(format!("Cratarr cannot see {p}.")));
+        }
+    }
+    Ok(())
+}
+
+/// A plain absolute path at or under one of `roots`.
+fn folder_in(p: &str, roots: &[String]) -> bool {
+    let plain = p.starts_with('/') && !p.split('/').any(|s| s == ".." || s == ".");
+    plain && roots.iter().map(|r| r.trim_end_matches('/')).any(|r| p == r || p.starts_with(&format!("{r}/")))
+}
+
+#[cfg(test)]
+mod chosen_folders_tests {
+    use super::folder_in;
+
+    #[test]
+    fn a_chosen_folder_lies_inside_the_mounts() {
+        let roots = ["/media".to_string(), "/music/".to_string()];
+        assert!(folder_in("/media/Music", &roots));
+        assert!(folder_in("/media", &roots));
+        assert!(folder_in("/music/A", &roots));
+        assert!(!folder_in("/mediax/A", &roots), "a sibling with the same start");
+        assert!(!folder_in("/media/../etc", &roots));
+        assert!(!folder_in("media/Music", &roots), "relative");
+        assert!(!folder_in("/data", &roots));
     }
 }

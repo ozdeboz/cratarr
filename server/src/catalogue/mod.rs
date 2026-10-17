@@ -356,6 +356,16 @@ impl Catalogue {
         self.folders.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
+    /// How many tracks each folder in use holds (decision 0044: a folder's row), with its path.
+    pub fn tracks_per_folder(&self) -> Result<Vec<(PathBuf, u64)>> {
+        let counts: std::collections::HashMap<i64, u64> = {
+            let db = self.db();
+            let mut q = db.prepare(&format!("SELECT folder, count(*) FROM files WHERE {PRESENT} GROUP BY folder"))?;
+            q.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as u64)))?.collect::<rusqlite::Result<_>>()?
+        };
+        Ok(self.folders().into_iter().enumerate().map(|(i, p)| (p, counts.get(&(i as i64)).copied().unwrap_or(0))).collect())
+    }
+
     /// Use these folders (index = id). A folder whose path changed keeps its rows when the same files are there under
     /// the new path (a mount moved, say `/music` to `/media/Music`), and nothing is read again.
     ///

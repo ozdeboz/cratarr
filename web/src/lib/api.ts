@@ -633,6 +633,19 @@ export const getSettings = () => request<Settings>('/api/settings');
 
 export const getCatalogue = () => quietly<CatalogueStatus>('/api/catalogue');
 
+/** Folders, chosen and shown (decision 0044): a folder in the browser, with how much audio is in it (`more`: past the
+ *  count) and whether Cratarr can write there. */
+export type FolderEntry = { name: string; path: string; audio: number; more: boolean; writable: boolean };
+/** What the browser shows at a place (`path` null: the top, Cratarr's mounts); `parent` null: up is the top. */
+export type FolderListing = { path: string | null; parent: string | null; folders: FolderEntry[] };
+export const browseFolders = (path?: string | null) =>
+  request<FolderListing>(`/api/folders${path ? `?path=${encodeURIComponent(path)}` : ''}`);
+/** A chosen folder's row: whether it is there and writable, its disk's free bytes, and the tracks Cratarr knows in it. */
+export type FolderStatus = { exists: boolean; writable: boolean; free: number | null; tracks: number | null };
+export const folderStatus = (path: string) => quietly<FolderStatus>(`/api/folders/status?path=${encodeURIComponent(path)}`);
+/** Music folders Cratarr found that are not chosen yet. */
+export const suggestedFolders = () => quietly<{ folders: string[] }>('/api/folders/suggested');
+
 /** A file the catalogue could not read properly. */
 export type FileProblem = {
   folder: string;

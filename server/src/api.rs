@@ -115,6 +115,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/settings/lidarr", post(preview_lidarr))
         .route("/api/settings/naming", get(naming))
         .route("/api/catalogue", get(catalogue_status))
+        .route("/api/folders", get(browse_folders))
+        .route("/api/folders/status", get(folder_status))
+        .route("/api/folders/suggested", get(suggested_folders))
         .route("/api/catalogue/problems", get(catalogue_problems))
         .fallback(crate::web::serve)
         .with_state(app)
@@ -1332,6 +1335,56 @@ struct SaveBody {
 
 async fn save_settings(State(app): State<Arc<App>>, Json(b): Json<SaveBody>) -> Result<Json<SettingsView>, ApiError> {
     Ok(Json(app.settings.save(b.sources, b.tag_rules, b.lidarr, b.trash_days, b.naming).await?))
+}
+
+/// `?path=`: a folder of Cratarr's (none: the top, its mounts).
+#[derive(Deserialize)]
+struct FolderAt {
+    path: Option<String>,
+}
+
+/// The folder browser (decision 0044): what Cratarr can see at a place, to add a folder.
+async fn browse_folders(Query(q): Query<FolderAt>) -> Response {
+    match tokio::task::spawn_blocking(move || crate::folders::browse(q.path.as_deref(), &crate::folders::roots())).await {
+        Ok(Ok(listing)) => Json(listing).into_response(),
+        Ok(Err(why)) => (StatusCode::BAD_REQUEST, Json(json!({ "error": why }))).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// The music folders Cratarr found under its mounts that are not chosen yet, nor inside or around a chosen one
+/// (decision 0044): the browser's suggestions.
+async fn suggested_folders(State(app): State<Arc<App>>) -> Response {
+    let chosen = app.library.chosen_folders();
+    match tokio::task::spawn_blocking(move || crate::source::cratarr::suggested_folders(&chosen)).await {
+        Ok(found) => Json(json!({ "folders": found.iter().map(|p| p.display().to_string()).collect::<Vec<_>>() })).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
+/// A folder's row (decision 0044): whether it is there and writable, its free space, and the tracks Cratarr knows in it.
+async fn folder_status(State(app): State<Arc<App>>, Query(q): Query<FolderAt>) -> Response {
+    let Some(path) = q.path.filter(|p| !p.trim().is_empty()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Which folder?" }))).into_response();
+    };
+    let cat = app.library.catalogue();
+    let looked = tokio::task::spawn_blocking(move || {
+        let roots = crate::folders::roots();
+        // A folder that is gone is still told about (its row says so); one outside the mounts is not looked at.
+        let there = crate::folders::inside(&path, &roots);
+        if there.is_none() && std::path::Path::new(&path).exists() {
+            return Err("Cratarr cannot see that folder.".to_string());
+        }
+        let dir = there.unwrap_or_else(|| std::path::PathBuf::from(&path));
+        let tracks = cat.tracks_per_folder().ok().and_then(|all| all.into_iter().find(|(p, _)| *p == dir || p.as_path() == std::path::Path::new(&path)).map(|(_, n)| n));
+        Ok((crate::folders::status(&dir), tracks))
+    })
+    .await;
+    match looked {
+        Ok(Ok((s, tracks))) => Json(json!({ "exists": s.exists, "writable": s.writable, "free": s.free, "tracks": tracks })).into_response(),
+        Ok(Err(why)) => (StatusCode::BAD_REQUEST, Json(json!({ "error": why }))).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 async fn catalogue_status(State(app): State<Arc<App>>) -> Result<Json<crate::catalogue::Status>, ApiError> {
