@@ -1,6 +1,6 @@
 # 0045: Diagnostics: what happened, kept by Cratarr itself
 
-- Status: proposed
+- Status: accepted (the owner, 2026-10-17: "Proceed.")
 - Date: 2026-10-17
 - Builds on: 0031 (Play On), 0033 (Cratarr holds the queue), 0037 (sync play), 0043 (sign-in everywhere)
 
