@@ -497,8 +497,11 @@ impl UserData {
     }
 
     /// Songs' annotations, and what imports brought in for them, follow their persistent ids to new song ids (the
-    /// catalogue was rebuilt): `moves` is (persistent id, song id now). Returns how many annotations moved.
+    /// catalogue was rebuilt): `moves` is (persistent id, song id now). A persistent id given twice goes to its first
+    /// song only: two would move its data there and back every time. Returns how many annotations moved.
     pub fn follow_pids(&self, moves: &[(String, String)]) -> Result<usize> {
+        let mut seen = std::collections::HashSet::new();
+        let moves: Vec<&(String, String)> = moves.iter().filter(|(pid, _)| seen.insert(pid.as_str())).collect();
         let mut db = self.db();
         let tx = db.transaction()?;
         let mut n = 0;
@@ -873,6 +876,16 @@ mod tests {
         u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
         assert_eq!(u.follow_pids(&[("pid1".into(), "tr-9".into())]).unwrap(), 1);
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 1);
+    }
+
+    #[test]
+    fn a_track_in_two_folders_keeps_its_data_on_the_first() {
+        let u = UserData::open(None).unwrap();
+        u.count_play("me", ("tr-1", "pid1"), "al-x", &[], 100).unwrap();
+        let both = [("pid1".to_string(), "tr-5".to_string()), ("pid1".to_string(), "tr-8".to_string())];
+        assert_eq!(u.follow_pids(&both).unwrap(), 1, "moved once, to the first");
+        assert_eq!(u.get("me", Kind::Song, &["tr-5".into()]).unwrap()["tr-5"].play_count, 1);
+        assert_eq!(u.follow_pids(&both).unwrap(), 0, "and it stays there");
     }
 
     const KEY: ImportKey = ImportKey { account: "me", source: "jellyfin", server_user: "u1" };

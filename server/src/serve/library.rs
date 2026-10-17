@@ -70,6 +70,27 @@ const LAYOUT: i64 = 7;
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
 
+/// What changed since the library was built: nothing, only the analyses (their gains and tempi are the songs'), or the
+/// songs themselves (files, tags, the rules, the added dates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Change {
+    None,
+    Analyses,
+    Songs,
+}
+
+/// The change from what the library was built from (`was`) to now, and the print to note: the songs' part and the
+/// analyses' part, apart. A print from before they were apart reads as the songs changed: built once more.
+fn change_between(was: Option<&str>, songs: &str, analyses: &str) -> (Change, String) {
+    let print = format!("{songs} | analysis {analyses}");
+    let change = match was {
+        Some(w) if w == print => Change::None,
+        Some(w) if w.split_once(" | analysis ").is_some_and(|(s, _)| s == songs) => Change::Analyses,
+        _ => Change::Songs,
+    };
+    (change, print)
+}
+
 /// One folder of the catalogue as the library reads it: its id there and its files.
 pub struct FolderRows {
     pub folder: i64,
@@ -276,25 +297,41 @@ impl Library {
     /// connection of its own so the catalogue is not held up meanwhile (a full read takes seconds). Returns whether it
     /// was built. Blocking.
     pub fn refresh_from(&self, cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<bool> {
-        let reader = cat.reader();
-        let count = cat.folders().len() as i64;
-        let print = format!(
-            "catalogue {} {} {} rules {:x} added {}",
+        let (change, print) = self.change(cat, rules)?;
+        if change == Change::None {
+            return Ok(false);
+        }
+        self.build_from(cat, rules, &print)?;
+        Ok(true)
+    }
+
+    /// What changed since the library was built (a cheap check: the catalogue's counts and sums), and the print to
+    /// build it with. Blocking.
+    pub fn change(&self, cat: &crate::catalogue::Catalogue, rules: &Rules) -> Result<(Change, String)> {
+        let served = match cat.reader() {
+            Some(c) => crate::catalogue::served_fingerprint(&c)?,
+            None => cat.served_fingerprint()?,
+        };
+        // The analyses' part is the fingerprint's tail (`… analysis <count>/<sum of when>`).
+        let (files, analyses) = served.split_once(" analysis ").unwrap_or((served.as_str(), ""));
+        let songs = format!(
+            "catalogue {} {} {} rules {:x} files {}",
             cat.generation(),
-            count,
+            cat.folders().len(),
             self.added_print(),
             {
                 use md5::Digest;
                 md5::Md5::digest(serde_json::to_string(rules)?.as_bytes())
             },
-            match &reader {
-                Some(c) => crate::catalogue::served_fingerprint(c)?,
-                None => cat.served_fingerprint()?,
-            }
+            files
         );
-        if self.built_from().as_deref() == Some(print.as_str()) {
-            return Ok(false);
-        }
+        Ok(change_between(self.built_from().as_deref(), &songs, analyses))
+    }
+
+    /// Builds the library from the catalogue, `print` (from `change`) noted as what it was built from. Blocking.
+    pub fn build_from(&self, cat: &crate::catalogue::Catalogue, rules: &Rules, print: &str) -> Result<()> {
+        let reader = cat.reader();
+        let count = cat.folders().len() as i64;
         let folders = (0..count)
             .map(|folder| {
                 let rows = match &reader {
@@ -306,7 +343,8 @@ impl Library {
             })
             .collect::<Result<Vec<_>>>()?;
         self.build(&folders, rules)?;
-        self.set_built_from(&print)
+        self.set_built_from(print)?;
+        Ok(())
     }
 
     fn built_from(&self) -> Option<String> {
@@ -747,6 +785,16 @@ mod tests {
         lib.build(&sample(), &Rules::default()).unwrap();
         let created: i64 = lib.db().query_row("SELECT created FROM albums WHERE id = ?1", [&id], |r| r.get(0)).unwrap();
         assert_eq!(created, 1_700_000_001, "a later one does not move it");
+    }
+
+    #[test]
+    fn new_analyses_alone_are_told_apart_from_changed_songs() {
+        let (first, print) = change_between(None, "catalogue 1 2 a rules f files 10/5", "3/99");
+        assert_eq!(first, Change::Songs, "never built");
+        assert_eq!(change_between(Some(&print), "catalogue 1 2 a rules f files 10/5", "3/99").0, Change::None);
+        assert_eq!(change_between(Some(&print), "catalogue 1 2 a rules f files 10/5", "4/120").0, Change::Analyses);
+        assert_eq!(change_between(Some(&print), "catalogue 1 2 a rules f files 11/6", "4/120").0, Change::Songs);
+        assert_eq!(change_between(Some("catalogue 1 2 a rules f added 10/5 analysis 3/99"), "catalogue 1 2 a rules f files 10/5", "3/99").0, Change::Songs, "a print from before");
     }
 
     #[test]
