@@ -256,11 +256,21 @@ impl Bins {
     }
 }
 
+/// Above this rate the sound is taken down to it first (2 or 4 to 1, after two low-pass filters at 20 kHz): nothing the
+/// show is steered by lies above 20 kHz, and a 192 kHz file took five times as long a minute as a CD's (NAS,
+/// 2026-10-18).
+const RATE_ABOVE: u32 = 48_000;
+
 /// Listens to a track for its signals: the sound in (each sample's middle, the channels' mean, and side, half the
 /// first two channels' difference), its signals out (`finish`).
 pub struct SignalEar {
+    /// The rate it listens at (the file's, or a part of it: `RATE_ABOVE`).
     rate: u32,
     samples: u64,
+    // Taking a high rate down: keep one sample in `down`, after the low-passes (middle, side).
+    down: usize,
+    skipped: usize,
+    down_filters: [[Biquad; 2]; 2],
     // The filters, a chain a band, and their 10 ms slices.
     filters: Vec<Vec<Biquad>>,
     slice_len: usize,
@@ -297,7 +307,10 @@ pub struct SignalEar {
 }
 
 impl SignalEar {
-    pub fn new(rate: u32) -> Self {
+    pub fn new(file_rate: u32) -> Self {
+        let down = if file_rate > RATE_ABOVE { (file_rate as f64 / f64::from(RATE_ABOVE)).ceil() as usize } else { 1 };
+        let lowpass = || [Biquad::new(file_rate, 20_000.0, false), Biquad::new(file_rate, 20_000.0, false)];
+        let rate = file_rate / down as u32;
         let n = (f64::from(rate) * WINDOW_SECS).round().max(256.0) as usize;
         let n = n.next_power_of_two();
         let hop = n / 4;
@@ -309,6 +322,9 @@ impl SignalEar {
         SignalEar {
             rate,
             samples: 0,
+            down,
+            skipped: 0,
+            down_filters: [lowpass(), lowpass()],
             filters: EDGES.iter().map(|&e| chain(rate, e)).collect(),
             slice_len: (rate as usize / FRAMES_A_SECOND).max(1),
             in_slice: 0,
@@ -343,6 +359,19 @@ impl SignalEar {
 
     /// One sample: its middle (the channels' mean) and side (half the first two channels' difference; 0 for mono).
     pub fn hear(&mut self, mid: f32, side: f32) {
+        let (mid, side) = if self.down > 1 {
+            let [m, s] = &mut self.down_filters;
+            let mid = m.iter_mut().fold(f64::from(mid), |v, f| f.run(v)) as f32;
+            let side = s.iter_mut().fold(f64::from(side), |v, f| f.run(v)) as f32;
+            self.skipped += 1;
+            if self.skipped < self.down {
+                return;
+            }
+            self.skipped = 0;
+            (mid, side)
+        } else {
+            (mid, side)
+        };
         self.samples += 1;
         let x = f64::from(mid);
         for (b, chain) in self.filters.iter_mut().enumerate() {
@@ -1280,7 +1309,7 @@ mod tests {
     fn a_tone_lands_in_its_own_band_at_any_rate() {
         // A second and a half each, near each band's middle.
         let tones = [35.0, 95.0, 245.0, 900.0, 3200.0, 10_000.0];
-        for rate in [44_100, 96_000] {
+        for rate in [44_100, 96_000, 192_000] {
             let s = heard(rate, 9.0, &[], |t| (0.3 * (2.0 * PI * tones[((t / 1.5) as usize).min(5)] * t).sin(), 0.0));
             let level = frames(&s, id::LEVEL);
             assert_eq!(level.len(), 180, "20 a second");
@@ -1329,7 +1358,7 @@ mod tests {
         let kicks: Vec<f64> = (0..24).map(|k| 0.5 + 0.5 * f64::from(k)).collect();
         let snares: Vec<f64> = (0..12).map(|k| 1.0 + 1.0 * f64::from(k)).collect();
         let hats: Vec<f64> = (0..24).map(|k| 0.75 + 0.5 * f64::from(k)).collect();
-        for rate in [44_100, 96_000] {
+        for rate in [44_100, 96_000, 192_000] {
             let s = heard(rate, 12.5, &[], |t| {
                 let near = |at: &[f64]| at.iter().copied().filter(|s| *s <= t).next_back();
                 let m = 0.5 * near(&kicks).map_or(0.0, |s| burst(t, s, 0.008, 0.08, &[55.0]))
