@@ -90,10 +90,44 @@
   function stripTap(e: MouseEvent) {
     if (prefs.navFolded && !peek && !(e.target as Element).closest('a, button')) peek = true;
   }
-  function fold() {
-    prefs.navFolded = !prefs.navFolded;
+  // Its edge is a handle, as the panel's (decision 0042): a tap folds or unfolds it; a drag follows the pointer and
+  // snaps on release to whichever of the two widths is nearer, never anything between.
+  const NAV_OPEN = 240;
+  const NAV_FOLDED = 68;
+  let navDrag = $state<number | null>(null);
+  let navDragged = false;
+  function navGrip(e: PointerEvent) {
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const x0 = e.clientX;
+    const w0 = prefs.navFolded && !peek ? NAV_FOLDED : NAV_OPEN;
+    navDragged = false;
+    const move = (m: PointerEvent) => {
+      if (Math.abs(m.clientX - x0) > 4) navDragged = true;
+      if (navDragged) navDrag = Math.min(NAV_OPEN, Math.max(NAV_FOLDED, w0 + m.clientX - x0));
+    };
+    const up = () => {
+      if (navDragged && navDrag !== null) prefs.navFolded = navDrag < (NAV_OPEN + NAV_FOLDED) / 2;
+      navDrag = null;
+      peek = false;
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  }
+  function navTap() {
+    // The click that ends a drag is not a tap.
+    if (navDragged) {
+      navDragged = false;
+      return;
+    }
+    prefs.navFolded = !(prefs.navFolded && !peek);
     peek = false;
   }
+  const navFoldedNow = $derived(navDrag !== null ? navDrag < (NAV_OPEN + NAV_FOLDED) / 2 : prefs.navFolded);
   $effect(() => {
     page;
     untrack(collapse);
@@ -318,16 +352,24 @@
   const overflowActive = $derived(overflow.some((p) => p.id === page));
 </script>
 
-<div class="shell" class:folded={prefs.navFolded}>
+<div class="shell" class:folded={navFoldedNow} style:--nav-w={navDrag !== null ? `${navDrag}px` : undefined}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
   <aside
     class="sidebar"
     class:peek
     onclickcapture={collapse}
     onclick={stripTap}
-    onpointerenter={(e) => prefs.navFolded && e.pointerType === 'mouse' && (peek = true)}
-    onpointerleave={(e) => e.pointerType === 'mouse' && (peek = false)}
+    onpointerenter={(e) => prefs.navFolded && navDrag === null && e.pointerType === 'mouse' && (peek = true)}
+    onpointerleave={(e) => e.pointerType === 'mouse' && navDrag === null && (peek = false)}
   >
+    <button
+      class="nav-grip edge-grip"
+      aria-label={prefs.navFolded && !peek ? 'Unfold the navigation' : 'Fold the navigation'}
+      aria-expanded={!(prefs.navFolded && !peek)}
+      title={prefs.navFolded && !peek ? 'Unfold the navigation' : 'Fold the navigation'}
+      onpointerdown={navGrip}
+      onclick={navTap}
+    ></button>
     <div class="brand">
       <span class="logo"><Mark /></span>
       <span class="name">Cratarr</span>
@@ -348,9 +390,6 @@
       {#each APART as p (p.id)}
         <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
       {/each}
-      <button class="fold" aria-pressed={prefs.navFolded} title={prefs.navFolded ? 'Unfold the navigation' : 'Fold the navigation'} onclick={fold}
-        ><Icon name={prefs.navFolded ? 'panelLeftOpen' : 'panelLeftClose'} /><span class="label">{prefs.navFolded ? 'Unfold' : 'Fold'}</span></button
-      >
       {#if status}<div class="version">Cratarr {status.version}</div>{/if}
     </div>
   </aside>
@@ -380,7 +419,7 @@
     {#if sidebar}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div
-        class="grip"
+        class="grip edge-grip"
         role="separator"
         aria-orientation="vertical"
         aria-label="Player width"
@@ -605,29 +644,7 @@
     height: calc(var(--app-h, 100dvh) - var(--top-h, 0px) - env(safe-area-inset-top));
   }
 
-  /* The edge between page and player: a line, with a handle in the middle that shows it can be dragged. */
-  .grip {
-    display: grid;
-    place-items: center;
-    cursor: col-resize;
-    touch-action: none;
-    background: linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat;
-  }
-
-  .grip::after {
-    content: '';
-    width: 6px;
-    height: 44px;
-    border-radius: 3px;
-    background: var(--muted);
-    opacity: 0.6;
-  }
-
-  .grip:hover::after,
-  .grip:focus-visible::after {
-    background: var(--accent);
-    opacity: 1;
-  }
+  /* The edge between page and player wears the shared handle (app.css .edge-grip). */
 
   /* The panel scrolls on its own: a scroll in it never moves the page beside it (nor where it has nothing to scroll).
      Its content answers to the panel's width (a container), which can be dragged narrow. */
@@ -743,8 +760,7 @@
 
   .sheet a,
   .sidebar nav a,
-  .foot a,
-  .fold {
+  .foot a {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -757,8 +773,7 @@
 
   .sheet a:hover,
   .sidebar nav a:hover,
-  .foot a:hover,
-  .fold:hover {
+  .foot a:hover {
     background: color-mix(in srgb, var(--text) 7%, transparent);
   }
 
@@ -886,13 +901,9 @@
     font-size: 0.75rem;
   }
 
-  .fold {
-    width: 100%;
-    border: 0;
-    background: none;
-    color: var(--muted);
-    font: inherit;
-    cursor: pointer;
+  /* The navigation's edge: the panel's handle (app.css .edge-grip) over its right border, a tap or a drag. */
+  .nav-grip {
+    display: none;
   }
 
   /* Folded (decision 0042): a strip of icons; the names stay for screen readers. */
@@ -905,7 +916,7 @@
       padding-inline: 10px;
     }
 
-    .folded .sidebar:not(.peek) :is(nav a, .foot a, .fold, .conn, .brand) {
+    .folded .sidebar:not(.peek) :is(nav a, .foot a, .conn, .brand) {
       justify-content: center;
       padding-inline: 0;
     }
@@ -932,6 +943,25 @@
       top: 2px;
       right: 4px;
       margin: 0;
+    }
+
+    .nav-grip {
+      display: grid;
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 12px;
+      padding: 0;
+      border: 0;
+      background-color: transparent;
+      /* Over the border it replaces: the handle draws the line. */
+      background-position: right;
+      z-index: 1;
+    }
+
+    .sidebar {
+      border-right: 0;
     }
 
     /* Shown whole over the page: the page keeps its place beside the strip. */

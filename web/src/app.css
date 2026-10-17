@@ -125,3 +125,29 @@ button.solid[aria-busy='true']::after {
   border-color: color-mix(in srgb, var(--accent-text) 30%, transparent);
   border-top-color: var(--accent-text);
 }
+
+/* An edge's handle (decisions 0018 and 0042): a line, with a handle in the middle that shows it can be dragged. The
+   edge between page and panel (App's .grip) and the navigation's edge (App's .nav-grip) wear the same. */
+.edge-grip {
+  display: grid;
+  place-items: center;
+  cursor: col-resize;
+  touch-action: none;
+  background: linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat;
+}
+
+.edge-grip::after {
+  content: '';
+  width: 6px;
+  height: 44px;
+  border-radius: 3px;
+  background: var(--muted);
+  opacity: 0.6;
+}
+
+.edge-grip:hover::after,
+.edge-grip:focus-visible::after {
+  background: var(--accent);
+  opacity: 1;
+}
+
