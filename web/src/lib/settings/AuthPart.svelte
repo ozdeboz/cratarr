@@ -113,14 +113,23 @@
       : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
   }
   const accounts = $derived(new Set(devices.map((d) => d.user)).size);
+
+  // The password's fields only once asked for (deeper only while it applies): a new password, then back.
+  let changing = $state(false);
+  async function changePassword() {
+    await ed.changePassword();
+    if (!ed.sub.current && !ed.sub.password) changing = false;
+  }
 </script>
 
 {#if ed.sub.accounts}
   <section aria-labelledby="auth-h">
     <h2 id="auth-h">Authentication</h2>
     <p class="lede">
-      Your account for Cratarr and Subsonic apps: <code>{location.origin}</code>
-      <MoreInfo label="Authentication" text="Sign in to these pages with it. Subsonic apps take this address with this account's own name and password (never a directory's)." />
+      Your account for Cratarr and Subsonic apps <MoreInfo
+        label="Authentication"
+        text="Sign in to these pages with it. Subsonic apps take this address with this account's own name and password (never a directory's)."
+      />
     </p>
     {#if ed.sub.accounts.length === 0}
       <div class="fields">
@@ -140,20 +149,27 @@
       <dl class="account">
         <dt>Account</dt>
         <dd>{ed.sub.accounts.join(', ')}</dd>
+        <dt>Address</dt>
+        <dd><code>{location.origin}</code></dd>
       </dl>
-      <div class="fields">
-        <label>
-          <span class="l">Current password</span>
-          <input type="password" bind:value={ed.sub.current} autocomplete="current-password" />
-        </label>
-        <label>
-          <span class="l">New password</span>
-          <input type="password" bind:value={ed.sub.password} autocomplete="new-password" />
-        </label>
-      </div>
-      <div class="row">
-        <button disabled={ed.sub.busy || !ed.sub.current || !ed.sub.password} aria-busy={ed.sub.busy} onclick={ed.changePassword}>Change password</button>
-      </div>
+      {#if changing}
+        <div class="fields">
+          <label>
+            <span class="l">Current password</span>
+            <input type="password" bind:value={ed.sub.current} autocomplete="current-password" />
+          </label>
+          <label>
+            <span class="l">New password</span>
+            <input type="password" bind:value={ed.sub.password} autocomplete="new-password" />
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" disabled={ed.sub.busy || !ed.sub.current || !ed.sub.password} aria-busy={ed.sub.busy} onclick={changePassword}>Change password</button>
+          <button disabled={ed.sub.busy} onclick={() => ((changing = false), (ed.sub.current = ''), (ed.sub.password = ''))}>Cancel</button>
+        </div>
+      {:else}
+        <div class="row"><button onclick={() => (changing = true)}>Change password</button></div>
+      {/if}
 
       {#if required !== null}
         <div class="pref">
@@ -224,6 +240,12 @@
 {/if}
 
 <style>
+  /* Each group (Signed in, API keys) apart from the one above it. */
+  section h3 {
+    margin-top: 24px;
+    margin-bottom: 4px;
+  }
+
   .list {
     list-style: none;
     margin: 0;

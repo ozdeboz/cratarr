@@ -65,7 +65,7 @@
       <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
       {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
       <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar. -->
-      {#if partReset.run}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="reset" size={22} /></button></span>{/if}
+      {#if partReset.run}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
       <PanelPlace />
     </span>
   </div>
@@ -96,9 +96,9 @@
     {/if}
 
     {#if resetting && partReset.run}
-      <MenuSheet label="Reset" icon="reset" title={`Reset ${title}`} onclose={() => (resetting = false)}>
+      <MenuSheet label="Reset" icon="resetSettings" title={`Reset ${title}`} onclose={() => (resetting = false)}>
         <p class="reset">{partReset.what}</p>
-        <MenuEntry icon="reset" label="Reset" danger busy={resetBusy} disabled={resetBusy} onclick={reset} />
+        <MenuEntry icon="resetSettings" label="Reset" danger busy={resetBusy} disabled={resetBusy} onclick={reset} />
         <MenuEntry icon="close" label="Cancel" disabled={resetBusy} onclick={() => (resetting = false)} />
       </MenuSheet>
     {/if}
@@ -528,8 +528,9 @@
     width: auto;
   }
 
-  /* Every button of a part, except an (i) (lib/MoreInfo), which is an icon on its own. */
-  .scroll :global(button:not(.info)) {
+  /* Every button of a part, except an (i) (lib/MoreInfo), an icon on its own, and a switch (lib/Switch), which is its
+     whole row: flat, as Finamp's settings rows, not a box in the card. */
+  .scroll :global(button:not(.info):not(.switch)) {
     min-height: 44px;
     padding: 0 14px;
     background: var(--bg);
@@ -540,7 +541,7 @@
     cursor: pointer;
   }
 
-  .scroll :global(.server button:not(.info)) {
+  .scroll :global(.server button:not(.info):not(.switch)) {
     background: var(--surface);
   }
 
