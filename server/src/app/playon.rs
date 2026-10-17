@@ -1195,7 +1195,7 @@ impl PlayOn {
         let mut entries = self.entries();
         let Some(e) = entries.get_mut(name) else { return };
         e.moved = e.queue.tracks.iter().map(|t| t.entry.clone()).filter(|x| !x.is_empty()).collect();
-        if e.queue.edit(Command::Stop).is_ok() {
+        if e.queue.edit_at(Command::Stop, None).is_ok() {
             e.told = e.queue.version;
         }
         e.report = Report { index: -1, volume: e.report.volume, ducked: e.report.ducked, ..Report::default() };
