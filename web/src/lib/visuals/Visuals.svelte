@@ -860,7 +860,9 @@
           fluid: fluidNow,
           forces,
           flow: { energy: lit, swirl: 1 + 2 * track[T.swell] },
-          dt,
+          // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
+          // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
+          dt: dt * s.speed * (still ? 0.25 : 1),
           warp: 0.12 * fluidNow,
         },
         w,
