@@ -363,6 +363,24 @@
     if (pick !== null) return meters.bands[pick]?.[i] ?? 0;
     return meters.bands.length ? meters.bands.reduce((a, b) => a + (b[i] ?? 0), 0) / meters.bands.length : 0;
   };
+  // The pace this device settled at (`cratarr-visuals-pace`): its own, not shared, not a setting.
+  type Pace = { points: number; passes: number; fit: number; ceiling: { cost: number; until: number } | null };
+  const PACE = 'cratarr-visuals-pace';
+  function keptPace(): Pace | null {
+    try {
+      const p = JSON.parse(localStorage.getItem(PACE) ?? 'null');
+      return p && typeof p.points === 'number' && typeof p.passes === 'number' && typeof p.fit === 'number' ? p : null;
+    } catch {
+      return null;
+    }
+  }
+  function keepPace(p: Pace) {
+    try {
+      localStorage.setItem(PACE, JSON.stringify(p));
+    } catch {
+      /* this visit only */
+    }
+  }
   // The fewest points the device's own pace steps down to.
   const MIN_POINTS = 1 << 14;
   // A new track's flame blends in over this long; one asked for with the dice, quicker.
@@ -401,9 +419,14 @@
     // The sync group this device plays in, if any: its visuals followed, this one's changes sent to it.
     const stopGroup = followGroup();
 
+    // Where this device's pace settled last time (points, steps, resolution's share; and a level it could not hold
+    // lately, not tried again until then): the visuals open there, not at the settings' most, and do not hunt for it
+    // again (2026-10-18: a tablet opening at the most stepped down and up five times in eleven seconds, every step
+    // starting the picture over).
+    const pace = keptPace();
     let renderer: FlameRenderer | null = null;
     try {
-      renderer = new FlameRenderer(canvas, Math.round(2 ** s.points));
+      renderer = new FlameRenderer(canvas, Math.min(Math.round(2 ** s.points), pace?.points ?? Infinity));
     } catch (e) {
       // Why, for a debugger attached to the device (the page says only that it cannot).
       console.warn('Visuals:', e);
@@ -510,7 +533,7 @@
     let lit = 0.5;
     let glow = 1;
     let metered = 0;
-    let passes = s.steps;
+    let passes = Math.min(s.steps, pace?.passes ?? s.steps);
     let raf = 0;
     let last = performance.now();
     let drawnAt = 0;
@@ -525,11 +548,18 @@
     let worst = 0;
     let judged = performance.now();
     // The resolution the step-down gives up before points (a share of the Resolution setting's).
-    let fit = 1;
+    let fit = Math.min(1, Math.max(0.6, pace?.fit ?? 1));
     // Seconds in a row with no late frame needed before a step back up; doubled each time a step up was soon taken
     // back, so the load settles instead of swinging (back to 3 after a minute with nothing taken back).
     let calm = 0;
-    let wait = 3;
+    let wait = 6;
+    // The cost of a level (points times steps times pixels) that failed right after a step up to it, and until when
+    // no step up reaches it again; the cost of the last step up's level.
+    let ceiling = pace?.ceiling && pace.ceiling.until > Date.now() ? pace.ceiling : null;
+    let upTo = 0;
+    const costOf = (points: number, steps: number, share: number) => points * steps * share * share;
+    // Frames not to judge the pace by: while new points settle, and the one a resize made.
+    let settlingFrames = 0;
     let steppedUp = 0;
     let steppedDown = 0;
     // The framing and exposure, measured from the flame twice a second (a quarter of the measure each frame, so no one
@@ -790,7 +820,10 @@
       }
       // The points fall into a buffer of at most about 0.6 megapixels; the screen scales it up (softer, and cheaper).
       const scale = Math.min(1, Math.sqrt(600_000 / (w * h)));
-      renderer.resize(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)));
+      const bw = Math.max(1, Math.round(w * scale));
+      const bh = Math.max(1, Math.round(h * scale));
+      const resized = renderer.width !== bw || renderer.height !== bh;
+      renderer.resize(bw, bh);
       // The fluid: each band's part pushed where it lies by its lights (its hits, by default), outward from the middle
       // and round the way the part turns; a beat pushes out from the middle; the loudness keeps the flow going, the
       // swells add whirls. Where the picture is in the buffer: as the renderer's camera puts it.
@@ -885,27 +918,54 @@
       const most = Math.round(2 ** s.points);
       if (renderer.pointCount > most) renderer.setPoints(most);
       passes = Math.min(passes, s.steps);
-      drawn++;
-      if (spent > frameMs * 1.08 + 2) late++;
-      worst = Math.max(worst, spent);
+      // Not judged: frames while new points settle, or just after a resize (each costs more than the pace it leads to).
+      if (renderer.settling || resized) settlingFrames = 2;
+      else if (settlingFrames > 0) settlingFrames--;
+      else {
+        drawn++;
+        if (spent > frameMs * 1.08 + 2) late++;
+        worst = Math.max(worst, spent);
+      }
       if (now - judged >= 1000) {
-        if (late * 5 > drawn) {
+        let stepped = false;
+        if (drawn >= 5 && late * 5 > drawn) {
           calm = 0;
-          if (now - steppedUp < 5000) wait = Math.min(60, wait * 2);
-          steppedDown = now;
-          for (let n = worst > frameMs * 2 ? 2 : 1; n > 0; n--) {
-            if (passes > 1) passes--;
-            else if (fit > 0.6) fit = Math.max(0.6, fit * 0.85);
-            else if (renderer.pointCount > MIN_POINTS) renderer.setPoints(Math.max(MIN_POINTS, renderer.pointCount >> 1));
+          // A step up that failed at once: its level is the ceiling for five minutes.
+          if (now - steppedUp < 5000 && upTo) {
+            wait = Math.min(60, wait * 2);
+            ceiling = { cost: upTo, until: Date.now() + 5 * 60_000 };
           }
-        } else if (late === 0 && ++calm >= wait) {
+          upTo = 0;
+          steppedDown = now;
+          // One level a second at most, however late (two at once overshot, and the step back up failed again).
+          if (passes > 1) passes--;
+          else if (fit > 0.6) fit = Math.max(0.6, fit * 0.85);
+          else if (renderer.pointCount > MIN_POINTS) renderer.setPoints(Math.max(MIN_POINTS, renderer.pointCount >> 1));
+          stepped = true;
+        } else if (drawn >= 5 && late === 0 && ++calm >= wait) {
           calm = 0;
-          steppedUp = now;
-          if (renderer.pointCount < most) renderer.setPoints(Math.min(most, renderer.pointCount * 2));
-          else if (fit < 1) fit = Math.min(1, fit / 0.85);
-          else if (passes < s.steps) passes++;
+          const points = renderer.pointCount;
+          const next =
+            points < most
+              ? { points: Math.min(most, points * 2), passes, fit }
+              : fit < 1
+                ? { points, passes, fit: Math.min(1, fit / 0.85) }
+                : passes < s.steps
+                  ? { points, passes: passes + 1, fit }
+                  : null;
+          if (ceiling && ceiling.until < Date.now()) ceiling = null;
+          const cost = next ? costOf(next.points, next.passes, next.fit) : 0;
+          if (next && (!ceiling || cost < ceiling.cost)) {
+            steppedUp = now;
+            upTo = cost;
+            if (next.points !== points) renderer.setPoints(next.points);
+            fit = next.fit;
+            passes = next.passes;
+            stepped = true;
+          }
         }
-        if (now - steppedDown > 60_000) wait = 3;
+        if (stepped) keepPace({ points: renderer.pointCount, passes, fit, ceiling });
+        if (now - steppedDown > 60_000) wait = 6;
         late = 0;
         drawn = 0;
         worst = 0;

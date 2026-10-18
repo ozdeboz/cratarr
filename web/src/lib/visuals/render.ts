@@ -16,6 +16,8 @@ import { Fluid, gridFor, type Flow, type Force } from './fluid';
 // The six parts, rotations up to eight arms and as many mirrors.
 const MAX_XFORMS = 22;
 const SLOTS = 8;
+/** Passes a point added to the running ones settles for, unseen, before it is drawn (flam3's fuse). */
+const SETTLE = 30;
 
 const ITERATE = `#version 300 es
 precision highp float;
@@ -291,6 +293,26 @@ void main() {
   bandB = clean(texelFetch(uBandsB, at, 0));
 }`;
 
+// The carry: the picture so far drawn into buffers of another size (the step-down's changes of resolution, a window
+// resized), each value as many old pixels' worth as a new one covers, so it shows as it did instead of starting over.
+const CARRY = `#version 300 es
+precision highp float;
+uniform sampler2D uAcc;
+uniform sampler2D uBandsA;
+uniform sampler2D uBandsB;
+uniform vec2 uSize;
+uniform float uArea;
+layout(location = 0) out vec4 o;
+layout(location = 1) out vec4 bandA;
+layout(location = 2) out vec4 bandB;
+${BAD}
+void main() {
+  vec2 uv = gl_FragCoord.xy / uSize;
+  o = clean(textureLod(uAcc, uv, 0.0)) * uArea;
+  bandA = clean(textureLod(uBandsA, uv, 0.0)) * uArea;
+  bandB = clean(textureLod(uBandsB, uv, 0.0)) * uArea;
+}`;
+
 // Finds whether a buffer holds any such value: only those pixels pass (counted by an occlusion query).
 const FIND = `#version 300 es
 precision highp float;
@@ -482,7 +504,17 @@ export class FlameRenderer {
   private accFbo: WebGLFramebuffer | null = null;
   private empty: WebGLVertexArrayObject;
   private flip = 0;
+  /** The points: how many run the chaos game (the first `count` of buffers holding `capacity`), and how many of those
+   *  are on the flame and drawn (`ready`): ones added later settle unseen for `settleLeft` more passes first. Fewer
+   *  points only draw fewer; more only add new ones (2026-10-18: each change started every point again at random, the
+   *  whole flame rebuilding, and on a tablet near its limit the step-down changed them every few seconds). */
   private count = 0;
+  private capacity = 0;
+  private ready = 0;
+  private settleLeft = 0;
+  private carrying: WebGLProgram;
+  /** The buffers being replaced at a resize, their picture carried into the new ones. */
+  private carryFrom: { accs: WebGLTexture[]; bands: WebGLTexture[]; bandsB: WebGLTexture[]; fbos: WebGLFramebuffer[]; cur: number; width: number; height: number } | null = null;
   private flame: Flame | null = null;
   private loc = new Map<string, WebGLUniformLocation | null>();
   /** The buffer's kind: 32-bit floats where they can be blended into and filtered, else 16-bit (a pixel stops counting
@@ -518,6 +550,7 @@ export class FlameRenderer {
     this.show = program(gl, FULL, SHOW);
     this.scrubbing = program(gl, FULL, SCRUB);
     this.finding = program(gl, FULL, FIND);
+    this.carrying = program(gl, FULL, CARRY);
     this.empty = gl.createVertexArray()!;
     this.feedback = gl.createTransformFeedback()!;
     this.seed(points);
@@ -526,14 +559,67 @@ export class FlameRenderer {
   /** How many points carry the chaos game: fewer where the device cannot keep up (they start again at random). */
   setPoints(n: number) {
     if (n === this.count) return;
+    if (n > this.capacity) this.reserve(n);
+    if (n < this.count) {
+      this.count = n;
+      this.ready = Math.min(this.ready, n);
+      return;
+    }
+    // The new ones settle unseen over the next passes (a frame's own, not thirty at once), then are drawn.
+    this.count = n;
+    this.settleLeft = SETTLE;
+  }
+
+  /** Whether points added lately are still settling (the frames meanwhile are not the device's usual pace). */
+  get settling(): boolean {
+    return this.ready < this.count;
+  }
+
+  /** Buffers for `n` points: the ones running kept where they are, the rest new at random. */
+  private reserve(n: number) {
+    if (n <= this.capacity) return;
     const gl = this.gl;
-    for (const b of this.buffers) gl.deleteBuffer(b);
+    const old = this.buffers;
+    const latest = old[this.flip];
+    const data = new ArrayBuffer(n * 20);
+    const f = new Float32Array(data);
+    const u = new Uint32Array(data);
+    for (let i = this.count; i < n; i++) {
+      f[i * 5] = Math.random() * 2 - 1;
+      f[i * 5 + 1] = Math.random() * 2 - 1;
+      u[i * 5 + 4] = (Math.random() * 0xfffffffe + 1) >>> 0;
+    }
     for (const v of this.vaos) gl.deleteVertexArray(v);
     this.buffers = [];
     this.vaos = [];
-    this.flip = 0;
-    this.fuse = 30;
-    this.seed(n);
+    for (let k = 0; k < 2; k++) {
+      const b = gl.createBuffer()!;
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_COPY);
+      if (latest && this.count) {
+        gl.bindBuffer(gl.COPY_READ_BUFFER, latest);
+        gl.copyBufferSubData(gl.COPY_READ_BUFFER, gl.ARRAY_BUFFER, 0, 0, this.count * 20);
+      }
+      this.buffers.push(b);
+      this.vaos.push(this.vaoOf(b));
+    }
+    gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    gl.bindVertexArray(null);
+    for (const b of old) gl.deleteBuffer(b);
+    this.capacity = n;
+  }
+
+  private vaoOf(b: WebGLBuffer): WebGLVertexArrayObject {
+    const gl = this.gl;
+    const vao = gl.createVertexArray()!;
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 20, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 20, 16);
+    return vao;
   }
 
   get pointCount(): number {
@@ -556,18 +642,14 @@ export class FlameRenderer {
       const b = gl.createBuffer()!;
       gl.bindBuffer(gl.ARRAY_BUFFER, b);
       gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_COPY);
-      const vao = gl.createVertexArray()!;
-      gl.bindVertexArray(vao);
-      gl.enableVertexAttribArray(0);
-      gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 20, 0);
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribIPointer(1, 1, gl.UNSIGNED_INT, 20, 16);
       this.buffers.push(b);
-      this.vaos.push(vao);
+      this.vaos.push(this.vaoOf(b));
     }
     gl.bindVertexArray(null);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     this.count = n;
+    this.capacity = n;
+    this.ready = 0;
   }
 
   /** The drawing size in pixels (the buffer the points fall into; the screen scales it). */
@@ -575,10 +657,15 @@ export class FlameRenderer {
     if (width === this.width && height === this.height) return;
     const gl = this.gl;
     this.fluid?.resize(...gridFor(width, height));
+    // The old buffers kept until the new ones hold their picture (a failed try at a kind a driver refused: dropped).
+    if (!this.carryFrom && this.accs.length && this.width && this.height) {
+      this.carryFrom = { accs: this.accs, bands: this.bandSets, bandsB: this.bandSetsB, fbos: this.fbos, cur: this.cur, width: this.width, height: this.height };
+    } else {
+      for (const x of [...this.accs, ...this.bandSets, ...this.bandSetsB]) gl.deleteTexture(x);
+      for (const f of this.fbos) gl.deleteFramebuffer(f);
+    }
     this.width = width;
     this.height = height;
-    for (const x of [...this.accs, ...this.bandSets, ...this.bandSetsB]) gl.deleteTexture(x);
-    for (const f of this.fbos) gl.deleteFramebuffer(f);
     this.accs = [];
     this.bandSets = [];
     this.bandSetsB = [];
@@ -615,7 +702,9 @@ export class FlameRenderer {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.deleteFramebuffer(fbo);
         this.precision = this.precision === 32 ? 16 : 8;
+        const kept = this.carryFrom;
         this.width = 0;
+        this.carryFrom = kept;
         this.resize(width, height);
         return;
       }
@@ -625,6 +714,7 @@ export class FlameRenderer {
     }
     this.cur = 0;
     this.use();
+    this.carry();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     // The colours' coarser levels, for a wide smoothing (made each frame it is asked for; here only so the texture is
     // complete with a filter that reads them), where they can be filtered.
@@ -635,6 +725,34 @@ export class FlameRenderer {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
         gl.generateMipmap(gl.TEXTURE_2D);
       }
+  }
+
+  /** The old buffers' picture into the new set in use, then the old ones gone. */
+  private carry() {
+    const old = this.carryFrom;
+    this.carryFrom = null;
+    if (!old) return;
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.carrying);
+    const at = (n: string) => gl.getUniformLocation(this.carrying, n);
+    [old.accs[old.cur], old.bands[old.cur], old.bandsB[old.cur]].forEach((t, i) => {
+      gl.activeTexture(gl.TEXTURE0 + i);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+    });
+    gl.uniform1i(at('uAcc'), 0);
+    gl.uniform1i(at('uBandsA'), 1);
+    gl.uniform1i(at('uBandsB'), 2);
+    gl.uniform2f(at('uSize'), this.width, this.height);
+    gl.uniform1f(at('uArea'), (old.width * old.height) / (this.width * this.height));
+    gl.bindVertexArray(this.empty);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.activeTexture(gl.TEXTURE0);
+    for (const x of [...old.accs, ...old.bands, ...old.bandsB]) gl.deleteTexture(x);
+    for (const f of old.fbos) gl.deleteFramebuffer(f);
   }
 
   /** The set in use as `acc`, `bands` and `accFbo`. */
@@ -807,16 +925,34 @@ export class FlameRenderer {
     this.fuse = 0;
     if (unseen) gl.enable(gl.RASTERIZER_DISCARD);
     for (let p = 0; p < unseen + passes; p++) {
-      if (p === unseen && unseen) gl.disable(gl.RASTERIZER_DISCARD);
+      if (p === unseen && unseen) {
+        gl.disable(gl.RASTERIZER_DISCARD);
+        this.ready = this.count;
+      }
       const from = this.flip;
       const to = 1 - from;
       gl.bindVertexArray(this.vaos[from]);
-      gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, this.buffers[to]);
-      gl.beginTransformFeedback(gl.POINTS);
-      gl.drawArrays(gl.POINTS, 0, this.count);
-      gl.endTransformFeedback();
+      // The points on the flame, drawn (all of them unseen while the whole set first settles), then any still settling,
+      // unseen; each written to its own part of the other buffer.
+      const drawn = p < unseen ? 0 : this.ready;
+      if (drawn) {
+        gl.bindBufferRange(gl.TRANSFORM_FEEDBACK_BUFFER, 0, this.buffers[to], 0, drawn * 20);
+        gl.beginTransformFeedback(gl.POINTS);
+        gl.drawArrays(gl.POINTS, 0, drawn);
+        gl.endTransformFeedback();
+      }
+      const rest = this.count - drawn;
+      if (rest) {
+        if (drawn) gl.enable(gl.RASTERIZER_DISCARD);
+        gl.bindBufferRange(gl.TRANSFORM_FEEDBACK_BUFFER, 0, this.buffers[to], drawn * 20, rest * 20);
+        gl.beginTransformFeedback(gl.POINTS);
+        gl.drawArrays(gl.POINTS, drawn, rest);
+        gl.endTransformFeedback();
+        if (drawn) gl.disable(gl.RASTERIZER_DISCARD);
+      }
       gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, null);
       this.flip = to;
+      if (p >= unseen && this.ready < this.count && --this.settleLeft <= 0) this.ready = this.count;
     }
     // Drawn again whatever the passes were (a first frame of none would leave every later draw discarded).
     gl.disable(gl.RASTERIZER_DISCARD);
@@ -832,7 +968,7 @@ export class FlameRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.acc);
     gl.uniform1i(this.u(this.show, 'uAcc'), 0);
     gl.uniform2f(this.u(this.show, 'uView'), viewWidth, viewHeight);
-    const held = (this.count * passes) / Math.max(0.02, 1 - look.keep);
+    const held = (Math.max(1, this.ready) * passes) / Math.max(0.02, 1 - look.keep);
     const perPixel = held / (this.width * this.height);
     gl.uniform1f(this.u(this.show, 'uK1'), look.brightness);
     gl.uniform1f(this.u(this.show, 'uK2'), ((this.precision === 8 ? 255 : 4) * look.exposure) / perPixel);
@@ -915,7 +1051,7 @@ export class FlameRenderer {
     for (const x of [...this.accs, ...this.bandSets, ...this.bandSetsB]) gl.deleteTexture(x);
     for (const f of this.fbos) gl.deleteFramebuffer(f);
     if (this.query) gl.deleteQuery(this.query);
-    for (const p of new Set([this.iterate, this.plot, this.fade, this.show, this.scrubbing, this.finding])) gl.deleteProgram(p);
+    for (const p of new Set([this.iterate, this.plot, this.fade, this.show, this.scrubbing, this.finding, this.carrying])) gl.deleteProgram(p);
     gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 
