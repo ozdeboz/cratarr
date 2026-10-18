@@ -42,7 +42,12 @@
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
   import { newDrift, stepDrift } from './drift';
-  import { holding, newGovernor, STANDING, stepGovernor } from './governor';
+  import { holding, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
+  import { drifted, fresh, limitsOf, thumbed, type Learned } from './learning';
+  import { forgetVisualsLimits, getVisualsLimits, postVisualsThumb, putVisualsLimits } from '../api';
+  import { toast } from '../toast.svelte';
+  import type { MeterValues } from './meters';
+  import type { TrialLoop } from './trial.svelte';
   import { beatsOf } from './beats';
   import { DEFAULT_LIMITS, prechecking, type Checked } from './precheck';
   import { recipeFor, settingsOf, type Recipe } from './recipe';
@@ -207,6 +212,125 @@
     showChrome();
   }
 
+  // The governor (governor.ts), stepped with the meters four times a second in the loop; and the limits it holds the
+  // picture within, as learned from the thumbs (learning.ts): kept per user on the server, drifted back by the time
+  // since, applied at once.
+  const governor = newGovernor();
+  let learned = $state<Learned>(fresh(STANDING));
+  let learnedVersion = 0;
+  const limitsNow = $derived(limitsOf(learned));
+  const status = (e: unknown) => (e && typeof e === 'object' && 'status' in e ? (e as { status?: number }).status : undefined);
+  async function loadLearned() {
+    try {
+      const got = await getVisualsLimits();
+      learnedVersion = got.version;
+      learned = drifted({ ...fresh(STANDING), ...got.limits } as Learned, STANDING, (Date.now() - got.at) / 86_400_000);
+    } catch (e) {
+      // None learned yet (or not to be had now): where they start.
+      if (status(e) === 404) {
+        learnedVersion = 0;
+        learned = fresh(STANDING);
+      }
+    }
+  }
+  // The last 20 seconds, four readings a second: the meters and what the loop knew beside them (for the thumbs).
+  const WINDOW = 80;
+  let recent: { meters: MeterValues; loop: TrialLoop }[] = [];
+  // Each budget's lever, and how far it holds back (0 open, 1 as far as it goes).
+  const LEVER_OF: Record<Budgeted, { lever: keyof Levers; most: number }> = {
+    motion: { lever: 'pace', most: 0.25 },
+    shapeChurn: { lever: 'evolution', most: 4 },
+    colourChurn: { lever: 'hue', most: 0.2 },
+    zoomPumping: { lever: 'size', most: 0.2 },
+    looksPerMinute: { lever: 'gap', most: 6 },
+  };
+  /** The budget the governor holds the picture back by most now, if it holds any back (the flash rule is not one). */
+  function heldMost(): Budgeted | null {
+    let best: Budgeted | null = null;
+    let far = 0;
+    for (const [k, { lever, most }] of Object.entries(LEVER_OF) as [Budgeted, { lever: keyof Levers; most: number }][]) {
+      if (!holding(governor.levers, lever)) continue;
+      const v = governor.levers[lever];
+      const by = most > 1 ? (v - 1) / (most - 1) : (1 - v) / (1 - most);
+      if (by > far) {
+        far = by;
+        best = k;
+      }
+    }
+    return best;
+  }
+  // Thumbs up and down on the visuals as they are now (the owner: "a general thumbs up or thumbs down for any
+  // visualization that I currently look at, and it could then decide to tune"): learning.ts decides what, if anything,
+  // to change; each is kept, with the 20 seconds before it, for the periodic fit.
+  let thumbShown = $state<'up' | 'down' | null>(null);
+  let thumbTimer: ReturnType<typeof setTimeout> | undefined;
+  async function thumb(t: 'up' | 'down') {
+    thumbShown = t;
+    clearTimeout(thumbTimer);
+    thumbTimer = setTimeout(() => (thumbShown = null), 600);
+    showChrome();
+    const list = recent.slice();
+    const mean = (pick: (r: (typeof list)[number]) => number) => (list.length ? list.reduce((s, r) => s + pick(r), 0) / list.length : 0);
+    const meters = Object.fromEntries((Object.keys(LEVER_OF) as Budgeted[]).map((k) => [k, mean((r) => r.meters[k])])) as Record<Budgeted, number>;
+    const window = { meters: list.length ? meters : {}, intensity: mean((r) => r.loop.intensity) };
+    const held = heldMost();
+    let { learned: next, changed } = thumbed(learned, STANDING, t, window, held);
+    if (changed) {
+      learned = next;
+      for (let tries = 0; tries < 2; tries++) {
+        try {
+          learnedVersion = (await putVisualsLimits({ base: learnedVersion, limits: learned, at: Date.now() })).version;
+          break;
+        } catch (e) {
+          if (status(e) !== 409 || tries) {
+            toast.fail(e, 'Not saved');
+            break;
+          }
+          // Another device learned meanwhile: its limits, this thumb on them.
+          await loadLearned();
+          ({ learned: next, changed } = thumbed(learned, STANDING, t, window, held));
+          if (!changed) break;
+          learned = next;
+        }
+      }
+    }
+    const summary = <T,>(pick: (r: (typeof list)[number]) => T) => list.map(pick);
+    const meterStats = Object.fromEntries(
+      Object.keys(list[0]?.meters ?? {}).map((k) => {
+        const v = summary((r) => Number(r.meters[k as keyof MeterValues]));
+        return [k, { mean: v.reduce((a, b) => a + b, 0) / v.length, most: Math.max(...v) }];
+      }),
+    );
+    const loopStats = Object.fromEntries(
+      (['intensity', 'bps', 'hitsPerSecond', 'swing', 'points', 'steps', 'fps'] as const).map((k) => {
+        const v = summary((r) => r.loop[k]);
+        return [k, v.length ? { mean: v.reduce((a, b) => a + b, 0) / v.length, least: Math.min(...v) } : null];
+      }),
+    );
+    const now = $state.snapshot(s) as VisualSettings;
+    const playingNow = playing();
+    postVisualsThumb({
+      thumb: t,
+      meters: meterStats,
+      loop: { ...loopStats, device: list[list.length - 1]?.loop.device ?? null },
+      settings: { ...Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])), ...lookNow(), wild: now.wild, colours: now.colours },
+      track: playingNow ? `${playingNow.source}/${playingNow.id}` : null,
+      held,
+      changed,
+      at: Date.now(),
+    }).catch(() => {});
+  }
+  async function forget() {
+    try {
+      await forgetVisualsLimits();
+      learnedVersion = 0;
+      learned = fresh(STANDING);
+    } catch (e) {
+      toast.fail(e, 'Not forgotten');
+    }
+    showChrome();
+  }
+
   // The dice: everything at random, a look and how it behaves (a recipe: recipe.ts), both to the group. Each recipe is
   // first run against the playing track from where it is (precheck.ts), a slice a frame: the first within the limits
   // (the governor's, as Calm ↔ Wild has them; three flashes a second whatever it says) is taken, after eight the one
@@ -226,7 +350,7 @@
     const signals = key ? signalsOf(source, id) : null;
     const beats = key ? (beatsOf(source, id) ?? null) : null;
     const wild = 2 ** (2 * (base.wild - 0.5));
-    const limits: Record<string, number> = { ...Object.fromEntries(Object.entries(DEFAULT_LIMITS).map(([k, v]) => [k, v * wild])), flash: DEFAULT_LIMITS.flash };
+    const limits: Record<string, number> = { ...Object.fromEntries(Object.entries(limitsNow).map(([k, v]) => [k, v * wild])), flash: DEFAULT_LIMITS.flash };
     let best: { recipe: Recipe; by: number } | null = null;
     for (let k = 0; k < TRIES; k++) {
       const recipe = recipeFor(Math.floor(Math.random() * 0x100000000), ASPECTS);
@@ -536,6 +660,7 @@
     document.addEventListener('fullscreenchange', fullscreenChanged);
     // The sync group this device plays in, if any: its visuals followed, this one's changes sent to it.
     const stopGroup = followGroup();
+    void loadLearned();
 
     // Where this device's pace settled last time (points, steps, resolution's share; and a level it could not hold
     // lately, not tried again until then): the visuals open there, not at the settings' most, and do not hunt for it
@@ -607,8 +732,6 @@
     // so one segment's flashes and motion are not counted, nor held back, in the next.
     let trialSeen: VisualSettings | null = null;
     let meteredAt = 0;
-    // The governor (governor.ts), stepped with the meters four times a second.
-    const governor = newGovernor();
     // The hits seen since the rating page last had the loop's numbers (each band's last one, and how many came).
     const hitsSeen = Array<number>(BANDS).fill(-1);
     let hitsCounted = 0;
@@ -1015,7 +1138,7 @@
       if (now - meteredAt >= 250) {
         const values = metering.now();
         // With the trial of the rating page, only the flashes' rule: its budgets are what the ratings are to tell.
-        const l = stepGovernor(governor, values, { dt: Math.min(1, (now - meteredAt) / 1000), limits: STANDING, wild: how.wild, activity: d.lit, budgets: !trial.settings });
+        const l = stepGovernor(governor, values, { dt: Math.min(1, (now - meteredAt) / 1000), limits: limitsNow, wild: how.wild, activity: d.lit, budgets: !trial.settings });
         const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
         trial.meters = values;
@@ -1033,6 +1156,8 @@
           fps,
           device: device(),
         };
+        recent.push({ meters: values, loop: trial.loop });
+        if (recent.length > WINDOW) recent.shift();
         hitsCounted = 0;
         const marks = { flash: holding(l, 'swing'), speed: holding(l, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(l, k)) };
         if (marks.flash !== !!governed.flash || marks.speed !== !!governed.speed || marks.wild !== !!governed.wild) governed = marks;
@@ -1349,11 +1474,22 @@
               }}>Reset</button
             >
             <button class="reset" use:held={'rate'} onclick={startRating}>Rate</button>
+            <button class="reset" use:held={'forget'} onclick={forget}>Forget</button>
           </div>
         </div>
       {/if}
       {#if np && !panel}
         <div class="track">
+          {#if !ratingRun}
+            <div class="thumbs">
+              <button class="round" class:on={thumbShown === 'up'} aria-label="Thumbs up" use:held={'thumbs-up'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => thumb('up')}
+                ><Icon name="thumbsUp" size={22} /></button
+              >
+              <button class="round" class:on={thumbShown === 'down'} aria-label="Thumbs down" use:held={'thumbs-down'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => thumb('down')}
+                ><Icon name="thumbsDown" size={22} /></button
+              >
+            </div>
+          {/if}
           <strong>{np.name}</strong>
           {#if np.artist}<span>{np.artist}</span>{/if}
         </div>
@@ -1771,6 +1907,12 @@
     font: inherit;
     font-size: 0.9rem;
     cursor: pointer;
+  }
+
+  .thumbs {
+    display: flex;
+    gap: 4px;
+    margin: 0 0 6px -12px;
   }
 
   .track {
