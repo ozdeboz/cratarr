@@ -103,6 +103,23 @@ routes and governed them at their own Wild. In 65 the room is the group's (the o
 roll shares that it stands, every device in the group governs at Wild's most while it does, and the next roll, an undo,
 Reset or a recall on any of them ends it for all. A device alone is a group of one, as before.
 
+### Waves
+
+Slow, giant waves across the screen (the owner asked what they would cost: "65 candidates"). A **Waves** route column
+beside Stir, Flow and Swirl (64.1) sets how high they run, as the routes say (Swell's, by default, to be tuned in the
+lab); a new section may turn their way.
+
+- **With Fluid**: a broad, slow current added in the fluid's force pass, so the light rides on it as it rides on the
+  stirring. It must be one the fluid keeps: each step takes out whatever presses the flow together or pulls it apart
+  (the pressure), so a wave that pushes and pulls along its way would be undone; one that rolls across it (shear), or a
+  row of slow whirls, stays.
+- **Without Fluid** (none made at 0): the picture bent along the wave in the show pass, as the warp already bends it
+  along the flow. It moves nothing, only how it shows.
+- **The cost**: on Mali a pass costs, not the arithmetic in it (0047: seventeen passes added 4.3 ms a frame on the
+  tablet, the grid's size hardly counting; the fluid's whole step 1.2 to 1.7 ms there). Both forms add a few operations
+  to passes that already run (about 5,200 cells, or the screen's pixels once), well under 0.1 ms; a pass of their own
+  would cost about 0.25 ms on the tablet, so neither gets one.
+
 ### Not in 65
 
 - **Touch** (the owner: deferred to 66): touch as a signal row; drag stirring the fluid, a tap rippling, a pinch and a
