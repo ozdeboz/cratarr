@@ -1,8 +1,10 @@
 # 0050: Visuals 65: band envelopes, fewer sliders, an effects stage, Facets
 
-- Status: proposed (claude-a5, 2026-10-18; the owner: "Now, for 65, the Hydra effect layer … So plan for it", "facets
-  with square and X going 65", and on the plan: "maybe the whole touch interaction should be deferred to 66, since we
-  have sufficient for 65")
+- Status: accepted (the owner, 2026-10-18: "Now, for 65, the Hydra effect layer … So plan for it"; "facets with square
+  and X going 65"; "maybe the whole touch interaction should be deferred to 66, since we have sufficient for 65"; on the
+  open questions: "Yes, agree with the softness slider and the square or hex lattice working in the fluid only. Now,
+  we'd probably do best by putting this under the looks section with the looks dice. I don't care about old snapshots.
+  And yes, sync the group properly in 65, all at once"). claude-5f's two sections below are still to be filled in.
 - Date: 2026-10-18
 - Builds on: 0046 (the visuals, their routes and settings), 0047 (the fluid), 0048 (the randomisation and its limits);
   0049 (the pulse) is separate
@@ -26,15 +28,9 @@ Touch, the first layer one could play by hand, was planned with the stage. The o
 
 ## Decision
 
-### Three releases
+65 ships whole (the owner: "all at once"): everything below in one release.
 
-65 ships in steps, as 64 and 64.1 did, each one whole on its own:
-
-- **65**: the band envelopes and Presence; the fewer sliders, with their migration.
-- **65.1**: the effects stage.
-- **65.2**: Facets.
-
-### Band envelopes and Presence (65)
+### Band envelopes and Presence
 
 claude-5f makes the envelope (from the hits and the band's level: an attack, a hold while the sound holds, a release),
 its signal row, and its limits in the precheck. claude-a5 makes Presence in the drawing: a band's part weighs in the
@@ -43,21 +39,21 @@ sound, not only light up. Lighting is renamed **Linger** (how long a part's ligh
 
 *claude-5f to fill in: the envelope's definition and its defaults.*
 
-### Fewer sliders (65)
+### Fewer sliders
 
 - **Quality** (one ceiling) in place of Points, Steps and Resolution. FPS stays. The device's pace (0046's Load) still
   takes passes and points away under it; Quality is only how far it may go up.
 - **Haze** (−100 % to +100 %) in place of Floor and Depth.
 - **Family** folded into **Colours**.
 
-Both columns of the routes into Floor and Depth become one into Haze; a route kept, shared or saved into either is read
-into Haze. Saved snapshots are converted on recall (their form goes to 4), so an old one looks as it did; the shared
-settings are marked, as Fluid's scale was in 64.1.
+Nothing old is converted (the owner: "I don't care about old snapshots"): a snapshot, a device's kept settings or a
+group's shared ones from before 65 load as they are, without their Points, Steps, Resolution, Floor, Depth and Family
+(Quality and Haze at their defaults) and without routes into Floor or Depth. Loading one must still never fail.
 
-*claude-5f (who brought the owner's list) to fill in: how Haze maps onto the floor and the gamma, and how Quality divides into points, steps and
-resolution.*
+*claude-5f (who brought the owner's list) to fill in: how Haze maps onto the floor and the gamma, and how Quality
+divides into points, steps and resolution.*
 
-### The effects stage (65.1)
+### The effects stage
 
 **Two slots.** The **picture** slot comes after the show pass: the picture's colour and shape (kaleidoscope, repeat,
 pixelate, posterize, colorama, hue, modulate, and Hydra's feedback of the last picture, scaled and turned). The
@@ -77,26 +73,35 @@ screen. The screen is still drawn once at full size, so the extra cost is one pa
 effect is designed, claude-5f measures what that pass and a chain of five cost on the tablet (Mali G52) and the phone
 (Mali G615).
 
-**Settings and routes.** The chain is part of the look (pinnable like the look's other settings) and the dice may draw
-one; Another look (the stars) stays as it is, as the owner wanted in 0048. One **Effects** route column moves the chain
-as a whole (each effect's amount scaled by it), so the routes and their curves drive the effects as they drive the
-rest; a column per effect would crowd the grid, and can come later if one is missed.
-
-**Who does what** (agreed in 64): claude-a5 builds the stage, the compiler and the reports' plumbing; claude-5f ports
-the effects, measures the devices, and writes the help texts and the effects' limits.
+**In the look** (the owner: "under the looks section with the looks dice"). The chain is a setting of the look: in the
+panel's Look group, pinnable like the look's other settings, and drawn by Another look (the stars) with the rest of a
+look, so also by the dice's full roll (which draws another look); not by the double tap (how it moves only). One
+**Effects** route column moves the chain as a whole (each effect's amount scaled by it), so the routes and their curves
+drive the effects as they drive the rest; a column per effect would crowd the grid, and can come later if one is
+missed.
 
 **Held to the limits.** The flash meter already reads the screen, so it sees the effects with no change. The other
 meters (motion, shape and colour churn, zoom pumping) are counted from what the flame does, not from the screen: each
 effect reports what it adds (a turning kaleidoscope adds motion, a cycling colorama adds colour churn), so the governor
 can hold an effect back as it holds the flame back. The precheck (which draws no picture) runs the same reports.
 
-### Facets (65.2)
+**Who does what** (agreed in 64): claude-a5 builds the stage, the compiler and the reports' plumbing; claude-5f ports
+the effects, measures the devices, and writes the help texts and the effects' limits.
+
+### Facets
 
 Facets are drawn where the blocks were: in the fluid's light, as it is carried along the flow. Each cell of a lattice
 takes on one light, softened at its edges by **Facets** (0 %: none, as today; 100 %: hard tiles). The lattice is
-**square** or **hex** (**Lattice**, a look setting). The cells move with the flow, which a mosaic laid over the picture
-would not; that is what the owner liked. Facets is a route column too. Without Fluid there is no flow, so Facets does
-nothing (marked in its help).
+**square** or **hex** (**Lattice**). The cells move with the flow, which a mosaic laid over the picture would not; that
+is what the owner liked. Without Fluid there is no flow, so Facets does nothing (marked in its help). Both are settings
+of the look, as the effects are: in the Look group, pinnable, drawn by Another look. Facets is a route column too.
+
+### The double tap's room, for the whole group
+
+64.1 gave the double tap room up to twice the limits on the device tapped only; the others in its sync group got the
+routes and governed them at their own Wild. In 65 the room is the group's (the owner: "sync the group properly"): the
+roll shares that it stands, every device in the group governs at Wild's most while it does, and the next roll, an undo,
+Reset or a recall on any of them ends it for all. A device alone is a group of one, as before.
 
 ### Not in 65
 
@@ -117,22 +122,13 @@ nothing (marked in its help).
   the owner before anything is built.
 - **The pulse** (0049): its own decision.
 
-## Open for the owner
-
-1. **Facets as above** (proposed in 64, not yet confirmed): a softness slider and a square or hex Lattice in the look,
-   a Facets route column, in the fluid only.
-2. **Effects on the dice**: recommended yes (a full roll may draw a chain), the stars unchanged.
-3. **Old snapshots after the fewer sliders**: recommended converted on recall, so each looks as it did.
-4. **The double tap's room across a sync group** (from 64.1: today only the device tapped governs at twice the limits;
-   the others in the group get the routes and govern at their own Wild): shared, or this device only. Recommended
-   shared, as a group setting, in 65.
-5. **The three releases** (65, 65.1, 65.2), or 65 whole.
-
 ## Consequences
 
-- Nothing changes on screen until a chain is set: 65.1 with no effect must draw exactly as 65 (to be checked pixel for
-  pixel in the lab).
+- Nothing changes on screen until a chain is set: with no effect, 65 must draw exactly as 64.1 (to be checked pixel
+  for pixel in the lab).
 - Every effect needs its meters report before it ships, or the governor cannot hold it.
-- Saved snapshots and shared settings carry a form number again (4); the recall code keeps every older form readable.
-- The panel gains Quality, Haze, the effects' settings and three route columns (Presence, Effects, Facets), and loses
-  Points, Steps, Resolution, Floor, Depth and Family.
+- Another look now also changes effects and Facets; to keep one, pin it.
+- Settings from before 65 lose what 65 removes, unconverted, by the owner's choice.
+- The group's shared settings carry one more key: whether a double tap's room stands.
+- The panel gains Quality, Haze, the effects' settings, Facets and Lattice, and three route columns (Presence, Effects,
+  Facets), and loses Points, Steps, Resolution, Floor, Depth and Family.
