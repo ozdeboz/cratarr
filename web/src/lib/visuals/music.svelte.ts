@@ -132,8 +132,9 @@ function pulseAt(beats: Beats, beat: Beat | null, pos: number, most: number, sha
   return Math.max(on, (0.35 + 0.65 * next.strength) * counts(next) * risen(ATTACK - next.since));
 }
 
-/** The music now. `at` is the frame's time (performance.now()), to move the position on between the player's reports. */
-export function musicNow(at: number): Music {
+/** The music now. `at` is the frame's time (performance.now()), to move the position on between the player's reports;
+ *  `lighting`: each band's hits' ring (s; by default the settings'). */
+export function musicNow(at: number, lighting: readonly number[] = visualSettings.lighting): Music {
   const np = playing();
   track.fill(0);
   if (!np) {
@@ -166,7 +167,7 @@ export function musicNow(at: number): Music {
   // The bands: the server's, else heard here.
   if (signals) {
     stopLive();
-    return musicOf(signals, beats ?? null, pos, on, { state: own, at, key, gainDb: levelDb(np.source, np.id), bpm, energy: energy() });
+    return musicOf(signals, beats ?? null, pos, on, { state: own, at, key, lighting, gainDb: levelDb(np.source, np.id), bpm, energy: energy() });
   }
   const beat = beats ? beatAt(beats, pos) : null;
   const bps = beat ? 1 / beat.length : (bpm ?? 90) / 60;
@@ -175,7 +176,7 @@ export function musicNow(at: number): Music {
   const now = listen();
   if (now) {
     heard = now.loudness;
-    fromLive(now, at);
+    fromLive(now, at, lighting);
     from = 'live';
   }
   const intensity = intensityOf(heard, levelDb(np.source, np.id), energy());
@@ -298,7 +299,7 @@ function listen(): LiveNow | null {
   return live.now();
 }
 
-function fromLive(now: LiveNow, at: number) {
+function fromLive(now: LiveNow, at: number, lighting: readonly number[]) {
   for (let b = 0; b < BANDS; b++) {
     const heard = now.bands[b];
     const v = bands[b];
@@ -314,7 +315,7 @@ function fromLive(now: LiveNow, at: number) {
     }
     v[B.level] = heard.level;
     v[B.flux] = heard.flux;
-    v[B.hits] = h.count ? ringOf((at - h.at) / 1000, h.strength, visualSettings.lighting[b]) : 0;
+    v[B.hits] = h.count ? ringOf((at - h.at) / 1000, h.strength, lighting[b]) : 0;
     const secs = (at - h.since) / 1000;
     hits[b] = { index: h.count - 1, weight: h.strength / Math.max(0.05, h.mean), perSecond: secs > 5 ? (h.count - h.first) / secs : 2 };
   }

@@ -12,6 +12,8 @@
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import { colourOf, PARTS, type Flame } from './flame';
 import { Fluid, gridFor, type Flow, type Force } from './fluid';
+import { FlashMeter } from './flashmeter';
+import type { Tiles } from './meters';
 
 // The six parts, rotations up to eight arms and as many mirrors.
 const MAX_XFORMS = 22;
@@ -470,6 +472,9 @@ export type Shown = {
 
 export class FlameRenderer {
   private gl: WebGL2RenderingContext;
+  // The flash meter (flashmeter.ts), made the first time the screen is measured; out where it cannot be made.
+  private meter: FlashMeter | null = null;
+  private meterOut = false;
   private iterate: WebGLProgram;
   private plot: WebGLProgram;
   private fade: WebGLProgram;
@@ -1014,6 +1019,26 @@ export class FlameRenderer {
 
   /** The fluid, where the Fluid setting asks for one (`amount` over 0) and this device can make it; let go after ten
    *  seconds unasked, so a passing 0 does not make it again and again. */
+  /** The screen just shown (`viewWidth` x `viewHeight`) read into tiles for the flash meter (meters.ts), as of `t`
+   *  seconds; read back a frame or two later with `tiles`. None where this device cannot (it is then never tried again). */
+  measure(viewWidth: number, viewHeight: number, t: number) {
+    if (this.meterOut) return;
+    try {
+      this.meter ??= new FlashMeter(this.gl);
+      this.meter.capture(viewWidth, viewHeight, t);
+    } catch (e) {
+      console.warn('Visuals: no flash meter on this device', e);
+      this.meter?.dispose();
+      this.meter = null;
+      this.meterOut = true;
+    }
+  }
+
+  /** The screen's readings the GPU has finished, the oldest first. */
+  tiles(): Tiles[] {
+    return this.meter?.poll() ?? [];
+  }
+
   private fluidFor(amount: number): Fluid | null {
     const now = performance.now();
     if (!(amount > 0)) {
@@ -1044,6 +1069,8 @@ export class FlameRenderer {
     const gl = this.gl;
     this.fluid?.dispose();
     this.fluid = null;
+    this.meter?.dispose();
+    this.meter = null;
     for (const b of this.buffers) gl.deleteBuffer(b);
     for (const v of this.vaos) gl.deleteVertexArray(v);
     gl.deleteVertexArray(this.empty);

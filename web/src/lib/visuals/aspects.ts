@@ -67,8 +67,9 @@ export type AspectsNow = {
   glow: number;
   /** The whole picture's turn (radians). */
   turn: number;
-  /** Each part's turning rate (radians a second) and its drawn aspects. */
+  /** Each part's turning rate (radians a second), its evolving shape as drawn (0..1.25), and its drawn aspects. */
   rates: number[];
+  shape: number[];
   parts: Part[];
   /** Each part's lights (-1..3), after the Flash setting. */
   hits: number[];
@@ -173,6 +174,7 @@ export function stepAspects(
   // are not known yet): a step turns it by as much as it would have turned steadily since the band's last, on average
   // (a strong hit further, a weak one less), and evolves it to what it was given at that moment, held until the next.
   const hits: number[] = [];
+  const shapes: number[] = [];
   const parts: Part[] = [];
   for (let i = 0; i < PARTS; i++) {
     const k = Math.floor((i * BANDS) / PARTS);
@@ -201,6 +203,7 @@ export function stepAspects(
     for (let e = 0; e < 3; e++) ev[e] += (c * wants[e] + (1 - c) * st.held[i][e] - ev[e]) * follow;
     const [shape, hue, spread] = ev;
     const grown = clamp(shape, 0, 1.25);
+    shapes.push(grown);
     parts.push({ turn: st.turned[i], size: 0.94 + 0.12 * grown, morph: (still ? 0.15 : 0.35) * grown, hue, spread: 2 ** clamp(spread, -2, 2) });
     // Lights: its colour's points lit up, or dimmed where its routes take it below nothing.
     hits.push(clamp(flashed(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), st.courses.lights[i]), -1, 3));
@@ -226,6 +229,7 @@ export function stepAspects(
     glow: st.glow,
     turn: st.turn,
     rates: st.rates,
+    shape: shapes,
     parts,
     hits,
     // Size: half its size at rest, all of it given all (by default the loudness: smaller when quiet, and a beat's

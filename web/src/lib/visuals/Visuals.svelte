@@ -41,6 +41,9 @@
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
+  import { Meters, type FrameStats } from './meters';
+  import RateMode from './RateMode.svelte';
+  import { trial } from './trial.svelte';
   import { coverPalette, type PaletteColour } from './palette';
   import { setVisualsSide, visuals } from './shown.svelte';
   import { applyDevice, applyShared, followGroup, groupLook, share, SHARED_KEYS, sharedNow, showing, STANDARD } from './shared.svelte';
@@ -138,10 +141,15 @@
   // milliseconds on a slow tablet, and all of them at once held a frame up by a seventh of a second there (2026-10-18).
   // Then how it blends in, and whether it goes to the sync group (the dice's, a Reset's: a track's and the moments' come
   // out the same on every device anyway).
-  let drawingNow: { draws: Generator<void, Drawn>; blend: number; share: boolean; load: boolean } | null = null;
-  function loadAnother(seed: number, toGroup = false) {
-    drawingNow = { draws: presetDraws(seed, pinned()), blend: ANOTHER_MS, share: toGroup, load: true };
+  let drawingNow: { draws: Generator<void, Drawn>; blend: number; share: boolean; load: boolean; why: Look } | null = null;
+  function loadAnother(seed: number, toGroup = false, why: Look = 'dice') {
+    drawingNow = { draws: presetDraws(seed, pinned()), blend: ANOTHER_MS, share: toGroup, load: true, why };
   }
+  // A new look this frame, and why (the meters: a track's own, or one chosen, does not count against the budget).
+  type Look = NonNullable<FrameStats['look']>;
+  let lookCame: FrameStats['look'] = null;
+  // The rating page (?rate=1, RateMode.svelte): its trial drawn in place of the settings while it runs.
+  const rating = typeof location !== 'undefined' && new URLSearchParams(location.search).has('rate');
   // The dice: a random preset into the look's settings not pinned.
   function rollAnother() {
     loadAnother(Math.floor(Math.random() * 0x100000000), true);
@@ -196,6 +204,7 @@
     }
     drawingNow = null;
     nextBlend = ANOTHER_MS;
+    lookCame = 'track';
     if (snap.id === STANDARD.id) {
       // Each track's own look again: nothing pinned, the playing track's drawn anew (and sent to the group, as after
       // the panel's Reset).
@@ -478,6 +487,9 @@
     };
     // The mapping from the music and the settings to what is drawn (aspects.ts), and the moments' gap.
     const aspects = newAspects();
+    // What the visuals do, measured (meters.ts), and when the rating page last had them.
+    const metering = new Meters();
+    let meteredAt = 0;
     // The fluid (decision 0047): where each band's part lies on the screen (measured four times a second while the light
     // flows), and which way each part turns (its pushes curl with it).
     let partsWhere: ([number, number] | null)[] = [];
@@ -548,7 +560,9 @@
         return;
       }
 
-      const m = musicNow(now);
+      // How it behaves: as the settings say, or as the rating page's trial does (the look stays the settings').
+      const how = trial.settings ?? s;
+      const m = musicNow(now, how.lighting);
       if (m.key !== key || resets !== resetsSeen) {
         // A track's preset into the look's settings not pinned (after the panel's Reset, the playing one's again): the
         // first shows at once, each next blends in. Drawn ahead where it was (the next track's, at idle time, with the
@@ -564,6 +578,7 @@
         const theirs = toGroup ? null : groupLook(m.key);
         if (theirs) {
           nextBlend = blend;
+          lookCame = 'track';
           loadPreset({ ...lookNow(), ...theirs } as Preset);
         }
         const fixed = pinned();
@@ -572,10 +587,11 @@
           drawingNow = null;
           if (!theirs) {
             nextBlend = blend;
+            lookCame = 'track';
             loadPreset(ahead.drawn.preset);
             if (toGroup) share(lookNow());
           }
-        } else drawingNow = { draws: presetDraws(seedOf(m.key ?? 'cratarr'), fixed), blend, share: toGroup, load: !theirs };
+        } else drawingNow = { draws: presetDraws(seedOf(m.key ?? 'cratarr'), fixed), blend, share: toGroup, load: !theirs, why: 'track' };
       }
       // A preset being drawn: as many draws as fit in six milliseconds of this frame, then into the settings.
       if (drawingNow) {
@@ -584,10 +600,11 @@
         while (!next.done && performance.now() < until) next = drawingNow.draws.next();
         if (next.done) {
           current = next.value.own;
-          const { blend, share: toGroup, load } = drawingNow;
+          const { blend, share: toGroup, load, why } = drawingNow;
           drawingNow = null;
           if (load) {
             nextBlend = blend;
+            lookCame = why;
             loadPreset(next.value.preset);
             if (toGroup) share(lookNow());
           }
@@ -644,7 +661,7 @@
       // What is drawn, as the music and the settings give it (aspects.ts). Reduced motion: a quarter of the turning, all
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
-      const d = stepAspects(aspects, m, s, dt, { still, now, matrix, fluidFull: FLUID_FULL });
+      const d = stepAspects(aspects, m, how, dt, { still, now, matrix: trial.settings ? undefined : matrix, fluidFull: FLUID_FULL });
       const { turn, hits, parts, track } = d;
       if (panel && now - metered > 100) {
         metered = now;
@@ -654,7 +671,7 @@
       // Seeded from the track and the beat they come on (else the half second), so every device playing it together
       // makes the same choice.
       const at = `${m.key}|${m.beat ? m.beat.index : Math.floor(m.position * 2)}`;
-      if (d.moments.reseed) loadAnother(seedOf(`reseed|${at}`));
+      if (d.moments.reseed) loadAnother(seedOf(`reseed|${at}`), false, 'moment');
       if (d.moments.symmetry && !(s.pins.includes('symmetry') && s.pins.includes('mirror'))) {
         const rnd = randomFrom(seedOf(`symmetry|${at}`));
         if (!s.pins.includes('symmetry')) s.symmetry = ((s.symmetry + Math.floor(rnd() * 7)) % 8) + 1;
@@ -773,12 +790,33 @@
           flow: { energy: d.lit, swirl: 1 + 2 * track[T.swell] },
           // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
           // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
-          dt: dt * s.speed * (still ? 0.25 : 1),
+          dt: dt * how.speed * (still ? 0.25 : 1),
           warp: d.warp,
         },
         w,
         h,
       );
+      // What this frame did, measured (meters.ts): the screen read into tiles (back a frame or two later), the parts'
+      // motion and change, a new look and why. The meters' values for the rating page four times a second.
+      renderer.measure(w, h, now / 1000);
+      const stats: FrameStats = {
+        t: now / 1000,
+        turnRates: d.rates,
+        shape: d.shape,
+        hue: d.parts.map((p) => p.hue),
+        spread: d.parts.map((p) => p.spread ?? 1),
+        scale: d.scale,
+        saturation: d.saturation,
+        look: lookCame,
+        symmetry: d.moments.symmetry,
+        tiles: renderer.tiles(),
+      };
+      lookCame = null;
+      metering.add(stats);
+      if (now - meteredAt >= 250) {
+        meteredAt = now;
+        trial.meters = metering.now();
+      }
       // A picture for a snapshot, while this frame is still in the canvas.
       if (pictureWanted) {
         const done = pictureWanted;
@@ -1101,6 +1139,7 @@
     <SnapshotsSheet onclose={() => (snapshotsOpen = false)} capture={capturePicture} trackName={np?.name ?? null} {recall} over={!docked} />
   {/if}
   <Help />
+  {#if rating}<RateMode />{/if}
 </div>
 
 <style>
