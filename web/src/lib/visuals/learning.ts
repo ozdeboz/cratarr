@@ -26,12 +26,12 @@ export type LearnedLimit = { value: number; step: number; dir: -1 | 0 | 1 };
 export type Learned = Record<Budgeted, LearnedLimit>;
 
 /** What the defaults typically do, in the governor's terms (each meter against its budget at a limit of 1): Standard's
- *  median mean over eleven varied tracks at a quarter and three fifths of each (claude-5f's calibration, 2026-10-18,
- *  462 runs; precheck.ts), against which a meter stands out. New looks a minute: half the limit (Standard has none of
+ *  median mean over eleven varied tracks at a quarter and three fifths of each, three track looks a track (claude-5f's
+ *  calibration for 65, 2026-10-18, 506 runs; precheck.ts), against which a meter stands out. New looks a minute: half the limit (Standard has none of
  *  its own). */
 export const TYPICAL: Readonly<Record<Budgeted, number>> = {
-  motion: 0.264,
-  shapeChurn: 0.155,
+  motion: 0.272,
+  shapeChurn: 0.279,
   colourChurn: 0.036,
   zoomPumping: 0.068,
   looksPerMinute: 2,
@@ -39,7 +39,7 @@ export const TYPICAL: Readonly<Record<Budgeted, number>> = {
 /** The most the defaults do (the same runs' most), the other end of their usual range; new looks a minute: the limit. */
 export const USUAL_MOST: Readonly<Record<Budgeted, number>> = {
   motion: 0.466,
-  shapeChurn: 0.423,
+  shapeChurn: 0.683,
   colourChurn: 0.354,
   zoomPumping: 0.351,
   looksPerMinute: 4,

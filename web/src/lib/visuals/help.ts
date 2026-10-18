@@ -81,19 +81,19 @@ export const HELP: Record<string, string> = {
   lattice:
     'The shape of the cells Facets makes: Square or Hex.',
   fx1:
-    'Effect 1: an effect over the whole picture, such as a kaleidoscope or posterize; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
+    'Effect 1: an effect over the whole picture, such as Kaleid, Echo, Ripple, Colorama or Rings; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
   fx1Amount:
     'How strongly Effect 1 shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
   fx2:
-    'Effect 2: an effect over the whole picture, such as a kaleidoscope or posterize; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
+    'Effect 2: an effect over the whole picture, such as Kaleid, Echo, Ripple, Colorama or Rings; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
   fx2Amount:
     'How strongly Effect 2 shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
   fx3:
-    'Effect 3: an effect over the whole picture, such as a kaleidoscope or posterize; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
+    'Effect 3: an effect over the whole picture, such as Kaleid, Echo, Ripple, Colorama or Rings; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
   fx3Amount:
     'How strongly Effect 3 shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
   fxLoop:
-    'Loop: an effect inside the flame’s trails rather than over the picture. It acts each frame on the light as it is carried on, so it builds up into new shapes. Only effects that move the picture; None for none.',
+    'Loop: an effect inside the flame’s trails rather than over the picture. It acts each frame on the light as it is carried on, so it builds up into new shapes. Only effects that move the picture, such as Kaleid, Rotate or Rings; None for none.',
   fxLoopAmount:
     'How strongly the Loop effect acts. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
   final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',

@@ -20,14 +20,16 @@ import type { Signals } from './signals';
 export type Limits = Partial<Record<'flash' | 'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping' | 'looksPerMinute', number>>;
 
 /** Until the owner's ratings fit them (fit.ts), on the governor's scale (budget.ts): a little above (a quarter more, up
- *  to the next 0.05) the most Standard did over 11 varied tracks, at a quarter and three fifths of each (2026-10-18;
- *  Standard's typical, its runs' median mean, and its most: motion 0.26 and 0.47, shape 0.16 and 0.42, colour 0.04 and
- *  0.35, pumping 0.07 and 0.35; flashes 1 and 3), so today's behaviour always passes, quiet passage or loud, and the
- *  wildest tenth or so of recipes does not (48 of 440). Flashes: three a second over a quarter of the screen, the rule. */
+ *  to the next 0.05) the most Standard did over 11 varied tracks, at a quarter and three fifths of each, three track
+ *  looks a track as tracks draw them (65, 2026-10-18, 506 runs; 26 of the 66 looks with effects; Standard's typical, its
+ *  runs' median mean, and its most: motion 0.27 and 0.47, shape 0.28 and 0.68 (64: 0.16 and 0.42, before the meters
+ *  saw Presence move the points between the parts), colour 0.04 and 0.35, pumping 0.07 and 0.35; flashes 1 and 3), so
+ *  today's behaviour always passes, quiet passage or loud, and the wildest tenth or so of recipes does not (34 of 440).
+ *  Flashes: three a second over a quarter of the screen, the rule. */
 export const DEFAULT_LIMITS: Required<Limits> = {
   flash: 3,
   motion: 0.6,
-  shapeChurn: 0.55,
+  shapeChurn: 0.9,
   colourChurn: 0.45,
   zoomPumping: 0.45,
   // New looks a minute (the dice's and the moments', a track's own not counted): Standard has none of its own; four
