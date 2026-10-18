@@ -7,6 +7,7 @@
   import Icon from '../Icon.svelte';
   import { playing } from '../remote.svelte';
   import type { MeterValues } from './meters';
+  import type { TrialLoop } from './trial.svelte';
   import { described, pairFor, settingsFor, type Pair } from './rating';
   import { ASPECTS, defaultRoutes } from './routes';
   import { BANDS, DEFAULTS, visualSettings, type VisualSettings } from './settings.svelte';
@@ -39,7 +40,11 @@
   let left = $state(SEGMENT_S);
   let failed = $state(false);
   let samples: { a: MeterValues[]; b: MeterValues[] } = { a: [], b: [] };
+  // What else each segment was shown with (the music's activity, the flash rule's hold, the device's pace), and when the
+  // question came (how long the answer took).
+  let loops: { a: TrialLoop[]; b: TrialLoop[] } = { a: [], b: [] };
   let segmentStart = { a: 0, b: 0 };
+  let asked = 0;
 
   /** Production's behaviour, on this device's own look and settings. */
   function standard(): VisualSettings {
@@ -64,8 +69,20 @@
     phase = which;
     left = SEGMENT_S;
     samples[which] = [];
+    loops[which] = [];
     segmentStart[which] = Date.now();
     trial.settings = settingsFor(pair[which], standard(), ASPECTS);
+  }
+
+  /** Each of the loop's numbers' mean and least over a segment, and the device it was on. */
+  function loopSummary(list: TrialLoop[]): Record<string, unknown> {
+    if (!list.length) return {};
+    const out: Record<string, unknown> = { device: list[list.length - 1].device };
+    for (const key of ['intensity', 'bps', 'hitsPerSecond', 'swing', 'points', 'steps', 'fps'] as const) {
+      const values = list.map((l) => l[key]);
+      out[key] = { mean: values.reduce((s, v) => s + v, 0) / values.length, least: Math.min(...values) };
+    }
+    return out;
   }
 
   /** Each meter's mean and most over a segment. */
@@ -83,11 +100,11 @@
     phase = 'saving';
     const np = playing();
     const body = {
-      a: { ...described(pair.a, ASPECTS), meters: summary(samples.a), from: segmentStart.a },
-      b: { ...described(pair.b, ASPECTS), meters: summary(samples.b), from: segmentStart.b },
+      a: { ...described(pair.a, ASPECTS), meters: summary(samples.a), loop: loopSummary(loops.a), from: segmentStart.a },
+      b: { ...described(pair.b, ASPECTS), meters: summary(samples.b), loop: loopSummary(loops.b), from: segmentStart.b },
       choice,
       track: np ? `${np.source}/${np.id}` : null,
-      context: { version: 1, n: pair.n, kind: pair.kind, swapped: pair.swapped, seconds: SEGMENT_S, series: kept.base },
+      context: { version: 2, n: pair.n, kind: pair.kind, swapped: pair.swapped, seconds: SEGMENT_S, series: kept.base, answerMs: Date.now() - asked },
     };
     try {
       const r = await fetch('/api/visuals/ratings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -117,10 +134,14 @@
   const timer = setInterval(() => {
     if (phase !== 'a' && phase !== 'b') return;
     if (trial.meters) samples[phase].push({ ...trial.meters });
+    if (trial.loop) loops[phase].push({ ...trial.loop });
     left = Math.max(0, left - 0.25);
     if (left > 0) return;
     if (phase === 'a') show('b');
-    else phase = 'ask';
+    else {
+      phase = 'ask';
+      asked = Date.now();
+    }
   }, 250);
 
   show('a');
