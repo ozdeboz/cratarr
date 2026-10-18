@@ -53,7 +53,7 @@ export const HELP: Record<string, string> = {
   lightness: 'How light the colours are, with Rainbow colours. At 0 they are deep and rich; at 100% light and pastel.',
   vividness: 'How vivid the colours are, with Rainbow colours. At 0 they are soft and muted; at 100% as vivid as they go.',
   final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',
-  pin: 'You moved this setting, so it keeps your value when the next track starts, and the dice leave it alone. Tap the pin to let each track set it again.',
+  pin: 'You moved this setting, so it keeps your value when the next track starts, and Another look and the dice leave it alone. Tap the pin to let each track set it again.',
   snapshots:
     'Snapshots: the visuals saved with every setting and a small picture. Tap one to bring it back: every setting returns as it was saved, and its Look settings are pinned, so the next track keeps that look. Hold one to rename or delete it. They are kept on the server, so every device sees them.',
   'snapshots:standard':
@@ -61,6 +61,9 @@ export const HELP: Record<string, string> = {
   'snapshots:save':
     'Saves the visuals as they are now: every setting, from the Look and the routes to Points and Brightness, with a small picture, named after the playing track and the time (tap the name to change it). In a sync group, bringing it back sets the shared settings on every device, and Points, Steps, Resolution, FPS and Brightness only on the device you bring it back on.',
   another: 'Another look: every Look setting you have not pinned moves to a new random value.',
+  randomise:
+    'Randomise: everything at random. A new look (every Look setting you have not pinned) and new values for how the visuals move with the music: the routes, Flash, Speed, Intensity, Fluid, Smoothing, Floor, Depth and each band’s times. Each roll is first tried against the next half minute of the playing track: one that would get livelier than Wild allows, or flash over a quarter of the screen more than three times a second, is passed over for another (after eight tries, the one closest to fitting is taken). Colours, Wild, Points, Steps, Resolution, FPS and Brightness stay as they are. In a sync group, every device gets it.',
+  undo: 'Undo: puts the visuals back as they were before the last roll of the dice: the look, the pins and how they move with the music, on every device in the sync group.',
   wild:
     'How lively the visuals may get. They are kept within limits on how fast they turn, how quickly their shape and colours change, how much they pump in size and how often a new look comes. At 0 they stay within half of those limits, calm; at 100% they may go to twice them, wild. Loud music gets a little more room than quiet. Flashes over a quarter of the screen stay at most three a second either way.',
   held: 'Held back: the visuals are doing more than Wild allows just now (or flashing over a large area too often), so this is turned down for a moment. It eases back by itself.',
