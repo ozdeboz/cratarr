@@ -61,8 +61,8 @@ const EXTRAS: Extra[] = [
   { signal: 'loudness', aspect: 'smoothing', lo: -0.4, hi: -0.1, family: 'grain' },
   { signal: 'centroid', aspect: 'depth', lo: 0.1, hi: 0.3, family: 'grain' },
   { signal: 'swell', aspect: 'fluid', lo: 0.2, hi: 0.8, family: 'fluid' },
-  { signal: 'section', aspect: 'drift', lo: 0.3, hi: 1, family: 'drift' },
-  { signal: 'downbeat', aspect: 'drift', lo: 0.1, hi: 0.4, family: 'drift' },
+  { signal: 'section', aspect: 'look', lo: 0.3, hi: 1, family: 'look' },
+  { signal: 'downbeat', aspect: 'look', lo: 0.1, hi: 0.4, family: 'look' },
 ];
 
 /** The most all of a recipe's routes into light and glow may add up to (flashes are the governor's first worry). */

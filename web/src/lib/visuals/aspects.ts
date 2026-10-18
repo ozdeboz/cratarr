@@ -91,9 +91,10 @@ export type AspectsNow = {
   floor: number;
   fluid: number;
   warp: number;
-  /** How far the look walks (drift.ts): what Drift's routes give it, but the Track row's (its move at a new track is
-   *  the track's own, not a walk). */
-  drift: number;
+  /** How far the look and the behaviour walk (drift.ts): what the Look and Behaviour columns' routes give them, but
+   *  the Track row's (its move at a new track is the track's own, not a walk). */
+  look: number;
+  behaviour: number;
   /** The moments come this frame: another symmetry (none with reduced motion). */
   moments: { symmetry: boolean };
 };
@@ -241,7 +242,7 @@ export function stepAspects(
     return true;
   };
   const moments = { symmetry: !still && moment(st.moments.symmetry, W[A.symmetry]) };
-  const drift = (W[A.drift] - track[T.track] * envelope * matrix.track[T.track * ASPECTS.length + A.drift]) / L.evolution;
+  const walkOf = (a: number) => (W[a] - track[T.track] * envelope * matrix.track[T.track * ASPECTS.length + a]) / L.evolution;
   const fluid = opts.fluidFull * grainOf(W, s.fluid, A.fluid);
   return {
     given: W,
@@ -271,7 +272,8 @@ export function stepAspects(
     // Fluid: the light carried along a flow (none at 0), read back along it a little as it shows.
     fluid,
     warp: 0.12 * fluid,
-    drift,
+    look: walkOf(A.look),
+    behaviour: walkOf(A.behaviour),
     moments,
   };
 }

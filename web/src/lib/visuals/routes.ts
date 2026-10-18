@@ -37,7 +37,7 @@ export const SIGNAL_LABEL: Record<Signal, string> = {
 };
 
 /** The picture's aspects. */
-export const ASPECTS = ['shape', 'rotation', 'lights', 'hue', 'spread', 'brightness', 'size', 'saturation', 'trails', 'smoothing', 'floor', 'depth', 'fluid', 'drift', 'symmetry'] as const;
+export const ASPECTS = ['shape', 'rotation', 'lights', 'hue', 'spread', 'brightness', 'size', 'saturation', 'trails', 'smoothing', 'floor', 'depth', 'fluid', 'look', 'behaviour', 'symmetry'] as const;
 export type Aspect = (typeof ASPECTS)[number];
 /** Aspects of each part of the flame: a band's routes act on its own part, the whole track's on every part. */
 export const PART_ASPECTS: readonly Aspect[] = ['shape', 'rotation', 'lights', 'hue', 'spread'];
@@ -58,7 +58,8 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   floor: 'Floor',
   depth: 'Depth',
   fluid: 'Fluid',
-  drift: 'Drift',
+  look: 'Look',
+  behaviour: 'Behaviour',
   symmetry: 'Symmetry',
 };
 
@@ -74,8 +75,10 @@ const isMoment = ASPECTS.map((a) => MOMENT_ASPECTS.includes(a));
 /** A route's key: the signal, its band (`-` for the whole track's), the aspect. */
 export const routeKey = (signal: Signal, band: number | null, aspect: Aspect) => `${signal}|${band ?? '-'}|${aspect}`;
 
-/** A route's key as kept before 64, as it is now: Reseed's column is Drift's (the owner: Drift replaces it). */
-export const keyNow = (key: string) => (key.endsWith('|reseed') ? `${key.slice(0, -'reseed'.length)}drift` : key);
+/** A route's key as kept before, as it is now: Reseed's column became Drift's (64), and Drift's is Look's (64.1: the
+ *  owner, "Instead of having drift as a target, we should have looks and behavior as a target"). */
+export const keyNow = (key: string) =>
+  key.endsWith('|reseed') ? `${key.slice(0, -'reseed'.length)}look` : key.endsWith('|drift') ? `${key.slice(0, -'drift'.length)}look` : key;
 
 /** Whether `key` names a route there is: a track signal with `-`, a band signal with a band under `bands`. */
 export function isRoute(key: string, bands: number): boolean {
@@ -91,7 +94,8 @@ export function isRoute(key: string, bands: number): boolean {
  *  back to it). Every other route is 0. */
 export function defaultRoutes(bands: number): Record<string, number> {
   const r: Record<string, number> = {
-    [routeKey('track', null, 'drift')]: -1,
+    [routeKey('track', null, 'look')]: -1,
+    [routeKey('track', null, 'behaviour')]: -1,
     [routeKey('loudness', null, 'size')]: 1,
     [routeKey('loudness', null, 'saturation')]: 1,
     [routeKey('loudness', null, 'rotation')]: 0.2,

@@ -148,3 +148,79 @@ export function stepDrift(s: Drift, i: DriftInput): Partial<Preset> {
   for (const k of free) set(k, at[k]);
   return out;
 }
+
+/** The behaviour's walk (64.1; the owner: "behavior not walking is an oversight", and "The other sliders are simply
+ *  limits"): its sliders walk too, but only ever under what is set, each as a factor on its set value between
+ *  `1 − TETHER` and 1, reflected at the top. The Behaviour column's routes walk it as the Look column's walk the look,
+ *  each bar another way (from the track and the bar, so every device walks alike; not the look's way); below 0 back
+ *  to the set values. The Track row into Behaviour, once a track: below 0 back toward the set values by its share (at
+ *  −100 % all the way: each track starts as set), above 0 further under them. Pinned sliders do not walk. Not kept:
+ *  the set values are the owner's, the walk only the moment's. */
+export type BehaviourWalk = {
+  seed: number | null;
+  moved: boolean;
+  bar: number | null;
+  direction: Record<string, number>;
+  /** Each slider's way under its set value (0 to −TETHER). */
+  under: Record<string, number>;
+};
+
+export function newBehaviourWalk(): BehaviourWalk {
+  return { seed: null, moved: false, bar: null, direction: {}, under: {} };
+}
+
+/** The behaviour's own ways, apart from the look's. */
+const BEHAVIOUR_SALT = 0x5bd1e995;
+
+/** Under the set value, reflected back in at both ends. */
+const within = (u: number) => {
+  let v = u > 0 ? -u : u;
+  if (v < -TETHER) v = -2 * TETHER - v;
+  return Math.min(0, Math.max(-TETHER, v));
+};
+
+export type BehaviourInput = {
+  /** The Behaviour column's routed sum now (signed), and the Track row's routed amount into it (signed). */
+  amount: number;
+  trackEvent: number;
+  dt: number;
+  seed: number;
+  bar: number;
+  /** The sliders that walk, and the pins. */
+  keys: readonly string[];
+  pins: string[];
+};
+
+/** One step: each slider's factor on its set value (1: as set). */
+export function stepBehaviourWalk(w: BehaviourWalk, i: BehaviourInput): Record<string, number> {
+  const free = i.keys.filter((k) => !i.pins.includes(k));
+  for (const k of i.keys) if (i.pins.includes(k)) w.under[k] = 0;
+  if (w.seed !== i.seed) {
+    w.seed = i.seed;
+    w.moved = false;
+    w.bar = null;
+  }
+  if (!w.moved && i.trackEvent !== 0) {
+    w.moved = true;
+    const f = Math.min(1, Math.max(-1, -i.trackEvent));
+    if (f > 0) for (const k of free) w.under[k] = (w.under[k] ?? 0) * (1 - f);
+    else {
+      const d = directionFor(i.seed ^ BEHAVIOUR_SALT, -1, free);
+      for (const k of free) w.under[k] = within((w.under[k] ?? 0) - -f * TETHER * Math.abs(d[k]));
+    }
+  }
+  if (i.amount !== 0 && i.dt > 0 && free.length) {
+    if (w.bar !== i.bar) {
+      w.bar = i.bar;
+      w.direction = directionFor(i.seed ^ BEHAVIOUR_SALT, i.bar, free);
+    }
+    const far = Math.abs(i.amount) * STEP * i.dt;
+    if (i.amount > 0) for (const k of free) w.under[k] = within((w.under[k] ?? 0) + far * (w.direction[k] ?? 0));
+    else {
+      const gap = Math.hypot(...free.map((k) => w.under[k] ?? 0));
+      const go = Math.min(1, gap > 1e-9 ? far / gap : 0);
+      for (const k of free) w.under[k] = (w.under[k] ?? 0) * (1 - go);
+    }
+  }
+  return Object.fromEntries(i.keys.map((k) => [k, 1 + (w.under[k] ?? 0)]));
+}

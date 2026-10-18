@@ -41,7 +41,7 @@
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
-  import { newDrift, stepDrift } from './drift';
+  import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
   import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
   import { drifted, fresh, limitsOf, thumbed, type Learned } from './learning';
   import { forgetVisualsLimits, getVisualsLimits, postVisualsThumb, putVisualsLimits } from '../api';
@@ -431,9 +431,12 @@
     if (settings.routes && typeof settings.routes === 'object') {
       const off = Object.fromEntries([...Object.keys(DEFAULTS.routes), ...Object.keys(s.routes)].map((k) => [k, 0]));
       const theirs = settings.routes as Record<string, number>;
-      // One saved before the Track row: a new track brought its own look then.
-      const track = routeKey('track', null, 'drift');
-      settings.routes = { ...off, ...(track in theirs ? {} : { [track]: -1 }), ...theirs };
+      // One saved before the Track row, or before the Behaviour column (64.1): a new track brought its own look then,
+      // and the behaviour stayed as set.
+      const defaults: Record<string, number> = {};
+      if (!(routeKey('track', null, 'look') in theirs) && !('track|-|drift' in theirs)) defaults[routeKey('track', null, 'look')] = -1;
+      if (!(routeKey('track', null, 'behaviour') in theirs)) defaults[routeKey('track', null, 'behaviour')] = -1;
+      settings.routes = { ...off, ...defaults, ...theirs };
     }
     drawingNow = null;
     nextBlend = ANOTHER_MS;
@@ -461,30 +464,42 @@
   // The settings the governor holds back now (governor.ts), marked by their label: Flash's swing, Speed's pace, and on
   // Wild whatever it holds back (the evolving, the hues, the size, the moments too).
   let governed = $state<Partial<Record<One, boolean>>>({});
+  // Each behaviour slider's value in effect now (its walk's share of what is set), marked under the slider where it
+  // differs.
+  let live = $state<Partial<Record<string, number>>>({});
+  const liveAt = (key: One) => {
+    const v = live[key];
+    if (v === undefined || Math.abs(v - (valueOf(key) ?? 0)) < 0.005) return null;
+    const [lo, hi] = RANGES[key];
+    return Math.min(1, Math.max(0, (v - lo) / (hi - lo)));
+  };
   const percent = (v: number) => `${Math.round(v * 100)}%`;
   const thousands = (log2: number) => {
     const n = 2 ** log2;
     return n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}M` : `${Math.round(n / 1024)}k`;
   };
+  // The panel's groups (the owner, 2026-10-18: "We should get a header for the behavior section"): first the limits
+  // (what the device can afford, how bright, how lively the governor lets it be), then how the visuals behave with the
+  // music, then the look.
   const COMPUTE: Row[] = [
     { key: 'points', label: 'Points', step: 0.25, text: thousands },
     { key: 'steps', label: 'Steps', step: 1, text: (v) => `${v}` },
     { key: 'resolution', label: 'Resolution', step: 0.05, text: percent },
     { key: 'fps', label: 'FPS', step: 5, text: (v) => `${v}` },
+    { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
+    { key: 'wild', label: 'Wild', step: 0.05, text: percent },
   ];
   const SHOW: Row[] = [
     { key: 'intensity', label: 'Intensity', step: 0.05, text: percent },
     { key: 'flash', label: 'Flash', step: 0.05, text: percent },
     { key: 'speed', label: 'Speed', step: 0.05, text: percent },
-    { key: 'wild', label: 'Wild', step: 0.05, text: percent },
-    { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
-    { key: 'colours', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? 'Rainbow' },
     { key: 'smoothing', label: 'Smoothing', step: 0.05, text: percent },
     { key: 'floor', label: 'Floor', step: 0.05, text: percent },
     { key: 'depth', label: 'Depth', step: 0.05, text: percent },
     { key: 'fluid', label: 'Fluid', step: 0.05, text: percent },
   ];
   const LOOK: Row[] = [
+    { key: 'colours', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? 'Rainbow' },
     { key: 'form', label: 'Form', step: 1, text: (v) => `${v}` },
     { key: 'detail', label: 'Detail', step: 0.01, text: percent },
     { key: 'twist', label: 'Twist', step: 0.01, text: percent },
@@ -743,6 +758,9 @@
     // as far as the Track row's route into Drift says: at -100 % all of it (as before Drift), at -50 % half way, at 0
     // none, above 0 away from it. After the panel's Reset (`whole`), all of it.
     const drifting = newDrift();
+    // The behaviour's walk (drift.ts): each walking slider's factor on its set value now (none: as set).
+    const walking = newBehaviourWalk();
+    let walkFactor: Record<string, number> = {};
     let drifted = 0;
     let driftDt = 0;
     // For the rating page: the look's settings Drift's walk and the Symmetry moments moved since the last frame (how it
@@ -760,7 +778,7 @@
       const how = trial.settings ?? s;
       const out = stepDrift(drifting, {
         amount: 0,
-        trackEvent: how.routes[routeKey('track', null, 'drift')] ?? 0,
+        trackEvent: how.routes[routeKey('track', null, 'look')] ?? 0,
         dt: 0,
         seed: seedOf(key ?? 'cratarr'),
         bar: 0,
@@ -959,7 +977,9 @@
       // What is drawn, as the music and the settings give it (aspects.ts). Reduced motion: a quarter of the turning, all
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
-      const d = stepAspects(aspects, m, how, dt, { still, now, matrix: trial.settings ? undefined : matrix, fluidFull: FLUID_FULL, levers: governor.levers });
+      // How it behaves now: as set, each walking slider at its walk's share of it (not with the rating page's trial).
+      const behaving = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
+      const d = stepAspects(aspects, m, behaving, dt, { still, now, matrix: trial.settings ? undefined : matrix, fluidFull: FLUID_FULL, levers: governor.levers });
       const { turn, hits, parts, track } = d;
       if (m.playing && m.hits)
         m.hits.forEach((h, b) => {
@@ -978,10 +998,20 @@
         drifted = now;
         if (!still) {
           const bar = Math.floor((m.beat ? m.beat.index : m.position * 2) / 4);
-          const walked = stepDrift(drifting, { amount: d.drift, trackEvent: 0, dt: driftDt, seed: seedOf(m.key ?? 'cratarr'), bar, pins: s.pins, own: current ?? (lookNow() as Preset), now: lookNow() as Preset });
+          const walked = stepDrift(drifting, { amount: d.look, trackEvent: 0, dt: driftDt, seed: seedOf(m.key ?? 'cratarr'), bar, pins: s.pins, own: current ?? (lookNow() as Preset), now: lookNow() as Preset });
           for (const k of Object.keys(walked)) behaviourMoved.add(k);
           Object.assign(s, walked);
         }
+        // The behaviour's: its Track row once a track, its walk (none with reduced motion), under the set values.
+        walkFactor = stepBehaviourWalk(walking, {
+          amount: still ? 0 : d.behaviour,
+          trackEvent: how.routes[routeKey('track', null, 'behaviour')] ?? 0,
+          dt: driftDt,
+          seed: seedOf(m.key ?? 'cratarr'),
+          bar: Math.floor((m.beat ? m.beat.index : m.position * 2) / 4),
+          keys: BEHAVIOUR_PINS,
+          pins: s.pins,
+        });
         driftDt = 0;
       }
       // The moments: another symmetry; a pinned setting stays as it is. Seeded from the track and the beat it comes on
@@ -1109,7 +1139,7 @@
           flow: stirred.flow,
           // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
           // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
-          dt: dt * how.speed * governor.levers.pace * (still ? 0.25 : 1),
+          dt: dt * behaving.speed * governor.levers.pace * (still ? 0.25 : 1),
           warp: d.warp,
         },
         w,
@@ -1146,6 +1176,7 @@
         const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
         trial.meters = values;
+        if (panel) live = Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, behaving[k]]));
         trial.loop = {
           intensity: m.intensity,
           bps: m.bps,
@@ -1355,18 +1386,21 @@
         <div class="panel" role="group" aria-label="Settings" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
           {#each [COMPUTE, SHOW, LOOK] as rows, g (g)}
             <div class="rows" class:look={g > 0}>
-              {#if g === 2}<h3 use:held={'look'}>Look</h3>{/if}
+              {#if g === 1}<h3 use:held={'behaviour'}>Behaviour</h3>{:else if g === 2}<h3 use:held={'look'}>Look</h3>{/if}
               {#each rows as row (row.key)}
                 <label class="row" class:pinnable={g > 0}>
                   <span use:held={row.key}>{row.label}{#if governed[row.key]}<span class="governed" aria-label="Held back" use:held={'held'}></span>{/if}</span>
-                  <input
-                    type="range"
-                    min={RANGES[row.key][0]}
-                    max={RANGES[row.key][1]}
-                    step={row.step}
-                    value={valueOf(row.key)}
-                    oninput={(e) => set(row.key, Number(e.currentTarget.value))}
-                  />
+                  <span class="slider">
+                    <input
+                      type="range"
+                      min={RANGES[row.key][0]}
+                      max={RANGES[row.key][1]}
+                      step={row.step}
+                      value={valueOf(row.key)}
+                      oninput={(e) => set(row.key, Number(e.currentTarget.value))}
+                    />
+                    {#if liveAt(row.key) !== null}<i class="live" style:left="calc(8px + {liveAt(row.key)} * (100% - 16px))"></i>{/if}
+                  </span>
                   <output>{row.text(valueOf(row.key))}</output>
                   {#if g > 0}
                     {#if s.pins.includes(row.key) && isPinnable(row.key)}
@@ -1667,6 +1701,22 @@
   }
 
   /* The look's rows: their values may be names (a lens, a family), and a pin where moved. */
+  .slider {
+    position: relative;
+    display: grid;
+  }
+
+  .slider .live {
+    position: absolute;
+    bottom: -3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #3fd18f;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+
   .row.pinnable {
     grid-template-columns: 5.4em 1fr 6em 1.4em;
     gap: 8px;
