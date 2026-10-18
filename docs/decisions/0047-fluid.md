@@ -77,3 +77,18 @@ its parts are lit and settling in a quiet section; at 100 % the light is smoke.
   planned for the visuals measure them with the rest.
 - A third way of drawing to keep in step with the Mali rules; its own lab (a page of three blobs stirred by three
   turning forces) shows a change at a glance.
+
+## Amendment, 2026-10-18: a finer scale, Speed, stirred in time, and no blocks (64)
+
+- **A finer scale** (the owner: "between 0 and 5% fluid dynamics is about all I want … or maybe 10% should be 100%"):
+  Fluid's whole range is a tenth of the fluid's own (`FLUID_FULL`); a Fluid kept or saved in 63 is carried over.
+- **At the Speed setting's pace** (the owner: "speed should scale the fluid's pace as well"), and the governor's.
+- **Stirred in time** (stirring.ts, claude-5f's; the owner asked how the fluid could follow the beat the way the flames
+  do, with no new slider): each band's hits kick its part, 60 ms ahead where the server knows them (the music says how
+  soon each band's next hit comes); the beats, downbeats and sections kick from the middle; steady bands stir with
+  their level; the flow breathes with the pulse. With reduced motion only the steady stirring.
+- **No blocks on Mali:** the light is carried at its own level (`textureLod(…, 0)`). The light's coarser levels, made
+  for a wide smoothing and stale otherwise, were blended in wherever the flow squeezed, stepping at every cell's edge
+  and piling up frame on frame into square blocks: the phone's G615 blends 7 % of the next level for a 5 % squeeze, 26 %
+  for 20 % (measured off-screen); desktop drivers round small levels away, so the labs never showed it. The owner liked
+  the look a little: Facets, square and hex, will bring it back deliberately (65).
