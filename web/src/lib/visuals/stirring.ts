@@ -8,10 +8,20 @@
 // - Each band's Continuity steers its part: stepped (0) kicks only on the band's own hits, steady (1) stirs all the
 //   time with its level, between them some of each.
 // - The beats' pushes turn a little each beat, so their pattern rotates in tempo.
+// - What each push is worth is a route's (64.1; the owner asked that nothing moving the fluid be hidden): Hits, Beat,
+//   Downbeat, Section and Level into Stir, Loudness and Beat into Flow, Swell and Section into Swirl. Across a route's
+//   curve is the push's own strength as it always was (a hit's, a beat's, a band's level, the loudness, the pulse, the
+//   swell, the whirl; a downbeat and a section are 1); straight at 1, the defaults, each gives it unchanged. Not
+//   scaled by the loudness, as the routes the flame's aspects take are.
 //
 // Pure and deterministic (no randomness: every device of a sync group stirs alike). `stir` each frame the fluid steps.
 
 import type { Flow, Force } from './fluid';
+import type { Signal } from './routes';
+
+/** A route into the fluid's `aspect` at `x` (routes.ts `heightOn`); none given: straight at 1, `x` itself. */
+export type Gain = (signal: Signal, band: number | null, aspect: 'stir' | 'flow' | 'swirl', x: number) => number;
+const AS_EVER: Gain = (_signal, _band, _aspect, x) => x;
 
 /** Kicks land this long before a moment known ahead (s). */
 export const LEAD = 0.06;
@@ -45,6 +55,7 @@ export type StirInput = {
   swell: number;
   bps: number;
   center: [number, number];
+  gain?: Gain;
 };
 
 type Kick = { x: number; y: number; dx: number; dy: number; radius: number; strength: number; born: number };
@@ -76,9 +87,10 @@ export function stir(s: Stirring, i: StirInput): { forces: Force[]; flow: Flow }
   // The flow breathes: freer just after a beat, held tighter between (its energy, how long its motion lasts).
   const pulse = i.beat ? Math.exp(-i.beat.since / Math.max(0.05, 0.3 * i.beat.length)) : 0;
   const whirl = Math.exp(-(i.t - s.whirlAt) / 2);
+  const g = i.gain ?? AS_EVER;
   const flow: Flow = {
-    energy: Math.min(1, Math.max(0, i.loudness * (0.7 + 0.6 * pulse))),
-    swirl: 1 + 2 * Math.max(0, i.swell) + 2 * whirl,
+    energy: Math.min(1, Math.max(0, g('loudness', null, 'flow', i.loudness) * (0.7 + 0.6 * g('beat', null, 'flow', pulse)))),
+    swirl: Math.max(0, 1 + 2 * g('swell', null, 'swirl', Math.max(0, i.swell)) + 2 * g('section', null, 'swirl', whirl)),
   };
   if (!(i.amount > 0)) {
     s.kicks = [];
@@ -104,10 +116,12 @@ export function stir(s: Stirring, i: StirInput): { forces: Force[]; flow: Flow }
     if (due === null) return;
     s.kickedHit[b] = due;
     if (stepped <= 0) return;
+    const worth = g('hits', b, 'stir', 0.3 + 0.7 * Math.min(1, Math.max(0, h.strength)));
+    if (!worth) return;
     const [ox, oy] = unit(at[0] - i.center[0], at[1] - i.center[1]);
     const round = Math.sign(i.turns[b] ?? 0) * 0.6;
     const [dx, dy] = unit(ox - oy * round, oy + ox * round);
-    kick(at[0], at[1], dx * KICK_SPEED, dy * KICK_SPEED, KICK * stepped * (0.3 + 0.7 * Math.min(1, Math.max(0, h.strength))));
+    kick(at[0], at[1], dx * KICK_SPEED, dy * KICK_SPEED, KICK * stepped * worth);
   });
 
   // The beats: four pushes out from the middle, their pattern turned a little further each beat; a downbeat's harder.
@@ -119,8 +133,8 @@ export function stir(s: Stirring, i: StirInput): { forces: Force[]; flow: Flow }
     else if (s.kickedBeat !== b.index && s.kickedBeat !== b.index + 1) due = b.index;
     if (due !== null) {
       s.kickedBeat = due;
-      const strength = KICK * 0.6 * (0.35 + 0.65 * Math.min(1, Math.max(0, b.strength)));
-      for (let k = 0; k < 4; k++) {
+      const strength = KICK * 0.6 * g('beat', null, 'stir', 0.35 + 0.65 * Math.min(1, Math.max(0, b.strength)));
+      if (strength) for (let k = 0; k < 4; k++) {
         const a = due * BEAT_TURN + (k * Math.PI) / 2;
         const [cx, cy] = [Math.cos(a), Math.sin(a)];
         kick(i.center[0] + BEAT_OUT * cx, i.center[1] + BEAT_OUT * cy, cx * 0.4, cy * 0.4, strength, 0.1);
@@ -128,11 +142,12 @@ export function stir(s: Stirring, i: StirInput): { forces: Force[]; flow: Flow }
     }
   }
   const downUp = i.downbeat > 0.5;
-  if (downUp && !s.downUp) {
+  const down = downUp && !s.downUp ? KICK * 1.2 * g('downbeat', null, 'stir', 1) : 0;
+  if (down) {
     for (let k = 0; k < 4; k++) {
       const a = (k * Math.PI) / 2 + Math.PI / 4;
       const [cx, cy] = [Math.cos(a), Math.sin(a)];
-      kick(i.center[0] + BEAT_OUT * cx, i.center[1] + BEAT_OUT * cy, cx * 0.6, cy * 0.6, KICK * 1.2, 0.14);
+      kick(i.center[0] + BEAT_OUT * cx, i.center[1] + BEAT_OUT * cy, cx * 0.6, cy * 0.6, down, 0.14);
     }
   }
   s.downUp = downUp;
@@ -140,11 +155,13 @@ export function stir(s: Stirring, i: StirInput): { forces: Force[]; flow: Flow }
   const sectionUp = i.section > 0.5;
   if (sectionUp && !s.sectionUp) {
     s.whirlAt = i.t;
-    for (let k = 0; k < 6; k++) {
-      const a = (k * Math.PI) / 3;
-      const [cx, cy] = [Math.cos(a), Math.sin(a)];
-      kick(i.center[0] + 0.2 * cx, i.center[1] + 0.2 * cy, -cy * 0.5, cx * 0.5, KICK, 0.12);
-    }
+    const worth = KICK * g('section', null, 'stir', 1);
+    if (worth)
+      for (let k = 0; k < 6; k++) {
+        const a = (k * Math.PI) / 3;
+        const [cx, cy] = [Math.cos(a), Math.sin(a)];
+        kick(i.center[0] + 0.2 * cx, i.center[1] + 0.2 * cy, -cy * 0.5, cx * 0.5, worth, 0.12);
+      }
   }
   s.sectionUp = sectionUp;
 
@@ -163,8 +180,8 @@ export function stir(s: Stirring, i: StirInput): { forces: Force[]; flow: Flow }
   i.parts.forEach((at, p) => {
     if (!at) return;
     const steady = Math.min(1, Math.max(0, i.continuity[p] ?? 0.5));
-    const level = Math.min(1, Math.max(0, i.level[p] ?? 0));
-    if (steady <= 0 || level <= 0) return;
+    const level = steady > 0 ? g('level', p, 'stir', Math.min(1, Math.max(0, i.level[p] ?? 0))) : 0;
+    if (!level) return;
     const [ox, oy] = unit(at[0] - i.center[0], at[1] - i.center[1]);
     const round = Math.sign(i.turns[p] ?? 0) * 0.6;
     const [dx, dy] = unit(ox - oy * round, oy + ox * round);

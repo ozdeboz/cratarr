@@ -39,8 +39,29 @@ export const SIGNAL_LABEL: Record<Signal, string> = {
   bandSwell: 'Swell',
 };
 
-/** The picture's aspects. */
-export const ASPECTS = ['shape', 'rotation', 'lights', 'hue', 'spread', 'brightness', 'size', 'saturation', 'trails', 'smoothing', 'floor', 'depth', 'fluid', 'look', 'behaviour', 'symmetry'] as const;
+/** The picture's aspects. Stir, Flow and Swirl are the fluid's (64.1; the owner asked that what moves it be routes,
+ *  not hidden): read by stirring.ts at its own moments (`heightOn`), not added up each frame. */
+export const ASPECTS = [
+  'shape',
+  'rotation',
+  'lights',
+  'hue',
+  'spread',
+  'brightness',
+  'size',
+  'saturation',
+  'trails',
+  'smoothing',
+  'floor',
+  'depth',
+  'fluid',
+  'stir',
+  'flow',
+  'swirl',
+  'look',
+  'behaviour',
+  'symmetry',
+] as const;
 export type Aspect = (typeof ASPECTS)[number];
 /** Aspects of each part of the flame: a band's routes act on its own part, the whole track's on every part. */
 export const PART_ASPECTS: readonly Aspect[] = ['shape', 'rotation', 'lights', 'hue', 'spread'];
@@ -61,6 +82,9 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   floor: 'Floor',
   depth: 'Depth',
   fluid: 'Fluid',
+  stir: 'Stir',
+  flow: 'Flow',
+  swirl: 'Swirl',
   look: 'Look',
   behaviour: 'Behaviour',
   symmetry: 'Symmetry',
@@ -104,12 +128,24 @@ export function defaultRoutes(bands: number): Record<string, number> {
     [routeKey('loudness', null, 'rotation')]: 0.2,
     [routeKey('beat', null, 'brightness')]: 0.2,
     [routeKey('beat', null, 'size')]: 0.08,
+    // The fluid's stirring as it always was (stirring.ts): the beats', the downbeats' and a new section's pushes; the
+    // flow as free as the loudness, breathing with the beat; the swells' and a new section's whirls.
+    [routeKey('beat', null, 'stir')]: 1,
+    [routeKey('downbeat', null, 'stir')]: 1,
+    [routeKey('section', null, 'stir')]: 1,
+    [routeKey('loudness', null, 'flow')]: 1,
+    [routeKey('beat', null, 'flow')]: 1,
+    [routeKey('swell', null, 'swirl')]: 1,
+    [routeKey('section', null, 'swirl')]: 1,
   };
   for (let b = 0; b < bands; b++) {
     r[routeKey('level', b, 'shape')] = 1;
     r[routeKey('level', b, 'rotation')] = 0.6;
     r[routeKey('level', b, 'hue')] = 0.08;
     r[routeKey('hits', b, 'lights')] = 1;
+    // Each band's hits kick its part; its level stirs it all the while (as its Continuity shares them).
+    r[routeKey('hits', b, 'stir')] = 1;
+    r[routeKey('level', b, 'stir')] = 1;
   }
   return r;
 }
@@ -196,6 +232,25 @@ const isLevel = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
 
 /** What a route gives at its signal `v`: its curve's height, a straight one's amount times the signal. */
 const heightOf = (table: Float32Array | null, end: number, v: number) => (table ? heightAt(table, v) : end * v);
+/** What a route gives at `x` at a moment of its own, not each frame through `give` (the fluid's pushes, stirring.ts):
+ *  its curve's height, a straight one's amount times `x`, none where there is no route; walking, its walk's share
+ *  (`walk`: `Matrix.walks` order). `band` null: the whole track's. */
+export function heightOn(m: Matrix, signal: Signal, band: number | null, aspect: Aspect, x: number, walk?: Float32Array): number {
+  const a = A[aspect];
+  if (band === null) {
+    const s = T[signal as TrackSignal];
+    if (s === undefined) return 0;
+    const cell = s * NA + a;
+    const w = m.trackWalk[cell];
+    return heightOf(m.trackTable[cell], m.track[cell], x) * (w < 0 || !walk ? 1 : (walk[w] ?? 1));
+  }
+  const s = B[signal as BandSignal];
+  if (s === undefined || !m.bands[band]) return 0;
+  const cell = s * NA + a;
+  const w = m.bandWalk[band][cell];
+  return heightOf(m.bandTable[band][cell], m.bands[band][cell], x) * (w < 0 || !walk ? 1 : (walk[w] ?? 1));
+}
+
 /** A level's route's share let through; walking (`w` under 1), its pull as much less. */
 const letThrough = (peak: number, y: number, e: number, w = 1) => 1 - w * (1 - Math.min(1, Math.max(0, 1 - e * (peak - y))));
 

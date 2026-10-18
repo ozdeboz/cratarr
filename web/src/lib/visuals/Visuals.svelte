@@ -74,6 +74,7 @@
     B,
     BAND_SIGNALS,
     compile,
+    heightOn,
     routeKey,
     SIGNAL_LABEL,
     T,
@@ -463,6 +464,9 @@
       const defaults: Record<string, number> = {};
       if (!(routeKey('track', null, 'look') in theirs) && !('track|-|drift' in theirs)) defaults[routeKey('track', null, 'look')] = -1;
       if (!(routeKey('track', null, 'behaviour') in theirs)) defaults[routeKey('track', null, 'behaviour')] = -1;
+      // One saved before the fluid's routes (64.1): it stirred as their defaults do.
+      const fluidRoute = (k: string) => /[|](stir|flow|swirl)$/.test(k);
+      if (!Object.keys(theirs).some(fluidRoute)) for (const [k, v] of Object.entries(DEFAULTS.routes)) if (fluidRoute(k)) defaults[k] = v as number;
       settings.routes = { ...off, ...defaults, ...theirs };
     }
     drawingNow = null;
@@ -1218,6 +1222,9 @@
         swell: track[T.swell],
         bps: m.bps,
         center: [0.5, 0.5],
+        // What each push is worth: its route into Stir, Flow or Swirl (the trial's own routes with the rating page's).
+        gain: (signal, band, aspect, x) =>
+          trial.settings ? (aspects.matrix ? heightOn(aspects.matrix, signal, band, aspect, x) : x) : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined),
       });
       renderer.frame(
         passes,
