@@ -5,7 +5,7 @@
 import { PARTS, type Part } from './flame';
 import type { Levers } from './governor';
 import type { Music } from './music.svelte';
-import { A, ASPECTS, B, BAND_SIGNALS, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix } from './routes';
+import { A, ASPECTS, B, BAND_SIGNALS, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from './routes';
 import { BANDS, type VisualSettings } from './settings.svelte';
 
 /** Nothing held back (the governor's levers all open). */
@@ -37,7 +37,7 @@ export type AspectsState = {
   track: Float32Array;
   standIn: Float32Array[];
   got: Given;
-  routes: Record<string, number> | null;
+  routes: Record<string, RouteValue> | null;
   matrix: Matrix | null;
   // The track playing, and when it started (ms): the Track signal.
   trackKey: string | null | undefined;
@@ -95,6 +95,8 @@ export type AspectsNow = {
    *  the Track row's (its move at a new track is the track's own, not a walk). */
   look: number;
   behaviour: number;
+  /** Each level's share of its setting its routes let through now (1: all of it). */
+  levels: { fluid: number; smoothing: number; floor: number; depth: number };
   /** The moments come this frame: another symmetry (none with reduced motion). */
   moments: { symmetry: boolean };
 };
@@ -128,8 +130,9 @@ export function newAspects(): AspectsState {
   };
 }
 
-/** A setting of the grain (0..1) as its routes move it: a route's full amount moves one half of its range. */
-export const grainOf = (given: Float32Array, setting: number, aspect: number) => clamp(setting + 0.5 * given[aspect], 0, 1);
+/** A level (Smoothing, Floor, Depth, Fluid: 0..1) as its routes let it through: the setting the most it gets
+ *  (routes.ts `LEVEL_ASPECTS`). */
+export const levelOf = (g: Given, setting: number, aspect: number) => clamp(setting * g.level[aspect], 0, 1);
 
 /** Floor: none at 0, then from 0.002 of the display's scale (a stray speck's) up to 1 (the flame's mean), evenly in its
  *  log. */
@@ -243,7 +246,7 @@ export function stepAspects(
   };
   const moments = { symmetry: !still && moment(st.moments.symmetry, W[A.symmetry]) };
   const walkOf = (a: number) => (W[a] - track[T.track] * envelope * matrix.track[T.track * ASPECTS.length + a]) / L.evolution;
-  const fluid = opts.fluidFull * grainOf(W, s.fluid, A.fluid);
+  const fluid = opts.fluidFull * levelOf(st.got, s.fluid, A.fluid);
   return {
     given: W,
     track,
@@ -261,14 +264,16 @@ export function stepAspects(
     // Trails: each frame keeps this much of the last (longer trails given more, shorter given less).
     keep: clamp(1 - 0.07 * 2 ** (-1.5 * W[A.trails]), 0.5, 0.985),
     // Depth: the display's gamma, 1.5 to 6 (3 as before at its middle); higher lifts more of the faint detail.
-    gamma: 1.5 * 4 ** grainOf(W, s.depth, A.depth),
+    gamma: 1.5 * 4 ** levelOf(st.got, s.depth, A.depth),
     // Glow: as bright at rest (dimmer only while paused), brighter given more (by default a beat's flash).
     flash: st.glow * clamp(flashed(1 + 0.5 * W[A.brightness], st.courses.glow), 0.15, 3),
     // Saturation: a third of its colour at rest, all of it given all (by default the loudness: paler when quiet).
     saturation: clamp(flashed(0.35 + 0.65 * W[A.saturation], st.courses.saturation), 0, 1.25),
     // Smoothing: up to 12 pixels (3 as before at its middle). Floor: from none to about the flame's mean density.
-    smoothing: 12 * grainOf(W, s.smoothing, A.smoothing) ** 2,
-    floor: floorOf(grainOf(W, s.floor, A.floor)),
+    smoothing: 12 * levelOf(st.got, s.smoothing, A.smoothing) ** 2,
+    floor: floorOf(levelOf(st.got, s.floor, A.floor)),
+    // Each level's share of its setting the routes let through now (the sliders' live marks).
+    levels: { fluid: st.got.level[A.fluid], smoothing: st.got.level[A.smoothing], floor: st.got.level[A.floor], depth: st.got.level[A.depth] },
     // Fluid: the light carried along a flow (none at 0), read back along it a little as it shows.
     fluid,
     warp: 0.12 * fluid,

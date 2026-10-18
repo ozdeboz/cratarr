@@ -9,7 +9,8 @@
 // that keeps nothing (a private window) starts from the defaults each time.
 
 import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
-import { defaultRoutes, isRoute, keyNow } from './routes';
+import { defaultRoutes, isRoute, keyNow, type RouteValue } from './routes';
+import { curveFrom, valueOf } from './curves';
 
 const KEY = 'cratarr-visuals';
 /** The kept settings' form: 2 since 64 (Fluid on a finer scale), 3 since 64.1 (finer again); none before. */
@@ -74,7 +75,7 @@ export type VisualSettings = Preset & {
   /** Each band's motion and evolution: 0 in steps on its own transients, 1 steady, between them a share of each. */
   continuity: number[];
   /** Each route's amount (-1..1) by its key (`routeKey`); one not here is 0. */
-  routes: Record<string, number>;
+  routes: Record<string, RouteValue>;
 };
 
 const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
@@ -233,7 +234,13 @@ export function keptFrom(kept: Record<string, unknown>): VisualSettings {
   if (saved.routes && typeof saved.routes === 'object') {
     for (const [kept, v] of Object.entries(saved.routes as Record<string, unknown>)) {
       const key = keyNow(kept);
-      if (typeof v === 'number' && Number.isFinite(v) && isRoute(key, BANDS)) out.routes[key] = within('routes', v);
+      if (!isRoute(key, BANDS)) continue;
+      // An amount (a straight route), or a curve (64.1) brought into its ranges and kept as a number where straight.
+      if (typeof v === 'number' && Number.isFinite(v)) out.routes[key] = within('routes', v);
+      else {
+        const c = curveFrom(v);
+        if (c) out.routes[key] = valueOf(c);
+      }
     }
   }
   return out;

@@ -42,6 +42,7 @@
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
   import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
+  import { curveOf, endOf, valueOf as kept, withEnd } from './curves';
   import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
   import { drifted, fresh, limitsOf, thumbed, type Learned } from './learning';
   import { forgetVisualsLimits, getVisualsLimits, postVisualsThumb, putVisualsLimits } from '../api';
@@ -593,7 +594,7 @@
         ? [routeKey(signal, pick, aspect)]
         : Array.from({ length: BANDS }, (_, b) => routeKey(signal, b, aspect));
   function amountOf(signal: Signal, aspect: Aspect): { v: number; mixed: boolean } {
-    const v = keysOf(signal, aspect).map((k) => s.routes[k] ?? 0);
+    const v = keysOf(signal, aspect).map((k) => endOf(s.routes[k] ?? 0));
     return { v: v.reduce((a, b) => a + b, 0) / v.length, mixed: v.some((x) => Math.abs(x - v[0]) > 1e-6) };
   }
   function setRoute(signal: Signal, aspect: Aspect, v: number) {
@@ -778,7 +779,7 @@
       const how = trial.settings ?? s;
       const out = stepDrift(drifting, {
         amount: 0,
-        trackEvent: how.routes[routeKey('track', null, 'look')] ?? 0,
+        trackEvent: endOf(how.routes[routeKey('track', null, 'look')] ?? 0),
         dt: 0,
         seed: seedOf(key ?? 'cratarr'),
         bar: 0,
@@ -1005,7 +1006,7 @@
         // The behaviour's: its Track row once a track, its walk (none with reduced motion), under the set values.
         walkFactor = stepBehaviourWalk(walking, {
           amount: still ? 0 : d.behaviour,
-          trackEvent: how.routes[routeKey('track', null, 'behaviour')] ?? 0,
+          trackEvent: endOf(how.routes[routeKey('track', null, 'behaviour')] ?? 0),
           dt: driftDt,
           seed: seedOf(m.key ?? 'cratarr'),
           bar: Math.floor((m.beat ? m.beat.index : m.position * 2) / 4),
