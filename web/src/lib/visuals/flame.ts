@@ -1,9 +1,9 @@
 // Fractal flames (decision 0046), written from Draves and Reckase, "The Fractal Flame Algorithm" (2003; revised
 // 2008): an iterated function system whose transforms are an affine map followed by a weighted sum of nonlinear
 // "variations", drawn by the chaos game with a colour coordinate per point. This file holds a flame's description:
-// made from a seed (a track's id gives the same flame every time), checked on the CPU before it is shown (a flame that
-// collapses to a point or smears into noise is passed over), framed, evolved by the music, and blended into the
-// next. The drawing is lib/visuals/render.ts.
+// made from a preset of the look's settings alone (a track's id gives the same preset every time, checked on the CPU
+// before it is shown: one whose flame collapses to a point or smears into noise is passed over), framed, evolved by the
+// music, and blended into the next. The drawing is lib/visuals/render.ts.
 
 /** A flame's parts: its first transforms, one for each of the music's six bands, low to high (decision 0046, amended). */
 export const PARTS = 6;
@@ -158,8 +158,9 @@ const PICKS: [Variation, number][] = [
 ];
 const PICK_TOTAL = PICKS.reduce((n, [, w]) => n + w, 0);
 
-function pickVariation(rnd: () => number): Variation {
-  let r = rnd() * PICK_TOTAL;
+/** A variation by `u` (0..1) through the picks' weights. */
+function pickVariation(u: number): Variation {
+  let r = u * PICK_TOTAL;
   for (const [v, w] of PICKS) if ((r -= w) < 0) return v;
   return VARIATIONS.linear;
 }
@@ -171,21 +172,34 @@ function affineOf(angle: number, sx: number, sy: number, shear: number, c: numbe
   return [sx * cos, sy * (shear * cos - sin), c, sx * sin, sy * (shear * sin + cos), f];
 }
 
-function randomXform(rnd: () => number): Xform {
-  // A contraction on the whole, turned and sheared at random, not too far from the middle.
-  const affine = affineOf(rnd() * Math.PI * 2, 0.3 + rnd() * 0.7, 0.3 + rnd() * 0.7, (rnd() - 0.5) * 0.8, (rnd() - 0.5) * 1.6, (rnd() - 0.5) * 1.6);
-  const variations = new Map<Variation, number>();
-  const n = rnd() < 0.4 ? 1 : rnd() < 0.6 ? 2 : 3;
+/** How many numbers each part draws from its form: always as many, so a slider moved changes no other part's draws. */
+const DRAWS = 22;
+
+/** A band's part: its form's draws (`r`, 0..1 each) about the preset's Detail, Twist and Warp. */
+function partOf(r: number[], p: Preset): Xform {
+  // Detail: how far it contracts (0.3, tight, to 1, open, as the random ones ranged), each part a quarter either side.
+  const scale = 0.3 + 0.7 * p.detail;
+  const sx = Math.min(1, Math.max(0.15, scale + (r[1] - 0.5) * 0.5));
+  const sy = Math.min(1, Math.max(0.15, scale + (r[2] - 0.5) * 0.5));
+  // Twist: how far it turns, each part its own way (at the most any way round, as the random ones did); sheared and
+  // moved off the middle by its form.
+  const affine = affineOf((r[0] * 2 - 1) * Math.PI * p.twist, sx, sy, (r[3] - 0.5) * 0.8, (r[4] - 0.5) * 1.6, (r[5] - 0.5) * 1.6);
+  // Its variations: one to three, by its form, their weights adding up to Warp's share (so the part keeps its size), the
+  // rest plain.
+  const kinds = new Map<Variation, number>();
+  const n = r[6] < 0.4 ? 1 : r[7] < 0.6 ? 2 : 3;
   for (let i = 0; i < n; i++) {
-    const v = pickVariation(rnd);
-    variations.set(v, (variations.get(v) ?? 0) + 0.3 + rnd() * 0.7);
+    const v = pickVariation(r[8 + i]);
+    kinds.set(v, (kinds.get(v) ?? 0) + 0.3 + r[11 + i] * 0.7);
   }
-  // The weights add up to about one, so the transform keeps its size.
-  const sum = [...variations.values()].reduce((s, w) => s + w, 0);
-  for (const [v, w] of variations) variations.set(v, w / sum);
-  // A third of them a post map too: a turn and a little scaling after the variations, which bends their shapes round.
-  const post = rnd() < 0.35 ? affineOf(rnd() * Math.PI * 2, 0.8 + rnd() * 0.4, 0.8 + rnd() * 0.4, 0, (rnd() - 0.5) * 0.4, (rnd() - 0.5) * 0.4) : undefined;
-  return { affine, post, variations, weight: 0.25 + rnd(), color: rnd(), colorSpeed: 0.3 + rnd() * 0.5, turns: true };
+  const sum = [...kinds.values()].reduce((s, w) => s + w, 0);
+  const variations = new Map<Variation, number>();
+  for (const [v, w] of kinds) variations.set(v, (w / sum) * p.warp);
+  if (p.warp < 1) variations.set(VARIATIONS.linear, (variations.get(VARIATIONS.linear) ?? 0) + 1 - p.warp);
+  // A third of them a post map: a turn (by Twist) and a little scaling after the variations, which bends their shapes
+  // round.
+  const post = r[14] < 0.35 ? affineOf((r[15] * 2 - 1) * Math.PI * p.twist, 0.8 + r[16] * 0.4, 0.8 + r[17] * 0.4, 0, (r[18] - 0.5) * 0.4, (r[19] - 0.5) * 0.4) : undefined;
+  return { affine, post, variations, weight: 0.25 + r[20], color: 0, colorSpeed: 0.3 + r[21] * 0.5, turns: true };
 }
 
 // The variations a final transform takes: the ones that warp the whole picture into a whole (a sphere, a swirl, a lens),
@@ -205,14 +219,20 @@ const FINALS: Variation[] = [
   VARIATIONS.heart,
 ];
 
-/** A final transform: near the identity, then a warp, half of it the plain picture. */
-function randomFinal(rnd: () => number): Xform {
-  const warp = FINALS[Math.floor(rnd() * FINALS.length)];
+/** The finals' names, for the Lens setting (1 is the first). */
+export const LENSES = FINALS.map((v) => {
+  const name = Object.entries(VARIATIONS).find(([, n]) => n === v)![0];
+  return name[0].toUpperCase() + name.slice(1);
+});
+
+/** A final transform (the Lens setting's `lens`, one of `FINALS`), by its form's draws (`f`): near the identity, then
+ *  the warp, up to half of it the plain picture. */
+function finalOf(f: number[], lens: number): Xform {
   return {
-    affine: affineOf(rnd() * Math.PI * 2, 0.8 + rnd() * 0.5, 0.8 + rnd() * 0.5, (rnd() - 0.5) * 0.3, (rnd() - 0.5) * 0.3, (rnd() - 0.5) * 0.3),
+    affine: affineOf(f[0] * Math.PI * 2, 0.8 + f[1] * 0.5, 0.8 + f[2] * 0.5, (f[3] - 0.5) * 0.3, (f[4] - 0.5) * 0.3, (f[5] - 0.5) * 0.3),
     variations: new Map([
-      [warp, 0.5 + rnd() * 0.5],
-      [VARIATIONS.linear, rnd() * 0.5],
+      [FINALS[(lens - 1) % FINALS.length], 0.5 + f[6] * 0.5],
+      [VARIATIONS.linear, f[7] * 0.5],
     ]),
     weight: 0,
     color: 0,
@@ -246,35 +266,126 @@ export function withSymmetry(flame: Flame, order: number, mirror: boolean): Flam
   return { ...flame, xforms: [...parts, ...symmetry(order, mirror, mean)], symmetry: { order, mirror } };
 }
 
-/** A flame's colours (OKLCH, the perceptual lightness, chroma and hue): one lightness and chroma for all of them, and
- *  each part its own hue (and reach), by one of four families, every one keeping the bands told apart: the spectrum (six
- *  hues evenly round the wheel), an arc (the six spread over a third to over half of it, a warm or a cool sweep), two
- *  tones (two hues across the wheel, the bands taking them in turn, near and far), three (each for two neighbouring
- *  bands, near and far). */
-function randomColours(rnd: () => number, parts: Xform[]): Colours {
-  const start = rnd();
-  const family = rnd();
-  const n = parts.length;
-  parts.forEach((x, i) => {
-    let hue: number;
+/** The parts' hues and reaches (OKLCH) by the Family setting, every family keeping the bands told apart: the spectrum
+ *  (six hues evenly round the wheel), an arc (the six spread over a third to over half of it, a warm or a cool sweep),
+ *  two tones (two hues across the wheel, the bands taking them in turn, near and far), three (each for two neighbouring
+ *  bands, near and far). From `hue` (the Hue setting); the arc's span, the tones' distance and each part's own hair of
+ *  difference from the form's draws (`f`). */
+function huesOf(family: number, hue: number, f: number[]): { color: number; reach: number }[] {
+  return Array.from({ length: PARTS }, (_, i) => {
+    let h: number;
     let reach = 1;
-    if (family < 0.4) hue = start + i / n;
-    else if (family < 0.65) hue = start + (i / Math.max(1, n - 1)) * (0.33 + rnd() * 0.22);
-    else if (family < 0.85) {
-      hue = start + (i % 2) * (0.42 + rnd() * 0.08);
+    if (family === 0) h = hue + i / PARTS;
+    else if (family === 1) h = hue + (i / (PARTS - 1)) * (0.33 + f[0] * 0.22);
+    else if (family === 2) {
+      h = hue + (i % 2) * (0.42 + f[1] * 0.08);
       reach = i % 4 < 2 ? 1 : 0.55;
     } else {
-      hue = start + Math.floor(i / 2) / 3;
+      h = hue + Math.floor(i / 2) / 3;
       reach = i % 2 ? 0.55 : 1;
     }
-    x.color = (((hue + (rnd() - 0.5) * 0.03) % 1) + 1) % 1;
-    x.colorReach = reach;
+    return { color: (((h + (f[2 + i] - 0.5) * 0.03) % 1) + 1) % 1, reach };
   });
-  return { light: 0.62 + rnd() * 0.16, chroma: 0.12 + rnd() * 0.08 };
 }
 
-/** The visuals' Colours setting: the seed's own (one of `randomColours`' families), the playing track's cover's, or a
- *  fire's. */
+/** A flame's look, all of it as the visuals' settings show it (decision 0046, amended): a track's key or the dice give
+ *  one (`presetOf`) and the flame is made from it alone (`flameOf`), so every slider moves what is shown and nothing about
+ *  the look is hidden in a seed.
+ *  - form: which variations each part is made of, and each part's own difference from the sliders' values (a choice,
+ *    not a dial: neighbouring numbers are unrelated forms, 0 to `FORMS` - 1);
+ *  - detail, twist, warp (0..1): how far the parts contract (tight, dense cores to large, wispy forms), how far they
+ *    turn (straight arms to spirals), how much of each is its variations rather than plain (gentle to wild);
+ *  - symmetry (1 to 8 arms), mirror (0 or 1), final (the Lens: 0 none, else one of `LENSES`, 1 the first);
+ *  - family (0 to 3: spectrum, arc, two tones, three), hue (where the colours start, a turn of the wheel), lightness and
+ *    vividness (0..1: OKLCH lightness 0.55 to 0.85, chroma 0.06 to 0.26);
+ *  - spread and purity, as `evolved` takes them. */
+export type Preset = {
+  form: number;
+  detail: number;
+  twist: number;
+  warp: number;
+  symmetry: number;
+  mirror: number;
+  final: number;
+  family: number;
+  hue: number;
+  lightness: number;
+  vividness: number;
+  spread: number;
+  purity: number;
+};
+export const PRESET_KEYS = ['form', 'detail', 'twist', 'warp', 'symmetry', 'mirror', 'final', 'family', 'hue', 'lightness', 'vividness', 'spread', 'purity'] as const;
+export const FORMS = 1000;
+
+/** A preset that always draws something, for when no draw from a seed passes the check. */
+const STANDBY: Preset = { form: 0, detail: 0.5, twist: 0.7, warp: 0.8, symmetry: 4, mirror: 0, final: 0, family: 0, hue: 0, lightness: 0.5, vividness: 0.5, spread: 1, purity: 0.75 };
+
+/** The flame of a preset, unframed. */
+function build(p: Preset): Flame {
+  const rnd = randomFrom(seedOf(`form ${Math.round(p.form)}`));
+  const parts = Array.from({ length: PARTS }, () => partOf(Array.from({ length: DRAWS }, rnd), p));
+  huesOf(Math.round(p.family), p.hue, Array.from({ length: 2 + PARTS }, rnd)).forEach((h, i) => {
+    parts[i].color = h.color;
+    parts[i].colorReach = h.reach;
+  });
+  const f = Array.from({ length: 8 }, rnd);
+  const lens = Math.round(p.final);
+  const order = Math.max(1, Math.round(p.symmetry));
+  const mirror = Math.round(p.mirror) === 1;
+  const colours = { light: 0.55 + 0.3 * p.lightness, chroma: 0.06 + 0.2 * p.vividness };
+  return withSymmetry({ xforms: parts, final: lens > 0 ? finalOf(f, lens) : undefined, symmetry: { order, mirror }, colours, center: [0, 0], size: 1 }, order, mirror);
+}
+
+/** The flame of a preset, framed (the visuals frame it again as it moves: `measure`). */
+export function flameOf(p: Preset): Flame {
+  const flame = build(p);
+  const m = measure(flame);
+  if (m) {
+    flame.center = m.center;
+    flame.size = m.size;
+  }
+  return flame;
+}
+
+/** A track's preset (from its key's seed), or the dice's: drawn until its flame passes the check (`survey`), the best
+ *  of 24 draws where none does. `fixed`: settings pinned, kept as they are (the check sees them as they are); `own`:
+ *  the draw without them, what a pin let go of returns to. A third without symmetry, two fifths turned round (2 to 8
+ *  arms), the rest mirrored too (1 to 6); a lens on three in ten (it warps the whole picture, at a third more of the GPU's
+ *  time a step); the families as often as they came before. */
+export function presetOf(seed: number, fixed: Partial<Preset> = {}): { preset: Preset; own: Preset } {
+  const rnd = randomFrom(seed);
+  let best: { preset: Preset; own: Preset; score: number } | null = null;
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const kind = rnd();
+    const family = rnd();
+    const own: Preset = {
+      form: Math.floor(rnd() * FORMS),
+      detail: 0.15 + rnd() * 0.7,
+      twist: 0.3 + rnd() * 0.7,
+      warp: 0.55 + rnd() * 0.45,
+      symmetry: kind < 0.35 ? 1 : kind < 0.75 ? 2 + Math.floor(rnd() * 7) : 1 + Math.floor(rnd() * 6),
+      mirror: kind >= 0.75 ? 1 : 0,
+      final: rnd() < 0.3 ? 1 + Math.floor(rnd() * FINALS.length) : 0,
+      family: family < 0.4 ? 0 : family < 0.65 ? 1 : family < 0.85 ? 2 : 3,
+      hue: rnd(),
+      lightness: 0.23 + rnd() * 0.54,
+      vividness: 0.3 + rnd() * 0.4,
+      spread: 0.8 + rnd() * 0.5,
+      purity: 0.6 + rnd() * 0.35,
+    };
+    const preset = { ...own, ...fixed };
+    const look = survey(build(preset), seed + attempt);
+    if (!look) continue;
+    if (look.score > 0.5) return { preset, own };
+    if (!best || look.score > best.score) best = { preset, own, score: look.score };
+  }
+  return best ?? { preset: { ...STANDBY, ...fixed }, own: STANDBY };
+}
+
+/** The flame of a seed, as a track's preset makes it. */
+export const flameFrom = (seed: number): Flame => flameOf(presetOf(seed).preset);
+
+/** The visuals' Colours setting: the preset's own (its family), the playing track's cover's, or a fire's. */
 export type ColourMode = 'rainbow' | 'cover' | 'fire';
 
 /** The flame's parts coloured by `mode`; its shape as it is. Cover: the cover's colours (`cover`, OKLab, darkest first:
@@ -310,44 +421,6 @@ export function coloured(flame: Flame, mode: ColourMode, cover: { L: number; a: 
     }),
     colours: { light: lights.reduce((a, b) => a + b, 0) / PARTS, chroma, lights },
   };
-}
-
-/** The flame of a seed: made at random from it until one passes the check, then framed. */
-export function flameFrom(seed: number): Flame {
-  const rnd = randomFrom(seed);
-  let best: { flame: Flame; score: number } | null = null;
-  for (let attempt = 0; attempt < 40; attempt++) {
-    // Six transforms, one for each of the music's bands, low to high (decision 0046, amended: `evolved`).
-    const parts = Array.from({ length: PARTS }, () => randomXform(rnd));
-    const colours = randomColours(rnd, parts);
-    // A third without symmetry, two fifths turned round (2 to 8 arms), the rest mirrored too (dihedral, 1 to 6).
-    const kind = rnd();
-    const order = kind < 0.35 ? 1 : kind < 0.75 ? 2 + Math.floor(rnd() * 7) : 1 + Math.floor(rnd() * 6);
-    const mirror = kind >= 0.75;
-    // A final transform on three flames in ten: it warps the whole picture, at a third more of the GPU's time a step.
-    const final = rnd() < 0.3 ? randomFinal(rnd) : undefined;
-    const flame = withSymmetry({ xforms: parts, final, symmetry: { order, mirror }, colours, center: [0, 0], size: 1 }, order, mirror);
-    const look = survey(flame, seed + attempt);
-    if (!look) continue;
-    flame.center = look.center;
-    flame.size = look.size;
-    if (look.score > 0.5) return flame;
-    if (!best || look.score > best.score) best = { flame, score: look.score };
-  }
-  return best?.flame ?? fallback();
-}
-
-/** A flame that always draws: a swirled, spherical four-fold star. */
-function fallback(): Flame {
-  const parts: Xform[] = [
-    { affine: [0.6, -0.3, 0.2, 0.3, 0.6, 0.1], variations: new Map([[VARIATIONS.spherical, 0.6], [VARIATIONS.swirl, 0.4]]), weight: 1, color: 0, colorSpeed: 0.5, turns: true },
-    { affine: [0.5, 0.4, -0.5, -0.4, 0.5, 0.3], variations: new Map([[VARIATIONS.julia, 1]]), weight: 0.7, color: 1 / 6, colorSpeed: 0.5, turns: true },
-    { affine: [0.4, 0, 0.4, 0, 0.4, -0.4], variations: new Map([[VARIATIONS.sinusoidal, 1]]), weight: 0.6, color: 2 / 6, colorSpeed: 0.5, turns: true },
-    { affine: [0.5, 0.2, 0.3, -0.2, 0.5, 0.3], variations: new Map([[VARIATIONS.bubble, 1]]), weight: 0.6, color: 3 / 6, colorSpeed: 0.5, turns: true },
-    { affine: [0.4, -0.2, -0.3, 0.2, 0.4, -0.3], variations: new Map([[VARIATIONS.swirl, 1]]), weight: 0.6, color: 4 / 6, colorSpeed: 0.5, turns: true },
-    { affine: [0.3, 0, 0, 0, 0.3, 0.5], variations: new Map([[VARIATIONS.linear, 1]]), weight: 0.5, color: 5 / 6, colorSpeed: 0.5, turns: true },
-  ];
-  return withSymmetry({ xforms: parts, symmetry: { order: 4, mirror: false }, colours: { light: 0.75, chroma: 0.14 }, center: [0, 0], size: 1.6 }, 4, false);
 }
 
 // --- The CPU's look at a flame: where its points fall, and whether it is worth showing ---

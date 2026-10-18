@@ -1,18 +1,21 @@
 // The visuals' settings (decision 0046, amended): how much the device draws (points, steps, resolution, frame rate:
-// ceilings the automatic step-down stays under), how the show looks (intensity, flash, speed, brightness, purity,
-// spread, the grain, colours, symmetry), each band's times (how long its light rings, how quickly its part evolves, and how much of its motion comes
-// in steps on its own transients), and the routes: how much each of the music's signals drives each aspect of the
-// picture (routes.ts).
-// Changed live from the visuals' panel and kept on this device (a phone and the tablet want different ones); a
-// browser that keeps nothing (a private window) starts from the defaults each time.
+// ceilings the automatic step-down stays under), how the show behaves (intensity, flash, speed, brightness, colours, the
+// grain), the look (the preset: the flame's form, detail, twist, warp, symmetry, mirror, lens, colour family, hue,
+// lightness, vividness, spread and purity, which a track's key or the dice set and the picture follows; one the owner
+// moved is pinned), each band's times (how long its light rings, how quickly its part evolves, and how much of its
+// motion comes in steps on its own transients), and the routes: how much each of the music's signals drives each aspect
+// of the picture (routes.ts).
+// Changed live from the visuals' panel and kept on this device (a phone and a tablet want different ones); a browser
+// that keeps nothing (a private window) starts from the defaults each time.
 
+import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
 import { defaultRoutes, isRoute } from './routes';
 
 const KEY = 'cratarr-visuals';
 /** The bands the routes are kept for (the server's six). */
 export const BANDS = 6;
 
-export type VisualSettings = {
+export type VisualSettings = Preset & {
   /** The most points the chaos game runs (log2: 14 is 16k, 21 is 2M). */
   points: number;
   /** The most steps of every point drawn per frame. */
@@ -30,22 +33,17 @@ export type VisualSettings = {
   speed: number;
   /** The most brightness shown, after everything (0.1..1). */
   brightness: number;
-  /** How purely each band's part is its own colour (0: points blend their bands' colours, 1: each its band's alone). */
-  purity: number;
-  /** The parts' offsets scaled apart (separate clusters) or together (one shape): 1 is the seed's own. */
-  spread: number;
   /** The grain: how far the sparse parts are blurred into a haze (0: the raw grain; 0.5: three pixels, as before),
    *  how faint a part goes black (0: none), and how much of the faint detail is lifted (the display's gamma: 0.5 is 3,
    *  as before). Each 0..1; their routes move them from there. */
   smoothing: number;
   floor: number;
   depth: number;
-  /** The colours: 0 the flame's own (its seed's), 1 the playing track's cover's, 2 a fire's. */
+  /** The colours: 0 the preset's own (its family), 1 the playing track's cover's, 2 a fire's. */
   colours: number;
-  /** The flame's rotations: 0 its own (the seed's), else that many arms. */
-  symmetry: number;
-  /** Its mirrors: 0 its own, 1 none, 2 as many as its arms (dihedral). */
-  mirror: number;
+  /** The look's settings the owner moved: kept as they are when a track or the dice load another preset, until
+   *  unpinned. */
+  pins: string[];
   /** Each band's (sub, bass, low mid, mid, presence, air) light after a transient: how long it rings (seconds). */
   lighting: number[];
   /** Each band's loudness evolving its transform: how long it takes to follow (seconds). */
@@ -69,15 +67,26 @@ export const DEFAULTS: VisualSettings = {
   flash: 1,
   speed: 1,
   brightness: 1,
-  // Six parts mixing their colours go grey: mostly each its band's own.
-  purity: 0.75,
-  spread: 1,
   smoothing: 0.5,
   floor: 0,
   depth: 0.5,
   colours: 0,
-  symmetry: 0,
+  // The look: the playing track's preset replaces these (those not pinned) as soon as the visuals show.
+  form: 0,
+  detail: 0.5,
+  twist: 0.7,
+  warp: 0.8,
+  symmetry: 1,
   mirror: 0,
+  final: 0,
+  family: 0,
+  hue: 0,
+  lightness: 0.5,
+  vividness: 0.5,
+  spread: 1,
+  // Six parts mixing their colours go grey: mostly each its band's own.
+  purity: 0.75,
+  pins: [],
   // A kick rings longer than a hat.
   lighting: [0.2, 0.18, 0.15, 0.13, 0.1, 0.08],
   evolution: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
@@ -85,9 +94,11 @@ export const DEFAULTS: VisualSettings = {
   routes: defaultRoutes(BANDS),
 };
 
+type Ranged = Exclude<keyof VisualSettings, 'pins'>;
+
 /** Each setting's range, as its slider has it (the bands' times in seconds, though their sliders double). A kept value
  *  outside it (from a version whose range was another) is brought into it. */
-export const RANGES: Record<keyof VisualSettings, [number, number]> = {
+export const RANGES: Record<Ranged, [number, number]> = {
   points: [14, 21],
   steps: [1, 16],
   resolution: [0.25, 1],
@@ -96,21 +107,30 @@ export const RANGES: Record<keyof VisualSettings, [number, number]> = {
   flash: [0, 2],
   speed: [0, 2],
   brightness: [0.1, 1],
-  purity: [0, 1],
-  spread: [0.25, 2.5],
   smoothing: [0, 1],
   floor: [0, 1],
   depth: [0, 1],
   colours: [0, 2],
-  symmetry: [0, 8],
-  mirror: [0, 2],
+  form: [0, FORMS - 1],
+  detail: [0, 1],
+  twist: [0, 1],
+  warp: [0, 1],
+  symmetry: [1, 8],
+  mirror: [0, 1],
+  final: [0, LENSES.length],
+  family: [0, 3],
+  hue: [0, 1],
+  lightness: [0, 1],
+  vividness: [0, 1],
+  spread: [0.25, 2.5],
+  purity: [0, 1],
   lighting: [0.02, 1],
   evolution: [0.02, 2],
   continuity: [0, 1],
   routes: [-1, 1],
 };
 
-const within = (key: keyof typeof RANGES, v: number) => Math.min(RANGES[key][1], Math.max(RANGES[key][0], v));
+const within = (key: Ranged, v: number) => Math.min(RANGES[key][1], Math.max(RANGES[key][0], v));
 
 /** The pixels the display pass draws by default: about a megapixel. The points fall into a buffer of at most 0.6 MP
  *  anyway; drawing that out to every pixel of a large screen cost the most of a frame on integrated graphics (5.5 ms of
@@ -125,19 +145,39 @@ export function autoResolution(devicePixels: number): number {
 /** The defaults, their lists their own (the settings change in place). */
 const fresh = (): VisualSettings => ({
   ...DEFAULTS,
+  pins: [],
   lighting: [...DEFAULTS.lighting],
   evolution: [...DEFAULTS.evolution],
   continuity: [...DEFAULTS.continuity],
   routes: { ...DEFAULTS.routes },
 });
 
+const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly string[]).includes(k);
+
 function load(): VisualSettings {
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<VisualSettings>;
+    const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, unknown>;
     const out = fresh();
+    // Kept before the look was a preset (2026-10-18): Symmetry 0 and Mirror 0 were Auto, Mirror 1 Off and 2 On;
+    // Spread and Purity were settings of their own. One set away from its default then is pinned now.
+    const before = !Array.isArray(saved.pins);
+    if (before) {
+      const pins: string[] = [];
+      if (typeof saved.symmetry === 'number' && saved.symmetry >= 1) pins.push('symmetry');
+      else delete saved.symmetry;
+      if (saved.mirror === 1 || saved.mirror === 2) {
+        saved.mirror = saved.mirror === 2 ? 1 : 0;
+        pins.push('mirror');
+      } else delete saved.mirror;
+      if (typeof saved.spread === 'number' && saved.spread !== 1) pins.push('spread');
+      if (typeof saved.purity === 'number' && saved.purity !== 0.75) pins.push('purity');
+      saved.pins = pins;
+    }
     for (const k of Object.keys(DEFAULTS) as (keyof VisualSettings)[]) {
       const v = saved[k];
-      if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = within(k, v);
+      if (k === 'pins') {
+        if (Array.isArray(v)) out.pins = v.filter((x): x is string => typeof x === 'string' && isPresetKey(x));
+      } else if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = within(k, v);
       // Six bands' times; three (kept before the six bands, 2026-10-18) each for two of them.
       else if (Array.isArray(v) && (v.length === 6 || v.length === 3) && v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
         const six = v.length === 6 ? v : v.flatMap((x) => [x, x]);
@@ -146,7 +186,7 @@ function load(): VisualSettings {
     }
     // The routes kept: each one there is, over the defaults (a 0 kept turns a default off).
     if (saved.routes && typeof saved.routes === 'object') {
-      for (const [key, v] of Object.entries(saved.routes)) {
+      for (const [key, v] of Object.entries(saved.routes as Record<string, unknown>)) {
         if (typeof v === 'number' && Number.isFinite(v) && isRoute(key, BANDS)) out.routes[key] = within('routes', v);
       }
     }
@@ -179,5 +219,18 @@ export function resetVisualSettings() {
 /** The routes back to the defaults, the other settings as they are. */
 export function resetRoutes() {
   visualSettings.routes = defaultRoutes(BANDS);
+  saveVisualSettings();
+}
+
+/** The look's settings as they are pinned. */
+export function pinned(): Partial<Preset> {
+  const out: Partial<Preset> = {};
+  for (const k of visualSettings.pins) if (isPresetKey(k)) out[k] = visualSettings[k];
+  return out;
+}
+
+/** A preset into the look's settings not pinned. */
+export function loadPreset(p: Preset) {
+  for (const k of PRESET_KEYS) if (!visualSettings.pins.includes(k)) visualSettings[k] = p[k];
   saveVisualSettings();
 }

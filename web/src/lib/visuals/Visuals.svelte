@@ -1,23 +1,38 @@
 <script lang="ts">
-  // Full-screen visuals (decision 0046), from the full player's top bar: each track's own fractal flame
-  // (lib/visuals/flame.ts, made from its id) drawn on the GPU (lib/visuals/render.ts), blending into the next track's
-  // flame as it starts. Its six parts each answer to a band of the sound (sub to air). The music's signals
-  // (lib/visuals/music.svelte.ts) drive the picture's aspects through the routes (lib/visuals/routes.ts), each by an
-  // amount: by default the loudness as heard sets its size and colour, the beat flashes and swells it, each band's level
-  // evolves, turns and tints its part and its hits light it. The loudness is the envelope of everything else: a quiet
-  // passage is less of a show, not a darker screen. Its colours are its seed's own, the playing track's cover's or a
-  // fire's (the Colours setting).
+  // Full-screen visuals (decision 0046), from the full player's top bar: a fractal flame (lib/visuals/flame.ts) drawn on
+  // the GPU (lib/visuals/render.ts), made from the look's settings alone. Each track loads its own preset into them (from
+  // its id), blending in as it starts; a setting the owner moved is pinned and stays. Its six parts each answer to a band
+  // of the sound (sub to air). The music's signals (lib/visuals/music.svelte.ts) drive the picture's aspects through the
+  // routes (lib/visuals/routes.ts), each by an amount: by default the loudness as heard sets its size and colour, the
+  // beat flashes and swells it, each band's level evolves, turns and tints its part and its hits light it. The loudness
+  // is the envelope of everything else: a quiet passage is less of a show, not a darker screen. Its colours are its
+  // preset's own, the playing track's cover's or a fire's (the Colours setting).
   // Over everything, on black. A tap or a mouse move shows the track, the close button, the sliders and the dice for a
-  // few seconds; the dice show another flame at random, until the track changes or they are pressed again; the sliders
-  // open a panel of settings at the right (lib/visuals/settings.svelte.ts) with the routes' grid, live, until it is
-  // closed. Esc, Back or a swipe down closes the visuals. The screen stays on while they show, where the browser allows.
+  // few seconds; the dice load a random preset into the settings not pinned; the sliders open a panel of settings at the
+  // right (lib/visuals/settings.svelte.ts) with the routes' grid, live, until it is closed. Esc, Back or a swipe down
+  // closes the visuals. The screen stays on while they show, where the browser allows.
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
   import { coverUrl } from '../api';
   import Icon from '../Icon.svelte';
   import { reducedMotion } from '../motion';
   import { playing } from '../remote.svelte';
-  import { between, coloured, evolved, flameFrom, measuring, PARTS, seedOf, withSymmetry, type ColourMode, type Flame, type Part } from './flame';
+  import {
+    between,
+    coloured,
+    evolved,
+    flameOf,
+    LENSES,
+    measuring,
+    PARTS,
+    PRESET_KEYS,
+    presetOf,
+    seedOf,
+    type ColourMode,
+    type Flame,
+    type Part,
+    type Preset,
+  } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
   import { coverPalette, type PaletteColour } from './palette';
   import { held } from './held.svelte';
@@ -45,6 +60,8 @@
     DEFAULTS,
     RANGES,
     resetRoutes,
+    loadPreset,
+    pinned,
     resetVisualSettings,
     saveVisualSettings,
     visualSettings as s,
@@ -99,18 +116,29 @@
     }
   }
 
-  // The dice: a flame from another seed than the track's own, each press another (`asked` counts the presses).
-  let another: number | null = null;
-  let asked = 0;
+  // The look: the preset last loaded (the playing track's, or the dice's or a moment's), which a pin let go of returns
+  // to; how the next change of the look blends in (set by whatever loads a preset: a track over six seconds, the dice
+  // and the moments over a second and a half); and a count of the panel's Resets, after which the track's own comes back.
+  let current: Preset | null = null;
+  let nextBlend: number | null = null;
+  let resets = 0;
+  function loadAnother(seed: number) {
+    const { preset, own } = presetOf(seed, pinned());
+    current = own;
+    nextBlend = ANOTHER_MS;
+    loadPreset(preset);
+  }
+  // The dice: a random preset into the look's settings not pinned.
   function rollAnother() {
-    another = Math.floor(Math.random() * 0x100000000);
-    asked++;
+    loadAnother(Math.floor(Math.random() * 0x100000000));
     showChrome();
   }
 
-  // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then the look.
-  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes'>;
-  const MIRROR = ['Auto', 'Off', 'On'];
+  // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show
+  // behaves, then the look (the preset: pinned where moved).
+  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes' | 'pins'>;
+  const MIRROR = ['Off', 'On'];
+  const FAMILIES = ['Spectrum', 'Arc', 'Two tones', 'Three'];
   const COLOURS = ['Rainbow', 'Cover', 'Fire'];
   const MODES: ColourMode[] = ['rainbow', 'cover', 'fire'];
   type Row = { key: One; label: string; step: number; text: (v: number) => string };
@@ -125,20 +153,39 @@
     { key: 'resolution', label: 'Resolution', step: 0.05, text: percent },
     { key: 'fps', label: 'FPS', step: 5, text: (v) => `${v}` },
   ];
-  const LOOK: Row[] = [
+  const SHOW: Row[] = [
     { key: 'intensity', label: 'Intensity', step: 0.05, text: percent },
     { key: 'flash', label: 'Flash', step: 0.05, text: percent },
     { key: 'speed', label: 'Speed', step: 0.05, text: percent },
     { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
     { key: 'colours', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? 'Rainbow' },
-    { key: 'purity', label: 'Purity', step: 0.05, text: percent },
-    { key: 'spread', label: 'Spread', step: 0.05, text: percent },
     { key: 'smoothing', label: 'Smoothing', step: 0.05, text: percent },
     { key: 'floor', label: 'Floor', step: 0.05, text: percent },
     { key: 'depth', label: 'Depth', step: 0.05, text: percent },
-    { key: 'symmetry', label: 'Symmetry', step: 1, text: (v) => (v ? `${v}` : 'Auto') },
-    { key: 'mirror', label: 'Mirror', step: 1, text: (v) => MIRROR[v] ?? 'Auto' },
   ];
+  const LOOK: Row[] = [
+    { key: 'form', label: 'Form', step: 1, text: (v) => `${v}` },
+    { key: 'detail', label: 'Detail', step: 0.01, text: percent },
+    { key: 'twist', label: 'Twist', step: 0.01, text: percent },
+    { key: 'warp', label: 'Warp', step: 0.01, text: percent },
+    { key: 'symmetry', label: 'Symmetry', step: 1, text: (v) => `${v}` },
+    { key: 'mirror', label: 'Mirror', step: 1, text: (v) => MIRROR[v] ?? 'Off' },
+    { key: 'final', label: 'Lens', step: 1, text: (v) => (v ? (LENSES[v - 1] ?? '') : 'Off') },
+    { key: 'spread', label: 'Spread', step: 0.05, text: percent },
+    { key: 'family', label: 'Family', step: 1, text: (v) => FAMILIES[v] ?? '' },
+    { key: 'hue', label: 'Hue', step: 0.01, text: (v) => `${Math.round(v * 360)}°` },
+    { key: 'lightness', label: 'Lightness', step: 0.01, text: percent },
+    { key: 'vividness', label: 'Vividness', step: 0.01, text: percent },
+    { key: 'purity', label: 'Purity', step: 0.05, text: percent },
+  ];
+  const isLook = (key: string) => (PRESET_KEYS as readonly string[]).includes(key);
+  // A look's setting let go of: back to the preset's value.
+  function unpin(key: One) {
+    s.pins = s.pins.filter((k) => k !== key);
+    if (current && isLook(key)) (s as Record<string, unknown>)[key] = current[key as keyof Preset];
+    saveVisualSettings();
+    showChrome();
+  }
   // Each band's times, on a doubling scale.
   const BAND_ROWS = ['Sub', 'Bass', 'Low mid', 'Mid', 'Presence', 'Air'];
   const TIMES = (['lighting', 'evolution'] as const).map((key) => ({
@@ -162,6 +209,8 @@
   const valueOf = (key: One) => (key === 'resolution' ? (s.resolution ?? autoResolution(devicePixels())) : s[key]) as number;
   function set(key: One, v: number) {
     (s as Record<One, number | null>)[key] = v;
+    // The look's settings moved are pinned: a track's or the dice's preset leaves them as they are.
+    if (isLook(key) && !s.pins.includes(key)) s.pins = [...s.pins, key];
     saveVisualSettings();
     showChrome();
   }
@@ -256,13 +305,16 @@
     let shown: Flame | null = null;
     let blendStart = 0;
     let blendMs = BLEND_MS;
-    let seen = 0;
-    // The playing track's flame as made (or the dice's), and the symmetry it is shown with (its own, or the
-    // settings'): a change of either blends in as the dice do.
+    let resetsSeen = 0;
+    // The flame the look's settings make (Spread and Purity aside: `evolved` takes them as it draws), and the settings
+    // and colours it was made from. A change blends in: as `nextBlend` asks after a preset, else over a second and a
+    // half; one of the settings that move it by degrees (Detail, Twist, Warp, Hue, Lightness, Vividness) dragged shows at
+    // once.
     let base: Flame | null = null;
-    let symmetryShown = '';
-    // A moment's symmetry (the routes' Symmetry), until the next one or another flame.
-    let momentSymmetry: { order: number; mirror: boolean } | null = null;
+    let made: Record<string, number> | null = null;
+    let madeColours = '';
+    const SHAPING = PRESET_KEYS.filter((k) => k !== 'spread' && k !== 'purity');
+    const BY_DEGREES = new Set<string>(['detail', 'twist', 'warp', 'hue', 'lightness', 'vividness']);
     // The Colours setting's Cover: the playing track's cover's colours, asked for as it starts (and the next one's, so
     // they are in as it starts); null until they are, and where it has no cover. Fire: how much of its heat shows,
     // followed over a second and a half.
@@ -385,19 +437,15 @@
       }
 
       const m = musicNow(now);
-      if (m.key !== key || asked !== seen) {
-        // The first track shows at once; each next one blends in, as does another look from the dice. A new track
-        // brings back its own.
-        const next = m.key !== key;
-        if (next) another = null;
-        seen = asked;
-        from = key === undefined ? null : shown;
+      if (m.key !== key || resets !== resetsSeen) {
+        // A track's preset into the look's settings not pinned (after the panel's Reset, the playing one's again): the
+        // first shows at once, each next blends in.
+        nextBlend = key === undefined ? 0 : m.key !== key ? BLEND_MS : ANOTHER_MS;
         key = m.key;
-        base = flameFrom(another ?? seedOf(m.key ?? 'cratarr'));
-        symmetryShown = '';
-        momentSymmetry = null;
-        blendStart = now;
-        blendMs = next ? BLEND_MS : ANOTHER_MS;
+        resetsSeen = resets;
+        const { preset, own } = presetOf(seedOf(m.key ?? 'cratarr'), pinned());
+        current = own;
+        loadPreset(preset);
       }
       // The colours: the cover's asked for as a track starts, where they are wanted.
       const mode = MODES[s.colours] ?? 'rainbow';
@@ -415,26 +463,27 @@
       }
       const covered = mode === 'cover' && cover?.key === m.key ? cover.colours : null;
       fire += ((mode === 'fire' ? 1 : 0) - fire) * Math.min(1, dt / 1.5);
-      // Its symmetry: its own (or a moment's), or as the settings ask; its colours, as the Colours setting asks. A change
-      // blends in over a second and a half; the cover's colours coming in while a track's flame blends in join that
-      // blend instead.
-      if (base) {
-        const order = s.symmetry || momentSymmetry?.order || base.symmetry.order;
-        const mirror = s.mirror ? s.mirror === 2 : (momentSymmetry?.mirror ?? base.symmetry.mirror);
-        const shape = `${order}/${mirror}`;
-        const want = `${shape}/${mode}/${covered ? m.key : ''}`;
-        if (want !== symmetryShown) {
-          const coloursOnly = from && symmetryShown.startsWith(`${shape}/`);
-          if (symmetryShown !== '' && shown && !coloursOnly) {
-            from = shown;
-            blendStart = now;
-            blendMs = ANOTHER_MS;
-          }
-          symmetryShown = want;
-          to = coloured(order === base.symmetry.order && mirror === base.symmetry.mirror ? base : withSymmetry(base, order, mirror), mode, covered);
-          if (!from) shown = to;
+      // The flame as the look's settings make it, coloured as the Colours setting asks. After a preset, it blends in as
+      // asked; a choice (Form, Symmetry, Mirror, Lens, Family) or another colour mode over a second and a half; a
+      // setting dragged by degrees at once; the cover's colours coming in while a flame blends in join that blend.
+      const colours = `${mode}/${covered ? m.key : ''}`;
+      const changed = !made ? SHAPING : SHAPING.filter((k) => made![k] !== s[k]);
+      if (changed.length || colours !== madeColours) {
+        if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, s[k]])) as Preset);
+        const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
+        const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
+        if (blend && shown) {
+          from = shown;
+          blendStart = now;
+          blendMs = blend;
         }
+        made = Object.fromEntries(SHAPING.map((k) => [k, s[k]]));
+        madeColours = colours;
+        to = coloured(base!, mode, covered);
+        if (!from) shown = to;
       }
+      // A preset that changed nothing (all of it pinned) leaves nothing to blend.
+      nextBlend = null;
       // The show's intensity: the loudness as heard, followed over a fifth of a second, as far as the Intensity setting
       // lets it count. It is the loudness's signal, and the envelope of every other one's routes (none while paused).
       // Dimmer while paused.
@@ -498,14 +547,13 @@
         // Lights: its colour's points lit up, or dimmed where its routes take it below nothing.
         hits.push(clamp(flashed(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), courses.lights[i]), -1, 3));
       }
-      // The moments: another flame (as the dice give), another symmetry (where the Symmetry setting is Auto).
-      if (!still && moment(moments.reseed, W[A.reseed], now)) {
-        another = Math.floor(Math.random() * 0x100000000);
-        asked++;
-      }
-      if (!still && moment(moments.symmetry, W[A.symmetry], now) && base && !s.symmetry) {
-        const order = momentSymmetry?.order ?? base.symmetry.order;
-        momentSymmetry = { order: ((order + Math.floor(Math.random() * 7)) % 8) + 1, mirror: Math.random() < 0.5 };
+      // The moments: another preset (as the dice give), another symmetry; a pinned setting stays as it is.
+      if (!still && moment(moments.reseed, W[A.reseed], now)) loadAnother(Math.floor(Math.random() * 0x100000000));
+      if (!still && moment(moments.symmetry, W[A.symmetry], now) && !(s.pins.includes('symmetry') && s.pins.includes('mirror'))) {
+        if (!s.pins.includes('symmetry')) s.symmetry = ((s.symmetry + Math.floor(Math.random() * 7)) % 8) + 1;
+        if (!s.pins.includes('mirror')) s.mirror = Math.random() < 0.5 ? 1 : 0;
+        nextBlend = ANOTHER_MS;
+        saveVisualSettings();
       }
 
       if (!to) return;
@@ -689,10 +737,11 @@
       </div>
       {#if panel}
         <div class="panel" role="group" aria-label="Settings" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
-          {#each [COMPUTE, LOOK] as rows, g (g)}
-            <div class="rows" class:look={g === 1}>
+          {#each [COMPUTE, SHOW, LOOK] as rows, g (g)}
+            <div class="rows" class:look={g > 0}>
+              {#if g === 2}<h3>Look</h3>{/if}
               {#each rows as row (row.key)}
-                <label class="row">
+                <label class="row" class:pinnable={g === 2}>
                   <span use:held={row.key}>{row.label}</span>
                   <input
                     type="range"
@@ -703,6 +752,21 @@
                     oninput={(e) => set(row.key, Number(e.currentTarget.value))}
                   />
                   <output>{row.text(valueOf(row.key))}</output>
+                  {#if g === 2}
+                    {#if s.pins.includes(row.key)}
+                      <button
+                        class="pin"
+                        aria-label="Unpin {row.label}"
+                        use:held={'pin'}
+                        onclick={(e) => {
+                          e.preventDefault();
+                          unpin(row.key);
+                        }}><Icon name="pin" size={16} /></button
+                      >
+                    {:else}
+                      <span></span>
+                    {/if}
+                  {/if}
                 </label>
               {/each}
             </div>
@@ -792,6 +856,7 @@
               use:held={'reset'}
               onclick={() => {
                 resetVisualSettings();
+                resets++;
                 showChrome();
               }}>Reset</button
             >
@@ -945,6 +1010,24 @@
     text-align: right;
     font-variant-numeric: tabular-nums;
     color: rgb(255 255 255 / 0.75);
+  }
+
+  /* The look's rows: their values may be names (a lens, a family), and a pin where moved. */
+  .row.pinnable {
+    grid-template-columns: 5.4em 1fr 6em 1.4em;
+    gap: 8px;
+  }
+
+  .pin {
+    display: grid;
+    place-items: center;
+    width: 1.4em;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent);
+    cursor: pointer;
   }
 
   .routes {

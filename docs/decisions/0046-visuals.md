@@ -456,13 +456,53 @@ deep red to black, the densest yellow, white only at the very hottest. Each part
 point's is its bands', by how near its colour is to each). The dice give another flame in every mode, its colours the
 mode's.
 
-**Buffers:** 32-bit floats are taken only where they can be filtered as well as blended. A phone's Mali-G615 blends
-them but has no OES_texture_float_linear: its picture was read pixel by pixel and scaled up blocky, grainier, from 59
-on. It now draws in 16-bit, as a tablet's Mali-G52 does.
+**Buffers:** 32-bit floats are taken only where they can be filtered as well as blended. A tablet's Mali-G52 blends
+them but has no OES_texture_float_linear: its picture was read pixel by pixel and scaled up blocky, grainier, in 59. It
+now draws in 16-bit again. (A phone's Mali-G615 has the extension and keeps 32-bit. This paragraph first named the
+phone: the debug link had gone to the tablet, the only device then attached.)
 
-**Measured** (the lab page over the made-up track, the PC's Intel graphics, and the phone off-screen over its debug
+**Measured** (the lab page over the made-up track, the PC's Intel graphics, and the tablet off-screen over its debug
 link): the sub's light varied by 0.07 (standard deviation) at Flash 0, 0.19 at 100 % and 0.40 at 200 %, its mean alike;
 it rose from 40 ms before each hit and was most on it. Real covers: The Low End Theory's reds and greens, Force Of The
 Wind's ochres and blues, R.I.P's black and white as greys; no cover, the seed's own. Smoothing's coarser levels, Fire
-and Floor drew on the phone as on the PC, in 16- and 32-bit, through three scrubs that found nothing. The grid's 14
+and Floor drew on the tablet as on the PC, in 16- and 32-bit, through three scrubs that found nothing. The grid's 14
 columns fit a 390 px phone.
+
+## Amendment, 2026-10-18: the look is the sliders, a track's preset sets them
+
+The owner: "I'd like our seed, whether random or not, to be a preset on the sliders, instead of the sliders being an
+operation on the seed", and (with claude-5f) three dials for the form rather than one number, and pins.
+
+**The look's settings are the flame:** Form, Detail, Twist, Warp, Symmetry, Mirror, Lens, Spread, Family, Hue,
+Lightness, Vividness and Purity. The flame is made from them alone, so moving one moves what is shown and nothing about
+the look stays hidden in a seed:
+- **Form** (0 to 999): which variations each of the six parts is made of (36 kinds, one to three a part), and each
+  part's own difference from the dials below, so six parts are not one. A choice, not a dial: neighbouring numbers are
+  unrelated forms.
+- **Detail:** how far the parts contract (0.3 to 1 of their size, each part a quarter either side): tight, dense cores
+  to large, wispy forms. **Twist:** how far they turn, and their post maps with them: straight arms to spirals.
+  **Warp:** how much of each part is its variations rather than plain: gentle to wild.
+- **Symmetry** (1 to 8 arms) and **Mirror** (Off, On): no Auto any more; the preset says. **Lens:** the final
+  transform, Off or one of twelve warps of the whole picture.
+- **Family** (Spectrum, Arc, Two tones, Three), **Hue** (where the colours start), **Lightness** and **Vividness**
+  (OKLCH 0.55 to 0.85 and chroma 0.06 to 0.26): the colours, under Rainbow; Cover and Fire colour the parts their own
+  way. Spread and Purity as before.
+
+**Presets:** a track's key (or the dice, or a Reseed moment) draws a preset of them, checked as the seeds were (24
+draws at most, the first whose flame passes, else the best). It loads into the settings, and the panel shows what is
+loaded. A track's preset blends in over six seconds; the dice, a moment, or a choice (Form, Symmetry, Mirror, Lens,
+Family, the colour mode) over a second and a half; a dial dragged shows at once.
+
+**Pins:** a look setting the owner moves is pinned, with a pin by its value. Tracks, the dice and the moments leave it
+as it is (the check draws the rest around it), until its pin is tapped (back to the preset's own value) or the panel's
+Reset (every pin gone, the track's own preset back). A Symmetry moment changes Symmetry and Mirror where they are not
+pinned. Kept settings from before carry over: a Symmetry or Mirror that was not Auto, a Spread not 100 % and a Purity not
+75 % come in pinned.
+
+How the show behaves stays out of the preset: Points, Steps, Resolution, FPS, Intensity, Flash, Speed, Brightness,
+Colours, the grain, each band's times and the routes.
+
+**Measured** (the lab page): a fresh device loads track A's preset, nothing pinned; Detail moved pins it and the flame's
+transforms change at once; the dice change all else; track B on the same device keeps Detail; unpinned, Detail goes
+back to B's own; Form and Symmetry pinned, then Reset: no pins, B's own; settings kept from 60 (Symmetry 3, Mirror On,
+Spread 250 %, Purity 100 %) came in pinned. The look's rows fit a 390 px phone.

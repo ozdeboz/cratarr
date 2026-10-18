@@ -61,7 +61,7 @@ export const HELP: Record<string, string> = {
   // The routes.
   routes:
     'How much each signal from the music moves each part of the picture, from −100% to +100%; tap a square to set it. The top rows are signals of the whole track; the rows below are each band’s own, for the band picked above them (All: every band at once).',
-  reset: 'Puts every setting back to its default, the routes too.',
+  reset: 'Puts every setting back to its default, the routes too; every pin is let go and the playing track’s own look comes back.',
   'routes:reset': 'Puts every route back to its default, the way the visuals responded before the routes existed.',
 
   // Route columns: what a signal moves.

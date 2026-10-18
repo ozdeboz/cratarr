@@ -470,10 +470,10 @@ export class FlameRenderer {
    *  soon). 16-bit ones were the default in preview 56 (4 to 20 % quicker): the densest pixels reach some 60,000 points
    *  (measured in 32-bit ones, 2026-10-18), against a 16-bit float's 65,504, and a GPU whose blending rounds up
    *  (Direct3D allows it) carries them over into infinity, black for good: a GTX 1650 showed such specks from 56 on, a
-   *  tablet's Mali-G52 (16-bit, a GPU that rounds to nearest, stuck at 2048) never did. 32-bit ones that cannot be
-   *  filtered (a phone's Mali-G615 (2026-10-18) blends them but has no OES_texture_float_linear) were read pixel by
-   *  pixel and scaled up to the screen blocky: that phone's picture grainier from 59 on, and no coarser levels for the
-   *  smoothing. */
+   *  tablet's Mali-G52 (16-bit then, a GPU that rounds to nearest, stuck at 2048) never did. 32-bit ones that cannot be
+   *  filtered (that tablet's Mali-G52 blends them but has no OES_texture_float_linear, 2026-10-18; a phone's Mali-G615
+   *  has it) were read pixel by pixel and scaled up to the screen blocky: the tablet's picture grainier in 59, and no
+   *  coarser levels for the smoothing. */
   precision: 32 | 16 | 8;
   get halfFloat(): boolean {
     return this.precision !== 8;
@@ -783,6 +783,8 @@ export class FlameRenderer {
       gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, null);
       this.flip = to;
     }
+    // Drawn again whatever the passes were (a first frame of none would leave every later draw discarded).
+    gl.disable(gl.RASTERIZER_DISCARD);
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
