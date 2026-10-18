@@ -10,11 +10,13 @@ import { newAspects, stepAspects } from './aspects';
 import type { Beats } from './beats';
 import { BUDGETED, budgetOf } from './budget';
 import { settingsReport } from './effects';
+import { flameOf, PRESET_KEYS } from './flame';
 import { Meters, screenTile, type MeterValues } from './meters';
 import { musicOf, newMusicState } from './music.svelte';
 import { settingsOf, type Recipe, type Scope } from './recipe';
 import { FLUID_FULL, type VisualSettings } from './settings.svelte';
 import type { Signals } from './signals';
+import { DIVE_MOST, diveTurnOf } from './zoom';
 
 /** The limits a recipe is held to (the governor's, at the Calm ↔ Wild setting). */
 export type Limits = Partial<Record<'flash' | 'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping' | 'looksPerMinute', number>>;
@@ -24,7 +26,8 @@ export type Limits = Partial<Record<'flash' | 'motion' | 'shapeChurn' | 'colourC
  *  looks a track as tracks draw them (65, 2026-10-18, 506 runs; 26 of the 66 looks with effects; Standard's typical, its
  *  runs' median mean, and its most: motion 0.27 and 0.47, shape 0.28 and 0.68 (64: 0.16 and 0.42, before the meters
  *  saw Presence move the points between the parts), colour 0.04 and 0.35, pumping 0.07 and 0.35; flashes 1 and 3), so
- *  today's behaviour always passes, quiet passage or loud, and the wildest tenth or so of recipes does not (34 of 440).
+ *  today's behaviour always passes, quiet passage or loud, and the wildest tenth or so of recipes does not (52 of 440,
+ *  the dives' turns counted).
  *  Flashes: three a second over a quarter of the screen, the rule. */
 export const DEFAULT_LIMITS: Required<Limits> = {
   flash: 3,
@@ -56,6 +59,21 @@ const BRIGHT = 0.35;
 /** Steps a slice: about 1 ms on a PC (a run is 25 ms there, 2026-10-18), a few on a slow tablet. */
 const SLICE = 30;
 
+/** The dive's turn a second at a dive rate of 1 for a look (zoom.ts `diveTurnOf`: the turn is in proportion to the
+ *  rate), kept by the look: fitting the part to dive into takes a few milliseconds on a PC, several times that on a
+ *  tablet, and a roll's eight recipes share their base's look. */
+const diveTurns = new Map<string, number>();
+function diveTurnPerRate(settings: VisualSettings): number {
+  const look = PRESET_KEYS.map((k) => settings[k]).join('|');
+  let turn = diveTurns.get(look);
+  if (turn === undefined) {
+    if (diveTurns.size > 64) diveTurns.clear();
+    turn = diveTurnOf(flameOf(settings), 1);
+    diveTurns.set(look, turn);
+  }
+  return turn;
+}
+
 /** The run, a slice at a time; its value the verdict. */
 export function* prechecking(
   recipe: Recipe,
@@ -68,6 +86,8 @@ export function* prechecking(
   scope: Scope = 'all',
 ): Generator<void, Checked> {
   const settings = settingsOf(recipe, base, scope);
+  // The dive's turn, as the visuals count it (the renderer's, beside each part's own); none where it cannot dive.
+  const divePerRate = settings.dive > 0 ? diveTurnPerRate(settings) : 0;
   const aspects = newAspects();
   const state = newMusicState();
   const meters = new Meters();
@@ -85,7 +105,7 @@ export function* prechecking(
     const luminance = Math.min(1, BRIGHT * a.flash * (1 + 0.6 * lights));
     meters.add({
       t: k * dt,
-      turnRates: a.rates,
+      turnRates: divePerRate && a.dive ? a.rates.map((r) => r + DIVE_MOST * a.dive * divePerRate) : a.rates,
       shape: a.shape,
       weights: a.parts.map((p) => p.weight ?? 1),
       hue: a.parts.map((p) => p.hue),
