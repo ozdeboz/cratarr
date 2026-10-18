@@ -1590,7 +1590,7 @@
             </div>
             <div class="grid-head" bind:this={gridHead}>
               <div class="grid" style:--columns={ASPECTS.length}>
-                <span class="corner"></span>
+                <span class="head-corner"></span>
                 {#each ASPECTS as aspect (aspect)}
                   <span class="aspect" use:held={`aspect:${aspect}`}>{ASPECT_LABEL[aspect]}</span>
                 {/each}
@@ -1949,7 +1949,8 @@
     touch-action: pan-x pan-y;
   }
 
-  .corner {
+  /* The routes' header's first cell, over the signals' names (its own name: .corner is the top controls'). */
+  .head-corner {
     position: sticky;
     left: 0;
     z-index: 1;
