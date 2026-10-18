@@ -34,7 +34,7 @@ export const HELP: Record<string, string> = {
   depth:
     'How much faint detail is lifted into view. At 0 only the bright structure shows, with strong contrast; at 100% the faint mist and grain around it are lifted almost as bright as the flame.',
   fluid:
-    'How much the picture flows like smoke. At 0 the flame’s trails simply fade where they were drawn, and nothing of the fluid runs. At 100% they drift, curl and fold like smoke stirred by the music: each band’s part pushes where it lights up, beats push out from the centre, loudness keeps the flow going and swells add whirls. Above 0 it costs a little more of the graphics chip.',
+    'How much the picture flows like smoke. At 0 the flame’s trails simply fade where they were drawn, and nothing of the fluid runs. Up to 100% they drift and curl more and more in a flow the music stirs, gently by design: at 100% a strong flow, still a flame, not all smoke. Each band’s part is kicked on its hits, beats push out from the centre in a pattern that turns with the tempo, downbeats shove harder and a new section sets a whirl going. Above 0 it costs a little more of the graphics chip.',
   colours:
     'Where the colours of the flame’s six parts come from. Rainbow: from the Look settings Family, Hue, Lightness and Vividness. Cover: six colours from the playing album’s cover, the darkest for the bass and the lightest for the treble. Fire: deep red for the bass to yellow for the treble, the densest areas glowing white-hot.',
   symmetry: 'How many times the flame repeats around its centre, like the arms of a star. At 1 it does not repeat; at 8 it has eight arms.',
@@ -55,10 +55,11 @@ export const HELP: Record<string, string> = {
   final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',
   pin: 'You moved this setting, so it keeps your value when the next track starts, and the dice leave it alone. Tap the pin to let each track set it again.',
   snapshots:
-    'Saved looks. Tap one to bring it back: everything that shapes the picture returns as it was when saved, and its Look settings are pinned, so the next track keeps it. Hold one to rename or delete it. They are kept on the server, so every device sees them.',
-  'snapshots:standard': 'The visuals as Cratarr first made them, kept so they can always be brought back. It cannot be renamed or deleted.',
+    'Snapshots: the visuals saved with every setting and a small picture. Tap one to bring it back: every setting returns as it was saved, and its Look settings are pinned, so the next track keeps that look. Hold one to rename or delete it. They are kept on the server, so every device sees them.',
+  'snapshots:standard':
+    'The visuals as Cratarr made them before snapshots existed, kept so they can always be brought back: every setting to its default, every pin let go, and each track its own look again. It cannot be renamed or deleted.',
   'snapshots:save':
-    'Saves everything that shapes the picture now (the Look, Colours, Flash, the grain, the routes and the band times), named after the playing track.',
+    'Saves the visuals as they are now: every setting, from the Look and the routes to Points and Brightness, with a small picture, named after the playing track and the time (tap the name to change it). In a sync group, bringing it back sets the shared settings on every device, and Points, Steps, Resolution, FPS and Brightness only on the device you bring it back on.',
   another: 'Another look: every Look setting you have not pinned moves to a new random value.',
 
   // The bands, as headings of their own settings and as the routes' choice of band.
@@ -102,6 +103,8 @@ export const HELP: Record<string, string> = {
   'aspect:depth': 'As the row rises, more faint detail is lifted into view, as the Depth setting does; below 0, less.',
   'aspect:reseed':
     'Each time the row rises past half way, the dice are rolled for you: every Look setting you have not pinned moves to a new random value.',
+  'aspect:drift':
+    'As the row rises, the flame’s look walks: its Detail, Twist, Warp, colours, Spread and Purity move a little further in a direction that changes every bar, never far from where the track set them. Below 0 the look walks back. Pinned settings stay where they are.',
   'aspect:symmetry':
     'Each time the row rises past half way, the Symmetry and Mirror settings move to new random values, unless you have pinned them.',
 
@@ -116,6 +119,8 @@ export const HELP: Record<string, string> = {
   'signal:key': 'Which key the music is in, as a place on a circle where related keys sit side by side. It changes slowly, so it suits slow drifts such as Hue.',
   'signal:swell': 'Rises while the music grows louder over several seconds, and falls back when it stops growing.',
   'signal:buildUp': 'Rises through a build-up, as the music climbs towards a drop.',
+  'signal:track':
+    'A pulse as each new track starts. Into Drift it decides what a new track does to the look: at −100% the look becomes the new track’s own, at −50% it goes halfway there, at 0 it stays as it is, and above 0 it moves away from the track’s own.',
   // Each band's:
   'signal:level': 'How loud this band is right now.',
   'signal:flux': 'How much this band’s sound is changing: high on new notes and hits, low on held sounds.',
