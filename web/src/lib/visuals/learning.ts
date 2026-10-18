@@ -4,7 +4,9 @@
 // "Simple is good, but we do need to handle the caveats":
 //
 // - A thumbs down tightens the limit of the one kind of busyness that stood out most over the 20 seconds before it
-//   (against what the defaults typically do), to a step under what it was then, so it acts at once. All of it in the
+//   (how far past what the defaults typically do, as a share of how far the defaults themselves go at most: the kinds
+//   range very differently, colour churn's most is ten times its typical, motion's not twice), to a step under what it
+//   was then, so it acts at once. All of it in the
 //   governor's own terms: each meter against its budget at a limit of 1 (as Calm ↔ Wild and the music's activity
 //   scale it, governor.ts `budgetOf`), so a limit learned is one the governor holds the picture to as it is.
 //   Where nothing stood out, it only counts toward the periodic fit: dislikes are pressed more often than likes, and
@@ -17,21 +19,30 @@
 //
 // Pure: the visuals load what was learned (the server keeps it per user), drift it, and save each change.
 
-import type { Budgeted } from './governor';
+import type { Budgeted } from './budget';
 
 /** One limit as learned: its value, the step its next change takes, and which way it last went. */
 export type LearnedLimit = { value: number; step: number; dir: -1 | 0 | 1 };
 export type Learned = Record<Budgeted, LearnedLimit>;
 
-/** What the defaults typically do, in the governor's terms (Standard over eleven varied tracks, 2026-10-18;
- *  precheck.ts: taken at an activity of a half, a budget's factor of 1), against which a meter stands out; new looks a
- *  minute: half the limit (Standard has none of its own). */
+/** What the defaults typically do, in the governor's terms (each meter against its budget at a limit of 1): Standard's
+ *  median mean over eleven varied tracks at a quarter and three fifths of each (claude-5f's calibration, 2026-10-18,
+ *  462 runs; precheck.ts), against which a meter stands out. New looks a minute: half the limit (Standard has none of
+ *  its own). */
 export const TYPICAL: Readonly<Record<Budgeted, number>> = {
-  motion: 0.4,
-  shapeChurn: 0.32,
-  colourChurn: 0.08,
-  zoomPumping: 0.14,
+  motion: 0.264,
+  shapeChurn: 0.155,
+  colourChurn: 0.036,
+  zoomPumping: 0.068,
   looksPerMinute: 2,
+};
+/** The most the defaults do (the same runs' most), the other end of their usual range; new looks a minute: the limit. */
+export const USUAL_MOST: Readonly<Record<Budgeted, number>> = {
+  motion: 0.466,
+  shapeChurn: 0.423,
+  colourChurn: 0.354,
+  zoomPumping: 0.351,
+  looksPerMinute: 4,
 };
 
 export const FIRST_STEP = 0.1;
@@ -75,12 +86,12 @@ export function thumbed(
   let meter: Budgeted | null = null;
   let to = 0;
   if (thumb === 'down') {
-    // The one that stood out most, if any stood out: against the defaults' typical.
-    let most = 1;
+    // The one that stood out most, if any stood out: past the defaults' typical, as a share of their usual range.
+    let most = 0;
     for (const k of Object.keys(base) as Budgeted[]) {
       const v = window.relative[k];
       if (v === undefined || !Number.isFinite(base[k])) continue;
-      const out = v / TYPICAL[k];
+      const out = (v - TYPICAL[k]) / (USUAL_MOST[k] - TYPICAL[k]);
       if (out > most) {
         most = out;
         meter = k;

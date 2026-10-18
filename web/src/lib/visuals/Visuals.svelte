@@ -42,7 +42,7 @@
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
   import { newDrift, stepDrift } from './drift';
-  import { budgetOf, BUDGETED, holding, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
+  import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
   import { drifted, fresh, limitsOf, thumbed, type Learned } from './learning';
   import { forgetVisualsLimits, getVisualsLimits, postVisualsThumb, putVisualsLimits } from '../api';
   import { toast } from '../toast.svelte';
@@ -237,19 +237,12 @@
   const WINDOW = 80;
   // `relative`: each budgeted meter against its budget at a limit of 1, as Wild and the music's activity had it then.
   let recent: { meters: MeterValues; loop: TrialLoop; relative: Record<Budgeted, number> }[] = [];
-  // Each budget's lever, and how far it holds back (0 open, 1 as far as it goes).
-  const LEVER_OF: Record<Budgeted, { lever: keyof Levers; most: number }> = {
-    motion: { lever: 'pace', most: 0.25 },
-    shapeChurn: { lever: 'evolution', most: 4 },
-    colourChurn: { lever: 'hue', most: 0.2 },
-    zoomPumping: { lever: 'size', most: 0.2 },
-    looksPerMinute: { lever: 'gap', most: 6 },
-  };
   /** The budget the governor holds the picture back by most now, if it holds any back (the flash rule is not one). */
   function heldMost(): Budgeted | null {
     let best: Budgeted | null = null;
     let far = 0;
-    for (const [k, { lever, most }] of Object.entries(LEVER_OF) as [Budgeted, { lever: keyof Levers; most: number }][]) {
+    // How far each budget's lever holds back: 0 open, 1 as far as it goes.
+    for (const [k, { lever, most }] of Object.entries(LEVERS) as [Budgeted, { lever: keyof Levers; most: number }][]) {
       if (!holding(governor.levers, lever)) continue;
       const v = governor.levers[lever];
       const by = most > 1 ? (v - 1) / (most - 1) : (1 - v) / (1 - most);
@@ -1483,7 +1476,7 @@
       {/if}
       {#if np && !panel}
         <div class="track">
-          {#if !ratingRun}
+          {#if !rating.run}
             <div class="thumbs">
               <button class="round" class:on={thumbShown === 'up'} aria-label="Thumbs up" use:held={'thumbs-up'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => thumb('up')}
                 ><Icon name="thumbsUp" size={22} /></button
