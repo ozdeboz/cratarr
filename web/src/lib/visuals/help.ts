@@ -33,6 +33,7 @@ export const HELP: Record<string, string> = {
   family: 'How the colours are chosen under Rainbow: around the whole wheel, along a warm or cool arc, two tones, or three.',
   hue: 'Turns all the colours round the colour wheel.',
   lightness: 'How light the colours are.',
+  vividness: 'How vivid the colours are, from muted to full.',
   final: 'A warp over the whole picture, like a lens or a swirl.',
   pin: 'You set this one: it keeps your value when the next track starts. Tap to let the track set it again.',
   dice: 'Another look: a new preset in every setting you have not pinned.',

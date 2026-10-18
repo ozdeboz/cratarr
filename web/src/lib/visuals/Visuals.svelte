@@ -20,6 +20,8 @@
   import { between, coloured, evolved, flameFrom, measuring, PARTS, seedOf, withSymmetry, type ColourMode, type Flame, type Part } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
   import { coverPalette, type PaletteColour } from './palette';
+  import { held } from './held.svelte';
+  import Help from './Help.svelte';
   import { FlameRenderer } from './render';
   import {
     A,
@@ -636,7 +638,7 @@
 </script>
 
 {#snippet routeRow(signal: Signal)}
-  <span class="signal">{SIGNAL_LABEL[signal]}<i style:width="{Math.round(Math.min(1, Math.max(0, meterOf(signal))) * 100)}%"></i></span>
+  <span class="signal" use:held={`signal:${signal}`}>{SIGNAL_LABEL[signal]}<i style:width="{Math.round(Math.min(1, Math.max(0, meterOf(signal))) * 100)}%"></i></span>
   {#each ASPECTS as aspect (aspect)}
     {@const a = amountOf(signal, aspect)}
     <button
@@ -681,7 +683,7 @@
           onpointerup={(e) => e.stopPropagation()}
           onclick={togglePanel}><Icon name="sliders" size={24} /></button
         >
-        <button class="round" aria-label="Another look" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={rollAnother}
+        <button class="round" aria-label="Another look" use:held={'dice'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={rollAnother}
           ><Icon name="dice" size={26} /></button
         >
       </div>
@@ -691,7 +693,7 @@
             <div class="rows" class:look={g === 1}>
               {#each rows as row (row.key)}
                 <label class="row">
-                  <span>{row.label}</span>
+                  <span use:held={row.key}>{row.label}</span>
                   <input
                     type="range"
                     min={RANGES[row.key][0]}
@@ -707,9 +709,10 @@
           {/each}
           <div class="routes" role="group" aria-label="Routes">
             <div class="head">
-              <h3>Routes</h3>
+              <h3 use:held={'routes'}>Routes</h3>
               <button
                 class="reset"
+                use:held={'routes:reset'}
                 onclick={() => {
                   resetRoutes();
                   cell = null;
@@ -719,7 +722,7 @@
             <div class="grid" style:--columns={ASPECTS.length}>
               <span></span>
               {#each ASPECTS as aspect (aspect)}
-                <span class="aspect">{ASPECT_LABEL[aspect]}</span>
+                <span class="aspect" use:held={`aspect:${aspect}`}>{ASPECT_LABEL[aspect]}</span>
               {/each}
               {#each TRACK_SIGNALS as signal (signal)}
                 {@render routeRow(signal)}
@@ -761,7 +764,7 @@
               <h3>{band}</h3>
               {#each TIMES as time (time.key)}
                 <label class="row">
-                  <span>{time.label}</span>
+                  <span use:held={time.key}>{time.label}</span>
                   <input
                     type="range"
                     min={time.min}
@@ -774,7 +777,7 @@
                 </label>
               {/each}
               <label class="row">
-                <span>Continuity</span>
+                <span use:held={'continuity'}>Continuity</span>
                 <input type="range" min={RANGES.continuity[0]} max={RANGES.continuity[1]} step="0.05" value={s.continuity[b]} oninput={(e) => setContinuity(b, Number(e.currentTarget.value))} />
                 <output>{percent(s.continuity[b])}</output>
               </label>
@@ -786,6 +789,7 @@
             >
             <button
               class="reset"
+              use:held={'reset'}
               onclick={() => {
                 resetVisualSettings();
                 showChrome();
@@ -802,6 +806,7 @@
       {/if}
     </div>
   {/if}
+  <Help />
 </div>
 
 <style>
