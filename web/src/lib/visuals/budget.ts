@@ -22,7 +22,9 @@ export type Limits = Partial<Record<'flash' | 'motion' | 'shapeChurn' | 'colourC
  *  Presence move the points between the parts), colour's 0.35, pumping's 0.35; flashes 3), so today's behaviour always
  *  passes, quiet passage or loud. The looks' own effects are drawn within the room these leave above that most
  *  (`DRAWN_ROOM`), so a track's look never needs holding; the limits are not raised for them (the wildest of
- *  65's first draws doubled motion's most). Flashes: three a second over a quarter of the screen, the rule. */
+ *  65's first draws doubled motion's most); held to it, the looks with effects peak where the flame does. The dice's
+ *  recipes: 83 of 440 refused (motion 79: the zooms they roll count as the motion they are; flash 9).
+ *  Flashes: three a second over a quarter of the screen, the rule. */
 export const DEFAULT_LIMITS: Required<Limits> = {
   flash: 3,
   motion: 0.6,
