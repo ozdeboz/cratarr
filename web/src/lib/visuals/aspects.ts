@@ -147,7 +147,7 @@ export function stepAspects(
   m: Music,
   s: VisualSettings,
   dt: number,
-  opts: { still: boolean; now: number; matrix?: Matrix; fluidFull: number; levers?: Levers },
+  opts: { still: boolean; now: number; matrix?: Matrix; fluidFull: number; levers?: Levers; routeWalk?: Float32Array },
 ): AspectsNow {
   const { still, now } = opts;
   const L = opts.levers ?? OPEN;
@@ -177,7 +177,7 @@ export function stepAspects(
   track[T.track] = Math.max(0, 1 - ((now - st.trackAt) / 1000) * m.bps);
   const bands = m.bands ?? st.standIn;
   const envelope = m.playing ? st.lit : 0;
-  give(matrix, track, bands, envelope, st.got);
+  give(matrix, track, bands, envelope, st.got, opts.routeWalk);
   const W = st.got.whole;
   // The courses: followed more slowly while the governor holds the flashes back, so they no longer follow each pulse.
   const follow2 = 1 - Math.exp((-dt * L.swing) / SLOW_S);

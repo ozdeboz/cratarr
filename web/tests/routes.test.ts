@@ -118,3 +118,22 @@ test('a straight curve is kept as its number, a bent one as itself; routes at 0 
   const m = compile({ [routeKey('beat', null, 'size')]: 0, [routeKey('loudness', null, 'size')]: 1 }, BANDS);
   assert.equal(m.trackOn.length, 1);
 });
+
+test('a route that walks gives its walk factor’s share of itself, and a level’s pull as much less', () => {
+  const walking: Curve = { ...straight(0.8), walks: true };
+  assert.deepEqual(valueOf(walking), walking, 'kept as a curve: a straight one that walks stays one');
+  const m = compile({ [routeKey('beat', null, 'size')]: walking, [routeKey('swell', null, 'fluid')]: { ...straight(0.6), walks: true }, [routeKey('loudness', null, 'size')]: 1 }, BANDS);
+  assert.deepEqual(m.walks, [routeKey('beat', null, 'size'), routeKey('swell', null, 'fluid')]);
+  const track = new Float32Array(TRACK_SIGNALS.length);
+  track[T.beat] = 0.5;
+  track[T.swell] = 0.25;
+  track[T.loudness] = 1;
+  const at = (w: number[]) => give(m, track, [], 1, given(BANDS), Float32Array.from(w));
+  // As set: 0.8 × 0.5 from the beat, 1 from the loudness; the fluid's factor 1 − 0.6 × 0.75.
+  assert.ok(close(at([1, 1]).whole[A.size], 1.4) && close(at([1, 1]).level[A.fluid], 0.55));
+  // Walked to 0.7: the beat's part 0.7 of itself; the fluid's pull 0.7 of itself.
+  assert.ok(close(at([0.7, 0.7]).whole[A.size], 1 + 0.4 * 0.7));
+  assert.ok(close(at([0.7, 0.7]).level[A.fluid], 1 - 0.7 * 0.45));
+  // Without walk factors, as set.
+  assert.ok(close(give(m, track, [], 1, given(BANDS)).whole[A.size], 1.4));
+});

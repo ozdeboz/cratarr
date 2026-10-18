@@ -7,7 +7,9 @@
 // x2 − x1 and 1 − x2 make a quadratic that never dips below 0), so each signal has one height; and the curve stays
 // within its control points' hull, so within −1..1.
 
-export type Curve = { h1: [number, number]; h2: [number, number]; h: number };
+/** `walks`: it walks with the behaviour (the Behaviour column's walk), only ever at or under itself (the owner: "behavior
+ *  should also affect those matrix routes that subscribe to it … as an attenuating walk"); off unless set. */
+export type Curve = { h1: [number, number]; h2: [number, number]; h: number; walks?: boolean };
 /** A route as kept: its amount (straight), or its curve. */
 export type RouteValue = number | Curve;
 
@@ -29,8 +31,11 @@ export function isStraight(c: Curve): boolean {
   return near(c.h1, s.h1) && near(c.h2, s.h2);
 }
 
-/** A curve as kept: a number where it is straight. */
-export const valueOf = (c: Curve): RouteValue => (isStraight(c) ? c.h : c);
+/** A curve as kept: a number where it is straight and does not walk. */
+export const valueOf = (c: Curve): RouteValue => (isStraight(c) && !c.walks ? c.h : c);
+
+/** Whether a route walks with the behaviour. */
+export const walksOf = (v: RouteValue) => typeof v !== 'number' && !!v.walks;
 
 /** A curve brought into its ranges (handles' x 0..1, heights −1..1), or null where it is not one. */
 export function curveFrom(v: unknown): Curve | null {
@@ -41,12 +46,14 @@ export function curveFrom(v: unknown): Curve | null {
   const h1 = pt(o.h1);
   const h2 = pt(o.h2);
   if (!h1 || !h2 || typeof o.h !== 'number' || !Number.isFinite(o.h)) return null;
-  return { h1, h2, h: clamp(o.h, -1, 1) };
+  return { h1, h2, h: clamp(o.h, -1, 1), ...(o.walks === true ? { walks: true } : {}) };
 }
 
 /** A curve ending elsewhere, its shape kept (its heights scaled; the straight one where it ended at 0). */
 export const withEnd = (c: Curve, h: number): Curve =>
-  Math.abs(c.h) < 1e-6 ? straight(h) : { h1: [c.h1[0], clamp((c.h1[1] * h) / c.h, -1, 1)], h2: [c.h2[0], clamp((c.h2[1] * h) / c.h, -1, 1)], h };
+  Math.abs(c.h) < 1e-6
+    ? { ...straight(h), ...(c.walks ? { walks: true } : {}) }
+    : { h1: [c.h1[0], clamp((c.h1[1] * h) / c.h, -1, 1)], h2: [c.h2[0], clamp((c.h2[1] * h) / c.h, -1, 1)], h, ...(c.walks ? { walks: true } : {}) };
 
 /** How many steps a table has across (its points: one more). */
 export const TABLE_STEPS = 32;

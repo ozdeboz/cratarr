@@ -127,10 +127,21 @@ export type Matrix = {
   bandPeak: Float32Array[];
   trackOn: Int32Array;
   bandOn: Int32Array[];
+  /** The routes that walk with the behaviour, by key, and each cell's place among them (−1: it does not walk). */
+  walks: string[];
+  trackWalk: Int16Array;
+  bandWalk: Int16Array[];
 };
 
 export function compile(routes: Record<string, RouteValue>, bands: number): Matrix {
-  const cells = (signals: number) => ({ end: new Float32Array(signals * NA), table: Array<Float32Array | null>(signals * NA).fill(null), peak: new Float32Array(signals * NA), on: [] as number[] });
+  const cells = (signals: number) => ({
+    end: new Float32Array(signals * NA),
+    table: Array<Float32Array | null>(signals * NA).fill(null),
+    peak: new Float32Array(signals * NA),
+    on: [] as number[],
+    walk: new Int16Array(signals * NA).fill(-1),
+  });
+  const walks: string[] = [];
   const t = cells(TRACK_SIGNALS.length);
   const per = Array.from({ length: bands }, () => cells(BAND_SIGNALS.length));
   for (const [key, value] of Object.entries(routes)) {
@@ -146,6 +157,7 @@ export function compile(routes: Record<string, RouteValue>, bands: number): Matr
     into.table[cell] = bent ? bent.table : null;
     into.peak[cell] = bent ? bent.peak : Math.max(0, end);
     into.on.push(cell);
+    if (curve?.walks) into.walk[cell] = walks.push(key) - 1;
   }
   return {
     track: t.end,
@@ -156,6 +168,9 @@ export function compile(routes: Record<string, RouteValue>, bands: number): Matr
     bandPeak: per.map((b) => b.peak),
     trackOn: Int32Array.from(t.on),
     bandOn: per.map((b) => Int32Array.from(b.on)),
+    walks,
+    trackWalk: t.walk,
+    bandWalk: per.map((b) => b.walk),
   };
 }
 
@@ -181,13 +196,15 @@ const isLevel = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
 
 /** What a route gives at its signal `v`: its curve's height, a straight one's amount times the signal. */
 const heightOf = (table: Float32Array | null, end: number, v: number) => (table ? heightAt(table, v) : end * v);
-/** A level's route's share let through. */
-const letThrough = (peak: number, y: number, e: number) => Math.min(1, Math.max(0, 1 - e * (peak - y)));
+/** A level's route's share let through; walking (`w` under 1), its pull as much less. */
+const letThrough = (peak: number, y: number, e: number, w = 1) => 1 - w * (1 - Math.min(1, Math.max(0, 1 - e * (peak - y))));
 
 /** Adds up the routes into `out`: `track` the whole track's signals now (`T` order, 0..1), `bands[b]` band b's (`B`
  *  order); `envelope` (0..1) scales every signal's routes but the loudness's own. The swings add up what each route's
- *  curve gives at its signal, times the envelope; the levels multiply what each lets through. */
-export function give(m: Matrix, track: Float32Array, bands: Float32Array[], envelope: number, out: Given): Given {
+ *  curve gives at its signal, times the envelope; the levels multiply what each lets through. `walk`: each walking
+ *  route's factor now (`Matrix.walks` order, 1: as set), its share of what it gives. */
+export function give(m: Matrix, track: Float32Array, bands: Float32Array[], envelope: number, out: Given, walk?: Float32Array): Given {
+  const walkOf = (i: number) => (i < 0 || !walk ? 1 : (walk[i] ?? 1));
   const { whole, band, level } = out;
   whole.fill(0);
   level.fill(1);
@@ -197,8 +214,9 @@ export function give(m: Matrix, track: Float32Array, bands: Float32Array[], enve
     const a = cell - s * NA;
     const e = s === T.loudness ? 1 : envelope;
     const y = heightOf(m.trackTable[cell], m.track[cell], track[s]);
-    if (isLevel[a]) level[a] *= letThrough(m.trackPeak[cell], y, e);
-    else whole[a] += e * y;
+    const w = walkOf(m.trackWalk[cell]);
+    if (isLevel[a]) level[a] *= letThrough(m.trackPeak[cell], y, e, w);
+    else whole[a] += e * y * w;
   }
   const n = Math.min(band.length, bands.length, m.bands.length);
   const bandLevel = levelScratch(n);
@@ -214,8 +232,9 @@ export function give(m: Matrix, track: Float32Array, bands: Float32Array[], enve
       const s = (cell / NA) | 0;
       const a = cell - s * NA;
       const y = heightOf(m.bandTable[b][cell], m.bands[b][cell], bands[b][s]);
-      if (isLevel[a]) lv[a] *= letThrough(m.bandPeak[b][cell], y, envelope);
-      else to[a] += envelope * y;
+      const w = walkOf(m.bandWalk[b][cell]);
+      if (isLevel[a]) lv[a] *= letThrough(m.bandPeak[b][cell], y, envelope, w);
+      else to[a] += envelope * y * w;
     }
   }
   if (n) {
