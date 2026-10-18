@@ -347,7 +347,8 @@
   //
   // A double tap rolls how it moves only (the owner, 64.1: "double tap becomes this randomize"; `MOVEMENT` in
   // recipe.ts), its look and the rest as they are; and it may go "twice the limits": checked, and governed while it
-  // stands, as at Wild's most (`loosened`), till the next roll, an undo (back to what stood before), Reset or a recall.
+  // stands, as at Wild's most (the shared `loose`: every device of the group alike), till the next roll, an undo (back to
+  // what stood before), Reset or a recall on any of them.
   // Three flashes a second over a quarter of the screen stay the rule. A single tap waits out the double's window (a
   // roll takes about as long anyway).
   const BEHAVIOUR = ['routes', 'flash', 'speed', 'intensity', 'fluid', 'smoothing', 'haze', 'tunnel', 'dive', ...SCALE_KEYS, 'lighting', 'evolution', 'continuity'] as const;
@@ -355,9 +356,8 @@
   const DOUBLE_MS = 250;
   let rollWanted: Scope | null = null;
   let rolling: { run: Generator<void, Recipe>; scope: Scope } | null = null;
-  let loosened = false;
-  const wildNow = (wild: number) => (loosened ? Math.max(wild, 1) : wild);
-  let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings>; loosened: boolean } | null>(null);
+  const wildNow = (wild: number) => (s.loose ? Math.max(wild, 1) : wild);
+  let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings>; loose: number } | null>(null);
   let diceWait = 0;
   function diceTapped() {
     if (diceWait) {
@@ -393,12 +393,12 @@
   }
   function rolled(recipe: Recipe, scope: Scope) {
     const now = $state.snapshot(s) as VisualSettings;
-    undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings>, loosened };
+    undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings>, loose: now.loose };
     const next = settingsOf(recipe, now, scope);
     for (const k of BEHAVIOUR) if (!s.pins.includes(k)) (s as Record<string, unknown>)[k] = next[k];
-    loosened = scope === 'movement';
+    s.loose = scope === 'movement' ? 1 : 0;
     saveVisualSettings();
-    share(Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])));
+    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), loose: s.loose });
     if (scope === 'all') loadAnother(Math.floor(Math.random() * 0x100000000), true);
   }
   function undoRoll() {
@@ -410,9 +410,9 @@
     nextBlend = ANOTHER_MS;
     lookCame = 'dice';
     Object.assign(s, was.behaviour, was.look, { pins: was.pins });
-    loosened = was.loosened;
+    s.loose = was.loose;
     saveVisualSettings();
-    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), ...lookNow(), pins: [...s.pins] });
+    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), ...lookNow(), pins: [...s.pins], loose: s.loose });
     showChrome();
   }
 
@@ -451,8 +451,8 @@
     }
   }
   function recall(snap: VisualsSnapshot) {
-    loosened = false;
-    const settings: Record<string, unknown> = { ...snap.settings };
+    // A recall ends a double tap's room, for the group too (shared with the rest below).
+    const settings: Record<string, unknown> = { ...snap.settings, loose: 0 };
     // One saved in 63: its Fluid on the finer scale since.
     if ((settings.v ?? 1) === 1 && typeof settings.fluid === 'number') settings.fluid = fluidFrom63(settings.fluid);
     // One saved before the columns' scales (64.2): all of each.
@@ -797,10 +797,11 @@
   }
   // The routes back to the defaults; to the group, each route set before as nothing.
   function routesReset() {
-    loosened = false;
+    s.loose = 0;
     const before = Object.keys(s.routes);
     resetRoutes();
-    share({ routes: { ...Object.fromEntries(before.map((k) => [k, 0])), ...$state.snapshot(s.routes) } });
+    saveVisualSettings();
+    share({ routes: { ...Object.fromEntries(before.map((k) => [k, 0])), ...$state.snapshot(s.routes) }, loose: 0 });
   }
   const signed = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
   const cellLabel = (signal: Signal, aspect: Aspect) => `${SIGNAL_LABEL[signal]}${isBandSignal(signal) ? ` (${pick === null ? 'All' : BAND_ROWS[pick]})` : ''} → ${ASPECT_LABEL[aspect]}`;
@@ -1778,7 +1779,6 @@
               use:held={'reset'}
               onclick={() => {
                 resetVisualSettings();
-                loosened = false;
                 resets++;
                 // To the group: all but the look now (the track's preset follows once drawn), every pin let go.
                 share(Object.fromEntries(SHARED_KEYS.filter((k) => !isLook(k)).map((k) => [k, $state.snapshot(s[k])])));

@@ -64,6 +64,9 @@ export type VisualSettings = Preset & {
   tunnel: number;
   /** The most of the look's effects (0..1, 65): the Effects column's routes are its conditions, as Fluid's. */
   effects: number;
+  /** A double tap's roll stands (1): the group governs at Wild's most, up to twice the limits, till the next roll, an
+   *  undo, Reset or a recall (65; the owner: "sync the group properly"). Not a slider: the dice set it. */
+  loose: number;
   dive: number;
   /** Each band's part's weight in the drawing, the scale of its Presence column (65; routes.ts `COLUMN_SCALES`), and
    *  the slow giant waves' (the Waves column). */
@@ -112,6 +115,7 @@ export const DEFAULTS: VisualSettings = {
   fluid: 0,
   tunnel: 0,
   effects: 1,
+  loose: 0,
   dive: 0,
   presence: 1,
   waves: 1,
@@ -212,6 +216,7 @@ export const RANGES: Record<Ranged, [number, number]> = {
   facets: [0, 1],
   lattice: [0, 1],
   effects: [0, 1],
+  loose: [0, 1],
   lighting: [0.02, 1],
   evolution: [0.02, 2],
   continuity: [0, 1],
