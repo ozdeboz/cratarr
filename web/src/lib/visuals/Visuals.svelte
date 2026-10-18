@@ -40,6 +40,7 @@
     type Preset,
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
+  import { newAspects, stepAspects } from './aspects';
   import { coverPalette, type PaletteColour } from './palette';
   import { setVisualsSide, visuals } from './shown.svelte';
   import { applyDevice, applyShared, followGroup, groupLook, share, SHARED_KEYS, sharedNow, showing, STANDARD } from './shared.svelte';
@@ -55,8 +56,6 @@
     B,
     BAND_SIGNALS,
     compile,
-    give,
-    given,
     routeKey,
     SIGNAL_LABEL,
     T,
@@ -386,8 +385,6 @@
   // A new track's flame blends in over this long; one asked for with the dice, quicker.
   const BLEND_MS = 6000;
   const ANOTHER_MS = 1500;
-  // A beat's turn of the transforms: once around in 32 beats.
-  const STEP = (2 * Math.PI) / 32;
 
   onMount(() => {
     showChrome();
@@ -479,59 +476,12 @@
         stopIdle = () => clearTimeout(id);
       }
     };
-    let turn = 0;
-    // The turning's clock: a route's full amount turns a part once around in 16 beats (the default routes, once in 32
-    // on average), at the Speed setting; paused, it slows to a stop.
-    let clock = 0;
-    // The signals now (the loudness's as the Intensity setting lets it count), the bands' stand-ins while none are
-    // known (each half way), and what the routes give each aspect.
-    const track = new Float32Array(TRACK_SIGNALS.length);
-    const standIn = Array.from({ length: BANDS }, () => {
-      const v = new Float32Array(BAND_SIGNALS.length);
-      v[B.level] = 0.5;
-      return v;
-    });
-    const got = given(BANDS);
-    // Each part: how far it has turned, and its evolving aspects (shape, hue, spread) as followed over its band's
-    // Evolution time.
-    const turned = Array<number>(PARTS).fill(0);
-    const evolving = Array.from({ length: PARTS }, () => [0.5, 0, 0]);
-    // Each part's steps: its band's last hit seen (or beat, where its hits are not known yet), what its evolving aspects
-    // were given then (what a stepping part evolves to), and the turn of its steps still to come (each eased in over
-    // 80 ms).
-    const lastHit = Array<number | null>(PARTS).fill(null);
-    const held = Array.from({ length: PARTS }, () => [0.5, 0, 0]);
-    const pending = Array<number>(PARTS).fill(0);
-    // The moments' state: ready again once what they are given falls under a third, and not within two seconds.
-    const moments = { reseed: { armed: true, at: -Infinity }, symmetry: { armed: true, at: -Infinity } };
-    const MOMENT_GAP_MS = 2000;
-    // The Flash setting: each quickly changing aspect (each part's lights, the glow, size and saturation) as its slow
-    // course (followed twice over a third of a second: a beat's or a hit's swing all but gone from it, a passage's
-    // change kept) and the setting's share of its swing about that course.
-    const SLOW_S = 0.3;
-    const courses = { lights: Array.from({ length: PARTS }, () => [] as number[]), glow: [] as number[], size: [] as number[], saturation: [] as number[] };
-    let follow2 = 0;
-    const flashed = (v: number, course: number[]) => {
-      if (!course.length) course.push(v, v);
-      course[0] += (v - course[0]) * follow2;
-      course[1] += (course[0] - course[1]) * follow2;
-      return course[1] + s.flash * (v - course[1]);
-    };
+    // The mapping from the music and the settings to what is drawn (aspects.ts), and the moments' gap.
+    const aspects = newAspects();
     // The fluid (decision 0047): where each band's part lies on the screen (measured four times a second while the light
     // flows), and which way each part turns (its pushes curl with it).
     let partsWhere: ([number, number] | null)[] = [];
     let partsMeasured = 0;
-    const rates = Array<number>(PARTS).fill(0);
-    // The grain's settings (0..1) as their routes move them: a route's full amount moves one half of its range.
-    const grain = (setting: number, aspect: number) => clamp(setting + 0.5 * got.whole[aspect], 0, 1);
-    // Floor: none at 0, then from 0.002 of the display's scale (a stray speck's) up to 1 (the flame's mean), evenly in
-    // its log.
-    const floorOf = (v: number) => (v > 0 ? 0.002 * 500 ** v : 0);
-    // How intense the show is (the loudness as heard, followed over a fifth of a second; `lit`: as far as the
-    // Intensity setting lets it count), and paused or not.
-    let intensity = 0.5;
-    let lit = 0.5;
-    let glow = 1;
     let metered = 0;
     let passes = Math.min(s.steps, pace?.passes ?? s.steps);
     let raf = 0;
@@ -569,15 +519,6 @@
     let measure: ReturnType<typeof measuring> | null = null;
     let counted = { since: performance.now(), frames: 0 };
 
-    const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-    // A moment: what its routes give rising past a half.
-    const moment = (m: { armed: boolean; at: number }, v: number, now: number) => {
-      if (v < 1 / 3) m.armed = true;
-      if (!(v > 0.5 && m.armed && now - m.at > MOMENT_GAP_MS)) return false;
-      m.armed = false;
-      m.at = now;
-      return true;
-    };
 
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
@@ -700,76 +641,21 @@
       }
       // A preset that changed nothing (all of it pinned) leaves nothing to blend.
       nextBlend = null;
-      // The show's intensity: the loudness as heard, followed over a fifth of a second, as far as the Intensity setting
-      // lets it count. It is the loudness's signal, and the envelope of every other one's routes (none while paused).
-      // Dimmer while paused.
-      intensity += (m.intensity - intensity) * Math.min(1, dt * 5);
-      lit = 1 - s.intensity * (1 - intensity);
-      glow += ((m.playing ? 1 : 0.55) - glow) * Math.min(1, dt * 2);
-      // Reduced motion: a quarter of the turning, all of it steady, half the beats' and hits' share, no moments.
+      // What is drawn, as the music and the settings give it (aspects.ts). Reduced motion: a quarter of the turning, all
+      // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
-      track.set(m.track);
-      track[T.loudness] = lit;
-      if (still) for (const t of [T.beat, T.downbeat, T.section]) track[t] *= 0.5;
-      const bandsNow = m.bands ?? standIn;
-      give(matrix, track, bandsNow, m.playing ? lit : 0, got);
-      const W = got.whole;
-      follow2 = 1 - Math.exp(-dt / SLOW_S);
+      const d = stepAspects(aspects, m, s, dt, { still, now, matrix, fluidFull: FLUID_FULL });
+      const { turn, hits, parts, track } = d;
       if (panel && now - metered > 100) {
         metered = now;
-        meters = { track: Array.from(track), bands: bandsNow.map((v) => Array.from(v)) };
-      }
-      // The turning's clock, at the track's tempo (its beats' where they are known, 90 BPM without one); the whole
-      // picture turns with the whole track's routes to Rotation.
-      const b = m.playing ? m.beat : null;
-      const want = m.playing ? STEP * m.bps * (still ? 0.25 : 1) * s.speed : 0;
-      clock += (want - clock) * Math.min(1, dt * 1.5);
-      turn += clock * 0.6 * W[A.rotation] * dt;
-      // Each part, given the whole track's routes and its band's: Shape evolves it (larger, its variations given over
-      // to its band's own), Hue moves its colour round, Spread draws it out from the middle or in (all three followed
-      // over its band's Evolution time), Rotation turns it, Lights light its colour. Its band's Continuity shares its
-      // motion between steady (turning at its rate, evolving as it is given) and steps on its band's own hits (or the
-      // beats, where those are not known yet): a step turns it by as much as it would have turned steadily since the
-      // band's last, on average (a strong hit further, a weak one less), and evolves it to what it was given at that
-      // moment, held until the next.
-      const hits: number[] = [];
-      const parts: Part[] = [];
-      for (let i = 0; i < PARTS; i++) {
-        const k = Math.floor((i * BANDS) / PARTS);
-        const own = got.band[k];
-        const c = still ? 1 : s.continuity[k];
-        const wants = [W[A.shape] + own[A.shape], W[A.hue] + own[A.hue], W[A.spread] + own[A.spread]];
-        const rate = clock * 2 * (W[A.rotation] + own[A.rotation]);
-        rates[i] = rate;
-        const step = m.playing && m.hits ? m.hits[k] : null;
-        const at = step ? step.index : b ? b.index : null;
-        if (at !== lastHit[i]) {
-          const was = lastHit[i];
-          // Backwards or by more than three: a seek or another track, not stepped for.
-          if (at !== null && was !== null && at > was && at - was <= 3) {
-            held[i] = wants;
-            const often = Math.max(0.5, step ? step.perSecond : m.bps);
-            pending[i] += ((1 - c) * rate * (step ? step.weight : 1)) / often;
-          }
-          lastHit[i] = at;
-        }
-        const eased = pending[i] * Math.min(1, dt / 0.08);
-        turned[i] += c * rate * dt + eased;
-        pending[i] -= eased;
-        const follow = Math.min(1, dt / s.evolution[k]);
-        for (let e = 0; e < 3; e++) evolving[i][e] += (c * wants[e] + (1 - c) * held[i][e] - evolving[i][e]) * follow;
-        const [shape, hue, spread] = evolving[i];
-        const grown = clamp(shape, 0, 1.25);
-        parts.push({ turn: turned[i], size: 0.94 + 0.12 * grown, morph: (still ? 0.15 : 0.35) * grown, hue, spread: 2 ** clamp(spread, -2, 2) });
-        // Lights: its colour's points lit up, or dimmed where its routes take it below nothing.
-        hits.push(clamp(flashed(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), courses.lights[i]), -1, 3));
+        meters = { track: Array.from(track), bands: d.bands.map((v) => Array.from(v)) };
       }
       // The moments: another preset (as the dice give), another symmetry; a pinned setting stays as it is.
       // Seeded from the track and the beat they come on (else the half second), so every device playing it together
       // makes the same choice.
       const at = `${m.key}|${m.beat ? m.beat.index : Math.floor(m.position * 2)}`;
-      if (!still && moment(moments.reseed, W[A.reseed], now)) loadAnother(seedOf(`reseed|${at}`));
-      if (!still && moment(moments.symmetry, W[A.symmetry], now) && !(s.pins.includes('symmetry') && s.pins.includes('mirror'))) {
+      if (d.moments.reseed) loadAnother(seedOf(`reseed|${at}`));
+      if (d.moments.symmetry && !(s.pins.includes('symmetry') && s.pins.includes('mirror'))) {
         const rnd = randomFrom(seedOf(`symmetry|${at}`));
         if (!s.pins.includes('symmetry')) s.symmetry = ((s.symmetry + Math.floor(rnd() * 7)) % 8) + 1;
         if (!s.pins.includes('mirror')) s.mirror = rnd() < 0.5 ? 1 : 0;
@@ -804,9 +690,7 @@
         }
       }
       renderer.setFlame(frame ? { ...drawnFlame, center: frame.center, size: frame.size } : drawnFlame);
-      // Size: half its size at rest, all of it given all (by default the loudness: smaller when quiet, and a beat's
-      // swell).
-      const scaleNow = clamp(flashed(0.5 + 0.5 * W[A.size], courses.size), 0.25, 1.4);
+      const scaleNow = d.scale;
 
       // The Resolution setting (by default about a megapixel, `autoResolution`) of the screen's own pixels; the screen
       // scales it up.
@@ -827,7 +711,7 @@
       // The fluid: each band's part pushed where it lies by its lights (its hits, by default), outward from the middle
       // and round the way the part turns; a beat pushes out from the middle; the loudness keeps the flow going, the
       // swells add whirls. Where the picture is in the buffer: as the renderer's camera puts it.
-      const fluidNow = FLUID_FULL * grain(s.fluid, A.fluid);
+      const fluidNow = d.fluid;
       const forces: Force[] = [];
       if (fluidNow > 0) {
         if (now - partsMeasured > 250) {
@@ -853,7 +737,7 @@
           const out = Math.hypot(at[0] - 0.5, at[1] - 0.5) || 1;
           const ox = (at[0] - 0.5) / out;
           const oy = (at[1] - 0.5) / out;
-          const round = 0.6 * Math.sign(rates[i]);
+          const round = 0.6 * Math.sign(d.rates[i]);
           forces.push({ x: at[0], y: at[1], dx: 0.5 * (ox - oy * round), dy: 0.5 * (oy + ox * round), radius: 0.12, strength: light * fluidNow });
         }
         const beat = still ? 0 : track[T.beat];
@@ -867,36 +751,30 @@
         passes,
         {
           brightness: 1,
-          // Trails: each frame keeps this much of the last (longer trails given more, shorter given less).
-          keep: clamp(1 - 0.07 * 2 ** (-1.5 * W[A.trails]), 0.5, 0.985),
-          // Depth: the display's gamma, 1.5 to 6 (3 as before at its middle); higher lifts more of the faint detail.
-          gamma: 1.5 * 4 ** grain(s.depth, A.depth),
+          keep: d.keep,
+          gamma: d.gamma,
           vibrancy: 1,
           turn,
           scale: scaleNow,
           zoom: 1,
-          // Glow: as bright at rest (dimmer only while paused), brighter given more (by default a beat's flash).
-          flash: glow * clamp(flashed(1 + 0.5 * W[A.brightness], courses.glow), 0.15, 3),
+          flash: d.flash,
           hits,
           ceiling: s.brightness,
-          // Saturation: a third of its colour at rest, all of it given all (by default the loudness: paler when quiet).
-          saturation: clamp(flashed(0.35 + 0.65 * W[A.saturation], courses.saturation), 0, 1.25),
+          saturation: d.saturation,
           // The whole picture as bright however much of its frame the flame covers: a flame spread over most of it is
           // shown dimmer, one gathered into a few cells brighter (against one covering a third of its frame), so its
           // shape's changes are not flares.
           exposure: frame ? Math.min(1.5, Math.max(0.4, 0.33 / Math.max(0.05, frame.coverage))) : 1,
-          // Smoothing: up to 12 pixels (3 as before at its middle). Floor: from none to about the flame's mean density.
-          smoothing: 12 * grain(s.smoothing, A.smoothing) ** 2,
-          floor: floorOf(grain(s.floor, A.floor)),
+          smoothing: d.smoothing,
+          floor: d.floor,
           fire,
-          // Fluid: the light carried along a flow (none at 0), read back along it a little as it shows.
           fluid: fluidNow,
           forces,
-          flow: { energy: lit, swirl: 1 + 2 * track[T.swell] },
+          flow: { energy: d.lit, swirl: 1 + 2 * track[T.swell] },
           // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
           // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
           dt: dt * s.speed * (still ? 0.25 : 1),
-          warp: 0.12 * fluidNow,
+          warp: d.warp,
         },
         w,
         h,
