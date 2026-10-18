@@ -33,6 +33,8 @@ export const HELP: Record<string, string> = {
     'How faint an area of the picture can be and still show. At 0 everything shows, down to single stray points; at 100% everything fainter than the flame’s average fades to black, leaving only its brightest areas.',
   depth:
     'How much faint detail is lifted into view. At 0 only the bright structure shows, with strong contrast; at 100% the faint mist and grain around it are lifted almost as bright as the flame.',
+  fluid:
+    'How much the picture flows like smoke. At 0 the flame’s trails simply fade where they were drawn, and nothing of the fluid runs. At 100% they drift, curl and fold like smoke stirred by the music: each band’s part pushes where it lights up, beats push out from the centre, loudness keeps the flow going and swells add whirls. Above 0 it costs a little more of the graphics chip.',
   colours:
     'Where the colours of the flame’s six parts come from. Rainbow: from the Look settings Family, Hue, Lightness and Vividness. Cover: six colours from the playing album’s cover, the darkest for the bass and the lightest for the treble. Fire: deep red for the bass to yellow for the treble, the densest areas glowing white-hot.',
   symmetry: 'How many times the flame repeats around its centre, like the arms of a star. At 1 it does not repeat; at 8 it has eight arms.',
@@ -96,6 +98,7 @@ export const HELP: Record<string, string> = {
   'aspect:trails': 'As the row rises, the movement leaves longer trails; below 0, shorter ones.',
   'aspect:smoothing': 'As the row rises, the grain softens into haze, as the Smoothing setting does; below 0, it sharpens.',
   'aspect:floor': 'As the row rises, the faint areas fade out, as the Floor setting does; below 0, they come back.',
+  'aspect:fluid': 'As the row rises, the picture flows more like smoke, as the Fluid setting does; below 0, less.',
   'aspect:depth': 'As the row rises, more faint detail is lifted into view, as the Depth setting does; below 0, less.',
   'aspect:reseed':
     'Each time the row rises past half way, the dice are rolled for you: every Look setting you have not pinned moves to a new random value.',
