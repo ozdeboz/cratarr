@@ -532,6 +532,13 @@ in (the app's own, or the one it plays on), while the visuals show.
 playing (with the form of its settings, `v`, for later readers); a tap on one recalls it, every look setting pinned,
 and to the group; held (or a right click), one is renamed or deleted.
 
+**Standard** (the owner: "keep a snapshot of the current settings so we don't lose our current production … one
+standard, non-removable preset"): always first among them, it cannot be renamed or deleted, and it is data in the page,
+not the defaults read at the time, so later defaults leave it as it is. It holds the visuals as preview 62 made them:
+each track's own look (it pins nothing: recalled, every pin is let go and the playing track's look is drawn again) and
+everything else as it was then. A recall puts a snapshot's routes back whole, any route it does not have turned off,
+so routes set since, or defaults added since, do not stay on.
+
 **Measured** (the lab page against a stand-in server and live channel, the page playing on a player in a group): an
 empty group got this device's settings; a slider moved sent only itself; another device's change came in, this page's
 own echo and an older change did not; a change of its own still being sent stayed over another device's; the dice sent

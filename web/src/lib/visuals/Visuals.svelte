@@ -43,7 +43,7 @@
   import { longPress } from './longPress';
   import { coverPalette, type PaletteColour } from './palette';
   import { setVisualsSide } from './shown.svelte';
-  import { applyShared, followGroup, groupLook, share, SHARED_KEYS, SHARED_V, sharedNow, showing } from './shared.svelte';
+  import { applyShared, followGroup, groupLook, share, SHARED_KEYS, SHARED_V, sharedNow, showing, STANDARD } from './shared.svelte';
   import { held } from './held.svelte';
   import Help from './Help.svelte';
   import { FlameRenderer } from './render';
@@ -168,12 +168,25 @@
     }
   }
   function recall(snap: VisualsSnapshot) {
-    const settings = { ...snap.settings };
+    const settings: Record<string, unknown> = { ...snap.settings };
     delete settings.v;
+    // Its routes whole: any route it does not have (one set since, or a default added since) off.
+    if (settings.routes && typeof settings.routes === 'object') {
+      const off = Object.fromEntries([...Object.keys(DEFAULTS.routes), ...Object.keys(s.routes)].map((k) => [k, 0]));
+      settings.routes = { ...off, ...(settings.routes as Record<string, number>) };
+    }
     drawingNow = null;
-    applyShared({ ...settings, pins: [...PRESET_KEYS] });
     nextBlend = ANOTHER_MS;
-    share(sharedNow());
+    if (snap.id === STANDARD.id) {
+      // Each track's own look again: nothing pinned, the playing track's drawn anew (and sent to the group, as after
+      // the panel's Reset).
+      applyShared({ ...settings, pins: [] });
+      share(Object.fromEntries(SHARED_KEYS.filter((k) => !isLook(k)).map((k) => [k, $state.snapshot(s[k])])));
+      resets++;
+    } else {
+      applyShared({ ...settings, pins: [...PRESET_KEYS] });
+      share(sharedNow());
+    }
     showChrome();
   }
   function edit(snap: VisualsSnapshot) {
@@ -976,6 +989,7 @@
             <h3 use:held={'snapshots'}>Snapshots</h3>
             <div class="chips">
               <button class="chip save" use:held={'snapshots:save'} onclick={saveSnapshot}><Icon name="plus" size={14} /> Save</button>
+              <button class="chip" use:held={'snapshots:standard'} onclick={() => recall(STANDARD as unknown as VisualsSnapshot)}>{STANDARD.name}</button>
               {#each snapshots as snap (snap.id)}
                 {#if editing === snap.id}
                   <span class="editing">

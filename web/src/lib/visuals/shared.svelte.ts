@@ -185,3 +185,42 @@ async function flush() {
     if (sending === settings) sending = {};
   }
 }
+
+/** The visuals as Cratarr made them on 2026-10-18 (preview 62), kept as data so they can always be brought back, however
+ *  the defaults change later: each track's own look (nothing pinned), and everything else as it was then. Listed first
+ *  among the saved looks; it cannot be renamed or deleted. A recall puts back its routes whole: any route it does not
+ *  have is turned off. */
+export const STANDARD = {
+  id: 'standard',
+  name: 'Standard',
+  created: 0,
+  settings: {
+    v: 1,
+    pins: [],
+    colours: 0,
+    intensity: 1,
+    flash: 1,
+    speed: 1,
+    smoothing: 0.5,
+    floor: 0,
+    depth: 0.5,
+    lighting: [0.2, 0.18, 0.15, 0.13, 0.1, 0.08],
+    evolution: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
+    continuity: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+    routes: {
+      'loudness|-|size': 1,
+      'loudness|-|saturation': 1,
+      'loudness|-|rotation': 0.2,
+      'beat|-|brightness': 0.2,
+      'beat|-|size': 0.08,
+      ...Object.fromEntries(
+        [0, 1, 2, 3, 4, 5].flatMap((b) => [
+          [`level|${b}|shape`, 1],
+          [`level|${b}|rotation`, 0.6],
+          [`level|${b}|hue`, 0.08],
+          [`hits|${b}|lights`, 1],
+        ]),
+      ),
+    },
+  },
+} as const;

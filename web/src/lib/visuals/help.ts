@@ -54,6 +54,7 @@ export const HELP: Record<string, string> = {
   pin: 'You moved this setting, so it keeps your value when the next track starts, and the dice leave it alone. Tap the pin to let each track set it again.',
   snapshots:
     'Saved looks. Tap one to bring it back: everything that shapes the picture returns as it was when saved, and its Look settings are pinned, so the next track keeps it. Hold one to rename or delete it. They are kept on the server, so every device sees them.',
+  'snapshots:standard': 'The visuals as Cratarr first made them, kept so they can always be brought back. It cannot be renamed or deleted.',
   'snapshots:save':
     'Saves everything that shapes the picture now (the Look, Colours, Flash, the grain, the routes and the band times), named after the playing track.',
   dice: 'Another look: every Look setting you have not pinned moves to a new random value.',
