@@ -9,6 +9,7 @@
 import { newAspects, stepAspects } from './aspects';
 import type { Beats } from './beats';
 import { BUDGETED, budgetOf } from './budget';
+import { settingsReport } from './effects';
 import { Meters, screenTile, type MeterValues } from './meters';
 import { musicOf, newMusicState } from './music.svelte';
 import { settingsOf, type Recipe, type Scope } from './recipe';
@@ -91,6 +92,8 @@ export function* prechecking(
       look: null,
       symmetry: a.moments.symmetry,
       tiles: [screenTile(k * dt, luminance)],
+      // What the look's effects add, as the visuals' meters take it (65): so a recipe's effects are held to the limits.
+      extra: settingsReport(settings, a.effects),
     });
     if (k * dt < SETTLE_S) continue;
     // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the governor holds

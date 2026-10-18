@@ -43,10 +43,20 @@ export const HELP: Record<string, string> = {
     'Flow: how much of what the routes into the Flow column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 the music gives the flow no life.',
   swirl:
     'Swirl: how much of what the routes into the Swirl column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 nothing sets it whirling.',
+  presence:
+    'Presence: how much of what the routes into the Presence column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 every part keeps its usual share of the picture, whatever its sound.',
+  waves:
+    'Waves: how much of what the routes into the Waves column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 no waves run.',
   smoothing:
     'Where few points have landed, the picture looks grainy. Smoothing softens those sparse areas into a soft blur, while the dense areas stay sharp. At 0 you see the raw grain of single points; at 100% the sparse areas blur up to twelve pixels wide. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
   haze:
     'Haze: the faint mist and grain around the flame. At 0 it shows as the visuals always showed it. Towards +100% more of it is lifted into view, until it is almost as bright as the flame; towards −100% less, and the faintest areas fade to black, leaving the bright structure clean. What you set here is the most it reaches either way: routes into it, and Behaviour’s walk, only ever take it toward 0.',
+  tunnel:
+    'Tunnel: the picture streams outward from the middle for ever, as if flying into it, while the flame itself keeps its size. This is how fast it goes at most: at 0 it is off, at 100% fastest. It can run with Dive. Routes into it, and Behaviour’s walk, only ever take it slower.',
+  dive:
+    'Dive: the view zooms for ever into one part of the flame that is a small, turned copy of the whole, so the zoom never reaches an end. This is how fast it goes at most: at 0 it is off, at 100% fastest. It can run with Tunnel. Routes into it, and Behaviour’s walk, only ever take it slower.',
+  effects:
+    'Effects: how strongly the look’s effects show (Effect 1 to 3 and Loop, in the Look). At 100% each as strongly as its Amount; at 0 none of them. Routes into it, and Behaviour’s walk, only ever take it lower.',
   fluid:
     'How much the picture flows like smoke. At 0 the flame’s trails simply fade where they were drawn, and nothing of the fluid runs. Up to 100% they drift and curl more and more in a flow the music stirs, gently by design: at 100% a strong flow, still a flame, not all smoke. How the music stirs it is in the routes’ Stir, Flow and Swirl columns: by default each band’s hits kick its part, beats push out from the centre in a pattern that turns with the tempo, downbeats shove harder and a new section sets a whirl going. Above 0 it costs a little more of the graphics chip. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
   family:
@@ -66,6 +76,26 @@ export const HELP: Record<string, string> = {
   hue: 'Turns all the colours round the colour wheel together, keeping how they relate (not with Cover or Fire). 0° and 360° are the same colours: a full turn.',
   lightness: 'How light the colours are (not with Cover or Fire). At 0 they are deep and rich; at 100% light and pastel.',
   vividness: 'How vivid the colours are (not with Cover or Fire). At 0 they are soft and muted; at 100% as vivid as they go.',
+  facets:
+    'Facets: where the picture flows like smoke (Fluid above 0), it is carried along in cells, each holding one light, like a mosaic moving with the flow. At 0 there are none; towards 100% the cells’ edges grow harder, until they are hard tiles. Without Fluid it does nothing.',
+  lattice:
+    'The shape of the cells Facets makes: Square or Hex.',
+  fx1:
+    'Effect 1: an effect over the whole picture, such as a kaleidoscope or posterize; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
+  fx1Amount:
+    'How strongly Effect 1 shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
+  fx2:
+    'Effect 2: an effect over the whole picture, such as a kaleidoscope or posterize; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
+  fx2Amount:
+    'How strongly Effect 2 shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
+  fx3:
+    'Effect 3: an effect over the whole picture, such as a kaleidoscope or posterize; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
+  fx3Amount:
+    'How strongly Effect 3 shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
+  fxLoop:
+    'Loop: an effect inside the flame’s trails rather than over the picture. It acts each frame on the light as it is carried on, so it builds up into new shapes. Only effects that move the picture; None for none.',
+  fxLoopAmount:
+    'How strongly the Loop effect acts. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
   final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',
   pin: 'You moved this setting, so it keeps your value when the next track starts, and Another look and the dice leave it alone. Tap the pin to let each track set it again.',
   snapshots:
@@ -142,6 +172,18 @@ export const HELP: Record<string, string> = {
     'How much life the flow has. By default the loudness sets its energy and the beat makes it breathe with the pulse. Below 0 the row calms it instead. Loudness does not scale it beyond its own row.',
   'aspect:swirl':
     'How much the flow whirls. By default a swell sets it turning and a new section starts a whirl. Below 0 it whirls the other way. Loudness does not scale it.',
+  'aspect:presence':
+    'As the row rises, its part of the flame takes more of the picture (more of the points are drawn as it); below 0, less. In the bands’ rows, each part follows its own sound.',
+  'aspect:waves':
+    'As the row rises, slow giant waves run across the picture, higher the more it gives; below 0 they run the other way. With Fluid the light rides on them as a broad current; without it the picture bends along them.',
+  'aspect:tunnel':
+    'As the row rises, Tunnel comes up to the speed its slider sets; below 0, the row slows it instead. Never faster than the slider.',
+  'aspect:dive':
+    'As the row rises, Dive comes up to the speed its slider sets; below 0, the row slows it instead. Never faster than the slider.',
+  'aspect:effects':
+    'As the row rises, the look’s effects come up to what Effects sets; below 0, the row takes them down instead. Never above the slider.',
+  'aspect:facets':
+    'As the row rises, Facets comes up to what its slider sets; below 0, the row takes it down. Never above the slider.',
   'aspect:look':
     'As the row rises, the flame’s look walks: its Detail, Twist, Warp, colours, Spread and Purity move a little further in a direction that changes every bar, never far from where the track set them. Below 0 the look walks back. Pinned settings stay where they are.',
   'aspect:behaviour':

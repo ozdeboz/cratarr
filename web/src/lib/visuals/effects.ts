@@ -12,6 +12,8 @@
 // change: the amounts are uniforms. Each effect says what it adds to the meters (meters.ts), so the governor holds it
 // back as it holds the flame back. Pure: no GL here.
 
+import type { VisualSettings } from './settings.svelte';
+
 /** The meters an effect adds to, each a second at its amount (the meters' own units). */
 export type Report = Partial<Record<'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping', number>>;
 
@@ -145,4 +147,26 @@ vec2 fx_loop(vec2 uv, float a, float t, float aspect) {
   p = fx_${e.name}(p, a, t);
   return vec2(p.x / aspect, p.y) * 0.5 + 0.5;
 }`;
+}
+
+/** The look's effects as a setting holds them (settings.svelte.ts). */
+export type EffectSettings = Pick<VisualSettings, 'fx1' | 'fx2' | 'fx3' | 'fx1Amount' | 'fx2Amount' | 'fx3Amount' | 'fxLoop' | 'fxLoopAmount'>;
+
+/** The look's effects for the renderer (render.ts `Shown.effects`): each amount times what the Effects setting's routes
+ *  let through (`level`); `t` the track's own time (s). */
+export const effectsNow = (how: EffectSettings, level: number, t: number) => ({
+  ids: [how.fx1, how.fx2, how.fx3].map(Math.round),
+  amounts: [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a) => a * level),
+  loop: Math.round(how.fxLoop),
+  loopAmount: how.fxLoopAmount * level,
+  t,
+});
+
+/** What the look's effects add to the meters a second, the picture's and the loop's together: the same for the visuals'
+ *  meters and the precheck's, so the governor and the dice hold an effect alike. */
+export function settingsReport(how: EffectSettings, level: number): Report {
+  const fx = effectsNow(how, level, 0);
+  const out: Report = { ...reportOf(fx.ids, fx.amounts, 'picture') };
+  for (const [k, v] of Object.entries(reportOf([fx.loop], [fx.loopAmount], 'loop')) as [keyof Report, number][]) out[k] = (out[k] ?? 0) + v;
+  return out;
 }

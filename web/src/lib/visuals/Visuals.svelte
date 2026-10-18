@@ -68,7 +68,7 @@
   import { newStirring, stir } from './stirring';
   import { FlameRenderer } from './render';
   import { DIVE_MOST, TUNNEL_MOST } from './zoom';
-  import { effectOf, reportOf } from './effects';
+  import { effectOf, effectsNow, settingsReport } from './effects';
   import {
     A,
     ASPECT_LABEL,
@@ -547,23 +547,6 @@
   const effectName = (v: number) => {
     const e = effectOf(Math.round(v));
     return e ? e.name[0].toUpperCase() + e.name.slice(1) : 'None';
-  };
-  // The look's effects for the renderer (render.ts `Shown.effects`), each amount times what the Effects setting's
-  // routes let through; and what they add to the meters.
-  const effectsNow = (how: VisualSettings, level: number, t: number) => ({
-    ids: [how.fx1, how.fx2, how.fx3].map(Math.round),
-    amounts: [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a) => a * level),
-    loop: Math.round(how.fxLoop),
-    loopAmount: how.fxLoopAmount * level,
-    t,
-  });
-  const effectsReport = (how: VisualSettings, level: number) => {
-    const fx = effectsNow(how, level, 0);
-    const picture = reportOf(fx.ids, fx.amounts, 'picture');
-    const loop = reportOf([fx.loop], [fx.loopAmount], 'loop');
-    const out: Record<string, number> = { ...picture };
-    for (const [k, v] of Object.entries(loop)) out[k] = (out[k] ?? 0) + (v ?? 0);
-    return out;
   };
   const LOOK: Row[] = [
     { key: 'family', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? '' },
@@ -1404,7 +1387,7 @@
       const stats: FrameStats = {
         t: now / 1000,
         // What the effects add to the meters (effects.ts), beside the flame's own.
-        extra: effectsReport(how, d.effects),
+        extra: settingsReport(how, d.effects),
         // The dive's turn counts as each part's.
         turnRates: renderer?.diveTurnRate ? d.rates.map((r) => r + renderer!.diveTurnRate) : d.rates,
         shape: d.shape,
