@@ -57,7 +57,7 @@ export const HELP: Record<string, string> = {
   'snapshots:standard': 'The visuals as Cratarr first made them, kept so they can always be brought back. It cannot be renamed or deleted.',
   'snapshots:save':
     'Saves everything that shapes the picture now (the Look, Colours, Flash, the grain, the routes and the band times), named after the playing track.',
-  dice: 'Another look: every Look setting you have not pinned moves to a new random value.',
+  another: 'Another look: every Look setting you have not pinned moves to a new random value.',
 
   // The bands, as headings of their own settings and as the routes' choice of band.
   'band:0': 'Sub: the deepest bass, below 60 Hz. Kick drums and sub-bass, felt more than heard.',

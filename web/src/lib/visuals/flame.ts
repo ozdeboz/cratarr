@@ -565,6 +565,34 @@ export function* measuring(flame: Flame, steps = 6000, slice = 1500): Generator<
   return { center, size, coverage: cells.reduce((s, c) => s + c, 0) / cells.length };
 }
 
+/** Where each band's part lies as drawn (its final transform taken, before the symmetry's copies carry it round): the
+ *  middle of the points its transform takes, on the CPU over `steps` of the chaos game; null for a part with none.
+ *  The fluid is pushed there (decision 0047). */
+export function partsAt(flame: Flame, steps = 1200): ([number, number] | null)[] {
+  const rnd = randomFrom(0x9a27);
+  const pick = picker(flame.xforms);
+  const sums = Array.from({ length: PARTS }, () => [0, 0, 0]);
+  let x = rnd() * 2 - 1;
+  let y = rnd() * 2 - 1;
+  for (let i = 0; i < steps; i++) {
+    const k = pick(rnd());
+    const p = apply(flame.xforms[k], x, y, rnd);
+    if (!Number.isFinite(p[0]) || !Number.isFinite(p[1]) || Math.abs(p[0]) > 1e4 || Math.abs(p[1]) > 1e4) {
+      x = rnd() * 2 - 1;
+      y = rnd() * 2 - 1;
+      continue;
+    }
+    [x, y] = p;
+    if (i < 20 || k >= PARTS || !flame.xforms[k].turns) continue;
+    const shown = flame.final ? apply(flame.final, x, y, rnd) : p;
+    if (!Number.isFinite(shown[0]) || !Number.isFinite(shown[1]) || Math.abs(shown[0]) > 1e4 || Math.abs(shown[1]) > 1e4) continue;
+    sums[k][0] += shown[0];
+    sums[k][1] += shown[1];
+    sums[k][2]++;
+  }
+  return sums.map(([sx, sy, n]) => (n > 0 ? [sx / n, sy / n] : null));
+}
+
 /** Chooses a transform by weight, given a number in 0..1. */
 export function picker(xforms: Xform[]): (r: number) => number {
   const total = xforms.reduce((s, x) => s + x.weight, 0);

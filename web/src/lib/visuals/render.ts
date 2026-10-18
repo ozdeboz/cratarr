@@ -11,6 +11,7 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import { colourOf, PARTS, type Flame } from './flame';
+import { Fluid, gridFor, type Flow, type Force } from './fluid';
 
 // The six parts, rotations up to eight arms and as many mirrors.
 const MAX_XFORMS = 22;
@@ -329,6 +330,11 @@ uniform float uSmooth;
 uniform float uLevels;
 uniform float uFloor;
 uniform float uFire;
+// The fluid's flow (cells a second, its grid's), the seconds of it the picture is read back along (0: none), and a
+// cell's size in texture coordinates.
+uniform sampler2D uVelocity;
+uniform float uWarp;
+uniform vec2 uUvPerCell;
 out vec4 o;
 ${BAD}
 // A sample of the buffer, none of it anything but a number (whatever a driver did to it before the scrub came by).
@@ -339,6 +345,7 @@ vec3 heat(float t) { return clamp(vec3(2.2 * t, 2.2 * t - 0.8, 4.0 * t - 3.3), 0
 void main() {
   // A beat's swell: the picture drawn a little larger about its middle.
   vec2 uv = 0.5 + (gl_FragCoord.xy / uView - 0.5) / uZoom;
+  if (uWarp > 0.0) uv -= uWarp * textureLod(uVelocity, uv, 0.0).xy * uUvPerCell;
   vec2 px = 1.0 / vec2(textureSize(uAcc, 0));
   vec4 a = at(uv, 0.0);
   // The pixel's points by band: shares of one.
@@ -429,6 +436,14 @@ export type Shown = {
   floor: number;
   /** How much of a fire's heat shows (0..1): the densest points yellow-white, the faintest a deep red. */
   fire: number;
+  /** How much the light flows (0..1, decision 0047): 0 fades it where it was drawn, as before; above, it is carried
+   *  along by the fluid (fluid.ts), pushed by `forces` and moving as `flow` says, `dt` seconds a frame, and the picture
+   *  is read back along the flow by `warp` seconds of it. */
+  fluid: number;
+  forces: Force[];
+  flow: Flow;
+  dt: number;
+  warp: number;
 };
 
 export class FlameRenderer {
@@ -459,6 +474,11 @@ export class FlameRenderer {
   private bandRgb = new Float32Array(PARTS * 3);
   /** The colours buffer's levels above its first (0 where they cannot be filtered). */
   private levels = 0;
+  /** The fluid the light flows in (decision 0047): made the first time the Fluid setting asks for it (nothing of it
+   *  before), let go after ten seconds unasked, and not made again where this device cannot (`fluidOut`). */
+  private fluid: Fluid | null = null;
+  private fluidOut = false;
+  private fluidUnwanted = 0;
   private accFbo: WebGLFramebuffer | null = null;
   private empty: WebGLVertexArrayObject;
   private flip = 0;
@@ -554,6 +574,7 @@ export class FlameRenderer {
   resize(width: number, height: number) {
     if (width === this.width && height === this.height) return;
     const gl = this.gl;
+    this.fluid?.resize(...gridFor(width, height));
     this.width = width;
     this.height = height;
     for (const x of [...this.accs, ...this.bandSets, ...this.bandSetsB]) gl.deleteTexture(x);
@@ -755,12 +776,26 @@ export class FlameRenderer {
     gl.viewport(0, 0, this.width, this.height);
     gl.enable(gl.BLEND);
 
-    // Fade what is there.
-    gl.useProgram(this.fade);
-    gl.uniform1f(this.u(this.fade, 'uKeep'), look.keep);
-    gl.blendFunc(gl.ZERO, gl.SRC_ALPHA);
-    gl.bindVertexArray(this.empty);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    // Fade what is there; with the Fluid setting, carry it along the flow as it fades, into the other set of buffers
+    // (as the scrub copies), and draw on there.
+    const fluid = this.fluidFor(look.fluid);
+    if (fluid) {
+      fluid.push(look.forces);
+      fluid.step(look.dt, look.flow);
+      const other = 1 - this.cur;
+      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height);
+      this.cur = other;
+      this.use();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
+      gl.viewport(0, 0, this.width, this.height);
+      gl.enable(gl.BLEND);
+    } else {
+      gl.useProgram(this.fade);
+      gl.uniform1f(this.u(this.fade, 'uKeep'), look.keep);
+      gl.blendFunc(gl.ZERO, gl.SRC_ALPHA);
+      gl.bindVertexArray(this.empty);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
 
     // The points: each pass one step of the chaos game for every point, drawn where it lands.
     gl.useProgram(this.iterate);
@@ -827,9 +862,41 @@ export class FlameRenderer {
     gl.uniform1f(this.u(this.show, 'uLevels'), levels);
     gl.uniform1f(this.u(this.show, 'uFloor'), look.floor);
     gl.uniform1f(this.u(this.show, 'uFire'), look.fire);
+    const warp = fluid && look.warp > 0 ? look.warp : 0;
+    gl.uniform1f(this.u(this.show, 'uWarp'), warp);
+    if (fluid && warp) {
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, fluid.velocity);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(this.u(this.show, 'uVelocity'), 3);
+      gl.uniform2fv(this.u(this.show, 'uUvPerCell'), fluid.uvPerCell);
+    }
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
+  }
+
+  /** The fluid, where the Fluid setting asks for one (`amount` over 0) and this device can make it; let go after ten
+   *  seconds unasked, so a passing 0 does not make it again and again. */
+  private fluidFor(amount: number): Fluid | null {
+    const now = performance.now();
+    if (!(amount > 0)) {
+      if (this.fluid && now - this.fluidUnwanted > 10_000) {
+        this.fluid.dispose();
+        this.fluid = null;
+      }
+      return null;
+    }
+    this.fluidUnwanted = now;
+    if (this.fluid || this.fluidOut) return this.fluid;
+    try {
+      if (!Fluid.supported(this.gl)) throw new Error('not supported');
+      this.fluid = new Fluid(this.gl, ...gridFor(this.width, this.height));
+    } catch (e) {
+      console.warn('Visuals: no fluid on this device', e);
+      this.fluidOut = true;
+    }
+    return this.fluid;
   }
 
   /** Whether the GPU took the context away (the page should stop and drop the renderer). */
@@ -839,6 +906,8 @@ export class FlameRenderer {
 
   dispose() {
     const gl = this.gl;
+    this.fluid?.dispose();
+    this.fluid = null;
     for (const b of this.buffers) gl.deleteBuffer(b);
     for (const v of this.vaos) gl.deleteVertexArray(v);
     gl.deleteVertexArray(this.empty);

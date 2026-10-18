@@ -29,6 +29,7 @@
     LENSES,
     measuring,
     PARTS,
+    partsAt,
     PRESET_KEYS,
     randomFrom,
     drawing as presetDraws,
@@ -46,6 +47,7 @@
   import { applyShared, followGroup, groupLook, share, SHARED_KEYS, SHARED_V, sharedNow, showing, STANDARD } from './shared.svelte';
   import { held } from './held.svelte';
   import Help from './Help.svelte';
+  import type { Force } from './fluid';
   import { FlameRenderer } from './render';
   import {
     A,
@@ -248,6 +250,7 @@
     { key: 'smoothing', label: 'Smoothing', step: 0.05, text: percent },
     { key: 'floor', label: 'Floor', step: 0.05, text: percent },
     { key: 'depth', label: 'Depth', step: 0.05, text: percent },
+    { key: 'fluid', label: 'Fluid', step: 0.05, text: percent },
   ];
   const LOOK: Row[] = [
     { key: 'form', label: 'Form', step: 1, text: (v) => `${v}` },
@@ -505,6 +508,11 @@
       course[1] += (course[0] - course[1]) * follow2;
       return course[1] + s.flash * (v - course[1]);
     };
+    // The fluid (decision 0047): where each band's part lies on the screen (measured four times a second while the light
+    // flows), and which way each part turns (its pushes curl with it).
+    let partsWhere: ([number, number] | null)[] = [];
+    let partsMeasured = 0;
+    const rates = Array<number>(PARTS).fill(0);
     // The grain's settings (0..1) as their routes move them: a route's full amount moves one half of its range.
     const grain = (setting: number, aspect: number) => clamp(setting + 0.5 * got.whole[aspect], 0, 1);
     // Floor: none at 0, then from 0.002 of the display's scale (a stray speck's) up to 1 (the flame's mean), evenly in
@@ -716,6 +724,7 @@
         const c = still ? 1 : s.continuity[k];
         const wants = [W[A.shape] + own[A.shape], W[A.hue] + own[A.hue], W[A.spread] + own[A.spread]];
         const rate = clock * 2 * (W[A.rotation] + own[A.rotation]);
+        rates[i] = rate;
         const step = m.playing && m.hits ? m.hits[k] : null;
         const at = step ? step.index : b ? b.index : null;
         if (at !== lastHit[i]) {
@@ -779,6 +788,9 @@
         }
       }
       renderer.setFlame(frame ? { ...drawnFlame, center: frame.center, size: frame.size } : drawnFlame);
+      // Size: half its size at rest, all of it given all (by default the loudness: smaller when quiet, and a beat's
+      // swell).
+      const scaleNow = clamp(flashed(0.5 + 0.5 * W[A.size], courses.size), 0.25, 1.4);
 
       // The Resolution setting (by default about a megapixel, `autoResolution`) of the screen's own pixels; the screen
       // scales it up.
@@ -793,6 +805,45 @@
       // The points fall into a buffer of at most about 0.6 megapixels; the screen scales it up (softer, and cheaper).
       const scale = Math.min(1, Math.sqrt(600_000 / (w * h)));
       renderer.resize(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)));
+      // The fluid: each band's part pushed where it lies by its lights (its hits, by default), outward from the middle
+      // and round the way the part turns; a beat pushes out from the middle; the loudness keeps the flow going, the
+      // swells add whirls. Where the picture is in the buffer: as the renderer's camera puts it.
+      const fluidNow = grain(s.fluid, A.fluid);
+      const forces: Force[] = [];
+      if (fluidNow > 0) {
+        if (now - partsMeasured > 250) {
+          partsMeasured = now;
+          const cam = frame ?? drawnFlame;
+          const aspect = w / h;
+          const cos = Math.cos(turn);
+          const sin = Math.sin(turn);
+          partsWhere = partsAt(drawnFlame).map((p) => {
+            if (!p) return null;
+            let x = ((p[0] - cam.center[0]) * scaleNow) / cam.size;
+            let y = ((p[1] - cam.center[1]) * scaleNow) / cam.size;
+            [x, y] = [cos * x - sin * y, sin * x + cos * y];
+            if (aspect > 1) x /= aspect;
+            else y *= aspect;
+            return [x * 0.5 + 0.5, y * 0.5 + 0.5];
+          });
+        }
+        for (let i = 0; i < PARTS; i++) {
+          const at = partsWhere[i];
+          const light = Math.max(0, hits[i] ?? 0);
+          if (!at || light < 0.02) continue;
+          const out = Math.hypot(at[0] - 0.5, at[1] - 0.5) || 1;
+          const ox = (at[0] - 0.5) / out;
+          const oy = (at[1] - 0.5) / out;
+          const round = 0.6 * Math.sign(rates[i]);
+          forces.push({ x: at[0], y: at[1], dx: 0.5 * (ox - oy * round), dy: 0.5 * (oy + ox * round), radius: 0.12, strength: light * fluidNow });
+        }
+        const beat = still ? 0 : track[T.beat];
+        if (beat > 0.05)
+          for (let k = 0; k < 4; k++) {
+            const a = turn + (k * Math.PI) / 2;
+            forces.push({ x: 0.5 + 0.12 * Math.cos(a), y: 0.5 + 0.12 * Math.sin(a), dx: 0.4 * Math.cos(a), dy: 0.4 * Math.sin(a), radius: 0.1, strength: beat * fluidNow });
+          }
+      }
       renderer.frame(
         passes,
         {
@@ -803,9 +854,7 @@
           gamma: 1.5 * 4 ** grain(s.depth, A.depth),
           vibrancy: 1,
           turn,
-          // Size: half its size at rest, all of it given all (by default the loudness: smaller when quiet, and a
-          // beat's swell).
-          scale: clamp(flashed(0.5 + 0.5 * W[A.size], courses.size), 0.25, 1.4),
+          scale: scaleNow,
           zoom: 1,
           // Glow: as bright at rest (dimmer only while paused), brighter given more (by default a beat's flash).
           flash: glow * clamp(flashed(1 + 0.5 * W[A.brightness], courses.glow), 0.15, 3),
@@ -821,6 +870,12 @@
           smoothing: 12 * grain(s.smoothing, A.smoothing) ** 2,
           floor: floorOf(grain(s.floor, A.floor)),
           fire,
+          // Fluid: the light carried along a flow (none at 0), read back along it a little as it shows.
+          fluid: fluidNow,
+          forces,
+          flow: { energy: lit, swirl: 1 + 2 * track[T.swell] },
+          dt,
+          warp: 0.12 * fluidNow,
         },
         w,
         h,
@@ -931,8 +986,8 @@
           onpointerup={(e) => e.stopPropagation()}
           onclick={togglePanel}><Icon name="sliders" size={24} /></button
         >
-        <button class="round" aria-label="Another look" use:held={'dice'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={rollAnother}
-          ><Icon name="dice" size={26} /></button
+        <button class="round" aria-label="Another look" use:held={'another'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={rollAnother}
+          ><Icon name="visuals" size={24} /></button
         >
         {#if docked}
           <button class="round" aria-label="Over the page" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => setVisualsSide(false)}

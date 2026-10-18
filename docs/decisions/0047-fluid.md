@@ -52,7 +52,22 @@ with `gridFor(width, height)`; per frame `push(forces)` (where, which way, how f
 width, height)` in place of the fade (all three of the renderer's targets, into its other set); `velocity` (cells a
 second, `uvPerCell` to texture coordinates) for the warp; `resize`, `dispose`.
 
-(How the renderer and the music use it: to be added with that side.)
+**The renderer's side** (render.ts): the fluid is made the first time the Fluid setting asks for it (nothing of it
+before, and nothing where it cannot be made: the setting then does nothing), resized with the buffer, and let go after
+ten seconds unasked (so a route passing through none does not make it again and again). A frame with Fluid above none
+pushes, steps, and advects the light into the other set of buffers (the one the scrub copies into) and draws the points
+on there; the display reads the picture back along the flow by `warp` seconds of it (0.12 at Fluid 100 %). At none the
+fade runs as before, and the display does not sample the flow.
+
+**The music's side** (Visuals.svelte): Fluid is a setting of the show (0 to 100 %, none by default, shared in a sync
+group, none in the Standard snapshot) and a route column (a route's full amount moving it half its range, as the
+grain's). Four times a second, while it flows, where each band's part lies on the screen is measured on the CPU (the
+middle of the points its transform takes, its lens taken, through the renderer's camera: flame.ts `partsAt`). Each
+frame each part is pushed there by its Lights (its hits, by default; through the routes, whatever lights it), outward
+from the middle and round the way the part turns, harder with Fluid; a beat pushes out from the middle at four points;
+the loudness as heard is the flow's energy (a quiet passage settles, a loud one flows on), the swells add whirls.
+Measured in the lab: at none nothing made and the picture as before; at 30 % the flame keeps its shape, curling where
+its parts are lit and settling in a quiet section; at 100 % the light is smoke.
 
 ## Consequences
 

@@ -39,6 +39,9 @@ export type VisualSettings = Preset & {
   smoothing: number;
   floor: number;
   depth: number;
+  /** How much the light flows (0..1, decision 0047): 0 its trails only fade where they were drawn, as before (nothing of
+   *  the fluid made); above it they are carried along by a flow the music stirs, like smoke. Its route moves it. */
+  fluid: number;
   /** The colours: 0 the preset's own (its family), 1 the playing track's cover's, 2 a fire's. */
   colours: number;
   /** The look's settings the owner moved: kept as they are when a track or the dice load another preset, until
@@ -70,6 +73,7 @@ export const DEFAULTS: VisualSettings = {
   smoothing: 0.5,
   floor: 0,
   depth: 0.5,
+  fluid: 0,
   colours: 0,
   // The look: the playing track's preset replaces these (those not pinned) as soon as the visuals show.
   form: 0,
@@ -110,6 +114,7 @@ export const RANGES: Record<Ranged, [number, number]> = {
   smoothing: [0, 1],
   floor: [0, 1],
   depth: [0, 1],
+  fluid: [0, 1],
   colours: [0, 2],
   form: [0, FORMS - 1],
   detail: [0, 1],
