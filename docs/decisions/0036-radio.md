@@ -1,6 +1,7 @@
 # 0036: Radio: the music goes on, from the owner's own library
 
-- Status: proposed
+- Status: accepted (built 2026-10-16, ea8ab39d and on, as amended: Radio's inserts and Autoplay apart; marked at the
+  owner's word, 2026-10-19)
 - Date: 2026-10-16
 - Builds on: 0030 (OpenSubsonic), 0031 (Play On), 0032 (Cratarr is its own source), 0033 (Cratarr holds the queues;
   lanes, repeat)
