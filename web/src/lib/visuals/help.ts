@@ -61,6 +61,9 @@ export const HELP: Record<string, string> = {
   'snapshots:save':
     'Saves the visuals as they are now: every setting, from the Look and the routes to Points and Brightness, with a small picture, named after the playing track and the time (tap the name to change it). In a sync group, bringing it back sets the shared settings on every device, and Points, Steps, Resolution, FPS and Brightness only on the device you bring it back on.',
   another: 'Another look: every Look setting you have not pinned moves to a new random value.',
+  wild:
+    'How lively the visuals may get. They are kept within limits on how fast they turn, how quickly their shape and colours change, how much they pump in size and how often a new look comes. At 0 they stay within half of those limits, calm; at 100% they may go to twice them, wild. Loud music gets a little more room than quiet. Flashes over a quarter of the screen stay at most three a second either way.',
+  held: 'Held back: the visuals are doing more than Wild allows just now (or flashing over a large area too often), so this is turned down for a moment. It eases back by itself.',
 
   // The bands, as headings of their own settings and as the routes' choice of band.
   'band:0': 'Sub: the deepest bass, below 60 Hz. Kick drums and sub-bass, felt more than heard.',
