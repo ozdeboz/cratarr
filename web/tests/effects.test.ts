@@ -86,3 +86,22 @@ test('each effect has at most two knobs, each a label and its text; the rows a c
   assert.equal(kaleid.knobs[0].text(0.5), '7');
   assert.equal(kaleid.knobs[1].text(0.5), 'None');
 });
+
+test('the governor reaches the effects: the swing always, and the lever of each meter an effect counts toward', async () => {
+  const { heldBack, effectsNow, settingsReport } = await import('../src/lib/visuals/effects.ts');
+  const open = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
+  // Posterize counts toward no meter: only the flashes' swing holds it.
+  assert.equal(heldBack(2, 1, [0.5, 0.5], { ...open, pace: 0.3, evolution: 4 }), 1);
+  assert.equal(heldBack(2, 1, [0.5, 0.5], { ...open, swing: 0.5 }), 0.5);
+  // Kaleid spinning counts as motion and shape churn: the pace and the evolving both hold it.
+  assert.ok(Math.abs(heldBack(1, 1, [0.5, 1], { ...open, pace: 0.5, evolution: 2 }) - 0.25) < 1e-12);
+  // Not spinning, only shape churn: the pace does not.
+  assert.ok(Math.abs(heldBack(1, 1, [0.5, 0.5], { ...open, pace: 0.5, evolution: 2 }) - 0.5) < 1e-12);
+  // Pulse counts as zoom pumping: the size holds it.
+  assert.ok(Math.abs(heldBack(16, 1, [0.5, 0.5], { ...open, size: 0.4 }) - 0.4) < 1e-12);
+  const how = { fx1: 1, fx1Amount: 1, fx2: 1, fx2Amount: 1, fx3: 0, fx3Amount: 0, fxLoop: 0, fxLoopAmount: 0, fx1K1: 0.5, fx1K2: 1, fx2K1: 0.5, fx2K2: 0.5, fx3K1: 0.5, fx3K2: 0.5, fxLoopK1: 0.5, fxLoopK2: 0.5 };
+  const held = effectsNow(how, 1, 0, null, { ...open, pace: 0.5 });
+  assert.deepEqual(held.amounts.map((a) => +a.toFixed(3)), [0.5, 1, 0], 'Kaleid spinning held by the pace; Pulse not');
+  // What they count is counted as held: the governor and the precheck read the same.
+  assert.ok(settingsReport(how, 1, { ...open, pace: 0.5 }).motion! < settingsReport(how, 1).motion!);
+});

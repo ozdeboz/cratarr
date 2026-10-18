@@ -40,7 +40,7 @@
     type Preset,
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
-  import { newAspects, stepAspects } from './aspects';
+  import { newAspects, stepAspects, wavesMotion } from './aspects';
   import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
   import { curveOf, endOf, heightAt, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
   import CurveEditor from './CurveEditor.svelte';
@@ -1337,6 +1337,9 @@
         }
       }
       const beatNow = m.playing && !still ? m.beat : null;
+      // The waves' height, held back with the pace as the turning is (their phase stays the track's, so a group waves
+      // alike).
+      const wavesNow = still ? 0 : d.given[A.waves] * governor.levers.pace;
       const stirred = stir(stirring, {
         t: now / 1000,
         dt,
@@ -1353,7 +1356,7 @@
         loudness: d.lit,
         swell: track[T.swell],
         bps: m.bps,
-        waves: still ? 0 : d.given[A.waves],
+        waves: wavesNow,
         position: m.position,
         center: [0.5, 0.5],
         // What each push is worth: its route into Stir, Flow or Swirl (the trial's own routes with the rating page's),
@@ -1388,7 +1391,7 @@
           // motion.
           tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
           // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
-          effects: effectsNow(how, d.effects, m.position, beatNow),
+          effects: effectsNow(how, d.effects, m.position, beatNow, governor.levers),
           facets: { amount: d.facets, hex: Math.round(how.lattice) === 1 },
           dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
           forces: stirred.forces,
@@ -1414,7 +1417,11 @@
       const stats: FrameStats = {
         t: now / 1000,
         // What the effects add to the meters (effects.ts), beside the flame's own.
-        extra: settingsReport(how, d.effects),
+        // What the effects add (as the governor lets them), and the waves' motion where nothing flows (aspects.ts).
+        extra: (() => {
+          const fx = settingsReport(how, d.effects, governor.levers);
+          return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) };
+        })(),
         // The dive's turn counts as each part's.
         turnRates: renderer?.diveTurnRate ? d.rates.map((r) => r + renderer!.diveTurnRate) : d.rates,
         shape: d.shape,

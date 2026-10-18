@@ -12,6 +12,7 @@
 // its ids change: the amounts and knobs are uniforms. Each effect says what it adds to the meters (meters.ts), so the
 // governor holds it back as it holds the flame back. Pure: no GL here.
 
+import type { Levers } from './governor';
 import type { VisualSettings } from './settings.svelte';
 
 /** The engines (the owner, 65: "a kaleidoscope engine, exyedo engine, and maybe one more? And then have multiple
@@ -39,20 +40,20 @@ export type Effect = {
   id: number;
   /** The panel's label. */
   name: string;
-  /** shape: \`vec2 fx_<name>(vec2 p, float a, float t, vec2 k)\`, where to read instead; colour: \`vec3 fx_<name>(vec3 c,
-   *  vec2 p, float a, float t, vec2 k)\`; echo: \`vec3 fx_<name>(vec3 c, vec2 p, float a, float t, vec2 k, sampler2D
-   *  prev)\` (sample it with \`fx_prev(prev, q)\`). p: centred, aspect-true (y −1..1, x ±aspect); a: its amount (0: none,
+  /** shape: `vec2 fx_<name>(vec2 p, float a, float t, vec2 k)`, where to read instead; colour: `vec3 fx_<name>(vec3 c,
+   *  vec2 p, float a, float t, vec2 k)`; echo: `vec3 fx_<name>(vec3 c, vec2 p, float a, float t, vec2 k, sampler2D
+   *  prev)` (sample it with `fx_prev(prev, q)`). p: centred, aspect-true (y −1..1, x ±aspect); a: its amount (0: none,
    *  it must change nothing); t: the track's own time (seconds); k: its knobs (0..1, the half way a middle setting). On the
-   *  picture, \`fx_beat()\` gives the beat: x where in it (0..1), y how long since it fell (seconds; long ago where there
+   *  picture, `fx_beat()` gives the beat: x where in it (0..1), y how long since it fell (seconds; long ago where there
    *  is none), z its strength (0..1), w where in its bar (0..1). */
   kind: 'shape' | 'colour' | 'echo';
-  /** Its engine (the picture's three, each one of its sub-effects at a time: \`ENGINES\`). */
+  /** Its engine (the picture's three, each one of its sub-effects at a time: `ENGINES`). */
   engine: Engine;
   /** Where it may go: the loop takes shapes only. */
   slots: readonly ('picture' | 'loop')[];
-  /** Its own controls, at most two, in \`k\`'s order. */
+  /** Its own controls, at most two, in `k`'s order. */
   knobs: readonly Knob[];
-  /** One GLSL ES 3.00 function \`fx_<name>\`, and helpers named \`fx_<name>_…\`. */
+  /** One GLSL ES 3.00 function `fx_<name>`, and helpers named `fx_<name>_…`. */
   glsl: string;
   report: (amount: number, k: Knobs) => Report;
 };
@@ -452,7 +453,7 @@ export const ENGINE_EFFECTS: Record<Engine, readonly Effect[]> = {
   hydra: [9, 7, 8, 5, 6, 12, 2].map((id) => byId.get(id)!),
 };
 export const LOOP_EFFECTS: readonly Effect[] = [1, 4, 7, 8, 10, 11, 14].map((id) => byId.get(id)!);
-/** An engine's sub-effect at \`place\` (1..), or the loop's: its id (0: none). */
+/** An engine's sub-effect at `place` (1..), or the loop's: its id (0: none). */
 export const engineEffect = (engine: Engine, place: number) => ENGINE_EFFECTS[engine][Math.round(place) - 1]?.id ?? 0;
 export const loopEffect = (place: number) => LOOP_EFFECTS[Math.round(place) - 1]?.id ?? 0;
 /** An effect by its id (none for 0 or one not known: a setting from a later version shows nothing, rather than fails). */
@@ -489,8 +490,8 @@ vec2 fx_flow(vec2 p) {
   return v * 2.0 * vec2(uAspect, 1.0);
 }`;
 
-/** The picture slot's fragment shader for a chain (its ids by place, as \`uFxA\`'s and \`uFxK\`'s), or null where nothing
- *  is in it: the picture (\`uPicture\`) read where its shapes say, then its colours and echoes (\`uPrev\`: the last
+/** The picture slot's fragment shader for a chain (its ids by place, as `uFxA`'s and `uFxK`'s), or null where nothing
+ *  is in it: the picture (`uPicture`) read where its shapes say, then its colours and echoes (`uPrev`: the last
  *  finished one). */
 export function pictureShader(ids: readonly number[]): string | null {
   const placed = ids.map((id, k) => ({ e: effectOf(id), k })).filter((x): x is { e: Effect; k: number } => !!x.e && x.e.slots.includes('picture'));
@@ -526,10 +527,10 @@ ${placed.filter(({ e }) => e.kind !== 'shape').map(call).join('\n')}
 }`;
 }
 
-/** \`fx_flow\` where nothing flows (the loop's carry pass): none. The fluid's light pass gives its own (fluid.ts). */
+/** `fx_flow` where nothing flows (the loop's carry pass): none. The fluid's light pass gives its own (fluid.ts). */
 export const NO_FLOW = `vec2 fx_flow(vec2 p) { return vec2(0.0); }`;
 
-/** The loop slot's GLSL for one effect: \`vec2 fx_loop(vec2 uv, float a, float t, float aspect, vec2 k)\` on a buffer's
+/** The loop slot's GLSL for one effect: `vec2 fx_loop(vec2 uv, float a, float t, float aspect, vec2 k)` on a buffer's
  *  coordinates (0..1), for the passes that read the kept light back; none (the identity) where it is not a shape. */
 export function loopFunction(id: number, flow = NO_FLOW): string {
   const e = effectOf(id);
@@ -565,23 +566,50 @@ export type EffectSettings = Pick<
   | 'fxLoopK2'
 >;
 
-/** The look's effects for the renderer (render.ts \`Shown.effects\`): each amount times what the Effects setting's routes
- *  let through (\`level\`); each one's knobs; \`t\` the track's own time (s); the beat. */
-export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null) => ({
+/** Nothing held back. */
+const FREE: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
+
+/** How far the governor lets an effect through (governor.ts): the flashes' swing always (any effect can flash), and the
+ *  lever of every meter it counts toward (its report's), as each holds the flame back: motion the pace, shape churn the
+ *  evolving (stretched: 1/evolution), colour churn the hues, zoom pumping the size. Its reports are in step with its
+ *  amount, so each lever lowers just what its meter counts. */
+export function heldBack(id: number, amount: number, k: Knobs, levers: Levers): number {
+  const e = effectOf(id);
+  if (!e || !(amount > 0)) return 1;
+  const r = e.report(amount, k);
+  let f = levers.swing;
+  if (r.motion) f *= levers.pace;
+  if (r.shapeChurn) f /= Math.max(1, levers.evolution);
+  if (r.colourChurn) f *= levers.hue;
+  if (r.zoomPumping) f *= levers.size;
+  return Math.max(0, Math.min(1, f));
+}
+
+/** The look's effects for the renderer (render.ts `Shown.effects`): each amount times what the Effects setting's routes
+ *  let through (`level`) and what the governor lets through (`levers`); each one's knobs; `t` the track's own time
+ *  (s); the beat. */
+export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null, levers: Levers = FREE) => {
   // Each engine's sub-effect (its setting the place in the engine's list), in the engines' order.
-  ids: [how.fx1, how.fx2, how.fx3].map((place, k) => engineEffect(ENGINES[k].key, place)),
-  amounts: [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a) => a * level),
-  knobs: [
+  const ids = [how.fx1, how.fx2, how.fx3].map((place, k) => engineEffect(ENGINES[k].key, place));
+  const knobs = [
     [how.fx1K1, how.fx1K2],
     [how.fx2K1, how.fx2K2],
     [how.fx3K1, how.fx3K2],
-  ] as Knobs[],
-  loop: loopEffect(how.fxLoop),
-  loopAmount: how.fxLoopAmount * level,
-  loopKnobs: [how.fxLoopK1, how.fxLoopK2] as Knobs,
-  t,
-  beat: beatOf(beat),
-});
+  ] as Knobs[];
+  const loop = loopEffect(how.fxLoop);
+  const loopKnobs = [how.fxLoopK1, how.fxLoopK2] as Knobs;
+  const set = [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a) => a * level);
+  return {
+    ids,
+    amounts: set.map((a, k) => a * heldBack(ids[k], a, knobs[k], levers)),
+    knobs,
+    loop,
+    loopAmount: how.fxLoopAmount * level * heldBack(loop, how.fxLoopAmount * level, loopKnobs, levers),
+    loopKnobs,
+    t,
+    beat: beatOf(beat),
+  };
+};
 
 /** The beat as the visuals know it (music.svelte.ts): its number, how long since it fell, how long it lasts (s), its
  *  strength. None (paused, reduced motion, a track without beats): long ago, so a beat's effect rests. */
@@ -593,8 +621,8 @@ export const beatOf = (b: Beat | null): [number, number, number, number] =>
 
 /** What the look's effects add to the meters a second, the picture's and the loop's together: the same for the visuals'
  *  meters and the precheck's, so the governor and the dice hold an effect alike. */
-export function settingsReport(how: EffectSettings, level: number): Report {
-  const fx = effectsNow(how, level, 0);
+export function settingsReport(how: EffectSettings, level: number, levers: Levers = FREE): Report {
+  const fx = effectsNow(how, level, 0, null, levers);
   const out: Report = { ...reportOf(fx.ids, fx.amounts, 'picture', fx.knobs) };
   for (const [k, v] of Object.entries(reportOf([fx.loop], [fx.loopAmount], 'loop', [fx.loopKnobs])) as [keyof Report, number][]) out[k] = (out[k] ?? 0) + v;
   return out;

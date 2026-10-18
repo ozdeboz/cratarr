@@ -101,12 +101,12 @@ export function diveTarget(flame: Flame): ({ j: number } & DiveFit) | null {
   return fine ? { j: best.j, ...fine } : best;
 }
 
-/** How long one loop takes at \`rate\` (the zoom's log a second): as long as the zoom takes to grow by the part's shrink. */
+/** How long one loop takes at `rate` (the zoom's log a second): as long as the zoom takes to grow by the part's shrink. */
 export const divePeriod = (fit: DiveFit, rate: number) => Math.log(1 / Math.hypot(fit.a[0], fit.a[1])) / Math.max(1e-3, rate);
 
-/** The camera at \`t\` into the loop (0..1): the zoom (a complex factor, a^{-t}, growing by 1/shrink over the loop and
+/** The camera at `t` into the loop (0..1): the zoom (a complex factor, a^{-t}, growing by 1/shrink over the loop and
  *  turning back the part's turn) about the part's fixed point (b / (1 − a)); and how fast it turns (radians a second
- *  at \`rate\`). */
+ *  at `rate`). */
 export function diveCamera(fit: DiveFit, t: number, rate: number): { zoom: [number, number]; at: [number, number]; turnRate: number } {
   const shrink = Math.hypot(fit.a[0], fit.a[1]);
   const turn = Math.atan2(fit.a[1], fit.a[0]);
