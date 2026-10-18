@@ -26,11 +26,12 @@
     measuring,
     PARTS,
     PRESET_KEYS,
-    presetOf,
+    drawing as presetDraws,
     seedOf,
     type ColourMode,
     type Flame,
     type Part,
+    type Drawn,
     type Preset,
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
@@ -122,11 +123,12 @@
   let current: Preset | null = null;
   let nextBlend: number | null = null;
   let resets = 0;
+  // A preset being drawn (a track's, the dice's or a moment's), a few draws a frame: each is checked on the CPU, a few
+  // milliseconds on a slow tablet, and all of them at once held a frame up by a seventh of a second there (2026-10-18).
+  // Then how it blends in.
+  let drawingNow: { draws: Generator<void, Drawn>; blend: number } | null = null;
   function loadAnother(seed: number) {
-    const { preset, own } = presetOf(seed, pinned());
-    current = own;
-    nextBlend = ANOTHER_MS;
-    loadPreset(preset);
+    drawingNow = { draws: presetDraws(seed, pinned()), blend: ANOTHER_MS };
   }
   // The dice: a random preset into the look's settings not pinned.
   function rollAnother() {
@@ -320,6 +322,29 @@
     // followed over a second and a half.
     let cover: { key: string; colours: PaletteColour[] | null } | null = null;
     let fire = 0;
+    // The next track's preset, drawn ahead at idle time (with the pins as they are then), so its start waits for none
+    // of it; and how to stop the idle work drawing it.
+    let ahead: { key: string; pins: string; draws: Generator<void, Drawn>; drawn: Drawn | null } | null = null;
+    let stopIdle: (() => void) | null = null;
+    const drawAhead = (deadline?: IdleDeadline) => {
+      stopIdle = null;
+      if (!ahead || ahead.drawn) return;
+      const until = performance.now() + Math.min(8, deadline ? deadline.timeRemaining() : 8);
+      let next = ahead.draws.next();
+      while (!next.done && performance.now() < until) next = ahead.draws.next();
+      if (next.done) ahead.drawn = next.value;
+      else idleSoon();
+    };
+    const idleSoon = () => {
+      if (stopIdle) return;
+      if ('requestIdleCallback' in window) {
+        const id = requestIdleCallback(drawAhead, { timeout: 2000 });
+        stopIdle = () => cancelIdleCallback(id);
+      } else {
+        const id = setTimeout(drawAhead, 100);
+        stopIdle = () => clearTimeout(id);
+      }
+    };
     let turn = 0;
     // The turning's clock: a route's full amount turns a part once around in 16 beats (the default routes, once in 32
     // on average), at the Speed setting; paused, it slows to a stop.
@@ -439,13 +464,30 @@
       const m = musicNow(now);
       if (m.key !== key || resets !== resetsSeen) {
         // A track's preset into the look's settings not pinned (after the panel's Reset, the playing one's again): the
-        // first shows at once, each next blends in.
-        nextBlend = key === undefined ? 0 : m.key !== key ? BLEND_MS : ANOTHER_MS;
+        // first shows at once, each next blends in. Drawn ahead where it was (the next track's, at idle time, with the
+        // same pins), else drawn now.
+        const blend = key === undefined ? 0 : m.key !== key ? BLEND_MS : ANOTHER_MS;
         key = m.key;
         resetsSeen = resets;
-        const { preset, own } = presetOf(seedOf(m.key ?? 'cratarr'), pinned());
-        current = own;
-        loadPreset(preset);
+        const fixed = pinned();
+        if (ahead?.drawn && ahead.key === m.key && ahead.pins === JSON.stringify(fixed)) {
+          current = ahead.drawn.own;
+          nextBlend = blend;
+          drawingNow = null;
+          loadPreset(ahead.drawn.preset);
+        } else drawingNow = { draws: presetDraws(seedOf(m.key ?? 'cratarr'), fixed), blend };
+      }
+      // A preset being drawn: as many draws as fit in six milliseconds of this frame, then into the settings.
+      if (drawingNow) {
+        const until = performance.now() + 6;
+        let next = drawingNow.draws.next();
+        while (!next.done && performance.now() < until) next = drawingNow.draws.next();
+        if (next.done) {
+          current = next.value.own;
+          nextBlend = drawingNow.blend;
+          drawingNow = null;
+          loadPreset(next.value.preset);
+        }
       }
       // The colours: the cover's asked for as a track starts, where they are wanted.
       const mode = MODES[s.colours] ?? 'rainbow';
@@ -461,6 +503,16 @@
         );
         if (playingNow.upcoming[0]) coverPalette(coverUrl({ source: playingNow.source, id: playingNow.upcoming[0].id })).catch(() => {});
       }
+      // The next track's preset drawn ahead, anew when the next track or the pins change.
+      const upcoming = playingNow?.upcoming[0] ? `${playingNow.source}/${playingNow.upcoming[0].id}` : null;
+      if (upcoming) {
+        const fixed = pinned();
+        const pins = JSON.stringify(fixed);
+        if (ahead?.key !== upcoming || ahead.pins !== pins) {
+          ahead = { key: upcoming, pins, draws: presetDraws(seedOf(upcoming), fixed), drawn: null };
+          idleSoon();
+        }
+      }
       const covered = mode === 'cover' && cover?.key === m.key ? cover.colours : null;
       fire += ((mode === 'fire' ? 1 : 0) - fire) * Math.min(1, dt / 1.5);
       // The flame as the look's settings make it, coloured as the Colours setting asks. After a preset, it blends in as
@@ -469,7 +521,8 @@
       const colours = `${mode}/${covered ? m.key : ''}`;
       const changed = !made ? SHAPING : SHAPING.filter((k) => made![k] !== s[k]);
       if (changed.length || colours !== madeColours) {
-        if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, s[k]])) as Preset);
+        // Unframed: the framing below measures what is drawn anyway.
+        if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, s[k]])) as Preset, false);
         const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
         const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
         if (blend && shown) {
@@ -680,6 +733,7 @@
       lock?.release().catch(() => {});
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       renderer?.dispose();
+      stopIdle?.();
       stopMusic();
     };
   });

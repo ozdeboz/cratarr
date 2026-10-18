@@ -336,10 +336,11 @@ function build(p: Preset): Flame {
   return withSymmetry({ xforms: parts, final: lens > 0 ? finalOf(f, lens) : undefined, symmetry: { order, mirror }, colours, center: [0, 0], size: 1 }, order, mirror);
 }
 
-/** The flame of a preset, framed (the visuals frame it again as it moves: `measure`). */
-export function flameOf(p: Preset): Flame {
+/** The flame of a preset, framed; or not (`framed` false), where whatever draws it frames it again anyway (the
+ *  visuals do, as it moves: `measuring`), a sixth of a second on a slow tablet saved each time the look changes. */
+export function flameOf(p: Preset, framed = true): Flame {
   const flame = build(p);
-  const m = measure(flame);
+  const m = framed ? measure(flame) : null;
   if (m) {
     flame.center = m.center;
     flame.size = m.size;
@@ -352,7 +353,19 @@ export function flameOf(p: Preset): Flame {
  *  the draw without them, what a pin let go of returns to. A third without symmetry, two fifths turned round (2 to 8
  *  arms), the rest mirrored too (1 to 6); a lens on three in ten (it warps the whole picture, at a third more of the GPU's
  *  time a step); the families as often as they came before. */
-export function presetOf(seed: number, fixed: Partial<Preset> = {}): { preset: Preset; own: Preset } {
+export function presetOf(seed: number, fixed: Partial<Preset> = {}): Drawn {
+  const draws = drawing(seed, fixed);
+  for (;;) {
+    const next = draws.next();
+    if (next.done) return next.value;
+  }
+}
+
+export type Drawn = { preset: Preset; own: Preset };
+
+/** `presetOf` a draw at a time: it yields after each one checked (each a few milliseconds on a slow tablet), so the
+ *  draws can be spread over frames or idle time. */
+export function* drawing(seed: number, fixed: Partial<Preset> = {}): Generator<void, Drawn> {
   const rnd = randomFrom(seed);
   let best: { preset: Preset; own: Preset; score: number } | null = null;
   for (let attempt = 0; attempt < 24; attempt++) {
@@ -374,6 +387,7 @@ export function presetOf(seed: number, fixed: Partial<Preset> = {}): { preset: P
       purity: 0.6 + rnd() * 0.35,
     };
     const preset = { ...own, ...fixed };
+    if (attempt > 0) yield;
     const look = survey(build(preset), seed + attempt);
     if (!look) continue;
     if (look.score > 0.5) return { preset, own };
