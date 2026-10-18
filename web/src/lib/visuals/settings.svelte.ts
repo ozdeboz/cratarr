@@ -85,7 +85,7 @@ export type VisualSettings = Preset & {
   /** The look's settings the owner moved: kept as they are when a track or the dice load another preset, until
    *  unpinned. */
   pins: string[];
-  /** Each band's (sub, bass, low mid, mid, presence, air) light after a transient: how long it rings (seconds). */
+  /** Each band's (sub, bass, low mid, mid, upper mid, air) light after a transient: how long it rings (seconds). */
   lighting: number[];
   /** Each band's loudness evolving its transform: how long it takes to follow (seconds). */
   evolution: number[];

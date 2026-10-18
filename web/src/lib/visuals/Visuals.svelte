@@ -597,7 +597,8 @@
     showChrome();
   }
   // Each band's times, on a doubling scale.
-  const BAND_ROWS = ['Sub', 'Bass', 'Low mid', 'Mid', 'Presence', 'Air'];
+  // The fifth band was Presence until 65's Presence column took the name (the owner chose "Upper mid").
+  const BAND_ROWS = ['Sub', 'Bass', 'Low mid', 'Mid', 'Upper mid', 'Air'];
   const TIMES = (['lighting', 'evolution'] as const).map((key) => ({
     key,
     label: key === 'lighting' ? 'Lighting' : 'Evolution',

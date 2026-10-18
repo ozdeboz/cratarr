@@ -96,7 +96,7 @@ export const HELP: Record<string, string> = {
   'band:1': 'Bass: 60 to 150 Hz. Bass lines and the body of kick drums.',
   'band:2': 'Low mid: 150 to 400 Hz. The warmth of voices, guitars and pianos.',
   'band:3': 'Mid: 400 Hz to 2 kHz. Most of voices and melodies.',
-  'band:4': 'Presence: 2 to 5 kHz. The edge and clarity of voices and snares.',
+  'band:4': 'Upper mid: 2 to 5 kHz. The edge and clarity of voices and snares.',
   'band:5': 'Air: above 5 kHz. Cymbals, hi-hats and breath.',
   'band:all': 'Every band at once: a square set here sets that row for all six bands.',
 

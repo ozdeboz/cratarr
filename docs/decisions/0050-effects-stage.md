@@ -36,7 +36,8 @@ Touch, the first layer one could play by hand, was planned with the stage. The o
 claude-5f makes the envelope (from the hits and the band's level: an attack, a hold while the sound holds, a release),
 its signal row, and its limits in the precheck. claude-a5 makes Presence in the drawing: a band's part weighs in the
 chaos game (its transform's share of the points) by a new **Presence** route column, so a part can come and go with its
-sound, not only light up. Lighting is renamed **Linger** (how long a part's light rings on).
+sound, not only light up. Lighting is renamed **Linger** (how long a part's light rings on). The fifth band, Presence until now, is renamed **Upper mid** so the
+column alone has the name (the owner chose it over renaming the column).
 
 **The envelope** (claude-5f): each band's own, 0 to 1, a new band signal row **Envelope** that any route can take
 (by default each band's Envelope into its Presence at 100%; Hits into Lights stays as it is). Followed each frame, the
