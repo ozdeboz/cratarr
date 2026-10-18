@@ -243,3 +243,38 @@ a made-up track) and wants both: "Basically, yes, I want both, so this is seriou
   two runs never match; with no effect set the stage stands aside (render.ts `chainFor` null) and the show pass draws
   to the screen as before, while 65's own defaults (Envelope into Presence, Swell into Waves) change Standard's picture
   on purpose.
+
+## Amendment, 2026-10-18: the engines, their controls and the beat; the governor reaches everything (65, the build)
+
+- **Three engines** (the owner: "a kaleidoscope engine, exyedo engine, and maybe one more … multiple subeffects"),
+  each one sub-effect at a time, run in this order: **Kaleidoscope** (Kaleid, Repeat, Rotate, Scroll, Pixelate,
+  Magnify), **EYEDO** (Pulse, Burst, Halo, Rings, Interference) and **Hydra** (Echo, Ripple, Stream, Colorama, Hue,
+  Saturate, Posterize); the loop takes one of seven shapes. Each chosen effect has **its own controls**, one or two (the
+  owner: "one or two of the most relevant controls per chosen subeffect"), at their middle as made. Picture effects
+  hear **the beat** (`fx_beat`: where in the beat and the bar, how strong); Pulse, Burst and Halo fire on it.
+- **The governor reaches all of it** (claude-5f's audit, the owner: "Agree! Fix it"; then "no shortcuts no
+  concessions"). Every meter's lever now reaches what the meter counts:
+  - each effect's amount is held by the flash rule's swing and by the lever of every meter its report counts toward
+    (effects.ts `heldBack`), so an effect is held as the flame is, not the flame in its place;
+  - Presence slows as shape churn is held (and the points moving between the parts count as shape churn);
+  - the Waves' height is held by the motion lever and their motion counted where nothing flows; the zooms' streaming
+    out (the Tunnel, the Dive's zoom beside its turn, Echo's) counts as the motion it is (k e-folds a second moves a
+    point as k radians a second do);
+  - a full roll draws each try's look first and checks the recipe with it, so the look shown is the look checked;
+  - the precheck counts what the visuals count (the effects' reports, the dive's turn, the waves, the zooms).
+- **Reduced motion** rests every effect that changes over time (Posterize, Hue, Saturate stay), as the zooms rest.
+- **The limits stay the flame's own.** With effects drawn into track looks, Standard's most motion doubled (one hip-hop
+  look's Echo and Rings); raising the limits to fit would have loosened the governor for the flame too. Instead the
+  limits stay a quarter above what the flame itself does (motion 0.6, shape 0.8, colour 0.45, pumping 0.45) and a
+  drawn look's effects are drawn within the room left above that at the quietest passage's budget (budget.ts
+  `DRAWN_ROOM`; flame.ts). Recalibrated on the final code (506 runs): Standard over drawn looks peaks where the flame
+  does (motion 0.466, pumping 0.351), none over a limit; 83 of 440 recipes refused (motion 79: the zooms they roll).
+- **The Mali review** (the showcase session's, read-only, against our gotchas) found two that would have shown only on
+  the devices: pow of a negative in Burst and Halo (NaN, the whole picture blank between beats) and the loop's effects
+  running on the track's time (spinning faster through a track, compounding per frame); both fixed, with the review's
+  smaller ones. Each effect place runs its own clock, so a change of amount never jumps an angle. The pace no longer
+  steps down for the hitch of a new effect program (on the PC each change had cost about 25 s at a lower quality).
+- **Measured on the PC** (Edge, CPU slowed four times; the showcase session's script): the stage 0.29 ms of GPU to
+  exist, 0.41 with three effects; the loop's read-back 0.86; the fluid's light carrying a loop effect and Facets 0.56;
+  frames held at 55 fps but for a loop effect's few doubled frames. **On the devices still to come:** neither the
+  tablet nor the phone was reachable; the same script runs there when they are.
