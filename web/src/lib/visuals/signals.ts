@@ -31,6 +31,11 @@ export const ID = {
 
 const KIND = { series: 0, hits: 1, marks: 2, table: 3 } as const;
 
+/** Series whose frame i is the moment i/rate (the loudness, each window by its middle, and what is worked out from it;
+ *  novelty two a second where a track has no beats). Every other series' frame i holds what fell in [i/rate,
+ *  (i+1)/rate) (analysis/signals.rs, `bucket`): its moment is that frame's middle. */
+const AT_MOMENTS = new Set<number>([ID.loudness, ID.novelty, ID.swell, ID.buildUp]);
+
 /** A series: `rate` values a second (0: a value a beat), `channels` bytes a frame. */
 export type Series = { rate: number; channels: number; scale: number; data: Uint8Array };
 /** Times (seconds, in order) with a byte each, 0..1. */
@@ -157,7 +162,7 @@ export function seriesAt(s: Signals, id: number, t: number, beat: number | null 
     for (let c = 0; c < x.channels; c++) out[c] = x.data[f * x.channels + c] / 255;
     return out;
   }
-  const pos = Math.min(Math.max(t * x.rate, 0), frames - 1);
+  const pos = Math.min(Math.max(t * x.rate - (AT_MOMENTS.has(id) ? 0 : 0.5), 0), frames - 1);
   const f = Math.floor(pos);
   const g = Math.min(f + 1, frames - 1);
   for (let c = 0; c < x.channels; c++) {
