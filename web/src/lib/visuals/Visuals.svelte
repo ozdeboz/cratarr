@@ -13,9 +13,10 @@
   // closes the visuals. The screen stays on while they show, where the browser allows.
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
-  import { coverUrl } from '../api';
+  import { coverUrl, deleteVisualsSnapshot, getVisualsSnapshots, renameVisualsSnapshot, saveVisualsSnapshot, type VisualsSnapshot } from '../api';
   import Icon from '../Icon.svelte';
   import { reducedMotion } from '../motion';
+  import { toast } from '../toast.svelte';
   import { playing } from '../remote.svelte';
   import {
     between,
@@ -26,6 +27,7 @@
     measuring,
     PARTS,
     PRESET_KEYS,
+    randomFrom,
     drawing as presetDraws,
     seedOf,
     type ColourMode,
@@ -35,7 +37,9 @@
     type Preset,
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
+  import { longPress } from './longPress';
   import { coverPalette, type PaletteColour } from './palette';
+  import { applyShared, followGroup, share, SHARED_KEYS, SHARED_V, sharedNow } from './shared.svelte';
   import { held } from './held.svelte';
   import Help from './Help.svelte';
   import { FlameRenderer } from './render';
@@ -125,16 +129,80 @@
   let resets = 0;
   // A preset being drawn (a track's, the dice's or a moment's), a few draws a frame: each is checked on the CPU, a few
   // milliseconds on a slow tablet, and all of them at once held a frame up by a seventh of a second there (2026-10-18).
-  // Then how it blends in.
-  let drawingNow: { draws: Generator<void, Drawn>; blend: number } | null = null;
-  function loadAnother(seed: number) {
-    drawingNow = { draws: presetDraws(seed, pinned()), blend: ANOTHER_MS };
+  // Then how it blends in, and whether it goes to the sync group (the dice's, a Reset's: a track's and the moments' come
+  // out the same on every device anyway).
+  let drawingNow: { draws: Generator<void, Drawn>; blend: number; share: boolean } | null = null;
+  function loadAnother(seed: number, toGroup = false) {
+    drawingNow = { draws: presetDraws(seed, pinned()), blend: ANOTHER_MS, share: toGroup };
   }
   // The dice: a random preset into the look's settings not pinned.
   function rollAnother() {
-    loadAnother(Math.floor(Math.random() * 0x100000000));
+    loadAnother(Math.floor(Math.random() * 0x100000000), true);
     showChrome();
   }
+
+  // The saved looks (snapshots: on the server, every device's), newest first: read as the panel opens. Saving takes
+  // everything shared in a sync group, named after the track playing; recalling one puts it back, every look setting
+  // pinned (the next track leaves it), and to the group. One held is renamed or deleted.
+  let snapshots = $state<VisualsSnapshot[]>([]);
+  let editing = $state<string | null>(null);
+  let editName = $state('');
+  function readSnapshots() {
+    getVisualsSnapshots().then(
+      (list) => (snapshots = list),
+      () => {},
+    );
+  }
+  async function saveSnapshot() {
+    showChrome();
+    try {
+      const made = await saveVisualsSnapshot(np?.name ?? 'Visuals', { ...sharedNow(), v: SHARED_V });
+      snapshots = [made, ...snapshots.filter((x) => x.id !== made.id)];
+    } catch (e) {
+      toast.fail(e, 'Not saved');
+    }
+  }
+  function recall(snap: VisualsSnapshot) {
+    const settings = { ...snap.settings };
+    delete settings.v;
+    drawingNow = null;
+    applyShared(settings);
+    s.pins = [...PRESET_KEYS];
+    saveVisualSettings();
+    nextBlend = ANOTHER_MS;
+    share(sharedNow());
+    showChrome();
+  }
+  function edit(snap: VisualsSnapshot) {
+    editName = snap.name;
+    editing = snap.id;
+    showChrome();
+  }
+  async function rename(snap: VisualsSnapshot) {
+    if (editing !== snap.id) return;
+    editing = null;
+    const name = editName.trim();
+    if (!name || name === snap.name) return;
+    try {
+      const done = await renameVisualsSnapshot(snap.id, name);
+      snapshots = snapshots.map((x) => (x.id === snap.id ? done : x));
+    } catch (e) {
+      toast.fail(e, 'Not renamed');
+    }
+  }
+  async function remove(snap: VisualsSnapshot) {
+    editing = null;
+    try {
+      await deleteVisualsSnapshot(snap.id);
+      snapshots = snapshots.filter((x) => x.id !== snap.id);
+    } catch (e) {
+      toast.fail(e, 'Not deleted');
+    }
+  }
+  const focusNow = (node: HTMLInputElement) => {
+    node.focus();
+    node.select();
+  };
 
   // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show
   // behaves, then the look (the preset: pinned where moved).
@@ -181,11 +249,13 @@
     { key: 'purity', label: 'Purity', step: 0.05, text: percent },
   ];
   const isLook = (key: string) => (PRESET_KEYS as readonly string[]).includes(key);
+  const lookNow = () => Object.fromEntries(PRESET_KEYS.map((k) => [k, s[k]]));
   // A look's setting let go of: back to the preset's value.
   function unpin(key: One) {
     s.pins = s.pins.filter((k) => k !== key);
     if (current && isLook(key)) (s as Record<string, unknown>)[key] = current[key as keyof Preset];
     saveVisualSettings();
+    share({ pins: [...s.pins], [key]: s[key] });
     showChrome();
   }
   // Each band's times, on a doubling scale.
@@ -200,11 +270,13 @@
   function setTime(key: 'lighting' | 'evolution', band: number, log2: number) {
     s[key][band] = 2 ** log2;
     saveVisualSettings();
+    share({ [key]: [...s[key]] });
     showChrome();
   }
   function setContinuity(band: number, v: number) {
     s.continuity[band] = v;
     saveVisualSettings();
+    share({ continuity: [...s.continuity] });
     showChrome();
   }
   const devicePixels = () => innerWidth * innerHeight * Math.min(devicePixelRatio || 1, 2) ** 2;
@@ -214,10 +286,13 @@
     // The look's settings moved are pinned: a track's or the dice's preset leaves them as they are.
     if (isLook(key) && !s.pins.includes(key)) s.pins = [...s.pins, key];
     saveVisualSettings();
+    // To the sync group: all but what is this device's own (its cost, its brightness).
+    if ((SHARED_KEYS as readonly string[]).includes(key)) share({ [key]: v, ...(isLook(key) ? { pins: [...s.pins] } : {}) });
     showChrome();
   }
   function togglePanel() {
     panel = !panel;
+    if (panel) readSnapshots();
     showChrome();
   }
 
@@ -239,12 +314,21 @@
     return { v: v.reduce((a, b) => a + b, 0) / v.length, mixed: v.some((x) => Math.abs(x - v[0]) > 1e-6) };
   }
   function setRoute(signal: Signal, aspect: Aspect, v: number) {
+    const changed: Record<string, number> = {};
     for (const k of keysOf(signal, aspect)) {
-      // A 0 is kept only where it turns a default off.
+      // A 0 is kept only where it turns a default off (to the group, a 0 either way).
       if (v === 0 && !DEFAULTS.routes[k]) delete s.routes[k];
       else s.routes[k] = v;
+      changed[k] = v;
     }
     saveVisualSettings();
+    share({ routes: changed });
+  }
+  // The routes back to the defaults; to the group, each route set before as nothing.
+  function routesReset() {
+    const before = Object.keys(s.routes);
+    resetRoutes();
+    share({ routes: { ...Object.fromEntries(before.map((k) => [k, 0])), ...$state.snapshot(s.routes) } });
   }
   const signed = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
   const cellLabel = (signal: Signal, aspect: Aspect) => `${SIGNAL_LABEL[signal]}${isBandSignal(signal) ? ` (${pick === null ? 'All' : BAND_ROWS[pick]})` : ''} → ${ASPECT_LABEL[aspect]}`;
@@ -289,6 +373,8 @@
     };
     wake();
     document.addEventListener('visibilitychange', wake);
+    // The sync group this device plays in, if any: its visuals followed, this one's changes sent to it.
+    const stopGroup = followGroup();
 
     let renderer: FlameRenderer | null = null;
     try {
@@ -467,6 +553,8 @@
         // first shows at once, each next blends in. Drawn ahead where it was (the next track's, at idle time, with the
         // same pins), else drawn now.
         const blend = key === undefined ? 0 : m.key !== key ? BLEND_MS : ANOTHER_MS;
+        // After a Reset, the track's preset goes to the group too.
+        const toGroup = resets !== resetsSeen;
         key = m.key;
         resetsSeen = resets;
         const fixed = pinned();
@@ -475,7 +563,8 @@
           nextBlend = blend;
           drawingNow = null;
           loadPreset(ahead.drawn.preset);
-        } else drawingNow = { draws: presetDraws(seedOf(m.key ?? 'cratarr'), fixed), blend };
+          if (toGroup) share(lookNow());
+        } else drawingNow = { draws: presetDraws(seedOf(m.key ?? 'cratarr'), fixed), blend, share: toGroup };
       }
       // A preset being drawn: as many draws as fit in six milliseconds of this frame, then into the settings.
       if (drawingNow) {
@@ -485,8 +574,10 @@
         if (next.done) {
           current = next.value.own;
           nextBlend = drawingNow.blend;
+          const toGroup = drawingNow.share;
           drawingNow = null;
           loadPreset(next.value.preset);
+          if (toGroup) share(lookNow());
         }
       }
       // The colours: the cover's asked for as a track starts, where they are wanted.
@@ -601,10 +692,14 @@
         hits.push(clamp(flashed(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), courses.lights[i]), -1, 3));
       }
       // The moments: another preset (as the dice give), another symmetry; a pinned setting stays as it is.
-      if (!still && moment(moments.reseed, W[A.reseed], now)) loadAnother(Math.floor(Math.random() * 0x100000000));
+      // Seeded from the track and the beat they come on (else the half second), so every device playing it together
+      // makes the same choice.
+      const at = `${m.key}|${m.beat ? m.beat.index : Math.floor(m.position * 2)}`;
+      if (!still && moment(moments.reseed, W[A.reseed], now)) loadAnother(seedOf(`reseed|${at}`));
       if (!still && moment(moments.symmetry, W[A.symmetry], now) && !(s.pins.includes('symmetry') && s.pins.includes('mirror'))) {
-        if (!s.pins.includes('symmetry')) s.symmetry = ((s.symmetry + Math.floor(Math.random() * 7)) % 8) + 1;
-        if (!s.pins.includes('mirror')) s.mirror = Math.random() < 0.5 ? 1 : 0;
+        const rnd = randomFrom(seedOf(`symmetry|${at}`));
+        if (!s.pins.includes('symmetry')) s.symmetry = ((s.symmetry + Math.floor(rnd() * 7)) % 8) + 1;
+        if (!s.pins.includes('mirror')) s.mirror = rnd() < 0.5 ? 1 : 0;
         nextBlend = ANOTHER_MS;
         saveVisualSettings();
       }
@@ -733,6 +828,7 @@
       lock?.release().catch(() => {});
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       renderer?.dispose();
+      stopGroup();
       stopIdle?.();
       stopMusic();
     };
@@ -825,6 +921,35 @@
               {/each}
             </div>
           {/each}
+          <div class="snapshots" role="group" aria-label="Snapshots">
+            <h3 use:held={'snapshots'}>Snapshots</h3>
+            <div class="chips">
+              <button class="chip save" use:held={'snapshots:save'} onclick={saveSnapshot}><Icon name="plus" size={14} /> Save</button>
+              {#each snapshots as snap (snap.id)}
+                {#if editing === snap.id}
+                  <span class="editing">
+                    <input
+                      class="name"
+                      aria-label="Name"
+                      maxlength="60"
+                      bind:value={editName}
+                      use:focusNow
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter') rename(snap);
+                        else if (e.key === 'Escape') editing = null;
+                      }}
+                      onblur={() => rename(snap)}
+                    />
+                    <button class="delete" aria-label="Delete {snap.name}" onpointerdown={(e) => e.preventDefault()} onclick={() => remove(snap)}
+                      ><Icon name="trash" size={16} /></button
+                    >
+                  </span>
+                {:else}
+                  <button class="chip" use:longPress={() => edit(snap)} onclick={() => recall(snap)}>{snap.name}</button>
+                {/if}
+              {/each}
+            </div>
+          </div>
           <div class="routes" role="group" aria-label="Routes">
             <div class="head">
               <h3 use:held={'routes'}>Routes</h3>
@@ -832,7 +957,7 @@
                 class="reset"
                 use:held={'routes:reset'}
                 onclick={() => {
-                  resetRoutes();
+                  routesReset();
                   cell = null;
                 }}>Reset</button
               >
@@ -911,6 +1036,8 @@
               onclick={() => {
                 resetVisualSettings();
                 resets++;
+                // To the group: all but the look now (the track's preset follows once drawn), every pin let go.
+                share(Object.fromEntries(SHARED_KEYS.filter((k) => !isLook(k)).map((k) => [k, $state.snapshot(s[k])])));
                 showChrome();
               }}>Reset</button
             >
@@ -1081,6 +1208,63 @@
     border: 0;
     background: none;
     color: var(--accent);
+    cursor: pointer;
+  }
+
+  .snapshots {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgb(255 255 255 / 0.12);
+  }
+
+  .snapshots h3 {
+    margin: 2px 0 0;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: rgb(255 255 255 / 0.6);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0 4px;
+  }
+
+  .chip.save {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .editing {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .editing .name {
+    width: 11em;
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid rgb(255 255 255 / 0.5);
+    border-radius: 15px;
+    background: rgb(255 255 255 / 0.08);
+    color: #fff;
+    font: inherit;
+    font-size: 0.8rem;
+  }
+
+  .editing .delete {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 15px;
+    background: rgb(232 112 143 / 0.25);
+    color: #fff;
     cursor: pointer;
   }
 

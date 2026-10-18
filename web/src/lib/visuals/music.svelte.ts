@@ -41,6 +41,8 @@ export type Music = {
   /** Where the bands' signals come from. */
   from: 'server' | 'live' | null;
   playing: boolean;
+  /** Where in the track the picture is drawn (seconds, a little ahead of the sound: `AHEAD`); 0 with none. */
+  position: number;
 };
 
 /** The picture is drawn this far ahead of the sound (seconds): a frame reaches the screen a frame or two after it is
@@ -127,7 +129,7 @@ export function musicNow(at: number): Music {
   track.fill(0);
   if (!np) {
     stopLive();
-    return { key: null, intensity: 0, bps: 1.5, beat: null, track, bands: null, hits: null, from: null, playing: false };
+    return { key: null, intensity: 0, bps: 1.5, beat: null, track, bands: null, hits: null, from: null, playing: false, position: 0 };
   }
   const key = `${np.source}/${np.id}`;
   loadWaveform(np.source, np.id);
@@ -177,7 +179,7 @@ export function musicNow(at: number): Music {
   track[T.tempo] = bps / 2;
   if (beats) track[T.beat] = pulseAt(beats, beat, pos, 0.2, 0.35, () => 1);
   track[T.key] = Math.atan2(fifths.y, fifths.x) / (2 * Math.PI) + (fifths.y < 0 ? 1 : 0);
-  return { key, intensity, bps, beat, track, bands: from ? bands : null, hits: from ? hits : null, from, playing: on };
+  return { key, intensity, bps, beat, track, bands: from ? bands : null, hits: from ? hits : null, from, playing: on, position: pos };
 }
 
 /** The server's signals at `pos`. */

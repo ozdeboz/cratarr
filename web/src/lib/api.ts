@@ -95,11 +95,13 @@ export type State = {
   sources: SourceTab[];
 };
 
-/** `generic`: no words from the server, only its status; callers say what failed instead (see toast.fail). */
+/** `generic`: no words from the server, only its status; callers say what failed instead (see toast.fail). `status`:
+ *  the server's answer, where it gave one (a caller that tells a 404 from a 409 reads it). */
 export class ApiError extends Error {
   constructor(
     message: string,
     readonly generic = false,
+    readonly status?: number,
   ) {
     super(message);
   }
@@ -143,7 +145,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
       throw new ApiError(UNREACHED);
     }
     reached();
-    throw message ? new ApiError(message) : new ApiError(`Server returned ${res.status}`, true);
+    throw message ? new ApiError(message, false, res.status) : new ApiError(`Server returned ${res.status}`, true, res.status);
   }
   reached();
   if (res.status === 204) return undefined as T;
@@ -1149,3 +1151,25 @@ export type Proximity = {
 export type Signal = 'tracks' | 'genre' | 'artists';
 
 export const getInsights = () => request<Insights>('/api/insights');
+
+/** A sync group's visuals (decision 0046, amended): the settings that shape the picture, and the version the server
+ *  gave them. None yet: a 404. */
+export type GroupVisuals = { version: number; settings: Record<string, unknown> };
+export const getGroupVisuals = (group: string) => quietly<GroupVisuals>(`/api/groups/${encodeURIComponent(group)}/visuals`);
+/** Settings into a group's visuals (the server merges them key by key, the routes route by route): `base` 0 only where
+ *  the group has none yet (else a 409); `writer` names this page, so it knows its own change when it comes back. */
+export const putGroupVisuals = (group: string, body: { base: number; settings: Record<string, unknown>; writer: string }) =>
+  quietly<{ version: number }>(`/api/groups/${encodeURIComponent(group)}/visuals`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+/** A saved look of the visuals: the settings that shape the picture, named (after the track it was saved on). */
+export type VisualsSnapshot = { id: string; name: string; settings: Record<string, unknown>; created: string };
+export const getVisualsSnapshots = () => quietly<VisualsSnapshot[]>('/api/visuals/snapshots');
+export const saveVisualsSnapshot = (name: string, settings: Record<string, unknown>) =>
+  request<VisualsSnapshot>('/api/visuals/snapshots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, settings }) });
+export const renameVisualsSnapshot = (id: string, name: string) =>
+  request<VisualsSnapshot>(`/api/visuals/snapshots/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+export const deleteVisualsSnapshot = (id: string) => request<void>(`/api/visuals/snapshots/${encodeURIComponent(id)}`, { method: 'DELETE' });

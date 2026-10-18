@@ -506,3 +506,35 @@ Colours, the grain, each band's times and the routes.
 transforms change at once; the dice change all else; track B on the same device keeps Detail; unpinned, Detail goes
 back to B's own; Form and Symmetry pinned, then Reset: no pins, B's own; settings kept from 60 (Symmetry 3, Mirror On,
 Spread 250 %, Purity 100 %) came in pinned. The look's rows fit a 390 px phone.
+
+## Amendment, 2026-10-18: shared in a sync group, saved looks, moments every device agrees on
+
+The owner: "the visualizations should be shared between the sync play group so that controlling it in one place
+controls it in another", and "I want to be able to save a current snapshot and recall it". Their choices, of the
+options put to them: everything that shapes the picture is shared; a joining device adopts the group's settings; a
+snapshot holds all of it, on the server; recalling one pins what it sets. (The server's side is claude-5f's.)
+
+**Shared:** the look and its pins, Colours, Intensity, Flash, Speed, the grain, the routes and each band's times. Each
+device keeps its own Points, Steps, Resolution, FPS (what it can afford) and Brightness (its room). The group's settings
+live on the server, per group, while it lasts (`/api/groups/{group}/visuals`); the page follows the group its player is
+in (the app's own, or the one it plays on), while the visuals show.
+- Joining: the group's settings are taken; a group with none yet takes the joiner's (a create-only write: where another
+  device got there first, the server refuses it, and the page takes that one's).
+- Leaving: what shows stays, as kept on the device.
+- What the owner changes is sent as it is made, only what changed (the routes route by route), a drag once every
+  150 ms; the server merges it and sends it to every device on the live channel. A page knows its own changes when they
+  come back (`writer`, a name of its own per load), takes none older than the last it took, and none over a change of
+  its own still being sent. A track's preset and the music's moments are not sent: every device works them out alike.
+- The moments (a new look, a new symmetry) are seeded from the track and the beat they come on (the half second where
+  it has no beats), not at random, so every device in a group makes the same choice at the same moment.
+
+**Snapshots** (`/api/visuals/snapshots`): a row in the panel. Save keeps everything shared, named after the track
+playing (with the form of its settings, `v`, for later readers); a tap on one recalls it, every look setting pinned,
+and to the group; held (or a right click), one is renamed or deleted.
+
+**Measured** (the lab page against a stand-in server and live channel, the page playing on a player in a group): an
+empty group got this device's settings; a slider moved sent only itself; another device's change came in, this page's
+own echo and an older change did not; a change of its own still being sent stayed over another device's; the dice sent
+the look; a route only itself; out of the group nothing more went; a group's settings were taken on joining; the race
+to make them lost to another device, its settings taken; a snapshot saved, recalled (its look and Flash back, all 13
+look settings pinned, all sent), renamed by a hold, deleted by a right click.

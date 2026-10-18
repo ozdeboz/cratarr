@@ -156,44 +156,50 @@ const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly s
 
 function load(): VisualSettings {
   try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, unknown>;
-    const out = fresh();
-    // Kept before the look was a preset (2026-10-18): Symmetry 0 and Mirror 0 were Auto, Mirror 1 Off and 2 On;
-    // Spread and Purity were settings of their own. One set away from its default then is pinned now.
-    const before = !Array.isArray(saved.pins);
-    if (before) {
-      const pins: string[] = [];
-      if (typeof saved.symmetry === 'number' && saved.symmetry >= 1) pins.push('symmetry');
-      else delete saved.symmetry;
-      if (saved.mirror === 1 || saved.mirror === 2) {
-        saved.mirror = saved.mirror === 2 ? 1 : 0;
-        pins.push('mirror');
-      } else delete saved.mirror;
-      if (typeof saved.spread === 'number' && saved.spread !== 1) pins.push('spread');
-      if (typeof saved.purity === 'number' && saved.purity !== 0.75) pins.push('purity');
-      saved.pins = pins;
-    }
-    for (const k of Object.keys(DEFAULTS) as (keyof VisualSettings)[]) {
-      const v = saved[k];
-      if (k === 'pins') {
-        if (Array.isArray(v)) out.pins = v.filter((x): x is string => typeof x === 'string' && isPresetKey(x));
-      } else if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = within(k, v);
-      // Six bands' times; three (kept before the six bands, 2026-10-18) each for two of them.
-      else if (Array.isArray(v) && (v.length === 6 || v.length === 3) && v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
-        const six = v.length === 6 ? v : v.flatMap((x) => [x, x]);
-        (out as Record<string, unknown>)[k] = six.map((x) => within(k, x));
-      }
-    }
-    // The routes kept: each one there is, over the defaults (a 0 kept turns a default off).
-    if (saved.routes && typeof saved.routes === 'object') {
-      for (const [key, v] of Object.entries(saved.routes as Record<string, unknown>)) {
-        if (typeof v === 'number' && Number.isFinite(v) && isRoute(key, BANDS)) out.routes[key] = within('routes', v);
-      }
-    }
-    return out;
+    return keptFrom(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, unknown>);
   } catch {
     return fresh();
   }
+}
+
+/** Settings as kept (on this device, or come from another: shared.svelte.ts), over the defaults: each value brought
+ *  into its range, anything not a setting left out. */
+export function keptFrom(kept: Record<string, unknown>): VisualSettings {
+  const saved = { ...kept };
+  const out = fresh();
+  // Kept before the look was a preset (2026-10-18): Symmetry 0 and Mirror 0 were Auto, Mirror 1 Off and 2 On;
+  // Spread and Purity were settings of their own. One set away from its default then is pinned now.
+  const before = !Array.isArray(saved.pins);
+  if (before) {
+    const pins: string[] = [];
+    if (typeof saved.symmetry === 'number' && saved.symmetry >= 1) pins.push('symmetry');
+    else delete saved.symmetry;
+    if (saved.mirror === 1 || saved.mirror === 2) {
+      saved.mirror = saved.mirror === 2 ? 1 : 0;
+      pins.push('mirror');
+    } else delete saved.mirror;
+    if (typeof saved.spread === 'number' && saved.spread !== 1) pins.push('spread');
+    if (typeof saved.purity === 'number' && saved.purity !== 0.75) pins.push('purity');
+    saved.pins = pins;
+  }
+  for (const k of Object.keys(DEFAULTS) as (keyof VisualSettings)[]) {
+    const v = saved[k];
+    if (k === 'pins') {
+      if (Array.isArray(v)) out.pins = v.filter((x): x is string => typeof x === 'string' && isPresetKey(x));
+    } else if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = within(k, v);
+    // Six bands' times; three (kept before the six bands, 2026-10-18) each for two of them.
+    else if (Array.isArray(v) && (v.length === 6 || v.length === 3) && v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
+      const six = v.length === 6 ? v : v.flatMap((x) => [x, x]);
+      (out as Record<string, unknown>)[k] = six.map((x) => within(k, x));
+    }
+  }
+  // The routes kept: each one there is, over the defaults (a 0 kept turns a default off).
+  if (saved.routes && typeof saved.routes === 'object') {
+    for (const [key, v] of Object.entries(saved.routes as Record<string, unknown>)) {
+      if (typeof v === 'number' && Number.isFinite(v) && isRoute(key, BANDS)) out.routes[key] = within('routes', v);
+    }
+  }
+  return out;
 }
 
 export const visualSettings = $state<VisualSettings>(load());
