@@ -8,10 +8,7 @@
 // that keeps nothing (a private window) starts from the defaults each time.
 
 import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
-import { EFFECTS } from './effects';
-
-/** The highest effect's id, the effect settings' top. */
-const LAST_EFFECT = Math.max(...EFFECTS.map((e) => e.id));
+import { ENGINE_EFFECTS, LOOP_EFFECTS } from './effects';
 import { defaultRoutes, isRoute, keyNow, SCALE_KEYS, type RouteValue } from './routes';
 import { curveFrom, valueOf } from './curves';
 import { QUALITY } from './quality';
@@ -205,13 +202,13 @@ export const RANGES: Record<Ranged, [number, number]> = {
   vividness: [0, 1],
   spread: [0.25, 2.5],
   purity: [0, 1],
-  fx1: [0, LAST_EFFECT],
+  fx1: [0, ENGINE_EFFECTS.kaleidoscope.length],
   fx1Amount: [0, 1],
-  fx2: [0, LAST_EFFECT],
+  fx2: [0, ENGINE_EFFECTS.eyedo.length],
   fx2Amount: [0, 1],
-  fx3: [0, LAST_EFFECT],
+  fx3: [0, ENGINE_EFFECTS.hydra.length],
   fx3Amount: [0, 1],
-  fxLoop: [0, LAST_EFFECT],
+  fxLoop: [0, LOOP_EFFECTS.length],
   fxLoopAmount: [0, 1],
   facets: [0, 1],
   lattice: [0, 1],

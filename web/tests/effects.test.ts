@@ -50,3 +50,25 @@ test('the beat: where in it and its bar, how long since, how strong; none is lon
   for (const e of EFFECTS) if (e.glsl.includes('fx_beat(')) assert.ok(!e.slots.includes('loop'), `${e.name}: the loop has no beat`);
   assert.ok(pictureShader([16])!.includes('vec4 fx_beat()'));
 });
+
+test('three engines: every effect in exactly one, the loop’s its shapes; a setting counts its engine’s sub-effects', async () => {
+  const { ENGINES, ENGINE_EFFECTS, LOOP_EFFECTS, engineEffect, loopEffect, effectsNow } = await import('../src/lib/visuals/effects.ts');
+  assert.deepEqual(ENGINES.map((e) => e.label), ['Kaleidoscope', 'EYEDO', 'Hydra']);
+  const seen = new Map<number, string>();
+  for (const { key } of ENGINES)
+    for (const e of ENGINE_EFFECTS[key]) {
+      assert.ok(e, `${key}: an id with no effect`);
+      assert.equal(e.engine, key, `${e.name} in ${key}`);
+      assert.ok(!seen.has(e.id), `${e.name} in ${seen.get(e.id)} and ${key}`);
+      seen.set(e.id, key);
+    }
+  assert.equal(seen.size, EFFECTS.length, 'every effect in an engine');
+  for (const e of LOOP_EFFECTS) assert.ok(e && e.kind === 'shape' && e.slots.includes('loop'), `${e?.name}: for the loop`);
+  assert.equal(LOOP_EFFECTS.length, EFFECTS.filter((e) => e.slots.includes('loop')).length, 'every loop shape offered');
+  assert.equal(engineEffect('kaleidoscope', 1), 1);
+  assert.equal(engineEffect('hydra', 0), 0);
+  assert.equal(engineEffect('eyedo', 99), 0, 'past its last: none');
+  assert.equal(loopEffect(1), LOOP_EFFECTS[0].id);
+  const fx = effectsNow({ fx1: 2, fx1Amount: 0.5, fx2: 1, fx2Amount: 1, fx3: 0, fx3Amount: 1, fxLoop: 0, fxLoopAmount: 0 }, 1, 0);
+  assert.deepEqual(fx.ids, [ENGINE_EFFECTS.kaleidoscope[1].id, ENGINE_EFFECTS.eyedo[0].id, 0]);
+});

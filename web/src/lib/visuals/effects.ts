@@ -14,6 +14,16 @@
 
 import type { VisualSettings } from './settings.svelte';
 
+/** The engines (the owner, 65: "a kaleidoscope engine, exyedo engine, and maybe one more? And then have multiple
+ *  subeffects"): the picture's three slots, run in this order, each one of its sub-effects at a time. Kaleidoscope:
+ *  symmetry and tiling; EYEDO (after EYESY): on the beat and in rhythm; Hydra: flow, feedback and colour. */
+export type Engine = 'kaleidoscope' | 'eyedo' | 'hydra';
+export const ENGINES: readonly { key: Engine; label: string }[] = [
+  { key: 'kaleidoscope', label: 'Kaleidoscope' },
+  { key: 'eyedo', label: 'EYEDO' },
+  { key: 'hydra', label: 'Hydra' },
+];
+
 /** The meters an effect adds to, each a second at its amount (the meters' own units). */
 export type Report = Partial<Record<'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping', number>>;
 
@@ -28,6 +38,8 @@ export type Effect = {
    *  nothing); t: the track's own time (seconds). On the picture, `fx_beat()` gives the beat: x where in it (0..1),
    *  y how long since it fell (seconds; long ago where there is none), z its strength (0..1), w where in its bar (0..1). */
   kind: 'shape' | 'colour' | 'echo';
+  /** Its engine (the picture's three, each one of its sub-effects at a time: `ENGINES`). */
+  engine: Engine;
   /** Where it may go: the loop takes shapes only. */
   slots: readonly ('picture' | 'loop')[];
   /** One GLSL ES 3.00 function \`fx_<name>\`, and helpers named \`fx_<name>_…\`. */
@@ -40,6 +52,7 @@ export const EFFECTS: readonly Effect[] = [
     // ported from hydra-synth (AGPL-3.0), kaleid
     id: 1,
     name: 'kaleid',
+    engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture', 'loop'],
     glsl: `vec2 fx_kaleid(vec2 p, float a, float t) {
@@ -59,6 +72,7 @@ export const EFFECTS: readonly Effect[] = [
     // ported from hydra-synth (AGPL-3.0), posterize
     id: 2,
     name: 'posterize',
+    engine: 'hydra',
     kind: 'colour',
     slots: ['picture'],
     glsl: `vec3 fx_posterize(vec3 c, vec2 p, float a, float t) {
@@ -73,6 +87,7 @@ export const EFFECTS: readonly Effect[] = [
     // ported from hydra-synth (AGPL-3.0), repeat
     id: 3,
     name: 'repeat',
+    engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture'],
     glsl: `float fx_repeat_tri(float x) { return abs(mod(x + 1.0, 4.0) - 2.0) - 1.0; }
@@ -89,6 +104,7 @@ vec2 fx_repeat(vec2 p, float a, float t) {
     // ported from hydra-synth (AGPL-3.0), pixelate
     id: 4,
     name: 'pixelate',
+    engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture', 'loop'],
     glsl: `vec2 fx_pixelate(vec2 p, float a, float t) {
@@ -103,6 +119,7 @@ vec2 fx_repeat(vec2 p, float a, float t) {
     // ported from hydra-synth (AGPL-3.0), colorama
     id: 5,
     name: 'colorama',
+    engine: 'hydra',
     kind: 'colour',
     slots: ['picture'],
     glsl: `vec3 fx_colorama_hsv(vec3 c) {
@@ -130,6 +147,7 @@ vec3 fx_colorama(vec3 c, vec2 p, float a, float t) {
     // ported from hydra-synth (AGPL-3.0), hue
     id: 6,
     name: 'hue',
+    engine: 'hydra',
     kind: 'colour',
     slots: ['picture'],
     glsl: `vec3 fx_hue_hsv(vec3 c) {
@@ -156,6 +174,7 @@ vec3 fx_hue(vec3 c, vec2 p, float a, float t) {
     // ported from hydra-synth (AGPL-3.0), modulate (by noise)
     id: 7,
     name: 'ripple',
+    engine: 'hydra',
     kind: 'shape',
     slots: ['picture', 'loop'],
     glsl: `float fx_ripple_hash(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }
@@ -178,6 +197,7 @@ vec2 fx_ripple(vec2 p, float a, float t) {
     // ported from hydra-synth (AGPL-3.0), modulate (by the visuals' own flow)
     id: 8,
     name: 'stream',
+    engine: 'hydra',
     kind: 'shape',
     slots: ['picture', 'loop'],
     glsl: `vec2 fx_stream(vec2 p, float a, float t) {
@@ -192,6 +212,7 @@ vec2 fx_ripple(vec2 p, float a, float t) {
     // ported from hydra-synth (AGPL-3.0), src(o0) fed back, scaled and turned
     id: 9,
     name: 'echo',
+    engine: 'hydra',
     kind: 'echo',
     slots: ['picture'],
     glsl: `vec3 fx_echo(vec3 c, vec2 p, float a, float t, sampler2D prev) {
@@ -208,6 +229,7 @@ vec2 fx_ripple(vec2 p, float a, float t) {
     // ported from hydra-synth (AGPL-3.0), rotate
     id: 10,
     name: 'rotate',
+    engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture', 'loop'],
     glsl: `vec2 fx_rotate(vec2 p, float a, float t) {
@@ -222,6 +244,7 @@ vec2 fx_ripple(vec2 p, float a, float t) {
     // ported from hydra-synth (AGPL-3.0), scroll
     id: 11,
     name: 'scroll',
+    engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture', 'loop'],
     glsl: `float fx_scroll_tri(float x) { return abs(mod(x + 1.0, 4.0) - 2.0) - 1.0; }
@@ -237,6 +260,7 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     // ported from hydra-synth (AGPL-3.0), saturate
     id: 12,
     name: 'saturate',
+    engine: 'hydra',
     kind: 'colour',
     slots: ['picture'],
     glsl: `vec3 fx_saturate(vec3 c, vec2 p, float a, float t) {
@@ -251,6 +275,7 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     // After EYESY's Magnify Cloud mode (Critter & Guitari): the idea only, our own shader.
     id: 13,
     name: 'magnify',
+    engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture'],
     glsl: `vec2 fx_magnify(vec2 p, float a, float t) {
@@ -269,6 +294,7 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     // After EYESY's Concentric and Radiating Square modes (Critter & Guitari): the idea only, our own shader.
     id: 14,
     name: 'rings',
+    engine: 'eyedo',
     kind: 'shape',
     slots: ['picture', 'loop'],
     glsl: `vec2 fx_rings(vec2 p, float a, float t) {
@@ -285,6 +311,7 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     // After EYESY's Interference mode (Critter & Guitari): the idea only, our own shader.
     id: 15,
     name: 'interference',
+    engine: 'eyedo',
     kind: 'colour',
     slots: ['picture'],
     glsl: `vec3 fx_interference(vec3 c, vec2 p, float a, float t) {
@@ -302,6 +329,7 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     // After EYESY's trigger modes (Critter & Guitari): the idea only, our own shader.
     id: 16,
     name: 'pulse',
+    engine: 'eyedo',
     kind: 'shape',
     slots: ['picture'],
     glsl: `vec2 fx_pulse(vec2 p, float a, float t) {
@@ -317,6 +345,7 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     // After EYESY's trigger modes (Critter & Guitari): the idea only, our own shader.
     id: 17,
     name: 'burst',
+    engine: 'eyedo',
     kind: 'shape',
     slots: ['picture'],
     glsl: `vec2 fx_burst(vec2 p, float a, float t) {
@@ -335,6 +364,7 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     // After EYESY's trigger modes (Critter & Guitari): the idea only, our own shader.
     id: 18,
     name: 'halo',
+    engine: 'eyedo',
     kind: 'colour',
     slots: ['picture'],
     glsl: `vec3 fx_halo(vec3 c, vec2 p, float a, float t) {
@@ -350,6 +380,18 @@ vec2 fx_scroll(vec2 p, float a, float t) {
 ];
 
 const byId = new Map(EFFECTS.map((e) => [e.id, e]));
+
+/** Each engine's sub-effects in the order its setting counts them (1 the first, 0 none; a new one goes at the end, so
+ *  a kept setting keeps its effect), and the loop's likewise. */
+export const ENGINE_EFFECTS: Record<Engine, readonly Effect[]> = {
+  kaleidoscope: [1, 3, 10, 11, 4, 13].map((id) => byId.get(id)!),
+  eyedo: [16, 17, 18, 14, 15].map((id) => byId.get(id)!),
+  hydra: [9, 7, 8, 5, 6, 12, 2].map((id) => byId.get(id)!),
+};
+export const LOOP_EFFECTS: readonly Effect[] = [1, 4, 7, 8, 10, 11, 14].map((id) => byId.get(id)!);
+/** An engine's sub-effect at `place` (1..), or the loop's: its id (0: none). */
+export const engineEffect = (engine: Engine, place: number) => ENGINE_EFFECTS[engine][Math.round(place) - 1]?.id ?? 0;
+export const loopEffect = (place: number) => LOOP_EFFECTS[Math.round(place) - 1]?.id ?? 0;
 /** An effect by its id (none for 0 or one not known: a setting from a later version shows nothing, rather than fails). */
 export const effectOf = (id: number) => byId.get(id) ?? null;
 
@@ -441,9 +483,10 @@ export type EffectSettings = Pick<VisualSettings, 'fx1' | 'fx2' | 'fx3' | 'fx1Am
 /** The look's effects for the renderer (render.ts `Shown.effects`): each amount times what the Effects setting's routes
  *  let through (`level`); `t` the track's own time (s). */
 export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null) => ({
-  ids: [how.fx1, how.fx2, how.fx3].map(Math.round),
+  // Each engine's sub-effect (its setting the place in the engine's list), in the engines' order.
+  ids: [how.fx1, how.fx2, how.fx3].map((place, k) => engineEffect(ENGINES[k].key, place)),
   amounts: [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a) => a * level),
-  loop: Math.round(how.fxLoop),
+  loop: loopEffect(how.fxLoop),
   loopAmount: how.fxLoopAmount * level,
   t,
   beat: beatOf(beat),

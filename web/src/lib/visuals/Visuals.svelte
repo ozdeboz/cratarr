@@ -68,7 +68,7 @@
   import { newStirring, stir } from './stirring';
   import { FlameRenderer } from './render';
   import { DIVE_MOST, TUNNEL_MOST } from './zoom';
-  import { effectOf, effectsNow, settingsReport } from './effects';
+  import { effectsNow, ENGINE_EFFECTS, ENGINES, LOOP_EFFECTS, settingsReport } from './effects';
   import {
     A,
     ASPECT_LABEL,
@@ -544,8 +544,9 @@
     }),
   ];
   // An effect setting's text: its effect's name, or none.
-  const effectName = (v: number) => {
-    const e = effectOf(Math.round(v));
+  // An engine's (or the loop's) sub-effect by its place: its name, or none.
+  const subName = (list: readonly { name: string }[]) => (v: number) => {
+    const e = list[Math.round(v) - 1];
     return e ? e.name[0].toUpperCase() + e.name.slice(1) : 'None';
   };
   const LOOK: Row[] = [
@@ -567,10 +568,10 @@
     { key: 'lattice', label: 'Lattice', step: 1, text: (v) => (v ? 'Hex' : 'Square') },
     // The look's effects (65): three on the picture, one on the loop, each with its amount.
     ...([1, 2, 3] as const).flatMap((n) => [
-      { key: `fx${n}` as One, label: `Effect ${n}`, step: 1, text: effectName },
-      { key: `fx${n}Amount` as One, label: `Amount ${n}`, step: 0.05, text: percent },
+      { key: `fx${n}` as One, label: ENGINES[n - 1].label, step: 1, text: subName(ENGINE_EFFECTS[ENGINES[n - 1].key]) },
+      { key: `fx${n}Amount` as One, label: 'Amount', step: 0.05, text: percent },
     ]),
-    { key: 'fxLoop', label: 'Loop', step: 1, text: effectName },
+    { key: 'fxLoop', label: 'Loop', step: 1, text: subName(LOOP_EFFECTS) },
     { key: 'fxLoopAmount', label: 'Loop amount', step: 0.05, text: percent },
   ];
   const isLook = (key: string) => (PRESET_KEYS as readonly string[]).includes(key);

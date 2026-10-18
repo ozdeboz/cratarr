@@ -4,7 +4,7 @@
 // made from a preset of the look's settings alone (a track's id gives the same preset every time, checked on the CPU
 // before it is shown: one whose flame collapses to a point or smears into noise is passed over), framed, evolved by the
 // music, and blended into the next. The drawing is lib/visuals/render.ts.
-import { EFFECTS } from './effects';
+import { ENGINE_EFFECTS, ENGINES, LOOP_EFFECTS } from './effects';
 
 
 /** A flame's parts: its first transforms, one for each of the music's six bands, low to high (decision 0046, amended). */
@@ -361,8 +361,8 @@ export type Preset = {
   vividness: number;
   spread: number;
   purity: number;
-  /** The effects (65, effects.ts): three on the picture and one on the loop, each an effect's id (0: none) and its
-   *  amount (0..1). */
+  /** The effects (65, effects.ts): the picture's three engines (Kaleidoscope, EYEDO, Hydra) and the loop, each its
+   *  sub-effect (its place in the engine's list, 0: none) and its amount (0..1). */
   fx1: number;
   fx1Amount: number;
   fx2: number;
@@ -409,19 +409,22 @@ export const FORMS = 1000;
 const STANDBY: Preset = { form: 0, detail: 0.5, twist: 0.7, warp: 0.8, symmetry: 4, mirror: 0, final: 0, family: 0, hue: 0, lightness: 0.5, vividness: 0.5, spread: 1, purity: 0.75, ...NO_EFFECTS, facets: 0, lattice: 0 };
 
 /** A look's effects (effects.ts), drawn from a stream of their own, so a seed's other draws (its form, its colours …)
- *  stay as they were: one look in three one effect or two on the picture, one in five an effect on the loop, at no more
+ *  stay as they were: one look in three one engine or two on the picture, one in five an effect on the loop, at no more
  *  than four fifths of their amount. */
 function effectsDrawn(seed: number): Pick<Preset, keyof typeof NO_EFFECTS> {
   const rnd = randomFrom((seed ^ 0x5eedf00d) >>> 0);
-  const picture = EFFECTS.filter((e) => e.slots.includes('picture'));
-  const loops = EFFECTS.filter((e) => e.slots.includes('loop') && e.kind === 'shape');
-  const pick = (list: readonly { id: number }[]) => (list.length ? list[Math.floor(rnd() * list.length)].id : 0);
+  // One engine or two (never the same twice), each one of its sub-effects.
+  const place = (n: number) => 1 + Math.floor(rnd() * n);
   const n = rnd() < 0.67 ? 0 : rnd() < 0.6 ? 1 : 2;
   const out = { ...NO_EFFECTS };
-  if (n >= 1) [out.fx1, out.fx1Amount] = [pick(picture), 0.3 + rnd() * 0.5];
-  // A second, never the first again (the same effect twice is only the first, stronger).
-  if (n >= 2) [out.fx2, out.fx2Amount] = [pick(picture.filter((e) => e.id !== out.fx1)), 0.3 + rnd() * 0.5];
-  if (rnd() < 0.2) [out.fxLoop, out.fxLoopAmount] = [pick(loops), 0.2 + rnd() * 0.4];
+  const first = Math.floor(rnd() * ENGINES.length);
+  const engines = n === 0 ? [] : n === 1 ? [first] : [first, (first + 1 + Math.floor(rnd() * (ENGINES.length - 1))) % ENGINES.length];
+  for (const k of engines) {
+    const key = (['fx1', 'fx2', 'fx3'] as const)[k];
+    out[key] = place(ENGINE_EFFECTS[ENGINES[k].key].length);
+    out[`${key}Amount` as 'fx1Amount'] = 0.3 + rnd() * 0.5;
+  }
+  if (rnd() < 0.2) [out.fxLoop, out.fxLoopAmount] = [place(LOOP_EFFECTS.length), 0.2 + rnd() * 0.4];
   return out;
 }
 
