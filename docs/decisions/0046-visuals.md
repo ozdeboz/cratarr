@@ -570,3 +570,49 @@ Measured (the lab page, a stand-in server): the sheet opened over the visuals an
 settings (v 2) and a 4.8 KB picture as "Lab · 11:45", its name then edited in place; a recall put Flash and Points back,
 Points on this device only (nothing of the five sent to the group); one from 63 left Points as they were; Standard gave
 Points 19, Steps 3, Resolution and FPS the device's own, Brightness 100 %, nothing pinned; held, one was deleted.
+
+The snapshots on the server (claude-5f's): kept by Cratarr in the user data (`visual_snapshot`), per user (the first
+administrator's, as Cratarr's own calls act on), newest first: `GET/POST /api/visuals/snapshots`,
+`PATCH/DELETE /api/visuals/snapshots/{id}`, each `{ id, name, settings, created, picture? }`. The settings are the page's
+JSON, opaque to the server (with the page's `v`), at most 64 KB; names 1 to 200 characters; a PATCH renames, re-pictures
+or both. Standard is the page's, not stored.
+
+## Amendment, 2026-10-18: Drift and the Track row, the player a page drives, seeking, the Cratarr lens (64)
+
+- **Drift in place of Reseed** (the owner: "The reseed route target should essentially only affect looks, and it should
+  walk proportionally instead of randomizing", "So random direction proportional distance"). The column's routes walk
+  the look's smooth settings (Detail, Twist, Warp, Hue, Lightness, Vividness, Spread, Purity, those not pinned) in a
+  direction drawn anew each bar from the track and the bar's number (every device of a group walks alike), as far as the
+  routed signal reaches, within reach of where the track set them; below 0 they walk back (drift.ts, claude-5f's). The
+  choices (Form, Symmetry, Mirror, Lens, Family) do not walk. Ten steps a second, none with reduced motion; not saved,
+  not sent. Routes kept into Reseed are Drift's.
+- **The Track row** (the owner: "Yes, I want it in 64"): a whole-track signal, all of it as a track starts (the visuals
+  opening on one too), gone over its first beat. Into Drift it sets how far a new track brings its own look: −100 % all
+  of it (the default: as before), −50 % half way (the choices only past half way), 0 none, above 0 away from it. A Reset,
+  the dice and a group's look still come whole. A snapshot from before the row recalls with its −100 %. Into any other
+  aspect it is a pulse at each new track.
+- **Shared with the player a page drives:** the key is the player's group's leader where it is in one, else the
+  player's own name (the owner: "My phone is most definitely controlling my salon tablet … So they are in a group to
+  some extent"), so a phone's page driving the salon tablet shares the tablet's own page's visuals.
+- **Play and pause** between previous and next (the owner: "We are missing the play pause button").
+- **Seeking by taps** (the owner: "Double tap is 10 seconds forward or back. Triple tap makes that 30 seconds", "each
+  subsequent tap after the 30 seconds should be 30 seconds per tap"): on the right forward, on the left back, each step
+  as it comes, how far shown on that side for a moment. A single tap still shows or hides the controls, once no second
+  follows (300 ms). The local player seeks at once; one of Cratarr's players is moved by the server from where it is
+  (`POST /api/players/{name}/command { "command": "seek", "by_ms" }`); others are not moved.
+- **Full screen from the panel** shows the visuals: moving between beside the page and over it no longer goes back a
+  step of the history (which the visuals moved to took as their close).
+- **The Cratarr lens** (the owner: "the circle with a 60-degree slice on the right side taken out", then "we can actually
+  get the Cratarr logo itself in high resolution, including all details"): a Lens drawing the flame into Cratarr's mark,
+  the record's rings outside its slice and the thin ones in it (Mark.svelte's radii; the shader's code written from the
+  same list). Each point goes into the slice or the rest by its angle, as their areas share, and its distance into their
+  rings by area. It takes the whole of the final transform. Presets still draw their lens among the others, so every
+  track's own look stays as it was; this one is picked.
+- **The dice and the governor:** Another look keeps the look-only dice; the dice draw everything, a look and how it
+  behaves, checked against the track first, with an undo. Both, the meters, the rating page and the governor are
+  decision 0048's.
+
+Measured (the lab page): a track change at the default gave the next track's own look exactly; at 0 the look stayed; at
+−50 % every smooth setting went 0.49 to 0.51 of the way; a +100 % walk reached the tether (0.3) and stayed within it, and
+−100 % went home at once. Moved beside, over, beside, over and closed, the visuals stayed open each time and the history
+went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, the controls untouched.
