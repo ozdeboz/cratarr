@@ -288,3 +288,43 @@ high above 5 kHz): each band's loudness every 50 ms and its transients, worked o
 guarding the write, upserted, following the file); a decode that does not cover the file gives none, kept as none.
 Served at `GET /api/track/{source}/{id}/bands`, whose doc gives the format (versioned by its first byte). One decode
 answers both routes: the page asks for both at once, and the second finds the first's result.
+
+## Amendment, 2026-10-18: the visuals' signals (format 3)
+
+The owner asked that every signal the music gives can steer every aspect of the show ("For each aspect of the music we
+can get a signal for, I want to be able to control its effect on each of the main aspects of the visualization"), and
+for all the reasonable ones but stems ("Okay yes I want all of those but not stems!"; Demucs took 333 s of four cores
+for a 284 s track). The three bands become **format 3** (`analysis::signals`), still worked out only when the visuals
+first ask, in the same one decode, kept in the same column (`analysis_shape.bands`, read as `signals_of`), served at
+the same route; formats 1 and 2 count as not worked out and are done again when asked.
+
+- **Six adjacent bands** on a hearing scale: sub below 60 Hz, bass 60–150, low-mid 150–400, mid 400 Hz–2 kHz,
+  presence 2–5 kHz, air above 5 kHz. The three before left 150–300 Hz and 2.5–5 kHz out (a snare's body, a voice's
+  presence). Through each band's filters (24 dB an octave at each edge, the usual crossover slope; a tone in the middle of
+  a band reaches its neighbour about 15 dB down): its **level** (20 a second) and **crest** (peak against RMS over
+  200 ms: punch against density). From a short-time Fourier transform of the sound's middle and side (46 ms windows
+  every 11.6 ms): its **flux** (the rise of its log-compressed spectrum: the onset strength, Bello et al. 2005) and the
+  **hits** picked from it against a moving median (Böck et al. 2012); its **width** (side against middle and side: 0
+  mono, 0.5 two unrelated channels, 1 opposites); its **percussive and harmonic** parts (Fitzgerald 2010: medians
+  across 17 frames and across 17 bins of a 96-bin log-frequency spectrogram, soft masks) and the percussive part's hits;
+  its **swell**.
+- **The whole track:** the loudness as heard (EBU R128 momentary, absolute: the show's intensity), the **spectral
+  centroid**, **chroma** and the **harmonic change** (Harte et al. 2006: the tonal centroid's movement) with its peaks,
+  the sections' **novelty** (Foote 2000: a Gaussian checkerboard kernel along a beat-by-beat self-similarity of chroma
+  and timbre, as large as fits on both sides alike) with its **boundaries**, each beat's **place in its bar** (of 3 or 4,
+  where the low bands' starts fall hardest; with how sure: good on 4/4 with a kick on one, poor on jazz, classical and
+  free time, and a page ignores it when unsure), the **swell** (the loudness rising now, by at least 2 dB over 1.5 s,
+  more than 3 dB since its low; a single hit is none) and **build-ups** (a swell that brightens and leads into a
+  boundary: the whole track being known, the show can build towards the drop).
+- **The form:** a format byte and the number of sections, then self-describing sections (an id, a kind: series, hits,
+  marks or the band table; a rate, channels, a count, a scale id), so a later signal is another section, not another
+  format; a page skips the sections it does not know. The route's doc lists them.
+- **Above 48 kHz** the sound is taken down to 44.1 or 48 kHz first (two low-passes at 20 kHz): nothing the show is
+  steered by lies above, and a 192 kHz file took five times as long a minute as a CD's.
+- **Measured on the NAS** (`cratarr-server --signals <files>`, 2026-10-18): a 4:41 CD track 3.8 s and 254 KB; a 6:50
+  track at 96 kHz 7.9 s; a 7:07 track at 192 kHz 11.7 s (18.0 before the take-down); a 43-minute track 32.5 s and
+  2.2 MB: about 52 KB a minute, within the 60 s decode, kept only for tracks played with the visuals or looked ahead to.
+- **Look-ahead:** the next two tracks of each playing or paused queue get theirs before they play, on a free turn only
+  (a page waiting for a decode comes first), on every change of a player and once a minute. Until a track's are there,
+  a browser player listens to the sound itself (`web/src/lib/visuals/live.ts`: the band signals and the loudness from
+  running statistics); the app's player is not the page's, and waits for the server.
