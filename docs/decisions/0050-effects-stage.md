@@ -4,7 +4,8 @@
   and X going 65"; "maybe the whole touch interaction should be deferred to 66, since we have sufficient for 65"; on the
   open questions: "Yes, agree with the softness slider and the square or hex lattice working in the fluid only. Now,
   we'd probably do best by putting this under the looks section with the looks dice. I don't care about old snapshots.
-  And yes, sync the group properly in 65, all at once"). claude-5f's two sections below are still to be filled in.
+  And yes, sync the group properly in 65, all at once"). claude-5f's sections below (the envelope, Haze and Quality), filled in, are agreed too (the owner,
+  2026-10-18: "Agree").
 - Date: 2026-10-18
 - Builds on: 0046 (the visuals, their routes and settings), 0047 (the fluid), 0048 (the randomisation and its limits);
   0049 (the pulse) is separate
