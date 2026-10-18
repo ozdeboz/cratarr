@@ -1114,6 +1114,8 @@
         trialSeen = trial.settings;
         metering = new Meters();
         Object.assign(governor, newGovernor());
+        // Nor is a thumb just after the rating page judged on its trials.
+        recent = [];
       }
       renderer.measure(w, h, now / 1000);
       const stats: FrameStats = {
