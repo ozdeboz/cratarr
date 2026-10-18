@@ -427,6 +427,24 @@ struct NewSnapshot {
     name: String,
     /// Opaque here: whatever the page keeps (with its own version, `v`).
     settings: serde_json::Value,
+    /// A small picture of it, a data URL (`snapshot_picture`).
+    #[serde(default)]
+    picture: Option<String>,
+}
+
+/// The largest picture a snapshot keeps (its data URL's length).
+const SNAPSHOT_PICTURE: usize = 48 * 1024;
+
+/// A snapshot's picture as sent: a JPEG or PNG data URL, small.
+fn snapshot_picture(picture: Option<&str>) -> Result<Option<&str>, Response> {
+    let Some(p) = picture else { return Ok(None) };
+    if !(p.starts_with("data:image/jpeg;base64,") || p.starts_with("data:image/png;base64,")) {
+        return Err(refused(StatusCode::BAD_REQUEST, "A snapshot's picture is a JPEG or PNG data URL."));
+    }
+    if p.len() > SNAPSHOT_PICTURE {
+        return Err(refused(StatusCode::PAYLOAD_TOO_LARGE, "That picture is too large to keep."));
+    }
+    Ok(Some(p))
 }
 
 async fn add_visual_snapshot(Json(b): Json<NewSnapshot>) -> Response {
@@ -441,27 +459,39 @@ async fn add_visual_snapshot(Json(b): Json<NewSnapshot>) -> Response {
     if b.settings.to_string().len() > crate::app::visuals::MOST_BYTES {
         return refused(StatusCode::PAYLOAD_TOO_LARGE, "That snapshot is too large to keep.");
     }
-    match served.userdata.add_snapshot(&me, &name, &b.settings) {
+    let picture = match snapshot_picture(b.picture.as_deref()) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    match served.userdata.add_snapshot(&me, &name, &b.settings, picture) {
         Ok(snapshot) => Json(snapshot).into_response(),
         Err(e) => failed(e),
     }
 }
 
+/// A snapshot renamed, or given a picture, or both.
 #[derive(Deserialize)]
-struct SnapshotName {
-    name: String,
+struct SnapshotChange {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    picture: Option<String>,
 }
 
-async fn rename_visual_snapshot(Path(id): Path<String>, Json(b): Json<SnapshotName>) -> Response {
+async fn rename_visual_snapshot(Path(id): Path<String>, Json(b): Json<SnapshotChange>) -> Response {
     let (served, me) = match snapshot_keeper() {
         Ok(k) => k,
         Err(r) => return r,
     };
-    let name = match snapshot_name(&b.name) {
+    let name = match b.name.as_deref().map(snapshot_name).transpose() {
         Ok(n) => n,
         Err(r) => return r,
     };
-    match served.userdata.rename_snapshot(&me, &id, &name) {
+    let picture = match snapshot_picture(b.picture.as_deref()) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    match served.userdata.change_snapshot(&me, &id, name.as_deref(), picture) {
         Ok(Some(snapshot)) => Json(snapshot).into_response(),
         Ok(None) => refused(StatusCode::NOT_FOUND, "There is no such snapshot."),
         Err(e) => failed(e),

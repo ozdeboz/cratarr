@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS playlist_entry (
   playlist TEXT NOT NULL, entry TEXT NOT NULL, n INTEGER NOT NULL, added INTEGER NOT NULL,
   PRIMARY KEY (playlist, entry, n)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS visual_snapshot (
-  user TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL, created INTEGER NOT NULL,
+  user TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL, created INTEGER NOT NULL, picture TEXT,
   PRIMARY KEY (user, id));
 ";
 
@@ -177,7 +177,7 @@ pub struct Bookmark {
 }
 
 /// A look of the visuals kept to come back to (decision 0046, amended): whatever shaped the picture when it was saved,
-/// as the page sent it (its JSON, opaque here).
+/// as the page sent it (its JSON, opaque here), and a small picture of it (a data URL), where the page took one.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Snapshot {
     pub id: String,
@@ -185,6 +185,8 @@ pub struct Snapshot {
     pub settings: serde_json::Value,
     /// Epoch seconds.
     pub created: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 /// An Incoming album promoted (kept into Music) or rejected (deleted) by its id: what was done, and the key that
@@ -231,10 +233,27 @@ fn move_old_play_queues(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// A `visual_snapshot` row's (id, name, settings, created); settings that no longer read as JSON read as null.
+/// A `visual_snapshot` row's (id, name, settings, created, picture); settings that no longer read as JSON read as null.
 fn snapshot_of(r: &rusqlite::Row) -> rusqlite::Result<Snapshot> {
     let settings: String = r.get(2)?;
-    Ok(Snapshot { id: r.get(0)?, name: r.get(1)?, settings: serde_json::from_str(&settings).unwrap_or(serde_json::Value::Null), created: r.get(3)? })
+    Ok(Snapshot {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        settings: serde_json::from_str(&settings).unwrap_or(serde_json::Value::Null),
+        created: r.get(3)?,
+        picture: r.get(4)?,
+    })
+}
+
+const SNAPSHOT_COLUMNS: &str = "id, name, settings, created, picture";
+
+/// Snapshots made before they had pictures (preview 63) get the column, empty. Safe to repeat.
+fn add_snapshot_pictures(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('visual_snapshot') WHERE name = 'picture'")?.exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE visual_snapshot ADD COLUMN picture TEXT")?;
+    }
+    Ok(())
 }
 
 /// An `imported` row's (server_item, plays, played, starred, rating).
@@ -257,6 +276,7 @@ impl UserData {
         conn.execute_batch(tags::SCHEMA).context("creating the album tag table")?;
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
+        add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         Ok(Self { db: Mutex::new(conn) })
     }
 
@@ -608,32 +628,36 @@ impl UserData {
     /// A user's snapshots of the visuals, the newest first.
     pub fn snapshots(&self, user: &str) -> Result<Vec<Snapshot>> {
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT id, name, settings, created FROM visual_snapshot WHERE user = ?1 ORDER BY created DESC, rowid DESC")?;
+        let mut st = db.prepare_cached(&format!("SELECT {SNAPSHOT_COLUMNS} FROM visual_snapshot WHERE user = ?1 ORDER BY created DESC, rowid DESC"))?;
         let rows = st.query_map([user], snapshot_of)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// A snapshot kept, under a new id.
-    pub fn add_snapshot(&self, user: &str, name: &str, settings: &serde_json::Value) -> Result<Snapshot> {
+    pub fn add_snapshot(&self, user: &str, name: &str, settings: &serde_json::Value, picture: Option<&str>) -> Result<Snapshot> {
         let mut b = [0u8; 8];
         getrandom::fill(&mut b).map_err(|e| anyhow::anyhow!("random: {e}"))?;
         let id: String = b.iter().map(|x| format!("{x:02x}")).collect();
         let created = now();
         self.db().execute(
-            "INSERT INTO visual_snapshot (user, id, name, settings, created) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![user, id, name, settings.to_string(), created],
+            "INSERT INTO visual_snapshot (user, id, name, settings, created, picture) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![user, id, name, settings.to_string(), created, picture],
         )?;
-        Ok(Snapshot { id, name: name.to_string(), settings: settings.clone(), created })
+        Ok(Snapshot { id, name: name.to_string(), settings: settings.clone(), created, picture: picture.map(str::to_string) })
     }
 
-    /// A snapshot renamed; `None` where the user has none by that id.
-    pub fn rename_snapshot(&self, user: &str, id: &str, name: &str) -> Result<Option<Snapshot>> {
+    /// A snapshot renamed, or given another picture (whichever is given); `None` where the user has none by that id.
+    pub fn change_snapshot(&self, user: &str, id: &str, name: Option<&str>, picture: Option<&str>) -> Result<Option<Snapshot>> {
         let db = self.db();
-        if db.execute("UPDATE visual_snapshot SET name = ?3 WHERE user = ?1 AND id = ?2", params![user, id, name])? == 0 {
+        let changed = db.execute(
+            "UPDATE visual_snapshot SET name = coalesce(?3, name), picture = coalesce(?4, picture) WHERE user = ?1 AND id = ?2",
+            params![user, id, name, picture],
+        )?;
+        if changed == 0 {
             return Ok(None);
         }
         Ok(db
-            .query_row("SELECT id, name, settings, created FROM visual_snapshot WHERE user = ?1 AND id = ?2", params![user, id], snapshot_of)
+            .query_row(&format!("SELECT {SNAPSHOT_COLUMNS} FROM visual_snapshot WHERE user = ?1 AND id = ?2"), params![user, id], snapshot_of)
             .optional()?)
     }
 
@@ -1086,18 +1110,45 @@ mod tests {
     fn snapshots_are_kept_per_user_newest_first() {
         let u = UserData::open(None).unwrap();
         let settings = serde_json::json!({ "v": 1, "flash": 0.5, "routes": { "beat|-|size": 0.08 } });
-        let a = u.add_snapshot("me", "Oyster Cove", &settings).unwrap();
-        let b = u.add_snapshot("me", "Puds", &serde_json::json!({ "v": 1 })).unwrap();
-        u.add_snapshot("you", "Theirs", &settings).unwrap();
+        let a = u.add_snapshot("me", "Oyster Cove", &settings, Some("data:image/jpeg;base64,AAAA")).unwrap();
+        let b = u.add_snapshot("me", "Puds", &serde_json::json!({ "v": 1 }), None).unwrap();
+        u.add_snapshot("you", "Theirs", &settings, None).unwrap();
         assert_ne!(a.id, b.id);
         let mine = u.snapshots("me").unwrap();
         assert_eq!(mine.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Puds", "Oyster Cove"], "the newest first, only mine");
         assert_eq!(mine[1].settings, settings, "kept as sent");
-        let renamed = u.rename_snapshot("me", &a.id, "Golden hour").unwrap().unwrap();
+        assert_eq!(mine[1].picture.as_deref(), Some("data:image/jpeg;base64,AAAA"));
+        assert_eq!(mine[0].picture, None);
+        let renamed = u.change_snapshot("me", &a.id, Some("Golden hour"), None).unwrap().unwrap();
         assert_eq!((renamed.name.as_str(), renamed.created), ("Golden hour", a.created));
-        assert!(u.rename_snapshot("you", &a.id, "Mine now").unwrap().is_none(), "another user's is not theirs to rename");
+        assert_eq!(renamed.picture.as_deref(), Some("data:image/jpeg;base64,AAAA"), "a rename keeps the picture");
+        let pictured = u.change_snapshot("me", &b.id, None, Some("data:image/png;base64,BBBB")).unwrap().unwrap();
+        assert_eq!((pictured.name.as_str(), pictured.picture.as_deref()), ("Puds", Some("data:image/png;base64,BBBB")));
+        assert!(u.change_snapshot("you", &a.id, Some("Mine now"), None).unwrap().is_none(), "another user's is not theirs to rename");
         assert!(!u.delete_snapshot("you", &a.id).unwrap(), "another user's is not theirs to delete");
         assert!(u.delete_snapshot("me", &a.id).unwrap());
         assert_eq!(u.snapshots("me").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn snapshots_saved_before_pictures_get_the_column() {
+        let file = std::env::temp_dir().join(format!("cratarr-snapshots-{}.sqlite", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        {
+            let c = Connection::open(&file).unwrap();
+            c.execute_batch(
+                "CREATE TABLE visual_snapshot (user TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL,
+                   created INTEGER NOT NULL, PRIMARY KEY (user, id));
+                 INSERT INTO visual_snapshot VALUES ('me', 'a1', 'Kartlav', '{\"v\":1}', 5);",
+            )
+            .unwrap();
+        }
+        let u = UserData::open(Some(&file)).unwrap();
+        let mine = u.snapshots("me").unwrap();
+        assert_eq!((mine[0].name.as_str(), mine[0].picture.as_deref()), ("Kartlav", None));
+        assert!(u.change_snapshot("me", "a1", None, Some("data:image/jpeg;base64,CC")).unwrap().unwrap().picture.is_some());
+        drop(u);
+        UserData::open(Some(&file)).unwrap();
+        let _ = std::fs::remove_file(&file);
     }
 }
