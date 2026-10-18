@@ -739,7 +739,7 @@
         <div class="panel" role="group" aria-label="Settings" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
           {#each [COMPUTE, SHOW, LOOK] as rows, g (g)}
             <div class="rows" class:look={g > 0}>
-              {#if g === 2}<h3>Look</h3>{/if}
+              {#if g === 2}<h3 use:held={'look'}>Look</h3>{/if}
               {#each rows as row (row.key)}
                 <label class="row" class:pinnable={g === 2}>
                   <span use:held={row.key}>{row.label}</span>
