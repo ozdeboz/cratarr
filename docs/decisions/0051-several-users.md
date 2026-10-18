@@ -61,3 +61,9 @@ The owner (2026-10-19): "we need to support multiple users, their own settings".
   does it too"): each user's profile (name and role, from the directory), their permissions (among them what
   OpenSubsonic apps may do for them: keep tracks to play offline, make and share playlists, public share links; and
   their app password), and their devices and sign-ins, each to see and end.
+- **Listening is private:** administrators do not see other users' listening history.
+- **API keys** have an owner and a scope (reading, or control), and only administrators make them.
+- **One who leaves** is deactivated, their data kept.
+- **Repeated wrong passwords** lock the account for a while.
+- **The change journal records who did it for the essential changes only** (the owner: "Keep the change journal
+  essential only"): what deletes, moves or changes the library.
