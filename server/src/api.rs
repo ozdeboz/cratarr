@@ -27,6 +27,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/file/{source}/{id}", get(file))
         .route("/api/track/{source}/{id}/gain", get(track_gain))
         .route("/api/players", get(players))
+        .route("/api/groups/{group}/visuals", get(group_visuals).put(put_group_visuals))
+        .route("/api/visuals/snapshots", get(visual_snapshots).post(add_visual_snapshot))
+        .route("/api/visuals/snapshots/{id}", axum::routing::patch(rename_visual_snapshot).delete(delete_visual_snapshot))
         .route("/api/players/{name}/log", get(player_log_last).post(player_log_add))
         .route("/api/diagnostics", get(diagnostics_rows))
         .route("/api/diagnostics/download", get(diagnostics_download))
@@ -314,13 +317,16 @@ async fn players_events(
     use tokio::sync::broadcast::error::RecvError;
     use tokio_stream::StreamExt;
     let mut changed = app.play_on.subscribe();
-    let (out, rx) = tokio::sync::mpsc::channel::<String>(4);
+    // The sync groups' visuals (decision 0046, amended): each change as it comes (`visuals`), with the group's whole
+    // settings; behind, every group's as it is now.
+    let mut visuals = app.visuals.subscribe();
+    let (out, rx) = tokio::sync::mpsc::channel::<(&'static str, String)>(8);
     tokio::spawn(async move {
         let mut sent = String::new();
         loop {
             let now = json!({ "players": app.play_on.list() }).to_string();
             if now != sent {
-                if out.send(now.clone()).await.is_err() {
+                if out.send(("players", now.clone())).await.is_err() {
                     return;
                 }
                 sent = now;
@@ -328,12 +334,150 @@ async fn players_events(
             // Behind (`Lagged`): the list now says it all.
             tokio::select! {
                 r = changed.recv() => if matches!(r, Err(RecvError::Closed)) { return },
+                v = visuals.recv() => {
+                    let all = match v {
+                        Ok(c) => vec![c],
+                        Err(RecvError::Lagged(_)) => app.visuals.all(),
+                        Err(RecvError::Closed) => return,
+                    };
+                    for c in all {
+                        if out.send(("visuals", json!(c).to_string())).await.is_err() {
+                            return;
+                        }
+                    }
+                }
                 () = out.closed() => return,
             }
         }
     });
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|d| Ok(axum::response::sse::Event::default().event("players").data(d)));
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|(kind, d)| Ok(axum::response::sse::Event::default().event(kind).data(d)));
     axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+}
+
+fn refused(status: StatusCode, error: impl Into<String>) -> Response {
+    (status, Json(json!({ "error": error.into() }))).into_response()
+}
+
+/// A sync group's visuals, by its leader (decision 0046, amended): 404 until one of its devices has started them.
+async fn group_visuals(State(app): State<Arc<App>>, Path(group): Path<String>) -> Response {
+    match app.visuals.get(&group) {
+        Some(g) => Json(g).into_response(),
+        None => refused(StatusCode::NOT_FOUND, "That group has no visuals yet."),
+    }
+}
+
+/// `base` 0: start the group's visuals, refused (409) where it has them already; else the version the page last had
+/// (the last change wins). `writer`: the page's own id, so it can tell its own changes when they come back.
+#[derive(Deserialize)]
+struct GroupVisualsBody {
+    base: u64,
+    settings: serde_json::Map<String, serde_json::Value>,
+    writer: String,
+}
+
+async fn put_group_visuals(State(app): State<Arc<App>>, Path(group): Path<String>, Json(b): Json<GroupVisualsBody>) -> Response {
+    use crate::app::visuals::Refused;
+    if !app.play_on.list().iter().any(|p| p.group.as_deref() == Some(group.as_str())) {
+        return refused(StatusCode::NOT_FOUND, format!("No group is led by {group}."));
+    }
+    match app.visuals.put(&group, b.base, b.settings, &b.writer) {
+        Ok(version) => Json(json!({ "version": version })).into_response(),
+        Err(Refused::Exists) => refused(StatusCode::CONFLICT, "That group has its visuals already."),
+        Err(Refused::TooLarge) => refused(StatusCode::PAYLOAD_TOO_LARGE, "Those settings are too large to share."),
+    }
+}
+
+/// Whose snapshots Cratarr's own calls keep: the first administrator's (as its other calls act on).
+fn snapshot_keeper() -> Result<(Arc<crate::serve::Serve>, String), Response> {
+    let Some(served) = crate::serve::instance() else { return Err(refused(StatusCode::NOT_FOUND, "Cratarr's own library is not served here.")) };
+    let Some(me) = served.users.owner() else { return Err(refused(StatusCode::CONFLICT, "There is no account yet: make one in Settings.")) };
+    Ok((served, me))
+}
+
+fn failed(e: anyhow::Error) -> Response {
+    tracing::error!("visual snapshots: {e:#}");
+    refused(StatusCode::INTERNAL_SERVER_ERROR, "The snapshots could not be read or written.")
+}
+
+/// The visuals' snapshots (decision 0046, amended), the newest first.
+async fn visual_snapshots() -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    match served.userdata.snapshots(&me) {
+        Ok(all) => Json(all).into_response(),
+        Err(e) => failed(e),
+    }
+}
+
+/// The longest snapshot name kept.
+const SNAPSHOT_NAME: usize = 200;
+
+fn snapshot_name(name: &str) -> Result<String, Response> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > SNAPSHOT_NAME {
+        return Err(refused(StatusCode::BAD_REQUEST, format!("A snapshot's name is 1 to {SNAPSHOT_NAME} characters.")));
+    }
+    Ok(name.to_string())
+}
+
+#[derive(Deserialize)]
+struct NewSnapshot {
+    name: String,
+    /// Opaque here: whatever the page keeps (with its own version, `v`).
+    settings: serde_json::Value,
+}
+
+async fn add_visual_snapshot(Json(b): Json<NewSnapshot>) -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    let name = match snapshot_name(&b.name) {
+        Ok(n) => n,
+        Err(r) => return r,
+    };
+    if b.settings.to_string().len() > crate::app::visuals::MOST_BYTES {
+        return refused(StatusCode::PAYLOAD_TOO_LARGE, "That snapshot is too large to keep.");
+    }
+    match served.userdata.add_snapshot(&me, &name, &b.settings) {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(e) => failed(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct SnapshotName {
+    name: String,
+}
+
+async fn rename_visual_snapshot(Path(id): Path<String>, Json(b): Json<SnapshotName>) -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    let name = match snapshot_name(&b.name) {
+        Ok(n) => n,
+        Err(r) => return r,
+    };
+    match served.userdata.rename_snapshot(&me, &id, &name) {
+        Ok(Some(snapshot)) => Json(snapshot).into_response(),
+        Ok(None) => refused(StatusCode::NOT_FOUND, "There is no such snapshot."),
+        Err(e) => failed(e),
+    }
+}
+
+async fn delete_visual_snapshot(Path(id): Path<String>) -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    match served.userdata.delete_snapshot(&me, &id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => refused(StatusCode::NOT_FOUND, "There is no such snapshot."),
+        Err(e) => failed(e),
+    }
 }
 
 async fn state(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<StateView>, ApiError> {

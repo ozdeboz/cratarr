@@ -33,6 +33,7 @@ mod settings;
 mod shelf;
 mod sync;
 pub mod together;
+pub mod visuals;
 
 use std::sync::Arc;
 
@@ -95,6 +96,8 @@ pub struct App {
     pub play_on: Arc<PlayOn>,
     /// Plays the players tell, late too, each counted once (decision 0033, step 4).
     pub plays: Plays,
+    /// The visuals each sync group shares (decision 0046, amended).
+    pub visuals: Arc<visuals::GroupVisuals>,
 }
 
 impl App {
@@ -147,7 +150,22 @@ impl App {
                 }
             });
         }
-        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on, plays }))
+        // A group's visuals go with it: kept while a player is in the group, dropped when none is.
+        let visuals = Arc::new(visuals::GroupVisuals::new());
+        {
+            let (visuals, play_on) = (visuals.clone(), play_on.clone());
+            let mut changed = play_on.subscribe();
+            tokio::spawn(async move {
+                loop {
+                    let groups = play_on.list().into_iter().filter_map(|p| p.group).collect();
+                    visuals.keep_only(&groups);
+                    if let Err(tokio::sync::broadcast::error::RecvError::Closed) = changed.recv().await {
+                        return;
+                    }
+                }
+            });
+        }
+        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on, plays, visuals }))
     }
 
     /// For the navigation header.
