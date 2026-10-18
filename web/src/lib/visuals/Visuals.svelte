@@ -49,7 +49,7 @@
   import { signalsOf } from './signals';
   import { Meters, type FrameStats } from './meters';
   import RateMode from './RateMode.svelte';
-  import { trial } from './trial.svelte';
+  import { rating, trial } from './trial.svelte';
   import { appInfo, inApp } from '../app.svelte';
   import { coverPalette, type PaletteColour } from './palette';
   import { setVisualsSide, visuals } from './shown.svelte';
@@ -184,13 +184,20 @@
   // A new look this frame, and why (the meters: a track's own, or one chosen, does not count against the budget).
   type Look = NonNullable<FrameStats['look']>;
   let lookCame: FrameStats['look'] = null;
-  // The rating page (RateMode.svelte): from the panel's Rate (or ?rate=1 in the address), its trial drawn in place of
-  // the settings while it runs; each start a new run of it (a series stopped is taken up where it was left). While it
-  // runs, the controls that would change the look or how it behaves are away: only Close, where it shows, Full screen
-  // and the transport stay (a track change, a pause or a seek the page itself waits out or starts the pair over for).
-  let ratingRun = $state(typeof location !== 'undefined' && new URLSearchParams(location.search).has('rate') ? 1 : 0);
+  // The rating page (RateMode.svelte): from the panel's Rate (or ?rate=1 in the address, taken out of it as it starts,
+  // so neither going back nor opening the visuals again starts another), its trial drawn in place of the settings while
+  // it runs; each start a new run of it (a series stopped is taken up where it was left). It goes on where the visuals
+  // move (`rating.run` outlives this mount) and ends as they close. While it runs, the controls that would change the
+  // look or how it behaves are away: only Close, where it shows, Full screen and the transport stay (a track change, a
+  // pause or a seek the page itself waits out or starts the pair over for).
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('rate')) {
+    const url = new URL(location.href);
+    url.searchParams.delete('rate');
+    history.replaceState(history.state, '', url);
+    rating.run++;
+  }
   function startRating() {
-    ratingRun++;
+    rating.run++;
     panel = false;
     chrome = false;
   }
@@ -613,6 +620,11 @@
     const drifting = newDrift();
     let drifted = 0;
     let driftDt = 0;
+    // For the rating page: the look's settings Drift's walk and the Symmetry moments moved since the last frame (how it
+    // behaves), so a change of the look from anywhere else is told apart (counted, and while it blends in, settling).
+    const behaviourMoved = new Set<string>();
+    let looksOutside = 0;
+    let blendOutside = false;
     const trackLook = (drawn: Drawn, blend: number, whole: boolean) => {
       nextBlend = blend;
       lookCame = 'track';
@@ -803,10 +815,13 @@
         if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, s[k]])) as Preset, false);
         const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
         const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
+        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k));
+        if (outside) looksOutside++;
         if (blend && shown) {
           from = shown;
           blendStart = now;
           blendMs = blend;
+          blendOutside = outside;
         }
         made = Object.fromEntries(SHAPING.map((k) => [k, s[k]]));
         madeColours = colours;
@@ -815,6 +830,7 @@
       }
       // A preset that changed nothing (all of it pinned) leaves nothing to blend.
       nextBlend = null;
+      behaviourMoved.clear();
       // What is drawn, as the music and the settings give it (aspects.ts). Reduced motion: a quarter of the turning, all
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
@@ -837,7 +853,9 @@
         drifted = now;
         if (!still) {
           const bar = Math.floor((m.beat ? m.beat.index : m.position * 2) / 4);
-          Object.assign(s, stepDrift(drifting, { amount: d.drift, trackEvent: 0, dt: driftDt, seed: seedOf(m.key ?? 'cratarr'), bar, pins: s.pins, own: current ?? (lookNow() as Preset), now: lookNow() as Preset }));
+          const walked = stepDrift(drifting, { amount: d.drift, trackEvent: 0, dt: driftDt, seed: seedOf(m.key ?? 'cratarr'), bar, pins: s.pins, own: current ?? (lookNow() as Preset), now: lookNow() as Preset });
+          for (const k of Object.keys(walked)) behaviourMoved.add(k);
+          Object.assign(s, walked);
         }
         driftDt = 0;
       }
@@ -848,6 +866,7 @@
         const rnd = randomFrom(seedOf(`symmetry|${at}`));
         if (!s.pins.includes('symmetry')) s.symmetry = ((s.symmetry + Math.floor(rnd() * 7)) % 8) + 1;
         if (!s.pins.includes('mirror')) s.mirror = rnd() < 0.5 ? 1 : 0;
+        behaviourMoved.add('symmetry').add('mirror');
         nextBlend = ANOTHER_MS;
         saveVisualSettings();
       }
@@ -1000,7 +1019,20 @@
         const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
         trial.meters = values;
-        trial.loop = { intensity: m.intensity, bps: m.bps, hitsPerSecond: hitsCounted / since, swing: l.swing, points: renderer.pointCount, steps: passes, fps, device: device() };
+        trial.loop = {
+          intensity: m.intensity,
+          bps: m.bps,
+          hitsPerSecond: hitsCounted / since,
+          activity: d.lit,
+          swing: l.swing,
+          looks: looksOutside,
+          settling: !!from && blendOutside,
+          view: [canvas.clientWidth, canvas.clientHeight],
+          points: renderer.pointCount,
+          steps: passes,
+          fps,
+          device: device(),
+        };
         hitsCounted = 0;
         const marks = { flash: holding(l, 'swing'), speed: holding(l, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(l, k)) };
         if (marks.flash !== !!governed.flash || marks.speed !== !!governed.speed || marks.wild !== !!governed.wild) governed = marks;
@@ -1079,6 +1111,8 @@
     raf = requestAnimationFrame(loop);
 
     return () => {
+      // Closed, a rating run ends with them (moved, it goes on where they went).
+      if (!visuals.open) rating.run = 0;
       // Closed some other way: its step of the history goes too. Moved beside the page or over it (still open), the
       // step stays for the visuals where they went: going back here would close them there (2026-10-18: the docked
       // visuals' Full screen left the page full screen with the player, the visuals closed).
@@ -1138,7 +1172,7 @@
         ><Icon name="close" size={26} /></button
       >
       <div class="corner">
-        {#if !ratingRun}
+        {#if !rating.run}
         <button
           class="round"
           class:on={panel}
@@ -1187,7 +1221,7 @@
           >
         {/if}
       </div>
-      {#if panel && !ratingRun}
+      {#if panel && !rating.run}
         <div class="panel" role="group" aria-label="Settings" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
           {#each [COMPUTE, SHOW, LOOK] as rows, g (g)}
             <div class="rows" class:look={g > 0}>
@@ -1344,7 +1378,7 @@
     <SnapshotsSheet onclose={() => (snapshotsOpen = false)} capture={capturePicture} trackName={np?.name ?? null} {recall} over={!docked} />
   {/if}
   <Help />
-  {#if ratingRun}{#key ratingRun}<RateMode onstop={() => (ratingRun = 0)} />{/key}{/if}
+  {#if rating.run}{#key rating.run}<RateMode />{/key}{/if}
 </div>
 
 <style>

@@ -8,6 +8,7 @@
 
 import { newAspects, stepAspects } from './aspects';
 import type { Beats } from './beats';
+import { BUDGETED, budgetOf } from './budget';
 import { Meters, screenTile, type MeterValues } from './meters';
 import { musicOf, newMusicState } from './music.svelte';
 import { settingsOf, type Recipe } from './recipe';
@@ -17,16 +18,17 @@ import type { Signals } from './signals';
 /** The limits a recipe is held to (the governor's, at the Calm ↔ Wild setting). */
 export type Limits = Partial<Record<'flash' | 'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping' | 'looksPerMinute', number>>;
 
-/** Until the owner's ratings fit them (fit.ts): a little above the most Standard did over 11 varied tracks, at a quarter
- *  and three fifths of each (2026-10-18; Standard's typical and most: motion 0.40 and 0.69, shape 0.32 and 0.55, colour
- *  0.08 and 0.34, pumping 0.14 and 0.32, flashes 1 and 3), so today's behaviour always passes and the wildest tenth or
- *  so of recipes does not. Flashes: three a second over a quarter of the screen, the rule. */
+/** Until the owner's ratings fit them (fit.ts), on the governor's scale (budget.ts): a little above (a quarter more, up
+ *  to the next 0.05) the most Standard did over 11 varied tracks, at a quarter and three fifths of each (2026-10-18;
+ *  Standard's typical, its runs' median mean, and its most: motion 0.26 and 0.47, shape 0.16 and 0.42, colour 0.04 and
+ *  0.35, pumping 0.07 and 0.35; flashes 1 and 3), so today's behaviour always passes, quiet passage or loud, and the
+ *  wildest tenth or so of recipes does not (48 of 440). Flashes: three a second over a quarter of the screen, the rule. */
 export const DEFAULT_LIMITS: Required<Limits> = {
   flash: 3,
-  motion: 0.9,
-  shapeChurn: 0.7,
-  colourChurn: 0.4,
-  zoomPumping: 0.4,
+  motion: 0.6,
+  shapeChurn: 0.55,
+  colourChurn: 0.45,
+  zoomPumping: 0.45,
   // New looks a minute (the dice's and the moments', a track's own not counted): Standard has none of its own; four
   // keeps a moment-driven recipe from turning into a slideshow.
   looksPerMinute: 4,
@@ -34,8 +36,10 @@ export const DEFAULT_LIMITS: Required<Limits> = {
 
 export type Checked = {
   ok: boolean;
-  /** Each meter's most over the run (after its first seconds, while the meters settle). */
+  /** Each meter's most and mean over the run (after its first seconds, while the meters settle): the budgeted ones on
+   *  the governor's scale (budget.ts), the flashes as counted. */
   worst: Partial<MeterValues>;
+  mean: Partial<MeterValues>;
   /** The meters over their limits, by name. */
   over: string[];
 };
@@ -64,6 +68,8 @@ export function* prechecking(
   const state = newMusicState();
   const meters = new Meters();
   const worst: Record<string, number> = {};
+  const sum: Record<string, number> = {};
+  let counted = 0;
   const dt = 1 / FPS;
   const frames = Math.round(seconds * FPS);
   for (let k = 0; k < frames; k++) {
@@ -86,13 +92,23 @@ export function* prechecking(
       tiles: [screenTile(k * dt, luminance)],
     });
     if (k * dt < SETTLE_S) continue;
+    // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the governor holds
+    // them; so a limit means the same here as there, loud passage or quiet.
+    const budget = budgetOf(1, 0.5, a.lit);
     const now = meters.now();
-    for (const [key, v] of Object.entries(now)) if (typeof v === 'number') worst[key] = Math.max(worst[key] ?? 0, v);
+    counted++;
+    for (const [key, v] of Object.entries(now)) {
+      if (typeof v !== 'number') continue;
+      const x = (BUDGETED as readonly string[]).includes(key) ? v / budget : v;
+      worst[key] = Math.max(worst[key] ?? 0, x);
+      sum[key] = (sum[key] ?? 0) + x;
+    }
   }
   const over = Object.entries(limits)
     .filter(([key, limit]) => limit !== undefined && (worst[key] ?? 0) > limit)
     .map(([key]) => key);
-  return { ok: over.length === 0, worst: worst as Partial<MeterValues>, over };
+  const mean = Object.fromEntries(Object.entries(sum).map(([key, v]) => [key, v / Math.max(1, counted)]));
+  return { ok: over.length === 0, worst: worst as Partial<MeterValues>, mean: mean as Partial<MeterValues>, over };
 }
 
 /** The run all at once (for tests and the calibration). */

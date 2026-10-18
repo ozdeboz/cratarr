@@ -12,17 +12,18 @@
 // and by how busy the music is (a quiet passage gets less). While the rating page runs a trial they are off; the
 // flashes' rule stays on. Pure: the loop steps it with the meters now.
 
+import { BUDGETED, budgetOf, type Budgeted } from './budget';
 import type { MeterValues } from './meters';
 import { DEFAULT_LIMITS } from './precheck';
+
+export { BUDGETED, budgetOf, type Budgeted };
 
 /** What the governor holds back: each lever's share of what the settings ask (1: none held back). `evolution` and `gap`
  *  stretch (the evolving's times, the moments' gap: 1 and up); the rest scale down (1 and under). */
 export type Levers = { swing: number; pace: number; evolution: number; hue: number; size: number; gap: number };
 export const FREE: Readonly<Levers> = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
 
-/** The meters with a budget, each with its lever and how far that lever may go. */
-export const BUDGETED = ['motion', 'shapeChurn', 'colourChurn', 'zoomPumping', 'looksPerMinute'] as const;
-export type Budgeted = (typeof BUDGETED)[number];
+/** Each budgeted meter's lever, and how far that lever may go. */
 const LEVERS: Record<Budgeted, { lever: keyof Levers; most: number }> = {
   motion: { lever: 'pace', most: 0.25 },
   shapeChurn: { lever: 'evolution', most: 4 },
@@ -53,9 +54,6 @@ export function newGovernor(): Governor {
   return { levers: { ...FREE }, t: 0, flashedAt: -Infinity };
 }
 
-/** A budget as the Calm ↔ Wild setting (0..1: half as much to twice, as much at its middle) and the music (its
- *  intensity now, 0..1: half as much when quiet, one and a half times when loud) have it. */
-export const budgetOf = (limit: number, wild: number, activity: number) => limit * 2 ** (2 * (wild - 0.5)) * (0.5 + Math.min(1, Math.max(0, activity)));
 
 /** One step, `dt` seconds on, with the meters now: the levers as they hold back. `budgets` false (a trial): only the
  *  flashes' rule. */
