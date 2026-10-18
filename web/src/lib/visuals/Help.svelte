@@ -21,10 +21,21 @@
   $effect(() => {
     if (!helpShown.open) return;
     // Away on a tap anywhere but on it (before anything under the tap stops it on its way), on Escape, and on any
-    // scroll (its label has moved).
+    // scroll (its label has moved). The tap that puts it away does nothing else: on the picture it would have closed
+    // the panel too, on a button pressed it.
+    const swallow = (e: Event) => {
+      e.stopPropagation();
+      e.preventDefault();
+    };
     const tap = (e: PointerEvent) => {
       if (box && e.target instanceof Node && box.contains(e.target)) return;
+      swallow(e);
       hideHelp();
+      for (const type of ['pointerup', 'click'] as const) addEventListener(type, swallow, { capture: true, once: true });
+      setTimeout(() => {
+        removeEventListener('pointerup', swallow, true);
+        removeEventListener('click', swallow, true);
+      }, 800);
     };
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -67,7 +78,9 @@
     box-sizing: border-box;
     padding: 10px 12px;
     border-radius: 10px;
-    background: rgb(20 20 24 / 0.97);
+    /* A shade lighter than the panel, so it reads as on top of it. */
+    background: rgb(44 44 52 / 0.98);
+    border: 1px solid rgb(255 255 255 / 0.12);
     box-shadow: 0 6px 24px rgb(0 0 0 / 0.5);
     color: #fff;
     font-size: 14px;
