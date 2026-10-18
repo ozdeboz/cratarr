@@ -230,7 +230,9 @@
     let renderer: FlameRenderer | null = null;
     try {
       renderer = new FlameRenderer(canvas, Math.round(2 ** s.points));
-    } catch {
+    } catch (e) {
+      // Why, for a debugger attached to the device (the page says only that it cannot).
+      console.warn('Visuals:', e);
       unsupported = true;
     }
 
@@ -340,6 +342,7 @@
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       if (renderer.lost) {
+        console.warn('Visuals: the GPU took the context away', { points: renderer.pointCount, steps: passes, precision: renderer.precision });
         renderer = null;
         unsupported = true;
         return;

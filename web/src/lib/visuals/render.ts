@@ -261,13 +261,12 @@ layout(location = 2) out vec4 bandB;
 void main() { o = vec4(0.0, 0.0, 0.0, uKeep); bandA = o; bandB = o; }`;
 
 // Not a number, or infinite, from the bits (see ITERATE's).
-// A value not a number is nothing; an infinite one, the most a 16-bit float holds short of infinity.
+// A value not a number is nothing; an infinite one, the most a 16-bit float holds short of infinity (by its sign: a
+// comparison is false for one not a number). The Mali-G615's compiler gets a fragment shader wrong that tests the bits
+// and picks its answer from them too (0 came out as 60000, 0.12 as 0: the phone's picture white, with coloured noise;
+// measured 2026-10-18), so the bits only answer whether.
 const BAD = `bool bad(float x) { return (floatBitsToUint(x) & 0x7f800000u) == 0x7f800000u; }
-float clean1(float x) {
-  uint b = floatBitsToUint(x);
-  if ((b & 0x7f800000u) != 0x7f800000u) return clamp(x, 0.0, 60000.0);
-  return (b & 0x007fffffu) != 0u || (b & 0x80000000u) != 0u ? 0.0 : 60000.0;
-}
+float clean1(float x) { return bad(x) ? (x > 0.0 ? 60000.0 : 0.0) : clamp(x, 0.0, 60000.0); }
 vec4 clean(vec4 v) { return vec4(clean1(v.x), clean1(v.y), clean1(v.z), clean1(v.w)); }`;
 
 // The scrub: both buffers copied, each value not a number or infinite made nothing (and the largest kept under what a
@@ -332,7 +331,15 @@ void main() {
   // The pixel's points by band: shares of one.
   vec4 shareA = clamp(clean(texture(uBandsA, uv)) / max(a.a, 1e-6), 0.0, 1.0);
   vec2 shareB = clamp(clean(texture(uBandsB, uv)).xy / max(a.a, 1e-6), 0.0, 1.0);
-  float share[${PARTS}] = float[${PARTS}](shareA.x, shareA.y, shareA.z, shareA.w, shareB.x, shareB.y);
+  // Element by element: the Mali-G615's compiler refuses an array constructor here ("no default precision defined for
+  // variable 'float[6]'", 2026-10-18), which left the phone without visuals.
+  float share[${PARTS}];
+  share[0] = shareA.x;
+  share[1] = shareA.y;
+  share[2] = shareA.z;
+  share[3] = shareA.w;
+  share[4] = shareB.x;
+  share[5] = shareB.y;
   // The paper's density estimation, cheaply: where few points fell, the pixel is the mean of a wider ring around it
   // (up to three pixels out), where many fell it stays sharp.
   float radius = 3.0 / (1.0 + sqrt(a.a * uK2) * 2.0);
