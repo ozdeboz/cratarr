@@ -1362,7 +1362,7 @@
           // motion.
           tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
           // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
-          effects: effectsNow(how, d.effects, m.position),
+          effects: effectsNow(how, d.effects, m.position, beatNow),
           facets: { amount: d.facets, hex: Math.round(how.lattice) === 1 },
           dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
           forces: stirred.forces,

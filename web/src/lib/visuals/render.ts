@@ -573,7 +573,7 @@ export type Shown = {
   fluid: number;
   /** The effects (effects.ts): the picture's chain (its ids and amounts by place, each times the Effects level), the
    *  loop's effect and amount, and the track's own time they move with. None: as before. */
-  effects?: { ids: number[]; amounts: number[]; loop: number; loopAmount: number; t: number };
+  effects?: { ids: number[]; amounts: number[]; loop: number; loopAmount: number; t: number; beat?: [number, number, number, number] };
   /** Facets (where the light flows: fluid.ts): how much (0..1), and on hexagons rather than squares. */
   facets?: { amount: number; hex: boolean };
   /** The infinite zooms (zoom.ts): how fast, each its log a second (0: off). */
@@ -1283,6 +1283,7 @@ export class FlameRenderer {
     gl.uniform1f(u('uAspect'), into.w / into.h);
     gl.uniform1fv(u('uFxA'), Float32Array.from({ length: MOST_PICTURE }, (_, k) => fx.amounts[k] ?? 0));
     gl.uniform1f(u('uFxT'), fx.t);
+    gl.uniform4f(u('uFxBeat'), ...(fx.beat ?? ([0, 1000, 0, 0] as const)));
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     into.cur = next;

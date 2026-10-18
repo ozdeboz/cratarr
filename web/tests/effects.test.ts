@@ -40,3 +40,13 @@ test('a loop effect that reads the flow gets it where it runs: none in the carry
   const light = loopFunction(8, 'vec2 fx_flow(vec2 p) { return p; }');
   assert.ok(light.startsWith('vec2 fx_flow(vec2 p) { return p; }'));
 });
+
+test('the beat: where in it and its bar, how long since, how strong; none is long ago; only the picture reads it', async () => {
+  const { beatOf, effectsNow } = await import('../src/lib/visuals/effects.ts');
+  const [phase, since, strength, bar] = beatOf({ index: 6, since: 0.25, length: 0.5, strength: 0.8 });
+  assert.ok(Math.abs(phase - 0.5) < 1e-9 && since === 0.25 && strength === 0.8 && Math.abs(bar - (2 + 0.5) / 4) < 1e-9);
+  assert.deepEqual(beatOf(null), [0, 1000, 0, 0]);
+  assert.deepEqual(effectsNow({ fx1: 16, fx1Amount: 1, fx2: 0, fx2Amount: 0, fx3: 0, fx3Amount: 0, fxLoop: 0, fxLoopAmount: 0 }, 1, 0).beat, [0, 1000, 0, 0]);
+  for (const e of EFFECTS) if (e.glsl.includes('fx_beat(')) assert.ok(!e.slots.includes('loop'), `${e.name}: the loop has no beat`);
+  assert.ok(pictureShader([16])!.includes('vec4 fx_beat()'));
+});
