@@ -21,12 +21,15 @@ export type Limits = Partial<Record<'flash' | 'motion' | 'shapeChurn' | 'colourC
  *  and three fifths of each (2026-10-18; Standard's typical and most: motion 0.40 and 0.69, shape 0.32 and 0.55, colour
  *  0.08 and 0.34, pumping 0.14 and 0.32, flashes 1 and 3), so today's behaviour always passes and the wildest tenth or
  *  so of recipes does not. Flashes: three a second over a quarter of the screen, the rule. */
-export const DEFAULT_LIMITS: Required<Omit<Limits, 'looksPerMinute'>> = {
+export const DEFAULT_LIMITS: Required<Limits> = {
   flash: 3,
   motion: 0.9,
   shapeChurn: 0.7,
   colourChurn: 0.4,
   zoomPumping: 0.4,
+  // New looks a minute (the dice's and the moments', a track's own not counted): Standard has none of its own; four
+  // keeps a moment-driven recipe from turning into a slideshow.
+  looksPerMinute: 4,
 };
 
 export type Checked = {
