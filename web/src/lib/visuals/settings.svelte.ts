@@ -9,7 +9,7 @@
 // that keeps nothing (a private window) starts from the defaults each time.
 
 import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
-import { defaultRoutes, isRoute, keyNow, type RouteValue } from './routes';
+import { ASPECTS, defaultRoutes, isRoute, keyNow, type RouteValue } from './routes';
 import { curveFrom, valueOf } from './curves';
 
 const KEY = 'cratarr-visuals';
@@ -184,8 +184,11 @@ const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly s
 /** The behaviour's sliders that pin as the Look's do, moved by hand (the owner, 2026-10-18: "I try to pin the behavior
  *  instead of the look"): a pinned one the dice and Drift leave as it is. */
 export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth'] as const;
-/** Whether `k` can be pinned: the Look's settings and the behaviour's sliders. */
-export const isPinnable = (k: string) => isPresetKey(k) || (BEHAVIOUR_PINS as readonly string[]).includes(k);
+/** Whether `k` can be pinned: the Look's settings, the behaviour's sliders, a route (`route:` and its key) and a
+ *  column of the routes (`column:` and its aspect): what is pinned the dice, Drift and a track leave as it is (the
+ *  owner: "I also want to implement pin for the matrix"). */
+export const isPinnable = (k: string) =>
+  isPresetKey(k) || (BEHAVIOUR_PINS as readonly string[]).includes(k) || (k.startsWith('route:') && isRoute(k.slice(6), BANDS)) || (k.startsWith('column:') && (ASPECTS as readonly string[]).includes(k.slice(7)));
 
 function load(): VisualSettings {
   try {

@@ -42,7 +42,9 @@
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
   import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
-  import { curveOf, endOf, valueOf as kept, withEnd } from './curves';
+  import { curveOf, endOf, heightAt, isStraight, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
+  import CurveEditor from './CurveEditor.svelte';
+  import { densityOf, newHistory, remember } from './history';
   import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
   import { drifted, fresh, limitsOf, thumbed, type Learned } from './learning';
   import { forgetVisualsLimits, getVisualsLimits, postVisualsThumb, putVisualsLimits } from '../api';
@@ -51,7 +53,7 @@
   import type { TrialLoop } from './trial.svelte';
   import { beatsOf } from './beats';
   import { DEFAULT_LIMITS, prechecking, type Checked } from './precheck';
-  import { recipeFor, settingsOf, type Recipe } from './recipe';
+  import { recipeFor, settingsOf, type Recipe, type Scope } from './recipe';
   import { signalsOf } from './signals';
   import { Meters, type FrameStats } from './meters';
   import RateMode from './RateMode.svelte';
@@ -336,40 +338,62 @@
   // (the governor's, as Calm ↔ Wild has them; three flashes a second whatever it says) is taken, after eight the one
   // over them by least; where the track's signals are not known yet the first, the governor holding it as it plays.
   // The undo puts back the look and behaviour from before (until the next roll).
+  //
+  // A double tap rolls how it moves only (the owner, 64.1: "double tap becomes this randomize"; `MOVEMENT` in
+  // recipe.ts), its look and the rest as they are; and it may go "twice the limits": checked, and governed while it
+  // stands, as at Wild's most (`loosened`), till the next roll, an undo (back to what stood before), Reset or a recall.
+  // Three flashes a second over a quarter of the screen stay the rule. A single tap waits out the double's window (a
+  // roll takes about as long anyway).
   const BEHAVIOUR = ['routes', 'flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', 'lighting', 'evolution', 'continuity'] as const;
   const TRIES = 8;
-  let rollWanted = false;
-  let rolling: Generator<void, Recipe> | null = null;
-  let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings> } | null>(null);
-  function roll() {
-    rollWanted = true;
+  const DOUBLE_MS = 250;
+  let rollWanted: Scope | null = null;
+  let rolling: { run: Generator<void, Recipe>; scope: Scope } | null = null;
+  let loosened = false;
+  const wildNow = (wild: number) => (loosened ? Math.max(wild, 1) : wild);
+  let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings>; loosened: boolean } | null>(null);
+  let diceWait = 0;
+  function diceTapped() {
+    if (diceWait) {
+      clearTimeout(diceWait);
+      diceWait = 0;
+      roll('movement');
+    } else
+      diceWait = window.setTimeout(() => {
+        diceWait = 0;
+        roll('all');
+      }, DOUBLE_MS);
+  }
+  function roll(scope: Scope) {
+    rollWanted = scope;
     showChrome();
   }
-  function* rollingFor(base: VisualSettings, key: string | null, from: number): Generator<void, Recipe> {
+  function* rollingFor(base: VisualSettings, key: string | null, from: number, scope: Scope): Generator<void, Recipe> {
     const [source, id] = key ? [key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)] : ['', ''];
     const signals = key ? signalsOf(source, id) : null;
     const beats = key ? (beatsOf(source, id) ?? null) : null;
-    const wild = 2 ** (2 * (base.wild - 0.5));
+    const wild = 2 ** (2 * ((scope === 'movement' ? Math.max(base.wild, 1) : base.wild) - 0.5));
     const limits: Record<string, number> = { ...Object.fromEntries(Object.entries(limitsNow).map(([k, v]) => [k, v * wild])), flash: DEFAULT_LIMITS.flash };
     let best: { recipe: Recipe; by: number } | null = null;
     for (let k = 0; k < TRIES; k++) {
       const recipe = recipeFor(Math.floor(Math.random() * 0x100000000), ASPECTS);
       if (!signals) return recipe;
-      const checked: Checked = yield* prechecking(recipe, base, signals, beats, from, limits);
+      const checked: Checked = yield* prechecking(recipe, base, signals, beats, from, limits, undefined, scope);
       if (checked.ok) return recipe;
       const by = checked.over.reduce((sum, m) => sum + (checked.worst[m as keyof typeof checked.worst] as number) / (limits[m] ?? 1), 0);
       if (!best || by < best.by) best = { recipe, by };
     }
     return best!.recipe;
   }
-  function rolled(recipe: Recipe) {
+  function rolled(recipe: Recipe, scope: Scope) {
     const now = $state.snapshot(s) as VisualSettings;
-    undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings> };
-    const next = settingsOf(recipe, now);
+    undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings>, loosened };
+    const next = settingsOf(recipe, now, scope);
     for (const k of BEHAVIOUR) if (!s.pins.includes(k)) (s as Record<string, unknown>)[k] = next[k];
+    loosened = scope === 'movement';
     saveVisualSettings();
     share(Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])));
-    loadAnother(Math.floor(Math.random() * 0x100000000), true);
+    if (scope === 'all') loadAnother(Math.floor(Math.random() * 0x100000000), true);
   }
   function undoRoll() {
     if (!undo) return;
@@ -380,6 +404,7 @@
     nextBlend = ANOTHER_MS;
     lookCame = 'dice';
     Object.assign(s, was.behaviour, was.look, { pins: was.pins });
+    loosened = was.loosened;
     saveVisualSettings();
     share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), ...lookNow(), pins: [...s.pins] });
     showChrome();
@@ -420,6 +445,7 @@
     }
   }
   function recall(snap: VisualsSnapshot) {
+    loosened = false;
     const settings: Record<string, unknown> = { ...snap.settings };
     // One saved in 63 or 64: its Fluid on this scale (and so marked, for the group).
     if (typeof settings.fluid === 'number' && (settings.v ?? 1) === 1) settings.fluid = fluidFrom63(settings.fluid);
@@ -465,8 +491,8 @@
   // The settings the governor holds back now (governor.ts), marked by their label: Flash's swing, Speed's pace, and on
   // Wild whatever it holds back (the evolving, the hues, the size, the moments too).
   let governed = $state<Partial<Record<One, boolean>>>({});
-  // Each behaviour slider's value in effect now (its walk's share of what is set), marked under the slider where it
-  // differs.
+  // Each behaviour slider's value in effect now (its walk's share of what is set, and for the four levels what their
+  // routes let through of that), marked under the slider where it differs.
   let live = $state<Partial<Record<string, number>>>({});
   const liveAt = (key: One) => {
     const v = live[key];
@@ -593,23 +619,85 @@
       : pick !== null
         ? [routeKey(signal, pick, aspect)]
         : Array.from({ length: BANDS }, (_, b) => routeKey(signal, b, aspect));
-  function amountOf(signal: Signal, aspect: Aspect): { v: number; mixed: boolean } {
-    const v = keysOf(signal, aspect).map((k) => endOf(s.routes[k] ?? 0));
-    return { v: v.reduce((a, b) => a + b, 0) / v.length, mixed: v.some((x) => Math.abs(x - v[0]) > 1e-6) };
+  // Each walking route's walk now (`route:` and its key: its share of itself), for its cell, four times a second while
+  // the panel shows.
+  let routeWalkNow = $state<Record<string, number>>({});
+  // A cell: its routes' end (the bands' mean), whether they differ, whether they are pinned (each, or their column),
+  // bent, and walking (their walk's share now).
+  function cellOf(signal: Signal, aspect: Aspect) {
+    const keys = keysOf(signal, aspect);
+    const vs = keys.map((k) => s.routes[k] ?? 0);
+    const ends = vs.map(endOf);
+    const walking = keys.filter((_, i) => walksOf(vs[i]));
+    return {
+      v: ends.reduce((a, b) => a + b, 0) / ends.length,
+      mixed: ends.some((x) => Math.abs(x - ends[0]) > 1e-6),
+      pinned: s.pins.includes(`column:${aspect}`) || keys.every((k) => s.pins.includes(`route:${k}`)),
+      bent: vs.some((v) => typeof v !== 'number' && !isStraight(v)),
+      walk: walking.length ? walking.reduce((a, k) => a + (routeWalkNow[`route:${k}`] ?? 1), 0) / walking.length : null,
+    };
   }
-  function setRoute(signal: Signal, aspect: Aspect, v: number) {
-    const changed: Record<string, number> = {};
+  // The picked cell's curve for the editor: its route's, or for all six bands the mean of their handles (dashed where
+  // they differ); whether it walks (all of them), and its pins.
+  function editedOf(signal: Signal, aspect: Aspect) {
+    const keys = keysOf(signal, aspect);
+    const cs = keys.map((k) => curveOf(s.routes[k] ?? 0));
+    const mean = (f: (c: Curve) => number) => cs.reduce((a, c) => a + f(c), 0) / cs.length;
+    const flat = (c: Curve) => [c.h1[0], c.h1[1], c.h2[0], c.h2[1], c.h];
+    return {
+      curve: { h1: [mean((c) => c.h1[0]), mean((c) => c.h1[1])], h2: [mean((c) => c.h2[0]), mean((c) => c.h2[1])], h: mean((c) => c.h) } as Curve,
+      mixed: cs.some((c) => flat(c).some((v, i) => Math.abs(v - flat(cs[0])[i]) > 1e-6)),
+      walks: cs.every((c) => !!c.walks),
+      pinned: keys.every((k) => s.pins.includes(`route:${k}`)),
+      columnPinned: s.pins.includes(`column:${aspect}`),
+    };
+  }
+  const edited = $derived(cell ? editedOf(cell.signal, cell.aspect) : null);
+  const editedTable = $derived(edited ? tableOf(edited.curve).table : null);
+  // Where the picked cell's signal is now on its curve, and where it has been (four times a second while it shows):
+  // each signal's last half minute, kept while the music plays (not named history: that is the browser's).
+  const heard = newHistory(TRACK_SIGNALS.length, BAND_SIGNALS.length, BANDS);
+  let density = $state<Float32Array | null>(null);
+  const liveOnCurve = $derived.by(() => {
+    if (!cell || !editedTable || !meters.track.length) return null;
+    const x = Math.min(1, Math.max(0, meterOf(cell.signal)));
+    return { x, y: heightAt(editedTable, x) };
+  });
+  // Each of a cell's routes made anew (`make`: from what it is, its curve), kept as a number where straight and not
+  // walking; a 0 kept only where it turns a default off (to the group, a 0 either way). The routes edited are pinned:
+  // the dice leave them as they are. Saved and sent to the group when the change is `done` (a drag let go).
+  function remake(signal: Signal, aspect: Aspect, make: (c: Curve) => Curve, done: boolean) {
+    const changed: Record<string, RouteValue> = {};
+    const pins = new Set(s.pins);
     for (const k of keysOf(signal, aspect)) {
-      // A 0 is kept only where it turns a default off (to the group, a 0 either way).
+      const v = kept(make(curveOf(s.routes[k] ?? 0)));
       if (v === 0 && !DEFAULTS.routes[k]) delete s.routes[k];
       else s.routes[k] = v;
       changed[k] = v;
+      pins.add(`route:${k}`);
     }
+    if (pins.size !== s.pins.length) s.pins = [...pins];
+    if (!done) return;
     saveVisualSettings();
-    share({ routes: changed });
+    share({ routes: changed, pins: [...s.pins] });
+    showChrome();
+  }
+  // A cell's curve: its shape, each route's walk as it was.
+  const setCurve = (signal: Signal, aspect: Aspect, c: Curve, done: boolean) =>
+    remake(signal, aspect, (was) => ({ h1: [...c.h1], h2: [...c.h2], h: c.h, ...(was.walks ? { walks: true } : {}) }), done);
+  // Whether a cell's routes walk with the behaviour (each its own curve kept).
+  const setWalks = (signal: Signal, aspect: Aspect, on: boolean) =>
+    remake(signal, aspect, (c) => ({ h1: [...c.h1], h2: [...c.h2], h: c.h, ...(on ? { walks: true } : {}) }), true);
+  // Pinning: a cell's routes, or a column's.
+  function setPins(keys: string[], on: boolean) {
+    s.pins = on ? [...new Set([...s.pins, ...keys])] : s.pins.filter((p) => !keys.includes(p));
+    saveVisualSettings();
+    share({ pins: [...s.pins] });
+    showChrome();
   }
   // The routes back to the defaults; to the group, each route set before as nothing.
   function routesReset() {
+    loosened = false;
     const before = Object.keys(s.routes);
     resetRoutes();
     share({ routes: { ...Object.fromEntries(before.map((k) => [k, 0])), ...$state.snapshot(s.routes) } });
@@ -762,6 +850,10 @@
     // The behaviour's walk (drift.ts): each walking slider's factor on its set value now (none: as set).
     const walking = newBehaviourWalk();
     let walkFactor: Record<string, number> = {};
+    // The walking routes' factors (`Matrix.walks` order) and the matrix they are for (a route changed: none till the
+    // next step).
+    let routeWalk: Float32Array | undefined;
+    let routeWalkFor: typeof matrix | null = null;
     let drifted = 0;
     let driftDt = 0;
     // For the rating page: the look's settings Drift's walk and the Symmetry moments moved since the last frame (how it
@@ -893,16 +985,17 @@
       }
       // The dice: the recipes run against the track, as many slices as fit in four milliseconds of this frame.
       if (rollWanted) {
-        rollWanted = false;
-        rolling = rollingFor($state.snapshot(s) as VisualSettings, m.key, m.position);
+        rolling = { run: rollingFor($state.snapshot(s) as VisualSettings, m.key, m.position, rollWanted), scope: rollWanted };
+        rollWanted = null;
       }
       if (rolling) {
         const until = performance.now() + 4;
-        let next = rolling.next();
-        while (!next.done && performance.now() < until) next = rolling.next();
+        let next = rolling.run.next();
+        while (!next.done && performance.now() < until) next = rolling.run.next();
         if (next.done) {
+          const { scope } = rolling;
           rolling = null;
-          rolled(next.value);
+          rolled(next.value, scope);
         }
       }
       // A preset being drawn: as many draws as fit in six milliseconds of this frame, then into the settings.
@@ -980,7 +1073,14 @@
       const still = reducedMotion();
       // How it behaves now: as set, each walking slider at its walk's share of it (not with the rating page's trial).
       const behaving = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
-      const d = stepAspects(aspects, m, behaving, dt, { still, now, matrix: trial.settings ? undefined : matrix, fluidFull: FLUID_FULL, levers: governor.levers });
+      const d = stepAspects(aspects, m, behaving, dt, {
+        still,
+        now,
+        matrix: trial.settings ? undefined : matrix,
+        fluidFull: FLUID_FULL,
+        levers: governor.levers,
+        routeWalk: routeWalkFor === matrix ? routeWalk : undefined,
+      });
       const { turn, hits, parts, track } = d;
       if (m.playing && m.hits)
         m.hits.forEach((h, b) => {
@@ -1003,16 +1103,21 @@
           for (const k of Object.keys(walked)) behaviourMoved.add(k);
           Object.assign(s, walked);
         }
-        // The behaviour's: its Track row once a track, its walk (none with reduced motion), under the set values.
+        // The behaviour's: its Track row once a track, its walk (none with reduced motion), under the set values; the
+        // routes that walk with it too. A pinned slider stays as set; a pinned route walks if it is set to (its pin
+        // is for the dice).
         walkFactor = stepBehaviourWalk(walking, {
           amount: still ? 0 : d.behaviour,
           trackEvent: endOf(how.routes[routeKey('track', null, 'behaviour')] ?? 0),
           dt: driftDt,
           seed: seedOf(m.key ?? 'cratarr'),
           bar: Math.floor((m.beat ? m.beat.index : m.position * 2) / 4),
-          keys: BEHAVIOUR_PINS,
-          pins: s.pins,
+          keys: [...BEHAVIOUR_PINS, ...matrix.walks.map((k) => `route:${k}`)],
+          pins: s.pins.filter((p) => !p.startsWith('route:')),
         });
+        routeWalk = Float32Array.from(matrix.walks, (k) => walkFactor[`route:${k}`] ?? 1);
+        routeWalkFor = matrix;
+        if (m.playing) remember(heard, track, d.bands);
         driftDt = 0;
       }
       // The moments: another symmetry; a pinned setting stays as it is. Seeded from the track and the beat it comes on
@@ -1173,11 +1278,17 @@
       if (now - meteredAt >= 250) {
         const values = metering.now();
         // With the trial of the rating page, only the flashes' rule: its budgets are what the ratings are to tell.
-        const l = stepGovernor(governor, values, { dt: Math.min(1, (now - meteredAt) / 1000), limits: limitsNow, wild: how.wild, activity: d.lit, budgets: !trial.settings });
+        const l = stepGovernor(governor, values, { dt: Math.min(1, (now - meteredAt) / 1000), limits: limitsNow, wild: wildNow(how.wild), activity: d.lit, budgets: !trial.settings });
         const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
         trial.meters = values;
-        if (panel) live = Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, behaving[k]]));
+        if (panel) {
+          live = Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, behaving[k] * (k in d.levels ? d.levels[k as keyof typeof d.levels] : 1)]));
+          routeWalkNow = Object.fromEntries(matrix.walks.map((k) => [`route:${k}`, walkFactor[`route:${k}`] ?? 1]));
+          density = cell
+            ? densityOf(heard, isBandSignal(cell.signal) ? { signal: B[cell.signal as keyof typeof B], band: pick } : { track: T[cell.signal as keyof typeof T] })
+            : null;
+        }
         trial.loop = {
           intensity: m.intensity,
           bps: m.bps,
@@ -1192,7 +1303,7 @@
           fps,
           device: device(),
         };
-        const factor = budgetOf(1, how.wild, d.lit);
+        const factor = budgetOf(1, wildNow(how.wild), d.lit);
         recent.push({ meters: values, loop: trial.loop, relative: Object.fromEntries(BUDGETED.map((k) => [k, values[k] / factor])) as Record<Budgeted, number> });
         if (recent.length > WINDOW) recent.shift();
         hitsCounted = 0;
@@ -1299,15 +1410,19 @@
 {#snippet routeRow(signal: Signal)}
   <span class="signal" use:held={`signal:${signal}`}>{SIGNAL_LABEL[signal]}<i style:width="{Math.round(Math.min(1, Math.max(0, meterOf(signal))) * 100)}%"></i></span>
   {#each ASPECTS as aspect (aspect)}
-    {@const a = amountOf(signal, aspect)}
+    {@const a = cellOf(signal, aspect)}
     <button
       class="cell"
       class:negative={a.v < 0}
       class:mixed={a.mixed}
+      class:pinned={a.pinned}
+      class:walks={a.walk !== null}
       class:picked={cell?.signal === signal && cell?.aspect === aspect}
       style:--amount={Math.min(1, Math.abs(a.v))}
+      style:--walk={a.walk ?? 1}
       aria-label="{cellLabel(signal, aspect)}, {signed(a.v)}"
-      onclick={() => (cell = { signal, aspect })}><span>{a.v ? Math.round(a.v * 100) : ''}</span></button
+      onclick={() => (cell = { signal, aspect })}
+      ><span>{a.v ? Math.round(a.v * 100) : ''}</span>{#if a.bent}<svg class="bent" viewBox="0 0 8 8" aria-hidden="true"><path d="M0.5 7.5C1 2 4 0.5 7.5 0.5" /></svg>{/if}</button
     >
   {/each}
 {/snippet}
@@ -1347,7 +1462,7 @@
         <button class="round" aria-label="Another look" use:held={'another'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={rollAnother}
           ><Icon name="visuals" size={24} /></button
         >
-        <button class="round" aria-label="Randomise" use:held={'randomise'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={roll}
+        <button class="round" aria-label="Randomise" use:held={'randomise'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={diceTapped}
           ><Icon name="dice" size={24} /></button
         >
         {#if undo}
@@ -1453,25 +1568,25 @@
                 {@render routeRow(signal)}
               {/each}
             </div>
-            {#if cell}
+            {#if cell && edited}
               {@const { signal, aspect } = cell}
-              {@const a = amountOf(signal, aspect)}
-              <label class="route">
-                <span>{cellLabel(signal, aspect)}</span>
-                <input
-                  class="amount"
-                  class:negative={a.v < 0}
-                  type="range"
-                  min="-1"
-                  max="1"
-                  step="0.05"
-                  value={a.v}
-                  style:--lo="{50 + Math.min(0, a.v) * 50}%"
-                  style:--hi="{50 + Math.max(0, a.v) * 50}%"
-                  oninput={(e) => setRoute(signal, aspect, Number(e.currentTarget.value))}
+              <div class="route">
+                <span use:held={'route:curve'}>{cellLabel(signal, aspect)}</span>
+                <CurveEditor
+                  curve={edited.curve}
+                  mixed={edited.mixed}
+                  live={liveOnCurve}
+                  {density}
+                  walks={edited.walks}
+                  pinned={edited.pinned}
+                  columnPinned={edited.columnPinned}
+                  columnLabel={ASPECT_LABEL[aspect]}
+                  onchange={(c, done) => setCurve(signal, aspect, c, done)}
+                  onwalks={(on) => setWalks(signal, aspect, on)}
+                  onpin={(on) => setPins(keysOf(signal, aspect).map((k) => `route:${k}`), on)}
+                  oncolumnpin={(on) => setPins([`column:${aspect}`], on)}
                 />
-                <output>{signed(a.v)}</output>
-              </label>
+              </div>
             {/if}
           </div>
           {#each BAND_ROWS as band, b (band)}
@@ -1507,6 +1622,7 @@
               use:held={'reset'}
               onclick={() => {
                 resetVisualSettings();
+                loosened = false;
                 resets++;
                 // To the group: all but the look now (the track's preset follows once drawn), every pin let go.
                 share(Object.fromEntries(SHARED_KEYS.filter((k) => !isLook(k)).map((k) => [k, $state.snapshot(s[k])])));
@@ -1814,6 +1930,37 @@
     background: #e8708f;
   }
 
+  /* A walking route: its colour up to its walk's share of the cell. */
+  .cell.walks::before {
+    top: auto;
+    height: calc(var(--walk) * 100%);
+    border-radius: 0 0 4px 4px;
+  }
+
+  /* Pinned: a corner turned down. */
+  .cell.pinned::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    border-width: 0 7px 7px 0;
+    border-style: solid;
+    border-color: transparent rgb(255 255 255 / 0.85) transparent transparent;
+    border-top-right-radius: 4px;
+  }
+
+  /* Bent: a small curve in the corner across from the pin's, clear of the number. */
+  .cell .bent {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 7px;
+    height: 7px;
+    fill: none;
+    stroke: rgb(255 255 255 / 0.85);
+    stroke-width: 1.2;
+  }
+
   .cell span {
     position: relative;
   }
@@ -1860,15 +2007,13 @@
     color: #000;
   }
 
-  /* The picked route's slider, kept in sight under the grid. */
+  /* The picked route's curve, kept in sight under the grid. */
   .route {
     position: sticky;
     /* Down to the panel's edge (its padding), so nothing shows under it. */
     bottom: -10px;
     display: grid;
-    grid-template-columns: 1fr 3.4em;
-    align-items: center;
-    gap: 2px 12px;
+    gap: 4px;
     margin: 8px -8px 0;
     padding: 8px 10px 10px;
     border-radius: 10px 10px 0 0;
@@ -1878,65 +2023,6 @@
   }
 
   .route span {
-    grid-column: 1 / -1;
-    color: rgb(255 255 255 / 0.75);
-  }
-
-  /* An amount's slider fills from its middle (0) toward its thumb: green up, pink down. */
-  .route input {
-    --fill: var(--accent);
-    --track: rgb(255 255 255 / 0.2);
-    width: 100%;
-    min-width: 0;
-    height: 28px;
-    margin: 0;
-    background: transparent;
-    -webkit-appearance: none;
-    appearance: none;
-  }
-
-  .route input.negative {
-    --fill: #e8708f;
-  }
-
-  .route input::-webkit-slider-runnable-track {
-    height: 4px;
-    border-radius: 2px;
-    background:
-      linear-gradient(to right, transparent calc(50% - 1px), rgb(255 255 255 / 0.7) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
-      linear-gradient(to right, var(--track) var(--lo), var(--fill) var(--lo) var(--hi), var(--track) var(--hi));
-  }
-
-  .route input::-moz-range-track {
-    height: 4px;
-    border-radius: 2px;
-    background:
-      linear-gradient(to right, transparent calc(50% - 1px), rgb(255 255 255 / 0.7) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
-      linear-gradient(to right, var(--track) var(--lo), var(--fill) var(--lo) var(--hi), var(--track) var(--hi));
-  }
-
-  .route input::-webkit-slider-thumb {
-    width: 20px;
-    height: 20px;
-    margin-top: -8px;
-    border: 0;
-    border-radius: 50%;
-    background: var(--fill);
-    -webkit-appearance: none;
-    appearance: none;
-  }
-
-  .route input::-moz-range-thumb {
-    width: 20px;
-    height: 20px;
-    border: 0;
-    border-radius: 50%;
-    background: var(--fill);
-  }
-
-  .route output {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
     color: rgb(255 255 255 / 0.75);
   }
 

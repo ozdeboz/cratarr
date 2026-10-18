@@ -173,7 +173,10 @@ export const MOVEMENT = {
  *  what the owner pinned: a behaviour slider, a route ('route:<key>', on or off as it is), a column ('column:<aspect>',
  *  every route into it as it is). The Track row (what a new track does to the look and the behaviour) is base's: a
  *  recipe is how the visuals move with the music, not what a new track brings. */
-export function settingsOf(recipe: Recipe, base: VisualSettings, scope: 'all' | 'movement' = 'all'): VisualSettings {
+/** What a roll changes: everything, or how it moves (`MOVEMENT`). */
+export type Scope = 'all' | 'movement';
+
+export function settingsOf(recipe: Recipe, base: VisualSettings, scope: Scope = 'all'): VisualSettings {
   const within = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
   const r = recipe.settings;
   const pinned = new Set(base.pins);
