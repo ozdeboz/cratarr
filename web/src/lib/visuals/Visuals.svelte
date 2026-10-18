@@ -1742,7 +1742,7 @@
   .track {
     position: absolute;
     left: max(24px, env(safe-area-inset-left));
-    right: 136px;
+    right: 192px;
     bottom: max(24px, env(safe-area-inset-bottom));
     display: grid;
     gap: 2px;
