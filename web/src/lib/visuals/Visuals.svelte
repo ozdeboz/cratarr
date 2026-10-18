@@ -793,7 +793,7 @@
               {/each}
               <div class="bands" role="radiogroup" aria-label="Band">
                 {#each [null, 0, 1, 2, 3, 4, 5] as b (b ?? -1)}
-                  <button class="chip" class:on={pick === b} role="radio" aria-checked={pick === b} onclick={() => (pick = b)}
+                  <button class="chip" class:on={pick === b} role="radio" aria-checked={pick === b} use:held={`band:${b ?? 'all'}`} onclick={() => (pick = b)}
                     >{b === null ? 'All' : BAND_ROWS[b]}</button
                   >
                 {/each}
@@ -825,7 +825,7 @@
           </div>
           {#each BAND_ROWS as band, b (band)}
             <div class="rows band">
-              <h3>{band}</h3>
+              <h3 use:held={`band:${b}`}>{band}</h3>
               {#each TIMES as time (time.key)}
                 <label class="row">
                   <span use:held={time.key}>{time.label}</span>

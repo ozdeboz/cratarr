@@ -1,89 +1,103 @@
 // What each of the visuals' settings does: shown in a popover when its label is held down (held.svelte.ts), never
-// otherwise (the panel itself stays labels and values). Each says what it changes and what its slider's two ends look
-// like, never a middle as "usual" (a track's preset sets the look, not a default), and what it costs where that
-// matters. Keys: a setting's own key (settings.svelte.ts), `aspect:` and `signal:` with a route column's or row's key
-// (routes.ts), and a few of the panel's other parts.
+// otherwise (the panel itself stays labels and values). Each stands on its own for someone who has never seen the
+// visuals explained: it names what it acts on in plain words (the picture, the flame's six parts, the bands of the
+// sound, a row or a column of the routes) rather than words that only meant something while it was being built, says
+// what its slider's two ends look like (never a middle as "usual": a track's preset sets the look, not a default),
+// and what it costs where that matters. Keys: a setting's own key (settings.svelte.ts), `aspect:` and `signal:` with
+// a route column's or row's key (routes.ts), `band:` with a band's place (or `all`), and the panel's other parts.
 
 export const HELP: Record<string, string> = {
   // How much the device draws.
   points:
-    'How many points the flame is drawn from: the setting that costs the most graphics power. At 16k the picture is coarse and grainy but light on the device; at 2M it is finest and fullest, and heaviest. A device that cannot keep up uses fewer, never more than this.',
+    'The picture is drawn by points that keep jumping around the flame’s shape, leaving light where they land. More points give a finer, fuller, less grainy picture and the most work for the graphics chip: at 16k it is coarse and grainy but light on the device; at 2M finest and heaviest. A device that cannot keep up uses fewer, never more than this.',
   steps:
-    'How many times each point moves and is drawn per frame. At 1 the flame fills in slowly and costs least; at 16 it fills in fastest and smoothest, costing about as much as sixteen times the points.',
+    'How many times each point jumps and lands per frame. At 1 the picture fills in slowly and costs least; at 16 it fills in fastest and smoothest, costing about as much as sixteen times the points.',
   resolution:
     'How sharp the picture is against the screen’s own pixels. At 25% it is soft and light on the device; at 100% it is as sharp as the screen. Either way it is scaled to fill the screen.',
   fps: 'The most frames a second. At 10 the movement is choppy but light on the device; at 60 it is smoothest. If the device cannot keep up, the visuals lower Steps, then Resolution, then Points by themselves (never above what you set) and raise them again when there is room.',
 
-  // How the show looks.
+  // How the picture responds and looks.
   intensity:
-    'How much the music’s loudness sets the size of the show. At 0 loudness plays no part: the show is always at full strength. At 100% it follows the loudness fully: a quiet passage gives a small, calm show, a loud one a big show.',
+    'How much the music’s loudness controls how strongly the picture responds to it. At 0 loudness plays no part: the picture always responds in full. At 100% a quiet passage gives a smaller, calmer, paler picture and a loud one a bigger, livelier one.',
   flash:
-    'How big the quick jumps are: the lights, glow, size and colour that jump with beats and hits. At 0 there are no jumps, only the slow changes, such as a passage getting louder. At 100% every jump is as big as its routes set it; at 200%, twice that.',
-  speed: 'How fast the flame turns, following the track’s tempo. At 0 it stands still; at 200% it turns twice as fast as at 100%.',
-  brightness: 'The brightest the picture can ever get, after every flash and glow. At 10% it stays very dim, for a dark room; at 100% it can reach the screen’s full brightness.',
+    'How much the picture jumps on each beat and hit: its sudden flashes of light and glow, and its sudden changes of size and colour. At 0 nothing jumps and the picture only changes gradually, as when a passage gets louder. At 100% each jump is as large as the routes below set it; at 200%, twice that.',
+  speed: 'How fast the flame turns. It follows the track’s tempo, so faster music turns it faster. At 0 it stands still; at 200% it turns twice as fast as at 100%.',
+  brightness: 'The brightest the picture can ever get, however it flashes or glows. At 10% it stays very dim, for a dark room; at 100% it can reach the screen’s full brightness.',
   purity:
-    'How purely each band’s part keeps its own colour. At 0 the parts’ colours blend fully where they overlap; at 100% every band shows only its own colour.',
+    'The flame has six parts, one for each band of the sound from the deepest bass to the highest treble, each with its own colour. At 0 the parts’ colours mix where they overlap; at 100% each part keeps only its own colour, so you can tell the bands apart.',
   spread:
-    'How far apart the six parts of the flame are drawn. At 25% they are pulled together into one shape; at 250% they are drawn far apart into separate clusters.',
+    'How far apart the flame’s six parts (one for each band of the sound) are drawn. At 25% they are pulled together into one shape; at 250% they are drawn far apart into separate clusters.',
   smoothing:
-    'How much the sparse, grainy parts of the picture are softened, while the dense parts of the flame stay sharp. At 0 you see the raw grain of single points; at 100% the sparse parts become a soft haze, up to twelve pixels wide.',
+    'Where few points have landed, the picture looks grainy. Smoothing softens those sparse areas into a haze, while the dense areas stay sharp. At 0 you see the raw grain of single points; at 100% the sparse areas become a soft haze up to twelve pixels wide.',
   floor:
-    'How faint a part can be and still show. At 0 everything shows, down to single stray points; at 100% everything fainter than the flame’s average fades to black, leaving only its brightest parts.',
+    'How faint an area of the picture can be and still show. At 0 everything shows, down to single stray points; at 100% everything fainter than the flame’s average fades to black, leaving only its brightest areas.',
   depth:
     'How much faint detail is lifted into view. At 0 only the bright structure shows, with strong contrast; at 100% the faint mist and grain around it are lifted almost as bright as the flame.',
   colours:
-    'Where the colours come from. Rainbow: the look’s own colours. Cover: six colours from the playing album’s cover, the darkest for the bass and the lightest for the highs. Fire: deep red for the bass to yellow for the highs, the densest parts glowing white-hot.',
-  symmetry: 'How many times the flame repeats around its middle, like the arms of a star. At 1 it does not repeat; at 8 it has eight arms.',
-  mirror: 'Off: all the arms turn the same way. On: each arm is mirrored, like a kaleidoscope.',
+    'Where the colours of the flame’s six parts come from. Rainbow: from the Look settings Family, Hue, Lightness and Vividness. Cover: six colours from the playing album’s cover, the darkest for the bass and the lightest for the treble. Fire: deep red for the bass to yellow for the treble, the densest areas glowing white-hot.',
+  symmetry: 'How many times the flame repeats around its centre, like the arms of a star. At 1 it does not repeat; at 8 it has eight arms.',
+  mirror: 'Off: the arms are turned copies of each other, all curling the same way. On: each arm also gets a mirror image, like in a kaleidoscope.',
 
   // The look a track or the dice sets (the preset); each can be moved, and then stays as you set it.
-  look: 'The settings that make the flame. Each track sets them to its own look as it starts, and the dice to a random one; a setting you move keeps your value, pinned, until you tap its pin.',
-  form: 'Which kind of flame this is, from 0 to 999: each number gives the six parts their own kinds of bends, and numbers next to each other are not alike. Detail, Twist and Warp then shape whichever form it is.',
+  look: 'The settings that decide what the flame looks like: its shape and its colours. When a track starts it sets them to that track’s own look, the same each time it plays; the dice set them at random. A setting you move stays where you put it (it is pinned) until you tap its pin.',
+  form: 'The flame’s basic shape, from 0 to 999. Each number gives the six parts their own kinds of curve, and neighbouring numbers are not alike. Detail, Twist and Warp then shape whichever form it is.',
   detail:
-    'How each part folds into itself. At 0 the parts are dense, compact cores; at 100% they are large, open and wispy, with more fine detail.',
-  twist: 'How much each part turns as it repeats. At 0 the arms reach straight outwards; at 100% they wind into tight spirals.',
-  warp: 'How much each part bends. At 0 its lines stay straight and its edges sharp; at 100% it curls into swirls, bubbles and loops.',
+    'How the flame’s parts fold into themselves. At 0 each part is a dense, compact core; at 100% it is large, open and wispy, with more fine detail.',
+  twist: 'How much the flame’s parts turn as they repeat into themselves. At 0 they reach straight outwards; at 100% they wind into tight spirals.',
+  warp: 'How much the flame’s parts bend. At 0 their lines stay straight and their edges sharp; at 100% they curl into swirls, bubbles and loops.',
   family:
-    'How the Rainbow colours are chosen. Spectrum: spread round the whole colour wheel. Arc: along part of it, warm or cool. Two tones: two colours across the wheel, the bands taking them in turn. Three: three colours, each for two neighbouring bands.',
-  hue: 'Turns all the colours round the colour wheel together, keeping how they relate. 0° and 360° are the same colours: a full turn.',
-  lightness: 'How light the colours are. At 0 they are deep and rich; at 100% light and pastel.',
-  vividness: 'How vivid the colours are. At 0 they are soft and muted; at 100% as vivid as they go.',
-  final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each warping the flame as a whole. Off shows the flame without one.',
-  pin: 'You moved this setting, so it keeps your value when the next track starts. Tap the pin to let each track set it again.',
-  dice: 'Another look: a new, random setting for every part of the look you have not pinned.',
+    'How the six parts’ colours are chosen, with Rainbow colours. Spectrum: spread round the whole colour wheel. Arc: along part of it, warm or cool. Two tones: two colours from opposite sides of the wheel, the bands taking them in turn. Three: three colours, each for two neighbouring bands.',
+  hue: 'Turns all the colours round the colour wheel together, keeping how they relate (with Rainbow colours). 0° and 360° are the same colours: a full turn.',
+  lightness: 'How light the colours are, with Rainbow colours. At 0 they are deep and rich; at 100% light and pastel.',
+  vividness: 'How vivid the colours are, with Rainbow colours. At 0 they are soft and muted; at 100% as vivid as they go.',
+  final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',
+  pin: 'You moved this setting, so it keeps your value when the next track starts, and the dice leave it alone. Tap the pin to let each track set it again.',
+  dice: 'Another look: every Look setting you have not pinned moves to a new random value.',
+
+  // The bands, as headings of their own settings and as the routes' choice of band.
+  'band:0': 'Sub: the deepest bass, below 60 Hz. Kick drums and sub-bass, felt more than heard.',
+  'band:1': 'Bass: 60 to 150 Hz. Bass lines and the body of kick drums.',
+  'band:2': 'Low mid: 150 to 400 Hz. The warmth of voices, guitars and pianos.',
+  'band:3': 'Mid: 400 Hz to 2 kHz. Most of voices and melodies.',
+  'band:4': 'Presence: 2 to 5 kHz. The edge and clarity of voices and snares.',
+  'band:5': 'Air: above 5 kHz. Cymbals, hi-hats and breath.',
+  'band:all': 'Every band at once: a square set here sets that row for all six bands.',
 
   // Each band's times.
   lighting:
-    'How long this band’s light keeps glowing after each of its hits. At 20 ms it is an instant flash; at 1 s a glow that fades over a second.',
+    'How long this band’s part of the flame keeps glowing after each hit in this band, such as a drum or a plucked note. At 20 ms it flashes for an instant; at 1 s it glows and fades over a second.',
   evolution:
-    'How quickly this band’s part follows changes in the music. At 20 ms it reacts at once and can look nervous; at 2 s it moves smoothly, taking two seconds to catch up.',
+    'How quickly this band’s part of the flame changes shape when what moves it changes (at first, this band getting louder or quieter). At 20 ms it changes at once and can look nervous; at 2 s it changes smoothly, taking two seconds to catch up.',
   continuity:
-    'How this band’s part moves. At 0 only in steps, on its own hits; at 100% only steadily; in between, some of each.',
+    'How this band’s part of the flame turns and changes. At 0 only in steps, one on each hit in this band; at 100% only smoothly; in between, some of each.',
 
   // The routes.
   routes:
-    'How much each signal from the music moves each part of the picture, from −100% to +100%; tap a square to set it. The top rows are signals of the whole track; the rows below are each band’s own, for the band picked above them (All: every band at once).',
+    'Routes connect the music to the picture. Each row is something measured in the music, each column something in the picture, and each square how much that row moves that column, from −100% (the opposite way) to +100%; tap a square to set it. The top rows measure the whole track and act on every part of the flame. The rows below measure one band each, picked above them, and act on that band’s part; in the columns for the whole picture, the bands count together.',
   reset: 'Puts every setting back to its default, the routes too; every pin is let go and the playing track’s own look comes back.',
-  'routes:reset': 'Puts every route back to its default, the way the visuals responded before the routes existed.',
+  'routes:reset':
+    'Puts every square back to its default: loudness sets the picture’s size, colour and turning; beats make it flash and swell; each band’s loudness shapes, turns and tints its part, and its hits light it up.',
 
-  // Route columns: what a signal moves.
-  'aspect:shape': 'Makes the part grow and change its form as the signal rises.',
+  // Route columns: what a row moves.
+  'aspect:shape': 'As the row rises, its part of the flame grows and changes form (with the whole-track rows, every part).',
   'aspect:rotation':
-    'Turns the part as the signal rises; the whole track’s signals turn the whole picture. Below 0 it turns the other way.',
-  'aspect:lights': 'Lights the part up in its own colour as the signal rises. Below 0 the part dims instead.',
-  'aspect:hue': 'Moves the part’s colour round the colour wheel as the signal rises; below 0, the other way round.',
-  'aspect:spread': 'Draws the part out from the middle as the signal rises; below 0, in towards it.',
-  'aspect:brightness': 'Makes the whole picture glow brighter as the signal rises; below 0, dimmer.',
-  'aspect:size': 'Draws the whole picture larger as the signal rises; below 0, smaller.',
-  'aspect:saturation': 'Makes the colours richer as the signal rises; below 0, paler.',
-  'aspect:trails': 'Leaves longer trails behind the movement as the signal rises; below 0, shorter ones.',
-  'aspect:smoothing': 'Softens the grain into haze as the signal rises; below 0, sharpens it.',
-  'aspect:floor': 'Fades the faint parts out as the signal rises; below 0, brings them back.',
-  'aspect:depth': 'Lifts more faint detail into view as the signal rises; below 0, less.',
-  'aspect:reseed': 'Rolls a new look, as the dice do, each time the signal rises past half way.',
-  'aspect:symmetry': 'Picks a new symmetry each time the signal rises past half way.',
+    'As the row rises, its part of the flame turns (with the whole-track rows, the whole picture). Below 0 it turns the other way.',
+  'aspect:lights': 'As the row rises, its part of the flame lights up in its own colour. Below 0 the part dims instead.',
+  'aspect:hue': 'As the row rises, its part’s colour moves round the colour wheel; below 0, the other way round.',
+  'aspect:spread': 'As the row rises, its part of the flame is drawn out from the centre; below 0, in towards it.',
+  'aspect:brightness': 'As the row rises, the whole picture glows brighter; below 0, dimmer.',
+  'aspect:size': 'As the row rises, the whole picture is drawn larger; below 0, smaller.',
+  'aspect:saturation': 'As the row rises, the colours get richer; below 0, paler.',
+  'aspect:trails': 'As the row rises, the movement leaves longer trails; below 0, shorter ones.',
+  'aspect:smoothing': 'As the row rises, the grain softens into haze, as the Smoothing setting does; below 0, it sharpens.',
+  'aspect:floor': 'As the row rises, the faint areas fade out, as the Floor setting does; below 0, they come back.',
+  'aspect:depth': 'As the row rises, more faint detail is lifted into view, as the Depth setting does; below 0, less.',
+  'aspect:reseed':
+    'Each time the row rises past half way, the dice are rolled for you: every Look setting you have not pinned moves to a new random value.',
+  'aspect:symmetry':
+    'Each time the row rises past half way, the Symmetry and Mirror settings move to new random values, unless you have pinned them.',
 
-  // Route rows: the music's signals. The whole track's:
+  // Route rows: what is measured in the music. The whole track's:
   'signal:loudness': 'How loud the music sounds right now, as you hear it.',
   'signal:beat': 'A pulse on every beat, strongest on the strong beats.',
   'signal:downbeat': 'A pulse on the first beat of every bar.',
@@ -91,17 +105,17 @@ export const HELP: Record<string, string> = {
   'signal:section': 'A pulse where a new part of the track starts, such as a verse, a chorus or a drop.',
   'signal:harmony': 'Rises when the chords change, and stays low while they hold.',
   'signal:centroid': 'How bright the sound is: low for dark, muffled sounds, high for bright, sharp ones.',
-  'signal:key': 'Where the music’s key sits on the circle of fifths. It changes slowly, so it suits slow drifts such as Hue.',
+  'signal:key': 'Which key the music is in, as a place on a circle where related keys sit side by side. It changes slowly, so it suits slow drifts such as Hue.',
   'signal:swell': 'Rises while the music grows louder over several seconds, and falls back when it stops growing.',
   'signal:buildUp': 'Rises through a build-up, as the music climbs towards a drop.',
   // Each band's:
   'signal:level': 'How loud this band is right now.',
   'signal:flux': 'How much this band’s sound is changing: high on new notes and hits, low on held sounds.',
-  'signal:hits': 'A pulse on each hit in this band, glowing out over the band’s Lighting time.',
-  'signal:percussive': 'How much of this band is drums and other short, hit sounds.',
+  'signal:hits': 'A pulse on each hit in this band, such as a drum or a plucked note, fading over the band’s Lighting setting.',
+  'signal:percussive': 'How much of this band is drums and other short, struck sounds.',
   'signal:harmonic': 'How much of this band is held notes and chords.',
-  'signal:percussiveHits': 'A pulse on each drum hit in this band, leaving held notes out; it glows out over the band’s Lighting time.',
-  'signal:crest': 'How punchy this band is: its sharp peaks against its average loudness.',
-  'signal:width': 'How wide this band sounds across the stereo field: low in the middle, high when spread left and right.',
+  'signal:percussiveHits': 'A pulse on each drum hit in this band, leaving held notes out, fading over the band’s Lighting setting.',
+  'signal:crest': 'How punchy this band is: how far its sharp peaks stand out above its average loudness.',
+  'signal:width': 'How wide this band sounds between the left and right speakers: low when it comes from the middle, high when it is spread out.',
   'signal:bandSwell': 'Rises while this band grows louder over several seconds.',
 };
