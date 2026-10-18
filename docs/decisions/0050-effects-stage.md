@@ -147,5 +147,5 @@ lab); a new section may turn their way.
 - Another look now also changes effects and Facets; to keep one, pin it.
 - Settings from before 65 lose what 65 removes, unconverted, by the owner's choice.
 - The group's shared settings carry one more key: whether a double tap's room stands.
-- The panel gains Quality, Haze, the effects' settings, Facets and Lattice, and three route columns (Presence, Effects,
-  Facets), and loses Points, Steps, Resolution, Floor, Depth and Family.
+- The panel gains Quality, Haze, the effects' settings, Facets and Lattice, and four route columns (Presence, Effects,
+  Facets, Waves), and loses Points, Steps, Resolution, Floor, Depth and Family.
