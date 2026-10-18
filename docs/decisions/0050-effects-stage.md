@@ -104,6 +104,17 @@ nothing (marked in its help).
   twist; a play mode behind a hand icon, so the taps the visuals already use (controls, seek, play and pause) stay as
   they are; a phone as an instrument for the salon screen through its sync group. 66 begins with one place for all the
   visuals' pointer handling.
+- **A track's character** (the owner, 2026-10-18, "loaded as a 66 candidate": "we could map between the waveform
+  analysis and the seed settings … with sufficient rules, we could have a working model"): the music sets the ranges,
+  the seed picks inside them. A few numbers per track from its analysis (tempo and drum density, drums against
+  sustained sound, bass weight, brightness of the sound, loudness and its range, how much the sections differ, major or
+  minor) narrow what the seed may draw: fast and drum-heavy toward quick, flashing, short-lingering; pads toward fluid
+  and smooth; minor and slow toward darker, cooler colours (crossmodal correspondences; Palmer et al., PNAS 2013, for
+  music and colour). The seed keeps every track's look its own and alike on every device; a track not analysed yet
+  falls back to the seed alone; what the rules make passes the precheck and the governor as the dice's recipes do; the
+  thumbs, each with its track's character, can tune the rules later. After 65, since the envelopes and Presence change
+  what several settings mean. First step: the character of the 11 calibration tracks and what each would get, shown to
+  the owner before anything is built.
 - **The pulse** (0049): its own decision.
 
 ## Open for the owner
