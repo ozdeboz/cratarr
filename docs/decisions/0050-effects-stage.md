@@ -135,8 +135,11 @@ a made-up track) and wants both: "Basically, yes, I want both, so this is seriou
   points' pass (to be measured on the tablet before the design is fixed). Its seam: how far the part is from a pure
   turn and shrink (the preview showed 20 % to 39 % on the made-up track's looks) is how much the picture morphs as a
   loop restarts; 65 prefers well-fitting parts and eases the seam.
-- **Settings and routes** (proposed; to settle with the owner before building): Tunnel and Dive as two speeds (0:
-  off; they can run together), each with a route column, so the music can quicken them (a build-up diving faster).
+- **Settings and routes** (the owner: "Yes, that's the idea. These sliders should be routable"): Tunnel and Dive are
+  two sliders in Behaviour, their speeds (0: off; both can run at once), and two route columns. Each is a level, as
+  Fluid is since 64.1: its slider the most it gives, its column's routes the conditions for reaching it (a build-up
+  diving faster, a quiet passage slowing the tunnel); no route, the slider's speed as set. The dice roll them, and
+  they pin, as the other behaviour sliders do.
 - **Held to the limits**: the zoom-pumping meter is to take a steady zoom as calm, not as pumping; the dive's turn is
   reported to the motion meter as the effects report theirs.
 
