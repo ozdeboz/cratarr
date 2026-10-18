@@ -101,8 +101,6 @@ export const HELP: Record<string, string> = {
   'aspect:floor': 'As the row rises, the faint areas fade out, as the Floor setting does; below 0, they come back.',
   'aspect:fluid': 'As the row rises, the picture flows more like smoke, as the Fluid setting does; below 0, less.',
   'aspect:depth': 'As the row rises, more faint detail is lifted into view, as the Depth setting does; below 0, less.',
-  'aspect:reseed':
-    'Each time the row rises past half way, the dice are rolled for you: every Look setting you have not pinned moves to a new random value.',
   'aspect:drift':
     'As the row rises, the flame’s look walks: its Detail, Twist, Warp, colours, Spread and Purity move a little further in a direction that changes every bar, never far from where the track set them. Below 0 the look walks back. Pinned settings stay where they are.',
   'aspect:symmetry':

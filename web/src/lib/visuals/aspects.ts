@@ -4,7 +4,7 @@
 
 import { PARTS, type Part } from './flame';
 import type { Music } from './music.svelte';
-import { A, B, BAND_SIGNALS, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix } from './routes';
+import { A, ASPECTS, B, BAND_SIGNALS, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix } from './routes';
 import { BANDS, type VisualSettings } from './settings.svelte';
 
 /** A beat's turn of the transforms: once around in 32 beats. */
@@ -35,6 +35,9 @@ export type AspectsState = {
   got: Given;
   routes: Record<string, number> | null;
   matrix: Matrix | null;
+  // The track playing, and when it started (ms): the Track signal.
+  trackKey: string | null | undefined;
+  trackAt: number;
   // Each part: how far it has turned, and its evolving aspects (shape, hue, spread) as followed over its band's
   // Evolution time.
   turned: number[];
@@ -47,7 +50,7 @@ export type AspectsState = {
   pending: number[];
   rates: number[];
   // The moments: ready again once what they are given falls under a third, and not within two seconds.
-  moments: { reseed: Moment; symmetry: Moment };
+  moments: { symmetry: Moment };
   // The Flash setting: each quickly changing aspect (each part's lights, the glow, size and saturation) as its slow
   // course (followed twice over a third of a second: a beat's or a hit's swing all but gone from it, a passage's change
   // kept) and the setting's share of its swing about that course.
@@ -84,8 +87,11 @@ export type AspectsNow = {
   floor: number;
   fluid: number;
   warp: number;
-  /** The moments come this frame: another preset, another symmetry (none with reduced motion). */
-  moments: { reseed: boolean; symmetry: boolean };
+  /** How far the look walks (drift.ts): what Drift's routes give it, but the Track row's (its move at a new track is
+   *  the track's own, not a walk). */
+  drift: number;
+  /** The moments come this frame: another symmetry (none with reduced motion). */
+  moments: { symmetry: boolean };
 };
 
 export function newAspects(): AspectsState {
@@ -104,13 +110,15 @@ export function newAspects(): AspectsState {
     got: given(BANDS),
     routes: null,
     matrix: null,
+    trackKey: undefined,
+    trackAt: 0,
     turned: Array<number>(PARTS).fill(0),
     evolving: Array.from({ length: PARTS }, () => [0.5, 0, 0]),
     lastHit: Array<number | null>(PARTS).fill(null),
     held: Array.from({ length: PARTS }, () => [0.5, 0, 0]),
     pending: Array<number>(PARTS).fill(0),
     rates: Array<number>(PARTS).fill(0),
-    moments: { reseed: { armed: true, at: -Infinity }, symmetry: { armed: true, at: -Infinity } },
+    moments: { symmetry: { armed: true, at: -Infinity } },
     courses: { lights: Array.from({ length: PARTS }, () => [] as number[]), glow: [], size: [], saturation: [] },
   };
 }
@@ -151,8 +159,15 @@ export function stepAspects(
   track.set(m.track);
   track[T.loudness] = st.lit;
   if (still) for (const t of [T.beat, T.downbeat, T.section]) track[t] *= 0.5;
+  // Track: all of it as a track starts (the visuals opening on one too), gone over its first beat.
+  if (m.key !== st.trackKey) {
+    st.trackKey = m.key;
+    st.trackAt = now;
+  }
+  track[T.track] = Math.max(0, 1 - ((now - st.trackAt) / 1000) * m.bps);
   const bands = m.bands ?? st.standIn;
-  give(matrix, track, bands, m.playing ? st.lit : 0, st.got);
+  const envelope = m.playing ? st.lit : 0;
+  give(matrix, track, bands, envelope, st.got);
   const W = st.got.whole;
   const follow2 = 1 - Math.exp(-dt / SLOW_S);
   const flashed = (v: number, course: number[]) => {
@@ -216,10 +231,8 @@ export function stepAspects(
     mo.at = now;
     return true;
   };
-  const moments = {
-    reseed: !still && moment(st.moments.reseed, W[A.reseed]),
-    symmetry: !still && moment(st.moments.symmetry, W[A.symmetry]),
-  };
+  const moments = { symmetry: !still && moment(st.moments.symmetry, W[A.symmetry]) };
+  const drift = W[A.drift] - track[T.track] * envelope * matrix.track[T.track * ASPECTS.length + A.drift];
   const fluid = opts.fluidFull * grainOf(W, s.fluid, A.fluid);
   return {
     given: W,
@@ -249,6 +262,7 @@ export function stepAspects(
     // Fluid: the light carried along a flow (none at 0), read back along it a little as it shows.
     fluid,
     warp: 0.12 * fluid,
+    drift,
     moments,
   };
 }

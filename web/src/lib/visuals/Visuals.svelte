@@ -41,6 +41,7 @@
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
+  import { newDrift, stepDrift } from './drift';
   import { Meters, type FrameStats } from './meters';
   import RateMode from './RateMode.svelte';
   import { trial } from './trial.svelte';
@@ -200,7 +201,10 @@
     // Its routes whole: any route it does not have (one set since, or a default added since) off.
     if (settings.routes && typeof settings.routes === 'object') {
       const off = Object.fromEntries([...Object.keys(DEFAULTS.routes), ...Object.keys(s.routes)].map((k) => [k, 0]));
-      settings.routes = { ...off, ...(settings.routes as Record<string, number>) };
+      const theirs = settings.routes as Record<string, number>;
+      // One saved before the Track row: a new track brought its own look then.
+      const track = routeKey('track', null, 'drift');
+      settings.routes = { ...off, ...(track in theirs ? {} : { [track]: -1 }), ...theirs };
     }
     drawingNow = null;
     nextBlend = ANOTHER_MS;
@@ -490,6 +494,33 @@
     // What the visuals do, measured (meters.ts), and when the rating page last had them.
     const metering = new Meters();
     let meteredAt = 0;
+    // The look's walk (drift.ts): when it last walked, and the time since. A track's own look goes into the settings
+    // as far as the Track row's route into Drift says: at -100 % all of it (as before Drift), at -50 % half way, at 0
+    // none, above 0 away from it. After the panel's Reset (`whole`), all of it.
+    const drifting = newDrift();
+    let drifted = 0;
+    let driftDt = 0;
+    const trackLook = (drawn: Drawn, blend: number, whole: boolean) => {
+      nextBlend = blend;
+      lookCame = 'track';
+      if (whole) {
+        loadPreset(drawn.preset);
+        return;
+      }
+      const how = trial.settings ?? s;
+      const out = stepDrift(drifting, {
+        amount: 0,
+        trackEvent: how.routes[routeKey('track', null, 'drift')] ?? 0,
+        dt: 0,
+        seed: seedOf(key ?? 'cratarr'),
+        bar: 0,
+        pins: s.pins,
+        own: drawn.own,
+        now: lookNow() as Preset,
+      });
+      Object.assign(s, out);
+      saveVisualSettings();
+    };
     // The fluid (decision 0047): where each band's part lies on the screen (measured four times a second while the light
     // flows), and which way each part turns (its pushes curl with it).
     let partsWhere: ([number, number] | null)[] = [];
@@ -586,9 +617,7 @@
           current = ahead.drawn.own;
           drawingNow = null;
           if (!theirs) {
-            nextBlend = blend;
-            lookCame = 'track';
-            loadPreset(ahead.drawn.preset);
+            trackLook(ahead.drawn, blend, toGroup);
             if (toGroup) share(lookNow());
           }
         } else drawingNow = { draws: presetDraws(seedOf(m.key ?? 'cratarr'), fixed), blend, share: toGroup, load: !theirs, why: 'track' };
@@ -602,12 +631,13 @@
           current = next.value.own;
           const { blend, share: toGroup, load, why } = drawingNow;
           drawingNow = null;
-          if (load) {
+          if (load && why === 'track') trackLook(next.value, blend, toGroup);
+          else if (load) {
             nextBlend = blend;
             lookCame = why;
             loadPreset(next.value.preset);
-            if (toGroup) share(lookNow());
           }
+          if (load && toGroup) share(lookNow());
         }
       }
       // The colours: the cover's asked for as a track starts, where they are wanted.
@@ -667,11 +697,21 @@
         metered = now;
         meters = { track: Array.from(track), bands: d.bands.map((v) => Array.from(v)) };
       }
-      // The moments: another preset (as the dice give), another symmetry; a pinned setting stays as it is.
-      // Seeded from the track and the beat they come on (else the half second), so every device playing it together
-      // makes the same choice.
+      // Drift: the look walking with the music (drift.ts), each bar another way, never far from where the track set it;
+      // ten steps a second (each makes the flame anew), none with reduced motion. Not saved, nor sent to the group:
+      // every device playing the track together walks alike.
+      driftDt += dt;
+      if (now - drifted >= 100) {
+        drifted = now;
+        if (!still) {
+          const bar = Math.floor((m.beat ? m.beat.index : m.position * 2) / 4);
+          Object.assign(s, stepDrift(drifting, { amount: d.drift, trackEvent: 0, dt: driftDt, seed: seedOf(m.key ?? 'cratarr'), bar, pins: s.pins, own: current ?? (lookNow() as Preset), now: lookNow() as Preset }));
+        }
+        driftDt = 0;
+      }
+      // The moments: another symmetry; a pinned setting stays as it is. Seeded from the track and the beat it comes on
+      // (else the half second), so every device playing it together makes the same choice.
       const at = `${m.key}|${m.beat ? m.beat.index : Math.floor(m.position * 2)}`;
-      if (d.moments.reseed) loadAnother(seedOf(`reseed|${at}`), false, 'moment');
       if (d.moments.symmetry && !(s.pins.includes('symmetry') && s.pins.includes('mirror'))) {
         const rnd = randomFrom(seedOf(`symmetry|${at}`));
         if (!s.pins.includes('symmetry')) s.symmetry = ((s.symmetry + Math.floor(rnd() * 7)) % 8) + 1;

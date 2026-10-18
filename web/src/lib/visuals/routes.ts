@@ -6,7 +6,7 @@
 // routes are scaled by it, so a quiet passage is a small show whatever its parts do.
 
 /** Signals of the whole track. */
-export const TRACK_SIGNALS = ['loudness', 'beat', 'downbeat', 'tempo', 'section', 'harmony', 'centroid', 'key', 'swell', 'buildUp'] as const;
+export const TRACK_SIGNALS = ['loudness', 'beat', 'downbeat', 'tempo', 'section', 'harmony', 'centroid', 'key', 'swell', 'buildUp', 'track'] as const;
 /** Signals of each band. */
 export const BAND_SIGNALS = ['level', 'flux', 'hits', 'percussive', 'harmonic', 'percussiveHits', 'crest', 'width', 'bandSwell'] as const;
 export type TrackSignal = (typeof TRACK_SIGNALS)[number];
@@ -24,6 +24,7 @@ export const SIGNAL_LABEL: Record<Signal, string> = {
   key: 'Key',
   swell: 'Swell',
   buildUp: 'Build-up',
+  track: 'Track',
   level: 'Level',
   flux: 'Flux',
   hits: 'Hits',
@@ -36,12 +37,12 @@ export const SIGNAL_LABEL: Record<Signal, string> = {
 };
 
 /** The picture's aspects. */
-export const ASPECTS = ['shape', 'rotation', 'lights', 'hue', 'spread', 'brightness', 'size', 'saturation', 'trails', 'smoothing', 'floor', 'depth', 'fluid', 'reseed', 'symmetry'] as const;
+export const ASPECTS = ['shape', 'rotation', 'lights', 'hue', 'spread', 'brightness', 'size', 'saturation', 'trails', 'smoothing', 'floor', 'depth', 'fluid', 'drift', 'symmetry'] as const;
 export type Aspect = (typeof ASPECTS)[number];
 /** Aspects of each part of the flame: a band's routes act on its own part, the whole track's on every part. */
 export const PART_ASPECTS: readonly Aspect[] = ['shape', 'rotation', 'lights', 'hue', 'spread'];
-/** Aspects that act at moments: as what their routes give rises past a half (a new flame, a new symmetry). */
-export const MOMENT_ASPECTS: readonly Aspect[] = ['reseed', 'symmetry'];
+/** Aspects that act at moments: as what their routes give rises past a half (a new symmetry). */
+export const MOMENT_ASPECTS: readonly Aspect[] = ['symmetry'];
 
 export const ASPECT_LABEL: Record<Aspect, string> = {
   shape: 'Shape',
@@ -57,7 +58,7 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   floor: 'Floor',
   depth: 'Depth',
   fluid: 'Fluid',
-  reseed: 'Reseed',
+  drift: 'Drift',
   symmetry: 'Symmetry',
 };
 
@@ -73,6 +74,9 @@ const isMoment = ASPECTS.map((a) => MOMENT_ASPECTS.includes(a));
 /** A route's key: the signal, its band (`-` for the whole track's), the aspect. */
 export const routeKey = (signal: Signal, band: number | null, aspect: Aspect) => `${signal}|${band ?? '-'}|${aspect}`;
 
+/** A route's key as kept before 64, as it is now: Reseed's column is Drift's (the owner: Drift replaces it). */
+export const keyNow = (key: string) => (key.endsWith('|reseed') ? `${key.slice(0, -'reseed'.length)}drift` : key);
+
 /** Whether `key` names a route there is: a track signal with `-`, a band signal with a band under `bands`. */
 export function isRoute(key: string, bands: number): boolean {
   const [signal, band, aspect] = key.split('|');
@@ -83,9 +87,11 @@ export function isRoute(key: string, bands: number): boolean {
 
 /** The routes that make the picture as it was before them: the loudness sets the size and the colour (and, as the
  *  envelope, everything else) and turns the whole, the beat flashes and swells it; each band's level evolves, turns
- *  and tints its part, its hits light it. Every other route is 0. */
+ *  and tints its part, its hits light it; a new track brings its own look (Track into Drift at -100 %: all the way
+ *  back to it). Every other route is 0. */
 export function defaultRoutes(bands: number): Record<string, number> {
   const r: Record<string, number> = {
+    [routeKey('track', null, 'drift')]: -1,
     [routeKey('loudness', null, 'size')]: 1,
     [routeKey('loudness', null, 'saturation')]: 1,
     [routeKey('loudness', null, 'rotation')]: 0.2,

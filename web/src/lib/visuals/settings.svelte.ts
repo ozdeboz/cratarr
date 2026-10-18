@@ -9,7 +9,7 @@
 // that keeps nothing (a private window) starts from the defaults each time.
 
 import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
-import { defaultRoutes, isRoute } from './routes';
+import { defaultRoutes, isRoute, keyNow } from './routes';
 
 const KEY = 'cratarr-visuals';
 /** The kept settings' form: 2 since 64 (Fluid on its finer scale); none before. */
@@ -211,7 +211,8 @@ export function keptFrom(kept: Record<string, unknown>): VisualSettings {
   }
   // The routes kept: each one there is, over the defaults (a 0 kept turns a default off).
   if (saved.routes && typeof saved.routes === 'object') {
-    for (const [key, v] of Object.entries(saved.routes as Record<string, unknown>)) {
+    for (const [kept, v] of Object.entries(saved.routes as Record<string, unknown>)) {
+      const key = keyNow(kept);
       if (typeof v === 'number' && Number.isFinite(v) && isRoute(key, BANDS)) out.routes[key] = within('routes', v);
     }
   }
