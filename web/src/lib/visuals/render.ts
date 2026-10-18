@@ -10,7 +10,7 @@
 //   (decision 0046, amended), so a band's transient lights its own colour where it lies;
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
-import { colourOf, PARTS, type Flame } from './flame';
+import { MARK, colourOf, PARTS, type Flame } from './flame';
 import { Fluid, gridFor, type Flow, type Force } from './fluid';
 import { FlashMeter } from './flashmeter';
 import type { Tiles } from './meters';
@@ -18,6 +18,29 @@ import type { Tiles } from './meters';
 // The six parts, rotations up to eight arms and as many mirrors.
 const MAX_XFORMS = 22;
 const SLOTS = 8;
+
+// The Cratarr lens (flame.ts's `markOf`, `MARK`): a distance into a set of rings by an area share, written out ring by
+// ring for the shader; then the point into the mark's slice or the rest by its angle.
+const ringsGlsl = (name: string, rings: [number, number][]) => {
+  const total = rings.reduce((s, [a, b]) => s + b * b - a * a, 0);
+  const steps = rings.map(([a, b]) => {
+    const area = b * b - a * a;
+    return `  if (left < ${area.toFixed(6)}) return sqrt(${(a * a).toFixed(6)} + left);\n  left -= ${area.toFixed(6)};`;
+  });
+  return `float ${name}(float u) {\n  float left = clamp(u, 0.0, 1.0) * ${total.toFixed(6)};\n${steps.join('\n')}\n  return ${rings[rings.length - 1][1].toFixed(6)};\n}`;
+};
+const MARK_GLSL = `${ringsGlsl('markRings', MARK.rings)}
+${ringsGlsl('markSlice', MARK.slice)}
+vec2 mark(vec2 p, float r) {
+  float t = (atan(p.y, p.x) + PI) / (2.0 * PI);
+  float u = r / (1.0 + r);
+  u *= u;
+  float share = ${MARK.share.toFixed(6)};
+  bool inSlice = t < share;
+  float to = inSlice ? -PI / 6.0 + (t / share) * (PI / 3.0) : PI / 6.0 + ((t - share) / (1.0 - share)) * (5.0 * PI / 3.0);
+  float far = inSlice ? markSlice(u) : markRings(u);
+  return far * vec2(cos(to), sin(to));
+}`;
 /** Passes a point added to the running ones settles for, unseen, before it is drawn (flam3's fuse). */
 const SETTLE = 30;
 
@@ -157,6 +180,7 @@ vec2 variation(int v, vec2 p, float r2, float r, float th, vec3 abc, vec3 def, i
 
 // The final transform's warps only (flame.ts's FINALS): a second copy of the whole switch above for every point cost
 // the Intel a third more of its time a step.
+${MARK_GLSL}
 vec2 warp(int v, vec2 p, float r2, float r, float th) {
   switch (v) {
     case 1: return sin(p);
@@ -171,6 +195,7 @@ vec2 warp(int v, vec2 p, float r2, float r, float th) {
     case 16: return (2.0 / (r + 1.0)) * p.yx;
     case 27: return (2.0 / (r + 1.0)) * p;
     case 28: return (4.0 / (r2 + 4.0)) * p;
+    case 99: return mark(p, r);
     default: return p;
   }
 }

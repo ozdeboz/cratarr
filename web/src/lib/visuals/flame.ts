@@ -46,6 +46,8 @@ export const VARIATIONS = {
   secant2: 46,
   twintrian: 47,
   cross: 48,
+  // Cratarr's own (not flam3's): its mark (the Cratarr lens, `MARK`).
+  cratarr: 99,
 } as const;
 export type Variation = (typeof VARIATIONS)[keyof typeof VARIATIONS];
 
@@ -217,7 +219,47 @@ const FINALS: Variation[] = [
   VARIATIONS.horseshoe,
   VARIATIONS.handkerchief,
   VARIATIONS.heart,
+  VARIATIONS.cratarr,
 ];
+/** The finals a preset draws among: the ones before Cratarr's, so every track's own look stays as it was drawn (the
+ *  Cratarr lens is one to pick). */
+const DRAWN_FINALS = FINALS.indexOf(VARIATIONS.cratarr);
+
+/** Cratarr's mark (lib/Mark.svelte, tools/brand/record.py's `full`), the Cratarr lens's shape: the record's rings (inner
+ *  and outer radius, of its whole) outside its slice, the sixth about the right, and in the slice the thin rings that
+ *  are gaps elsewhere. `share`: the slice's share of the mark's area. The lens sends each point into the slice or the
+ *  rest by its angle, as their areas share, and its distance into their rings by area, so both are filled evenly. */
+export const MARK = (() => {
+  const of = (rings: number[][]) => rings.map(([a, b]) => [a / 24, b / 24] as [number, number]);
+  const rings = of([[0, 3], [8, 12.4], [13.6, 16.4], [17.6, 20.4], [21.6, 24]]);
+  const slice = of([[12.4, 13.6], [16.4, 17.6], [20.4, 21.6]]);
+  const area = (list: [number, number][]) => list.reduce((s, [a, b]) => s + b * b - a * a, 0);
+  const outside = (area(rings) * 5) / 6;
+  const inside = area(slice) / 6;
+  return { rings, slice, share: inside / (outside + inside) };
+})();
+
+/** A distance into `rings` by `u` (0..1), as their areas share it. */
+function ringAt(rings: [number, number][], u: number): number {
+  const total = rings.reduce((s, [a, b]) => s + b * b - a * a, 0);
+  let left = Math.min(1, Math.max(0, u)) * total;
+  for (const [a, b] of rings) {
+    const area = b * b - a * a;
+    if (left < area) return Math.sqrt(a * a + left);
+    left -= area;
+  }
+  return rings[rings.length - 1][1];
+}
+
+/** The Cratarr lens on a point (its distance `r`): into the mark. */
+export function markOf(x: number, y: number, r: number): [number, number] {
+  const t = (Math.atan2(y, x) + Math.PI) / (2 * Math.PI);
+  const u = (r / (1 + r)) ** 2;
+  const inSlice = t < MARK.share;
+  const to = inSlice ? -Math.PI / 6 + (t / MARK.share) * (Math.PI / 3) : Math.PI / 6 + ((t - MARK.share) / (1 - MARK.share)) * ((5 * Math.PI) / 3);
+  const out = ringAt(inSlice ? MARK.slice : MARK.rings, u);
+  return [out * Math.cos(to), out * Math.sin(to)];
+}
 
 /** The finals' names, for the Lens setting (1 is the first). */
 export const LENSES = FINALS.map((v) => {
@@ -226,14 +268,18 @@ export const LENSES = FINALS.map((v) => {
 });
 
 /** A final transform (the Lens setting's `lens`, one of `FINALS`), by its form's draws (`f`): near the identity, then
- *  the warp, up to half of it the plain picture. */
+ *  the warp, up to half of it the plain picture. Cratarr's all of it: any plain picture added would fill its slice. */
 function finalOf(f: number[], lens: number): Xform {
+  const warp = FINALS[(lens - 1) % FINALS.length];
   return {
     affine: affineOf(f[0] * Math.PI * 2, 0.8 + f[1] * 0.5, 0.8 + f[2] * 0.5, (f[3] - 0.5) * 0.3, (f[4] - 0.5) * 0.3, (f[5] - 0.5) * 0.3),
-    variations: new Map([
-      [FINALS[(lens - 1) % FINALS.length], 0.5 + f[6] * 0.5],
-      [VARIATIONS.linear, f[7] * 0.5],
-    ]),
+    variations:
+      warp === VARIATIONS.cratarr
+        ? new Map([[warp, 1]])
+        : new Map([
+            [warp, 0.5 + f[6] * 0.5],
+            [VARIATIONS.linear, f[7] * 0.5],
+          ]),
     weight: 0,
     color: 0,
     colorSpeed: 0,
@@ -378,7 +424,7 @@ export function* drawing(seed: number, fixed: Partial<Preset> = {}): Generator<v
       warp: 0.55 + rnd() * 0.45,
       symmetry: kind < 0.35 ? 1 : kind < 0.75 ? 2 + Math.floor(rnd() * 7) : 1 + Math.floor(rnd() * 6),
       mirror: kind >= 0.75 ? 1 : 0,
-      final: rnd() < 0.3 ? 1 + Math.floor(rnd() * FINALS.length) : 0,
+      final: rnd() < 0.3 ? 1 + Math.floor(rnd() * DRAWN_FINALS) : 0,
       family: family < 0.4 ? 0 : family < 0.65 ? 1 : family < 0.85 ? 2 : 3,
       hue: rnd(),
       lightness: 0.23 + rnd() * 0.54,
@@ -626,6 +672,7 @@ export function apply(t: Xform, px: number, py: number, rnd: () => number): [num
       case VARIATIONS.polar: vx = theta / Math.PI; vy = r - 1; break;
       case VARIATIONS.handkerchief: vx = r * Math.sin(theta + r); vy = r * Math.cos(theta - r); break;
       case VARIATIONS.heart: vx = r * Math.sin(theta * r); vy = -r * Math.cos(theta * r); break;
+      case VARIATIONS.cratarr: [vx, vy] = markOf(x, y, r); break;
       case VARIATIONS.disc: vx = (theta / Math.PI) * Math.sin(Math.PI * r); vy = (theta / Math.PI) * Math.cos(Math.PI * r); break;
       case VARIATIONS.spiral: vx = (Math.cos(theta) + Math.sin(r)) / r; vy = (Math.sin(theta) - Math.cos(r)) / r; break;
       case VARIATIONS.hyperbolic: vx = Math.sin(theta) / r; vy = r * Math.cos(theta); break;
