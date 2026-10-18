@@ -62,3 +62,13 @@ test('what is pinned stays, in either roll', () => {
     for (const k of Object.keys(s.routes).filter((k) => columnOf(k) === 'shape')) assert.equal(s.routes[k], pinned.routes[k], `${scope} ${k}`);
   }
 });
+
+test('a roll leaves the fluid’s stirring (Stir, Flow, Swirl) as it is', () => {
+  const stirred = { ...base, routes: { ...base.routes, 'hits|0|stir': 0.7, 'loudness|-|flow': 0.5, 'swell|-|swirl': -0.25 } } as VisualSettings;
+  for (const scope of ['all', 'movement'] as const) {
+    const s = settingsOf(recipe, stirred, scope);
+    assert.equal(s.routes['hits|0|stir'], 0.7, scope);
+    assert.equal(s.routes['loudness|-|flow'], 0.5, scope);
+    assert.equal(s.routes['swell|-|swirl'], -0.25, scope);
+  }
+});

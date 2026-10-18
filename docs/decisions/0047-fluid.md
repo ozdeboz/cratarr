@@ -93,14 +93,21 @@ its parts are lit and settling in a quiet section; at 100 % the light is smoke.
   for 20 % (measured off-screen); desktop drivers round small levels away, so the labs never showed it. The owner liked
   the look a little: Facets, square and hex, will bring it back deliberately (65).
 
-## Amendment, 2026-10-18: a fifth of the range, and eased in and out (64.1)
+## Amendment, 2026-10-18: 64's range kept, the stirring as routes, and eased in and out (64.1)
 
-- **A fifth of 64's range** (the owner's phone washed out in cycles: a route took Fluid to about 35 % of 64's range at
-  each punch in the presence band; "without that +60%, the effect is gone. what does this say about our fluid range?").
-  Swept on the phone's own settings and pace, the busy centre's contrast collapsed from about a fifth of 64's range
-  up (its p10–p90 spread 0.30 at 10 %, 0.10 at 30 %): 64.1's 100 % is 64's 20 % (`FLUID_FULL` 0.02). Kept settings,
-  snapshots and what a group shares (`fluidScale` sent with it) are read on the new scale, whichever page wrote them.
-  With the slider now the most Fluid gets (0046, amended), no route can take it past that.
+- **The range stays 64's** (`FLUID_FULL` 0.1). The owner's phone washed out in cycles: a route took Fluid to about 35 %
+  of 64's range at each punch in the presence band ("without that +60%, the effect is gone"). Swept on the phone's own
+  settings, the busy centre's contrast fell from about a fifth of the range up (its p10–p90 spread about 0.35 at 10 %,
+  0.1 to 0.2 from 30 %, noisy over the test track's loud and quiet sections), and a fifth was tried. The owner kept
+  64's: "even when I have the fluid on max … max fluid looks great", "restore 64's full range, otherwise it'll probably
+  not be good". The phone's case is fixed where it came from: the slider is now the most a route gives Fluid (0046,
+  amended), so no route takes it past what is set.
+- **The stirring as routes** (the owner, in claude-a5's session: "Yes, but I do want it in 64.1"): what was built into
+  stirring.ts (each band's hits, the beats, downbeats, sections, the bands' levels, the loudness, the swell) is three
+  route columns, Stir (the pushes), Flow (the flow's energy and breathing) and Swirl (the whirls), every default route
+  straight at 1, so the defaults stir exactly as before (claude-a5's test compares every force frame by frame). Across a
+  curve is the push's own strength; loudness does not scale them. The dice leave them as they are, as the Track row.
+  Tempo's hold on the turning and loudness through Intensity stay built in, said in Speed's and Intensity's help.
 - **Eased in and out** (claude-a5's, the owner: "Yes, fix it now"): Fluid tipping across 0 made the flow stop dead and
   the smeared light fall apart into specks; the renderer now follows Fluid and the warp (rising over 0.3 s, falling over
   1.5 s), the flow coasting to rest, the same textures carried on when it comes back.

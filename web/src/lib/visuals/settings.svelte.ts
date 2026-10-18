@@ -13,22 +13,16 @@ import { ASPECTS, defaultRoutes, isRoute, keyNow, type RouteValue } from './rout
 import { curveFrom, valueOf } from './curves';
 
 const KEY = 'cratarr-visuals';
-/** The kept settings' form: 2 since 64 (Fluid on a finer scale), 3 since 64.1 (finer again); none before. */
-const FORM = 3;
+/** The kept settings' form: 2 since 64 (Fluid on its finer scale); none before. */
+const FORM = 2;
 /** Fluid's whole range: this much of the fluid's own. In 63 the slider went to all of it, and the owner wanted only its
- *  first few percent ("between 0 and 5% fluid dynamics is about all I want … or maybe 10% should be 100%", 2026-10-18);
- *  64 took a tenth (`FLUID_64`). On the owner's phone that still washed the picture out at its top: the busy centre's
- *  contrast collapsed from about a fifth of 64's range up (its p10–p90 spread 0.3 at 10 %, 0.1 at 30 %; the lab, on the
- *  phone's own settings, 2026-10-18), so 64.1's whole range is that fifth. */
-export const FLUID_FULL = 0.02;
-const FLUID_64 = 0.1;
-/** A Fluid kept or saved by 63, on this scale. */
+ *  first few percent ("between 0 and 5% fluid dynamics is about all I want … or maybe 10% should be 100%", 2026-10-18).
+ *  64.1 tried a fifth of that (its top washed the owner's phone out: a route took Fluid past it on every punch); the
+ *  owner kept 64's ("restore 64's full range, otherwise it'll probably not be good"): with the slider now the most a
+ *  route gives Fluid, and Stir, Flow and Swirl as routes, the washouts are tamed where they come from. */
+export const FLUID_FULL = 0.1;
+/** A Fluid kept or saved before 64, on its finer scale. */
 export const fluidFrom63 = (v: number) => Math.min(1, v / FLUID_FULL);
-/** A Fluid kept, saved or shared by 64, on this scale. */
-export const fluidFrom64 = (v: number) => Math.min(1, (v * FLUID_64) / FLUID_FULL);
-/** Fluid's scale, sent with it to the group (`fluidScale`), so a device reads it right whichever page sent it: 2 is
- *  this one's; none, 64's. */
-export const FLUID_SCALE = 2;
 /** The bands the routes are kept for (the server's six). */
 export const BANDS = 6;
 
@@ -193,9 +187,8 @@ export const isPinnable = (k: string) =>
 function load(): VisualSettings {
   try {
     const kept = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, unknown>;
-    // Kept by 63 (the only one with a Fluid before the form was kept) or by 64: its Fluid on this scale.
+    // Kept by 63 (the only one with a Fluid before the form was kept): its Fluid on the finer scale.
     if (kept.keptForm === undefined && typeof kept.fluid === 'number') kept.fluid = fluidFrom63(kept.fluid);
-    else if (kept.keptForm === 2 && typeof kept.fluid === 'number') kept.fluid = fluidFrom64(kept.fluid);
     return keptFrom(kept);
   } catch {
     return fresh();

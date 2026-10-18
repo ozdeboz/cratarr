@@ -18,10 +18,10 @@ export const HELP: Record<string, string> = {
 
   // How the picture responds and looks.
   intensity:
-    'How much the music’s loudness controls how strongly the picture responds to it. At 0 loudness plays no part: the picture always responds in full. At 100% a quiet passage gives a smaller, calmer, paler picture and a loud one a bigger, livelier one.',
+    'How much the music’s loudness controls how strongly the picture responds to it. At 0 loudness plays no part: the picture always responds in full. At 100% a quiet passage gives a smaller, calmer, paler picture and a loud one a bigger, livelier one: every route answers less in a quiet passage, the fluid’s stirring aside.',
   flash:
     'How much the picture jumps on each beat and hit: its sudden flashes of light and glow, and its sudden changes of size and colour. At 0 nothing jumps and the picture only changes gradually, as when a passage gets louder. At 100% each jump is as large as the routes below set it; at 200%, twice that.',
-  speed: 'How fast the flame turns. It follows the track’s tempo, so faster music turns it faster. At 0 it stands still; at 200% it turns twice as fast as at 100%.',
+  speed: 'How fast the flame turns, and the fluid’s flow with it. It follows the track’s tempo, beat by beat, so faster music turns it faster; that is built in, not a route. At 0 it stands still; at 200% it turns twice as fast as at 100%.',
   brightness: 'The brightest the picture can ever get, however it flashes or glows. At 10% it stays very dim, for a dark room; at 100% it can reach the screen’s full brightness.',
   purity:
     'The flame has six parts, one for each band of the sound from the deepest bass to the highest treble, each with its own colour. At 0 the parts’ colours mix where they overlap; at 100% each part keeps only its own colour, so you can tell the bands apart.',
@@ -34,7 +34,7 @@ export const HELP: Record<string, string> = {
   depth:
     'How much faint detail is lifted into view. At 0 only the bright structure shows, with strong contrast; at 100% the faint mist and grain around it are lifted almost as bright as the flame. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
   fluid:
-    'How much the picture flows like smoke. At 0 the flame’s trails simply fade where they were drawn, and nothing of the fluid runs. Up to 100% they drift and curl more and more in a flow the music stirs: at 100% a clear flow in which the flame’s detail still reads, short of the point where the light would wash out over the whole screen. Each band’s part is kicked on its hits, beats push out from the centre in a pattern that turns with the tempo, downbeats shove harder and a new section sets a whirl going. Above 0 it costs a little more of the graphics chip. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
+    'How much the picture flows like smoke. At 0 the flame’s trails simply fade where they were drawn, and nothing of the fluid runs. Up to 100% they drift and curl more and more in a flow the music stirs, gently by design: at 100% a strong flow, still a flame, not all smoke. How the music stirs it is in the routes’ Stir, Flow and Swirl columns: by default each band’s hits kick its part, beats push out from the centre in a pattern that turns with the tempo, downbeats shove harder and a new section sets a whirl going. Above 0 it costs a little more of the graphics chip. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
   colours:
     'Where the colours of the flame’s six parts come from. Rainbow: from the Look settings Family, Hue, Lightness and Vividness. Cover: six colours from the playing album’s cover, the darkest for the bass and the lightest for the treble. Fire: deep red for the bass to yellow for the treble, the densest areas glowing white-hot.',
   symmetry: 'How many times the flame repeats around its centre, like the arms of a star. At 1 it does not repeat; at 8 it has eight arms.',
@@ -125,6 +125,12 @@ export const HELP: Record<string, string> = {
   'aspect:smoothing': 'As the row rises, Smoothing comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
   'aspect:floor': 'As the row rises, Floor comes up to what its slider sets, so the faint areas fade out; below 0, the row takes it down and they come back. Never above the slider.',
   'aspect:fluid': 'As the row rises, Fluid comes up to what its slider sets and the picture flows more like smoke; below 0, the row takes it down. Never above the slider.',
+  'aspect:stir':
+    'How hard this row pushes the fluid. By default each band’s hits kick its part of the flame, the beats push out from the centre in a pattern that turns with the tempo, downbeats shove harder, a new section sets a whirl going, and each band’s level stirs it steadily. Across the curve is the push’s own strength (for a hit, how hard it is); below 0 it pushes the other way. Loudness does not scale it.',
+  'aspect:flow':
+    'How much life the flow has. By default the loudness sets its energy and the beat makes it breathe with the pulse. Below 0 the row calms it instead. Loudness does not scale it beyond its own row.',
+  'aspect:swirl':
+    'How much the flow whirls. By default a swell sets it turning and a new section starts a whirl. Below 0 it whirls the other way. Loudness does not scale it.',
   'aspect:depth': 'As the row rises, Depth comes up to what its slider sets and more faint detail is lifted into view; below 0, the row takes it down. Never above the slider.',
   'aspect:look':
     'As the row rises, the flame’s look walks: its Detail, Twist, Warp, colours, Spread and Purity move a little further in a direction that changes every bar, never far from where the track set them. Below 0 the look walks back. Pinned settings stay where they are.',

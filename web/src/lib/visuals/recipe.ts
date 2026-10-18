@@ -149,7 +149,7 @@ export function recipeFor(seed: number, aspects: readonly string[], bands = 6): 
     intensity: between(0.6, 1),
     // Fluid's slider is the most a route gives it (64.1): where a route goes to it, some to give; else half the time
     // none.
-    fluid: Object.keys(r).some((k) => k.endsWith('|fluid')) || rnd() < 0.5 ? between(0.2, 1) : 0,
+    fluid: Object.keys(r).some((k) => k.endsWith('|fluid')) || rnd() < 0.5 ? between(0.2, 0.7) : 0,
     smoothing: between(0.3, 0.7),
     floor: between(0, 0.25),
     depth: between(0.35, 0.65),
@@ -163,6 +163,9 @@ export function recipeFor(seed: number, aspects: readonly string[], bands = 6): 
 /** What the dice's double tap randomises (the owner: "double tap becomes this randomize 1 to 5"): how the visuals move
  *  with the music, the routes into the flame's form, its lights, its turning and its size, the turning's pace and the
  *  swing, and the bands' times; the look, its colours, the grain and smoke, Intensity and every other route stay. */
+/** The columns of the fluid's stirring, which a roll leaves as they are. */
+export const STIRRING = ['stir', 'flow', 'swirl'] as const;
+
 export const MOVEMENT = {
   columns: ['shape', 'lights', 'rotation', 'size'],
   settings: ['flash', 'speed', 'lighting', 'evolution', 'continuity'],
@@ -183,8 +186,15 @@ export function settingsOf(recipe: Recipe, base: VisualSettings, scope: Scope = 
   const columns = [...pinned].filter((p) => p.startsWith('column:')).map((p) => `|${p.slice('column:'.length)}`);
   // Of a movement roll, only the movement's columns are the recipe's.
   const moving = (key: string) => MOVEMENT.columns.some((c) => key.endsWith(`|${c}`));
+  // The Track row and the fluid's stirring (Stir, Flow, Swirl: how the music pushes the fluid, its defaults today's
+  // stirring) are base's: a roll that dropped them would leave the fluid unstirred.
+  const stirring = (key: string) => STIRRING.some((c) => key.endsWith(`|${c}`));
   const kept = (key: string) =>
-    key.startsWith('track|') || pinned.has(`route:${key}`) || columns.some((c) => key.endsWith(c)) || (scope === 'movement' && !moving(key));
+    key.startsWith('track|') ||
+    stirring(key) ||
+    pinned.has(`route:${key}`) ||
+    columns.some((c) => key.endsWith(c)) ||
+    (scope === 'movement' && !moving(key));
   const routes: VisualSettings['routes'] = {};
   for (const [k, v] of Object.entries(recipe.routes)) if (!kept(k)) routes[k] = v;
   for (const [k, v] of Object.entries(base.routes)) if (kept(k)) routes[k] = v;
