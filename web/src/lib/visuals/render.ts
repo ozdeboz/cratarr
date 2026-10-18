@@ -333,6 +333,7 @@ out vec4 o;
 ${BAD}
 // A sample of the buffer, none of it anything but a number (whatever a driver did to it before the scrub came by).
 vec4 at(vec2 uv, float lod) { return clean(textureLod(uAcc, uv, lod)); }
+vec4 raw(vec2 uv, float lod) { return textureLod(uAcc, uv, lod); }
 // A blackbody's colours by its heat (0..1): black, a deep red, orange, yellow, white only at the very hottest.
 vec3 heat(float t) { return clamp(vec3(2.2 * t, 2.2 * t - 0.8, 4.0 * t - 3.3), 0.0, 1.0); }
 void main() {
@@ -354,16 +355,18 @@ void main() {
   share[5] = shareB.y;
   // The paper's density estimation, cheaply: where few points fell, the pixel is the mean of a wider ring around it
   // (up to uSmooth pixels out; past three, from a coarser level of the buffer, so the ring is a haze rather than
-  // eight copies), where many fell it stays sharp.
+  // eight copies), where many fell it stays sharp. The ring is cleaned once, as a whole: a value not a number in it
+  // costs that pixel its ring for a frame (the scrub clears it from the buffer), and cleaning each of its eight was
+  // a third of a tablet's frame (Mali-G52: 13.6 ms to 9.3 ms, 2026-10-18).
   float radius = uSmooth / (1.0 + sqrt(a.a * uK2) * 2.0);
   if (radius > 0.4) {
     float lod = min(uLevels, max(0.0, log2(radius / 3.0)));
     vec2 d = px * radius;
-    vec4 ring = at(uv + vec2(d.x, 0.0), lod) + at(uv - vec2(d.x, 0.0), lod)
-              + at(uv + vec2(0.0, d.y), lod) + at(uv - vec2(0.0, d.y), lod)
-              + at(uv + d * 0.7071, lod) + at(uv - d * 0.7071, lod)
-              + at(uv + vec2(d.x, -d.y) * 0.7071, lod) + at(uv + vec2(-d.x, d.y) * 0.7071, lod);
-    a = (a + ring) / 9.0;
+    vec4 ring = raw(uv + vec2(d.x, 0.0), lod) + raw(uv - vec2(d.x, 0.0), lod)
+              + raw(uv + vec2(0.0, d.y), lod) + raw(uv - vec2(0.0, d.y), lod)
+              + raw(uv + d * 0.7071, lod) + raw(uv - d * 0.7071, lod)
+              + raw(uv + vec2(d.x, -d.y) * 0.7071, lod) + raw(uv + vec2(-d.x, d.y) * 0.7071, lod);
+    a = (a + clean(ring)) / 9.0;
   }
   if (a.a <= 0.0) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
   float x = a.a * uK2;

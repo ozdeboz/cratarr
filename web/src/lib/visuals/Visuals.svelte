@@ -17,7 +17,7 @@
   import Icon from '../Icon.svelte';
   import { reducedMotion } from '../motion';
   import { playing } from '../remote.svelte';
-  import { between, coloured, evolved, flameFrom, measure, PARTS, seedOf, withSymmetry, type ColourMode, type Flame, type Part } from './flame';
+  import { between, coloured, evolved, flameFrom, measuring, PARTS, seedOf, withSymmetry, type ColourMode, type Flame, type Part } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
   import { coverPalette, type PaletteColour } from './palette';
   import { FlameRenderer } from './render';
@@ -337,9 +337,11 @@
     let wait = 3;
     let steppedUp = 0;
     let steppedDown = 0;
-    // The framing and exposure, measured from the flame twice a second and followed over a second and a half.
+    // The framing and exposure, measured from the flame twice a second (a quarter of the measure each frame, so no one
+    // frame waits for all of it) and followed over a second and a half.
     let frame: { center: [number, number]; size: number; coverage: number } | null = null;
     let measured = 0;
+    let measure: ReturnType<typeof measuring> | null = null;
     let counted = { since: performance.now(), frames: 0 };
 
     const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -509,9 +511,15 @@
       shown = from && k < 1 ? between(from, to, k * k * (3 - 2 * k)) : to;
       if (k >= 1) from = null;
       const drawnFlame = evolved(shown, parts, s.purity, s.spread);
-      if (now - measured > 500) {
+      if (!measure && now - measured > 500) {
         measured = now;
-        const seen = measure(drawnFlame);
+        // The first all at once: the picture starts framed.
+        measure = frame ? measuring(drawnFlame) : measuring(drawnFlame, 6000, 6000);
+      }
+      const measuredNow = measure?.next();
+      if (measuredNow?.done) {
+        measure = null;
+        const seen = measuredNow.value;
         if (seen) {
           if (!frame) frame = seen;
           else {
@@ -890,8 +898,8 @@
     box-sizing: border-box;
     padding: 8px 16px 10px;
     border-radius: 14px;
-    background: rgb(20 20 24 / 0.88);
-    backdrop-filter: blur(8px);
+    /* No blur behind it: blurring the moving picture under it every frame cost a tablet more than the picture did. */
+    background: rgb(20 20 24 / 0.92);
     color: #fff;
     pointer-events: auto;
     touch-action: pan-y;

@@ -425,7 +425,20 @@ function survey(flame: Flame, seed: number): { center: [number, number]; size: n
  *  so twice a second and follow it slowly with their framing and exposure: a flame whose transforms turn passes through
  *  shapes three times as large as its own and back (measured: 0.63 to 3.1, 2026-10-18), which showed as flares the
  *  music had no part in. */
-export function measure(flame: Flame, steps = 6000): { center: [number, number]; size: number; coverage: number } | null {
+export function measure(flame: Flame, steps = 6000): Seen | null {
+  const m = measuring(flame, steps, steps);
+  for (;;) {
+    const r = m.next();
+    if (r.done) return r.value;
+  }
+}
+
+export type Seen = { center: [number, number]; size: number; coverage: number };
+
+/** `measure` a slice at a time: `slice` steps each time it is moved on, its value the measure once all `steps` are
+ *  taken. All at once it was 28 ms of a tablet's processor (Helio G88, 2026-10-18), which made a frame late twice a
+ *  second; the visuals take a slice a frame. */
+export function* measuring(flame: Flame, steps = 6000, slice = 1500): Generator<void, Seen | null> {
   const rnd = randomFrom(0x51ced);
   const pick = picker(flame.xforms);
   const xs: number[] = [];
@@ -433,6 +446,7 @@ export function measure(flame: Flame, steps = 6000): { center: [number, number];
   let x = rnd() * 2 - 1;
   let y = rnd() * 2 - 1;
   for (let i = 0; i < steps; i++) {
+    if (i > 0 && i % slice === 0) yield;
     const p = apply(flame.xforms[pick(rnd())], x, y, rnd);
     if (!Number.isFinite(p[0]) || !Number.isFinite(p[1]) || Math.abs(p[0]) > 1e4 || Math.abs(p[1]) > 1e4) {
       x = rnd() * 2 - 1;
