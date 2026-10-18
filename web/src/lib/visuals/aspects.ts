@@ -3,10 +3,13 @@
 // behaviour's precheck (recipe.ts) steps it over a track's signals to see what a recipe would do before it is shown.
 
 import { PARTS, type Part } from './flame';
-import { FREE, type Levers } from './governor';
+import type { Levers } from './governor';
 import type { Music } from './music.svelte';
 import { A, ASPECTS, B, BAND_SIGNALS, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix } from './routes';
 import { BANDS, type VisualSettings } from './settings.svelte';
+
+/** Nothing held back (the governor's levers all open). */
+const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
 
 /** A beat's turn of the transforms: once around in 32 beats. */
 export const STEP = (2 * Math.PI) / 32;
@@ -143,7 +146,7 @@ export function stepAspects(
   opts: { still: boolean; now: number; matrix?: Matrix; fluidFull: number; levers?: Levers },
 ): AspectsNow {
   const { still, now } = opts;
-  const L = opts.levers ?? FREE;
+  const L = opts.levers ?? OPEN;
   let matrix = opts.matrix;
   if (!matrix) {
     if (st.routes !== s.routes || !st.matrix) {

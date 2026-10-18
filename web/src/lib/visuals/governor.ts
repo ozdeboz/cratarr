@@ -13,6 +13,7 @@
 // flashes' rule stays on. Pure: the loop steps it with the meters now.
 
 import type { MeterValues } from './meters';
+import { DEFAULT_LIMITS } from './precheck';
 
 /** What the governor holds back: each lever's share of what the settings ask (1: none held back). `evolution` and `gap`
  *  stretch (the evolving's times, the moments' gap: 1 and up); the rest scale down (1 and under). */
@@ -30,14 +31,9 @@ const LEVERS: Record<Budgeted, { lever: keyof Levers; most: number }> = {
   looksPerMinute: { lever: 'gap', most: 6 },
 };
 
-/** The standing limits: none until the baselines of today's defaults and the owner's ratings set them (fit.ts). */
-export const STANDING: Readonly<Record<Budgeted, number>> = {
-  motion: Infinity,
-  shapeChurn: Infinity,
-  colourChurn: Infinity,
-  zoomPumping: Infinity,
-  looksPerMinute: Infinity,
-};
+/** The standing limits: the precheck's, a little above the most today's defaults did over eleven varied tracks
+ *  (precheck.ts), until the owner's ratings fit them (fit.ts). */
+export const STANDING: Readonly<Record<Budgeted, number>> = Object.fromEntries(BUDGETED.map((k) => [k, DEFAULT_LIMITS[k]])) as Record<Budgeted, number>;
 
 /** The flashes' rule: held back above this many a second (WCAG's three, with room to act before it), let go again at
  *  it or under (the meter reads in halves; a lower mark held a beat a second at 120 BPM, 2, back for good). */

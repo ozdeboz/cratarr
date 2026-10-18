@@ -43,9 +43,14 @@
   import { newAspects, stepAspects } from './aspects';
   import { newDrift, stepDrift } from './drift';
   import { holding, newGovernor, STANDING, stepGovernor } from './governor';
+  import { beatsOf } from './beats';
+  import { DEFAULT_LIMITS, prechecking, type Checked } from './precheck';
+  import { recipeFor, settingsOf, type Recipe } from './recipe';
+  import { signalsOf } from './signals';
   import { Meters, type FrameStats } from './meters';
   import RateMode from './RateMode.svelte';
   import { trial } from './trial.svelte';
+  import { appInfo, inApp } from '../app.svelte';
   import { coverPalette, type PaletteColour } from './palette';
   import { setVisualsSide, visuals } from './shown.svelte';
   import { applyDevice, applyShared, followGroup, groupLook, share, SHARED_KEYS, sharedNow, showing, STANDARD } from './shared.svelte';
@@ -181,9 +186,63 @@
   let lookCame: FrameStats['look'] = null;
   // The rating page (?rate=1, RateMode.svelte): its trial drawn in place of the settings while it runs.
   const rating = typeof location !== 'undefined' && new URLSearchParams(location.search).has('rate');
-  // The dice: a random preset into the look's settings not pinned.
+  // Another look: a random preset into the look's settings not pinned.
   function rollAnother() {
     loadAnother(Math.floor(Math.random() * 0x100000000), true);
+    showChrome();
+  }
+
+  // The dice: everything at random, a look and how it behaves (a recipe: recipe.ts), both to the group. Each recipe is
+  // first run against the playing track from where it is (precheck.ts), a slice a frame: the first within the limits
+  // (the governor's, as Calm ↔ Wild has them; three flashes a second whatever it says) is taken, after eight the one
+  // over them by least; where the track's signals are not known yet the first, the governor holding it as it plays.
+  // The undo puts back the look and behaviour from before (until the next roll).
+  const BEHAVIOUR = ['routes', 'flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', 'lighting', 'evolution', 'continuity'] as const;
+  const TRIES = 8;
+  let rollWanted = false;
+  let rolling: Generator<void, Recipe> | null = null;
+  let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings> } | null>(null);
+  function roll() {
+    rollWanted = true;
+    showChrome();
+  }
+  function* rollingFor(base: VisualSettings, key: string | null, from: number): Generator<void, Recipe> {
+    const [source, id] = key ? [key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)] : ['', ''];
+    const signals = key ? signalsOf(source, id) : null;
+    const beats = key ? (beatsOf(source, id) ?? null) : null;
+    const wild = 2 ** (2 * (base.wild - 0.5));
+    const limits: Record<string, number> = { ...Object.fromEntries(Object.entries(DEFAULT_LIMITS).map(([k, v]) => [k, v * wild])), flash: DEFAULT_LIMITS.flash };
+    let best: { recipe: Recipe; by: number } | null = null;
+    for (let k = 0; k < TRIES; k++) {
+      const recipe = recipeFor(Math.floor(Math.random() * 0x100000000), ASPECTS);
+      if (!signals) return recipe;
+      const checked: Checked = yield* prechecking(recipe, base, signals, beats, from, limits);
+      if (checked.ok) return recipe;
+      const by = checked.over.reduce((sum, m) => sum + (checked.worst[m as keyof typeof checked.worst] as number) / (limits[m] ?? 1), 0);
+      if (!best || by < best.by) best = { recipe, by };
+    }
+    return best!.recipe;
+  }
+  function rolled(recipe: Recipe) {
+    const now = $state.snapshot(s) as VisualSettings;
+    undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings> };
+    const next = settingsOf(recipe, now);
+    for (const k of BEHAVIOUR) (s as Record<string, unknown>)[k] = next[k];
+    saveVisualSettings();
+    share(Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])));
+    loadAnother(Math.floor(Math.random() * 0x100000000), true);
+  }
+  function undoRoll() {
+    if (!undo) return;
+    const was = undo;
+    undo = null;
+    drawingNow = null;
+    rolling = null;
+    nextBlend = ANOTHER_MS;
+    lookCame = 'dice';
+    Object.assign(s, was.behaviour, was.look, { pins: was.pins });
+    saveVisualSettings();
+    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), ...lookNow(), pins: [...s.pins] });
     showChrome();
   }
 
@@ -532,6 +591,11 @@
     let meteredAt = 0;
     // The governor (governor.ts), stepped with the meters four times a second.
     const governor = newGovernor();
+    // The hits seen since the rating page last had the loop's numbers (each band's last one, and how many came).
+    const hitsSeen = Array<number>(BANDS).fill(-1);
+    let hitsCounted = 0;
+    // Which device this is, for the rating page: the app's own player, else the browser's platform.
+    const device = () => (inApp && appInfo.player) || (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || 'browser';
     // The look's walk (drift.ts): when it last walked, and the time since. A track's own look goes into the settings
     // as far as the Track row's route into Drift says: at -100 % all of it (as before Drift), at -50 % half way, at 0
     // none, above 0 away from it. After the panel's Reset (`whole`), all of it.
@@ -660,6 +724,20 @@
           }
         } else drawingNow = { draws: presetDraws(seedOf(m.key ?? 'cratarr'), fixed), blend, share: toGroup, load: !theirs, why: 'track' };
       }
+      // The dice: the recipes run against the track, as many slices as fit in four milliseconds of this frame.
+      if (rollWanted) {
+        rollWanted = false;
+        rolling = rollingFor($state.snapshot(s) as VisualSettings, m.key, m.position);
+      }
+      if (rolling) {
+        const until = performance.now() + 4;
+        let next = rolling.next();
+        while (!next.done && performance.now() < until) next = rolling.next();
+        if (next.done) {
+          rolling = null;
+          rolled(next.value);
+        }
+      }
       // A preset being drawn: as many draws as fit in six milliseconds of this frame, then into the settings.
       if (drawingNow) {
         const until = performance.now() + 6;
@@ -731,6 +809,11 @@
       const still = reducedMotion();
       const d = stepAspects(aspects, m, how, dt, { still, now, matrix: trial.settings ? undefined : matrix, fluidFull: FLUID_FULL, levers: governor.levers });
       const { turn, hits, parts, track } = d;
+      if (m.playing && m.hits)
+        m.hits.forEach((h, b) => {
+          if (h.index > hitsSeen[b] && hitsSeen[b] >= 0 && h.index - hitsSeen[b] <= 3) hitsCounted += h.index - hitsSeen[b];
+          hitsSeen[b] = h.index;
+        });
       if (panel && now - metered > 100) {
         metered = now;
         meters = { track: Array.from(track), bands: d.bands.map((v) => Array.from(v)) };
@@ -898,8 +981,11 @@
         const values = metering.now();
         // With the trial of the rating page, only the flashes' rule: its budgets are what the ratings are to tell.
         const l = stepGovernor(governor, values, { dt: Math.min(1, (now - meteredAt) / 1000), limits: STANDING, wild: how.wild, activity: d.lit, budgets: !trial.settings });
+        const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
         trial.meters = values;
+        trial.loop = { intensity: m.intensity, bps: m.bps, hitsPerSecond: hitsCounted / since, swing: l.swing, points: renderer.pointCount, steps: passes, fps, device: device() };
+        hitsCounted = 0;
         const marks = { flash: holding(l, 'swing'), speed: holding(l, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(l, k)) };
         if (marks.flash !== !!governed.flash || marks.speed !== !!governed.speed || marks.wild !== !!governed.wild) governed = marks;
       }
@@ -1048,6 +1134,14 @@
         <button class="round" aria-label="Another look" use:held={'another'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={rollAnother}
           ><Icon name="visuals" size={24} /></button
         >
+        <button class="round" aria-label="Randomise" use:held={'randomise'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={roll}
+          ><Icon name="dice" size={24} /></button
+        >
+        {#if undo}
+          <button class="round" aria-label="Undo" use:held={'undo'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={undoRoll}
+            ><Icon name="undo" size={24} /></button
+          >
+        {/if}
         <button
           class="round"
           aria-label="Snapshots"
@@ -1082,7 +1176,7 @@
               {#if g === 2}<h3 use:held={'look'}>Look</h3>{/if}
               {#each rows as row (row.key)}
                 <label class="row" class:pinnable={g === 2}>
-                  <span use:held={row.key}>{row.label}{#if governed[row.key]}<span class="governed" aria-label="Held back"></span>{/if}</span>
+                  <span use:held={row.key}>{row.label}{#if governed[row.key]}<span class="governed" aria-label="Held back" use:held={'held'}></span>{/if}</span>
                   <input
                     type="range"
                     min={RANGES[row.key][0]}
