@@ -832,7 +832,8 @@ const BAND_VARIATIONS: Variation[] = [
 /** How a band's part has evolved: turned by `turn` (radians, as Electric Sheep's loops turn the linear part), that
  *  part scaled by `size`, `morph` (0..1) of its variations given over to its band's own, its hue moved by `hue` (a
  *  turn of the wheel), and its offset from the middle scaled by `spread` (1: as it is). */
-export type Part = { turn: number; size: number; morph: number; hue: number; spread?: number };
+/** `weight`: its share of the points against its own (Presence, 65: 1 as drawn). */
+export type Part = { turn: number; size: number; morph: number; hue: number; spread?: number; weight?: number };
 
 /** The most a transform's linear part may stretch anything (its larger singular value): under 1, every transform pulls
  *  points together, so turning and growing never carry the flame through a shape that flies apart over the screen. */
@@ -866,6 +867,7 @@ export function evolved(flame: Flame, parts: Part[], purity = 0, spread = 1): Fl
         variations,
         color: (((t.color + p.hue) % 1) + 1) % 1,
         colorSpeed: t.colorSpeed + purity * (1 - t.colorSpeed),
+        weight: t.weight * (p.weight ?? 1),
       };
     }),
   };

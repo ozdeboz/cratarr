@@ -59,6 +59,8 @@ export type AspectsState = {
   held: number[][];
   pending: number[];
   rates: number[];
+  // Each part's presence as followed (quick to come, slower to go: a hit's weight eased in, not jumped to).
+  presence: number[];
   // The moments: ready again once what they are given falls under a third, and not within two seconds.
   moments: { symmetry: Moment };
   // The Flash setting: each quickly changing aspect (each part's lights, the glow, size and saturation) as its slow
@@ -138,6 +140,7 @@ export function newAspects(): AspectsState {
     held: Array.from({ length: PARTS }, () => [0.5, 0, 0]),
     pending: Array<number>(PARTS).fill(0),
     rates: Array<number>(PARTS).fill(0),
+    presence: Array<number>(PARTS).fill(0),
     moments: { symmetry: { armed: true, at: -Infinity } },
     courses: { lights: Array.from({ length: PARTS }, () => [] as number[]), glow: [], size: [], saturation: [] },
   };
@@ -257,7 +260,18 @@ export function stepAspects(
     const [shape, hue, spread] = ev;
     const grown = clamp(shape, 0, 1.25);
     shapes.push(grown);
-    parts.push({ turn: st.turned[i], size: 0.94 + 0.12 * grown, morph: (still ? 0.15 : 0.35) * grown, hue, spread: 2 ** clamp(spread, -2, 2) });
+    // Presence: its share of the points, doubling and a half at all of it given (a route's full amount), as drawn at
+    // none, about a third at all of it taken away; followed over 0.1 s as it comes, 0.4 s as it goes.
+    const wantP = clamp(W[A.presence] + own[A.presence], -2, 2);
+    st.presence[i] += (wantP - st.presence[i]) * Math.min(1, dt / (wantP > st.presence[i] ? 0.1 : 0.4));
+    parts.push({
+      turn: st.turned[i],
+      size: 0.94 + 0.12 * grown,
+      morph: (still ? 0.15 : 0.35) * grown,
+      hue,
+      spread: 2 ** clamp(spread, -2, 2),
+      weight: 2 ** (1.5 * st.presence[i]),
+    });
     // Lights: its colour's points lit up, or dimmed where its routes take it below nothing.
     hits.push(clamp(flashed(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), st.courses.lights[i]), -1, 3));
   }

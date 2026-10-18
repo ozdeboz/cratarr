@@ -43,3 +43,17 @@ test('the camera: none at the loop’s start, the part’s inverse at its end; a
   assert.ok(close(divePeriod(fit, Math.log(2)), 1, 1e-6));
   assert.ok(close(end.turnRate, -0.3 / divePeriod(fit, 0.2), 1e-9));
 });
+
+test('Presence: a part’s weight in the drawing scaled, the symmetry’s rotations as they were', async () => {
+  const { evolved } = await import('../src/lib/visuals/flame.ts');
+  const turning = { ...similar(0.5, 0.3, [0.4, -0.2]), turns: true };
+  const flame = flameOf([turning, { ...turning }, similar(1, Math.PI / 2, [0, 0], 0.7)]);
+  const parts = [
+    { turn: 0, size: 1, morph: 0, hue: 0, weight: 2.5 },
+    { turn: 0, size: 1, morph: 0, hue: 0 },
+  ];
+  const out = evolved(flame, parts);
+  assert.equal(out.xforms[0].weight, 2.5, 'weighed by its presence');
+  assert.equal(out.xforms[1].weight, 1, 'none given: as drawn');
+  assert.equal(out.xforms[2].weight, 0.7, 'a rotation of the symmetry: as it was');
+});
