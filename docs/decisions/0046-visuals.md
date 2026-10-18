@@ -360,3 +360,61 @@ which made every frame look on time; it now learns it from quick frames only.
 The page's own audio is offered to the live analysis (claude-5f's live.ts) through the levelling's route
 (`audioTap` in localPlayer): an element can feed only one, so the route is made at no change of level where levelling
 is off; never in Safari or while another player plays.
+
+## Amendment, 2026-10-18: routes, every signal on every aspect
+
+The owner (with claude-5f): "For each aspect of the music we can get a signal for, I want to be able to control its
+effect on each of the main aspects of the visualization", all of them but stems; amounts from -100 to +100 %, today's
+look as the defaults, standard controls, live, kept on the device, a Reset.
+
+**The signals** (each 0..1 now; format 3, decision 0035, drawn 50 ms ahead): of the whole track, the **loudness** as
+heard (as the Intensity setting lets it count), the **beat** and the **downbeat** (a pulse at each, gone within a fifth
+of a second; a downbeat as surely as the server is of where bars start), the **tempo** (120 BPM is 1), a **section**'s
+start (its boundary's strength, fading over a second), **harmony** (how much the chords are moving), **timbre** (the
+spectral centroid), the **key** (the chroma's direction on the circle of fifths, followed over two seconds: a full turn
+round the wheel), **swell** and **build-up**; of each band, its **level**, **flux**, **hits** (each fading over the
+band's Lighting time), **percussive** and **harmonic** parts, **drum hits**, **punch** (crest factor), **width** and
+**swell**.
+
+**The aspects:** of each of the six parts (a band's routes act on its own, the whole track's on all six): **Shape**
+(larger, its variations given over to its band's own: bubble, eyefish, swirl, horseshoe, cylinder, sinusoidal from sub
+to air), **Rotation** (a full amount turns it once round in 16 beats; negative turns it back), **Lights**, **Hue** (a
+full amount once round the wheel) and **Spread** (doubled or halved from the setting's); of the whole picture,
+**Glow**, **Size**, **Saturation**, **Trails** (each frame keeping more or less of the last) and two moments:
+**Reseed** (a new flame, as the dice give) and **Symmetry** (another number of arms, where the setting is Auto), each
+as what its routes give rises past a half, again only after it has fallen under a third and two seconds on. Shape, Hue
+and Spread follow over the band's Evolution time; Continuity shares a part's motion and evolution between steady and
+steps on its band's hits, as before.
+
+Each aspect adds up its routes (a signal times its amount) and moves from its rest by that: the rest is what nothing
+driving it shows (half the size, a third of the colour, no lights, no turning). **The loudness is the envelope:** every
+other signal's routes are scaled by it, so a quiet passage is a small show whatever its parts do; while paused, only the
+loudness's own routes act.
+
+**The defaults are the look before:** Loudness to Size and Saturation +100 % and to Rotation +20 %; Beat to Glow +20 %
+and to Size +8 %; each band's Level to Shape +100 %, Rotation +60 % and Hue +8 %, its Hits to Lights +100 %. Every other
+route is 0. The Beat and Bands sliders are gone: they were these routes' amounts.
+
+**The grid,** in the panel (now up to 500 px wide; it stays open until it is closed or the picture is tapped): a row a
+signal, the whole track's then the bands', a column an aspect, each cell coloured by its amount (green up, pink down;
+numbered where there is room); a tap on a cell gives its slider, filling from 0 at its middle, held in sight at the
+panel's foot. The bands' rows are the picked band's or all six at once (their mean shown, dashed where they differ; a
+change sets all six). A bar under each signal's name shows it now. **Reset** puts the routes back, the other settings
+as they are; the panel's own Reset puts back everything. Kept on the device with the other settings (only the routes
+there are; a 0 kept turns a default off).
+
+**Until the server has a track's signals,** where the page plays it, the bands come from the sound as it plays
+(claude-5f's live.ts, on the levelling's route): level, flux and hits; the rest wait for the server. Where neither (the
+app, another player), each band stands at half its level with no hits, and the parts step on the beats, as before.
+
+**Measured** (the real component in a lab page over a made-up format 3 track, 120 BPM, sections every six seconds, on
+the PC's Intel graphics): every signal moves its bar; a cell's slider changes what is drawn within a frame (Loudness to
+Size at -100 %: the scale from 0.70 to 0.29 in a quiet section) and is kept; Sub's Hits to Lights at 0 darkens the sub's
+part alone; Section to Reseed at +100 % gave a new flame at each section's start; the grid fits a 390 px phone (no
+sideways scroll) and a 1280 px tablet. The routes' sum costs 3.5 µs a frame with all 704 routes set (0.85 ms to compile
+them, on a change only); 56 frames a second at 512k points as before, the panel's grid open adding 0.1 ms of layout a
+frame. The live fallback, through the page's own player on a click track with the server's signals answering "not
+ready": the sub and bass parts lit on each kick (two a second), the upper bands on each hat (four a second).
+
+The upper three of the six parts had evolved toward no variation of their own (the three bands' three; linear for the
+rest) since six parts came in: each has its own now.

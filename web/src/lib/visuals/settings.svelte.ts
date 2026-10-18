@@ -1,11 +1,16 @@
 // The visuals' settings (decision 0046, amended): how much the device draws (points, steps, resolution, frame rate:
-// ceilings the automatic step-down stays under), how the show looks (intensity, speed, beat, bands, brightness), and
-// each band's times (sub, mid, treble: how long its light rings, how quickly its loudness evolves its transform, and
-// how much of its motion comes in steps on its own transients).
+// ceilings the automatic step-down stays under), how the show looks (intensity, speed, brightness, purity, spread,
+// symmetry), each band's times (how long its light rings, how quickly its part evolves, and how much of its motion comes
+// in steps on its own transients), and the routes: how much each of the music's signals drives each aspect of the
+// picture (routes.ts).
 // Changed live from the visuals' panel and kept on this device (a phone and the tablet want different ones); a
 // browser that keeps nothing (a private window) starts from the defaults each time.
 
+import { defaultRoutes, isRoute } from './routes';
+
 const KEY = 'cratarr-visuals';
+/** The bands the routes are kept for (the server's six). */
+export const BANDS = 6;
 
 export type VisualSettings = {
   /** The most points the chaos game runs (log2: 14 is 16k, 21 is 2M). */
@@ -20,10 +25,6 @@ export type VisualSettings = {
   intensity: number;
   /** Motion: the turning and its steps (0..2). */
   speed: number;
-  /** A beat's flash and swell (0..2). */
-  beat: number;
-  /** The bands' lights (0..2). */
-  bands: number;
   /** The most brightness shown, after everything (0.1..1). */
   brightness: number;
   /** How purely each band's part is its own colour (0: points blend their bands' colours, 1: each its band's alone). */
@@ -40,6 +41,8 @@ export type VisualSettings = {
   evolution: number[];
   /** Each band's motion and evolution: 0 in steps on its own transients, 1 steady, between them a share of each. */
   continuity: number[];
+  /** Each route's amount (-1..1) by its key (`routeKey`); one not here is 0. */
+  routes: Record<string, number>;
 };
 
 const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
@@ -53,8 +56,6 @@ export const DEFAULTS: VisualSettings = {
   fps: touch ? 30 : 60,
   intensity: 1,
   speed: 1,
-  beat: 1,
-  bands: 1,
   brightness: 1,
   // Six parts mixing their colours go grey: mostly each its band's own.
   purity: 0.75,
@@ -65,6 +66,7 @@ export const DEFAULTS: VisualSettings = {
   lighting: [0.2, 0.18, 0.15, 0.13, 0.1, 0.08],
   evolution: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
   continuity: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
+  routes: defaultRoutes(BANDS),
 };
 
 /** Each setting's range, as its slider has it (the bands' times in seconds, though their sliders double). A kept value
@@ -76,8 +78,6 @@ export const RANGES: Record<keyof VisualSettings, [number, number]> = {
   fps: [10, 60],
   intensity: [0, 1],
   speed: [0, 2],
-  beat: [0, 2],
-  bands: [0, 2],
   brightness: [0.1, 1],
   purity: [0, 1],
   spread: [0.25, 2.5],
@@ -86,9 +86,10 @@ export const RANGES: Record<keyof VisualSettings, [number, number]> = {
   lighting: [0.02, 1],
   evolution: [0.02, 2],
   continuity: [0, 1],
+  routes: [-1, 1],
 };
 
-const within = (key: keyof VisualSettings, v: number) => Math.min(RANGES[key][1], Math.max(RANGES[key][0], v));
+const within = (key: keyof typeof RANGES, v: number) => Math.min(RANGES[key][1], Math.max(RANGES[key][0], v));
 
 /** The pixels the display pass draws by default: about a megapixel. The points fall into a buffer of at most 0.6 MP
  *  anyway; drawing that out to every pixel of a large screen cost the most of a frame on integrated graphics (5.5 ms of
@@ -106,6 +107,7 @@ const fresh = (): VisualSettings => ({
   lighting: [...DEFAULTS.lighting],
   evolution: [...DEFAULTS.evolution],
   continuity: [...DEFAULTS.continuity],
+  routes: { ...DEFAULTS.routes },
 });
 
 function load(): VisualSettings {
@@ -119,6 +121,12 @@ function load(): VisualSettings {
       else if (Array.isArray(v) && (v.length === 6 || v.length === 3) && v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
         const six = v.length === 6 ? v : v.flatMap((x) => [x, x]);
         (out as Record<string, unknown>)[k] = six.map((x) => within(k, x));
+      }
+    }
+    // The routes kept: each one there is, over the defaults (a 0 kept turns a default off).
+    if (saved.routes && typeof saved.routes === 'object') {
+      for (const [key, v] of Object.entries(saved.routes)) {
+        if (typeof v === 'number' && Number.isFinite(v) && isRoute(key, BANDS)) out.routes[key] = within('routes', v);
       }
     }
     return out;
@@ -145,4 +153,10 @@ export function resetVisualSettings() {
   } catch {
     /* nothing kept */
   }
+}
+
+/** The routes back to the defaults, the other settings as they are. */
+export function resetRoutes() {
+  visualSettings.routes = defaultRoutes(BANDS);
+  saveVisualSettings();
 }

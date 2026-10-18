@@ -1,23 +1,50 @@
 <script lang="ts">
   // Full-screen visuals (decision 0046), from the full player's top bar: each track's own fractal flame
-  // (lib/visuals/flame.ts, made from its id) drawn on the GPU (lib/visuals/render.ts), its transforms turning a step
-  // and the picture flashing on each of the track's beats (lib/visuals/music.svelte.ts), blending into the next track's
-  // flame as it starts. The whole show is as intense as the music is loud as heard: its size, colour, motion and every
-  // light (not its brightness: a quiet passage is less of a show, not a darker screen). Within that, each of its three transforms answers to a band of the sound (low, middle, high): the band's
-  // transients light that transform's colour, its loudness evolves that transform.
+  // (lib/visuals/flame.ts, made from its id) drawn on the GPU (lib/visuals/render.ts), blending into the next track's
+  // flame as it starts. Its six parts each answer to a band of the sound (sub to air). The music's signals
+  // (lib/visuals/music.svelte.ts) drive the picture's aspects through the routes (lib/visuals/routes.ts), each by an
+  // amount: by default the loudness as heard sets its size and colour, the beat flashes and swells it, each band's level
+  // evolves, turns and tints its part and its hits light it. The loudness is the envelope of everything else: a quiet
+  // passage is less of a show, not a darker screen.
   // Over everything, on black. A tap or a mouse move shows the track, the close button, the sliders and the dice for a
   // few seconds; the dice show another flame at random, until the track changes or they are pressed again; the sliders
-  // open a panel of settings at the right (lib/visuals/settings.svelte.ts), live. Esc, Back or a swipe down closes it. The screen
-  // stays on while it shows, where the browser allows that.
+  // open a panel of settings at the right (lib/visuals/settings.svelte.ts) with the routes' grid, live, until it is
+  // closed. Esc, Back or a swipe down closes the visuals. The screen stays on while they show, where the browser allows.
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
   import Icon from '../Icon.svelte';
   import { reducedMotion } from '../motion';
   import { playing } from '../remote.svelte';
   import { between, evolved, flameFrom, measure, PARTS, seedOf, withSymmetry, type Flame, type Part } from './flame';
-  import { musicNow } from './music.svelte';
+  import { musicNow, stopMusic } from './music.svelte';
   import { FlameRenderer } from './render';
-  import { autoResolution, RANGES, resetVisualSettings, saveVisualSettings, visualSettings as s, type VisualSettings } from './settings.svelte';
+  import {
+    A,
+    ASPECT_LABEL,
+    ASPECTS,
+    B,
+    BAND_SIGNALS,
+    compile,
+    give,
+    given,
+    routeKey,
+    SIGNAL_LABEL,
+    T,
+    TRACK_SIGNALS,
+    type Aspect,
+    type Signal,
+  } from './routes';
+  import {
+    autoResolution,
+    BANDS,
+    DEFAULTS,
+    RANGES,
+    resetRoutes,
+    resetVisualSettings,
+    saveVisualSettings,
+    visualSettings as s,
+    type VisualSettings,
+  } from './settings.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -31,18 +58,12 @@
   let drawing = $state({ points: 0, steps: 0, cleared: 0 });
   const np = $derived(playing());
 
-  // The controls show for a few seconds after a tap or a move.
+  // The controls show for a few seconds after a tap or a move; with the panel open, until it is closed.
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
   function showChrome() {
     chrome = true;
     clearTimeout(hideTimer);
-    hideTimer = setTimeout(
-      () => {
-        chrome = false;
-        panel = false;
-      },
-      panel ? 8000 : 3000,
-    );
+    if (!panel) hideTimer = setTimeout(() => (chrome = false), 3000);
   }
 
   // Closing: by the button, Esc or a swipe down this step of the history goes back too; Back has done that already.
@@ -83,7 +104,7 @@
   }
 
   // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then the look.
-  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity'>;
+  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes'>;
   const MIRROR = ['Auto', 'Off', 'On'];
   type Row = { key: One; label: string; step: number; text: (v: number) => string };
   const percent = (v: number) => `${Math.round(v * 100)}%`;
@@ -100,8 +121,6 @@
   const LOOK: Row[] = [
     { key: 'intensity', label: 'Intensity', step: 0.05, text: percent },
     { key: 'speed', label: 'Speed', step: 0.05, text: percent },
-    { key: 'beat', label: 'Beat', step: 0.05, text: percent },
-    { key: 'bands', label: 'Bands', step: 0.05, text: percent },
     { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
     { key: 'purity', label: 'Purity', step: 0.05, text: percent },
     { key: 'spread', label: 'Spread', step: 0.05, text: percent },
@@ -138,6 +157,43 @@
     panel = !panel;
     showChrome();
   }
+
+  // The routes' grid: a row a signal (the whole track's, then the bands'), a column an aspect, each cell its amount;
+  // a tap on a cell gives its slider. The bands' rows are the picked band's, or all six together (their mean shown,
+  // marked where they differ; a change sets all six).
+  const matrix = $derived(compile(s.routes, BANDS));
+  let pick = $state<number | null>(null);
+  let cell = $state<{ signal: Signal; aspect: Aspect } | null>(null);
+  const isBandSignal = (signal: Signal) => (BAND_SIGNALS as readonly string[]).includes(signal);
+  const keysOf = (signal: Signal, aspect: Aspect) =>
+    !isBandSignal(signal)
+      ? [routeKey(signal, null, aspect)]
+      : pick !== null
+        ? [routeKey(signal, pick, aspect)]
+        : Array.from({ length: BANDS }, (_, b) => routeKey(signal, b, aspect));
+  function amountOf(signal: Signal, aspect: Aspect): { v: number; mixed: boolean } {
+    const v = keysOf(signal, aspect).map((k) => s.routes[k] ?? 0);
+    return { v: v.reduce((a, b) => a + b, 0) / v.length, mixed: v.some((x) => Math.abs(x - v[0]) > 1e-6) };
+  }
+  function setRoute(signal: Signal, aspect: Aspect, v: number) {
+    for (const k of keysOf(signal, aspect)) {
+      // A 0 is kept only where it turns a default off.
+      if (v === 0 && !DEFAULTS.routes[k]) delete s.routes[k];
+      else s.routes[k] = v;
+    }
+    saveVisualSettings();
+  }
+  const signed = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
+  const cellLabel = (signal: Signal, aspect: Aspect) => `${SIGNAL_LABEL[signal]}${isBandSignal(signal) ? ` (${pick === null ? 'All' : BAND_ROWS[pick]})` : ''} → ${ASPECT_LABEL[aspect]}`;
+  // Each signal now, for the meters by the rows' names (the picked band's, or the bands' mean), ten times a second
+  // while the panel shows.
+  let meters = $state<{ track: number[]; bands: number[][] }>({ track: [], bands: [] });
+  const meterOf = (signal: Signal) => {
+    if (!isBandSignal(signal)) return meters.track[T[signal as keyof typeof T]] ?? 0;
+    const i = B[signal as keyof typeof B];
+    if (pick !== null) return meters.bands[pick]?.[i] ?? 0;
+    return meters.bands.length ? meters.bands.reduce((a, b) => a + (b[i] ?? 0), 0) / meters.bands.length : 0;
+  };
   // The fewest points the device's own pace steps down to.
   const MIN_POINTS = 1 << 14;
   // A new track's flame blends in over this long; one asked for with the dice, quicker.
@@ -191,24 +247,40 @@
     // settings'): a change of either blends in as the dice do.
     let base: Flame | null = null;
     let symmetryShown = '';
+    // A moment's symmetry (the routes' Symmetry), until the next one or another flame.
+    let momentSymmetry: { order: number; mirror: boolean } | null = null;
     let turn = 0;
-    let speed = 0;
-    // Each band's transform: how far it has turned, and its band's loudness, followed over a quarter of a second (no
-    // bands known: as if each were half way).
+    // The turning's clock: a route's full amount turns a part once around in 16 beats (the default routes, once in 32
+    // on average), at the Speed setting; paused, it slows to a stop.
+    let clock = 0;
+    // The signals now (the loudness's as the Intensity setting lets it count), the bands' stand-ins while none are
+    // known (each half way), and what the routes give each aspect.
+    const track = new Float32Array(TRACK_SIGNALS.length);
+    const standIn = Array.from({ length: BANDS }, () => {
+      const v = new Float32Array(BAND_SIGNALS.length);
+      v[B.level] = 0.5;
+      return v;
+    });
+    const got = given(BANDS);
+    // Each part: how far it has turned, and its evolving aspects (shape, hue, spread) as followed over its band's
+    // Evolution time.
     const turned = Array<number>(PARTS).fill(0);
-    const bandLoud = Array<number>(PARTS).fill(0.5);
-    // Each band's steps: its last transient seen (or beat, where its transients are not known yet), its loudness then
-    // (what a stepping band evolves to), and the turn of its steps still to come (each eased in over 80 ms).
+    const evolving = Array.from({ length: PARTS }, () => [0.5, 0, 0]);
+    // Each part's steps: its band's last hit seen (or beat, where its hits are not known yet), what its evolving aspects
+    // were given then (what a stepping part evolves to), and the turn of its steps still to come (each eased in over
+    // 80 ms).
     const lastHit = Array<number | null>(PARTS).fill(null);
-    const held = Array<number>(PARTS).fill(0.5);
+    const held = Array.from({ length: PARTS }, () => [0.5, 0, 0]);
     const pending = Array<number>(PARTS).fill(0);
-    // A beat's flash and swell, 0..1.
-    let pulse = 0;
+    // The moments' state: ready again once what they are given falls under a third, and not within two seconds.
+    const moments = { reseed: { armed: true, at: -Infinity }, symmetry: { armed: true, at: -Infinity } };
+    const MOMENT_GAP_MS = 2000;
     // How intense the show is (the loudness as heard, followed over a fifth of a second; `lit`: as far as the
     // Intensity setting lets it count), and paused or not.
     let intensity = 0.5;
     let lit = 0.5;
     let glow = 1;
+    let metered = 0;
     let passes = s.steps;
     let raf = 0;
     let last = performance.now();
@@ -236,8 +308,15 @@
     let measured = 0;
     let counted = { since: performance.now(), frames: 0 };
 
-    // How much of the turning the music's loudness allows (nearly none in silence), and the Speed setting.
-    const motion = () => (0.1 + 0.9 * lit) * s.speed;
+    const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+    // A moment: what its routes give rising past a half.
+    const moment = (m: { armed: boolean; at: number }, v: number, now: number) => {
+      if (v < 1 / 3) m.armed = true;
+      if (!(v > 0.5 && m.armed && now - m.at > MOMENT_GAP_MS)) return false;
+      m.armed = false;
+      m.at = now;
+      return true;
+    };
 
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
@@ -270,20 +349,21 @@
       if (m.key !== key || asked !== seen) {
         // The first track shows at once; each next one blends in, as does another look from the dice. A new track
         // brings back its own.
-        const track = m.key !== key;
-        if (track) another = null;
+        const next = m.key !== key;
+        if (next) another = null;
         seen = asked;
         from = key === undefined ? null : shown;
         key = m.key;
         base = flameFrom(another ?? seedOf(m.key ?? 'cratarr'));
         symmetryShown = '';
+        momentSymmetry = null;
         blendStart = now;
-        blendMs = track ? BLEND_MS : ANOTHER_MS;
+        blendMs = next ? BLEND_MS : ANOTHER_MS;
       }
-      // Its symmetry: its own, or as the settings ask; a change blends in over a second and a half.
+      // Its symmetry: its own (or a moment's), or as the settings ask; a change blends in over a second and a half.
       if (base) {
-        const order = s.symmetry || base.symmetry.order;
-        const mirror = s.mirror ? s.mirror === 2 : base.symmetry.mirror;
+        const order = s.symmetry || momentSymmetry?.order || base.symmetry.order;
+        const mirror = s.mirror ? s.mirror === 2 : (momentSymmetry?.mirror ?? base.symmetry.mirror);
         const want = `${order}/${mirror}`;
         if (want !== symmetryShown) {
           if (symmetryShown !== '' && shown) {
@@ -296,59 +376,76 @@
           if (!from) shown = to;
         }
       }
-      // The whole show follows how loud the track is as heard: small, still, pale and unlit in silence or a fade, all of
-      // it at the loudest. Dimmer while paused.
+      // The show's intensity: the loudness as heard, followed over a fifth of a second, as far as the Intensity setting
+      // lets it count. It is the loudness's signal, and the envelope of every other one's routes (none while paused).
+      // Dimmer while paused.
       intensity += (m.intensity - intensity) * Math.min(1, dt * 5);
       lit = 1 - s.intensity * (1 - intensity);
       glow += ((m.playing ? 1 : 0.55) - glow) * Math.min(1, dt * 2);
-      // The transforms turn once around in 32 beats on average, at the track's tempo (its beats' where they are known,
-      // 90 BPM without one), as far as the loudness allows; paused, they slow to a stop. Each beat flashes and swells the
-      // picture, fading within a fifth of a second (sooner at a fast tempo), most on the strong beats. Reduced motion: a
-      // quarter of the turning, all of it steady, no swell, softer lights.
+      // Reduced motion: a quarter of the turning, all of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
+      track.set(m.track);
+      track[T.loudness] = lit;
+      if (still) for (const t of [T.beat, T.downbeat, T.section]) track[t] *= 0.5;
+      const bandsNow = m.bands ?? standIn;
+      give(matrix, track, bandsNow, m.playing ? lit : 0, got);
+      const W = got.whole;
+      if (panel && now - metered > 100) {
+        metered = now;
+        meters = { track: Array.from(track), bands: bandsNow.map((v) => Array.from(v)) };
+      }
+      // The turning's clock, at the track's tempo (its beats' where they are known, 90 BPM without one); the whole
+      // picture turns with the whole track's routes to Rotation.
       const b = m.playing ? m.beat : null;
-      const beatsASecond = b ? 1 / b.length : (m.bpm ?? 90) / 60;
-      const want = m.playing ? STEP * beatsASecond * (still ? 0.25 : 1) * motion() : 0;
-      speed += (want - speed) * Math.min(1, dt * 1.5);
-      turn += speed * 0.12 * dt;
-      pulse = b ? (0.35 + 0.65 * b.strength) * Math.exp(-b.since / Math.min(0.2, 0.35 * b.length)) : pulse * Math.exp(-dt / 0.15);
-      // Each band, within that: its loudness evolves its transform (larger, its variations given over to its band's own,
-      // its colour moved along the palette; and it turns further), its transients light its colour. Its Continuity
-      // setting shares its motion between steady (turning at its speed, evolving as its loudness goes) and steps on its
-      // own transients (or the beats, where those are not known yet): a step turns it by as much as it would have
-      // turned steadily since the band's last, on average (a strong transient further, a weak one less), and evolves it
-      // to its loudness at that moment, held until the next.
+      const want = m.playing ? STEP * m.bps * (still ? 0.25 : 1) * s.speed : 0;
+      clock += (want - clock) * Math.min(1, dt * 1.5);
+      turn += clock * 0.6 * W[A.rotation] * dt;
+      // Each part, given the whole track's routes and its band's: Shape evolves it (larger, its variations given over
+      // to its band's own), Hue moves its colour round, Spread draws it out from the middle or in (all three followed
+      // over its band's Evolution time), Rotation turns it, Lights light its colour. Its band's Continuity shares its
+      // motion between steady (turning at its rate, evolving as it is given) and steps on its band's own hits (or the
+      // beats, where those are not known yet): a step turns it by as much as it would have turned steadily since the
+      // band's last, on average (a strong hit further, a weak one less), and evolves it to what it was given at that
+      // moment, held until the next.
+      const hits: number[] = [];
+      const parts: Part[] = [];
       for (let i = 0; i < PARTS; i++) {
-        // Its band: one each from six; from the three a server before the six bands gives, one each for two parts.
-        const band = m.playing && m.bands ? m.bands[Math.floor((i * m.bands.length) / PARTS)] : undefined;
-        const c = still ? 1 : s.continuity[i];
-        const loud = (band?.loud ?? 0.5) * lit;
-        const rate = speed * (0.4 + 1.2 * bandLoud[i]);
-        const at = band ? band.index : b ? b.index : null;
+        const k = Math.floor((i * BANDS) / PARTS);
+        const own = got.band[k];
+        const c = still ? 1 : s.continuity[k];
+        const wants = [W[A.shape] + own[A.shape], W[A.hue] + own[A.hue], W[A.spread] + own[A.spread]];
+        const rate = clock * 2 * (W[A.rotation] + own[A.rotation]);
+        const step = m.playing && m.hits ? m.hits[k] : null;
+        const at = step ? step.index : b ? b.index : null;
         if (at !== lastHit[i]) {
           const was = lastHit[i];
           // Backwards or by more than three: a seek or another track, not stepped for.
           if (at !== null && was !== null && at > was && at - was <= 3) {
-            held[i] = loud;
-            const often = Math.max(0.5, band ? band.perSecond : beatsASecond);
-            pending[i] += ((1 - c) * rate * (band ? band.weight : 1)) / often;
+            held[i] = wants;
+            const often = Math.max(0.5, step ? step.perSecond : m.bps);
+            pending[i] += ((1 - c) * rate * (step ? step.weight : 1)) / often;
           }
           lastHit[i] = at;
         }
         const eased = pending[i] * Math.min(1, dt / 0.08);
         turned[i] += c * rate * dt + eased;
         pending[i] -= eased;
-        bandLoud[i] += (c * loud + (1 - c) * held[i] - bandLoud[i]) * Math.min(1, dt / s.evolution[i]);
+        const follow = Math.min(1, dt / s.evolution[k]);
+        for (let e = 0; e < 3; e++) evolving[i][e] += (c * wants[e] + (1 - c) * held[i][e] - evolving[i][e]) * follow;
+        const [shape, hue, spread] = evolving[i];
+        const grown = clamp(shape, 0, 1.25);
+        parts.push({ turn: turned[i], size: 0.94 + 0.12 * grown, morph: (still ? 0.15 : 0.35) * grown, hue, spread: 2 ** clamp(spread, -2, 2) });
+        hits.push(clamp(W[A.lights] + own[A.lights], 0, 3) * (still ? 0.5 : 1));
       }
-      const hits = Array.from({ length: PARTS }, (_, i) =>
-        m.playing && m.bands ? m.bands[Math.floor((i * m.bands.length) / PARTS)].hit * lit * s.bands * (still ? 0.5 : 1) : 0,
-      );
-      const parts: Part[] = bandLoud.map((l, i) => ({
-        turn: turned[i],
-        size: 0.94 + 0.12 * l,
-        morph: (still ? 0.15 : 0.35) * l,
-        hue: 0.08 * (l - 0.5),
-      }));
+      // The moments: another flame (as the dice give), another symmetry (where the Symmetry setting is Auto).
+      if (!still && moment(moments.reseed, W[A.reseed], now)) {
+        another = Math.floor(Math.random() * 0x100000000);
+        asked++;
+      }
+      if (!still && moment(moments.symmetry, W[A.symmetry], now) && base && !s.symmetry) {
+        const order = momentSymmetry?.order ?? base.symmetry.order;
+        momentSymmetry = { order: ((order + Math.floor(Math.random() * 7)) % 8) + 1, mirror: Math.random() < 0.5 };
+      }
 
       if (!to) return;
       const k = from ? Math.min(1, (now - blendStart) / blendMs) : 1;
@@ -389,21 +486,21 @@
         passes,
         {
           brightness: 1,
-          keep: 0.93,
+          // Trails: each frame keeps this much of the last (longer trails given more, shorter given less).
+          keep: clamp(1 - 0.07 * 2 ** (-1.5 * W[A.trails]), 0.5, 0.985),
           gamma: 3,
           vibrancy: 1,
           turn,
-          // Smaller when quiet (half its size in silence), its full size at the loudest; a beat's swell as loud as the
-          // music.
-          scale: 0.5 + 0.5 * lit,
-          zoom: 1 + (still ? 0 : 0.04) * pulse * lit * s.beat,
-          // As bright at any loudness (dimmer only while paused); a beat's flash as loud as the music, smaller where the
-          // bands' own lights carry the beat.
-          flash: glow * (1 + (still ? 0.15 : m.bands ? 0.1 : 0.35) * pulse * lit * s.beat),
+          // Size: half its size at rest, all of it given all (by default the loudness: smaller when quiet, and a
+          // beat's swell).
+          scale: clamp(0.5 + 0.5 * W[A.size], 0.25, 1.4),
+          zoom: 1,
+          // Glow: as bright at rest (dimmer only while paused), brighter given more (by default a beat's flash).
+          flash: glow * clamp(1 + 0.5 * W[A.brightness], 0.15, 3),
           hits,
           ceiling: s.brightness,
-          // Paler when quiet: a third of its colour in silence.
-          saturation: 0.35 + 0.65 * lit,
+          // Saturation: a third of its colour at rest, all of it given all (by default the loudness: paler when quiet).
+          saturation: clamp(0.35 + 0.65 * W[A.saturation], 0, 1.25),
           // The whole picture as bright however much of its frame the flame covers: a flame spread over most of it is
           // shown dimmer, one gathered into a few cells brighter (against one covering a third of its frame), so its
           // shape's changes are not flares.
@@ -463,9 +560,26 @@
       lock?.release().catch(() => {});
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       renderer?.dispose();
+      stopMusic();
     };
   });
 </script>
+
+{#snippet routeRow(signal: Signal)}
+  <span class="signal">{SIGNAL_LABEL[signal]}<i style:width="{Math.round(Math.min(1, Math.max(0, meterOf(signal))) * 100)}%"></i></span>
+  {#each ASPECTS as aspect (aspect)}
+    {@const a = amountOf(signal, aspect)}
+    <button
+      class="cell"
+      class:negative={a.v < 0}
+      class:mixed={a.mixed}
+      class:picked={cell?.signal === signal && cell?.aspect === aspect}
+      style:--amount={Math.min(1, Math.abs(a.v))}
+      aria-label="{cellLabel(signal, aspect)}, {signed(a.v)}"
+      onclick={() => (cell = { signal, aspect })}><span>{a.v ? Math.round(a.v * 100) : ''}</span></button
+    >
+  {/each}
+{/snippet}
 
 <div
   class="visuals"
@@ -521,6 +635,57 @@
               {/each}
             </div>
           {/each}
+          <div class="routes" role="group" aria-label="Routes">
+            <div class="head">
+              <h3>Routes</h3>
+              <button
+                class="reset"
+                onclick={() => {
+                  resetRoutes();
+                  cell = null;
+                }}>Reset</button
+              >
+            </div>
+            <div class="grid" style:--columns={ASPECTS.length}>
+              <span></span>
+              {#each ASPECTS as aspect (aspect)}
+                <span class="aspect">{ASPECT_LABEL[aspect]}</span>
+              {/each}
+              {#each TRACK_SIGNALS as signal (signal)}
+                {@render routeRow(signal)}
+              {/each}
+              <div class="bands" role="radiogroup" aria-label="Band">
+                {#each [null, 0, 1, 2, 3, 4, 5] as b (b ?? -1)}
+                  <button class="chip" class:on={pick === b} role="radio" aria-checked={pick === b} onclick={() => (pick = b)}
+                    >{b === null ? 'All' : BAND_ROWS[b]}</button
+                  >
+                {/each}
+              </div>
+              {#each BAND_SIGNALS as signal (signal)}
+                {@render routeRow(signal)}
+              {/each}
+            </div>
+            {#if cell}
+              {@const { signal, aspect } = cell}
+              {@const a = amountOf(signal, aspect)}
+              <label class="route">
+                <span>{cellLabel(signal, aspect)}</span>
+                <input
+                  class="amount"
+                  class:negative={a.v < 0}
+                  type="range"
+                  min="-1"
+                  max="1"
+                  step="0.05"
+                  value={a.v}
+                  style:--lo="{50 + Math.min(0, a.v) * 50}%"
+                  style:--hi="{50 + Math.max(0, a.v) * 50}%"
+                  oninput={(e) => setRoute(signal, aspect, Number(e.currentTarget.value))}
+                />
+                <output>{signed(a.v)}</output>
+              </label>
+            {/if}
+          </div>
           {#each BAND_ROWS as band, b (band)}
             <div class="rows band">
               <h3>{band}</h3>
@@ -656,7 +821,7 @@
     top: calc(max(12px, env(safe-area-inset-top)) + 56px);
     right: max(12px, env(safe-area-inset-right));
     bottom: max(12px, env(safe-area-inset-bottom));
-    width: min(340px, calc(100% - 24px));
+    width: min(500px, calc(100% - 24px));
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: rgb(255 255 255 / 0.25) transparent;
@@ -677,7 +842,8 @@
     border-top: 1px solid rgb(255 255 255 / 0.12);
   }
 
-  .rows h3 {
+  .rows h3,
+  .routes h3 {
     margin: 2px 0 0;
     font-size: 0.8rem;
     font-weight: 600;
@@ -701,6 +867,211 @@
   }
 
   .row output {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: rgb(255 255 255 / 0.75);
+  }
+
+  .routes {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgb(255 255 255 / 0.12);
+    container-type: inline-size;
+  }
+
+  .routes .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(4.4em, 1fr) repeat(var(--columns), minmax(0, 2.1em));
+    gap: 2px;
+    margin-top: 4px;
+  }
+
+  .aspect {
+    justify-self: center;
+    padding: 4px 0;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 0.72rem;
+    color: rgb(255 255 255 / 0.6);
+    white-space: nowrap;
+  }
+
+  .signal {
+    position: relative;
+    align-self: center;
+    padding: 0 4px 3px 0;
+    overflow: hidden;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* What the signal is now. */
+  .signal i {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    border-radius: 1px;
+    background: rgb(255 255 255 / 0.55);
+  }
+
+  .cell {
+    position: relative;
+    min-width: 0;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    /* Opaque: the picture behind the panel would tint an empty cell. */
+    background: rgb(42 42 48);
+    color: #fff;
+    font: inherit;
+    font-size: 0.62rem;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+
+  .cell::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--accent);
+    opacity: calc(var(--amount) * 0.85);
+  }
+
+  .cell.negative::before {
+    background: #e8708f;
+  }
+
+  .cell span {
+    position: relative;
+  }
+
+  .cell.mixed {
+    outline: 1px dashed rgb(255 255 255 / 0.5);
+    outline-offset: -2px;
+  }
+
+  .cell.picked {
+    outline: 2px solid #fff;
+    outline-offset: -1px;
+  }
+
+  /* Too narrow for the amounts: their colour alone. */
+  @container (max-width: 420px) {
+    .cell span {
+      display: none;
+    }
+  }
+
+  .bands {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 8px 0 4px;
+  }
+
+  .chip {
+    min-height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 15px;
+    background: rgb(255 255 255 / 0.08);
+    color: #fff;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+
+  .chip.on {
+    background: rgb(255 255 255 / 0.85);
+    color: #000;
+  }
+
+  /* The picked route's slider, kept in sight under the grid. */
+  .route {
+    position: sticky;
+    /* Down to the panel's edge (its padding), so nothing shows under it. */
+    bottom: -10px;
+    display: grid;
+    grid-template-columns: 1fr 3.4em;
+    align-items: center;
+    gap: 2px 12px;
+    margin: 8px -8px 0;
+    padding: 8px 10px 10px;
+    border-radius: 10px 10px 0 0;
+    background: rgb(36 36 42);
+    box-shadow: 0 -6px 12px rgb(0 0 0 / 0.35);
+    font-size: 0.85rem;
+  }
+
+  .route span {
+    grid-column: 1 / -1;
+    color: rgb(255 255 255 / 0.75);
+  }
+
+  /* An amount's slider fills from its middle (0) toward its thumb: green up, pink down. */
+  .route input {
+    --fill: var(--accent);
+    --track: rgb(255 255 255 / 0.2);
+    width: 100%;
+    min-width: 0;
+    height: 28px;
+    margin: 0;
+    background: transparent;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  .route input.negative {
+    --fill: #e8708f;
+  }
+
+  .route input::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background:
+      linear-gradient(to right, transparent calc(50% - 1px), rgb(255 255 255 / 0.7) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
+      linear-gradient(to right, var(--track) var(--lo), var(--fill) var(--lo) var(--hi), var(--track) var(--hi));
+  }
+
+  .route input::-moz-range-track {
+    height: 4px;
+    border-radius: 2px;
+    background:
+      linear-gradient(to right, transparent calc(50% - 1px), rgb(255 255 255 / 0.7) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
+      linear-gradient(to right, var(--track) var(--lo), var(--fill) var(--lo) var(--hi), var(--track) var(--hi));
+  }
+
+  .route input::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
+    margin-top: -8px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--fill);
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  .route input::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--fill);
+  }
+
+  .route output {
     text-align: right;
     font-variant-numeric: tabular-nums;
     color: rgb(255 255 255 / 0.75);

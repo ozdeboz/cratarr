@@ -530,15 +530,23 @@ export function apply(t: Xform, px: number, py: number, rnd: () => number): [num
 
 // --- Animation and blending ---
 
-/** The variation a band's loudness (decision 0046, amended: low, middle and high; a flame's first three transforms
- *  are theirs) brings into its transform: round and heavy for the low band (bubble), a twist for
- *  the middle (swirl), a fine ripple for the high (sinusoidal). */
-const BAND_VARIATIONS: Variation[] = [VARIATIONS.bubble, VARIATIONS.swirl, VARIATIONS.sinusoidal];
+/** The variation each band's part evolves toward (decision 0046, amended; a flame's first six transforms are the
+ *  bands'): round and heavy for the sub (bubble), a bulge for the bass (eyefish), a twist for the low mids (swirl), a
+ *  bend for the mids (horseshoe), a wave across for the presence (cylinder), a fine ripple for the air (sinusoidal). Six until
+ *  2026-10-18: the three bands' three left the upper three parts evolving toward none (linear). */
+const BAND_VARIATIONS: Variation[] = [
+  VARIATIONS.bubble,
+  VARIATIONS.eyefish,
+  VARIATIONS.swirl,
+  VARIATIONS.horseshoe,
+  VARIATIONS.cylinder,
+  VARIATIONS.sinusoidal,
+];
 
-/** How a band's transform has evolved: turned by `turn` (radians, as Electric Sheep's loops turn the linear part), that
- *  part scaled by `size`, `morph` (0..1) of its variations given over to its band's own, and its hue moved by `hue` (a
- *  turn of the wheel). */
-export type Part = { turn: number; size: number; morph: number; hue: number };
+/** How a band's part has evolved: turned by `turn` (radians, as Electric Sheep's loops turn the linear part), that
+ *  part scaled by `size`, `morph` (0..1) of its variations given over to its band's own, its hue moved by `hue` (a
+ *  turn of the wheel), and its offset from the middle scaled by `spread` (1: as it is). */
+export type Part = { turn: number; size: number; morph: number; hue: number; spread?: number };
 
 /** The most a transform's linear part may stretch anything (its larger singular value): under 1, every transform pulls
  *  points together, so turning and growing never carry the flame through a shape that flies apart over the screen. */
@@ -565,9 +573,10 @@ export function evolved(flame: Flame, parts: Part[], purity = 0, spread = 1): Fl
       }
       const linear = contracted(cos * a - sin * d, cos * b - sin * e, sin * a + cos * d, sin * b + cos * e);
       // Spread: the parts' offsets scaled apart (separate clusters) or together (one shape).
+      const out = spread * (p.spread ?? 1);
       return {
         ...t,
-        affine: [linear[0], linear[1], c * spread, linear[2], linear[3], f * spread],
+        affine: [linear[0], linear[1], c * out, linear[2], linear[3], f * out],
         variations,
         color: (((t.color + p.hue) % 1) + 1) % 1,
         colorSpeed: t.colorSpeed + purity * (1 - t.colorSpeed),
