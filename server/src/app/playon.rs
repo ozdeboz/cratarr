@@ -321,12 +321,15 @@ pub enum Command {
     Stop,
     Next,
     Previous,
-    /// To `position_ms`, or `percent` (0 to 100) of the track. What reaches the player is always `position_ms`.
+    /// To `position_ms`, or `percent` (0 to 100) of the track, or `by_ms` on from where it is now (back below 0: the
+    /// visuals' double and triple taps). What reaches the player is always `position_ms`.
     Seek {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         position_ms: Option<u64>,
         #[serde(default, skip_serializing)]
         percent: Option<f64>,
+        #[serde(default, skip_serializing)]
+        by_ms: Option<i64>,
     },
     /// 0 to 100.
     Volume { level: u8 },
@@ -568,7 +571,8 @@ impl Entry {
         self.connection.is_some() && self.heard.elapsed() < LEASE
     }
 
-    fn view(&self, name: &str, with_queue: bool) -> PlayerView {
+    /// Where it is in its track now: as it last reported, moved on by the time since while it plays.
+    fn position_now(&self) -> u64 {
         let r = &self.report;
         let mut position_ms = r.position_ms;
         if r.playing {
@@ -577,6 +581,12 @@ impl Entry {
                 position_ms = position_ms.min(d);
             }
         }
+        position_ms
+    }
+
+    fn view(&self, name: &str, with_queue: bool) -> PlayerView {
+        let r = &self.report;
+        let position_ms = self.position_now();
         let index = self.index();
         let track = usize::try_from(index).ok().and_then(|i| self.queue.tracks.get(i)).cloned().map(|mut t| {
             if t.album_id.is_none() {
@@ -1229,12 +1239,25 @@ impl PlayOn {
                 Command::Play { from: PlayFrom::default(), tracks, index, position_ms, shuffle, paused }
             }
             Command::Add { tracks, at, after, how } => Command::Add { tracks: self.named(tracks).await, at, after, how },
-            Command::Seek { position_ms: None, percent: Some(p) } => {
+            Command::Seek { position_ms: None, percent: Some(p), .. } => {
                 let duration = self.entries().get(name).and_then(|e| e.report.duration_ms);
                 let Some(d) = duration else { return Err(ToggleError::Refused("The track's length is not known yet.".into())) };
-                Command::Seek { position_ms: Some((d as f64 * p.clamp(0.0, 100.0) / 100.0) as u64), percent: None }
+                Command::Seek { position_ms: Some((d as f64 * p.clamp(0.0, 100.0) / 100.0) as u64), percent: None, by_ms: None }
             }
-            Command::Seek { position_ms: None, percent: None } => return Err(ToggleError::Refused("Seek where?".into())),
+            // On or back from where it is now (as Cratarr reckons it: its last report moved on), never past the start,
+            // and short of the end by a second (a seek past it would skip the track).
+            Command::Seek { position_ms: None, percent: None, by_ms: Some(by) } => {
+                let (now, duration) = match self.entries().get(name) {
+                    Some(e) => (e.position_now(), e.report.duration_ms),
+                    None => return Err(ToggleError::Refused(format!("No player is called {name}."))),
+                };
+                let mut to = (now as i64 + by).max(0) as u64;
+                if let Some(d) = duration {
+                    to = to.min(d.saturating_sub(1000));
+                }
+                Command::Seek { position_ms: Some(to), percent: None, by_ms: None }
+            }
+            Command::Seek { position_ms: None, percent: None, by_ms: None } => return Err(ToggleError::Refused("Seek where?".into())),
             other => other,
         };
         // The queue is edited here first (decision 0033), and the player told the edit by entry.
@@ -1820,12 +1843,12 @@ mod tests {
         let c: Command = serde_json::from_str(r#"{"command":"play","album":"al-x"}"#).unwrap();
         assert!(matches!(c, Command::Play { from: PlayFrom { album: Some(a), favourites: false, .. }, .. } if a == "al-x"));
         let c: Command = serde_json::from_str(r#"{"command":"seek","percent":50}"#).unwrap();
-        assert_eq!(c, Command::Seek { position_ms: None, percent: Some(50.0) });
+        assert_eq!(c, Command::Seek { position_ms: None, percent: Some(50.0), by_ms: None });
         assert_eq!(serde_json::from_str::<Command>(r#"{"command":"duck"}"#).unwrap(), Command::Duck);
         // To the player: tracks, never the playlist's name or the shuffle wish.
         let to_player = Command::play(vec![], 2, 5);
         assert_eq!(serde_json::to_string(&to_player).unwrap(), r#"{"command":"play","tracks":[],"index":2,"position_ms":5}"#);
-        assert_eq!(serde_json::to_string(&Command::Seek { position_ms: Some(9), percent: None }).unwrap(), r#"{"command":"seek","position_ms":9}"#);
+        assert_eq!(serde_json::to_string(&Command::Seek { position_ms: Some(9), percent: None, by_ms: None }).unwrap(), r#"{"command":"seek","position_ms":9}"#);
         // The sleep timer: a time, the end of the track, or null to clear it; passed on as it came.
         let c: Command = serde_json::from_str(r#"{"command":"sleep","at_ms":1760000000000}"#).unwrap();
         assert_eq!(c, Command::Sleep { at_ms: Some(1_760_000_000_000), end_of_track: false });
@@ -1926,6 +1949,27 @@ mod tests {
         let back = told(&mut again);
         let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back");
         assert_eq!((play["tracks"].as_array().unwrap().len(), play["index"].as_u64()), (2, Some(1)));
+    }
+
+    #[tokio::test]
+    async fn a_seek_by_moves_on_or_back_from_where_it_is() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let mut tablet = p.connect("tablet").unwrap();
+        p.command("tablet", Command::play(vec![t("tr-1")], 0, 0)).await.unwrap();
+        said(&mut tablet);
+        p.report("tablet", Report { index: 0, position_ms: 60_000, duration_ms: Some(200_000), playing: false, ..Report::default() }).unwrap();
+        let sought = |c: &mut Commands| told(c).iter().filter(|m| m["command"] == "seek").filter_map(|m| m["position_ms"].as_u64()).last();
+        let by = |ms: i64| Command::Seek { position_ms: None, percent: None, by_ms: Some(ms) };
+        p.command("tablet", by(10_000)).await.unwrap();
+        assert_eq!(sought(&mut tablet), Some(70_000), "on from where it is");
+        p.command("tablet", by(-90_000)).await.unwrap();
+        assert_eq!(sought(&mut tablet), Some(0), "never before the start");
+        p.command("tablet", by(500_000)).await.unwrap();
+        assert_eq!(sought(&mut tablet), Some(199_000), "short of the end by a second");
+        // As the page sends it; the player is told a position only.
+        let c: Command = serde_json::from_str(r#"{"command":"seek","by_ms":-30000}"#).unwrap();
+        assert_eq!(c, by(-30_000));
     }
 
     #[tokio::test]
