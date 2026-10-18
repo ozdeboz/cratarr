@@ -19,7 +19,7 @@
   import { player } from '../live.svelte';
   import { panel as sidePanel } from '../panel.svelte';
   import { prefs } from '../prefs.svelte';
-  import { playing, send } from '../remote.svelte';
+  import { paused, playing, seekBy, send } from '../remote.svelte';
   import {
     between,
     coloured,
@@ -124,12 +124,41 @@
     const dy = e.clientY - down.y;
     down = null;
     if (dy > 80 && Math.abs(dy) > 2 * Math.abs(dx)) close();
-    else if (Math.hypot(dx, dy) < 10) {
-      if (chrome) {
-        chrome = false;
-        panel = false;
-      } else showChrome();
+    else if (Math.hypot(dx, dy) < 10) tapped(e);
+  }
+
+  // Taps, as video players take them (the owner, 2026-10-18): one shows or hides the controls, once it is clear no
+  // second follows; two or more in a row on one side seek, on the right forward and on the left back, each as it
+  // comes: two 10 s, three 30 s, and each one after 30 s more ("each subsequent tap after the 30 seconds should be 30
+  // seconds per tap"). How far, on that side for a moment.
+  const TAP_MS = 300;
+  let taps: { n: number; side: 1 | -1; at: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  let sought = $state<{ side: 1 | -1; secs: number } | null>(null);
+  let soughtTimer: ReturnType<typeof setTimeout> | undefined;
+  function tapped(e: PointerEvent) {
+    const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const side = e.clientX - box.left > box.width / 2 ? 1 : -1;
+    const now = performance.now();
+    if (taps) clearTimeout(taps.timer);
+    if (!(taps && taps.side === side && now - taps.at < TAP_MS)) {
+      taps = { n: 1, side, at: now, timer: setTimeout(toggleChrome, TAP_MS) };
+      return;
     }
+    taps.n++;
+    taps.at = now;
+    taps.timer = setTimeout(() => (taps = null), TAP_MS);
+    const step = taps.n === 2 ? 10 : taps.n === 3 ? 20 : 30;
+    void seekBy(side * step);
+    sought = { side, secs: (taps.n === 2 ? 0 : (sought?.secs ?? 0)) + step };
+    clearTimeout(soughtTimer);
+    soughtTimer = setTimeout(() => (sought = null), 900);
+  }
+  function toggleChrome() {
+    taps = null;
+    if (chrome) {
+      chrome = false;
+      panel = false;
+    } else showChrome();
   }
 
   // The look: the preset last loaded (the playing track's, or the dice's or a moment's), which a pin let go of returns
@@ -1173,12 +1202,18 @@
           <button class="round" aria-label="Previous track" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => send('previous')}
             ><Icon name="previous" size={26} /></button
           >
+          <button class="round" aria-label={paused() ? 'Play' : 'Pause'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => send('play-pause')}
+            ><Icon name={paused() ? 'play' : 'pause'} size={26} /></button
+          >
           <button class="round" aria-label="Next track" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => send('next')}
             ><Icon name="next" size={26} /></button
           >
         </div>
       {/if}
     </div>
+  {/if}
+  {#if sought}
+    <div class="sought" class:back={sought.side < 0} aria-live="polite">{sought.side > 0 ? '+' : '−'}{sought.secs} s</div>
   {/if}
   {#if snapshotsOpen}
     <SnapshotsSheet onclose={() => (snapshotsOpen = false)} capture={capturePicture} trackName={np?.name ?? null} {recall} over={!docked} />
@@ -1588,6 +1623,25 @@
     gap: 2px;
     color: #fff;
     text-shadow: 0 1px 6px rgb(0 0 0 / 0.6);
+  }
+
+  .sought {
+    position: absolute;
+    top: 50%;
+    right: 12%;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: rgb(0 0 0 / 0.45);
+    color: #fff;
+    font-size: 1.1rem;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+    transform: translateY(-50%);
+  }
+
+  .sought.back {
+    right: auto;
+    left: 12%;
   }
 
   .transport {

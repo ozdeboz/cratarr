@@ -1,7 +1,7 @@
 // The remote for what plays, shared by the mini-player and the full player (decision 0018): the commands (shown at
 // once, see live.svelte.ts `expect`), the running clock, the favourite, the cover and the colour taken from it.
 import { untrack } from 'svelte';
-import { ApiError, coverUrl, albumCoverUrl, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
+import { ApiError, coverUrl, albumCoverUrl, playerCommand, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
 import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek } from './localPlayer.svelte';
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
@@ -183,6 +183,24 @@ export async function playUpcoming(i: number) {
 
 /** Seeks the local player (the remote one cannot be dragged yet, decision 0019). */
 export const seekTo = (secs: number) => isLocal() && localSeek(secs);
+
+/** Moves what plays `secs` on (back, below 0): the local player at once, within its track; one of Cratarr's players
+ *  through the server, which moves it from where it is (and keeps it within its track). */
+export async function seekBy(secs: number) {
+  if (isLocal()) {
+    const end = duration();
+    localSeek(Math.max(0, Math.min(end ? end - 1 : Infinity, position() + secs)));
+    return;
+  }
+  const np = playing();
+  if (!np?.player) return;
+  try {
+    await playerCommand(np.player, { command: 'seek', by_ms: Math.round(secs * 1000) });
+    setTimeout(refresh, 700); // the player reports back within a moment
+  } catch (e) {
+    expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond");
+  }
+}
 
 // Favourite: shown as the server reports it; a tap shows the new state at once and asks for it.
 const fav = $state<{ wanted: { id: string; on: boolean } | null }>({ wanted: null });
