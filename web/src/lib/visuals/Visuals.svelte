@@ -51,7 +51,7 @@
   import SnapshotsSheet from './SnapshotsSheet.svelte';
   import { held } from './held.svelte';
   import Help from './Help.svelte';
-  import type { Force } from './fluid';
+  import { newStirring, stir } from './stirring';
   import { FlameRenderer } from './render';
   import {
     A,
@@ -491,6 +491,8 @@
     };
     // The mapping from the music and the settings to what is drawn (aspects.ts), and the moments' gap.
     const aspects = newAspects();
+    // How the music stirs the fluid (stirring.ts).
+    const stirring = newStirring();
     // What the visuals do, measured (meters.ts), and when the rating page last had them.
     const metering = new Meters();
     let meteredAt = 0;
@@ -765,11 +767,11 @@
       const bh = Math.max(1, Math.round(h * scale));
       const resized = renderer.width !== bw || renderer.height !== bh;
       renderer.resize(bw, bh);
-      // The fluid: each band's part pushed where it lies by its lights (its hits, by default), outward from the middle
-      // and round the way the part turns; a beat pushes out from the middle; the loudness keeps the flow going, the
-      // swells add whirls. Where the picture is in the buffer: as the renderer's camera puts it.
+      // The fluid, stirred in time (stirring.ts): kicks on each band's hits at its part (ahead of them where they are
+      // known) and on the beats, the downbeats and the sections from the middle, steady bands stirring with their level,
+      // the flow breathing with the pulse. With reduced motion: no kicks, only the steady stirring. Where each part is in
+      // the buffer: as the renderer's camera puts it, measured four times a second.
       const fluidNow = d.fluid;
-      const forces: Force[] = [];
       if (fluidNow > 0) {
         if (now - partsMeasured > 250) {
           partsMeasured = now;
@@ -787,23 +789,26 @@
             return [x * 0.5 + 0.5, y * 0.5 + 0.5];
           });
         }
-        for (let i = 0; i < PARTS; i++) {
-          const at = partsWhere[i];
-          const light = Math.max(0, hits[i] ?? 0);
-          if (!at || light < 0.02) continue;
-          const out = Math.hypot(at[0] - 0.5, at[1] - 0.5) || 1;
-          const ox = (at[0] - 0.5) / out;
-          const oy = (at[1] - 0.5) / out;
-          const round = 0.6 * Math.sign(d.rates[i]);
-          forces.push({ x: at[0], y: at[1], dx: 0.5 * (ox - oy * round), dy: 0.5 * (oy + ox * round), radius: 0.12, strength: light * fluidNow });
-        }
-        const beat = still ? 0 : track[T.beat];
-        if (beat > 0.05)
-          for (let k = 0; k < 4; k++) {
-            const a = turn + (k * Math.PI) / 2;
-            forces.push({ x: 0.5 + 0.12 * Math.cos(a), y: 0.5 + 0.12 * Math.sin(a), dx: 0.4 * Math.cos(a), dy: 0.4 * Math.sin(a), radius: 0.1, strength: beat * fluidNow });
-          }
       }
+      const beatNow = m.playing && !still ? m.beat : null;
+      const stirred = stir(stirring, {
+        t: now / 1000,
+        dt,
+        amount: fluidNow,
+        parts: partsWhere,
+        turns: d.rates,
+        lights: hits,
+        level: d.bands.map((v) => v[B.level]),
+        continuity: still ? how.continuity.map(() => 1) : how.continuity,
+        hits: m.playing && m.hits ? m.hits.map((h) => (h.index < 0 ? null : { index: h.index, strength: h.weight, nextIn: h.nextIn })) : [],
+        beat: beatNow ? { ...beatNow, nextIn: beatNow.length - beatNow.since } : null,
+        downbeat: still ? 0 : track[T.downbeat],
+        section: still ? 0 : track[T.section],
+        loudness: d.lit,
+        swell: track[T.swell],
+        bps: m.bps,
+        center: [0.5, 0.5],
+      });
       renderer.frame(
         passes,
         {
@@ -826,8 +831,8 @@
           floor: d.floor,
           fire,
           fluid: fluidNow,
-          forces,
-          flow: { energy: d.lit, swirl: 1 + 2 * track[T.swell] },
+          forces: stirred.forces,
+          flow: stirred.flow,
           // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
           // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
           dt: dt * how.speed * (still ? 0.25 : 1),

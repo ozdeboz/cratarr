@@ -20,8 +20,8 @@ import { BANDS, visualSettings } from './settings.svelte';
 
 /** A band's last hit, for the steps the Continuity setting asks for: its place among the band's hits (-1 before the
  *  first), its strength against the band's mean (1: as strong as its hits are on average), and the band's hits a
- *  second. */
-export type Steps = { index: number; weight: number; perSecond: number };
+ *  second; and how soon its next one comes (s), where that is known ahead (the server's; null as heard). */
+export type Steps = { index: number; weight: number; perSecond: number; nextIn: number | null };
 
 export type Music = {
   /** The playing track (`source/id`), or null. */
@@ -89,7 +89,7 @@ export function newMusicState(): MusicState {
   return {
     track: new Float32Array(TRACK_SIGNALS.length),
     bands: Array.from({ length: BANDS }, () => new Float32Array(BAND_SIGNALS.length)),
-    hits: Array.from({ length: BANDS }, () => ({ index: -1, weight: 1, perSecond: 0 })),
+    hits: Array.from({ length: BANDS }, () => ({ index: -1, weight: 1, perSecond: 0, nextIn: null })),
     fifths: { x: 0, y: 0, at: 0 },
   };
 }
@@ -272,7 +272,8 @@ function fromServer(st: MusicState, s: Signals, pos: number, beats: Beats | null
     v[B.hits] = lightOf(all?.[b], pos, ring);
     v[B.percussiveHits] = lightOf(drums?.[b], pos, ring);
     const hit = lastOf(all?.[b], pos);
-    hits[b] = { index: hit.index, weight: hit.value / Math.max(0.05, s.meanStrength[b] ?? 1), perSecond: s.perSecond[b] ?? 0 };
+    const next = all?.[b]?.at[hit.index + 1];
+    hits[b] = { index: hit.index, weight: hit.value / Math.max(0.05, s.meanStrength[b] ?? 1), perSecond: s.perSecond[b] ?? 0, nextIn: next === undefined ? null : next - pos };
   }
 }
 
@@ -317,7 +318,7 @@ function fromLive(now: LiveNow, at: number, lighting: readonly number[]) {
     v[B.flux] = heard.flux;
     v[B.hits] = h.count ? ringOf((at - h.at) / 1000, h.strength, lighting[b]) : 0;
     const secs = (at - h.since) / 1000;
-    hits[b] = { index: h.count - 1, weight: h.strength / Math.max(0.05, h.mean), perSecond: secs > 5 ? (h.count - h.first) / secs : 2 };
+    hits[b] = { index: h.count - 1, weight: h.strength / Math.max(0.05, h.mean), perSecond: secs > 5 ? (h.count - h.first) / secs : 2, nextIn: null };
   }
 }
 
