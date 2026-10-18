@@ -92,3 +92,20 @@ its parts are lit and settling in a quiet section; at 100 % the light is smoke.
   and piling up frame on frame into square blocks: the phone's G615 blends 7 % of the next level for a 5 % squeeze, 26 %
   for 20 % (measured off-screen); desktop drivers round small levels away, so the labs never showed it. The owner liked
   the look a little: Facets, square and hex, will bring it back deliberately (65).
+
+## Amendment, 2026-10-18: a fifth of the range, and eased in and out (64.1)
+
+- **A fifth of 64's range** (the owner's phone washed out in cycles: a route took Fluid to about 35 % of 64's range at
+  each punch in the presence band; "without that +60%, the effect is gone. what does this say about our fluid range?").
+  Swept on the phone's own settings and pace, the busy centre's contrast collapsed from about a fifth of 64's range
+  up (its p10–p90 spread 0.30 at 10 %, 0.10 at 30 %): 64.1's 100 % is 64's 20 % (`FLUID_FULL` 0.02). Kept settings,
+  snapshots and what a group shares (`fluidScale` sent with it) are read on the new scale, whichever page wrote them.
+  With the slider now the most Fluid gets (0046, amended), no route can take it past that.
+- **Eased in and out** (claude-a5's, the owner: "Yes, fix it now"): Fluid tipping across 0 made the flow stop dead and
+  the smeared light fall apart into specks; the renderer now follows Fluid and the warp (rising over 0.3 s, falling over
+  1.5 s), the flow coasting to rest, the same textures carried on when it comes back.
+- **The busy centre's contrast** (the owner asked whether it can be helped): at Fluid 0 a quarter to nearly half of the
+  centre's pixels hit a colour channel's top (the lights and the beat's flash multiply where it is already dense). A
+  hue-keeping soft shoulder instead of each channel's clip removed that (24 % to 0) but did not add contrast (the
+  centre's spread 0.30 to 0.25): the flatness is the log display squeezing dense areas. Local exposure (brightness
+  against the density around a point) is the lead; not taken yet.

@@ -616,3 +616,48 @@ Measured (the lab page): a track change at the default gave the next track's own
 −50 % every smooth setting went 0.49 to 0.51 of the way; a +100 % walk reached the tether (0.3) and stayed within it, and
 −100 % went home at once. Moved beside, over, beside, over and closed, the visuals stayed open each time and the history
 went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, the controls untouched.
+
+## Amendment, 2026-10-18: routes as curves, settings as limits, Behaviour, pins in the matrix, the dice's double tap (64.1)
+
+- **Settings are limits** (the owner: "Wouldn't it be better if the slider would be the limit? … So the sliders become
+  the attenuators", then "The other sliders are simply limits"). For the four levels, Smoothing, Floor, Depth and
+  Fluid, the slider is the most there is, and each route into one is a condition for reaching it: the value is the
+  slider times every route's factor, each between 0 and 1, so it never passes the slider nor goes below 0, in any order
+  (claude-5f's proposal, the owner: "Awesome, so this is feasible"). A route's factor is 1 − e · (its curve's highest
+  point − its curve now), e the loudness envelope (quiet, the slider as before); a band signal's six factors combine
+  by their geometric mean, as one condition (claude-a5's). Flash and Speed already limit their columns' swing and pace.
+- **Each route a curve** (the owner: "Instead of the slider, I'm looking for a curve setting", then "the curves are
+  only for … the matrix routes", "every route", "one graph for either positive or negative … The color can auto adjust
+  based on the value selected"). A cubic from 0 at no signal through two handles to an end at full signal, from −100 %
+  to +100 % about a middle line, green above it and pink below; the old amounts are straight curves, so every setup,
+  snapshot and group setting reads as before (a route is a number while straight). The curve takes the raw signal, the
+  loudness envelope after it. Swings add the curves' values as the amounts were added; levels take them as above.
+  Computed from 33-point tables; straight routes keep the multiply.
+- **The editor** below the grid in place of the amount slider: the handles, a live dot where the signal is now, and
+  behind the curve, dimmer, where the signal has been over the last 30 s of music, mirrored about the middle line like
+  a waveform (the owner, after three sketches: "this gives us the best way to tune the curve to the signal"). Shaped
+  squares carry a small curve mark.
+- **Behaviour** (the owner, in claude-a5's session; "We should get a header for the behavior section"): Intensity, Flash,
+  Speed, Smoothing, Floor, Depth and Fluid under a header of their own; each pins by moving it as the Look's do (the
+  dice leave a pinned one; a recall pins them; Standard and Reset let go).
+- **Look and Behaviour in place of Drift** (the owner: "instead of having drift as a target, we should have looks and
+  behavior as a target"): Look is Drift as it was; Behaviour walks the behaviour settings below what is set and back,
+  never above (an attenuating walk, held in memory, never saved: a factor in [1 − tether, 1] per setting), the mark under
+  each slider showing where it is now. The Track row works on both; its default −100 % on Behaviour starts each track
+  from what is set. Routes kept into Drift are Look's.
+- **Routes that walk** (the owner: "behavior should also affect those matrix routes that subscribe to it … by limiting
+  the fill of cells vertically", "as an attenuating walk"): a route's Walk switch (off by default) puts it on the same
+  walk; its square fills only as far as it is.
+- **Pins in the matrix** (the owner, in claude-a5's session): shaping a square pins its route; a whole column can be
+  pinned. The dice leave pinned routes and columns as they are; a pinned route still walks if its switch is on. A
+  folded corner marks a pinned square.
+- **The dice keep the Track row**: a roll put in the recipe's routes whole, and recipes have none, so since 64 a new
+  track stopped bringing its own look after the dice.
+- **The dice's double tap** (the owner: "Normal tap is the same as now, and double tap becomes this randomize 1 to 5",
+  then "double tap could allow beyond limits", "twice the limits"): only how the visuals move, the routes into Shape,
+  Lights, Rotation and Size, Speed, Flash and the bands' times (recipe.ts `MOVEMENT`); the look, its colours, the grain
+  and smoke and every other route stay. Until the next roll, an undo, a Reset or a recall, the precheck and the governor
+  take Wild as 100 % (twice the limits); the flash rule stays.
+- **Save over** a snapshot (the owner: "Yes"): its settings and a new picture under its name and in its place.
+- **Calibration:** run again on this mapping, Standard measures as in 64 (its limits and the thumbs' reference values
+  unchanged); 47 of 440 random recipes refused.
