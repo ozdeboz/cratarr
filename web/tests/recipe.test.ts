@@ -72,3 +72,15 @@ test('a roll leaves the fluid’s stirring (Stir, Flow, Swirl) as it is', () => 
     assert.equal(s.routes['swell|-|swirl'], -0.25, scope);
   }
 });
+
+test('a band time pinned stays through either roll, the others the recipe’s', () => {
+  const pinnedBase = { ...base, pins: ['lighting:2', 'evolution:5', 'continuity:0'] } as unknown as VisualSettings;
+  for (const scope of ['all', 'movement'] as const) {
+    const recipe = recipeFor(7, ASPECTS);
+    const got = settingsOf(recipe, pinnedBase, scope);
+    assert.equal(got.lighting[2], pinnedBase.lighting[2], `${scope}: Lighting 2 kept`);
+    assert.equal(got.evolution[5], pinnedBase.evolution[5], `${scope}: Evolution 5 kept`);
+    assert.equal(got.continuity[0], pinnedBase.continuity[0], `${scope}: Continuity 0 kept`);
+    assert.notEqual(got.lighting[1], pinnedBase.lighting[1], `${scope}: Lighting 1 rolled`);
+  }
+});

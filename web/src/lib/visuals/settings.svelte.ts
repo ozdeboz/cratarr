@@ -178,11 +178,17 @@ const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly s
 /** The behaviour's sliders that pin as the Look's do, moved by hand (the owner, 2026-10-18: "I try to pin the behavior
  *  instead of the look"): a pinned one the dice and Drift leave as it is. */
 export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth'] as const;
+/** Each band's times, pinned one by one (`lighting:2`: the Low mid's Lighting): the dice leave a pinned one. */
+export const BAND_TIMES = ['lighting', 'evolution', 'continuity'] as const;
+export const bandPin = (key: (typeof BAND_TIMES)[number], band: number) => `${key}:${band}`;
+export const BAND_PINS = BAND_TIMES.flatMap((k) => Array.from({ length: BANDS }, (_, b) => bandPin(k, b)));
 /** Whether `k` can be pinned: the Look's settings, the behaviour's sliders, a route (`route:` and its key) and a
  *  column of the routes (`column:` and its aspect): what is pinned the dice, Drift and a track leave as it is (the
  *  owner: "I also want to implement pin for the matrix"). */
 export const isPinnable = (k: string) =>
-  isPresetKey(k) || (BEHAVIOUR_PINS as readonly string[]).includes(k) || (k.startsWith('route:') && isRoute(k.slice(6), BANDS)) || (k.startsWith('column:') && (ASPECTS as readonly string[]).includes(k.slice(7)));
+  isPresetKey(k) ||
+  (BEHAVIOUR_PINS as readonly string[]).includes(k) ||
+  BAND_PINS.includes(k) || (k.startsWith('route:') && isRoute(k.slice(6), BANDS)) || (k.startsWith('column:') && (ASPECTS as readonly string[]).includes(k.slice(7)));
 
 function load(): VisualSettings {
   try {

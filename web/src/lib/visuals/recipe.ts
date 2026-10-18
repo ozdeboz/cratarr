@@ -211,8 +211,9 @@ export function settingsOf(recipe: Recipe, base: VisualSettings, scope: Scope = 
     smoothing: one('smoothing', within(r.smoothing, 0, 1)),
     floor: one('floor', within(r.floor, 0, 1)),
     depth: one('depth', within(r.depth, 0, 1)),
-    lighting: takes('lighting') ? r.lighting.map((v) => within(v, 0.02, 1)) : base.lighting,
-    evolution: takes('evolution') ? r.evolution.map((v) => within(v, 0.02, 2)) : base.evolution,
-    continuity: takes('continuity') ? r.continuity.map((v) => within(v, 0, 1)) : base.continuity,
+    // Each band's times as the recipe has them, but a pinned one (`lighting:2`).
+    lighting: takes('lighting') ? r.lighting.map((v, b) => (pinned.has(`lighting:${b}`) ? base.lighting[b] : within(v, 0.02, 1))) : base.lighting,
+    evolution: takes('evolution') ? r.evolution.map((v, b) => (pinned.has(`evolution:${b}`) ? base.evolution[b] : within(v, 0.02, 2))) : base.evolution,
+    continuity: takes('continuity') ? r.continuity.map((v, b) => (pinned.has(`continuity:${b}`) ? base.continuity[b] : within(v, 0, 1))) : base.continuity,
   };
 }

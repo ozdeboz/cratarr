@@ -95,6 +95,8 @@
     resetVisualSettings,
     saveVisualSettings,
     BEHAVIOUR_PINS,
+    BAND_PINS,
+    bandPin,
     isPinnable,
     visualSettings as s,
     type VisualSettings,
@@ -475,7 +477,7 @@
       share(Object.fromEntries(SHARED_KEYS.filter((k) => !isLook(k)).map((k) => [k, $state.snapshot(s[k])])));
       resets++;
     } else {
-      applyShared({ ...settings, pins: [...PRESET_KEYS, ...BEHAVIOUR_PINS] });
+      applyShared({ ...settings, pins: [...PRESET_KEYS, ...BEHAVIOUR_PINS, ...BAND_PINS] });
       share(sharedNow());
     }
     showChrome();
@@ -560,16 +562,30 @@
     max: Math.log2(RANGES[key][1]),
   }));
   const seconds = (v: number) => (v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(1)} s`);
+  // A band's time moved is pinned, as the other sliders are: the dice leave it as it is.
+  function pinBand(key: 'lighting' | 'evolution' | 'continuity', band: number) {
+    const pin = bandPin(key, band);
+    if (!s.pins.includes(pin)) s.pins = [...s.pins, pin];
+  }
+  function unpinBand(key: 'lighting' | 'evolution' | 'continuity', band: number) {
+    const pin = bandPin(key, band);
+    s.pins = s.pins.filter((k) => k !== pin);
+    saveVisualSettings();
+    share({ pins: [...s.pins] });
+    showChrome();
+  }
   function setTime(key: 'lighting' | 'evolution', band: number, log2: number) {
     s[key][band] = 2 ** log2;
+    pinBand(key, band);
     saveVisualSettings();
-    share({ [key]: [...s[key]] });
+    share({ [key]: [...s[key]], pins: [...s.pins] });
     showChrome();
   }
   function setContinuity(band: number, v: number) {
     s.continuity[band] = v;
+    pinBand('continuity', band);
     saveVisualSettings();
-    share({ continuity: [...s.continuity] });
+    share({ continuity: [...s.continuity], pins: [...s.pins] });
     showChrome();
   }
   const devicePixels = () => innerWidth * innerHeight * Math.min(devicePixelRatio || 1, 2) ** 2;
@@ -611,6 +627,10 @@
   // marked where they differ; a change sets all six).
   const matrix = $derived(compile(s.routes, BANDS));
   let pick = $state<number | null>(null);
+  // The grid wider than the panel scrolls across on its own: the aspects' names over it follow it, and its visible
+  // width keeps the bands' chips in sight.
+  let gridHead = $state<HTMLDivElement>();
+  let gridView = $state(0);
   let cell = $state<{ signal: Signal; aspect: Aspect } | null>(null);
   const isBandSignal = (signal: Signal) => (BAND_SIGNALS as readonly string[]).includes(signal);
   const keysOf = (signal: Signal, aspect: Aspect) =>
@@ -1410,6 +1430,22 @@
   });
 </script>
 
+{#snippet bandPinOf(key: 'lighting' | 'evolution' | 'continuity', label: string, b: number)}
+  {#if s.pins.includes(bandPin(key, b))}
+    <button
+      class="pin"
+      aria-label="Unpin {label}"
+      use:held={'pin'}
+      onclick={(e) => {
+        e.preventDefault();
+        unpinBand(key, b);
+      }}><Icon name="pin" size={16} /></button
+    >
+  {:else}
+    <span></span>
+  {/if}
+{/snippet}
+
 {#snippet routeRow(signal: Signal)}
   <span class="signal" use:held={`signal:${signal}`}>{SIGNAL_LABEL[signal]}<i style:width="{Math.round(Math.min(1, Math.max(0, meterOf(signal))) * 100)}%"></i></span>
   {#each ASPECTS as aspect (aspect)}
@@ -1552,24 +1588,36 @@
                 }}>Reset</button
               >
             </div>
-            <div class="grid" style:--columns={ASPECTS.length}>
-              <span></span>
-              {#each ASPECTS as aspect (aspect)}
-                <span class="aspect" use:held={`aspect:${aspect}`}>{ASPECT_LABEL[aspect]}</span>
-              {/each}
-              {#each TRACK_SIGNALS as signal (signal)}
-                {@render routeRow(signal)}
-              {/each}
-              <div class="bands" role="radiogroup" aria-label="Band">
-                {#each [null, 0, 1, 2, 3, 4, 5] as b (b ?? -1)}
-                  <button class="chip" class:on={pick === b} role="radio" aria-checked={pick === b} use:held={`band:${b ?? 'all'}`} onclick={() => (pick = b)}
-                    >{b === null ? 'All' : BAND_ROWS[b]}</button
-                  >
+            <div class="grid-head" bind:this={gridHead}>
+              <div class="grid" style:--columns={ASPECTS.length}>
+                <span class="corner"></span>
+                {#each ASPECTS as aspect (aspect)}
+                  <span class="aspect" use:held={`aspect:${aspect}`}>{ASPECT_LABEL[aspect]}</span>
                 {/each}
               </div>
-              {#each BAND_SIGNALS as signal (signal)}
-                {@render routeRow(signal)}
-              {/each}
+            </div>
+            <div
+              class="grid-scroll"
+              bind:clientWidth={gridView}
+              onscroll={(e) => {
+                if (gridHead) gridHead.scrollLeft = e.currentTarget.scrollLeft;
+              }}
+            >
+              <div class="grid" style:--columns={ASPECTS.length}>
+                {#each TRACK_SIGNALS as signal (signal)}
+                  {@render routeRow(signal)}
+                {/each}
+                <div class="bands" role="radiogroup" aria-label="Band" style:width="{gridView}px">
+                  {#each [null, 0, 1, 2, 3, 4, 5] as b (b ?? -1)}
+                    <button class="chip" class:on={pick === b} role="radio" aria-checked={pick === b} use:held={`band:${b ?? 'all'}`} onclick={() => (pick = b)}
+                      >{b === null ? 'All' : BAND_ROWS[b]}</button
+                    >
+                  {/each}
+                </div>
+                {#each BAND_SIGNALS as signal (signal)}
+                  {@render routeRow(signal)}
+                {/each}
+              </div>
             </div>
             {#if cell && edited}
               {@const { signal, aspect } = cell}
@@ -1596,7 +1644,7 @@
             <div class="rows band">
               <h3 use:held={`band:${b}`}>{band}</h3>
               {#each TIMES as time (time.key)}
-                <label class="row">
+                <label class="row pinnable">
                   <span use:held={time.key}>{time.label}</span>
                   <input
                     type="range"
@@ -1607,12 +1655,14 @@
                     oninput={(e) => setTime(time.key, b, Number(e.currentTarget.value))}
                   />
                   <output>{seconds(s[time.key][b])}</output>
+                  {@render bandPinOf(time.key, time.label, b)}
                 </label>
               {/each}
-              <label class="row">
+              <label class="row pinnable">
                 <span use:held={'continuity'}>Continuity</span>
                 <input type="range" min={RANGES.continuity[0]} max={RANGES.continuity[1]} step="0.05" value={s.continuity[b]} oninput={(e) => setContinuity(b, Number(e.currentTarget.value))} />
                 <output>{percent(s.continuity[b])}</output>
+                {@render bandPinOf('continuity', 'Continuity', b)}
               </label>
             </div>
           {/each}
@@ -1867,11 +1917,43 @@
     justify-content: space-between;
   }
 
+  /* The grid: its names' column, then a cell an aspect, at least 28 px (a finger's tap, its number readable) and at most
+     2.1em, the panel's width shared out between them where it fits; else it scrolls across on its own, the signals'
+     names kept at its left and the aspects' (a grid of their own over it, the same columns, following its scroll) at
+     the top of the panel. Sized from the routes' width (cqw), not by their content, so both grids line up exactly. */
   .grid {
+    --cell: clamp(28px, calc((100cqw - 4.6em - var(--columns) * 2px) / var(--columns)), 2.1em);
     display: grid;
-    grid-template-columns: minmax(4.4em, 1fr) repeat(var(--columns), minmax(0, 2.1em));
+    grid-template-columns: 4.6em repeat(var(--columns), var(--cell));
     gap: 2px;
+    width: max-content;
+  }
+
+  .grid-head {
+    position: sticky;
+    /* Up to the panel's edge (its padding), so nothing shows over it. */
+    top: -8px;
+    z-index: 2;
     margin-top: 4px;
+    padding-top: 2px;
+    overflow: hidden;
+    background: rgb(20 20 24);
+  }
+
+  .grid-scroll {
+    padding-top: 2px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 0.25) transparent;
+    touch-action: pan-x pan-y;
+  }
+
+  .corner {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: rgb(20 20 24);
   }
 
   .aspect {
@@ -1884,12 +1966,17 @@
     white-space: nowrap;
   }
 
+  /* A signal's name, kept at the grid's left over the cells scrolled under it. */
   .signal {
-    position: relative;
-    align-self: center;
-    padding: 0 4px 3px 0;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    padding-right: 4px;
     overflow: hidden;
+    background: rgb(20 20 24);
+    box-shadow: 4px 0 6px -4px rgb(0 0 0 / 0.7);
     font-size: 0.8rem;
+    line-height: 28px;
     white-space: nowrap;
     text-overflow: ellipsis;
   }
@@ -1978,15 +2065,13 @@
     outline-offset: -1px;
   }
 
-  /* Too narrow for the amounts: their colour alone. */
-  @container (max-width: 420px) {
-    .cell span {
-      display: none;
-    }
-  }
-
+  /* The bands' chips: as wide as the grid shows, kept in sight as it scrolls. */
   .bands {
+    position: sticky;
+    left: 0;
     grid-column: 1 / -1;
+    justify-self: start;
+    box-sizing: border-box;
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
