@@ -1,9 +1,18 @@
 // A new Cratarr goes live while a page is open: the page still runs the code it loaded (the tablet's page ran preview 45
 // an hour after 47 was live, 2026-10-17). It looks now and then whether the build it runs is still the one served, and
-// when it is not, reloads itself at a moment nothing is lost: nothing playing in this page, nothing being typed.
+// when it is not, reloads itself at a moment nothing is lost.
+//
+// In the app the music is not the page's: the app's own player plays it and goes on through a reload, so music playing
+// does not hold the reload there (it did, and the salon tablet, playing all day, ran 63's page under 64 until it was
+// reloaded by hand: its visuals were not shared, 2026-10-18). In a browser the page plays the music itself, so there it
+// waits until the music is paused. Either way it waits while something is being typed, for half a minute after a touch
+// or a key, and while the rating page runs; the visuals, where they are open, open again after it.
 
+import { inApp } from './app.svelte';
 import { local } from './localPlayer.svelte';
 import { playsHere } from './output.svelte';
+import { REOPEN, visuals } from './visuals/shown.svelte';
+import { rating } from './visuals/trial.svelte';
 
 /** This page's build: its script's name (`index-<hash>.js`); none in development. */
 const own =
@@ -13,36 +22,64 @@ const own =
 
 /** How often it looks, at most. */
 const EVERY = 5 * 60_000;
+/** How long after a touch or a key it leaves the page alone (s). */
+const IDLE_S = 30;
+/** The build this tab last reloaded for (sessionStorage): reloaded once for a build, not again if it still is not it. */
+const TRIED = 'cratarr-update-tried';
+
 let looked = 0;
-let stale = false;
+let served: string | null = null;
+let touched = 0;
 
 async function look(now = false) {
-  if (!own || stale || (!now && Date.now() - looked < EVERY)) return;
+  if (!own || (!now && Date.now() - looked < EVERY)) return;
   looked = Date.now();
   try {
     const page = await (await fetch('/', { cache: 'no-store' })).text();
-    const served = page.match(/assets\/(index-[\w-]+\.js)/)?.[1];
-    if (served && served !== own) stale = true;
+    served = page.match(/assets\/(index-[\w-]+\.js)/)?.[1] ?? null;
   } catch {
     // Out of reach: the next look.
   }
 }
 
-/** Nothing would be lost: no music playing in this page, no field being typed in. */
+const session = {
+  get: (k: string) => {
+    try {
+      return sessionStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  },
+  set: (k: string, v: string) => {
+    try {
+      sessionStorage.setItem(k, v);
+    } catch {
+      /* not kept: the visuals stay closed after it */
+    }
+  },
+};
+
+/** Nothing would be lost: no music this page plays itself, nothing typed, nobody at it, no rating running. */
 function quiet() {
-  if (playsHere() && local.index >= 0 && !local.paused) return false;
+  if (!inApp && playsHere() && local.index >= 0 && !local.paused) return false;
+  if (Date.now() - touched < IDLE_S * 1000) return false;
+  if (rating.run) return false;
   const a = document.activeElement;
   return !(a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a instanceof HTMLElement && a.isContentEditable));
 }
 
 async function tick(now = false) {
   await look(now);
-  if (stale && quiet()) location.reload();
+  if (!served || served === own || session.get(TRIED) === served || !quiet()) return;
+  session.set(TRIED, served);
+  if (visuals.open) session.set(REOPEN, '1');
+  location.reload();
 }
 
 /** Starts looking (main.ts): every minute, and at once when the page comes back into view or online. */
 export function watchForUpdates() {
   if (!own) return;
+  for (const kind of ['pointerdown', 'keydown', 'wheel'] as const) addEventListener(kind, () => (touched = Date.now()), { capture: true, passive: true });
   setInterval(() => void tick(), 60_000);
   document.addEventListener('visibilitychange', () => void tick(document.visibilityState === 'visible'));
   addEventListener('online', () => void tick(true));

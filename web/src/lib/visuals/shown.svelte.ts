@@ -12,7 +12,19 @@ const keptSide = () => {
   }
 };
 
-export const visuals = $state({ open: false, side: keptSide() });
+/** The visuals open as the page reloaded for a new build (update.svelte.ts, sessionStorage): they open again. */
+export const REOPEN = 'cratarr-visuals-reopen';
+const reopened = (() => {
+  try {
+    const open = sessionStorage.getItem(REOPEN) === '1';
+    sessionStorage.removeItem(REOPEN);
+    return open;
+  } catch {
+    return false;
+  }
+})();
+
+export const visuals = $state({ open: reopened, side: keptSide() });
 
 /** The visuals beside the page (true) or over it. */
 export function setVisualsSide(side: boolean) {
