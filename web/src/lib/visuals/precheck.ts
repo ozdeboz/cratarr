@@ -6,14 +6,15 @@
 //
 // Done in slices (`prechecking`), so a slow tablet keeps its frames: a step is a few hundredths of a millisecond.
 
-import { newAspects, stepAspects } from './aspects';
+import { newAspects, stepAspects, wavesMotion } from './aspects';
 import type { Beats } from './beats';
 import { BUDGETED, budgetOf } from './budget';
-import { settingsReport } from './effects';
+import { settingsReport, type Report } from './effects';
 import { flameOf, PRESET_KEYS } from './flame';
 import { Meters, screenTile, type MeterValues } from './meters';
 import { musicOf, newMusicState } from './music.svelte';
 import { settingsOf, type Recipe, type Scope } from './recipe';
+import { A } from './routes';
 import { FLUID_FULL, type VisualSettings } from './settings.svelte';
 import type { Signals } from './signals';
 import { DIVE_MOST, diveTurnOf } from './zoom';
@@ -74,6 +75,9 @@ function diveTurnPerRate(settings: VisualSettings): number {
   return turn;
 }
 
+/** A report with `motion` more (a second). */
+const withMotion = (r: Report, motion: number): Report => (motion > 0 ? { ...r, motion: (r.motion ?? 0) + motion } : r);
+
 /** The run, a slice at a time; its value the verdict. */
 export function* prechecking(
   recipe: Recipe,
@@ -115,8 +119,9 @@ export function* prechecking(
       look: null,
       symmetry: a.moments.symmetry,
       tiles: [screenTile(k * dt, luminance)],
-      // What the look's effects add, as the visuals' meters take it (65): so a recipe's effects are held to the limits.
-      extra: settingsReport(settings, a.effects),
+      // What the look's effects add, and the waves where nothing flows, as the visuals' meters take them (65): so a
+      // recipe's effects and waves are held to the limits.
+      extra: withMotion(settingsReport(settings, a.effects), wavesMotion(a.given[A.waves], a.fluid)),
     });
     if (k * dt < SETTLE_S) continue;
     // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the governor holds

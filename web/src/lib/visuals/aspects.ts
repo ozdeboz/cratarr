@@ -3,6 +3,7 @@
 // behaviour's precheck (recipe.ts) steps it over a track's signals to see what a recipe would do before it is shown.
 
 import { PARTS, type Part } from './flame';
+import { WAVE_BEND } from './fluid';
 import type { Levers } from './governor';
 import type { Music } from './music.svelte';
 import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from './routes';
@@ -13,6 +14,12 @@ import { BANDS, type VisualSettings } from './settings.svelte';
 const SCALED = (Object.entries(COLUMN_SCALES) as [keyof typeof COLUMN_SCALES, (typeof COLUMN_SCALES)[keyof typeof COLUMN_SCALES]][])
   .filter(([a]) => a !== 'stir' && a !== 'flow' && a !== 'swirl')
   .map(([a, k]) => [A[a], k] as const);
+
+/** How fast the slow giant waves move the picture where nothing flows (the show pass bends it by `WAVE_BEND` of the
+ *  screen's height, once round their cycle in eight seconds: stirring.ts), as a turn a second of the flame's parts
+ *  (whose points lie about 0.4 of the screen's height out): what the motion meter counts for them. Where the fluid
+ *  flows they are part of its flow, which the meters do not see (the governor's pace slows it all the same). */
+export const wavesMotion = (amount: number, fluid: number) => (fluid > 0 ? 0 : (WAVE_BEND * Math.abs(amount) * ((2 * Math.PI) / 8)) / 0.4);
 
 /** Nothing held back (the governor's levers all open). */
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
@@ -261,9 +268,10 @@ export function stepAspects(
     const grown = clamp(shape, 0, 1.25);
     shapes.push(grown);
     // Presence: its share of the points, doubling and a half at all of it given (a route's full amount), as drawn at
-    // none, about a third at all of it taken away; followed over 0.1 s as it comes, 0.4 s as it goes.
+    // none, about a third at all of it taken away; followed over 0.1 s as it comes, 0.4 s as it goes, slower as the
+    // governor holds shape churn back (the points moving between the parts count as it: meters.ts).
     const wantP = clamp(W[A.presence] + own[A.presence], -2, 2);
-    st.presence[i] += (wantP - st.presence[i]) * Math.min(1, dt / (wantP > st.presence[i] ? 0.1 : 0.4));
+    st.presence[i] += (wantP - st.presence[i]) * Math.min(1, dt / ((wantP > st.presence[i] ? 0.1 : 0.4) * L.evolution));
     parts.push({
       turn: st.turned[i],
       size: 0.94 + 0.12 * grown,
