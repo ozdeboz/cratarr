@@ -7,6 +7,7 @@ import { local, jump as localJump, next as localNext, previous as localPrevious,
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { toast } from './toast.svelte';
+import { playOn } from './playOn.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
 export const playing = () => (isLocal() ? localNowPlaying() : (live.view?.now_playing ?? null));
@@ -185,7 +186,8 @@ export async function playUpcoming(i: number) {
 export const seekTo = (secs: number) => isLocal() && localSeek(secs);
 
 /** Moves what plays `secs` on (back, below 0): the local player at once, within its track; one of Cratarr's players
- *  through the server, which moves it from where it is (and keeps it within its track). */
+ *  through the server, which moves it from where it is (and keeps it within its track). Others (a Jellyfin client's
+ *  report names a player Play On does not know) are not moved. */
 export async function seekBy(secs: number) {
   if (isLocal()) {
     const end = duration();
@@ -193,7 +195,7 @@ export async function seekBy(secs: number) {
     return;
   }
   const np = playing();
-  if (!np?.player) return;
+  if (!np?.player || !playOn.players.some((p) => p.name === np.player)) return;
   try {
     await playerCommand(np.player, { command: 'seek', by_ms: Math.round(secs * 1000) });
     setTimeout(refresh, 700); // the player reports back within a moment
