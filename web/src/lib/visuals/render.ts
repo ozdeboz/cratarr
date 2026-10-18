@@ -13,6 +13,7 @@
 import { MARK, colourOf, PARTS, type Flame } from './flame';
 import { Fluid, gridFor, WAVE_BEND, WAVE_K, type Flow, type Force } from './fluid';
 import { diveCamera, diveFit, diveTarget, type DiveFit } from './zoom';
+import { loopFunction, MOST_PICTURE, pictureShader } from './effects';
 import { FlashMeter } from './flashmeter';
 import type { Tiles } from './meters';
 
@@ -330,7 +331,7 @@ layout(location = 2) out vec4 bandB;
 void main() { o = vec4(0.0, 0.0, 0.0, uKeep); bandA = o; bandB = o; }`;
 
 // The tunnel (zoom.ts), where nothing flows: the light kept, read nearer the middle (drawn larger), in place of the fade.
-const TUNNEL = `#version 300 es
+const tunnelSource = (loop: string) => `#version 300 es
 precision highp float;
 uniform sampler2D uAcc;
 uniform sampler2D uBandsA;
@@ -338,17 +339,32 @@ uniform sampler2D uBandsB;
 uniform vec2 uSize;
 uniform float uZoom;
 uniform float uKeep;
+uniform float uLoopA;
+uniform float uLoopT;
 layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 bandA;
 layout(location = 2) out vec4 bandB;
 bool bad(float x) { return (floatBitsToUint(x) & 0x7f800000u) == 0x7f800000u; }
 vec4 kept(vec4 v) { return bad(dot(v, vec4(1.0))) ? vec4(0.0) : v * uKeep; }
+${loop}
 void main() {
   vec2 at = 0.5 + (gl_FragCoord.xy / uSize - 0.5) * uZoom;
+  at = fx_loop(at, uLoopA, uLoopT, uSize.x / uSize.y);
   o = kept(textureLod(uAcc, at, 0.0));
   bandA = kept(textureLod(uBandsA, at, 0.0));
   bandB = kept(textureLod(uBandsB, at, 0.0));
 }`;
+
+/** The effects stage's targets: the two finished pictures and the picture (2), the buffer's size. */
+type FxTargets = { tex: WebGLTexture[]; fbo: WebGLFramebuffer[]; w: number; h: number; cur: number; last: number };
+
+// The picture slot's copy onto the screen: the finished picture (the buffer's size), scaled up as the show pass was.
+const COPY = `#version 300 es
+precision mediump float;
+uniform sampler2D uOut;
+uniform vec2 uView;
+out vec4 o;
+void main() { o = vec4(textureLod(uOut, gl_FragCoord.xy / uView, 0.0).rgb, 1.0); }`;
 
 // Not a number, or infinite, from the bits (see ITERATE's).
 // A value not a number is nothing; an infinite one, the most a 16-bit float holds short of infinity (by its sign: a
@@ -555,6 +571,9 @@ export type Shown = {
    *  along by the fluid (fluid.ts), pushed by `forces` and moving as `flow` says, `dt` seconds a frame, and the picture
    *  is read back along the flow by `warp` seconds of it. */
   fluid: number;
+  /** The effects (effects.ts): the picture's chain (its ids and amounts by place, each times the Effects level), the
+   *  loop's effect and amount, and the track's own time they move with. None: as before. */
+  effects?: { ids: number[]; amounts: number[]; loop: number; loopAmount: number; t: number };
   /** The infinite zooms (zoom.ts): how fast, each its log a second (0: off). */
   tunnel: number;
   dive: number;
@@ -583,7 +602,13 @@ export class FlameRenderer {
   private fbos: WebGLFramebuffer[] = [];
   private cur = 0;
   private scrubbing: WebGLProgram;
-  private tunneling: WebGLProgram;
+  /** The carry pass (the tunnel, the loop slot) by its loop effect's id (0: none). */
+  private carrying2 = new Map<number, WebGLProgram>();
+  /** The effects stage: its programs by chain, its targets (the picture and the last two finished, the buffer's size,
+   *  made when a chain first asks, let go of ten seconds after the last), and the copy onto the screen. */
+  private fxPrograms = new Map<string, WebGLProgram | null>();
+  private fx: FxTargets | null = null;
+  private copying: WebGLProgram;
   /** The dive now (zoom.ts): its part and that part's fit, how far into the loop, when the fit was made and for which
    *  flame's parts. */
   private dive: { j: number; fit: DiveFit; t: number; at: number; parts: number } | null = null;
@@ -662,7 +687,7 @@ export class FlameRenderer {
     this.fade = program(gl, FULL, FADE);
     this.show = program(gl, FULL, SHOW);
     this.scrubbing = program(gl, FULL, SCRUB);
-    this.tunneling = program(gl, FULL, TUNNEL);
+    this.copying = program(gl, FULL, COPY);
     this.finding = program(gl, FULL, FIND);
     this.carrying = program(gl, FULL, CARRY);
     this.empty = gl.createVertexArray()!;
@@ -998,6 +1023,7 @@ export class FlameRenderer {
 
   /** One frame: the old picture fades by `look.keep`, `passes` more steps of every point fall into it, and it shows. */
   frame(passes: number, look: Shown, viewWidth: number, viewHeight: number) {
+    const [screenWidth, screenHeight] = [viewWidth, viewHeight];
     const gl = this.gl;
     const flame = this.flame;
     if (!flame || !this.acc || !this.accFbo) return;
@@ -1018,18 +1044,21 @@ export class FlameRenderer {
     this.warpShown = follow(this.warpShown, Math.max(0, look.warp));
     if (this.fluidShown < FLUID_LEAST && look.fluid < FLUID_LEAST) this.fluidShown = this.warpShown = 0;
     const fluid = this.fluidFor(this.fluidShown);
+    // The loop slot's effect, where there is one.
+    const fxl = look.effects;
+    const loop = fxl && fxl.loop && fxl.loopAmount > 0 ? { id: fxl.loop, amount: fxl.loopAmount, t: fxl.t } : null;
     if (fluid) {
       fluid.push(look.forces);
       fluid.step(look.dt, look.flow);
       const other = 1 - this.cur;
-      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since));
+      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id), amount: loop.amount, t: loop.t } : undefined);
       this.cur = other;
       this.use();
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
       gl.viewport(0, 0, this.width, this.height);
       gl.enable(gl.BLEND);
-    } else if (look.tunnel > 0) {
-      this.tunnel(look.keep, this.tunnelZoom(look.tunnel, since));
+    } else if (look.tunnel > 0 || loop) {
+      this.tunnel(look.keep, this.tunnelZoom(look.tunnel, since), loop);
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
       gl.viewport(0, 0, this.width, this.height);
       gl.enable(gl.BLEND);
@@ -1087,8 +1116,12 @@ export class FlameRenderer {
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
 
-    // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2.
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where a
+    // chain of effects is set, into the picture at the buffer's size, for the chain's pass to finish.
+    const chain = this.chainFor(look.effects);
+    const into = chain ? this.fxTargets() : null;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
+    if (into) viewWidth = this.width, viewHeight = this.height;
     gl.viewport(0, 0, viewWidth, viewHeight);
     gl.useProgram(this.show);
     gl.activeTexture(gl.TEXTURE0);
@@ -1141,6 +1174,8 @@ export class FlameRenderer {
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
+    if (chain && into) this.finish(chain, look.effects!, into, screenWidth, screenHeight);
+    else if (this.fx && performance.now() - this.fx.last > 10_000) this.freeFx();
   }
 
   /** The fluid, where the Fluid setting asks for one (`amount` over 0) and this device can make it; let go after ten
@@ -1165,6 +1200,101 @@ export class FlameRenderer {
     return this.meter?.poll() ?? [];
   }
 
+  /** The picture chain's program for these effects, or null where none would show (none set, all at nothing, or one
+   *  that would not compile here: then the stage stands aside for good for that chain). */
+  private chainFor(fx: Shown['effects']): WebGLProgram | null {
+    if (!fx || !fx.amounts.some((a, k) => a > 0 && fx.ids[k])) return null;
+    const ids = fx.ids.slice(0, MOST_PICTURE);
+    const key = ids.join(',');
+    if (!this.fxPrograms.has(key)) {
+      const source = pictureShader(ids);
+      let p: WebGLProgram | null = null;
+      try {
+        p = source ? program(this.gl, FULL, source) : null;
+      } catch (e) {
+        console.warn('Visuals: an effects chain did not compile here', ids, e);
+      }
+      this.fxPrograms.set(key, p);
+    }
+    return this.fxPrograms.get(key) ?? null;
+  }
+
+  /** The stage's targets at the buffer's size: two finished pictures (one written, one the last) and the picture. */
+  private fxTargets() {
+    const gl = this.gl;
+    if (this.fx && (this.fx.w !== this.width || this.fx.h !== this.height)) this.freeFx();
+    if (!this.fx) {
+      const tex: WebGLTexture[] = [];
+      const fbo: WebGLFramebuffer[] = [];
+      for (let i = 0; i < 3; i++) {
+        const t = gl.createTexture()!;
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.width, this.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        const f = gl.createFramebuffer()!;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+        tex.push(t);
+        fbo.push(f);
+      }
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      this.fx = { tex, fbo, w: this.width, h: this.height, cur: 0, last: 0 };
+    }
+    this.fx.last = performance.now();
+    return this.fx;
+  }
+
+  private freeFx() {
+    const gl = this.gl;
+    if (!this.fx) return;
+    for (const t of this.fx.tex) gl.deleteTexture(t);
+    for (const f of this.fx.fbo) gl.deleteFramebuffer(f);
+    this.fx = null;
+  }
+
+  /** The picture slot after the show pass: the chain's pass from the picture (and the last finished one, for echoes,
+   *  and the flow, for what modulates by it) into the next finished one, then that one onto the screen. */
+  private finish(p: WebGLProgram, fx: NonNullable<Shown['effects']>, into: FxTargets, screenWidth: number, screenHeight: number) {
+    const gl = this.gl;
+    const next = 1 - into.cur;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, into.fbo[next]);
+    gl.viewport(0, 0, into.w, into.h);
+    gl.useProgram(p);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, into.tex[2]);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, into.tex[into.cur]);
+    const fluid = this.fluid;
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, fluid ? fluid.velocity : null);
+    gl.activeTexture(gl.TEXTURE0);
+    const u = (n: string) => gl.getUniformLocation(p, n);
+    gl.uniform1i(u('uPicture'), 0);
+    gl.uniform1i(u('uPrev'), 1);
+    gl.uniform1i(u('uFlow'), 2);
+    gl.uniform2f(u('uFlowScale'), fluid ? fluid.uvPerCell[0] : 0, fluid ? fluid.uvPerCell[1] : 0);
+    gl.uniform2f(u('uView'), into.w, into.h);
+    gl.uniform1f(u('uAspect'), into.w / into.h);
+    gl.uniform1fv(u('uFxA'), Float32Array.from({ length: MOST_PICTURE }, (_, k) => fx.amounts[k] ?? 0));
+    gl.uniform1f(u('uFxT'), fx.t);
+    gl.bindVertexArray(this.empty);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    into.cur = next;
+    // Onto the screen, scaled up.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, screenWidth, screenHeight);
+    gl.useProgram(this.copying);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, into.tex[next]);
+    gl.uniform1i(gl.getUniformLocation(this.copying, 'uOut'), 0);
+    gl.uniform2f(gl.getUniformLocation(this.copying, 'uView'), screenWidth, screenHeight);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+  }
+
   /** The tunnel's factor this frame at `rate`: read this much nearer the middle (under 1: drawn larger). */
   private tunnelZoom(rate: number, since: number) {
     return rate > 0 ? Math.exp(-rate * since) : 1;
@@ -1172,7 +1302,7 @@ export class FlameRenderer {
 
   /** The tunnel's pass where nothing flows: the buffers copied into the other set, read `zoom` nearer the middle and
    *  kept as the fade keeps them. */
-  private tunnel(keep: number, zoom: number) {
+  private tunnel(keep: number, zoom: number, loop: { id: number; amount: number; t: number } | null = null) {
     const gl = this.gl;
     const other = 1 - this.cur;
     gl.disable(gl.BLEND);
@@ -1185,8 +1315,12 @@ export class FlameRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.bandSets[this.cur]);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.bandSetsB[this.cur]);
-    const p = this.tunneling;
+    const id = loop?.id ?? 0;
+    let p = this.carrying2.get(id);
+    if (!p) this.carrying2.set(id, (p = program(gl, FULL, tunnelSource(loopFunction(id)))));
     gl.useProgram(p);
+    gl.uniform1f(gl.getUniformLocation(p, 'uLoopA'), loop?.amount ?? 0);
+    gl.uniform1f(gl.getUniformLocation(p, 'uLoopT'), loop?.t ?? 0);
     gl.uniform1i(gl.getUniformLocation(p, 'uAcc'), 0);
     gl.uniform1i(gl.getUniformLocation(p, 'uBandsA'), 1);
     gl.uniform1i(gl.getUniformLocation(p, 'uBandsB'), 2);

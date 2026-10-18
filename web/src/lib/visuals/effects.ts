@@ -91,7 +91,13 @@ export function reportOf(ids: readonly number[], amounts: readonly number[], slo
   return out;
 }
 
-const COMMON = `vec3 fx_prev(sampler2D s, vec2 q) { return textureLod(s, vec2(q.x / uAspect, q.y) * 0.5 + 0.5, 0.0).rgb; }`;
+const COMMON = `vec3 fx_prev(sampler2D s, vec2 q) { return textureLod(s, vec2(q.x / uAspect, q.y) * 0.5 + 0.5, 0.0).rgb; }
+// The fluid's flow where p is (p's units a second); none where nothing flows.
+vec2 fx_flow(vec2 p) {
+  if (uFlowScale.x == 0.0) return vec2(0.0);
+  vec2 v = textureLod(uFlow, vec2(p.x / uAspect, p.y) * 0.5 + 0.5, 0.0).xy * uFlowScale;
+  return v * 2.0 * vec2(uAspect, 1.0);
+}`;
 
 /** The picture slot's fragment shader for a chain (its ids by place, as \`uFxA\`'s), or null where nothing is in it:
  *  the picture (\`uPicture\`) read where its shapes say, then its colours and echoes (\`uPrev\`: the last finished one). */
@@ -113,6 +119,8 @@ uniform vec2 uView;
 uniform float uAspect;
 uniform float uFxA[${MOST_PICTURE}];
 uniform float uFxT;
+uniform sampler2D uFlow;
+uniform vec2 uFlowScale;
 out vec4 o;
 ${COMMON}
 ${once}
