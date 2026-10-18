@@ -29,6 +29,7 @@
     onback = null,
     step = 'menu',
     top = false,
+    over = false,
     children,
   }: {
     label: string;
@@ -49,6 +50,8 @@
     step?: string;
     /** From the top of the window, not the bottom: a sheet to type in (a name), which the keyboard would cover. */
     top?: boolean;
+    /** Over the full-screen visuals (lib/visuals), which lie over everything else. */
+    over?: boolean;
     children: Snippet;
   } = $props();
 
@@ -125,6 +128,7 @@
 <div
   class="backdrop"
   class:sided={side !== null}
+  style:z-index={over ? 2010 : null}
   role="presentation"
   onpointerdown={() => (pressedHere = true)}
   onclick={() => pressedHere && onclose()}
@@ -134,6 +138,7 @@
 </div>
 <div
   class="sheet"
+  style:z-index={over ? 2011 : null}
   role="dialog"
   aria-modal="true"
   aria-label={label}

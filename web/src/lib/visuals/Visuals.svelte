@@ -13,10 +13,9 @@
   // closes the visuals. The screen stays on while they show, where the browser allows.
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
-  import { coverUrl, deleteVisualsSnapshot, getVisualsSnapshots, renameVisualsSnapshot, saveVisualsSnapshot, type VisualsSnapshot } from '../api';
+  import { coverUrl, type VisualsSnapshot } from '../api';
   import Icon from '../Icon.svelte';
   import { reducedMotion } from '../motion';
-  import { toast } from '../toast.svelte';
   import { player } from '../live.svelte';
   import { panel as sidePanel } from '../panel.svelte';
   import { prefs } from '../prefs.svelte';
@@ -41,10 +40,10 @@
     type Preset,
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
-  import { longPress } from './longPress';
   import { coverPalette, type PaletteColour } from './palette';
   import { setVisualsSide } from './shown.svelte';
-  import { applyShared, followGroup, groupLook, share, SHARED_KEYS, SHARED_V, sharedNow, showing, STANDARD } from './shared.svelte';
+  import { applyDevice, applyShared, followGroup, groupLook, share, SHARED_KEYS, sharedNow, showing, STANDARD } from './shared.svelte';
+  import SnapshotsSheet from './SnapshotsSheet.svelte';
   import { held } from './held.svelte';
   import Help from './Help.svelte';
   import type { Force } from './fluid';
@@ -148,30 +147,45 @@
     showChrome();
   }
 
-  // The saved looks (snapshots: on the server, every device's), newest first: read as the panel opens. Saving takes
-  // everything shared in a sync group, named after the track playing; recalling one puts it back, every look setting
-  // pinned (the next track leaves it), and to the group. One held is renamed or deleted.
-  let snapshots = $state<VisualsSnapshot[]>([]);
-  let editing = $state<string | null>(null);
-  let editName = $state('');
-  function readSnapshots() {
-    getVisualsSnapshots().then(
-      (list) => (snapshots = list),
-      () => {},
-    );
+  // The saved looks (snapshots: on the server, every device's) in their sheet (SnapshotsSheet.svelte), from the
+  // bookmark. Recalling one puts it back, every look setting pinned (the next track leaves it), and to the group;
+  // Standard lets every pin go. A picture for a new one is taken from the canvas in the frame it is drawn (the canvas
+  // keeps nothing after it shows).
+  let snapshotsOpen = $state(false);
+  let pictureWanted: ((url: string | null) => void) | null = null;
+  function capturePicture(): Promise<string | null> {
+    if (unsupported) return Promise.resolve(null);
+    return new Promise((done) => {
+      pictureWanted = done;
+      setTimeout(() => {
+        if (pictureWanted !== done) return;
+        pictureWanted = null;
+        done(null);
+      }, 1000);
+    });
   }
-  async function saveSnapshot() {
-    showChrome();
+  /** The middle of the picture at 16:9, 160 x 90, as a JPEG. */
+  function pictureOf(from: HTMLCanvasElement): string | null {
     try {
-      const made = await saveVisualsSnapshot(np?.name ?? 'Visuals', { ...sharedNow(), v: SHARED_V });
-      snapshots = [made, ...snapshots.filter((x) => x.id !== made.id)];
-    } catch (e) {
-      toast.fail(e, 'Not saved');
+      const out = document.createElement('canvas');
+      out.width = 160;
+      out.height = 90;
+      const ctx = out.getContext('2d');
+      if (!ctx) return null;
+      const r = Math.min(from.width / 16, from.height / 9);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, 160, 90);
+      ctx.drawImage(from, (from.width - 16 * r) / 2, (from.height - 9 * r) / 2, 16 * r, 9 * r, 0, 0, 160, 90);
+      return out.toDataURL('image/jpeg', 0.7);
+    } catch {
+      return null;
     }
   }
   function recall(snap: VisualsSnapshot) {
     const settings: Record<string, unknown> = { ...snap.settings };
     delete settings.v;
+    // This device's own sliders, on this device only.
+    applyDevice(settings);
     // Its routes whole: any route it does not have (one set since, or a default added since) off.
     if (settings.routes && typeof settings.routes === 'object') {
       const off = Object.fromEntries([...Object.keys(DEFAULTS.routes), ...Object.keys(s.routes)].map((k) => [k, 0]));
@@ -191,38 +205,7 @@
     }
     showChrome();
   }
-  function edit(snap: VisualsSnapshot) {
-    editName = snap.name;
-    editing = snap.id;
-    showChrome();
-  }
-  async function rename(snap: VisualsSnapshot) {
-    if (editing !== snap.id) return;
-    editing = null;
-    const name = editName.trim();
-    if (!name || name === snap.name) return;
-    try {
-      const done = await renameVisualsSnapshot(snap.id, name);
-      snapshots = snapshots.map((x) => (x.id === snap.id ? done : x));
-    } catch (e) {
-      toast.fail(e, 'Not renamed');
-    }
-  }
-  async function remove(snap: VisualsSnapshot) {
-    editing = null;
-    try {
-      await deleteVisualsSnapshot(snap.id);
-      snapshots = snapshots.filter((x) => x.id !== snap.id);
-    } catch (e) {
-      toast.fail(e, 'Not deleted');
-    }
-  }
-  const focusNow = (node: HTMLInputElement) => {
-    node.focus();
-    node.select();
-  };
-
-  // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show
+    // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show
   // behaves, then the look (the preset: pinned where moved).
   type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes' | 'pins'>;
   const MIRROR = ['Off', 'On'];
@@ -328,7 +311,6 @@
 
   function togglePanel() {
     panel = !panel;
-    if (panel) readSnapshots();
     showChrome();
   }
 
@@ -880,6 +862,12 @@
         w,
         h,
       );
+      // A picture for a snapshot, while this frame is still in the canvas.
+      if (pictureWanted) {
+        const done = pictureWanted;
+        pictureWanted = null;
+        done(pictureOf(canvas));
+      }
 
       // Adapting, under the Points, Steps and Resolution settings, to hold the FPS setting rather than settle under it.
       // Each second: if more than a fifth of its frames came late for their slot, a step down (steps, then resolution to
@@ -989,6 +977,18 @@
         <button class="round" aria-label="Another look" use:held={'another'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={rollAnother}
           ><Icon name="visuals" size={24} /></button
         >
+        <button
+          class="round"
+          aria-label="Snapshots"
+          aria-haspopup="dialog"
+          use:held={'snapshots'}
+          onpointerdown={(e) => e.stopPropagation()}
+          onpointerup={(e) => e.stopPropagation()}
+          onclick={() => {
+            snapshotsOpen = true;
+            showChrome();
+          }}><Icon name="bookmark" size={24} /></button
+        >
         {#if docked}
           <button class="round" aria-label="Over the page" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => setVisualsSide(false)}
             ><Icon name="expand" size={22} /></button
@@ -1040,36 +1040,6 @@
               {/each}
             </div>
           {/each}
-          <div class="snapshots" role="group" aria-label="Snapshots">
-            <h3 use:held={'snapshots'}>Snapshots</h3>
-            <div class="chips">
-              <button class="chip save" use:held={'snapshots:save'} onclick={saveSnapshot}><Icon name="plus" size={14} /> Save</button>
-              <button class="chip" use:held={'snapshots:standard'} onclick={() => recall(STANDARD as unknown as VisualsSnapshot)}>{STANDARD.name}</button>
-              {#each snapshots as snap (snap.id)}
-                {#if editing === snap.id}
-                  <span class="editing">
-                    <input
-                      class="name"
-                      aria-label="Name"
-                      maxlength="60"
-                      bind:value={editName}
-                      use:focusNow
-                      onkeydown={(e) => {
-                        if (e.key === 'Enter') rename(snap);
-                        else if (e.key === 'Escape') editing = null;
-                      }}
-                      onblur={() => rename(snap)}
-                    />
-                    <button class="delete" aria-label="Delete {snap.name}" onpointerdown={(e) => e.preventDefault()} onclick={() => remove(snap)}
-                      ><Icon name="trash" size={16} /></button
-                    >
-                  </span>
-                {:else}
-                  <button class="chip" use:longPress={() => edit(snap)} onclick={() => recall(snap)}>{snap.name}</button>
-                {/if}
-              {/each}
-            </div>
-          </div>
           <div class="routes" role="group" aria-label="Routes">
             <div class="head">
               <h3 use:held={'routes'}>Routes</h3>
@@ -1179,6 +1149,9 @@
         </div>
       {/if}
     </div>
+  {/if}
+  {#if snapshotsOpen}
+    <SnapshotsSheet onclose={() => (snapshotsOpen = false)} capture={capturePicture} trackName={np?.name ?? null} {recall} over={!docked} />
   {/if}
   <Help />
 </div>
@@ -1342,63 +1315,6 @@
     border: 0;
     background: none;
     color: var(--accent);
-    cursor: pointer;
-  }
-
-  .snapshots {
-    margin-top: 6px;
-    padding-top: 6px;
-    border-top: 1px solid rgb(255 255 255 / 0.12);
-  }
-
-  .snapshots h3 {
-    margin: 2px 0 0;
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: rgb(255 255 255 / 0.6);
-  }
-
-  .chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin: 8px 0 4px;
-  }
-
-  .chip.save {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .editing {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .editing .name {
-    width: 11em;
-    min-height: 30px;
-    padding: 0 10px;
-    border: 1px solid rgb(255 255 255 / 0.5);
-    border-radius: 15px;
-    background: rgb(255 255 255 / 0.08);
-    color: #fff;
-    font: inherit;
-    font-size: 0.8rem;
-  }
-
-  .editing .delete {
-    display: grid;
-    place-items: center;
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    border: 0;
-    border-radius: 15px;
-    background: rgb(232 112 143 / 0.25);
-    color: #fff;
     cursor: pointer;
   }
 

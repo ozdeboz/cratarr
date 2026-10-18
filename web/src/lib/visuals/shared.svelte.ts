@@ -37,8 +37,27 @@ export const SHARED_KEYS = [
   'continuity',
 ] as const satisfies readonly (keyof VisualSettings)[];
 export type Shared = Partial<Record<(typeof SHARED_KEYS)[number] | 'lookFor', unknown>>;
-/** The shared settings' form, kept with a snapshot so a later one can be read: 1 since 2026-10-18. */
-export const SHARED_V = 1;
+/** What each device keeps its own in a group (what it can afford, its room's brightness), but a snapshot keeps too:
+ *  recalled, they come back on the device that recalls it, and are never sent to the group. */
+export const DEVICE_KEYS = ['points', 'steps', 'resolution', 'fps', 'brightness'] as const satisfies readonly (keyof VisualSettings)[];
+/** A snapshot's form, kept with it so a later one can be read: 1, the shared settings (the first ones, from 63); 2,
+ *  every slider (2026-10-18). */
+export const SNAPSHOT_V = 2;
+
+/** Every slider as it is now, for a snapshot. */
+export function snapshotNow(): Record<string, unknown> {
+  return { ...sharedNow(), ...Object.fromEntries(DEVICE_KEYS.map((k) => [k, $state.snapshot(visualSettings[k])])), v: SNAPSHOT_V };
+}
+
+/** A snapshot's own settings of this device into it (only those it has: the first snapshots have none); null for
+ *  Resolution or FPS is this device's default. */
+export function applyDevice(settings: Record<string, unknown>) {
+  const given = Object.fromEntries(DEVICE_KEYS.filter((k) => k in settings).map((k) => [k, settings[k]]));
+  if (!Object.keys(given).length) return;
+  const clean = keptFrom({ ...$state.snapshot(visualSettings), ...given });
+  for (const k of Object.keys(given)) (visualSettings as Record<string, unknown>)[k] = clean[k as keyof VisualSettings];
+  saveVisualSettings();
+}
 
 /** This page, as its changes come back from the server. */
 const writer = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).slice(0, 64);
@@ -188,7 +207,8 @@ async function flush() {
 }
 
 /** The visuals as Cratarr made them on 2026-10-18 (preview 62), kept as data so they can always be brought back, however
- *  the defaults change later: each track's own look (nothing pinned), and everything else as it was then. Listed first
+ *  the defaults change later: each track's own look (nothing pinned), and everything else as it was then (Resolution
+ *  and FPS each device's own default). Listed first
  *  among the saved looks; it cannot be renamed or deleted. A recall puts back its routes whole: any route it does not
  *  have is turned off. */
 export const STANDARD = {
@@ -196,7 +216,12 @@ export const STANDARD = {
   name: 'Standard',
   created: 0,
   settings: {
-    v: 1,
+    v: 2,
+    points: 19,
+    steps: 3,
+    resolution: null,
+    fps: null,
+    brightness: 1,
     pins: [],
     colours: 0,
     intensity: 1,

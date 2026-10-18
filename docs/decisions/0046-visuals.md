@@ -545,3 +545,28 @@ own echo and an older change did not; a change of its own still being sent staye
 the look; a route only itself; out of the group nothing more went; a group's settings were taken on joining; the race
 to make them lost to another device, its settings taken; a snapshot saved, recalled (its look and Flash back, all 13
 look settings pinned, all sent), renamed by a hold, deleted by a right click.
+
+
+## Amendment, 2026-10-18: the saved looks in a gallery, every slider kept
+
+The owner, on 63: four snapshots all named after the track they were saved on ("Kartlav"); they want proper control:
+"one button, a gallery", "when you press the bookmark button, a sheet opens, because that's our standard format of
+display"; and "it should save all of the sliders".
+
+- **The bookmark** (top right, beside the settings and Another look) opens the app's standard sheet (lib/MenuSheet,
+  raised over the full-screen visuals) with a gallery of small pictures: Save first, Standard second, then the saved
+  ones, newest first. The panel's row of them is gone: one place.
+- **Save** keeps every slider and a picture of the visuals as they are (160 x 90, a JPEG of the middle of the canvas,
+  taken in the frame it is drawn: the canvas keeps nothing after it shows; a few kilobytes), named after the track and
+  the time ("Kartlav · 21:04"), the name at once ready to change. A tap brings one back; held, it is renamed or deleted.
+- **Every slider:** besides those shared in a sync group, a snapshot keeps the five each device keeps its own (Points,
+  Steps, Resolution, FPS, Brightness). Recalled, those come back on the device that recalls it only, never sent to the
+  group. Snapshots carry their form (`v`): 1, the shared settings (63's, which leave the device's own as they are);
+  2, every slider. Standard holds production's for the five, Resolution and FPS each device's own default.
+- The pictures are the server's (claude-5f's): a snapshot's optional `picture`, a JPEG or PNG data URL of at most
+  48 KB, never part of the settings (so never sent to a group).
+
+Measured (the lab page, a stand-in server): the sheet opened over the visuals and read the saved ones; Save sent 32
+settings (v 2) and a 4.8 KB picture as "Lab · 11:45", its name then edited in place; a recall put Flash and Points back,
+Points on this device only (nothing of the five sent to the group); one from 63 left Points as they were; Standard gave
+Points 19, Steps 3, Resolution and FPS the device's own, Brightness 100 %, nothing pinned; held, one was deleted.
