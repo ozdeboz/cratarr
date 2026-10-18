@@ -180,7 +180,8 @@ uniform float uDt;
 uniform float uKeep;
 uniform float uZoom;
 uniform float uLoopA;
-uniform float uLoopT;
+uniform vec4 uLoopTime;
+uniform float uLoopFrames;
 uniform float uLoopAspect;
 uniform vec2 uLoopK;
 uniform float uFacets;
@@ -216,7 +217,7 @@ vec2 facet(vec2 uv) {
 void main() {
   // The tunnel (zoom.ts): read nearer the middle, so what was drawn is drawn larger.
   vec2 at = 0.5 + (vUv - 0.5) * uZoom;
-  at = fx_loop(at, uLoopA, uLoopT, uLoopAspect, uLoopK);
+  at = fx_loop(at, uLoopA, uLoopTime, uLoopFrames, uLoopAspect, uLoopK);
   vec2 back = facet(at - uDt * texture(uVelocity, at).xy * uCell);
   o = kept(textureLod(uAcc, back, 0.0));
   bandA = kept(textureLod(uBandsA, back, 0.0));
@@ -232,9 +233,10 @@ export const FLOW_IN_LIGHT = `vec2 fx_flow(vec2 p) {
   return textureLod(uVelocity, uv, 0.0).xy * uCell * 2.0 * vec2(uLoopAspect, 1.0);
 }`;
 
-/** The loop slot's shape for the light pass (effects.ts): its program's key and GLSL, its amount, the track's time. */
-export type Loop = { key: string; glsl: string; amount: number; t: number; knobs?: readonly [number, number] };
-const NO_LOOP = `vec2 fx_loop(vec2 uv, float a, float t, float aspect, vec2 k) { return uv; }`;
+/** The loop slot's shape for the light pass (effects.ts `loopFunction`): its program's key and GLSL, its amount, its
+ *  own time and what that moved this frame, this frame's length in sixtieths of a second, its knobs. */
+export type Loop = { key: string; glsl: string; amount: number; time: readonly [number, number, number, number]; frames: number; knobs?: readonly [number, number] };
+const NO_LOOP = `vec2 fx_loop(vec2 uv, float a, vec4 time, float frames, float aspect, vec2 k) { return uv; }`;
 
 /** The fluid's grid for a buffer of `width` x `height`: about `cells` cells, as the buffer is shaped. */
 export function gridFor(width: number, height: number, cells = 96 * 54): [number, number] {
@@ -381,7 +383,8 @@ export class Fluid {
     gl.uniform1f(u('uKeep'), keep);
     gl.uniform1f(u('uZoom'), zoom);
     gl.uniform1f(u('uLoopA'), loop?.amount ?? 0);
-    gl.uniform1f(u('uLoopT'), loop?.t ?? 0);
+    gl.uniform4f(u('uLoopTime'), ...(loop?.time ?? ([0, 0, 0, 0] as const)));
+    gl.uniform1f(u('uLoopFrames'), loop?.frames ?? 1);
     gl.uniform1f(u('uLoopAspect'), width / height);
     gl.uniform2f(u('uLoopK'), loop?.knobs?.[0] ?? 0.5, loop?.knobs?.[1] ?? 0.5);
     gl.uniform1f(u('uFacets'), facets?.amount ?? 0);

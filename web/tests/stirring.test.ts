@@ -102,7 +102,8 @@ test('the waves: as high as the Waves column gives, rolling with the track’s o
   assert.equal(stir(newStirring(), i).flow.wave, undefined, 'no Waves column: no waves');
   const a = stir(newStirring(), { ...i, waves: 0.5, position: 30 }).flow.wave!;
   assert.equal(a.amount, 0.5);
-  assert.ok(close(a.phase, (30 * 2 * Math.PI) / 8) && close(a.angle, (30 * 2 * Math.PI) / 120), 'phase and way from the track’s time');
+  // (each kept within a turn: 30 s is three and three quarter waves, a quarter of the way's turn)
+  assert.ok(close(a.phase, 0.75 * 2 * Math.PI) && close(a.angle, 0.25 * 2 * Math.PI), 'phase and way from the track’s time');
   // Two devices at the same place in the track wave alike, whatever their own clocks.
   const b = stir(newStirring(), { ...i, t: i.t + 1234, waves: 0.5, position: 30 }).flow.wave!;
   assert.deepEqual(a, b);

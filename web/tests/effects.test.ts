@@ -8,7 +8,7 @@ test('every effect is one function of its kind, named after it, and its id is it
   for (const e of EFFECTS) {
     assert.ok(!ids.has(e.id), `id ${e.id} once`);
     ids.add(e.id);
-    const head = { shape: `vec2 fx_${e.name}(vec2 p, float a, float t, vec2 k)`, colour: `vec3 fx_${e.name}(vec3 c, vec2 p, float a, float t, vec2 k)`, echo: `vec3 fx_${e.name}(vec3 c, vec2 p, float a, float t, vec2 k, sampler2D prev)` }[e.kind];
+    const head = { shape: `vec2 fx_${e.name}(vec2 p, float a, vec2 t, vec2 k)`, colour: `vec3 fx_${e.name}(vec3 c, vec2 p, float a, vec2 t, vec2 k)`, echo: `vec3 fx_${e.name}(vec3 c, vec2 p, float a, vec2 t, vec2 k, sampler2D prev)` }[e.kind];
     assert.ok(e.glsl.includes(head), `${e.name}: ${head}`);
     assert.ok(!/\bdiscard\b/.test(e.glsl) && !/\btexture\(/.test(e.glsl), `${e.name}: no discard, no implicit-LOD reads`);
     if (e.slots.includes('loop')) assert.equal(e.kind, 'shape', `${e.name}: the loop takes shapes only`);
@@ -20,14 +20,14 @@ test('a chain: shapes before the read, colours after, each by its place; nothing
   assert.equal(pictureShader([999]), null, 'an effect not known shows nothing');
   const s = pictureShader([2, 1, 0])!;
   const read = s.indexOf('vec3 c = textureLod(uPicture');
-  assert.ok(s.indexOf('p = fx_kaleid(p, uFxA[1], uFxT, uFxK[1]);') < read, 'the shape first, by its place');
-  assert.ok(s.indexOf('c = fx_posterize(c, p, uFxA[0], uFxT, uFxK[0]);') > read, 'the colour after');
+  assert.ok(s.indexOf('p = fx_kaleid(p, uFxA[1], uFxT[1], uFxK[1]);') < read, 'the shape first, by its place');
+  assert.ok(s.indexOf('c = fx_posterize(c, p, uFxA[0], uFxT[0], uFxK[0]);') > read, 'the colour after');
   assert.equal(s.split('vec2 fx_kaleid(').length, 2, 'each function once');
   assert.deepEqual(chainOf([1, 2, 999], 'loop').map((e) => e.name), ['kaleid'], 'a colour and one not known: not for the loop');
 });
 
 test('the loop: a shape on the buffer’s coordinates, else the identity; reports add up by amount', () => {
-  assert.ok(loopFunction(1).includes('p = fx_kaleid(p, a, t, k);'));
+  assert.ok(loopFunction(1).includes('p = fx_kaleid(p, a, time.xy, k);'));
   assert.ok(loopFunction(2).includes('return uv;'), 'a colour is not for the loop');
   // Kaleid at its knobs' middles: no spin, so no motion; its spin knob turned up, as fast as it turns.
   const r = reportOf([1, 1], [0.5, 1], 'picture');
@@ -104,4 +104,50 @@ test('the governor reaches the effects: the swing always, and the lever of each 
   assert.deepEqual(held.amounts.map((a) => +a.toFixed(3)), [0.5, 1, 0], 'Kaleid spinning held by the pace; Pulse not');
   // What they count is counted as held: the governor and the precheck read the same.
   assert.ok(settingsReport(how, 1, { ...open, pace: 0.5 }).motion! < settingsReport(how, 1).motion!);
+});
+
+test('each effect’s own time runs a frame at a time: a change of amount speeds it from where it is, never jumps it', async () => {
+  const { EffectClocks } = await import('../src/lib/visuals/effects.ts');
+  const c = new EffectClocks();
+  // Rotate at full speed, its way left, in the picture's first place and in the loop.
+  const fx = (t: number, a: number, id = 10) => ({ ids: [id, 0, 0], amounts: [a, 0, 0], knobs: [[1, 0] as const], loop: 10, loopAmount: a, loopKnobs: [1, 0] as const, t });
+  for (let i = 0; i <= 60; i++) c.run(fx(100 + i / 60, 1));
+  assert.ok(Math.abs(c.times[0][0] - 0.628318) < 1e-9, `a second's turn: ${c.times[0][0]}`);
+  // Halved late in the track: the next frame turns half as far, from where it was.
+  const was = c.times[0][0];
+  c.run(fx(100 + 61 / 60, 0.5));
+  assert.ok(Math.abs(c.times[0][0] - was - 0.628318 / 120) < 1e-9);
+  assert.ok(Math.abs(c.moved[3][0] - 0.628318 / 120) < 1e-9, 'the loop is given the frame’s step');
+  // Paused, or a seek back (the next track): it rests.
+  c.run(fx(100 + 61 / 60, 0.5));
+  assert.equal(c.moved[0][0], 0);
+  c.run(fx(3, 1));
+  assert.equal(c.moved[0][0], 0);
+  // Round and round: kept within a turn.
+  for (let i = 1; i <= 15 * 60; i++) c.run(fx(3 + i / 60, 1));
+  assert.ok(c.times[0][0] >= 0 && c.times[0][0] < 2 * Math.PI);
+  // At none, Rotate rests where it turned to, and is drawn there; another in its place starts again.
+  c.run(fx(20, 0));
+  assert.ok(c.holding());
+  c.run(fx(20.1, 1, 1));
+  assert.ok(!c.holding());
+});
+
+test('Repeat’s and Scroll’s fold: itself within −1..1, mirrored back beyond (not the mirror negated)', () => {
+  const mod = (x: number, y: number) => x - y * Math.floor(x / y);
+  for (const name of ['repeat', 'scroll']) {
+    const glsl = EFFECTS.find((e) => e.name === name)!.glsl;
+    const head = `float fx_${name}_fold(float x) { return `;
+    const body = glsl.slice(glsl.indexOf(head) + head.length, glsl.indexOf('; }', glsl.indexOf(head)));
+    assert.ok(glsl.includes(head), `${name}: its fold`);
+    const fold = new Function('x', 'abs', 'mod', `return ${body};`) as (x: number, abs: (v: number) => number, m: typeof mod) => number;
+    const at = (x: number) => fold(x, Math.abs, mod);
+    for (const x of [-1, -0.5, 0, 0.3, 1]) assert.ok(Math.abs(at(x) - x) < 1e-12, `${name}: ${x} -> ${at(x)}`);
+    for (const [x, y] of [[1.5, 0.5], [2, 0], [3, -1], [-1.5, -0.5], [5, 1]]) assert.ok(Math.abs(at(x) - y) < 1e-12, `${name}: ${x} -> ${at(x)}`);
+  }
+});
+
+test('pow only of what is positive (of a negative it is undefined: NaN on Mali)', () => {
+  const positive = new Set(['1.0 + 0.06 * k.x * a', '0.75 + 0.2 * a']);
+  for (const e of EFFECTS) for (const m of e.glsl.matchAll(/\bpow\(([^,]+),/g)) assert.ok(positive.has(m[1].trim()), `${e.name}: pow(${m[1]}, …)`);
 });

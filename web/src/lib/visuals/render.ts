@@ -11,9 +11,9 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import { MARK, colourOf, PARTS, type Flame } from './flame';
-import { FLOW_IN_LIGHT, Fluid, gridFor, WAVE_BEND, WAVE_K, type Flow, type Force } from './fluid';
+import { FLOW_IN_LIGHT, Fluid, gridFor, WAVE_BEND, WAVE_K, type Flow, type Force, type Loop } from './fluid';
 import { diveCamera, diveFit, diveTarget, type DiveFit } from './zoom';
-import { loopFunction, MOST_PICTURE, pictureShader } from './effects';
+import { EffectClocks, loopFunction, MOST_PICTURE, pictureShader } from './effects';
 import { FlashMeter } from './flashmeter';
 import type { Tiles } from './meters';
 
@@ -340,7 +340,8 @@ uniform vec2 uSize;
 uniform float uZoom;
 uniform float uKeep;
 uniform float uLoopA;
-uniform float uLoopT;
+uniform vec4 uLoopTime;
+uniform float uLoopFrames;
 uniform vec2 uLoopK;
 layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 bandA;
@@ -350,7 +351,7 @@ vec4 kept(vec4 v) { return bad(dot(v, vec4(1.0))) ? vec4(0.0) : v * uKeep; }
 ${loop}
 void main() {
   vec2 at = 0.5 + (gl_FragCoord.xy / uSize - 0.5) * uZoom;
-  at = fx_loop(at, uLoopA, uLoopT, uSize.x / uSize.y, uLoopK);
+  at = fx_loop(at, uLoopA, uLoopTime, uLoopFrames, uSize.x / uSize.y, uLoopK);
   o = kept(textureLod(uAcc, at, 0.0));
   bandA = kept(textureLod(uBandsA, at, 0.0));
   bandB = kept(textureLod(uBandsB, at, 0.0));
@@ -361,7 +362,7 @@ type FxTargets = { tex: WebGLTexture[]; fbo: WebGLFramebuffer[]; w: number; h: n
 
 // The picture slot's copy onto the screen: the finished picture (the buffer's size), scaled up as the show pass was.
 const COPY = `#version 300 es
-precision mediump float;
+precision highp float;
 uniform sampler2D uOut;
 uniform vec2 uView;
 out vec4 o;
@@ -481,8 +482,8 @@ void main() {
   vec2 px = 1.0 / vec2(textureSize(uAcc, 0));
   vec4 a = at(uv, 0.0);
   // The pixel's points by band: shares of one.
-  vec4 shareA = clamp(clean(texture(uBandsA, uv)) / max(a.a, 1e-6), 0.0, 1.0);
-  vec2 shareB = clamp(clean(texture(uBandsB, uv)).xy / max(a.a, 1e-6), 0.0, 1.0);
+  vec4 shareA = clamp(clean(textureLod(uBandsA, uv, 0.0)) / max(a.a, 1e-6), 0.0, 1.0);
+  vec2 shareB = clamp(clean(textureLod(uBandsB, uv, 0.0)).xy / max(a.a, 1e-6), 0.0, 1.0);
   // Element by element: the Mali-G615's compiler refuses an array constructor here ("no default precision defined for
   // variable 'float[6]'", 2026-10-18), which left that phone without visuals.
   float share[${PARTS}];
@@ -620,6 +621,15 @@ export class FlameRenderer {
    *  made when a chain first asks, let go of ten seconds after the last), and the copy onto the screen. */
   private fxPrograms = new Map<string, WebGLProgram | null>();
   private fx: FxTargets | null = null;
+  /** The effects' own times (effects.ts), and this frame's length in sixtieths of a second (a stall counted as at most
+   *  four, so nothing that feeds back lurches). */
+  private clocks = new EffectClocks();
+  private fxFrames = 1;
+  /** The effects stage's and the carry's uniforms' locations, by program. */
+  private locs = new WeakMap<WebGLProgram, Map<string, WebGLUniformLocation | null>>();
+  /** When an effect's program was last made (`settling`), and the loop effects the fluid's light pass has had. */
+  private madeAt = -Infinity;
+  private lightLoops = new Set<number>();
   private copying: WebGLProgram;
   /** The dive now (zoom.ts): its part and that part's fit, how far into the loop, when the fit was made and for which
    *  flame's parts. */
@@ -721,9 +731,10 @@ export class FlameRenderer {
     this.settleLeft = SETTLE;
   }
 
-  /** Whether points added lately are still settling (the frames meanwhile are not the device's usual pace). */
+  /** Whether points added lately are still settling, or a program was just made (an effect's, as it is first chosen:
+   *  making it makes a frame or two late, some while after): the frames meanwhile are not the device's usual pace. */
   get settling(): boolean {
-    return this.ready < this.count;
+    return this.ready < this.count || performance.now() - this.madeAt < 600;
   }
 
   /** Buffers for `n` points: the ones running kept where they are, the rest new at random. */
@@ -1058,12 +1069,21 @@ export class FlameRenderer {
     const fluid = this.fluidFor(this.fluidShown);
     // The loop slot's effect, where there is one.
     const fxl = look.effects;
-    const loop = fxl && fxl.loop && fxl.loopAmount > 0 ? { id: fxl.loop, amount: fxl.loopAmount, t: fxl.t, knobs: fxl.loopKnobs } : null;
+    this.fxFrames = Math.min(4, since * 60);
+    if (fxl) this.clocks.run(fxl);
+    const loop =
+      fxl && fxl.loop && fxl.loopAmount > 0
+        ? { id: fxl.loop, amount: fxl.loopAmount, time: [...this.clocks.times[3], ...this.clocks.moved[3]] as Loop['time'], frames: this.fxFrames, knobs: fxl.loopKnobs }
+        : null;
     if (fluid) {
+      if (loop && !this.lightLoops.has(loop.id)) {
+        this.lightLoops.add(loop.id);
+        this.madeAt = performance.now();
+      }
       fluid.push(look.forces);
       fluid.step(look.dt, look.flow);
       const other = 1 - this.cur;
-      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id, FLOW_IN_LIGHT), amount: loop.amount, t: loop.t, knobs: loop.knobs } : undefined, look.facets);
+      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id, FLOW_IN_LIGHT), ...loop } : undefined, look.facets);
       this.cur = other;
       this.use();
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
@@ -1215,7 +1235,7 @@ export class FlameRenderer {
   /** The picture chain's program for these effects, or null where none would show (none set, all at nothing, or one
    *  that would not compile here: then the stage stands aside for good for that chain). */
   private chainFor(fx: Shown['effects']): WebGLProgram | null {
-    if (!fx || !fx.amounts.some((a, k) => a > 0 && fx.ids[k])) return null;
+    if (!fx || !(fx.amounts.some((a, k) => a > 0 && fx.ids[k]) || this.clocks.holding())) return null;
     const ids = fx.ids.slice(0, MOST_PICTURE);
     const key = ids.join(',');
     if (!this.fxPrograms.has(key)) {
@@ -1227,6 +1247,7 @@ export class FlameRenderer {
         console.warn('Visuals: an effects chain did not compile here', ids, e);
       }
       this.fxPrograms.set(key, p);
+      this.madeAt = performance.now();
     }
     return this.fxPrograms.get(key) ?? null;
   }
@@ -1284,7 +1305,7 @@ export class FlameRenderer {
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, fluid ? fluid.velocity : null);
     gl.activeTexture(gl.TEXTURE0);
-    const u = (n: string) => gl.getUniformLocation(p, n);
+    const u = (n: string) => this.uniform(p, n);
     gl.uniform1i(u('uPicture'), 0);
     gl.uniform1i(u('uPrev'), 1);
     gl.uniform1i(u('uFlow'), 2);
@@ -1292,7 +1313,8 @@ export class FlameRenderer {
     gl.uniform2f(u('uView'), into.w, into.h);
     gl.uniform1f(u('uAspect'), into.w / into.h);
     gl.uniform1fv(u('uFxA'), Float32Array.from({ length: MOST_PICTURE }, (_, k) => fx.amounts[k] ?? 0));
-    gl.uniform1f(u('uFxT'), fx.t);
+    gl.uniform2fv(u('uFxT'), Float32Array.from({ length: MOST_PICTURE * 2 }, (_, i) => this.clocks.times[i >> 1][i & 1]));
+    gl.uniform1f(u('uFxFrames'), this.fxFrames);
     gl.uniform2fv(u('uFxK'), Float32Array.from({ length: MOST_PICTURE * 2 }, (_, i) => fx.knobs?.[i >> 1]?.[i & 1] ?? 0.5));
     gl.uniform4f(u('uFxBeat'), ...(fx.beat ?? ([0, 1000, 0, 0] as const)));
     gl.bindVertexArray(this.empty);
@@ -1304,8 +1326,8 @@ export class FlameRenderer {
     gl.useProgram(this.copying);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, into.tex[next]);
-    gl.uniform1i(gl.getUniformLocation(this.copying, 'uOut'), 0);
-    gl.uniform2f(gl.getUniformLocation(this.copying, 'uView'), screenWidth, screenHeight);
+    gl.uniform1i(this.uniform(this.copying, 'uOut'), 0);
+    gl.uniform2f(this.uniform(this.copying, 'uView'), screenWidth, screenHeight);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
   }
@@ -1317,7 +1339,7 @@ export class FlameRenderer {
 
   /** The tunnel's pass where nothing flows: the buffers copied into the other set, read `zoom` nearer the middle and
    *  kept as the fade keeps them. */
-  private tunnel(keep: number, zoom: number, loop: { id: number; amount: number; t: number; knobs?: readonly [number, number] } | null = null) {
+  private tunnel(keep: number, zoom: number, loop: { id: number; amount: number; time: Loop['time']; frames: number; knobs?: readonly [number, number] } | null = null) {
     const gl = this.gl;
     const other = 1 - this.cur;
     gl.disable(gl.BLEND);
@@ -1341,17 +1363,20 @@ export class FlameRenderer {
         p = this.carrying2.get(0) ?? program(gl, FULL, tunnelSource(loopFunction(0)));
       }
       this.carrying2.set(id, p);
+      this.madeAt = performance.now();
     }
     gl.useProgram(p);
-    gl.uniform1f(gl.getUniformLocation(p, 'uLoopA'), loop?.amount ?? 0);
-    gl.uniform1f(gl.getUniformLocation(p, 'uLoopT'), loop?.t ?? 0);
-    gl.uniform2f(gl.getUniformLocation(p, 'uLoopK'), loop?.knobs?.[0] ?? 0.5, loop?.knobs?.[1] ?? 0.5);
-    gl.uniform1i(gl.getUniformLocation(p, 'uAcc'), 0);
-    gl.uniform1i(gl.getUniformLocation(p, 'uBandsA'), 1);
-    gl.uniform1i(gl.getUniformLocation(p, 'uBandsB'), 2);
-    gl.uniform2f(gl.getUniformLocation(p, 'uSize'), this.width, this.height);
-    gl.uniform1f(gl.getUniformLocation(p, 'uZoom'), zoom);
-    gl.uniform1f(gl.getUniformLocation(p, 'uKeep'), keep);
+    const u = (n: string) => this.uniform(p!, n);
+    gl.uniform1f(u('uLoopA'), loop?.amount ?? 0);
+    gl.uniform4f(u('uLoopTime'), ...(loop?.time ?? ([0, 0, 0, 0] as const)));
+    gl.uniform1f(u('uLoopFrames'), loop?.frames ?? 1);
+    gl.uniform2f(u('uLoopK'), loop?.knobs?.[0] ?? 0.5, loop?.knobs?.[1] ?? 0.5);
+    gl.uniform1i(u('uAcc'), 0);
+    gl.uniform1i(u('uBandsA'), 1);
+    gl.uniform1i(u('uBandsB'), 2);
+    gl.uniform2f(u('uSize'), this.width, this.height);
+    gl.uniform1f(u('uZoom'), zoom);
+    gl.uniform1f(u('uKeep'), keep);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE0);
     this.cur = other;
@@ -1439,6 +1464,13 @@ export class FlameRenderer {
     if (this.query) gl.deleteQuery(this.query);
     for (const p of new Set([this.iterate, this.plot, this.fade, this.show, this.scrubbing, this.finding, this.carrying])) gl.deleteProgram(p);
     gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+
+  private uniform(p: WebGLProgram, name: string): WebGLUniformLocation | null {
+    let m = this.locs.get(p);
+    if (!m) this.locs.set(p, (m = new Map()));
+    if (!m.has(name)) m.set(name, this.gl.getUniformLocation(p, name));
+    return m.get(name) ?? null;
   }
 
   private u(p: WebGLProgram, name: string): WebGLUniformLocation | null {

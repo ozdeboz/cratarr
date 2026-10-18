@@ -94,8 +94,9 @@ export function stir(s: Stirring, i: StirInput): { forces: Force[]; flow: Flow }
   const flow: Flow = {
     energy: Math.min(1, Math.max(0, g('loudness', null, 'flow', i.loudness) * (0.7 + 0.6 * g('beat', null, 'flow', pulse)))),
     swirl: Math.max(0, 1 + 2 * g('swell', null, 'swirl', Math.max(0, i.swell)) + 2 * g('section', null, 'swirl', whirl)),
-    // The waves: once round their cycle in eight seconds, their way turning once in two minutes, both with the track.
-    ...(i.waves ? { wave: { amount: i.waves, angle: ((i.position ?? i.t) * 2 * Math.PI) / 120, phase: ((i.position ?? i.t) * 2 * Math.PI) / 8 } } : {}),
+    // The waves: once round their cycle in eight seconds, their way turning once in two minutes, both with the track
+    // (each kept within a turn: a sine of a large number loses its precision on some GPUs).
+    ...(i.waves ? { wave: { amount: i.waves, angle: (((i.position ?? i.t) / 120) % 1) * 2 * Math.PI, phase: (((i.position ?? i.t) / 8) % 1) * 2 * Math.PI } } : {}),
   };
   if (!(i.amount > 0)) {
     s.kicks = [];
