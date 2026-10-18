@@ -167,3 +167,32 @@ test('reduced motion: every effect that changes over time rests, the steady ones
   assert.ok(Math.abs(reportOf([9], [1], 'picture', [[1, 0]]).motion! - 60 * Math.log(1.06)) < 1e-12);
   assert.ok(!moves(9, [0, 0]), 'Echo neither zooming nor turning: steady');
 });
+
+test('a drawn look’s effects stay within the room the flame leaves under each limit; one within it is kept as drawn', async () => {
+  const { withinRoom, effectsDrawn } = await import('../src/lib/visuals/flame.ts');
+  const { DRAWN_ROOM } = await import('../src/lib/visuals/budget.ts');
+  const { settingsReport } = await import('../src/lib/visuals/effects.ts');
+  const meters = ['motion', 'shapeChurn', 'colourChurn', 'zoomPumping'] as const;
+  const room = (m: (typeof meters)[number]) => DRAWN_ROOM[m];
+  // Any seed's draw.
+  let held = 0;
+  for (let seed = 0; seed < 20000; seed++) {
+    const drawn = effectsDrawn(seed);
+    const r = settingsReport(drawn, 1);
+    for (const m of meters) assert.ok((r[m] ?? 0) <= room(m) * (1 + 1e-6), `seed ${seed} ${m} ${r[m]} > ${room(m)}`);
+    if (meters.some((m) => (r[m] ?? 0) > room(m) * 0.999)) held++;
+  }
+  assert.ok(held > 0, 'some draws are held');
+  const knobs = { fx1K1: 0.75, fx1K2: 0.75, fx2K1: 0.75, fx2K2: 0.75, fx3K1: 0.75, fx3K2: 0.75, fxLoopK1: 0.75, fxLoopK2: 0.25 };
+  // As much as a draw gives: every engine's every sub-effect at its most, with Rotate on the loop.
+  for (const fx1 of [1, 2, 3, 4, 5, 6])
+    for (const fx2 of [1, 2, 3, 4, 5])
+      for (const fx3 of [1, 2, 3, 4, 5, 6, 7]) {
+        const drawn = { fx1, fx1Amount: 0.8, fx2, fx2Amount: 0.8, fx3, fx3Amount: 0.8, fxLoop: 5, fxLoopAmount: 0.6, ...knobs };
+        const r = settingsReport(withinRoom(drawn), 1);
+        for (const m of meters) assert.ok((r[m] ?? 0) <= room(m) * (1 + 1e-6), `${fx1},${fx2},${fx3} ${m} ${r[m]} > ${room(m)}`);
+      }
+  // A steady one (Posterize) and a small spin: within the room already, as drawn.
+  const small = { fx1: 0, fx1Amount: 0, fx2: 0, fx2Amount: 0, fx3: 7, fx3Amount: 0.5, fxLoop: 0, fxLoopAmount: 0, ...knobs };
+  assert.deepEqual(withinRoom(small), small);
+});
