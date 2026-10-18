@@ -81,12 +81,21 @@ function levelDb(source: string, id: string): number {
   return Math.min(g.trackGain, peak, 0);
 }
 
-// Kept from frame to frame (the loop reads them within its frame).
-const track = new Float32Array(TRACK_SIGNALS.length);
-const bands = Array.from({ length: BANDS }, () => new Float32Array(BAND_SIGNALS.length));
-const hits: Steps[] = Array.from({ length: BANDS }, () => ({ index: -1, weight: 1, perSecond: 0 }));
-// The key: the chroma's direction on the circle of fifths, followed as a vector (so it turns the short way round).
-let fifths = { x: 0, y: 0, at: 0 };
+/** What the music's signals keep from frame to frame (a frame's `Music` is read within its frame): the signals now,
+ *  each band's last hit, and the key (the chroma's direction on the circle of fifths, followed as a vector, so it turns
+ *  the short way round). */
+export type MusicState = { track: Float32Array; bands: Float32Array[]; hits: Steps[]; fifths: { x: number; y: number; at: number } };
+export function newMusicState(): MusicState {
+  return {
+    track: new Float32Array(TRACK_SIGNALS.length),
+    bands: Array.from({ length: BANDS }, () => new Float32Array(BAND_SIGNALS.length)),
+    hits: Array.from({ length: BANDS }, () => ({ index: -1, weight: 1, perSecond: 0 })),
+    fifths: { x: 0, y: 0, at: 0 },
+  };
+}
+// The visuals' own.
+const own = newMusicState();
+const { track, bands, hits } = own;
 // The circle of fifths' place of each pitch class (C, C#, ... B), as an angle.
 const FIFTH_ANGLE = Array.from({ length: 12 }, (_, k) => (2 * Math.PI * ((7 * k) % 12)) / 12);
 
@@ -149,41 +158,71 @@ export function musicNow(at: number): Music {
     beatsOf(np.source, np.upcoming[0].id);
     signalsOf(np.source, np.upcoming[0].id);
   }
-  const beat = beats ? beatAt(beats, pos) : null;
   const bpm = tempos.get(key) ?? null;
-  const bps = beat ? 1 / beat.length : (bpm ?? 90) / 60;
-
-  // The bands: the server's, else heard here.
-  let heard: number | null = null;
-  let from: Music['from'] = null;
-  if (signals) {
-    stopLive();
-    heard = lufsAt(signals, pos);
-    fromServer(signals, pos, beats ?? null, beat, at);
-    from = 'server';
-  } else {
-    const now = listen();
-    if (now) {
-      heard = now.loudness;
-      fromLive(now, at);
-      from = 'live';
-    }
-  }
   const wave = waveformOf(np.source, np.id);
   const length = np.progress?.duration_secs ?? null;
-  const energy = wave && length ? loudnessAt(wave, pos / length) : null;
-  const intensity =
-    heard !== null ? Math.min(1, Math.max(0, (heard + levelDb(np.source, np.id) - QUIET) / (LOUD - QUIET))) : 0.25 + 0.6 * (energy ?? 0.6);
+  const energy = () => (wave && length ? loudnessAt(wave, pos / length) : null);
 
-  track[T.loudness] = intensity;
-  track[T.tempo] = bps / 2;
-  if (beats) track[T.beat] = pulseAt(beats, beat, pos, 0.2, 0.35, () => 1);
-  track[T.key] = Math.atan2(fifths.y, fifths.x) / (2 * Math.PI) + (fifths.y < 0 ? 1 : 0);
+  // The bands: the server's, else heard here.
+  if (signals) {
+    stopLive();
+    return musicOf(signals, beats ?? null, pos, on, { state: own, at, key, gainDb: levelDb(np.source, np.id), bpm, energy: energy() });
+  }
+  const beat = beats ? beatAt(beats, pos) : null;
+  const bps = beat ? 1 / beat.length : (bpm ?? 90) / 60;
+  let heard: number | null = null;
+  let from: Music['from'] = null;
+  const now = listen();
+  if (now) {
+    heard = now.loudness;
+    fromLive(now, at);
+    from = 'live';
+  }
+  const intensity = intensityOf(heard, levelDb(np.source, np.id), energy());
+  finish(own, intensity, bps, beats ?? null, beat, pos);
   return { key, intensity, bps, beat, track, bands: from ? bands : null, hits: from ? hits : null, from, playing: on, position: pos };
 }
 
-/** The server's signals at `pos`. */
-function fromServer(s: Signals, pos: number, beats: Beats | null, beat: Beat | null, at: number) {
+/** The show's intensity from the loudness heard (LUFS, null where it is not known) at the player's gain (dB), else
+ *  from the waveform's energy there (0..1, null where that is not known either). */
+function intensityOf(heard: number | null, gainDb: number, energy: number | null): number {
+  return heard !== null ? Math.min(1, Math.max(0, (heard + gainDb - QUIET) / (LOUD - QUIET))) : 0.25 + 0.6 * (energy ?? 0.6);
+}
+
+/** The whole track's signals every source gives: the loudness, the tempo, the beat, the key. */
+function finish(st: MusicState, intensity: number, bps: number, beats: Beats | null, beat: Beat | null, pos: number) {
+  st.track[T.loudness] = intensity;
+  st.track[T.tempo] = bps / 2;
+  if (beats) st.track[T.beat] = pulseAt(beats, beat, pos, 0.2, 0.35, () => 1);
+  st.track[T.key] = Math.atan2(st.fifths.y, st.fifths.x) / (2 * Math.PI) + (st.fifths.y < 0 ? 1 : 0);
+}
+
+/** The music at `position` (seconds) of a track whose signals the server has, playing or not: what the visuals' loop
+ *  takes each frame (`musicNow`), and what the behaviour's precheck steps through a track with (recipe.ts) without it
+ *  playing. `state`: what follows from frame to frame (a new one for each track stepped through; without one, a new one
+ *  each call, so the key does not follow); `at`: the frame's clock (ms; by default the position's); `lighting`: each
+ *  band's hits' ring (s; by default the settings'); `gainDb`: the player's levelling; `bpm`: the track's tempo where it
+ *  has no beats; `energy`: the waveform's loudness there (0..1), where the signals' is not known. */
+export function musicOf(
+  signals: Signals,
+  beats: Beats | null,
+  position: number,
+  playing: boolean,
+  opts: { state?: MusicState; at?: number; key?: string | null; lighting?: readonly number[]; gainDb?: number; bpm?: number | null; energy?: number | null } = {},
+): Music {
+  const st = opts.state ?? newMusicState();
+  st.track.fill(0);
+  const beat = beats ? beatAt(beats, position) : null;
+  const bps = beat ? 1 / beat.length : (opts.bpm ?? 90) / 60;
+  fromServer(st, signals, position, beats, beat, opts.at ?? position * 1000, opts.lighting ?? visualSettings.lighting);
+  const intensity = intensityOf(lufsAt(signals, position), opts.gainDb ?? 0, opts.energy ?? null);
+  finish(st, intensity, bps, beats, beat, position);
+  return { key: opts.key ?? null, intensity, bps, beat, track: st.track, bands: st.bands, hits: st.hits, from: 'server', playing, position };
+}
+
+/** The server's signals at `pos`, into `st`. */
+function fromServer(st: MusicState, s: Signals, pos: number, beats: Beats | null, beat: Beat | null, at: number, lighting: readonly number[]) {
+  const { track, bands, hits, fifths } = st;
   const one = (id: number) => seriesAt(s, id, pos)?.[0] ?? 0;
   // A downbeat: a beat that starts its bar, as surely as the server is of where bars start.
   const bar = s.series.get(ID.bar);
@@ -206,7 +245,7 @@ function fromServer(s: Signals, pos: number, beats: Beats | null, beat: Beat | n
       y += chroma[k] * Math.sin(FIFTH_ANGLE[k]);
     }
     const k = 1 - Math.exp(-Math.min(0.1, Math.max(0, (at - fifths.at) / 1000)) / KEY_S);
-    fifths = { x: fifths.x + (x - fifths.x) * k, y: fifths.y + (y - fifths.y) * k, at };
+    st.fifths = { x: fifths.x + (x - fifths.x) * k, y: fifths.y + (y - fifths.y) * k, at };
   } else fifths.at = at;
 
   const rows = (id: number) => seriesAt(s, id, pos);
@@ -228,7 +267,7 @@ function fromServer(s: Signals, pos: number, beats: Beats | null, beat: Beat | n
     v[B.crest] = crest?.[b] ?? 0;
     v[B.width] = width?.[b] ?? 0;
     v[B.bandSwell] = swell?.[b] ?? 0;
-    const ring = visualSettings.lighting[b];
+    const ring = lighting[b];
     v[B.hits] = lightOf(all?.[b], pos, ring);
     v[B.percussiveHits] = lightOf(drums?.[b], pos, ring);
     const hit = lastOf(all?.[b], pos);
