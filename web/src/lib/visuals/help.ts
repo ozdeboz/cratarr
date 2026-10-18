@@ -81,21 +81,37 @@ export const HELP: Record<string, string> = {
   lattice:
     'The shape of the cells Facets makes: Square or Hex.',
   fx1:
-    'Effect 1: an effect over the whole picture, such as Kaleid, Echo, Ripple, Colorama or Rings; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
+    'Kaleidoscope: one of its effects at a time over the whole picture: Kaleid (mirrored slices round the middle), Repeat (tiles), Rotate, Scroll, Pixelate or Magnify; None for none. The three engines run in their order, Kaleidoscope, EYEDO, Hydra; a track’s look may bring one or two, and one you choose is pinned.',
   fx1Amount:
-    'How strongly Effect 1 shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
+    'How strongly the Kaleidoscope’s effect shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the governor when it holds the picture back take it lower.',
   fx2:
-    'Effect 2: an effect over the whole picture, such as Kaleid, Echo, Ripple, Colorama or Rings; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
+    'EYEDO: one of its effects at a time, after EYESY’s: Pulse, Burst and Halo fire on the beat; Rings and Interference ring on. None for none. The three engines run in their order, Kaleidoscope, EYEDO, Hydra; a track’s look may bring one or two, and one you choose is pinned.',
   fx2Amount:
-    'How strongly Effect 2 shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
+    'How strongly EYEDO’s effect shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the governor when it holds the picture back take it lower.',
   fx3:
-    'Effect 3: an effect over the whole picture, such as Kaleid, Echo, Ripple, Colorama or Rings; None for none. The three run together, the ones that move the picture first, then the ones that change its colours. A track’s look may bring some; choose one and it is pinned.',
+    'Hydra: one of its effects at a time, after Hydra’s: Echo (the last picture fed back in), Ripple, Stream (drawn along the fluid’s flow), Colorama, Hue, Saturate or Posterize; None for none. The three engines run in their order, Kaleidoscope, EYEDO, Hydra; a track’s look may bring one or two, and one you choose is pinned.',
   fx3Amount:
-    'How strongly Effect 3 shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
+    'How strongly Hydra’s effect shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the governor when it holds the picture back take it lower.',
   fxLoop:
-    'Loop: an effect inside the flame’s trails rather than over the picture. It acts each frame on the light as it is carried on, so it builds up into new shapes. Only effects that move the picture, such as Kaleid, Rotate or Rings; None for none.',
+    'Loop: an effect inside the flame’s trails rather than over the picture. It acts each frame on the light as it is carried on, so it builds up into new shapes: Kaleid, Pixelate, Ripple, Stream, Rotate, Scroll or Rings; None for none.',
   fxLoopAmount:
-    'How strongly the Loop effect acts. At 0 not at all; at 100% fully. The Effects setting in Behaviour, and its routes, take it lower.',
+    'How strongly the Loop effect acts. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the governor when it holds the picture back take it lower.',
+  fx1K1:
+    'One of the chosen effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
+  fx1K2:
+    'One of the chosen effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
+  fx2K1:
+    'One of the chosen effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
+  fx2K2:
+    'One of the chosen effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
+  fx3K1:
+    'One of the chosen effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
+  fx3K2:
+    'One of the chosen effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
+  fxLoopK1:
+    'One of the Loop effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
+  fxLoopK2:
+    'One of the Loop effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
   final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',
   pin: 'You moved this setting, so it keeps your value when the next track starts, and Another look and the dice leave it alone. Tap the pin to let each track set it again.',
   snapshots:
