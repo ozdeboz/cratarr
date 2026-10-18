@@ -41,7 +41,7 @@
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
   import { coverPalette, type PaletteColour } from './palette';
-  import { setVisualsSide } from './shown.svelte';
+  import { setVisualsSide, visuals } from './shown.svelte';
   import { applyDevice, applyShared, followGroup, groupLook, share, SHARED_KEYS, sharedNow, showing, STANDARD } from './shared.svelte';
   import SnapshotsSheet from './SnapshotsSheet.svelte';
   import { held } from './held.svelte';
@@ -975,8 +975,10 @@
     raf = requestAnimationFrame(loop);
 
     return () => {
-      // Gone some other way (the shell's page changed): its step of the history goes too.
-      if (!closed && history.state?.visuals) history.back();
+      // Closed some other way: its step of the history goes too. Moved beside the page or over it (still open), the
+      // step stays for the visuals where they went: going back here would close them there (2026-10-18: the docked
+      // visuals' Full screen left the page full screen with the player, the visuals closed).
+      if (!closed && !visuals.open && history.state?.visuals) history.back();
       cancelAnimationFrame(raf);
       clearTimeout(hideTimer);
       removeEventListener('popstate', popped);
@@ -984,7 +986,8 @@
       document.removeEventListener('visibilitychange', wake);
       document.removeEventListener('fullscreenchange', fullscreenChanged);
       lock?.release().catch(() => {});
-      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      // The full screen the visuals over the page went to ends with them; beside it, they made none.
+      if (!docked && document.fullscreenElement) document.exitFullscreen().catch(() => {});
       renderer?.dispose();
       stopGroup();
       stopIdle?.();
