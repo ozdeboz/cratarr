@@ -28,12 +28,18 @@ export type VisualSettings = {
   brightness: number;
   /** How purely each band's part is its own colour (0: points blend their bands' colours, 1: each its band's alone). */
   purity: number;
-  /** Each band's (sub, mid, treble) light after a transient: how long it rings (seconds). */
-  lighting: [number, number, number];
+  /** The parts' offsets scaled apart (separate clusters) or together (one shape): 1 is the seed's own. */
+  spread: number;
+  /** The flame's rotations: 0 its own (the seed's), else that many arms. */
+  symmetry: number;
+  /** Its mirrors: 0 its own, 1 none, 2 as many as its arms (dihedral). */
+  mirror: number;
+  /** Each band's (sub, bass, low mid, mid, presence, air) light after a transient: how long it rings (seconds). */
+  lighting: number[];
   /** Each band's loudness evolving its transform: how long it takes to follow (seconds). */
-  evolution: [number, number, number];
+  evolution: number[];
   /** Each band's motion and evolution: 0 in steps on its own transients, 1 steady, between them a share of each. */
-  continuity: [number, number, number];
+  continuity: number[];
 };
 
 const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
@@ -50,11 +56,15 @@ export const DEFAULTS: VisualSettings = {
   beat: 1,
   bands: 1,
   brightness: 1,
-  purity: 0.5,
+  // Six parts mixing their colours go grey: mostly each its band's own.
+  purity: 0.75,
+  spread: 1,
+  symmetry: 0,
+  mirror: 0,
   // A kick rings longer than a hat.
-  lighting: [0.18, 0.14, 0.09],
-  evolution: [0.25, 0.25, 0.25],
-  continuity: [0.5, 0.5, 0.5],
+  lighting: [0.2, 0.18, 0.15, 0.13, 0.1, 0.08],
+  evolution: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
+  continuity: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
 };
 
 /** Each setting's range, as its slider has it (the bands' times in seconds, though their sliders double). A kept value
@@ -70,6 +80,9 @@ export const RANGES: Record<keyof VisualSettings, [number, number]> = {
   bands: [0, 2],
   brightness: [0.1, 1],
   purity: [0, 1],
+  spread: [0.25, 2.5],
+  symmetry: [0, 8],
+  mirror: [0, 2],
   lighting: [0.02, 1],
   evolution: [0.02, 2],
   continuity: [0, 1],
@@ -102,8 +115,10 @@ function load(): VisualSettings {
     for (const k of Object.keys(DEFAULTS) as (keyof VisualSettings)[]) {
       const v = saved[k];
       if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = within(k, v);
-      else if (Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
-        (out as Record<string, unknown>)[k] = v.map((x) => within(k, x));
+      // Six bands' times; three (kept before the six bands, 2026-10-18) each for two of them.
+      else if (Array.isArray(v) && (v.length === 6 || v.length === 3) && v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
+        const six = v.length === 6 ? v : v.flatMap((x) => [x, x]);
+        (out as Record<string, unknown>)[k] = six.map((x) => within(k, x));
       }
     }
     return out;

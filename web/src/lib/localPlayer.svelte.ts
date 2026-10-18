@@ -509,12 +509,13 @@ const UNKNOWN_DB = -6;
 const UNKNOWN = 10 ** (UNKNOWN_DB / 20);
 const canLevel = !!audio && !Managed && typeof AudioContext !== 'undefined';
 const gains = new Map<string, TrackGain | null>();
-let level: { ctx: AudioContext; gain: GainNode } | null = null;
+let level: { ctx: AudioContext; gain: GainNode; source: MediaElementAudioSourceNode } | null = null;
 /** An audio context made, not yet running. */
 let starting: AudioContext | null = null;
 
-function levelRoute() {
-  if (level || starting || !canLevel || !prefs.levelling) return;
+/** `tap`: the route for the visuals' tap (`audioTap`), made even where levelling is off (its gain then stays 1). */
+function levelRoute(tap = false) {
+  if (level || starting || !canLevel || (!prefs.levelling && !tap)) return;
   let ctx: AudioContext;
   try {
     ctx = new AudioContext();
@@ -529,8 +530,9 @@ function levelRoute() {
       if (level || ctx.state !== 'running' || !audio) return void ctx.close();
       try {
         const gain = ctx.createGain();
-        ctx.createMediaElementSource(audio).connect(gain).connect(ctx.destination);
-        level = { ctx, gain };
+        const source = ctx.createMediaElementSource(audio);
+        source.connect(gain).connect(ctx.destination);
+        level = { ctx, gain, source };
       } catch {
         return void ctx.close();
       }
@@ -545,6 +547,17 @@ function levelRoute() {
       void ctx.close();
     },
   );
+}
+
+/** This page's own audio as Web Audio has it, for the visuals' live analysis (decision 0046): the levelling's route, made
+ *  now where levelling is off (at no change of level; an element can feed only one route). Null while it is being made
+ *  (an audio context starts after a press: the visuals open on one), and where there is nothing to tap: Safari (the
+ *  managed stream; its audio context would silence the music in the background, see above), and while another player
+ *  plays (the app's, or one of Cratarr's). */
+export function audioTap(): { context: AudioContext; node: AudioNode } | null {
+  if (!canLevel || handed()) return null;
+  if (!level) levelRoute(true);
+  return level && level.ctx.state === 'running' ? { context: level.ctx, node: level.source } : null;
 }
 
 /** Asks for a queue place's gain, once per track. */

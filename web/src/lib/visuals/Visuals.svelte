@@ -14,8 +14,7 @@
   import Icon from '../Icon.svelte';
   import { reducedMotion } from '../motion';
   import { playing } from '../remote.svelte';
-  import { BANDS } from './bands';
-  import { between, evolved, flameFrom, measure, seedOf, type Flame, type Part } from './flame';
+  import { between, evolved, flameFrom, measure, PARTS, seedOf, withSymmetry, type Flame, type Part } from './flame';
   import { musicNow } from './music.svelte';
   import { FlameRenderer } from './render';
   import { autoResolution, RANGES, resetVisualSettings, saveVisualSettings, visualSettings as s, type VisualSettings } from './settings.svelte';
@@ -85,6 +84,7 @@
 
   // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then the look.
   type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity'>;
+  const MIRROR = ['Auto', 'Off', 'On'];
   type Row = { key: One; label: string; step: number; text: (v: number) => string };
   const percent = (v: number) => `${Math.round(v * 100)}%`;
   const thousands = (log2: number) => {
@@ -104,9 +104,12 @@
     { key: 'bands', label: 'Bands', step: 0.05, text: percent },
     { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
     { key: 'purity', label: 'Purity', step: 0.05, text: percent },
+    { key: 'spread', label: 'Spread', step: 0.05, text: percent },
+    { key: 'symmetry', label: 'Symmetry', step: 1, text: (v) => (v ? `${v}` : 'Auto') },
+    { key: 'mirror', label: 'Mirror', step: 1, text: (v) => MIRROR[v] ?? 'Auto' },
   ];
   // Each band's times, on a doubling scale.
-  const BAND_ROWS = ['Sub', 'Mid', 'Treble'];
+  const BAND_ROWS = ['Sub', 'Bass', 'Low mid', 'Mid', 'Presence', 'Air'];
   const TIMES = (['lighting', 'evolution'] as const).map((key) => ({
     key,
     label: key === 'lighting' ? 'Lighting' : 'Evolution',
@@ -184,17 +187,21 @@
     let blendStart = 0;
     let blendMs = BLEND_MS;
     let seen = 0;
+    // The playing track's flame as made (or the dice's), and the symmetry it is shown with (its own, or the
+    // settings'): a change of either blends in as the dice do.
+    let base: Flame | null = null;
+    let symmetryShown = '';
     let turn = 0;
     let speed = 0;
     // Each band's transform: how far it has turned, and its band's loudness, followed over a quarter of a second (no
     // bands known: as if each were half way).
-    const turned = [0, 0, 0];
-    const bandLoud = [0.5, 0.5, 0.5];
+    const turned = Array<number>(PARTS).fill(0);
+    const bandLoud = Array<number>(PARTS).fill(0.5);
     // Each band's steps: its last transient seen (or beat, where its transients are not known yet), its loudness then
     // (what a stepping band evolves to), and the turn of its steps still to come (each eased in over 80 ms).
-    const lastHit: (number | null)[] = [null, null, null];
-    const held = [0.5, 0.5, 0.5];
-    const pending = [0, 0, 0];
+    const lastHit = Array<number | null>(PARTS).fill(null);
+    const held = Array<number>(PARTS).fill(0.5);
+    const pending = Array<number>(PARTS).fill(0);
     // A beat's flash and swell, 0..1.
     let pulse = 0;
     // How intense the show is (the loudness as heard, followed over a fifth of a second; `lit`: as far as the
@@ -236,7 +243,9 @@
       raf = requestAnimationFrame(loop);
       const tick = now - lastTick;
       lastTick = now;
-      if (tick > 4 && tick < 50) refresh += (tick - refresh) * 0.05;
+      // Learnt from the display's quick frames only (up to 50 a second): a device behind on every frame calls back as
+      // slowly as it draws, and its own pace taken for the display's made every frame look on time (2026-10-18).
+      if (tick > 4 && tick < 21) refresh += (tick - refresh) * 0.05;
       // Every so many of the display's frames, as many as keep it at or under the FPS setting.
       const every = Math.max(1, Math.ceil((1000 / s.fps - 1) / refresh));
       const frameMs = every * refresh;
@@ -266,10 +275,26 @@
         seen = asked;
         from = key === undefined ? null : shown;
         key = m.key;
-        to = flameFrom(another ?? seedOf(m.key ?? 'cratarr'));
-        shown = to;
+        base = flameFrom(another ?? seedOf(m.key ?? 'cratarr'));
+        symmetryShown = '';
         blendStart = now;
         blendMs = track ? BLEND_MS : ANOTHER_MS;
+      }
+      // Its symmetry: its own, or as the settings ask; a change blends in over a second and a half.
+      if (base) {
+        const order = s.symmetry || base.symmetry.order;
+        const mirror = s.mirror ? s.mirror === 2 : base.symmetry.mirror;
+        const want = `${order}/${mirror}`;
+        if (want !== symmetryShown) {
+          if (symmetryShown !== '' && shown) {
+            from = shown;
+            blendStart = now;
+            blendMs = ANOTHER_MS;
+          }
+          symmetryShown = want;
+          to = order === base.symmetry.order && mirror === base.symmetry.mirror ? base : withSymmetry(base, order, mirror);
+          if (!from) shown = to;
+        }
       }
       // The whole show follows how loud the track is as heard: small, still, pale and unlit in silence or a fade, all of
       // it at the loudest. Dimmer while paused.
@@ -293,8 +318,9 @@
       // own transients (or the beats, where those are not known yet): a step turns it by as much as it would have
       // turned steadily since the band's last, on average (a strong transient further, a weak one less), and evolves it
       // to its loudness at that moment, held until the next.
-      for (let i = 0; i < BANDS; i++) {
-        const band = m.playing ? m.bands?.[i] : undefined;
+      for (let i = 0; i < PARTS; i++) {
+        // Its band: one each from six; from the three a server before the six bands gives, one each for two parts.
+        const band = m.playing && m.bands ? m.bands[Math.floor((i * m.bands.length) / PARTS)] : undefined;
         const c = still ? 1 : s.continuity[i];
         const loud = (band?.loud ?? 0.5) * lit;
         const rate = speed * (0.4 + 1.2 * bandLoud[i]);
@@ -314,7 +340,9 @@
         pending[i] -= eased;
         bandLoud[i] += (c * loud + (1 - c) * held[i] - bandLoud[i]) * Math.min(1, dt / s.evolution[i]);
       }
-      const hits = [0, 1, 2].map((i) => (m.playing ? (m.bands?.[i].hit ?? 0) * lit * s.bands * (still ? 0.5 : 1) : 0)) as [number, number, number];
+      const hits = Array.from({ length: PARTS }, (_, i) =>
+        m.playing && m.bands ? m.bands[Math.floor((i * m.bands.length) / PARTS)].hit * lit * s.bands * (still ? 0.5 : 1) : 0,
+      );
       const parts: Part[] = bandLoud.map((l, i) => ({
         turn: turned[i],
         size: 0.94 + 0.12 * l,
@@ -326,7 +354,7 @@
       const k = from ? Math.min(1, (now - blendStart) / blendMs) : 1;
       shown = from && k < 1 ? between(from, to, k * k * (3 - 2 * k)) : to;
       if (k >= 1) from = null;
-      const drawnFlame = evolved(shown, parts, s.purity);
+      const drawnFlame = evolved(shown, parts, s.purity, s.spread);
       if (now - measured > 500) {
         measured = now;
         const seen = measure(drawnFlame);

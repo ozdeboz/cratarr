@@ -10,9 +10,10 @@
 //   (decision 0046, amended), so a band's transient lights its own colour where it lies;
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
-import { colourOf, type Flame } from './flame';
+import { colourOf, PARTS, type Flame } from './flame';
 
-const MAX_XFORMS = 12;
+// The six parts, rotations up to eight arms and as many mirrors.
+const MAX_XFORMS = 22;
 const SLOTS = 8;
 
 const ITERATE = `#version 300 es
@@ -23,19 +24,30 @@ layout(location = 1) in uint aSeed;
 out vec4 vState;
 flat out uint vSeed;
 out vec3 vColor;
-out vec3 vBand;
+out vec4 vBandA;
+out vec2 vBandB;
 uniform int uCount;
 uniform vec3 uAbc[${MAX_XFORMS}];
 uniform vec3 uDef[${MAX_XFORMS}];
 uniform vec4 uMeta[${MAX_XFORMS}];
 uniform ivec4 uVarId[${MAX_XFORMS * 2}];
 uniform vec4 uVarW[${MAX_XFORMS * 2}];
+// The parts' post maps (flam3's "post"), where uPostMask has their bit.
+uniform vec3 uPostAbc[${PARTS}];
+uniform vec3 uPostDef[${PARTS}];
+uniform int uPostMask;
+// The final transform, applied to where a point is drawn (not to where it goes on), where uHasFinal.
+uniform int uHasFinal;
+uniform vec3 uFinalAbc;
+uniform vec3 uFinalDef;
+uniform ivec4 uFinalVarId[2];
+uniform vec4 uFinalVarW[2];
 uniform vec4 uCamera;
 uniform vec2 uTurn;
-// The flame's colours: one lightness and chroma (OKLCH); each band's transform's hue as a point on the unit circle.
+// The flame's colours: one lightness and chroma (OKLCH); each band's transform's colour as a point in the colour plane.
 uniform float uLight;
 uniform float uChroma;
-uniform vec2 uBandHue[3];
+uniform vec2 uBandHue[${PARTS}];
 const float PI = 3.14159265358979;
 
 // Not a number, or infinite: from the bits, which no compiler's fast arithmetic can assume away (isnan can be).
@@ -58,7 +70,8 @@ vec3 srgb(vec3 lab) {
 uint next(inout uint s) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
 float rnd(inout uint s) { return float(next(s) >> 8) * (1.0 / 16777216.0); }
 
-vec2 variation(int v, vec2 p, float r2, float r, float th, inout uint s) {
+// A variation of the transform's affine output p (abc, def: its coefficients, which some variations use).
+vec2 variation(int v, vec2 p, float r2, float r, float th, vec3 abc, vec3 def, inout uint s) {
   switch (v) {
     case 1: return sin(p);
     case 2: return p / r2;
@@ -90,6 +103,68 @@ vec2 variation(int v, vec2 p, float r2, float r, float th, inout uint s) {
     case 29: return vec2(sin(p.x), p.y);
     case 42: return vec2(sin(p.x) / cos(p.y), tan(p.y));
     case 48: return p / abs(p.x * p.x - p.y * p.y + 1e-12);
+    case 15: return vec2(p.x + abc.y * sin(p.y / (abc.z * abc.z + 1e-6)), p.y + def.y * sin(p.x / (def.z * def.z + 1e-6)));
+    case 17: return vec2(p.x + abc.z * sin(tan(3.0 * p.y)), p.y + def.z * sin(tan(3.0 * p.x)));
+    case 21: {
+      float k = abc.z * abc.z + 1e-6;
+      return (mod(r + k, 2.0 * k) - k + r * (1.0 - k)) * vec2(cos(th), sin(th));
+    }
+    case 22: {
+      float k = PI * (abc.z * abc.z + 1e-6);
+      float a = mod(th + def.z, k) > k * 0.5 ? th - k * 0.5 : th + k * 0.5;
+      return r * vec2(cos(a), sin(a));
+    }
+    case 31: {
+      float p1 = rnd(s);
+      float p2 = 2.0 * PI * rnd(s);
+      return p1 * vec2(p.x * cos(p2), p.y * sin(p2));
+    }
+    case 34: {
+      float p1 = rnd(s);
+      float p2 = 2.0 * PI * rnd(s);
+      return p1 * vec2(cos(p2), sin(p2));
+    }
+    case 41: {
+      float a = rnd(s) * PI;
+      return vec2(sin(a), sin(a) * sin(a) / cos(a));
+    }
+    case 43: return vec2(rnd(s) - 0.5, rnd(s) - 0.5);
+    case 44: return tan(rnd(s) * PI) / (r2 + 1e-6) * vec2(cos(p.x), sin(p.y));
+    case 45: {
+      float a = rnd(s) * r;
+      return p.x * vec2(cos(a) + sin(a), cos(a) - sin(a));
+    }
+    case 46: {
+      float cr = cos(r);
+      return vec2(p.x, 1.0 / cr + (cr < 0.0 ? 1.0 : -1.0));
+    }
+    case 47: {
+      float a = rnd(s) * r;
+      float sn = sin(a);
+      float k = log(sn * sn + 1e-12) / log(10.0) + cos(a);
+      if (bad(k)) k = -30.0;
+      return p.x * vec2(k, k - sn * PI);
+    }
+    default: return p;
+  }
+}
+
+// The final transform's warps only (flame.ts's FINALS): a second copy of the whole switch above for every point cost
+// the Intel a third more of its time a step.
+vec2 warp(int v, vec2 p, float r2, float r, float th) {
+  switch (v) {
+    case 1: return sin(p);
+    case 2: return p / r2;
+    case 3: return vec2(p.x * sin(r2) - p.y * cos(r2), p.x * cos(r2) + p.y * sin(r2));
+    case 4: return vec2((p.x - p.y) * (p.x + p.y), 2.0 * p.x * p.y) / r;
+    case 5: return vec2(th / PI, r - 1.0);
+    case 6: return r * vec2(sin(th + r), cos(th - r));
+    case 7: return r * vec2(sin(th * r), -cos(th * r));
+    case 8: return (th / PI) * vec2(sin(PI * r), cos(PI * r));
+    case 13: return sqrt(r) * vec2(cos(th * 0.5), sin(th * 0.5));
+    case 16: return (2.0 / (r + 1.0)) * p.yx;
+    case 27: return (2.0 / (r + 1.0)) * p;
+    case 28: return (4.0 / (r2 + 4.0)) * p;
     default: return p;
   }
 }
@@ -112,8 +187,9 @@ void main() {
   for (int k = 0; k < ${SLOTS}; k++) {
     float w = uVarW[i * 2 + k / 4][k % 4];
     if (w == 0.0) continue;
-    p += w * variation(uVarId[i * 2 + k / 4][k % 4], q, r2, r, th, s);
+    p += w * variation(uVarId[i * 2 + k / 4][k % 4], q, r2, r, th, uAbc[i], uDef[i], s);
   }
+  if (i < ${PARTS} && ((uPostMask >> i) & 1) == 1) p = vec2(dot(uPostAbc[i], vec3(p, 1.0)), dot(uPostDef[i], vec3(p, 1.0)));
   // The colour moves towards the transform's hue (uMeta.zw) by its speed (uMeta.y).
   vec2 c = mix(aState.zw, uMeta[i].zw, uMeta[i].y);
   bool lost = bad(p.x) || bad(p.y) || abs(p.x) > 1e5 || abs(p.y) > 1e5;
@@ -127,11 +203,33 @@ void main() {
   vState = vec4(p, c);
   vSeed = s;
   vColor = srgb(vec3(uLight, uChroma * c));
-  // How much of each band's colour the point is: by how near its colour is to each band's hue, shares of one.
-  vec3 near = exp(-4.0 * vec3(dot(c - uBandHue[0], c - uBandHue[0]), dot(c - uBandHue[1], c - uBandHue[1]), dot(c - uBandHue[2], c - uBandHue[2])));
-  vBand = near / max(near.x + near.y + near.z, 1e-6);
+  // How much of each band's colour the point is: by how near its colour is to each band's, shares of one.
+  float near[${PARTS}];
+  float sum = 0.0;
+  for (int k = 0; k < ${PARTS}; k++) {
+    vec2 d = c - uBandHue[k];
+    // A bell of nearness, as exp(-12 d²) but without its cost (six a point a step).
+    float n = 1.0 / (1.0 + 12.0 * dot(d, d));
+    near[k] = n * n * n;
+    sum += near[k];
+  }
+  sum = max(sum, 1e-6);
+  vBandA = vec4(near[0], near[1], near[2], near[3]) / sum;
+  vBandB = vec2(near[4], near[5]) / sum;
+  // Where it is drawn: through the final transform, where the flame has one.
+  vec2 shown = p;
+  if (uHasFinal == 1 && !lost) {
+    vec3 fh = vec3(p, 1.0);
+    vec2 fq = vec2(dot(uFinalAbc, fh), dot(uFinalDef, fh));
+    float fr2 = dot(fq, fq) + 1e-12;
+    float fr = sqrt(fr2);
+    float fth = atan(fq.x, fq.y);
+    // Its warp and the plain picture (flame.ts's randomFinal: two variations, the warp first).
+    shown = uFinalVarW[0].x * warp(uFinalVarId[0].x, fq, fr2, fr, fth) + uFinalVarW[0].y * fq;
+    if (bad(shown.x) || bad(shown.y)) lost = true;
+  }
   // The camera: centred, the flame's size to the shorter side, turned slowly as a whole.
-  vec2 v = (p - uCamera.xy) * uCamera.z;
+  vec2 v = (shown - uCamera.xy) * uCamera.z;
   v = vec2(uTurn.x * v.x - uTurn.y * v.y, uTurn.y * v.x + uTurn.x * v.y);
   if (uCamera.w > 1.0) v.x /= uCamera.w; else v.y *= uCamera.w;
   gl_Position = lost ? vec4(2.0, 2.0, 0.0, 1.0) : vec4(v, 0.0, 1.0);
@@ -141,10 +239,12 @@ void main() {
 const PLOT = `#version 300 es
 precision mediump float;
 in vec3 vColor;
-in vec3 vBand;
+in vec4 vBandA;
+in vec2 vBandB;
 layout(location = 0) out vec4 o;
-layout(location = 1) out vec4 band;
-void main() { o = vec4(vColor, 1.0); band = vec4(vBand, 0.0); }`;
+layout(location = 1) out vec4 bandA;
+layout(location = 2) out vec4 bandB;
+void main() { o = vec4(vColor, 1.0); bandA = vBandA; bandB = vec4(vBandB, 0.0, 0.0); }`;
 
 const FULL = `#version 300 es
 void main() {
@@ -156,8 +256,9 @@ const FADE = `#version 300 es
 precision mediump float;
 uniform float uKeep;
 layout(location = 0) out vec4 o;
-layout(location = 1) out vec4 band;
-void main() { o = vec4(0.0, 0.0, 0.0, uKeep); band = o; }`;
+layout(location = 1) out vec4 bandA;
+layout(location = 2) out vec4 bandB;
+void main() { o = vec4(0.0, 0.0, 0.0, uKeep); bandA = o; bandB = o; }`;
 
 // Not a number, or infinite, from the bits (see ITERATE's).
 // A value not a number is nothing; an infinite one, the most a 16-bit float holds short of infinity.
@@ -174,28 +275,31 @@ vec4 clean(vec4 v) { return vec4(clean1(v.x), clean1(v.y), clean1(v.z), clean1(v
 const SCRUB = `#version 300 es
 precision highp float;
 uniform sampler2D uAcc;
-uniform sampler2D uBands;
+uniform sampler2D uBandsA;
+uniform sampler2D uBandsB;
 layout(location = 0) out vec4 o;
-layout(location = 1) out vec4 band;
+layout(location = 1) out vec4 bandA;
+layout(location = 2) out vec4 bandB;
 ${BAD}
 void main() {
   ivec2 at = ivec2(gl_FragCoord.xy);
   o = clean(texelFetch(uAcc, at, 0));
-  band = clean(texelFetch(uBands, at, 0));
+  bandA = clean(texelFetch(uBandsA, at, 0));
+  bandB = clean(texelFetch(uBandsB, at, 0));
 }`;
 
 // Finds whether a buffer holds any such value: only those pixels pass (counted by an occlusion query).
 const FIND = `#version 300 es
 precision highp float;
 uniform sampler2D uAcc;
-uniform sampler2D uBands;
+uniform sampler2D uBandsA;
+uniform sampler2D uBandsB;
 out vec4 o;
 ${BAD}
+bool any4(vec4 v) { return bad(v.x) || bad(v.y) || bad(v.z) || bad(v.w); }
 void main() {
   ivec2 at = ivec2(gl_FragCoord.xy);
-  vec4 a = texelFetch(uAcc, at, 0);
-  vec4 b = texelFetch(uBands, at, 0);
-  if (!(bad(a.x) || bad(a.y) || bad(a.z) || bad(a.w) || bad(b.x) || bad(b.y) || bad(b.z) || bad(b.w))) discard;
+  if (!(any4(texelFetch(uAcc, at, 0)) || any4(texelFetch(uBandsA, at, 0)) || any4(texelFetch(uBandsB, at, 0)))) discard;
   o = vec4(1.0);
 }`;
 
@@ -209,10 +313,11 @@ uniform float uGamma;
 uniform float uVibrancy;
 uniform float uZoom;
 uniform float uFlash;
-uniform sampler2D uBands;
+uniform sampler2D uBandsA;
+uniform sampler2D uBandsB;
 // Each band's transient now (0..1), and its colour.
-uniform vec3 uHit;
-uniform vec3 uBandRgb[3];
+uniform float uHit[${PARTS}];
+uniform vec3 uBandRgb[${PARTS}];
 uniform float uCeiling;
 uniform float uSaturation;
 out vec4 o;
@@ -225,7 +330,9 @@ void main() {
   vec2 px = 1.0 / vec2(textureSize(uAcc, 0));
   vec4 a = at(uv);
   // The pixel's points by band: shares of one.
-  vec3 share = clamp(clean(texture(uBands, uv)).rgb / max(a.a, 1e-6), 0.0, 1.0);
+  vec4 shareA = clamp(clean(texture(uBandsA, uv)) / max(a.a, 1e-6), 0.0, 1.0);
+  vec2 shareB = clamp(clean(texture(uBandsB, uv)).xy / max(a.a, 1e-6), 0.0, 1.0);
+  float share[${PARTS}] = float[${PARTS}](shareA.x, shareA.y, shareA.z, shareA.w, shareB.x, shareB.y);
   // The paper's density estimation, cheaply: where few points fell, the pixel is the mean of a wider ring around it
   // (up to three pixels out), where many fell it stays sharp.
   float radius = 3.0 / (1.0 + sqrt(a.a * uK2) * 2.0);
@@ -248,9 +355,15 @@ void main() {
   vec3 flat_ = pow(max(c, 0.0), vec3(1.0 / uGamma));
   // A beat's flash, after the gamma, so it shows as much in the faint parts as in the bright ones; a band's transient
   // brightens the points of its colour, and adds a glow of that colour.
-  vec3 hit = uHit * share;
-  vec3 shown = mix(flat_, vib, uVibrancy) * uFlash * (1.0 + 0.6 * (hit.x + hit.y + hit.z));
-  shown += 0.2 * g * (hit.x * uBandRgb[0] + hit.y * uBandRgb[1] + hit.z * uBandRgb[2]);
+  float lit = 0.0;
+  vec3 glow = vec3(0.0);
+  for (int k = 0; k < ${PARTS}; k++) {
+    float h = uHit[k] * share[k];
+    lit += h;
+    glow += h * uBandRgb[k];
+  }
+  vec3 shown = mix(flat_, vib, uVibrancy) * uFlash * (1.0 + 0.6 * lit);
+  shown += 0.2 * g * glow;
   // Less colour where the music is quiet (towards its grey of the same brightness).
   shown = mix(vec3(dot(shown, vec3(0.299, 0.587, 0.114))), shown, uSaturation);
   // The most brightness shown, last: no flash or light goes past it.
@@ -272,8 +385,8 @@ export type Shown = {
   zoom: number;
   /** Brighter by this much as shown (a beat's flash): 1 for none. */
   flash: number;
-  /** Each band's transient now, low to high (0..1): its colour's points light up. */
-  hits: [number, number, number];
+  /** Each part's transient now, low to high (0..1): its colour's points light up. */
+  hits: number[];
   /** The most brightness shown (0..1), applied after everything else. */
   ceiling: number;
   /** The display's exposure against the points' mean density (1: as the paper has it): the visuals' auto-exposure. */
@@ -294,6 +407,7 @@ export class FlameRenderer {
   /** The buffers, two sets: the one in use (`cur`) and the one the next scrub copies into. */
   private accs: WebGLTexture[] = [];
   private bandSets: WebGLTexture[] = [];
+  private bandSetsB: WebGLTexture[] = [];
   private fbos: WebGLFramebuffer[] = [];
   private cur = 0;
   private scrubbing: WebGLProgram;
@@ -305,7 +419,8 @@ export class FlameRenderer {
   private acc: WebGLTexture | null = null;
   /** Beside `acc`: each pixel's points by band. */
   private bands: WebGLTexture | null = null;
-  private bandRgb = new Float32Array(9);
+  private bandsB: WebGLTexture | null = null;
+  private bandRgb = new Float32Array(PARTS * 3);
   private accFbo: WebGLFramebuffer | null = null;
   private empty: WebGLVertexArrayObject;
   private flip = 0;
@@ -399,18 +514,21 @@ export class FlameRenderer {
     const gl = this.gl;
     this.width = width;
     this.height = height;
-    for (const x of [...this.accs, ...this.bandSets]) gl.deleteTexture(x);
+    for (const x of [...this.accs, ...this.bandSets, ...this.bandSetsB]) gl.deleteTexture(x);
     for (const f of this.fbos) gl.deleteFramebuffer(f);
     this.accs = [];
     this.bandSets = [];
+    this.bandSetsB = [];
     this.fbos = [];
     // 32-bit float textures filter only with an extension; without it the screen reads them nearest.
     const smooth = this.precision !== 32 || !!gl.getExtension('OES_texture_float_linear');
-    const texture = () => {
+    // The colours in the buffer's kind; the bands' shares (only ever weighed against the count beside them) in 16-bit
+    // floats at most: each point writes all three, and 32-bit ones for all cost the Intel two of its three steps.
+    const texture = (bits: 32 | 16 | 8 = this.precision) => {
       const tex = gl.createTexture()!;
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      if (this.precision === 32) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
-      else if (this.precision === 16) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
+      if (bits === 32) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
+      else if (bits === 16) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
       else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, smooth ? gl.LINEAR : gl.NEAREST);
@@ -419,13 +537,16 @@ export class FlameRenderer {
       return tex;
     };
     for (let k = 0; k < 2; k++) {
+      const shares = this.precision === 32 ? 16 : this.precision;
       this.accs.push(texture());
-      this.bandSets.push(texture());
+      this.bandSets.push(texture(shares));
+      this.bandSetsB.push(texture(shares));
       const fbo = gl.createFramebuffer()!;
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.accs[k], 0);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.bandSets[k], 0);
-      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, this.bandSetsB[k], 0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
       // A driver may still refuse the kind it offered: one step down, and again.
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE && this.precision !== 8) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -448,6 +569,7 @@ export class FlameRenderer {
   private use() {
     this.acc = this.accs[this.cur];
     this.bands = this.bandSets[this.cur];
+    this.bandsB = this.bandSetsB[this.cur];
     this.accFbo = this.fbos[this.cur];
   }
 
@@ -463,11 +585,14 @@ export class FlameRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.accs[this.cur]);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.bandSets[this.cur]);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.bandSetsB[this.cur]);
     if (!this.query) {
       this.query = gl.createQuery();
       gl.useProgram(this.finding);
       gl.uniform1i(gl.getUniformLocation(this.finding, 'uAcc'), 0);
-      gl.uniform1i(gl.getUniformLocation(this.finding, 'uBands'), 1);
+      gl.uniform1i(gl.getUniformLocation(this.finding, 'uBandsA'), 1);
+      gl.uniform1i(gl.getUniformLocation(this.finding, 'uBandsB'), 2);
       gl.colorMask(false, false, false, false);
       gl.beginQuery(gl.ANY_SAMPLES_PASSED_CONSERVATIVE, this.query!);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -476,7 +601,8 @@ export class FlameRenderer {
     }
     gl.useProgram(this.scrubbing);
     gl.uniform1i(gl.getUniformLocation(this.scrubbing, 'uAcc'), 0);
-    gl.uniform1i(gl.getUniformLocation(this.scrubbing, 'uBands'), 1);
+    gl.uniform1i(gl.getUniformLocation(this.scrubbing, 'uBandsA'), 1);
+    gl.uniform1i(gl.getUniformLocation(this.scrubbing, 'uBandsB'), 2);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE0);
     this.cur = other;
@@ -509,7 +635,8 @@ export class FlameRenderer {
       abc.set([a, b, c], i * 3);
       def.set([d, e, f], i * 3);
       run += x.weight / total;
-      meta.set([i === xs.length - 1 ? 1.0001 : run, x.colorSpeed, Math.cos(2 * Math.PI * x.color), Math.sin(2 * Math.PI * x.color)], i * 4);
+      const reach = x.colorReach ?? 1;
+      meta.set([i === xs.length - 1 ? 1.0001 : run, x.colorSpeed, reach * Math.cos(2 * Math.PI * x.color), reach * Math.sin(2 * Math.PI * x.color)], i * 4);
       [...x.variations].slice(0, SLOTS).forEach(([v, w], k) => {
         ids[i * SLOTS + k] = v;
         ws[i * SLOTS + k] = w;
@@ -522,12 +649,46 @@ export class FlameRenderer {
     gl.uniform4fv(this.u(this.iterate, 'uMeta'), meta);
     gl.uniform4iv(this.u(this.iterate, 'uVarId'), ids);
     gl.uniform4fv(this.u(this.iterate, 'uVarW'), ws);
-    // The bands' transforms are the first three (flame.ts).
-    const hues = [0, 1, 2].map((b) => xs[b]?.color ?? b / 3);
+    // The parts' post maps.
+    const postAbc = new Float32Array(PARTS * 3);
+    const postDef = new Float32Array(PARTS * 3);
+    let mask = 0;
+    xs.slice(0, PARTS).forEach((x, i) => {
+      if (!x.post) return;
+      mask |= 1 << i;
+      postAbc.set([x.post[0], x.post[1], x.post[2]], i * 3);
+      postDef.set([x.post[3], x.post[4], x.post[5]], i * 3);
+    });
+    gl.uniform1i(this.u(this.iterate, 'uPostMask'), mask);
+    gl.uniform3fv(this.u(this.iterate, 'uPostAbc'), postAbc);
+    gl.uniform3fv(this.u(this.iterate, 'uPostDef'), postDef);
+    // The final transform.
+    const final = flame.final;
+    gl.uniform1i(this.u(this.iterate, 'uHasFinal'), final ? 1 : 0);
+    if (final) {
+      gl.uniform3f(this.u(this.iterate, 'uFinalAbc'), final.affine[0], final.affine[1], final.affine[2]);
+      gl.uniform3f(this.u(this.iterate, 'uFinalDef'), final.affine[3], final.affine[4], final.affine[5]);
+      // The shader takes one warp and the plain picture: the strongest warp (while two finals blend, the other one is
+      // left out until it is the stronger), and the linear weight.
+      const fid = new Int32Array(8);
+      const fw = new Float32Array(8);
+      let strongest: [number, number] = [0, 0];
+      for (const [v, w] of final.variations) if (v !== 0 && w > strongest[1]) strongest = [v, w];
+      fid[0] = strongest[0];
+      fw[0] = strongest[1];
+      fw[1] = final.variations.get(0) ?? 0;
+      gl.uniform4iv(this.u(this.iterate, 'uFinalVarId'), fid);
+      gl.uniform4fv(this.u(this.iterate, 'uFinalVarW'), fw);
+    }
+    // The bands' transforms are the first six (flame.ts): each one's colour, a point in the colour plane.
+    const parts = Array.from({ length: PARTS }, (_, b) => xs[b] ?? { color: b / PARTS, colorReach: 1 });
     gl.uniform1f(this.u(this.iterate, 'uLight'), flame.colours.light);
     gl.uniform1f(this.u(this.iterate, 'uChroma'), flame.colours.chroma);
-    gl.uniform2fv(this.u(this.iterate, 'uBandHue'), hues.flatMap((h) => [Math.cos(2 * Math.PI * h), Math.sin(2 * Math.PI * h)]));
-    hues.forEach((h, b) => this.bandRgb.set(colourOf(flame.colours.light, flame.colours.chroma, h), b * 3));
+    gl.uniform2fv(
+      this.u(this.iterate, 'uBandHue'),
+      parts.flatMap((x) => [(x.colorReach ?? 1) * Math.cos(2 * Math.PI * x.color), (x.colorReach ?? 1) * Math.sin(2 * Math.PI * x.color)]),
+    );
+    parts.forEach((x, b) => this.bandRgb.set(colourOf(flame.colours.light, flame.colours.chroma * (x.colorReach ?? 1), x.color), b * 3));
   }
 
   /** One frame: the old picture fades by `look.keep`, `passes` more steps of every point fall into it, and it shows. */
@@ -592,9 +753,12 @@ export class FlameRenderer {
     gl.uniform1f(this.u(this.show, 'uFlash'), look.flash);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.bands);
-    gl.uniform1i(this.u(this.show, 'uBands'), 1);
+    gl.uniform1i(this.u(this.show, 'uBandsA'), 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.bandsB);
+    gl.uniform1i(this.u(this.show, 'uBandsB'), 2);
     gl.activeTexture(gl.TEXTURE0);
-    gl.uniform3f(this.u(this.show, 'uHit'), look.hits[0], look.hits[1], look.hits[2]);
+    gl.uniform1fv(this.u(this.show, 'uHit'), Float32Array.from({ length: PARTS }, (_, k) => look.hits[k] ?? 0));
     gl.uniform3fv(this.u(this.show, 'uBandRgb'), this.bandRgb);
     gl.uniform1f(this.u(this.show, 'uCeiling'), look.ceiling);
     gl.uniform1f(this.u(this.show, 'uSaturation'), look.saturation);
@@ -614,7 +778,7 @@ export class FlameRenderer {
     for (const v of this.vaos) gl.deleteVertexArray(v);
     gl.deleteVertexArray(this.empty);
     gl.deleteTransformFeedback(this.feedback);
-    for (const x of [...this.accs, ...this.bandSets]) gl.deleteTexture(x);
+    for (const x of [...this.accs, ...this.bandSets, ...this.bandSetsB]) gl.deleteTexture(x);
     for (const f of this.fbos) gl.deleteFramebuffer(f);
     if (this.query) gl.deleteQuery(this.query);
     for (const p of new Set([this.iterate, this.plot, this.fade, this.show, this.scrubbing, this.finding])) gl.deleteProgram(p);

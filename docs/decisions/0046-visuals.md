@@ -324,3 +324,39 @@ as Chrome draws on the MSI; three minutes each in 16-bit and 32-bit buffers, bot
   then the resolution down to 60 % of the setting's, then points); a step back up only after seconds in a row with no
   late frame (3 at first, doubled whenever a step up is taken back within five seconds, up to a minute). New points
   take 30 steps unseen (was 20).
+
+## Amendment, 2026-10-18: more kinds of flame, Spread, Symmetry and Mirror
+
+The owner (with claude-5f) wanted more variety than three transforms of a few favoured variations, with half of them
+symmetric and one palette recipe, and settings for what makes a flame's "centres" (its vortices): their spread and
+symmetry.
+
+- **Six parts,** one for each of the music's six bands (format 3; a server's three bands each drive two), every one its
+  own colour (the owner: "separating the bands is the point").
+- **36 of the paper's variations,** picked nearly evenly (the plainest three times as often as the rest, the ones that
+  tear the picture apart or scatter it into dust a third): waves, popcorn, rings, fan, noise, blur, arch, square, rays,
+  blade, secant2 and twintrian added to the 24.
+- **A post map** (flam3's "post": a turn and a little scaling after the variations) on a third of the parts, which bends
+  their shapes round; **a final transform** on three flames in ten (a warp of the whole picture as it is drawn: a sphere,
+  a swirl, a lens, a heart; one of twelve, mixed with the plain picture).
+- **Symmetry:** a third none, two fifths rotations (2 to 8 arms), the rest mirrored too (dihedral, 1 to 6).
+- **Colour families,** every one keeping the bands apart: the spectrum (six hues evenly round), an arc (a third to over
+  half of the wheel), two tones (across the wheel, the bands taking them in turn, near and far), three (each for two
+  neighbouring bands). Purity's default is 75 %: six parts blending go grey.
+- **The check before a flame is shown is looser** (from 4 to 70 % of its frame covered; a score of 0.5 enough), not for
+  haze, which stays as strict: it is grain however long the flame is drawn.
+- **Spread** (25 to 250 %): the parts' offsets from the middle scaled, together into one shape or apart into clusters.
+  **Symmetry** (Auto, the seed's own, or 1 to 8 arms) and **Mirror** (Auto, Off, On): a change blends in over a second
+  and a half, as the dice do. The auto-framing keeps any of them on the screen.
+
+**What it costs:** on the PC's Intel graphics, 512k points in 3 steps (each frame waited for): 21 ms a frame for a flame
+without a final transform, 23 to 27 with one, against 17 to 20 before (the six bands' shares, a third buffer, and the
+final transform's warp: given a switch of its own twelve rather than all 36, which had cost it 33). The step-down takes
+it: the Intel holds 57 frames a second at 512k points in one step, at 85 % of the default resolution. The bands' shares
+are kept in 16-bit floats beside 32-bit colours (they are only ever weighed against the count). And the step-down
+learnt the display's frame interval from every frame: a device behind on all of them calls back as slowly as it draws,
+which made every frame look on time; it now learns it from quick frames only.
+
+The page's own audio is offered to the live analysis (claude-5f's live.ts) through the levelling's route
+(`audioTap` in localPlayer): an element can feed only one, so the route is made at no change of level where levelling
+is off; never in Safari or while another player plays.
