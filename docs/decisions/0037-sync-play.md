@@ -185,6 +185,10 @@ afford (Points, Steps, Resolution, FPS) and how bright its screen should be stay
 - **Kept by Cratarr, per group** (by its leader), in memory: dropped when no player is in the group any more, gone with
   a restart (the group's devices start it again). `GET /api/groups/{leader}/visuals`: `{ version, settings }`, or 404
   until a device has started them.
+- **And per player on its own** (by its name; preview 64): the owner's phone drives the salon tablet without being in
+  a group with it ("my phone is most definitely controlling my salon tablet"), and its visuals follow the tablet's: a
+  player's own page and every page driving it share them, as a group's devices do. A page uses its player's group
+  where it has one, else the player.
 - **A change:** `PUT /api/groups/{leader}/visuals` with `{ base, settings, writer }`. Its settings are merged into the
   group's: top-level keys replace, `routes` replace key by key, so two people moving different sliders at once do not
   undo each other. `base` 0 starts the group's visuals only where it has none (409 otherwise: two devices joining an

@@ -359,7 +359,9 @@ fn refused(status: StatusCode, error: impl Into<String>) -> Response {
     (status, Json(json!({ "error": error.into() }))).into_response()
 }
 
-/// A sync group's visuals, by its leader (decision 0046, amended): 404 until one of its devices has started them.
+/// The visuals shared by everything that shows one player's music (decision 0046, amended): a sync group's, by its
+/// leader, or a player's on its own, by its name (its own page and any page driving it, as the owner's phone drives
+/// the salon tablet). 404 until one of them has started them.
 async fn group_visuals(State(app): State<Arc<App>>, Path(group): Path<String>) -> Response {
     match app.visuals.get(&group) {
         Some(g) => Json(g).into_response(),
@@ -378,8 +380,8 @@ struct GroupVisualsBody {
 
 async fn put_group_visuals(State(app): State<Arc<App>>, Path(group): Path<String>, Json(b): Json<GroupVisualsBody>) -> Response {
     use crate::app::visuals::Refused;
-    if !app.play_on.list().iter().any(|p| p.group.as_deref() == Some(group.as_str())) {
-        return refused(StatusCode::NOT_FOUND, format!("No group is led by {group}."));
+    if !app.play_on.list().iter().any(|p| p.name == group || p.group.as_deref() == Some(group.as_str())) {
+        return refused(StatusCode::NOT_FOUND, format!("No player or group is called {group}."));
     }
     match app.visuals.put(&group, b.base, b.settings, &b.writer) {
         Ok(version) => Json(json!({ "version": version })).into_response(),
