@@ -648,8 +648,8 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
 - **Routes that walk** (the owner: "behavior should also affect those matrix routes that subscribe to it … by limiting
   the fill of cells vertically", "as an attenuating walk"): a route's Walk switch (off by default) puts it on the same
   walk; its square fills only as far as it is.
-- **Pins in the matrix** (the owner, in claude-a5's session): shaping a square pins its route; a whole column can be
-  pinned. The dice leave pinned routes and columns as they are; a pinned route still walks if its switch is on. A
+- **Pins in the matrix** (the owner, in claude-a5's session): shaping a square pins its route (a whole column could be
+  pinned too, until 64.2). The dice leave pinned routes and columns as they are; a pinned route still walks if its switch is on. A
   folded corner marks a pinned square.
 - **The dice keep the Track row**: a roll put in the recipe's routes whole, and recipes have none, so since 64 a new
   track stopped bringing its own look after the dice.
@@ -667,3 +667,24 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
 - **The fluid's stirring as routes** (0047, amended): three more columns, Stir, Flow and Swirl.
 - **Calibration:** run again on this mapping, Standard measures as in 64 (its limits and the thumbs' reference values
   unchanged); 47 of 440 random recipes refused.
+
+## Amendment, 2026-10-18: Close back on top, the editor over the names, zero, the cells as curves, pins on routes (64.2)
+
+- **The top controls back where they were**: 64.1's scrolling grid named its header's first cell `.corner`, the top
+  control row's class, so the row became sticky and left-aligned on a dark band over Close, with a strip above it (the
+  owner: "I no longer have the close button"). The cell has a name of its own.
+- **The curve editor over the grid's sticky names** (the owner: "there is a Z index problem with the sticky label
+  columns").
+- **Zero** in the editor (the owner: "I want a zero button in the graph editor"): the route to nothing, its square
+  empty; as any change to a square, it pins the route.
+- **Each square shows its curve**, scaled so its largest swing fills it (the owner: "The curves aren't normalized in the
+  grid cells"), in place of the number; it **fills from the bottom as far as its route gives now** (its curve where its
+  signal is, times its walk, through the loudness as the routes act), green or pink by direction, moving with the music
+  (the owner: "the cell's fill should show the current value").
+- **Outlines** (the owner: "our selection highlight could be dashed, while pinned routes get a solid highlight"): the
+  picked square dashed, a pinned route solid, **a route that walks** a border of long dashes and short gaps marching at
+  the Behaviour walk's pace (the owner: "a walking border, long solid dashes, short empty gaps. Match speed"), drawn
+  heavier where it is pinned too.
+- **Pins live on routes** (the owner: "A pin lives on a route", "I never asked for a column pin"): 64.1's column pins
+  are gone, from the editor, the dice and the settings (one kept is dropped on reading); the look's and the behaviour's
+  settings pin on their own sliders.

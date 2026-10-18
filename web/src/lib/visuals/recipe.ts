@@ -173,8 +173,7 @@ export const MOVEMENT = {
 
 /** The settings a recipe makes of `base`: its routes whole (every other route off) and its settings; `base`'s look,
  *  pins, colours and what the device can afford (Points, Steps, Resolution, FPS, Brightness) kept, and of the rest
- *  what the owner pinned: a behaviour slider, a route ('route:<key>', on or off as it is), a column ('column:<aspect>',
- *  every route into it as it is). The Track row (what a new track does to the look and the behaviour) is base's: a
+ *  what the owner pinned: a behaviour slider, a route ('route:<key>', on or off as it is). The Track row (what a new track does to the look and the behaviour) is base's: a
  *  recipe is how the visuals move with the music, not what a new track brings. */
 /** What a roll changes: everything, or how it moves (`MOVEMENT`). */
 export type Scope = 'all' | 'movement';
@@ -183,7 +182,6 @@ export function settingsOf(recipe: Recipe, base: VisualSettings, scope: Scope = 
   const within = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
   const r = recipe.settings;
   const pinned = new Set(base.pins);
-  const columns = [...pinned].filter((p) => p.startsWith('column:')).map((p) => `|${p.slice('column:'.length)}`);
   // Of a movement roll, only the movement's columns are the recipe's.
   const moving = (key: string) => MOVEMENT.columns.some((c) => key.endsWith(`|${c}`));
   // The Track row and the fluid's stirring (Stir, Flow, Swirl: how the music pushes the fluid, its defaults today's
@@ -193,7 +191,6 @@ export function settingsOf(recipe: Recipe, base: VisualSettings, scope: Scope = 
     key.startsWith('track|') ||
     stirring(key) ||
     pinned.has(`route:${key}`) ||
-    columns.some((c) => key.endsWith(c)) ||
     (scope === 'movement' && !moving(key));
   const routes: VisualSettings['routes'] = {};
   for (const [k, v] of Object.entries(recipe.routes)) if (!kept(k)) routes[k] = v;

@@ -7,7 +7,7 @@
   // Drawn at the panel's own pixels, so the handles stay round.
   import Icon from '../Icon.svelte';
   import { held } from './held.svelte';
-  import { isStraight, withEnd, type Curve } from './curves';
+  import { isStraight, straight, withEnd, type Curve } from './curves';
 
   let {
     curve,
@@ -16,12 +16,9 @@
     density,
     walks,
     pinned,
-    columnPinned,
-    columnLabel,
     onchange,
     onwalks,
     onpin,
-    oncolumnpin,
   }: {
     curve: Curve;
     /** The bands' curves differ (all six shown: their mean, dashed). */
@@ -32,13 +29,10 @@
     density: Float32Array | null;
     walks: boolean;
     pinned: boolean;
-    columnPinned: boolean;
-    columnLabel: string;
     /** The curve changed (`done`: the drag let go). */
     onchange: (c: Curve, done: boolean) => void;
     onwalks: (on: boolean) => void;
     onpin: (on: boolean) => void;
-    oncolumnpin: (on: boolean) => void;
   } = $props();
 
   const H = 120;
@@ -129,12 +123,10 @@
   </svg>
   <div class="controls">
     <output>{curve.h > 0 ? '+' : ''}{Math.round(curve.h * 100)}%</output>
+    <button class="chip" use:held={'route:zero'} disabled={curve.h === 0 && isStraight(curve) && !mixed} onclick={() => onchange(straight(0), true)}>0</button>
     <button class="chip" class:on={walks} aria-pressed={walks} use:held={'route:walks'} onclick={() => onwalks(!walks)}>Walk</button>
     <button class="pin" class:on={pinned} aria-pressed={pinned} aria-label={pinned ? 'Unpin route' : 'Pin route'} use:held={'route:pin'} onclick={() => onpin(!pinned)}
       ><Icon name="pin" size={16} /></button
-    >
-    <button class="pin column" class:on={columnPinned} aria-pressed={columnPinned} aria-label={columnPinned ? `Unpin ${columnLabel}` : `Pin ${columnLabel}`} use:held={'column:pin'} onclick={() => oncolumnpin(!columnPinned)}
-      ><Icon name="pin" size={16} /><span>{columnLabel}</span></button
     >
   </div>
 </div>

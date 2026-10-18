@@ -53,13 +53,12 @@ test('a movement roll changes only the movement', () => {
 });
 
 test('what is pinned stays, in either roll', () => {
-  const pinned = { ...base, pins: ['flash', 'route:loudness|-|size', 'column:shape'] } as VisualSettings;
+  const pinned = { ...base, pins: ['flash', 'route:loudness|-|size', 'route:level|0|shape'] } as VisualSettings;
   for (const scope of ['all', 'movement'] as const) {
     const s = settingsOf(recipe, pinned, scope);
     assert.equal(s.flash, 0.33, scope);
     assert.equal(s.routes['loudness|-|size'], 0.9, scope);
     assert.equal(s.routes['level|0|shape'], 0.4, scope);
-    for (const k of Object.keys(s.routes).filter((k) => columnOf(k) === 'shape')) assert.equal(s.routes[k], pinned.routes[k], `${scope} ${k}`);
   }
 });
 

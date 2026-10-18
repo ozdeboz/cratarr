@@ -42,7 +42,7 @@
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
   import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
-  import { curveOf, endOf, heightAt, isStraight, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
+  import { curveOf, endOf, heightAt, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
   import CurveEditor from './CurveEditor.svelte';
   import { densityOf, newHistory, remember } from './history';
   import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
@@ -53,7 +53,7 @@
   import type { TrialLoop } from './trial.svelte';
   import { beatsOf } from './beats';
   import { DEFAULT_LIMITS, prechecking, type Checked } from './precheck';
-  import { recipeFor, settingsOf, type Recipe, type Scope } from './recipe';
+  import { recipeFor, settingsOf, STIRRING, type Recipe, type Scope } from './recipe';
   import { signalsOf } from './signals';
   import { Meters, type FrameStats } from './meters';
   import RateMode from './RateMode.svelte';
@@ -642,20 +642,64 @@
   // Each walking route's walk now (`route:` and its key: its share of itself), for its cell, four times a second while
   // the panel shows.
   let routeWalkNow = $state<Record<string, number>>({});
-  // A cell: its routes' end (the bands' mean), whether they differ, whether they are pinned (each, or their column),
-  // bent, and walking (their walk's share now).
+  // A cell: its routes' end (the bands' mean), whether they differ, whether they are all pinned, the curve it shows
+  // (the bands' mean, scaled to the cell: `pathOf`), whether its routes walk with the behaviour, and what they give now:
+  // each its curve at where its signal is now, times its walk, through the loudness (as the routes act: the Loudness
+  // row and the stirring's columns not), the bands' mean; -1 to 1.
   function cellOf(signal: Signal, aspect: Aspect) {
     const keys = keysOf(signal, aspect);
     const vs = keys.map((k) => s.routes[k] ?? 0);
     const ends = vs.map(endOf);
-    const walking = keys.filter((_, i) => walksOf(vs[i]));
+    const cs = vs.map(curveOf);
+    const mean = (f: (c: Curve) => number) => cs.reduce((a, c) => a + f(c), 0) / cs.length;
+    const shown = { h1: [mean((c) => c.h1[0]), mean((c) => c.h1[1])], h2: [mean((c) => c.h2[0]), mean((c) => c.h2[1])], h: mean((c) => c.h) } as Curve;
+    const e = signal === 'loudness' || STIRRING.includes(aspect as (typeof STIRRING)[number]) ? 1 : meters.lit;
+    const band = isBandSignal(signal);
+    const now = keys.reduce((a, k, i) => {
+      const b = band ? (pick ?? i) : null;
+      const x = b === null ? (meters.track[T[signal as keyof typeof T]] ?? 0) : (meters.bands[b]?.[B[signal as keyof typeof B]] ?? 0);
+      const y = typeof vs[i] === 'number' ? (vs[i] as number) * Math.min(1, Math.max(0, x)) : heightAt(tableFor(cs[i]), x);
+      return a + y * (routeWalkNow[`route:${k}`] ?? 1) * e;
+    }, 0) / keys.length;
     return {
       v: ends.reduce((a, b) => a + b, 0) / ends.length,
       mixed: ends.some((x) => Math.abs(x - ends[0]) > 1e-6),
-      pinned: s.pins.includes(`column:${aspect}`) || keys.every((k) => s.pins.includes(`route:${k}`)),
-      bent: vs.some((v) => typeof v !== 'number' && !isStraight(v)),
-      walk: walking.length ? walking.reduce((a, k) => a + (routeWalkNow[`route:${k}`] ?? 1), 0) / walking.length : null,
+      pinned: keys.every((k) => s.pins.includes(`route:${k}`)),
+      path: pathOf(shown),
+      walks: keys.some((_, i) => walksOf(vs[i])),
+      now: Math.min(1, Math.max(-1, now)),
     };
+  }
+  // Each curve's table, kept by the curve (a table is 513 points).
+  const tables = new Map<string, Float32Array>();
+  function tableFor(c: Curve): Float32Array {
+    const key = `${c.h1}|${c.h2}|${c.h}`;
+    let t = tables.get(key);
+    if (!t) {
+      if (tables.size > 2000) tables.clear();
+      t = tableOf(c).table;
+      tables.set(key, t);
+    }
+    return t;
+  }
+  // A curve as the cell draws it (viewBox 0 0 32 24): left to right as the row rises, about the middle line, scaled so
+  // its largest swing reaches the cell's edge (the amount is the cell's colour); none for a route that does nothing.
+  // Kept by the curve, so a grid of them costs little each time it is drawn.
+  const paths = new Map<string, string | null>();
+  function pathOf(c: Curve): string | null {
+    const key = `${c.h1}|${c.h2}|${c.h}`;
+    const had = paths.get(key);
+    if (had !== undefined) return had;
+    const all = tableFor(c);
+    const ys = Array.from({ length: 33 }, (_, i) => all[Math.round((i / 32) * (all.length - 1))]);
+    const most = Math.max(...ys.map(Math.abs));
+    const path =
+      most < 1e-4
+        ? null
+        : ys.map((y, i) => `${i ? 'L' : 'M'}${((i / (ys.length - 1)) * 28 + 2).toFixed(2)},${(12 - (y / most) * 9).toFixed(2)}`).join('');
+    if (paths.size > 2000) paths.clear();
+    paths.set(key, path);
+    return path;
   }
   // The picked cell's curve for the editor: its route's, or for all six bands the mean of their handles (dashed where
   // they differ); whether it walks (all of them), and its pins.
@@ -669,7 +713,6 @@
       mixed: cs.some((c) => flat(c).some((v, i) => Math.abs(v - flat(cs[0])[i]) > 1e-6)),
       walks: cs.every((c) => !!c.walks),
       pinned: keys.every((k) => s.pins.includes(`route:${k}`)),
-      columnPinned: s.pins.includes(`column:${aspect}`),
     };
   }
   const edited = $derived(cell ? editedOf(cell.signal, cell.aspect) : null);
@@ -726,7 +769,11 @@
   const cellLabel = (signal: Signal, aspect: Aspect) => `${SIGNAL_LABEL[signal]}${isBandSignal(signal) ? ` (${pick === null ? 'All' : BAND_ROWS[pick]})` : ''} → ${ASPECT_LABEL[aspect]}`;
   // Each signal now, for the meters by the rows' names (the picked band's, or the bands' mean), ten times a second
   // while the panel shows.
-  let meters = $state<{ track: number[]; bands: number[][] }>({ track: [], bands: [] });
+  let meters = $state<{ track: number[]; bands: number[][]; lit: number }>({ track: [], bands: [], lit: 1 });
+  // The routes' box, and how far the walking cells' borders have marched (px, one dash and gap is 12): on at the pace of
+  // the behaviour's walk, standing still while it does.
+  let routesBox = $state<HTMLElement | null>(null);
+  let marched = 0;
   const meterOf = (signal: Signal) => {
     if (!isBandSignal(signal)) return meters.track[T[signal as keyof typeof T]] ?? 0;
     const i = B[signal as keyof typeof B];
@@ -1107,9 +1154,13 @@
           if (h.index > hitsSeen[b] && hitsSeen[b] >= 0 && h.index - hitsSeen[b] <= 3) hitsCounted += h.index - hitsSeen[b];
           hitsSeen[b] = h.index;
         });
+      if (panel && routesBox) {
+        marched = (marched + 40 * Math.abs(d.behaviour) * dt) % 12;
+        routesBox.style.setProperty('--march', `${marched.toFixed(2)}px`);
+      }
       if (panel && now - metered > 100) {
         metered = now;
-        meters = { track: Array.from(track), bands: d.bands.map((v) => Array.from(v)) };
+        meters = { track: Array.from(track), bands: d.bands.map((v) => Array.from(v)), lit: d.lit };
       }
       // Drift: the look walking with the music (drift.ts), each bar another way, never far from where the track set it;
       // ten steps a second (each makes the flame anew), none with reduced motion. Not saved, nor sent to the group:
@@ -1452,16 +1503,15 @@
     {@const a = cellOf(signal, aspect)}
     <button
       class="cell"
-      class:negative={a.v < 0}
+      class:negative={a.now < 0}
       class:mixed={a.mixed}
       class:pinned={a.pinned}
-      class:walks={a.walk !== null}
+      class:walks={a.walks}
       class:picked={cell?.signal === signal && cell?.aspect === aspect}
-      style:--amount={Math.min(1, Math.abs(a.v))}
-      style:--walk={a.walk ?? 1}
+      style:--now={Math.abs(a.now)}
       aria-label="{cellLabel(signal, aspect)}, {signed(a.v)}"
       onclick={() => (cell = { signal, aspect })}
-      ><span>{a.v ? Math.round(a.v * 100) : ''}</span>{#if a.bent}<svg class="bent" viewBox="0 0 8 8" aria-hidden="true"><path d="M0.5 7.5C1 2 4 0.5 7.5 0.5" /></svg>{/if}</button
+      >{#if a.path}<svg class="curve" viewBox="0 0 32 24" preserveAspectRatio="none" aria-hidden="true"><path d={a.path} /></svg>{/if}</button
     >
   {/each}
 {/snippet}
@@ -1576,7 +1626,7 @@
               {/each}
             </div>
           {/each}
-          <div class="routes" role="group" aria-label="Routes">
+          <div class="routes" role="group" aria-label="Routes" bind:this={routesBox}>
             <div class="head">
               <h3 use:held={'routes'}>Routes</h3>
               <button
@@ -1630,12 +1680,9 @@
                   {density}
                   walks={edited.walks}
                   pinned={edited.pinned}
-                  columnPinned={edited.columnPinned}
-                  columnLabel={ASPECT_LABEL[aspect]}
                   onchange={(c, done) => setCurve(signal, aspect, c, done)}
                   onwalks={(on) => setWalks(signal, aspect, on)}
                   onpin={(on) => setPins(keysOf(signal, aspect).map((k) => `route:${k}`), on)}
-                  oncolumnpin={(on) => setPins([`column:${aspect}`], on)}
                 />
               </div>
             {/if}
@@ -2008,52 +2055,66 @@
     cursor: pointer;
   }
 
+  /* What the route gives now: the cell filled from the bottom that far, green the one way, pink the other. */
   .cell::before {
     content: '';
     position: absolute;
-    inset: 0;
-    border-radius: inherit;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: calc(var(--now) * 100%);
+    border-radius: 0 0 4px 4px;
     background: var(--accent);
-    opacity: calc(var(--amount) * 0.85);
+    opacity: 0.85;
   }
 
   .cell.negative::before {
     background: #e8708f;
   }
 
-  /* A walking route: its colour up to its walk's share of the cell. */
-  .cell.walks::before {
-    top: auto;
-    height: calc(var(--walk) * 100%);
-    border-radius: 0 0 4px 4px;
+  /* Pinned: a solid line round it (walking, its marching border is drawn as heavy instead). */
+  .cell.pinned:not(.walks) {
+    outline: 2px solid rgb(255 255 255 / 0.85);
+    outline-offset: -2px;
   }
 
-  /* Pinned: a corner turned down. */
-  .cell.pinned::after {
+  /* Walking with the behaviour: long dashes and short gaps (10 and 2 px; the picked square's are short and even)
+     marching round it, at the walk's pace. */
+  .cell.walks::after {
+    --line: 1.5px;
     content: '';
     position: absolute;
-    top: 0;
-    right: 0;
-    border-width: 0 7px 7px 0;
-    border-style: solid;
-    border-color: transparent rgb(255 255 255 / 0.85) transparent transparent;
-    border-top-right-radius: 4px;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+      linear-gradient(90deg, #fff 10px, transparent 0) var(--march, 0px) 0 / 12px var(--line) repeat-x,
+      linear-gradient(90deg, #fff 10px, transparent 0) calc(-1 * var(--march, 0px)) 100% / 12px var(--line) repeat-x,
+      linear-gradient(0deg, #fff 10px, transparent 0) 0 calc(-1 * var(--march, 0px)) / var(--line) 12px repeat-y,
+      linear-gradient(0deg, #fff 10px, transparent 0) 100% var(--march, 0px) / var(--line) 12px repeat-y;
   }
 
-  /* Bent: a small curve in the corner across from the pin's, clear of the number. */
-  .cell .bent {
+  .cell.walks.pinned::after {
+    --line: 2.5px;
+  }
+
+  /* Picked too: the march inside the picked outline. */
+  .cell.walks.picked::after {
+    inset: 3px;
+  }
+
+  /* Its curve, scaled to the cell. */
+  .cell .curve {
     position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 7px;
-    height: 7px;
+    inset: 2px;
+    width: calc(100% - 4px);
+    height: calc(100% - 4px);
     fill: none;
-    stroke: rgb(255 255 255 / 0.85);
-    stroke-width: 1.2;
-  }
-
-  .cell span {
-    position: relative;
+    stroke: rgb(255 255 255 / 0.9);
+    stroke-width: 1.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
   }
 
   .cell.mixed {
@@ -2062,7 +2123,7 @@
   }
 
   .cell.picked {
-    outline: 2px solid #fff;
+    outline: 2px dashed #fff;
     outline-offset: -1px;
   }
 
@@ -2099,8 +2160,9 @@
   /* The picked route's curve, kept in sight under the grid. */
   .route {
     position: sticky;
-    /* Down to the panel's edge (its padding), so nothing shows under it. */
+    /* Down to the panel's edge (its padding), so nothing shows under it; over the grid's sticky names and header. */
     bottom: -10px;
+    z-index: 3;
     display: grid;
     gap: 4px;
     margin: 8px -8px 0;

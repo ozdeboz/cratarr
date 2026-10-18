@@ -182,13 +182,13 @@ export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothin
 export const BAND_TIMES = ['lighting', 'evolution', 'continuity'] as const;
 export const bandPin = (key: (typeof BAND_TIMES)[number], band: number) => `${key}:${band}`;
 export const BAND_PINS = BAND_TIMES.flatMap((k) => Array.from({ length: BANDS }, (_, b) => bandPin(k, b)));
-/** Whether `k` can be pinned: the Look's settings, the behaviour's sliders, a route (`route:` and its key) and a
- *  column of the routes (`column:` and its aspect): what is pinned the dice, Drift and a track leave as it is (the
- *  owner: "I also want to implement pin for the matrix"). */
+/** Whether `k` can be pinned: the Look's settings, the behaviour's sliders, each band's times and a route (`route:`
+ *  and its key; a pin lives on a route): what is pinned the dice, Drift and a track leave as it is (the owner: "I also
+ *  want to implement pin for the matrix"). */
 export const isPinnable = (k: string) =>
   isPresetKey(k) ||
   (BEHAVIOUR_PINS as readonly string[]).includes(k) ||
-  BAND_PINS.includes(k) || (k.startsWith('route:') && isRoute(k.slice(6), BANDS)) || (k.startsWith('column:') && (ASPECTS as readonly string[]).includes(k.slice(7)));
+  BAND_PINS.includes(k) || (k.startsWith('route:') && isRoute(k.slice(6), BANDS));
 
 function load(): VisualSettings {
   try {
