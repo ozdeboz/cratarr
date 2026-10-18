@@ -5,8 +5,14 @@
 import { PARTS, type Part } from './flame';
 import type { Levers } from './governor';
 import type { Music } from './music.svelte';
-import { A, ASPECTS, B, BAND_SIGNALS, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from './routes';
+import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from './routes';
 import { BANDS, type VisualSettings } from './settings.svelte';
+
+/** The columns scaled here, each its aspect's place and its setting (the fluid's stirring is scaled where it stirs:
+ *  Visuals.svelte's `gain`). */
+const SCALED = (Object.entries(COLUMN_SCALES) as [keyof typeof COLUMN_SCALES, (typeof COLUMN_SCALES)[keyof typeof COLUMN_SCALES]][])
+  .filter(([a]) => a !== 'stir' && a !== 'flow' && a !== 'swirl')
+  .map(([a, k]) => [A[a], k] as const);
 
 /** Nothing held back (the governor's levers all open). */
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
@@ -178,6 +184,13 @@ export function stepAspects(
   const bands = m.bands ?? st.standIn;
   const envelope = m.playing ? st.lit : 0;
   give(matrix, track, bands, envelope, st.got, opts.routeWalk);
+  // Each column as far as its scale lets its routes move it (64.2): the whole track's and each band's.
+  for (const [a, k] of SCALED) {
+    const v = s[k];
+    if (v === 1) continue;
+    st.got.whole[a] *= v;
+    for (const own of st.got.band) own[a] *= v;
+  }
   const W = st.got.whole;
   // The courses: followed more slowly while the governor holds the flashes back, so they no longer follow each pulse.
   const follow2 = 1 - Math.exp((-dt * L.swing) / SLOW_S);

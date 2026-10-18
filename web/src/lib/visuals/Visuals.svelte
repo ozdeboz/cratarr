@@ -73,9 +73,12 @@
     ASPECTS,
     B,
     BAND_SIGNALS,
+    COLUMN_SCALES,
     compile,
     heightOn,
+    LEVEL_ASPECTS,
     routeKey,
+    SCALE_KEYS,
     SIGNAL_LABEL,
     T,
     TRACK_SIGNALS,
@@ -345,7 +348,7 @@
   // stands, as at Wild's most (`loosened`), till the next roll, an undo (back to what stood before), Reset or a recall.
   // Three flashes a second over a quarter of the screen stay the rule. A single tap waits out the double's window (a
   // roll takes about as long anyway).
-  const BEHAVIOUR = ['routes', 'flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', 'lighting', 'evolution', 'continuity'] as const;
+  const BEHAVIOUR = ['routes', 'flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', ...SCALE_KEYS, 'lighting', 'evolution', 'continuity'] as const;
   const TRIES = 8;
   const DOUBLE_MS = 250;
   let rollWanted: Scope | null = null;
@@ -450,6 +453,8 @@
     const settings: Record<string, unknown> = { ...snap.settings };
     // One saved in 63: its Fluid on the finer scale since.
     if ((settings.v ?? 1) === 1 && typeof settings.fluid === 'number') settings.fluid = fluidFrom63(settings.fluid);
+    // One saved before the columns' scales (64.2): all of each.
+    for (const k of SCALE_KEYS) if (!(k in settings)) settings[k] = 1;
     delete settings.v;
     // This device's own sliders, on this device only.
     applyDevice(settings);
@@ -518,14 +523,17 @@
     { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
     { key: 'wild', label: 'Wild', step: 0.05, text: percent },
   ];
+  // Then each column of the routes, in the grid's order (64.2; the owner: "each column their own slider"): its scale,
+  // or for the four levels the most their routes give.
+  const column = (key: One, aspect: Aspect): Row => ({ key, label: ASPECT_LABEL[aspect], step: 0.05, text: percent });
   const SHOW: Row[] = [
     { key: 'intensity', label: 'Intensity', step: 0.05, text: percent },
     { key: 'flash', label: 'Flash', step: 0.05, text: percent },
     { key: 'speed', label: 'Speed', step: 0.05, text: percent },
-    { key: 'smoothing', label: 'Smoothing', step: 0.05, text: percent },
-    { key: 'floor', label: 'Floor', step: 0.05, text: percent },
-    { key: 'depth', label: 'Depth', step: 0.05, text: percent },
-    { key: 'fluid', label: 'Fluid', step: 0.05, text: percent },
+    ...ASPECTS.flatMap((a) => {
+      const key = (COLUMN_SCALES as Partial<Record<Aspect, One>>)[a] ?? ((LEVEL_ASPECTS as readonly Aspect[]).includes(a) ? (a as One) : null);
+      return key ? [column(key, a)] : [];
+    }),
   ];
   const LOOK: Row[] = [
     { key: 'colours', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? 'Rainbow' },
@@ -600,12 +608,17 @@
     if ((SHARED_KEYS as readonly string[]).includes(key)) share({ [key]: v, ...(isPinnable(key) ? { pins: [...s.pins] } : {}) });
     showChrome();
   }
-  // Full screen, where the browser can and the visuals are not already (the app's view may be): a button for it.
+  // Full screen, where the browser can: a button for it, which leaves it again (64.2: it went away, and only the
+  // browser's Esc or back left).
   const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled && typeof document.documentElement.requestFullscreen === 'function';
   let fullscreen = $state(typeof document !== 'undefined' && !!document.fullscreenElement);
   function goFullscreen() {
     document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
     if (docked) setVisualsSide(false);
+    showChrome();
+  }
+  function leaveFullscreen() {
+    document.exitFullscreen().catch(() => {});
     showChrome();
   }
   // Beside the page, where the player goes (it moves there too), or over it again; as the full player's own buttons.
@@ -1289,9 +1302,11 @@
         swell: track[T.swell],
         bps: m.bps,
         center: [0.5, 0.5],
-        // What each push is worth: its route into Stir, Flow or Swirl (the trial's own routes with the rating page's).
+        // What each push is worth: its route into Stir, Flow or Swirl (the trial's own routes with the rating page's),
+        // times that column's scale.
         gain: (signal, band, aspect, x) =>
-          trial.settings ? (aspects.matrix ? heightOn(aspects.matrix, signal, band, aspect, x) : x) : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined),
+          behaving[aspect] *
+          (trial.settings ? (aspects.matrix ? heightOn(aspects.matrix, signal, band, aspect, x) : x) : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined)),
       });
       renderer.frame(
         passes,
@@ -1581,9 +1596,13 @@
             ><Icon name="sidebar" size={24} /></button
           >
         {/if}
-        {#if canFullscreen && !fullscreen}
-          <button class="round" aria-label="Full screen" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={goFullscreen}
-            ><Icon name="fullscreen" size={24} /></button
+        {#if canFullscreen}
+          <button
+            class="round"
+            aria-label={fullscreen ? 'Exit full screen' : 'Full screen'}
+            onpointerdown={(e) => e.stopPropagation()}
+            onpointerup={(e) => e.stopPropagation()}
+            onclick={fullscreen ? leaveFullscreen : goFullscreen}><Icon name={fullscreen ? 'exitFullscreen' : 'fullscreen'} size={24} /></button
           >
         {/if}
       </div>

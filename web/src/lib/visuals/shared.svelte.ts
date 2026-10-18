@@ -17,6 +17,7 @@ import { ApiError, getGroupVisuals, putGroupVisuals } from '../api';
 import { on } from '../events.svelte';
 import { head, playOn } from '../playOn.svelte';
 import { PRESET_KEYS, type Preset } from './flame';
+import { SCALE_KEYS } from './routes';
 import { keptFrom, saveVisualSettings, visualSettings, type VisualSettings } from './settings.svelte';
 
 /** The settings shared, and saved in a snapshot. */
@@ -32,6 +33,7 @@ export const SHARED_KEYS = [
   'floor',
   'depth',
   'fluid',
+  ...SCALE_KEYS,
   'routes',
   'lighting',
   'evolution',

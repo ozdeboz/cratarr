@@ -166,8 +166,8 @@
     prefs.sidebar = false;
     player.full = true;
   }
-  // Full screen, where the browser can and the page is not already (the app's view may be): over the page, then the
-  // whole screen.
+  // Full screen, where the browser can: over the page, then the whole screen; full screen, the same button leaves it
+  // (64.2: it went away, and only the browser's Esc or back left).
   const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled && typeof document.documentElement.requestFullscreen === 'function';
   let fullscreen = $state(typeof document !== 'undefined' && !!document.fullscreenElement);
   $effect(() => {
@@ -179,6 +179,7 @@
     document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
     if (place === 'side') maximise();
   }
+  const leaveFullscreen = () => document.exitFullscreen().catch(() => {});
   // Beside the page again: the player moves into the panel, unless a playlist or crate is viewed there: that keeps the
   // panel, and the mini-player's tap brings the player over it.
   function toSidebar() {
@@ -350,8 +351,10 @@
       {:else if player.roomy}
         <button class="corner" aria-label="Beside the page" onclick={toSidebar}><Icon name="sidebar" size={22} /></button>
       {/if}
-      {#if canFullscreen && !fullscreen}
-        <button class="corner" aria-label="Full screen" onclick={goFullscreen}><Icon name="fullscreen" size={20} /></button>
+      {#if canFullscreen}
+        <button class="corner" aria-label={fullscreen ? 'Exit full screen' : 'Full screen'} onclick={fullscreen ? leaveFullscreen : goFullscreen}
+          ><Icon name={fullscreen ? 'exitFullscreen' : 'fullscreen'} size={20} /></button
+        >
       {/if}
     </div>
     <!-- Finamp's layout: the cover's region, then the controls' box with three groups spread in it (track name,

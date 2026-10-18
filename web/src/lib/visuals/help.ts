@@ -27,6 +27,26 @@ export const HELP: Record<string, string> = {
     'The flame has six parts, one for each band of the sound from the deepest bass to the highest treble, each with its own colour. At 0 the parts’ colours mix where they overlap; at 100% each part keeps only its own colour, so you can tell the bands apart.',
   spread:
     'How far apart the flame’s six parts (one for each band of the sound) are drawn. At 25% they are pulled together into one shape; at 250% they are drawn far apart into separate clusters.',
+  shape:
+    'Shape: how much of what the routes into the Shape column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 the music leaves the parts’ form as it is.',
+  rotation:
+    'Rotation: how much of what the routes into the Rotation column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 the music turns nothing.',
+  lights:
+    'Lights: how much of what the routes into the Lights column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 no part lights up or dims with the music.',
+  glow:
+    'Glow: how much of what the routes into the Glow column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 the glow stays even.',
+  size:
+    'Size: how much of what the routes into the Size column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 the picture stays at its resting size.',
+  saturation:
+    'Saturation: how much of what the routes into the Saturation column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 the colours stay as rich as at rest.',
+  trails:
+    'Trails: how much of what the routes into the Trails column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 the trails keep their usual length.',
+  stir:
+    'Stir: how much of what the routes into the Stir column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 nothing pushes the fluid.',
+  flow:
+    'Flow: how much of what the routes into the Flow column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 the music gives the flow no life.',
+  swirl:
+    'Swirl: how much of what the routes into the Swirl column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 nothing sets it whirling.',
   smoothing:
     'Where few points have landed, the picture looks grainy. Smoothing softens those sparse areas into a haze, while the dense areas stay sharp. At 0 you see the raw grain of single points; at 100% the sparse areas become a soft haze up to twelve pixels wide. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
   floor:
@@ -43,7 +63,7 @@ export const HELP: Record<string, string> = {
   // The look a track or the dice sets (the preset); each can be moved, and then stays as you set it.
   look: 'The settings that decide what the flame looks like: its shape and its colours. When a track starts it sets them to that track’s own look, the same each time it plays; the dice set them at random. A setting you move stays where you put it (it is pinned) until you tap its pin.',
   behaviour:
-    'Behaviour: how the visuals move with the music. Each of these settings is the most it goes to: Behaviour’s walk (a route into the Behaviour column) moves them a little below what you set and back, never above, and the routes into Smoothing, Floor, Depth and Fluid only ever take those lower; the mark under each slider shows where it is now. Move one and it is pinned: the dice leave it and it no longer walks; tap the pin to let go.',
+    'Behaviour: how the visuals move with the music. Each of these settings is the most it goes to: Behaviour’s walk (a route into the Behaviour column) moves them a little below what you set and back, never above, and the routes into Smoothing, Floor, Depth and Fluid only ever take those lower. Below Speed, each column of the routes has its slider, in the grid’s order; the mark under each slider shows where it is now. Move one and it is pinned: the dice leave it and it no longer walks; tap the pin to let go.',
   form: 'The flame’s basic shape, from 0 to 999. Each number gives the six parts their own kinds of curve, and neighbouring numbers are not alike. Detail, Twist and Warp then shape whichever form it is.',
   detail:
     'How the flame’s parts fold into themselves. At 0 each part is a dense, compact core; at 100% it is large, open and wispy, with more fine detail.',
@@ -66,7 +86,7 @@ export const HELP: Record<string, string> = {
     'Save over: puts the visuals as they are now into this snapshot, every setting and a new small picture, keeping its name and its place among the others.',
   another: 'Another look: every Look setting you have not pinned moves to a new random value.',
   randomise:
-    'Randomise. A tap: everything at random, a new look (every Look setting you have not pinned) and new values for how the visuals move with the music: the routes, Flash, Speed, Intensity, Fluid, Smoothing, Floor, Depth and each band’s times. A double tap: only how they move, the routes into Shape, Lights, Rotation and Size, Speed, Flash and the bands’ times; the look, the colours, the grain and smoke and every other route stay, and until the next roll, an undo or a Reset it may be as lively as Wild at 100% allows. Either way each roll is first tried against the next half minute of the playing track and passed over if it would be livelier than allowed or flash over a quarter of the screen more than three times a second (after eight tries, the one closest to fitting is taken). What you pinned (settings and routes), the Track row, Colours, Wild, Points, Steps, Resolution, FPS and Brightness stay. In a sync group, every device gets it.',
+    'Randomise. A tap: everything at random, a new look (every Look setting you have not pinned) and new values for how the visuals move with the music: the routes and every Behaviour setting, each column’s slider among them, and each band’s times. A double tap: only how they move, the routes into Shape, Lights, Rotation and Size and those four sliders, Speed, Flash and the bands’ times; the look, the colours, the grain and smoke and every other route stay, and until the next roll, an undo or a Reset it may be as lively as Wild at 100% allows. Either way each roll is first tried against the next half minute of the playing track and passed over if it would be livelier than allowed or flash over a quarter of the screen more than three times a second (after eight tries, the one closest to fitting is taken). What you pinned (settings and routes), the Track row, Colours, Wild, Points, Steps, Resolution, FPS and Brightness stay. In a sync group, every device gets it.',
   'thumbs-up':
     'Thumbs up: you like the visuals as they are now. If they are being held back just then (the amber dot), the limit doing it is eased a step, so they get more room. Otherwise your thumb is only kept, with how lively the last 20 seconds were, to tune the limits later. The limit on flashes never changes.',
   'thumbs-down':

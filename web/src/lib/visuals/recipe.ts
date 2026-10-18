@@ -3,13 +3,14 @@
 // with: a fixed backbone (what makes the visuals follow the music at all: loudness sets the size and colour, each band's
 // level shapes and turns its part, its hits light it, the beats swell it), each of its amounts varied a little, and 3 to
 // 6 more routes drawn from ones that make musical sense, each within its own cap; the settings that shape the motion
-// (Flash, Speed, Intensity, the fluid, the grain, the bands' times) varied within ranges that keep it watchable. Then
+// (Flash, Speed, Intensity, the fluid, the grain, the bands' times, each column's scale) varied within ranges that
+// keep it watchable. Then
 // a precheck runs the recipe against the track's own signals and refuses one that would flash or churn past the
 // governor's limits (`precheck`, with the frame's mapping the visuals use).
 //
 // Pure: the same seed gives the same recipe (every device of a sync group alike).
 
-import { routeKey, type Aspect, type Signal } from './routes';
+import { routeKey, SCALE_KEYS, type Aspect, type Signal } from './routes';
 import type { BEHAVIOUR_PINS, VisualSettings } from './settings.svelte';
 
 export type RecipeSettings = {
@@ -23,6 +24,8 @@ export type RecipeSettings = {
   lighting: number[];
   evolution: number[];
   continuity: number[];
+  /** Each column's scale (64.2; settings.svelte.ts `COLUMN_SCALES`). */
+  scales: Record<(typeof SCALE_KEYS)[number], number>;
 };
 
 export type Recipe = {
@@ -72,6 +75,10 @@ const MOST_FLASHING = 1.6;
 /** Today's bands' times, which a recipe varies. */
 const LIGHTING = [0.2, 0.18, 0.15, 0.13, 0.1, 0.08];
 const EVOLUTION = [0.25, 0.25, 0.25, 0.25, 0.25, 0.25];
+/** The columns' scales a recipe rolls (routes.ts `SCALE_KEYS`, in its order; drawn after everything else, so a seed's
+ *  routes and other settings are what they were before 64.2), each between this and all of it: every column still
+ *  moves. */
+const LEAST_SCALE = 0.5;
 
 const BAND_SIGNALS = new Set<Signal>(['level', 'flux', 'hits', 'percussive', 'harmonic', 'percussiveHits', 'crest', 'width', 'bandSwell']);
 
@@ -156,19 +163,21 @@ export function recipeFor(seed: number, aspects: readonly string[], bands = 6): 
     lighting: LIGHTING.map((v) => v * 2 ** between(-0.7, 1)),
     evolution: EVOLUTION.map((v) => v * 2 ** between(-0.7, 1.3)),
     continuity: Array.from({ length: bands }, () => between(0.2, 0.9)),
+    scales: Object.fromEntries(SCALE_KEYS.map((k) => [k, between(LEAST_SCALE, 1)])) as RecipeSettings['scales'],
   };
   return { seed, routes: r, settings, extras };
 }
 
 /** What the dice's double tap randomises (the owner: "double tap becomes this randomize 1 to 5"): how the visuals move
- *  with the music, the routes into the flame's form, its lights, its turning and its size, the turning's pace and the
- *  swing, and the bands' times; the look, its colours, the grain and smoke, Intensity and every other route stay. */
+ *  with the music, the routes into the flame's form, its lights, its turning and its size and those four columns'
+ *  scales, the turning's pace and the swing, and the bands' times; the look, its colours, the grain and smoke,
+ *  Intensity and every other route and scale stay. */
 /** The columns of the fluid's stirring, which a roll leaves as they are. */
 export const STIRRING = ['stir', 'flow', 'swirl'] as const;
 
 export const MOVEMENT = {
   columns: ['shape', 'lights', 'rotation', 'size'],
-  settings: ['flash', 'speed', 'lighting', 'evolution', 'continuity'],
+  settings: ['flash', 'speed', 'lighting', 'evolution', 'continuity', 'shape', 'lights', 'rotation', 'size'],
 } as const;
 
 /** The settings a recipe makes of `base`: its routes whole (every other route off) and its settings; `base`'s look,
@@ -212,5 +221,7 @@ export function settingsOf(recipe: Recipe, base: VisualSettings, scope: Scope = 
     lighting: takes('lighting') ? r.lighting.map((v, b) => (pinned.has(`lighting:${b}`) ? base.lighting[b] : within(v, 0.02, 1))) : base.lighting,
     evolution: takes('evolution') ? r.evolution.map((v, b) => (pinned.has(`evolution:${b}`) ? base.evolution[b] : within(v, 0.02, 2))) : base.evolution,
     continuity: takes('continuity') ? r.continuity.map((v, b) => (pinned.has(`continuity:${b}`) ? base.continuity[b] : within(v, 0, 1))) : base.continuity,
+    // Each column's scale (a recipe from before 64.2 has none: all of each).
+    ...(Object.fromEntries(SCALE_KEYS.map((k) => [k, one(k, within(r.scales?.[k] ?? 1, 0, 1))])) as RecipeSettings['scales']),
   };
 }

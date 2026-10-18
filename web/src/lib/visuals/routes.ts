@@ -6,6 +6,7 @@
 // routes are scaled by it, so a quiet passage is a small show whatever its parts do.
 
 import { curveFrom, heightAt, isStraight, tableOf, type RouteValue } from './curves';
+import type { VisualSettings } from './settings.svelte';
 export type { Curve, RouteValue } from './curves';
 
 /** Signals of the whole track. */
@@ -89,6 +90,23 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   behaviour: 'Behaviour',
   symmetry: 'Symmetry',
 };
+
+/** The columns that have no setting of their own otherwise, each its scale's setting (64.2; the owner: "is it
+ *  impossible to have each column their own slider?"): what its routes give it, times that (1 as before, 0 at rest).
+ *  The Glow column's is `glow`: `brightness` is the display's. */
+export const COLUMN_SCALES = {
+  shape: 'shape',
+  rotation: 'rotation',
+  lights: 'lights',
+  brightness: 'glow',
+  size: 'size',
+  saturation: 'saturation',
+  trails: 'trails',
+  stir: 'stir',
+  flow: 'flow',
+  swirl: 'swirl',
+} as const satisfies Partial<Record<Aspect, keyof VisualSettings>>;
+export const SCALE_KEYS = Object.values(COLUMN_SCALES);
 
 /** Each one's place in its list, for the dense arrays below. */
 const places = <T extends string>(list: readonly T[]) => Object.fromEntries(list.map((x, i) => [x, i])) as Record<T, number>;

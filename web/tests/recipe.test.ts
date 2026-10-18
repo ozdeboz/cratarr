@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MOVEMENT, recipeFor, settingsOf } from '../src/lib/visuals/recipe.ts';
-import { ASPECTS } from '../src/lib/visuals/routes.ts';
+import { ASPECTS, SCALE_KEYS } from '../src/lib/visuals/routes.ts';
 import type { VisualSettings } from '../src/lib/visuals/settings.svelte.ts';
 
 const six = (v: number) => Array<number>(6).fill(v);
@@ -27,6 +27,7 @@ const base = {
   lighting: six(0.5),
   evolution: six(0.5),
   continuity: six(0.5),
+  ...Object.fromEntries(SCALE_KEYS.map((k) => [k, 0.2])),
 } as unknown as VisualSettings;
 const recipe = recipeFor(12345, ASPECTS);
 const columnOf = (k: string) => k.split('|')[2];
@@ -82,4 +83,26 @@ test('a band time pinned stays through either roll, the others the recipe’s', 
     assert.equal(got.continuity[0], pinnedBase.continuity[0], `${scope}: Continuity 0 kept`);
     assert.notEqual(got.lighting[1], pinnedBase.lighting[1], `${scope}: Lighting 1 rolled`);
   }
+});
+
+test('each column’s scale: rolled from a half to all, the movement’s four only in a double tap, a pinned one kept', () => {
+  const all = settingsOf(recipe, base);
+  for (const k of SCALE_KEYS) assert.ok(all[k] >= 0.5 && all[k] <= 1, `${k} ${all[k]}`);
+  const mv = settingsOf(recipe, base, 'movement');
+  for (const k of SCALE_KEYS) {
+    if (['shape', 'lights', 'rotation', 'size'].includes(k)) assert.ok(mv[k] >= 0.5, `${k} rolled`);
+    else assert.equal(mv[k], 0.2, `${k} kept`);
+  }
+  const pinned = { ...base, pins: ['lights', 'stir'] } as VisualSettings;
+  for (const scope of ['all', 'movement'] as const) {
+    const got = settingsOf(recipe, pinned, scope);
+    assert.equal(got.lights, 0.2, `${scope}: Lights kept`);
+    assert.equal(got.stir, 0.2, `${scope}: Stir kept`);
+  }
+});
+
+test('a recipe from before the columns’ scales gives all of each', () => {
+  const old = { ...recipe, settings: { ...recipe.settings, scales: undefined } } as unknown as typeof recipe;
+  const got = settingsOf(old, base);
+  for (const k of SCALE_KEYS) assert.equal(got[k], 1, k);
 });

@@ -668,7 +668,7 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
 - **Calibration:** run again on this mapping, Standard measures as in 64 (its limits and the thumbs' reference values
   unchanged); 47 of 440 random recipes refused.
 
-## Amendment, 2026-10-18: Close back on top, the editor over the names, zero, the cells as curves, pins on routes (64.2)
+## Amendment, 2026-10-18: Close back on top, the editor over the names, zero, the cells as curves, pins on routes, each column its slider, Full screen leaves (64.2)
 
 - **The top controls back where they were**: 64.1's scrolling grid named its header's first cell `.corner`, the top
   control row's class, so the row became sticky and left-aligned on a dark band over Close, with a strip above it (the
@@ -688,3 +688,22 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
 - **Pins live on routes** (the owner: "A pin lives on a route", "I never asked for a column pin"): 64.1's column pins
   are gone, from the editor, the dice and the settings (one kept is dropped on reading); the look's and the behaviour's
   settings pin on their own sliders.
+- **Each column its slider** (the owner: "Are there columns which do not yet have a slider … Or is it impossible to have
+  each column their own slider?", then chose where, what and the dice): Shape, Rotation, Lights, Glow, Size,
+  Saturation, Trails, Stir, Flow and Swirl, which had none, each get one in Behaviour, every column's slider there in
+  the grid's order after Intensity, Flash and Speed (Smoothing, Floor, Depth and Fluid in their places). Each **scales**
+  what its column's routes give, like Fluid's: at 100% as before, lower every swing as much smaller in the same shape,
+  at 0 the column at rest (Size half, Saturation a third, Glow even, Trails as usual, nothing turned, lit or stirred).
+  Pinned when moved, walked by Behaviour as the other sliders are, shared in a group and kept in a snapshot (one saved
+  before them recalls each at 100%). Hue, Spread and Symmetry keep the Look's sliders (where the column starts from).
+  The Glow column's setting is `glow` (`brightness` is the display's). routes.ts `COLUMN_SCALES`.
+- **The dice roll them too** (the owner chose it): each between a half and all of it, so every column still moves,
+  drawn after everything else (a seed's routes and other settings are what they were); a double tap rolls the four
+  movement columns' (Shape, Lights, Rotation, Size); a pinned one stays.
+- **Calibration** run again: Standard (every scale at 100%) measures exactly as in 64.1, so the governor's limits and
+  the thumbs' reference values are unchanged; the dice's recipes are calmer by a median 12 to 24% per meter, and 7 of
+  440 are refused (64.1: 47).
+- **Full screen leaves too** (the owner: "Our full screen mode has no exit mode, so it can become stuck"): the player's
+  and the visuals' Full screen button stayed only until full screen, after which only the browser's Esc or back left
+  it; it now turns into Exit full screen. (The showcase on oskarolivier.nl, which hid Close, was stuck that way; it has
+  its own way out now.) The Cratarr app's view offers no full screen (its WebView has none), so none of it shows there.
