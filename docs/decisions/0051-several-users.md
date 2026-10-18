@@ -67,3 +67,6 @@ The owner (2026-10-19): "we need to support multiple users, their own settings".
 - **Repeated wrong passwords** lock the account for a while.
 - **The change journal records who did it for the essential changes only** (the owner: "Keep the change journal
   essential only"): what deletes, moves or changes the library.
+- **Sync play admits only its own players** (the owner: "Yes, the fix should go in"). Its port on the local network
+  (0037) took any device that named a player, to listen to a group or, as its leader, to play into it. A player is given
+  a secret of its own when it joins a group, and the sync server turns away a listener or a leader without it.
