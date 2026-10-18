@@ -180,6 +180,11 @@ const fresh = (): VisualSettings => ({
 });
 
 const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly string[]).includes(k);
+/** The behaviour's sliders that pin as the Look's do, moved by hand (the owner, 2026-10-18: "I try to pin the behavior
+ *  instead of the look"): a pinned one the dice and Drift leave as it is. */
+export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth'] as const;
+/** Whether `k` can be pinned: the Look's settings and the behaviour's sliders. */
+export const isPinnable = (k: string) => isPresetKey(k) || (BEHAVIOUR_PINS as readonly string[]).includes(k);
 
 function load(): VisualSettings {
   try {
@@ -216,7 +221,7 @@ export function keptFrom(kept: Record<string, unknown>): VisualSettings {
   for (const k of Object.keys(DEFAULTS) as (keyof VisualSettings)[]) {
     const v = saved[k];
     if (k === 'pins') {
-      if (Array.isArray(v)) out.pins = v.filter((x): x is string => typeof x === 'string' && isPresetKey(x));
+      if (Array.isArray(v)) out.pins = v.filter((x): x is string => typeof x === 'string' && isPinnable(x));
     } else if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = within(k, v);
     // Six bands' times; three (kept before the six bands, 2026-10-18) each for two of them.
     else if (Array.isArray(v) && (v.length === 6 || v.length === 3) && v.every((x) => typeof x === 'number' && Number.isFinite(x))) {

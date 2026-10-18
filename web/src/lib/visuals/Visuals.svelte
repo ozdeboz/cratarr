@@ -92,6 +92,8 @@
     pinned,
     resetVisualSettings,
     saveVisualSettings,
+    BEHAVIOUR_PINS,
+    isPinnable,
     visualSettings as s,
     type VisualSettings,
   } from './settings.svelte';
@@ -363,7 +365,7 @@
     const now = $state.snapshot(s) as VisualSettings;
     undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings> };
     const next = settingsOf(recipe, now);
-    for (const k of BEHAVIOUR) (s as Record<string, unknown>)[k] = next[k];
+    for (const k of BEHAVIOUR) if (!s.pins.includes(k)) (s as Record<string, unknown>)[k] = next[k];
     saveVisualSettings();
     share(Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])));
     loadAnother(Math.floor(Math.random() * 0x100000000), true);
@@ -443,7 +445,7 @@
       share(Object.fromEntries(SHARED_KEYS.filter((k) => !isLook(k)).map((k) => [k, $state.snapshot(s[k])])));
       resets++;
     } else {
-      applyShared({ ...settings, pins: [...PRESET_KEYS] });
+      applyShared({ ...settings, pins: [...PRESET_KEYS, ...BEHAVIOUR_PINS] });
       share(sharedNow());
     }
     showChrome();
@@ -532,11 +534,12 @@
   const valueOf = (key: One) => (key === 'resolution' ? (s.resolution ?? autoResolution(devicePixels())) : s[key]) as number;
   function set(key: One, v: number) {
     (s as Record<One, number | null>)[key] = v;
-    // The look's settings moved are pinned: a track's or the dice's preset leaves them as they are.
-    if (isLook(key) && !s.pins.includes(key)) s.pins = [...s.pins, key];
+    // The look's settings and the behaviour's sliders moved are pinned: a track's or the dice's preset, and Drift,
+    // leave them as they are.
+    if (isPinnable(key) && !s.pins.includes(key)) s.pins = [...s.pins, key];
     saveVisualSettings();
     // To the sync group: all but what is this device's own (its cost, its brightness).
-    if ((SHARED_KEYS as readonly string[]).includes(key)) share({ [key]: v, ...(isLook(key) ? { pins: [...s.pins] } : {}) });
+    if ((SHARED_KEYS as readonly string[]).includes(key)) share({ [key]: v, ...(isPinnable(key) ? { pins: [...s.pins] } : {}) });
     showChrome();
   }
   // Full screen, where the browser can and the visuals are not already (the app's view may be): a button for it.
@@ -1354,7 +1357,7 @@
             <div class="rows" class:look={g > 0}>
               {#if g === 2}<h3 use:held={'look'}>Look</h3>{/if}
               {#each rows as row (row.key)}
-                <label class="row" class:pinnable={g === 2}>
+                <label class="row" class:pinnable={g > 0}>
                   <span use:held={row.key}>{row.label}{#if governed[row.key]}<span class="governed" aria-label="Held back" use:held={'held'}></span>{/if}</span>
                   <input
                     type="range"
@@ -1365,8 +1368,8 @@
                     oninput={(e) => set(row.key, Number(e.currentTarget.value))}
                   />
                   <output>{row.text(valueOf(row.key))}</output>
-                  {#if g === 2}
-                    {#if s.pins.includes(row.key)}
+                  {#if g > 0}
+                    {#if s.pins.includes(row.key) && isPinnable(row.key)}
                       <button
                         class="pin"
                         aria-label="Unpin {row.label}"
