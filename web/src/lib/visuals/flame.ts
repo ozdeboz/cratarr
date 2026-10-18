@@ -413,7 +413,8 @@ function effectsDrawn(seed: number): Pick<Preset, keyof typeof NO_EFFECTS> {
   const n = rnd() < 0.67 ? 0 : rnd() < 0.6 ? 1 : 2;
   const out = { ...NO_EFFECTS };
   if (n >= 1) [out.fx1, out.fx1Amount] = [pick(picture), 0.3 + rnd() * 0.5];
-  if (n >= 2) [out.fx2, out.fx2Amount] = [pick(picture), 0.3 + rnd() * 0.5];
+  // A second, never the first again (the same effect twice is only the first, stronger).
+  if (n >= 2) [out.fx2, out.fx2Amount] = [pick(picture.filter((e) => e.id !== out.fx1)), 0.3 + rnd() * 0.5];
   if (rnd() < 0.2) [out.fxLoop, out.fxLoopAmount] = [pick(loops), 0.2 + rnd() * 0.4];
   return out;
 }
