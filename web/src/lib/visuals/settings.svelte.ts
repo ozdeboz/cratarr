@@ -12,6 +12,13 @@ import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
 import { defaultRoutes, isRoute } from './routes';
 
 const KEY = 'cratarr-visuals';
+/** The kept settings' form: 2 since 64 (Fluid on its finer scale); none before. */
+const FORM = 2;
+/** Fluid's whole range: this much of the fluid's own. In 63 the slider went to all of it, and the owner wanted only its
+ *  first few percent ("between 0 and 5% fluid dynamics is about all I want … or maybe 10% should be 100%", 2026-10-18). */
+export const FLUID_FULL = 0.1;
+/** A Fluid kept or saved before 64, on its finer scale. */
+export const fluidFrom63 = (v: number) => Math.min(1, v / FLUID_FULL);
 /** The bands the routes are kept for (the server's six). */
 export const BANDS = 6;
 
@@ -40,7 +47,8 @@ export type VisualSettings = Preset & {
   floor: number;
   depth: number;
   /** How much the light flows (0..1, decision 0047): 0 its trails only fade where they were drawn, as before (nothing of
-   *  the fluid made); above it they are carried along by a flow the music stirs, like smoke. Its route moves it. */
+   *  the fluid made); above it they are carried along by a flow the music stirs, like smoke. Its route moves it. Its
+   *  whole range is `FLUID_FULL` of the fluid's own. */
   fluid: number;
   /** The colours: 0 the preset's own (its family), 1 the playing track's cover's, 2 a fire's. */
   colours: number;
@@ -161,7 +169,10 @@ const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly s
 
 function load(): VisualSettings {
   try {
-    return keptFrom(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, unknown>);
+    const kept = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, unknown>;
+    // Kept by 63 (the only one with a Fluid before the form was kept): its Fluid on the finer scale.
+    if (kept.keptForm === undefined && typeof kept.fluid === 'number') kept.fluid = fluidFrom63(kept.fluid);
+    return keptFrom(kept);
   } catch {
     return fresh();
   }
@@ -212,7 +223,7 @@ export const visualSettings = $state<VisualSettings>(load());
 /** Keeps them on this device. */
 export function saveVisualSettings() {
   try {
-    localStorage.setItem(KEY, JSON.stringify(visualSettings));
+    localStorage.setItem(KEY, JSON.stringify({ ...visualSettings, keptForm: FORM }));
   } catch {
     /* kept for this visit only */
   }

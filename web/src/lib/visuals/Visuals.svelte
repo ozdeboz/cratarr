@@ -68,6 +68,8 @@
     autoResolution,
     BANDS,
     DEFAULTS,
+    FLUID_FULL,
+    fluidFrom63,
     RANGES,
     resetRoutes,
     loadPreset,
@@ -183,6 +185,8 @@
   }
   function recall(snap: VisualsSnapshot) {
     const settings: Record<string, unknown> = { ...snap.settings };
+    // One saved in 63: its Fluid on the finer scale since.
+    if ((settings.v ?? 1) === 1 && typeof settings.fluid === 'number') settings.fluid = fluidFrom63(settings.fluid);
     delete settings.v;
     // This device's own sliders, on this device only.
     applyDevice(settings);
@@ -790,7 +794,7 @@
       // The fluid: each band's part pushed where it lies by its lights (its hits, by default), outward from the middle
       // and round the way the part turns; a beat pushes out from the middle; the loudness keeps the flow going, the
       // swells add whirls. Where the picture is in the buffer: as the renderer's camera puts it.
-      const fluidNow = grain(s.fluid, A.fluid);
+      const fluidNow = FLUID_FULL * grain(s.fluid, A.fluid);
       const forces: Force[] = [];
       if (fluidNow > 0) {
         if (now - partsMeasured > 250) {
