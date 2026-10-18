@@ -266,7 +266,7 @@ void main() { o = vec4(0.0, 0.0, 0.0, uKeep); bandA = o; bandB = o; }`;
 // Not a number, or infinite, from the bits (see ITERATE's).
 // A value not a number is nothing; an infinite one, the most a 16-bit float holds short of infinity (by its sign: a
 // comparison is false for one not a number). The Mali-G615's compiler gets a fragment shader wrong that tests the bits
-// and picks its answer from them too (0 came out as 60000, 0.12 as 0: the phone's picture white, with coloured noise;
+// and picks its answer from them too (0 came out as 60000, 0.12 as 0: a phone's picture white, with coloured noise;
 // measured 2026-10-18), so the bits only answer whether.
 const BAD = `bool bad(float x) { return (floatBitsToUint(x) & 0x7f800000u) == 0x7f800000u; }
 float clean1(float x) { return bad(x) ? (x > 0.0 ? 60000.0 : 0.0) : clamp(x, 0.0, 60000.0); }
@@ -344,7 +344,7 @@ void main() {
   vec4 shareA = clamp(clean(texture(uBandsA, uv)) / max(a.a, 1e-6), 0.0, 1.0);
   vec2 shareB = clamp(clean(texture(uBandsB, uv)).xy / max(a.a, 1e-6), 0.0, 1.0);
   // Element by element: the Mali-G615's compiler refuses an array constructor here ("no default precision defined for
-  // variable 'float[6]'", 2026-10-18), which left the phone without visuals.
+  // variable 'float[6]'", 2026-10-18), which left that phone without visuals.
   float share[${PARTS}];
   share[0] = shareA.x;
   share[1] = shareA.y;
@@ -466,10 +466,11 @@ export class FlameRenderer {
    *  near 2048 points, only in the densest cores, where the log display hardly shows it), else 8 bits (saturating
    *  soon). 16-bit ones were the default in preview 56 (4 to 20 % quicker): the densest pixels reach some 60,000 points
    *  (measured in 32-bit ones, 2026-10-18), against a 16-bit float's 65,504, and a GPU whose blending rounds up
-   *  (Direct3D allows it) carries them over into infinity, black for good: the owner's GTX 1650 showed such specks from
-   *  56 on, his tablet (16-bit, a GPU that rounds to nearest, stuck at 2048) never did. 32-bit ones that cannot be
-   *  filtered (his phone's Mali-G615 blends them but has no OES_texture_float_linear) were read pixel by pixel and
-   *  scaled up to the screen blocky: the phone's picture grainier from 59 on, and no coarser levels for the smoothing. */
+   *  (Direct3D allows it) carries them over into infinity, black for good: a GTX 1650 showed such specks from 56 on, a
+   *  tablet's Mali-G52 (16-bit, a GPU that rounds to nearest, stuck at 2048) never did. 32-bit ones that cannot be
+   *  filtered (a phone's Mali-G615 (2026-10-18) blends them but has no OES_texture_float_linear) were read pixel by
+   *  pixel and scaled up to the screen blocky: that phone's picture grainier from 59 on, and no coarser levels for the
+   *  smoothing. */
   precision: 32 | 16 | 8;
   get halfFloat(): boolean {
     return this.precision !== 8;

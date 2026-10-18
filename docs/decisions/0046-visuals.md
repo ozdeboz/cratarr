@@ -423,7 +423,7 @@ rest) since six parts came in: each has its own now.
 
 The owner after preview 59: "I have a hard time controlling flashiness. Fix that please. One global slider could help
 too?", then "addition to rainbow gradient, I want to have the option for two other color modes, namely album cover and
-fire", and the grain controls claude-5f offered him; "put it all in and ship it".
+fire", and the grain controls claude-5f offered; "put it all in and ship it".
 
 **Flash** (0 to 200 %, 100 % the look before): each quickly changing aspect (each part's Lights, the Glow, Size and
 Saturation) is its slow course (the value followed twice over 0.3 s) and Flash's share of its swing about that course.
@@ -456,9 +456,9 @@ deep red to black, the densest yellow, white only at the very hottest. Each part
 point's is its bands', by how near its colour is to each). The dice give another flame in every mode, its colours the
 mode's.
 
-**Buffers:** 32-bit floats are taken only where they can be filtered as well as blended. The owner's phone (Mali-G615)
-blends them but has no OES_texture_float_linear: its picture was read pixel by pixel and scaled up blocky, grainier,
-from 59 on. It now draws in 16-bit, as the tablet does.
+**Buffers:** 32-bit floats are taken only where they can be filtered as well as blended. A phone's Mali-G615 blends
+them but has no OES_texture_float_linear: its picture was read pixel by pixel and scaled up blocky, grainier, from 59
+on. It now draws in 16-bit, as a tablet's Mali-G52 does.
 
 **Measured** (the lab page over the made-up track, the PC's Intel graphics, and the phone off-screen over its debug
 link): the sub's light varied by 0.07 (standard deviation) at Flash 0, 0.19 at 100 % and 0.40 at 200 %, its mean alike;
