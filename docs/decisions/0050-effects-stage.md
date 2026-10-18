@@ -120,6 +120,26 @@ lab); a new section may turn their way.
   to passes that already run (about 5,200 cells, or the screen's pixels once), well under 0.1 ms; a pass of their own
   would cost about 0.25 ms on the tablet, so neither gets one.
 
+### Infinite zoom: the tunnel and the dive
+
+The owner tried both on the ThinkBook's preview (branch a5/zoom-preview, fc71f300: render.ts, fluid.ts and a page over
+a made-up track) and wants both: "Basically, yes, I want both, so this is serious version 65 material."
+
+- **The tunnel**: the light kept from frame to frame is read a little nearer the middle each frame, so it streams
+  outward for ever, as if flying into it; the flame itself keeps its size. Where the fluid flows it is a few
+  operations in its light pass; at Fluid 0 a pass of its own in place of the fade (one pass at the buffer's size).
+- **The dive**: the camera zooms toward the fixed point of the flame's part that is most nearly a turned, shrunk copy
+  of the whole (fitted on the CPU four times a second as the flame moves), by that part's own shrink and turn; a share
+  of the points, growing through the loop, is drawn as that part's copy of them, so after one loop the part has become
+  the whole again and the zoom never ends. Its cost: the points so drawn go through that part once more in the
+  points' pass (to be measured on the tablet before the design is fixed). Its seam: how far the part is from a pure
+  turn and shrink (the preview showed 20 % to 39 % on the made-up track's looks) is how much the picture morphs as a
+  loop restarts; 65 prefers well-fitting parts and eases the seam.
+- **Settings and routes** (proposed; to settle with the owner before building): Tunnel and Dive as two speeds (0:
+  off; they can run together), each with a route column, so the music can quicken them (a build-up diving faster).
+- **Held to the limits**: the zoom-pumping meter is to take a steady zoom as calm, not as pumping; the dive's turn is
+  reported to the motion meter as the effects report theirs.
+
 ### Not in 65
 
 - **Touch** (the owner: deferred to 66): touch as a signal row; drag stirring the fluid, a tap rippling, a pinch and a
@@ -147,5 +167,5 @@ lab); a new section may turn their way.
 - Another look now also changes effects and Facets; to keep one, pin it.
 - Settings from before 65 lose what 65 removes, unconverted, by the owner's choice.
 - The group's shared settings carry one more key: whether a double tap's room stands.
-- The panel gains Quality, Haze, the effects' settings, Facets and Lattice, and four route columns (Presence, Effects,
-  Facets, Waves), and loses Points, Steps, Resolution, Floor, Depth and Family.
+- The panel gains Quality, Haze, the effects' settings, Facets and Lattice, Tunnel and Dive, and six route columns
+  (Presence, Effects, Facets, Waves, Tunnel, Dive), and loses Points, Steps, Resolution, Floor, Depth and Family.
