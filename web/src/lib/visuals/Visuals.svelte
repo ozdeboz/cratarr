@@ -79,6 +79,7 @@
     compile,
     heightOn,
     LEVEL_ASPECTS,
+    MOMENT_ASPECTS,
     routeKey,
     SCALE_KEYS,
     SIGNAL_LABEL,
@@ -510,6 +511,20 @@
   // look or the dice draw, then the cover's and a fire's, which only a hand chooses (and so pins).
   const COLOURS = ['Spectrum', 'Arc', 'Two tones', 'Three', 'Cover', 'Fire'];
   const modeOf = (family: number): ColourMode => (family >= 5 ? 'fire' : family >= 4 ? 'cover' : 'rainbow');
+  // Each engine's choice and its controls (the moments reset them).
+  const ENGINE_KNOBS = { fx1: ['fx1K1', 'fx1K2'], fx2: ['fx2K1', 'fx2K2'], fx3: ['fx3K1', 'fx3K2'], fxLoop: ['fxLoopK1', 'fxLoopK2'] } as const;
+  // What a moment (65.1) moves a discrete setting to: another of its values, drawn with `rnd` (the same on every device
+  // of a group). Symmetry another of its eight; Mirror and Lattice the other; a Lens another (or none); a Form another;
+  // the Colours another of the look's four families (Cover and Fire, chosen by hand, stay); an engine another of its
+  // effects where one is chosen (None stays none: its Amount's routes bring it in).
+  function momentOf(a: (typeof MOMENT_ASPECTS)[number], v: number, rnd: () => number): number {
+    const other = (lo: number, hi: number) => (hi <= lo ? v : lo + ((Math.round(v) - lo + 1 + Math.floor(rnd() * (hi - lo))) % (hi - lo + 1)));
+    if (a === 'symmetry') return ((v + Math.floor(rnd() * 7)) % 8) + 1;
+    if (a === 'mirror' || a === 'lattice') return v ? 0 : 1;
+    if (a === 'family') return v > 3 ? v : other(0, 3);
+    if (a === 'fx1' || a === 'fx2' || a === 'fx3' || a === 'fxLoop') return v > 0 ? other(1, RANGES[a][1]) : v;
+    return other(RANGES[a][0], RANGES[a][1]);
+  }
   type Row = { key: One; label: string; step: number; text: (v: number) => string };
   // The settings the governor holds back now (governor.ts), marked by their label: Flash's swing, Speed's pace, and on
   // Wild whatever it holds back (the evolving, the hues, the size, the moments too).
@@ -1255,15 +1270,26 @@
         if (m.playing) remember(heard, track, d.bands);
         driftDt = 0;
       }
-      // The moments: another symmetry; a pinned setting stays as it is. Seeded from the track and the beat it comes on
-      // (else the half second), so every device playing it together makes the same choice.
+      // The moments (routes.ts `MOMENT_ASPECTS`): each moves its own setting to another value, a pinned one staying as
+      // it is. Seeded from the track and the beat it comes on (else the half second), so every device playing it
+      // together makes the same choice. A moment is a new look: the meters count it (looks a minute), as the governor's
+      // gap between moments holds it (65.1: it was never counted).
       const at = `${m.key}|${m.beat ? m.beat.index : Math.floor(m.position * 2)}`;
-      if (d.moments.symmetry && !(s.pins.includes('symmetry') && s.pins.includes('mirror'))) {
-        const rnd = randomFrom(seedOf(`symmetry|${at}`));
-        if (!s.pins.includes('symmetry')) s.symmetry = ((s.symmetry + Math.floor(rnd() * 7)) % 8) + 1;
-        if (!s.pins.includes('mirror')) s.mirror = rnd() < 0.5 ? 1 : 0;
-        behaviourMoved.add('symmetry').add('mirror');
+      let momentCame = false;
+      for (const a of MOMENT_ASPECTS) {
+        if (!d.moments[a] || s.pins.includes(a)) continue;
+        const next = momentOf(a, s[a], randomFrom(seedOf(`${a}|${at}`)));
+        if (next === s[a]) continue;
+        s[a] = next;
+        behaviourMoved.add(a);
+        // Another of an engine's effects: its controls back to their middle, as when one is chosen by hand.
+        const knobs = ENGINE_KNOBS[a as keyof typeof ENGINE_KNOBS];
+        for (const k of knobs ?? []) if (!s.pins.includes(k)) s[k] = 0.5;
+        momentCame = true;
+      }
+      if (momentCame) {
         nextBlend = ANOTHER_MS;
+        lookCame = 'moment';
         saveVisualSettings();
       }
 

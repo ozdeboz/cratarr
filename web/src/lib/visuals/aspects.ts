@@ -7,7 +7,7 @@ import { WAVE_BEND } from './fluid';
 import { DIVE_MOST, TUNNEL_MOST } from './zoom';
 import type { Levers } from './governor';
 import type { Music } from './music.svelte';
-import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from './routes';
+import { A, AMOUNT_ASPECTS, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, compile, give, given, KNOB_ASPECTS, MOMENT_ASPECTS, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from './routes';
 import { BANDS, type VisualSettings } from './settings.svelte';
 
 /** The columns scaled here, each its aspect's place and its setting (the fluid's stirring is scaled where it stirs:
@@ -75,7 +75,7 @@ export type AspectsState = {
   // Each part's presence as followed (quick to come, slower to go: a hit's weight eased in, not jumped to).
   presence: number[];
   // The moments: ready again once what they are given falls under a third, and not within two seconds.
-  moments: { symmetry: Moment };
+  moments: Record<MomentAspect, Moment>;
   // The Flash setting: each quickly changing aspect (each part's lights, the glow, size and saturation) as its slow
   // course (followed twice over a third of a second: a beat's or a hit's swing all but gone from it, a passage's change
   // kept) and the setting's share of its swing about that course.
@@ -125,9 +125,14 @@ export type AspectsNow = {
   behaviour: number;
   /** Each level's share of its setting its routes let through now (1: all of it). */
   levels: { fluid: number; smoothing: number; haze: number; tunnel: number; dive: number };
-  /** The moments come this frame: another symmetry (none with reduced motion). */
-  moments: { symmetry: boolean };
+  /** The moments that come this frame (none with reduced motion): another symmetry, lens, form… (routes.ts
+   *  `MOMENT_ASPECTS`; Visuals.svelte moves the settings). */
+  moments: Record<MomentAspect, boolean>;
+  /** The effects as their routes have them now (65.1; effects.ts `routed`): each engine's and the Loop's Amount, the
+   *  share its routes let through (a level), and each control's swing about where it is set (−1..1 added, then 0..1). */
+  routed: { amounts: number[]; knobs: number[] };
 };
+type MomentAspect = (typeof MOMENT_ASPECTS)[number];
 
 export function newAspects(): AspectsState {
   return {
@@ -154,7 +159,7 @@ export function newAspects(): AspectsState {
     pending: Array<number>(PARTS).fill(0),
     rates: Array<number>(PARTS).fill(0),
     presence: Array<number>(PARTS).fill(0),
-    moments: { symmetry: { armed: true, at: -Infinity } },
+    moments: Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, { armed: true, at: -Infinity }])) as Record<MomentAspect, Moment>,
     courses: { lights: Array.from({ length: PARTS }, () => [] as number[]), glow: [], size: [], saturation: [] },
   };
 }
@@ -297,7 +302,7 @@ export function stepAspects(
     mo.at = now;
     return true;
   };
-  const moments = { symmetry: !still && moment(st.moments.symmetry, W[A.symmetry]) };
+  const moments = Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, !still && moment(st.moments[a], W[A[a]])])) as Record<MomentAspect, boolean>;
   const walkOf = (a: number) => (W[a] - track[T.track] * envelope * matrix.track[T.track * ASPECTS.length + a]) / L.evolution;
   const fluid = opts.fluidFull * levelOf(st.got, s.fluid, A.fluid);
   // Haze either way from 0, its routes taking it toward 0 (a level both ways).
@@ -345,5 +350,6 @@ export function stepAspects(
     look: walkOf(A.look),
     behaviour: walkOf(A.behaviour),
     moments,
+    routed: { amounts: AMOUNT_ASPECTS.map((a) => st.got.level[A[a]]), knobs: KNOB_ASPECTS.map((a) => clamp(W[A[a]], -1, 1)) },
   };
 }

@@ -67,13 +67,46 @@ export const ASPECTS = [
   'facets',
   'look',
   'behaviour',
+  // The look's own (65.1; the owner: "I want matrix targets for all effect controls", "Also for lens and other
+  // discrete"), each named for the setting it moves, in the Look's order: its discrete settings at moments, each
+  // engine's choice at moments, its Amount a level and its two controls swinging about where they are set.
+  'family',
+  'form',
   'symmetry',
+  'mirror',
+  'final',
+  'lattice',
+  'fx1',
+  'fx1Amount',
+  'fx1K1',
+  'fx1K2',
+  'fx2',
+  'fx2Amount',
+  'fx2K1',
+  'fx2K2',
+  'fx3',
+  'fx3Amount',
+  'fx3K1',
+  'fx3K2',
+  'fxLoop',
+  'fxLoopAmount',
+  'fxLoopK1',
+  'fxLoopK2',
 ] as const;
 export type Aspect = (typeof ASPECTS)[number];
 /** Aspects of each part of the flame: a band's routes act on its own part, the whole track's on every part. */
 export const PART_ASPECTS: readonly Aspect[] = ['shape', 'rotation', 'lights', 'hue', 'spread', 'presence'];
-/** Aspects that act at moments: as what their routes give rises past a half (a new symmetry). */
-export const MOMENT_ASPECTS: readonly Aspect[] = ['symmetry'];
+/** Aspects that act at moments: as what their routes give rises past a half, the setting moves on (a new symmetry, a
+ *  new lens, another of an engine's effects…). */
+export const MOMENT_ASPECTS: readonly Aspect[] = ['family', 'form', 'symmetry', 'mirror', 'final', 'lattice', 'fx1', 'fx2', 'fx3', 'fxLoop'];
+/** The look's columns (65.1), which the dice leave as they are (recipe.ts): they move what the look is, not how it
+ *  follows the music, and no recipe draws routes into them. */
+export const LOOK_COLUMNS: readonly Aspect[] = [...MOMENT_ASPECTS.filter((a) => a !== 'symmetry'), 'fx1Amount', 'fx1K1', 'fx1K2', 'fx2Amount', 'fx2K1', 'fx2K2', 'fx3Amount', 'fx3K1', 'fx3K2', 'fxLoopAmount', 'fxLoopK1', 'fxLoopK2'];
+/** The effects' controls, swinging about where they are set (each engine's two, then the Loop's), in effects.ts's
+ *  `routed.knobs` order. */
+export const KNOB_ASPECTS = ['fx1K1', 'fx1K2', 'fx2K1', 'fx2K2', 'fx3K1', 'fx3K2', 'fxLoopK1', 'fxLoopK2'] as const;
+/** The effects' Amounts, as levels (each engine's, then the Loop's), in `routed.amounts` order. */
+export const AMOUNT_ASPECTS = ['fx1Amount', 'fx2Amount', 'fx3Amount', 'fxLoopAmount'] as const;
 
 export const ASPECT_LABEL: Record<Aspect, string> = {
   shape: 'Shape',
@@ -99,7 +132,28 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   facets: 'Facets',
   look: 'Look',
   behaviour: 'Behaviour',
+  family: 'Colours',
+  form: 'Form',
   symmetry: 'Symmetry',
+  mirror: 'Mirror',
+  final: 'Lens',
+  lattice: 'Lattice',
+  fx1: 'Kaleidoscope',
+  fx1Amount: 'Kaleidoscope amount',
+  fx1K1: 'Kaleidoscope control 1',
+  fx1K2: 'Kaleidoscope control 2',
+  fx2: 'EYEDO',
+  fx2Amount: 'EYEDO amount',
+  fx2K1: 'EYEDO control 1',
+  fx2K2: 'EYEDO control 2',
+  fx3: 'Hydra',
+  fx3Amount: 'Hydra amount',
+  fx3K1: 'Hydra control 1',
+  fx3K2: 'Hydra control 2',
+  fxLoop: 'Loop',
+  fxLoopAmount: 'Loop amount',
+  fxLoopK1: 'Loop control 1',
+  fxLoopK2: 'Loop control 2',
 };
 
 /** The columns that have no setting of their own otherwise, each its scale's setting (64.2; the owner: "is it
@@ -262,7 +316,7 @@ export const given = (bands: number): Given => ({
  *  multiply. A straight one of amount a gives 1 − e·a·(1 − s) rising with its signal s, of −a 1 − e·a·s falling; quiet
  *  (e → 0) every route lets all through. The bands' routes into one: their geometric mean, as the swings take the bands'
  *  mean. */
-export const LEVEL_ASPECTS: readonly Aspect[] = ['smoothing', 'haze', 'fluid', 'tunnel', 'dive', 'effects', 'facets'];
+export const LEVEL_ASPECTS: readonly Aspect[] = ['smoothing', 'haze', 'fluid', 'tunnel', 'dive', 'effects', 'facets', ...AMOUNT_ASPECTS];
 const isLevel = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
 
 /** What a route gives at its signal `v`: its curve's height, a straight one's amount times the signal. */

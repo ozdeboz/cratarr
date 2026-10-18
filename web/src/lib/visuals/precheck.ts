@@ -98,7 +98,8 @@ export function* prechecking(
       spread: a.parts.map((p) => p.spread ?? 1),
       scale: a.scale,
       saturation: a.saturation,
-      look: null,
+      // A moment (another symmetry, lens, effect…) is a new look, as the visuals count it (65.1: it was never counted).
+      look: Object.values(a.moments).some(Boolean) ? 'moment' : null,
       symmetry: a.moments.symmetry,
       tiles: [screenTile(k * dt, luminance)],
       // What the look's effects add, the waves where nothing flows and the zooms' streaming out, as the visuals' meters
