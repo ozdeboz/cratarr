@@ -107,10 +107,13 @@ export function groupLook(key: string | null): Partial<Preset> | null {
   return Object.fromEntries(PRESET_KEYS.filter((k) => k in known).map((k) => [k, known[k]])) as Partial<Preset>;
 }
 
-/** The group this page's player is in: the app's own, or the one the page plays on. */
+/** Whose visuals this page shares (the server's key): its player's group's (the leader's name) where the player is in
+ *  one, else the player's own name, so a page driving a player shares them with that player's own page (the owner,
+ *  2026-10-18: "My phone is most definitely controlling my salon tablet … So they are in a group to some extent").
+ *  The player is the app's own, or the one the page plays on. */
 const groupNow = () => {
   const name = head();
-  return (name && playOn.players.find((p) => p.name === name)?.group) || null;
+  return name ? playOn.players.find((p) => p.name === name)?.group || name : null;
 };
 
 /** Follows the group the page's player is in while the visuals show; returns the function that stops it. */
