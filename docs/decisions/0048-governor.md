@@ -60,13 +60,72 @@ more. Flashes are not fitted: three a second is the rule.
 
 ### The runtime
 
-(The governor in the visuals' loop, its budgets and levers, the flash limiter on the quarter-of-the-screen rate, Calm ↔
-Wild, and undoing the last roll: added with that side.)
+**The governor** (governor.ts), in the visuals' loop: the meters stepped four times a second from what each frame did,
+and for each kind of busyness a lever that holds it back while it goes over its budget and lets go once it is back
+under. Pure; the loop applies its levers through the mapping (aspects.ts).
+
+- **Flashes** (the rule, always on, never learned): over 2.5 a second on the quarter-of-the-screen rate (the meter reads
+  in halves; WCAG's three with room to act before it), the Flash setting's swing closes (by half in about half a second)
+  and its slow course is followed more slowly with it, so the swing shrinks and the course no longer rides each pulse.
+  It opens again only after eight seconds without a reading over the rule: the meter tells of a burst a second late, and
+  a passage that flashed comes back (with a shorter rest a lull between two left the next one's start unheld). In the
+  lab, Flash at 200 % with the lights doubled stayed at three a second or under after the first trip; the first second
+  of a session's first burst is the meter's own lag, and the precheck covers the dice before it.
+- **Budgets:** motion holds back the turning's pace (and the fluid's), down to a quarter; shape churn the parts'
+  evolving (their Evolution times up to four times as long) and Drift's walk; colour churn the hues' swing; zoom pumping
+  the size's swing; new looks a minute the moments (their gap up to six times as long). A lever closes while its meter
+  is over its budget (by half in about a second) and opens once it is under four fifths of it.
+- **A budget** is a limit as Calm ↔ Wild and the music have it: limit × 2^(2·(Wild − ½)) × (½ + the music's activity),
+  half as much to twice as much along Wild (at its middle, as the limits), less on a quiet passage, more on a loud one.
+  The limits stand at the precheck's (DEFAULT_LIMITS) until the owner's ratings fit them, and as the thumbs teach them.
+- **Wild** is a setting of its own (0 to 100 %, 50 % by default), shared in a sync group as the other behaviour settings.
+- **A mark:** a small amber dot by Flash, Speed and Wild shows what the governor holds back now (on Wild, anything).
+- **While the rating page runs a trial,** only the flash rule holds: the budgets are what the ratings are to tell. Each
+  trial starts the meters and the governor anew, so one segment's flashes are neither counted nor held back in the next.
+
+**The dice** (Randomise, beside Another look): a recipe drawn and run against the playing track from where it is (the
+precheck), a slice a frame, up to eight: the first within the limits as Wild has them (the flashes at three a second
+whatever it says), else the one over them by least; without the track's signals yet, the first, the governor holding
+it as it plays. Its behaviour and a new look go to the settings and the sync group. **Undo** puts the look, its pins and
+the behaviour from before back, for the group too, until the next roll. In the lab a roll took about a quarter of a
+second, and an undo restored every setting.
+
+**The rating page** starts from **Rate** in the visuals' panel (the tablet's app has no address bar), or `?rate=1`; while
+it runs, the controls that would change the look or the behaviour are away.
+
+**Thumbs** (the owner: "I could get a general thumbs up or thumbs down for any visualization that I currently look at,
+and it could then decide to tune"; "Simple is good, but we do need to handle the caveats"): two buttons above the track's
+name. Each press is kept (`/api/visuals/thumbs`) with what the visuals did over the 20 seconds before it, for the
+periodic fit; and it may move one limit at once, as an up-down staircase moves a threshold (Levitt 1971; Kaernbach's
+weighted up-down, 1991), learning.ts:
+
+- **Thumbs down** tightens the limit of the one kind of busyness that stood out most over those 20 seconds against what
+  the defaults typically do, in the governor's own terms (each meter against its budget at a limit of 1), to a step under
+  what it was then, so it acts at once. Where nothing stood out it only counts toward the fit: dislikes are pressed more
+  often than likes, and many are of the look rather than its busyness, so each tightening something would ratchet
+  everything calm.
+- **Thumbs up** loosens, a step, the limit the governor holds the picture back by then (its amber dot): the way back out
+  once a limit is tight. A system that learns only from what it shows narrows for good without one (Jiang et al., 2019,
+  on recommender systems' degenerate feedback loops: continuous exploration is the remedy).
+- **Steps** start at a tenth and halve each time a limit turns the other way, to a fortieth, so it settles.
+- **Each limit drifts back** toward where it started, half way in thirty days: taste moves with mood and familiarity
+  (Berlyne's inverted U, its optimum shifting with exposure).
+- **None goes** under half or over twice where it started. The flash rule is not learned. **Forget** in the panel lets
+  go of all of it.
+- The learned limits are kept per user on the server (`/api/visuals/limits`, with a version: two devices learning at
+  once each apply their press on the other's), loaded as the visuals open and applied at once, by the governor and the
+  dice's precheck alike.
+
+In the lab, against a stand-in server: a thumbs down while motion stood out (1.6 times the defaults' typical) took its
+limit from 0.9 to 0.57 at once; a thumbs up while the governor held motion back loosened it a twentieth (the step
+halved as it turned); Forget let go of it on the server; both presses were kept with the 20 seconds before them.
 
 ## Consequences
 
 - The stars stay as they were; the dice now change how the visuals follow the music too, within limits.
 - Every behaviour shown can be measured the same way, live or simulated: the limits, the precheck, the ratings and any
   later report (a device telling the server what it shows) speak of the same numbers.
-- The limits start from today's behaviour and become the owner's as the ratings come in; the governor's own log, and
-  what the owner undoes or keeps as a snapshot, can refine them later.
+- The limits start from today's behaviour and become the owner's as the ratings come in, and the thumbs keep tuning
+  them as the owner watches; undos and snapshots can refine them later.
+- A limit learned is kept within bounds, drifts home, and is forgotten on one press: a bad evening cannot make the
+  visuals dull for good, nor wild.
