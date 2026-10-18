@@ -76,9 +76,9 @@ const MOST_FLASHING = 1.6;
 const LIGHTING = [0.2, 0.18, 0.15, 0.13, 0.1, 0.08];
 const EVOLUTION = [0.25, 0.25, 0.25, 0.25, 0.25, 0.25];
 /** The columns' scales a recipe rolls (routes.ts `SCALE_KEYS`, in its order; drawn after everything else, so a seed's
- *  routes and other settings are what they were before 64.2), each between this and all of it: every column still
- *  moves. */
-const LEAST_SCALE = 0.5;
+ *  routes and other settings are what they were before 64.2), each between this and all of it. 64.2 rolled from a half,
+ *  and the dice came out about a fifth calmer than 64.1's; the owner kept 64.1's liveliness (64.3: "Yes"). */
+const LEAST_SCALE = 0.75;
 
 const BAND_SIGNALS = new Set<Signal>(['level', 'flux', 'hits', 'percussive', 'harmonic', 'percussiveHits', 'crest', 'width', 'bandSwell']);
 

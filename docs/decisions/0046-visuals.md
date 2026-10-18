@@ -707,3 +707,9 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
   and the visuals' Full screen button stayed only until full screen, after which only the browser's Esc or back left
   it; it now turns into Exit full screen. (The showcase on oskarolivier.nl, which hid Close, was stuck that way; it has
   its own way out now.) The Cratarr app's view offers no full screen (its WebView has none), so none of it shows there.
+
+## Amendment, 2026-10-18: the dice roll the columns' sliders from three quarters (64.3)
+
+- 64.2's dice rolled each column's slider from a half to all of it, and came out calmer than 64.1's by a median 12 to
+  24% per meter. Asked whether to keep 64.1's liveliness by rolling from three quarters, the owner: "Yes". Now 5 to 12%
+  calmer than 64.1, 26 of 440 recipes refused (64.1: 47; 64.2: 7); Standard measures as before.

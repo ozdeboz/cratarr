@@ -85,12 +85,12 @@ test('a band time pinned stays through either roll, the others the recipe’s', 
   }
 });
 
-test('each column’s scale: rolled from a half to all, the movement’s four only in a double tap, a pinned one kept', () => {
+test('each column’s scale: rolled from three quarters to all, the movement’s four only in a double tap, a pinned one kept', () => {
   const all = settingsOf(recipe, base);
-  for (const k of SCALE_KEYS) assert.ok(all[k] >= 0.5 && all[k] <= 1, `${k} ${all[k]}`);
+  for (const k of SCALE_KEYS) assert.ok(all[k] >= 0.75 && all[k] <= 1, `${k} ${all[k]}`);
   const mv = settingsOf(recipe, base, 'movement');
   for (const k of SCALE_KEYS) {
-    if (['shape', 'lights', 'rotation', 'size'].includes(k)) assert.ok(mv[k] >= 0.5, `${k} rolled`);
+    if (['shape', 'lights', 'rotation', 'size'].includes(k)) assert.ok(mv[k] >= 0.75, `${k} rolled`);
     else assert.equal(mv[k], 0.2, `${k} kept`);
   }
   const pinned = { ...base, pins: ['lights', 'stir'] } as VisualSettings;
