@@ -1503,7 +1503,9 @@ impl Catalogue {
 
     /// The albums' gain and peak in a folder, by album directory (an album is a folder of files, as the served library
     /// counts it), from their tracks' analyses (`analysis::album_gain` over their loudness blocks): only where every
-    /// track of the directory has one, so a half-analysed album has none yet. Blocking.
+    /// track of the directory has one, so a half-analysed album has none yet. Blocking. (The served library reads them
+    /// through its own connection, `album_gains`; this one is the tests'.)
+    #[cfg(test)]
     pub fn album_gains(&self, folder: i64) -> Result<HashMap<String, (f32, f32)>> {
         album_gains(&self.db(), folder)
     }
@@ -1953,7 +1955,9 @@ fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::anal
     })
 }
 
-/// See `Catalogue::album_gains`; any connection to the catalogue's file.
+/// The albums' gain and peak in a folder, by album directory (an album is a folder of files, as the served library
+/// counts it), from their tracks' analyses (`analysis::album_gain` over their loudness blocks): only where every track
+/// of the directory has one, so a half-analysed album has none yet. Any connection to the catalogue's file.
 pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32, f32)>> {
     let mut st = db.prepare(&format!(
         "SELECT f.rel, {ANALYSIS_COLS} FROM files f

@@ -150,14 +150,15 @@ impl App {
                 }
             });
         }
-        // A group's visuals go with it: kept while a player is in the group, dropped when none is.
+        // Shared visuals go with what they are shared by: a group's while a player is in it, a player's while it is
+        // known.
         let visuals = Arc::new(visuals::GroupVisuals::new());
         {
             let (visuals, play_on) = (visuals.clone(), play_on.clone());
             let mut changed = play_on.subscribe();
             tokio::spawn(async move {
                 loop {
-                    let groups = play_on.list().into_iter().filter_map(|p| p.group).collect();
+                    let groups = play_on.list().into_iter().flat_map(|p| [Some(p.name), p.group]).flatten().collect();
                     visuals.keep_only(&groups);
                     if let Err(tokio::sync::broadcast::error::RecvError::Closed) = changed.recv().await {
                         return;

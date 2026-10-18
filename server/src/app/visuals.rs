@@ -3,7 +3,9 @@
 //! changing it on one of the group's devices changes it on all of them. What a device can afford (points, steps,
 //! resolution, frame rate) and how bright its screen should be stay its own, and never come here.
 //!
-//! Kept in memory with the group, by its leader's name, and dropped when the group is gone. Every change gets a version
+//! Shared by everything that shows one player's music: a sync group's devices (kept by the group's leader's name), or
+//! a player on its own and any page driving it (by the player's name: the owner's phone driving the salon tablet shows
+//! the tablet's). Kept in memory, dropped when the group or the player is gone. Every change gets a version
 //! larger than any before, even across a restart (they start from the clock), so a page can ignore what it has seen.
 //! A change is merged into what the group has: its top-level keys replace the group's, and its `routes` replace the
 //! group's routes key by key, so two people moving different sliders at once do not undo each other. Each change goes
