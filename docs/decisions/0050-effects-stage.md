@@ -37,7 +37,24 @@ its signal row, and its limits in the precheck. claude-a5 makes Presence in the 
 chaos game (its transform's share of the points) by a new **Presence** route column, so a part can come and go with its
 sound, not only light up. Lighting is renamed **Linger** (how long a part's light rings on).
 
-*claude-5f to fill in: the envelope's definition and its defaults.*
+**The envelope** (claude-5f): each band's own, 0 to 1, a new band signal row **Envelope** that any route can take
+(by default each band's Envelope into its Presence at 100%; Hits into Lights stays as it is). Followed each frame, the
+same in the visuals and in the precheck (one pure step in music.svelte.ts's family, so the governor measures what is
+shown):
+
+- **Attack**: on each of the band's hits it jumps to that hit's strength (as the Hits signal takes it, at most 1),
+  rising into it over the same lead the Hits signal has where the hits are known ahead, so its top is on the moment.
+- **Hold**: after the attack it falls toward what the sound still holds, **Sustain × the band's level now**, and stops
+  there; while the sound holds, the envelope holds. Where it is under that (a pad, never struck, swelling in), it rises
+  to it over 50 ms.
+- **Release**: whenever the envelope is above what the sound holds (after a hit, or as a held sound ends) it falls
+  toward it with the band's **Linger** as its time (each hit's light rings exactly as the Hits signal's does today).
+
+So a struck drum flares and is gone as its level drops; a pad, never struck, glows at its level; a struck chord flares,
+then holds while it rings. **Defaults:** Sustain 60% (a held sound at full level glows at most at 60% of a full hit's
+flare, so the hits still stand out), one setting for all bands; Linger as today's Lighting (Sub 0.2 s to Air
+0.08 s). **Limits:** none of its own in the precheck: what it moves is measured where it shows (the flash meter, the
+Presence and Lights it drives), and its steps are the hits' own, which the flash rule already counts.
 
 ### Fewer sliders
 
@@ -50,8 +67,31 @@ Nothing old is converted (the owner: "I don't care about old snapshots"): a snap
 group's shared ones from before 65 load as they are, without their Points, Steps, Resolution, Floor, Depth and Family
 (Quality and Haze at their defaults) and without routes into Floor or Depth. Loading one must still never fail.
 
-*claude-5f (who brought the owner's list) to fill in: how Haze maps onto the floor and the gamma, and how Quality
-divides into points, steps and resolution.*
+**Haze** (claude-5f) is Depth and Floor on one axis, 0 exactly today's defaults (Floor 0, Depth 50 %: gamma 3):
+
+- **Up to +100 %, more haze**: the gamma rises from 3 to 6 (Depth's top today), lifting the faint mist and grain
+  around the flame; no floor.
+- **Down to −100 %, less haze**: the gamma falls from 3 to 1.5 (Depth's bottom), and a floor comes up from a stray
+  speck's (0.002 of the flame's mean) to a fifth of the flame's mean (Floor 75 % today) as a cut to black, leaving the
+  bright structure clean. Today's 100 % (the mean itself) is not reached: it blacks out half the flame.
+- In numbers, with h from −1 to 1: gamma = 3 · 2^h; floor = none for h ≥ 0, else 0.002 · 500^(0.75 · −h) of the
+  flame's mean. Both are today's own curves, so a Haze moves the picture as Depth and Floor did.
+- **Its routes** are a level's, as Fluid's (0046's limits): they take Haze toward 0 (neither more nor less haze), as far
+  as the sound says, never past what is set, either side. Smoothing stays its own slider. The two ends are to be looked
+  at on the lab's screenshots (phone and tablet) before 65 ships: the −100 % floor in particular.
+
+**Quality** (claude-5f) is one ceiling, 0 to 100 %, on the same ladder the device's pace walks (steps, resolution,
+points), so the two never disagree; **60 % is exactly today's defaults** (2^19 points, 3 steps, the screen's default
+resolution of about a megapixel):
+
+- **Points**: 2^(16 + 5q), so 64k at 0, 512k at 60 %, 2M at 100 % (the slider's old range was 16k to 2M; under 64k the
+  flame thins to dust, and the pace still halves under the ceiling down to its own least).
+- **Resolution**: from 60 % of the screen's default at 0 (the pace's own lowest) up to the default at 60 %, then on to
+  the screen's own pixels at 100 % (beyond the default only on a device that has them to give).
+- **Steps**: 1 at 0, 3 at 60 %, 6 at 100 %, whole numbers in between.
+- Every device starts at 60 %; the pace takes it lower where frames come late (as now: steps first, then resolution,
+  then points), and climbs back no higher than Quality. Quality is the device's own, never shared, kept in a snapshot
+  as Points, Steps and Resolution were.
 
 ### The effects stage
 
