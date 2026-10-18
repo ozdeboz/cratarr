@@ -33,3 +33,10 @@ test('the loop: a shape on the buffer’s coordinates, else the identity; report
   assert.ok(Math.abs(r.motion! - 0.075) < 1e-12 && Math.abs(r.shapeChurn! - 0.15) < 1e-12, JSON.stringify(r));
   assert.deepEqual(reportOf([1], [0], 'picture'), {});
 });
+
+test('a loop effect that reads the flow gets it where it runs: none in the carry pass, the fluid’s in the light pass', () => {
+  const carry = loopFunction(8);
+  assert.ok(carry.includes('vec2 fx_flow(vec2 p) { return vec2(0.0); }') && carry.indexOf('fx_flow(vec2 p)') < carry.indexOf('vec2 fx_stream('), 'defined before Stream uses it');
+  const light = loopFunction(8, 'vec2 fx_flow(vec2 p) { return p; }');
+  assert.ok(light.startsWith('vec2 fx_flow(vec2 p) { return p; }'));
+});

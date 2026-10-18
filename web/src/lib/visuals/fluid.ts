@@ -224,6 +224,13 @@ void main() {
 
 type Target = { texture: WebGLTexture; fbo: WebGLFramebuffer };
 
+/** `fx_flow` in the light pass, for a loop effect that reads the flow (effects.ts Stream): the velocity where p is, in
+ *  p's units a second (centred, aspect-true), as the picture slot's own. */
+export const FLOW_IN_LIGHT = `vec2 fx_flow(vec2 p) {
+  vec2 uv = vec2(p.x / uLoopAspect, p.y) * 0.5 + 0.5;
+  return textureLod(uVelocity, uv, 0.0).xy * uCell * 2.0 * vec2(uLoopAspect, 1.0);
+}`;
+
 /** The loop slot's shape for the light pass (effects.ts): its program's key and GLSL, its amount, the track's time. */
 export type Loop = { key: string; glsl: string; amount: number; t: number };
 const NO_LOOP = `vec2 fx_loop(vec2 uv, float a, float t, float aspect) { return uv; }`;
@@ -356,7 +363,15 @@ export class Fluid {
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
     gl.viewport(0, 0, width, height);
     const name = loop ? `LIGHT:${loop.key}` : 'LIGHT';
-    if (loop && !this.programs.has(name)) this.programs.set(name, program(gl, VERTEX, lightSource(loop.glsl)));
+    if (loop && !this.programs.has(name)) {
+      // One that does not compile on this device: the light pass without it, rather than no frame.
+      try {
+        this.programs.set(name, program(gl, VERTEX, lightSource(loop.glsl)));
+      } catch (e) {
+        console.warn('Visuals: a loop effect did not compile here', loop.key, e);
+        this.programs.set(name, this.programs.get('LIGHT')!);
+      }
+    }
     const prog = this.use(name);
     const u = (name: string) => this.location(prog, name);
     this.bind(prog, { uVelocity: this.velocity, uAcc: light.acc, uBandsA: light.bandsA, uBandsB: light.bandsB });

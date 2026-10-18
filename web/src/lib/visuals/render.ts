@@ -11,7 +11,7 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import { MARK, colourOf, PARTS, type Flame } from './flame';
-import { Fluid, gridFor, WAVE_BEND, WAVE_K, type Flow, type Force } from './fluid';
+import { FLOW_IN_LIGHT, Fluid, gridFor, WAVE_BEND, WAVE_K, type Flow, type Force } from './fluid';
 import { diveCamera, diveFit, diveTarget, type DiveFit } from './zoom';
 import { loopFunction, MOST_PICTURE, pictureShader } from './effects';
 import { FlashMeter } from './flashmeter';
@@ -1053,7 +1053,7 @@ export class FlameRenderer {
       fluid.push(look.forces);
       fluid.step(look.dt, look.flow);
       const other = 1 - this.cur;
-      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id), amount: loop.amount, t: loop.t } : undefined, look.facets);
+      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id, FLOW_IN_LIGHT), amount: loop.amount, t: loop.t } : undefined, look.facets);
       this.cur = other;
       this.use();
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
@@ -1320,7 +1320,16 @@ export class FlameRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.bandSetsB[this.cur]);
     const id = loop?.id ?? 0;
     let p = this.carrying2.get(id);
-    if (!p) this.carrying2.set(id, (p = program(gl, FULL, tunnelSource(loopFunction(id)))));
+    if (!p) {
+      // One that does not compile on this device: the carry without it, rather than no frame.
+      try {
+        p = program(gl, FULL, tunnelSource(loopFunction(id)));
+      } catch (e) {
+        console.warn('Visuals: a loop effect did not compile here', id, e);
+        p = this.carrying2.get(0) ?? program(gl, FULL, tunnelSource(loopFunction(0)));
+      }
+      this.carrying2.set(id, p);
+    }
     gl.useProgram(p);
     gl.uniform1f(gl.getUniformLocation(p, 'uLoopA'), loop?.amount ?? 0);
     gl.uniform1f(gl.getUniformLocation(p, 'uLoopT'), loop?.t ?? 0);

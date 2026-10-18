@@ -313,13 +313,17 @@ ${placed.filter(({ e }) => e.kind !== 'shape').map(call).join('\n')}
 }`;
 }
 
+/** `fx_flow` where nothing flows (the loop's carry pass): none. The fluid's light pass gives its own (fluid.ts). */
+export const NO_FLOW = `vec2 fx_flow(vec2 p) { return vec2(0.0); }`;
+
 /** The loop slot's GLSL for one effect: \`vec2 fx_loop(vec2 uv, float a, float t, float aspect)\` on a buffer's
  *  coordinates (0..1), for the passes that read the kept light back; none (the identity) where it is not a shape. */
-export function loopFunction(id: number): string {
+export function loopFunction(id: number, flow = NO_FLOW): string {
   const e = effectOf(id);
   if (!e || !e.slots.includes('loop') || e.kind !== 'shape')
     return `vec2 fx_loop(vec2 uv, float a, float t, float aspect) { return uv; }`;
-  return `${e.glsl}
+  return `${flow}
+${e.glsl}
 vec2 fx_loop(vec2 uv, float a, float t, float aspect) {
   vec2 p = (uv - 0.5) * 2.0 * vec2(aspect, 1.0);
   p = fx_${e.name}(p, a, t);
