@@ -5,6 +5,9 @@
 // rest by that (Visuals.svelte has each one's range). The loudness as heard stays the envelope: every other signal's
 // routes are scaled by it, so a quiet passage is a small show whatever its parts do.
 
+import { curveFrom, heightAt, isStraight, tableOf, type RouteValue } from './curves';
+export type { Curve, RouteValue } from './curves';
+
 /** Signals of the whole track. */
 export const TRACK_SIGNALS = ['loudness', 'beat', 'downbeat', 'tempo', 'section', 'harmony', 'centroid', 'key', 'swell', 'buildUp', 'track'] as const;
 /** Signals of each band. */
@@ -111,51 +114,118 @@ export function defaultRoutes(bands: number): Record<string, number> {
   return r;
 }
 
-/** The routes as dense amounts: `track[signal * aspects + aspect]`, `bands[band][signal * aspects + aspect]`. */
-export type Matrix = { track: Float32Array; bands: Float32Array[] };
+/** The routes compiled (decision 0046, amended for 64.1): `track[signal * aspects + aspect]` and `bands[band][…]` each
+ *  route's end (its amount, as a straight one gives it); where a route is curved, its table of heights by signal
+ *  (`curves.ts`), else null; each one's peak (the most it gives, never under 0: what a level's route can let through);
+ *  and the routes there are, so a frame passes over none of the others. */
+export type Matrix = {
+  track: Float32Array;
+  bands: Float32Array[];
+  trackTable: (Float32Array | null)[];
+  bandTable: (Float32Array | null)[][];
+  trackPeak: Float32Array;
+  bandPeak: Float32Array[];
+  trackOn: Int32Array;
+  bandOn: Int32Array[];
+};
 
-export function compile(routes: Record<string, number>, bands: number): Matrix {
-  const track = new Float32Array(TRACK_SIGNALS.length * NA);
-  const per = Array.from({ length: bands }, () => new Float32Array(BAND_SIGNALS.length * NA));
-  for (const [key, amount] of Object.entries(routes)) {
-    if (!amount || !isRoute(key, bands)) continue;
+export function compile(routes: Record<string, RouteValue>, bands: number): Matrix {
+  const cells = (signals: number) => ({ end: new Float32Array(signals * NA), table: Array<Float32Array | null>(signals * NA).fill(null), peak: new Float32Array(signals * NA), on: [] as number[] });
+  const t = cells(TRACK_SIGNALS.length);
+  const per = Array.from({ length: bands }, () => cells(BAND_SIGNALS.length));
+  for (const [key, value] of Object.entries(routes)) {
+    if (!isRoute(key, bands)) continue;
+    const curve = typeof value === 'number' ? null : curveFrom(value);
+    const end = curve ? curve.h : typeof value === 'number' && Number.isFinite(value) ? value : 0;
+    const bent = curve && !isStraight(curve) ? tableOf(curve) : null;
+    if (!end && !bent) continue;
     const [signal, band, aspect] = key.split('|');
-    if (band === '-') track[T[signal as TrackSignal] * NA + A[aspect as Aspect]] = amount;
-    else per[Number(band)][B[signal as BandSignal] * NA + A[aspect as Aspect]] = amount;
+    const into = band === '-' ? t : per[Number(band)];
+    const cell = (band === '-' ? T[signal as TrackSignal] : B[signal as BandSignal]) * NA + A[aspect as Aspect];
+    into.end[cell] = end;
+    into.table[cell] = bent ? bent.table : null;
+    into.peak[cell] = bent ? bent.peak : Math.max(0, end);
+    into.on.push(cell);
   }
-  return { track, bands: per };
+  return {
+    track: t.end,
+    bands: per.map((b) => b.end),
+    trackTable: t.table,
+    bandTable: per.map((b) => b.table),
+    trackPeak: t.peak,
+    bandPeak: per.map((b) => b.peak),
+    trackOn: Int32Array.from(t.on),
+    bandOn: per.map((b) => Int32Array.from(b.on)),
+  };
 }
 
 /** What each aspect is given now: `whole` the whole track's routes (and, for the aspects of the whole picture, the
- *  bands' too: their mean, or for a moment their largest), `band[b]` band b's own routes (for its part's aspects). */
-export type Given = { whole: Float32Array; band: Float32Array[] };
+ *  bands' too: their mean, or for a moment their largest), `band[b]` band b's own routes (for its part's aspects);
+ *  `level` each level's share of its setting the routes let through (1: all of it; `LEVEL_ASPECTS`). */
+export type Given = { whole: Float32Array; band: Float32Array[]; level: Float32Array };
 
-export const given = (bands: number): Given => ({ whole: new Float32Array(NA), band: Array.from({ length: bands }, () => new Float32Array(NA)) });
+export const given = (bands: number): Given => ({
+  whole: new Float32Array(NA),
+  band: Array.from({ length: bands }, () => new Float32Array(NA)),
+  level: new Float32Array(NA).fill(1),
+});
+
+/** The levels (64.1; the owner: "The other sliders are simply limits"): Smoothing, Floor, Depth and Fluid are each the
+ *  most its setting gives, and each of its routes a condition for reaching it: a route lets through all of it where its
+ *  curve is at its peak, less as it falls short (as much less as the envelope says), never under nothing; they
+ *  multiply. A straight one of amount a gives 1 − e·a·(1 − s) rising with its signal s, of −a 1 − e·a·s falling; quiet
+ *  (e → 0) every route lets all through. The bands' routes into one: their geometric mean, as the swings take the bands'
+ *  mean. */
+export const LEVEL_ASPECTS: readonly Aspect[] = ['smoothing', 'floor', 'depth', 'fluid'];
+const isLevel = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
+
+/** What a route gives at its signal `v`: its curve's height, a straight one's amount times the signal. */
+const heightOf = (table: Float32Array | null, end: number, v: number) => (table ? heightAt(table, v) : end * v);
+/** A level's route's share let through. */
+const letThrough = (peak: number, y: number, e: number) => Math.min(1, Math.max(0, 1 - e * (peak - y)));
 
 /** Adds up the routes into `out`: `track` the whole track's signals now (`T` order, 0..1), `bands[b]` band b's (`B`
- *  order); `envelope` (0..1) scales every signal's routes but the loudness's own. */
+ *  order); `envelope` (0..1) scales every signal's routes but the loudness's own. The swings add up what each route's
+ *  curve gives at its signal, times the envelope; the levels multiply what each lets through. */
 export function give(m: Matrix, track: Float32Array, bands: Float32Array[], envelope: number, out: Given): Given {
-  const { whole, band } = out;
+  const { whole, band, level } = out;
   whole.fill(0);
-  for (let s = 0; s < TRACK_SIGNALS.length; s++) {
-    const v = track[s] * (s === T.loudness ? 1 : envelope);
-    if (!v) continue;
-    for (let a = 0; a < NA; a++) whole[a] += m.track[s * NA + a] * v;
+  level.fill(1);
+  for (let i = 0; i < m.trackOn.length; i++) {
+    const cell = m.trackOn[i];
+    const s = (cell / NA) | 0;
+    const a = cell - s * NA;
+    const e = s === T.loudness ? 1 : envelope;
+    const y = heightOf(m.trackTable[cell], m.track[cell], track[s]);
+    if (isLevel[a]) level[a] *= letThrough(m.trackPeak[cell], y, e);
+    else whole[a] += e * y;
   }
   const n = Math.min(band.length, bands.length, m.bands.length);
+  const bandLevel = levelScratch(n);
   for (let b = 0; b < band.length; b++) {
     const to = band[b];
     to.fill(0);
     if (b >= n) continue;
-    const amounts = m.bands[b];
-    for (let s = 0; s < BAND_SIGNALS.length; s++) {
-      const v = bands[b][s] * envelope;
-      if (!v) continue;
-      for (let a = 0; a < NA; a++) to[a] += amounts[s * NA + a] * v;
+    const lv = bandLevel[b];
+    lv.fill(1);
+    const on = m.bandOn[b];
+    for (let i = 0; i < on.length; i++) {
+      const cell = on[i];
+      const s = (cell / NA) | 0;
+      const a = cell - s * NA;
+      const y = heightOf(m.bandTable[b][cell], m.bands[b][cell], bands[b][s]);
+      if (isLevel[a]) lv[a] *= letThrough(m.bandPeak[b][cell], y, envelope);
+      else to[a] += envelope * y;
     }
   }
   if (n) {
     for (let a = 0; a < NA; a++) {
+      if (isLevel[a]) {
+        let product = 1;
+        for (let b = 0; b < n; b++) product *= bandLevel[b][a];
+        level[a] *= product ** (1 / n);
+        continue;
+      }
       if (isPart[a]) continue;
       let sum = 0;
       let most = -Infinity;
@@ -167,4 +237,11 @@ export function give(m: Matrix, track: Float32Array, bands: Float32Array[], enve
     }
   }
   return out;
+}
+
+// Each band's levels, kept from call to call (no garbage each frame).
+let scratch: Float32Array[] = [];
+function levelScratch(n: number): Float32Array[] {
+  while (scratch.length < n) scratch.push(new Float32Array(NA));
+  return scratch;
 }
