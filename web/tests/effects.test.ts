@@ -196,3 +196,23 @@ test('a drawn look’s effects stay within the room the flame leaves under each 
   const small = { fx1: 0, fx1Amount: 0, fx2: 0, fx2Amount: 0, fx3: 7, fx3Amount: 0.5, fxLoop: 0, fxLoopAmount: 0, ...knobs };
   assert.deepEqual(withinRoom(small), small);
 });
+
+test('the routes on the effects: levels take each amount down, swings move each control from where it is set, both drawn as routed', async () => {
+  const { effectsNow, settingsReport, knobLabel } = await import('../src/lib/visuals/effects.ts');
+  // Rotate (Kaleidoscope's third), Pulse (EYEDO's first), Echo (Hydra's first); Ripple on the loop.
+  const how = { fx1: 3, fx1Amount: 1, fx2: 1, fx2Amount: 0.8, fx3: 1, fx3Amount: 0.5, fxLoop: 3, fxLoopAmount: 0.6, fx1K1: 0.5, fx1K2: 0.2, fx2K1: 0.5, fx2K2: 0.5, fx3K1: 0.9, fx3K2: 0.5, fxLoopK1: 0.5, fxLoopK2: 0.5 };
+  assert.deepEqual(effectsNow(how, 1, 0), effectsNow(how, 1, 0, null, undefined, false, undefined), 'none: as set');
+  const routed = { amounts: [0.5, 1, 0, 0.25], knobs: [0.3, 0, -1, 0, 0.4, 0, 0, 0] };
+  const fx = effectsNow(how, 1, 0, null, undefined, false, routed);
+  assert.deepEqual(fx.amounts.map((a) => +a.toFixed(6)), [0.5, 0.8, 0]);
+  assert.ok(Math.abs(fx.loopAmount - 0.15) < 1e-12);
+  assert.deepEqual(fx.knobs.map((k) => k.map((v) => +v.toFixed(6))), [[0.8, 0.2], [0, 0.5], [1, 0.5]], 'swung, then kept within 0..1');
+  // The reports (the governor's, the precheck's) are the routed ones: Rotate's speed swung up, at its level.
+  assert.ok(Math.abs(settingsReport(how, 1, undefined, false, routed).motion! - (0.628318 * 0.8 * 0.5 + 0.0)) < 1e-9);
+  // The columns' labels: the chosen sub-effect's controls; none chosen, or no such control: none.
+  assert.equal(knobLabel('kaleidoscope', 3, 0), 'Speed');
+  assert.equal(knobLabel('eyedo', 1, 1), 'Decay');
+  assert.equal(knobLabel('hydra', 5, 0), null, 'Hue has no controls');
+  assert.equal(knobLabel('loop', 0, 0), null);
+  assert.equal(knobLabel('loop', 3, 1), 'Speed');
+});

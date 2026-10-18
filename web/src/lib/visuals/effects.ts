@@ -509,6 +509,10 @@ export const LOOP_EFFECTS: readonly Effect[] = [1, 4, 7, 8, 10, 11, 14].map((id)
 /** An engine's sub-effect at `place` (1..), or the loop's: its id (0: none). */
 export const engineEffect = (engine: Engine, place: number) => ENGINE_EFFECTS[engine][Math.round(place) - 1]?.id ?? 0;
 export const loopEffect = (place: number) => LOOP_EFFECTS[Math.round(place) - 1]?.id ?? 0;
+/** The label of control `n` (0, 1) of the sub-effect at `place` in an engine (or the loop), for its column in the
+ *  routes; null where none is chosen there or it has no such control. */
+export const knobLabel = (slot: Engine | 'loop', place: number, n: 0 | 1): string | null =>
+  (slot === 'loop' ? LOOP_EFFECTS : ENGINE_EFFECTS[slot])[Math.round(place) - 1]?.knobs[n]?.label ?? null;
 /** An effect by its id (none for 0 or one not known: a setting from a later version shows nothing, rather than fails). */
 export const effectOf = (id: number) => byId.get(id) ?? null;
 
@@ -722,22 +726,32 @@ export function heldBack(id: number, amount: number, k: Knobs, levers: Levers): 
  *  under reduced motion it rests; one that only recolours or reshapes it, steady, stays. */
 export const moves = (id: number, k: Knobs) => Object.values(effectOf(id)?.report(1, k) ?? {}).some((v) => v !== 0);
 
+/** What the routes make of each engine's and the loop's own settings now (65.1, the matrix's effect columns; none: as
+ *  set): `amounts`, levels (0..1) the Kaleidoscope's, EYEDO's, Hydra's and the loop's amounts are taken down to, as
+ *  Fluid's; `knobs`, swings (−1..1) each control is moved by from where it is set, as Hue's, in the engines' order
+ *  then the loop's, two each. */
+export type Routed = { amounts: readonly number[]; knobs: readonly number[] };
+
 /** The look's effects for the renderer (render.ts `Shown.effects`): each amount times what the Effects setting's routes
- *  let through (`level`) and what the governor lets through (`levers`), none for one that `moves` under reduced
- *  motion (`still`); each one's knobs; `t` the track's own time (s); the beat. */
-export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null, levers: Levers = FREE, still = false) => {
+ *  let through (`level`), its own routes' level (`routed`) and what the governor lets through (`levers`), none for
+ *  one that `moves` under reduced motion (`still`); each one's knobs as routed (the GLSL's, the clocks' and the
+ *  reports' alike, so the governor sees what is drawn); `t` the track's own time (s); the beat. */
+export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null, levers: Levers = FREE, still = false, routed?: Routed) => {
+  const unit = (v: number) => Math.max(0, Math.min(1, v));
+  const swung = (v: number, i: number) => unit(v + (routed?.knobs[i] ?? 0));
+  const levelOf = (k: number) => unit(routed?.amounts[k] ?? 1);
   // Each engine's sub-effect (its setting the place in the engine's list), in the engines' order.
   const ids = [how.fx1, how.fx2, how.fx3].map((place, k) => engineEffect(ENGINES[k].key, place));
   const knobs = [
-    [how.fx1K1, how.fx1K2],
-    [how.fx2K1, how.fx2K2],
-    [how.fx3K1, how.fx3K2],
+    [swung(how.fx1K1, 0), swung(how.fx1K2, 1)],
+    [swung(how.fx2K1, 2), swung(how.fx2K2, 3)],
+    [swung(how.fx3K1, 4), swung(how.fx3K2, 5)],
   ] as Knobs[];
   const loop = loopEffect(how.fxLoop);
-  const loopKnobs = [how.fxLoopK1, how.fxLoopK2] as Knobs;
-  const set = [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a) => a * level);
+  const loopKnobs = [swung(how.fxLoopK1, 6), swung(how.fxLoopK2, 7)] as Knobs;
+  const set = [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a, k) => a * level * levelOf(k));
   const on = (id: number, k: Knobs) => (still && moves(id, k) ? 0 : 1);
-  const loopSet = how.fxLoopAmount * level;
+  const loopSet = how.fxLoopAmount * level * levelOf(3);
   return {
     ids,
     amounts: set.map((a, k) => a * heldBack(ids[k], a, knobs[k], levers) * on(ids[k], knobs[k])),
@@ -760,8 +774,8 @@ export const beatOf = (b: Beat | null): [number, number, number, number] =>
 
 /** What the look's effects add to the meters a second, the picture's and the loop's together: the same for the visuals'
  *  meters and the precheck's, so the governor and the dice hold an effect alike. */
-export function settingsReport(how: EffectSettings, level: number, levers: Levers = FREE, still = false): Report {
-  const fx = effectsNow(how, level, 0, null, levers, still);
+export function settingsReport(how: EffectSettings, level: number, levers: Levers = FREE, still = false, routed?: Routed): Report {
+  const fx = effectsNow(how, level, 0, null, levers, still, routed);
   const out: Report = { ...reportOf(fx.ids, fx.amounts, 'picture', fx.knobs) };
   for (const [k, v] of Object.entries(reportOf([fx.loop], [fx.loopAmount], 'loop', [fx.loopKnobs])) as [keyof Report, number][]) out[k] = (out[k] ?? 0) + v;
   return out;
