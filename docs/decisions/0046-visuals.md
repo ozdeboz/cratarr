@@ -659,5 +659,11 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
   and smoke and every other route stay. Until the next roll, an undo, a Reset or a recall, the precheck and the governor
   take Wild as 100 % (twice the limits); the flash rule stays.
 - **Save over** a snapshot (the owner: "Yes"): its settings and a new picture under its name and in its place.
+- **The grid scrolls across** (the owner: with 19 columns a cell was 13 px on a phone): only the grid moves sideways,
+  the signals' names and the band chips stay at the left, the columns' names in a row of their own kept at the top of
+  the panel and moving with the grid; cells at least 28 px, their numbers at every width.
+- **Each band's times pin** (the owner: "pinning the behavior sliders themselves, just like the look slider"): a band's
+  Lighting, Evolution and Continuity pin as the Behaviour settings do; the dice leave a pinned one, a recall pins them.
+- **The fluid's stirring as routes** (0047, amended): three more columns, Stir, Flow and Swirl.
 - **Calibration:** run again on this mapping, Standard measures as in 64 (its limits and the thumbs' reference values
   unchanged); 47 of 440 random recipes refused.
