@@ -290,7 +290,9 @@ vec2 fx_ripple(vec2 p, float a, vec2 t, vec2 k) {
   vec2 q = mat2(cos(r), -sin(r), sin(r), cos(r)) * p / s;
   return max(c, fx_prev(prev, q) * pow(0.75 + 0.2 * a, f));
 }`,
-    report: (a, k) => ({ motion: 0.72 * k[1] * a }),
+    // Its turn, and its zoom: a stream outward at 60 ln(1 + 0.06 zoom a) e-folds a second (about 3.5 zoom a) moves a
+    // point as fast as a turn of that many radians a second does.
+    report: (a, k) => ({ motion: 0.72 * k[1] * a + 60 * Math.log(1 + 0.06 * k[0] * a) }),
   },
   {
     // ported from hydra-synth (AGPL-3.0), rotate
@@ -716,10 +718,14 @@ export function heldBack(id: number, amount: number, k: Knobs, levers: Levers): 
   return Math.max(0, Math.min(1, f));
 }
 
+/** Whether an effect changes the picture over time at its knobs (its report at all of it counts toward a meter):
+ *  under reduced motion it rests; one that only recolours or reshapes it, steady, stays. */
+export const moves = (id: number, k: Knobs) => Object.values(effectOf(id)?.report(1, k) ?? {}).some((v) => v !== 0);
+
 /** The look's effects for the renderer (render.ts `Shown.effects`): each amount times what the Effects setting's routes
- *  let through (`level`) and what the governor lets through (`levers`); each one's knobs; `t` the track's own time
- *  (s); the beat. */
-export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null, levers: Levers = FREE) => {
+ *  let through (`level`) and what the governor lets through (`levers`), none for one that `moves` under reduced
+ *  motion (`still`); each one's knobs; `t` the track's own time (s); the beat. */
+export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null, levers: Levers = FREE, still = false) => {
   // Each engine's sub-effect (its setting the place in the engine's list), in the engines' order.
   const ids = [how.fx1, how.fx2, how.fx3].map((place, k) => engineEffect(ENGINES[k].key, place));
   const knobs = [
@@ -730,12 +736,14 @@ export const effectsNow = (how: EffectSettings, level: number, t: number, beat: 
   const loop = loopEffect(how.fxLoop);
   const loopKnobs = [how.fxLoopK1, how.fxLoopK2] as Knobs;
   const set = [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a) => a * level);
+  const on = (id: number, k: Knobs) => (still && moves(id, k) ? 0 : 1);
+  const loopSet = how.fxLoopAmount * level;
   return {
     ids,
-    amounts: set.map((a, k) => a * heldBack(ids[k], a, knobs[k], levers)),
+    amounts: set.map((a, k) => a * heldBack(ids[k], a, knobs[k], levers) * on(ids[k], knobs[k])),
     knobs,
     loop,
-    loopAmount: how.fxLoopAmount * level * heldBack(loop, how.fxLoopAmount * level, loopKnobs, levers),
+    loopAmount: loopSet * heldBack(loop, loopSet, loopKnobs, levers) * on(loop, loopKnobs),
     loopKnobs,
     t,
     beat: beatOf(beat),
@@ -752,8 +760,8 @@ export const beatOf = (b: Beat | null): [number, number, number, number] =>
 
 /** What the look's effects add to the meters a second, the picture's and the loop's together: the same for the visuals'
  *  meters and the precheck's, so the governor and the dice hold an effect alike. */
-export function settingsReport(how: EffectSettings, level: number, levers: Levers = FREE): Report {
-  const fx = effectsNow(how, level, 0, null, levers);
+export function settingsReport(how: EffectSettings, level: number, levers: Levers = FREE, still = false): Report {
+  const fx = effectsNow(how, level, 0, null, levers, still);
   const out: Report = { ...reportOf(fx.ids, fx.amounts, 'picture', fx.knobs) };
   for (const [k, v] of Object.entries(reportOf([fx.loop], [fx.loopAmount], 'loop', [fx.loopKnobs])) as [keyof Report, number][]) out[k] = (out[k] ?? 0) + v;
   return out;

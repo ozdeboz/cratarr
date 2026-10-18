@@ -151,3 +151,19 @@ test('pow only of what is positive (of a negative it is undefined: NaN on Mali)'
   const positive = new Set(['1.0 + 0.06 * k.x * a', '0.75 + 0.2 * a']);
   for (const e of EFFECTS) for (const m of e.glsl.matchAll(/\bpow\(([^,]+),/g)) assert.ok(positive.has(m[1].trim()), `${e.name}: pow(${m[1]}, …)`);
 });
+
+test('reduced motion: every effect that changes over time rests, the steady ones stay; Echo’s zoom is motion', async () => {
+  const { effectsNow, settingsReport, moves, reportOf } = await import('../src/lib/visuals/effects.ts');
+  const knobs = { fx1K1: 0.5, fx1K2: 0.5, fx2K1: 0.5, fx2K2: 0.5, fx3K1: 0.5, fx3K2: 0.5, fxLoopK1: 0.5, fxLoopK2: 0.5 };
+  // Kaleid (folds, churning), Pulse (on the beat), Posterize (steady); Rotate in the loop.
+  const how = { fx1: 1, fx1Amount: 1, fx2: 1, fx2Amount: 1, fx3: 7, fx3Amount: 1, fxLoop: 5, fxLoopAmount: 1, ...knobs };
+  const still = effectsNow(how, 1, 0, null, undefined, true);
+  assert.deepEqual(still.ids, [1, 16, 2]);
+  assert.deepEqual(still.amounts, [0, 0, 1], 'only Posterize stays');
+  assert.equal(still.loopAmount, 0, 'the loop’s Rotate rests');
+  assert.deepEqual(settingsReport(how, 1, undefined, true), {}, 'and adds nothing to the meters');
+  assert.ok(!moves(6, [0.5, 0.5]) && !moves(12, [0.5, 0.5]) && moves(9, [0.5, 0.5]), 'Hue and Saturate steady, Echo not');
+  // Echo zooming only, no turn: its stream counts as motion, about 3.5 a second at all of it.
+  assert.ok(Math.abs(reportOf([9], [1], 'picture', [[1, 0]]).motion! - 60 * Math.log(1.06)) < 1e-12);
+  assert.ok(!moves(9, [0, 0]), 'Echo neither zooming nor turning: steady');
+});

@@ -40,7 +40,7 @@
     type Preset,
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
-  import { newAspects, stepAspects, wavesMotion } from './aspects';
+  import { newAspects, stepAspects, wavesMotion, zoomsMotion } from './aspects';
   import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
   import { curveOf, endOf, heightAt, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
   import CurveEditor from './CurveEditor.svelte';
@@ -1391,7 +1391,7 @@
           // motion.
           tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
           // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
-          effects: effectsNow(how, d.effects, m.position, beatNow, governor.levers),
+          effects: effectsNow(how, d.effects, m.position, beatNow, governor.levers, still),
           facets: { amount: d.facets, hex: Math.round(how.lattice) === 1 },
           dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
           forces: stirred.forces,
@@ -1416,11 +1416,12 @@
       renderer.measure(w, h, now / 1000);
       const stats: FrameStats = {
         t: now / 1000,
-        // What the effects add to the meters (effects.ts), beside the flame's own.
-        // What the effects add (as the governor lets them), and the waves' motion where nothing flows (aspects.ts).
+        // What the effects add (as the governor lets them), the waves' motion where nothing flows, and the zooms'
+        // streaming out at the rates the renderer is given (aspects.ts).
         extra: (() => {
-          const fx = settingsReport(how, d.effects, governor.levers);
-          return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) };
+          const fx = settingsReport(how, d.effects, governor.levers, still);
+          const zooms = still ? 0 : zoomsMotion(d.tunnel * governor.levers.pace, d.dive * governor.levers.pace);
+          return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) + zooms };
         })(),
         // The dive's turn counts as each part's.
         turnRates: renderer?.diveTurnRate ? d.rates.map((r) => r + renderer!.diveTurnRate) : d.rates,
