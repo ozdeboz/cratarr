@@ -4,7 +4,9 @@
 // "Simple is good, but we do need to handle the caveats":
 //
 // - A thumbs down tightens the limit of the one kind of busyness that stood out most over the 20 seconds before it
-//   (against what the defaults typically do, on music as busy), to a step under what it was then, so it acts at once.
+//   (against what the defaults typically do), to a step under what it was then, so it acts at once. All of it in the
+//   governor's own terms: each meter against its budget at a limit of 1 (as Calm ↔ Wild and the music's activity
+//   scale it, governor.ts `budgetOf`), so a limit learned is one the governor holds the picture to as it is.
 //   Where nothing stood out, it only counts toward the periodic fit: dislikes are pressed more often than likes, and
 //   most are of the look rather than its busyness, so each one tightening something would ratchet everything calm.
 // - A thumbs up loosens, a step, the limit the governor is holding the picture back by then (its amber dot): the way
@@ -21,8 +23,9 @@ import type { Budgeted } from './governor';
 export type LearnedLimit = { value: number; step: number; dir: -1 | 0 | 1 };
 export type Learned = Record<Budgeted, LearnedLimit>;
 
-/** What the defaults typically do (Standard over eleven varied tracks, 2026-10-18; precheck.ts), against which a meter
- *  stands out; new looks a minute: half the limit (Standard has none of its own). */
+/** What the defaults typically do, in the governor's terms (Standard over eleven varied tracks, 2026-10-18;
+ *  precheck.ts: taken at an activity of a half, a budget's factor of 1), against which a meter stands out; new looks a
+ *  minute: half the limit (Standard has none of its own). */
 export const TYPICAL: Readonly<Record<Budgeted, number>> = {
   motion: 0.4,
   shapeChurn: 0.32,
@@ -56,8 +59,9 @@ export function drifted(learned: Learned, base: Readonly<Record<Budgeted, number
   ) as Learned;
 }
 
-/** The 20 seconds before a thumb: each meter's mean, and the music's intensity (0..1). */
-export type Window = { meters: Partial<Record<Budgeted, number>>; intensity: number };
+/** The 20 seconds before a thumb: each meter's mean against its budget at a limit of 1 (`budgetOf(1, wild, activity)`
+ *  each reading), the governor's terms. */
+export type Window = { relative: Partial<Record<Budgeted, number>> };
 
 /** What a thumb does: the limits after it, and the one it changed (none where it only counts toward the fit).
  *  `held`: the limit the governor holds the picture back by now, if any. */
@@ -71,13 +75,12 @@ export function thumbed(
   let meter: Budgeted | null = null;
   let to = 0;
   if (thumb === 'down') {
-    // The one that stood out most, if any stood out: against the defaults' typical, on music as busy as this was.
-    const busy = 0.5 + Math.min(1, Math.max(0, window.intensity));
+    // The one that stood out most, if any stood out: against the defaults' typical.
     let most = 1;
     for (const k of Object.keys(base) as Budgeted[]) {
-      const v = window.meters[k];
+      const v = window.relative[k];
       if (v === undefined || !Number.isFinite(base[k])) continue;
-      const out = v / (TYPICAL[k] * busy);
+      const out = v / TYPICAL[k];
       if (out > most) {
         most = out;
         meter = k;
@@ -86,7 +89,7 @@ export function thumbed(
     if (meter) {
       const l = learned[meter];
       const step = l.dir === 1 ? Math.max(LEAST_STEP, l.step / 2) : l.step;
-      to = Math.min(l.value, window.meters[meter]!) * (1 - step);
+      to = Math.min(l.value, window.relative[meter]!) * (1 - step);
       learned = { ...learned, [meter]: { value: l.value, step, dir: -1 } };
     }
   } else if (held && Number.isFinite(base[held])) {

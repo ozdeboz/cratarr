@@ -42,7 +42,7 @@
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
   import { newDrift, stepDrift } from './drift';
-  import { holding, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
+  import { budgetOf, BUDGETED, holding, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
   import { drifted, fresh, limitsOf, thumbed, type Learned } from './learning';
   import { forgetVisualsLimits, getVisualsLimits, postVisualsThumb, putVisualsLimits } from '../api';
   import { toast } from '../toast.svelte';
@@ -235,7 +235,8 @@
   }
   // The last 20 seconds, four readings a second: the meters and what the loop knew beside them (for the thumbs).
   const WINDOW = 80;
-  let recent: { meters: MeterValues; loop: TrialLoop }[] = [];
+  // `relative`: each budgeted meter against its budget at a limit of 1, as Wild and the music's activity had it then.
+  let recent: { meters: MeterValues; loop: TrialLoop; relative: Record<Budgeted, number> }[] = [];
   // Each budget's lever, and how far it holds back (0 open, 1 as far as it goes).
   const LEVER_OF: Record<Budgeted, { lever: keyof Levers; most: number }> = {
     motion: { lever: 'pace', most: 0.25 },
@@ -271,8 +272,8 @@
     showChrome();
     const list = recent.slice();
     const mean = (pick: (r: (typeof list)[number]) => number) => (list.length ? list.reduce((s, r) => s + pick(r), 0) / list.length : 0);
-    const meters = Object.fromEntries((Object.keys(LEVER_OF) as Budgeted[]).map((k) => [k, mean((r) => r.meters[k])])) as Record<Budgeted, number>;
-    const window = { meters: list.length ? meters : {}, intensity: mean((r) => r.loop.intensity) };
+    const relative = Object.fromEntries(BUDGETED.map((k) => [k, mean((r) => r.relative[k])])) as Record<Budgeted, number>;
+    const window = { relative: list.length ? relative : {} };
     const held = heldMost();
     let { learned: next, changed } = thumbed(learned, STANDING, t, window, held);
     if (changed) {
@@ -315,6 +316,7 @@
       loop: { ...loopStats, device: list[list.length - 1]?.loop.device ?? null },
       settings: { ...Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])), ...lookNow(), wild: now.wild, colours: now.colours },
       track: playingNow ? `${playingNow.source}/${playingNow.id}` : null,
+      relative,
       held,
       changed,
       at: Date.now(),
@@ -1156,7 +1158,8 @@
           fps,
           device: device(),
         };
-        recent.push({ meters: values, loop: trial.loop });
+        const factor = budgetOf(1, how.wild, d.lit);
+        recent.push({ meters: values, loop: trial.loop, relative: Object.fromEntries(BUDGETED.map((k) => [k, values[k] / factor])) as Record<Budgeted, number> });
         if (recent.length > WINDOW) recent.shift();
         hitsCounted = 0;
         const marks = { flash: holding(l, 'swing'), speed: holding(l, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(l, k)) };
