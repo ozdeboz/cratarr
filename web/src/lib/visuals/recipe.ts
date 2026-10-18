@@ -160,21 +160,34 @@ export function recipeFor(seed: number, aspects: readonly string[], bands = 6): 
   return { seed, routes: r, settings, extras };
 }
 
+/** What the dice's double tap randomises (the owner: "double tap becomes this randomize 1 to 5"): how the visuals move
+ *  with the music, the routes into the flame's form, its lights, its turning and its size, the turning's pace and the
+ *  swing, and the bands' times; the look, its colours, the grain and smoke, Intensity and every other route stay. */
+export const MOVEMENT = {
+  columns: ['shape', 'lights', 'rotation', 'size'],
+  settings: ['flash', 'speed', 'lighting', 'evolution', 'continuity'],
+} as const;
+
 /** The settings a recipe makes of `base`: its routes whole (every other route off) and its settings; `base`'s look,
  *  pins, colours and what the device can afford (Points, Steps, Resolution, FPS, Brightness) kept, and of the rest
  *  what the owner pinned: a behaviour slider, a route ('route:<key>', on or off as it is), a column ('column:<aspect>',
  *  every route into it as it is). The Track row (what a new track does to the look and the behaviour) is base's: a
  *  recipe is how the visuals move with the music, not what a new track brings. */
-export function settingsOf(recipe: Recipe, base: VisualSettings): VisualSettings {
+export function settingsOf(recipe: Recipe, base: VisualSettings, scope: 'all' | 'movement' = 'all'): VisualSettings {
   const within = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
   const r = recipe.settings;
   const pinned = new Set(base.pins);
   const columns = [...pinned].filter((p) => p.startsWith('column:')).map((p) => `|${p.slice('column:'.length)}`);
-  const kept = (key: string) => key.startsWith('track|') || pinned.has(`route:${key}`) || columns.some((c) => key.endsWith(c));
+  // Of a movement roll, only the movement's columns are the recipe's.
+  const moving = (key: string) => MOVEMENT.columns.some((c) => key.endsWith(`|${c}`));
+  const kept = (key: string) =>
+    key.startsWith('track|') || pinned.has(`route:${key}`) || columns.some((c) => key.endsWith(c)) || (scope === 'movement' && !moving(key));
   const routes: VisualSettings['routes'] = {};
   for (const [k, v] of Object.entries(recipe.routes)) if (!kept(k)) routes[k] = v;
   for (const [k, v] of Object.entries(base.routes)) if (kept(k)) routes[k] = v;
-  const one = <K extends (typeof BEHAVIOUR_PINS)[number]>(k: K, v: number) => (pinned.has(k) ? base[k] : v);
+  // A behaviour slider pinned, or not the movement's in a movement roll, is base's.
+  const takes = (k: string) => scope === 'all' || (MOVEMENT.settings as readonly string[]).includes(k);
+  const one = <K extends (typeof BEHAVIOUR_PINS)[number]>(k: K, v: number) => (pinned.has(k) || !takes(k) ? base[k] : v);
   return {
     ...base,
     routes,
@@ -185,8 +198,8 @@ export function settingsOf(recipe: Recipe, base: VisualSettings): VisualSettings
     smoothing: one('smoothing', within(r.smoothing, 0, 1)),
     floor: one('floor', within(r.floor, 0, 1)),
     depth: one('depth', within(r.depth, 0, 1)),
-    lighting: r.lighting.map((v) => within(v, 0.02, 1)),
-    evolution: r.evolution.map((v) => within(v, 0.02, 2)),
-    continuity: r.continuity.map((v) => within(v, 0, 1)),
+    lighting: takes('lighting') ? r.lighting.map((v) => within(v, 0.02, 1)) : base.lighting,
+    evolution: takes('evolution') ? r.evolution.map((v) => within(v, 0.02, 2)) : base.evolution,
+    continuity: takes('continuity') ? r.continuity.map((v) => within(v, 0, 1)) : base.continuity,
   };
 }
