@@ -35,6 +35,8 @@ export type FrameStats = {
   look: 'track' | 'dice' | 'moment' | null;
   /** A new symmetry this frame (a moment). */
   symmetry: boolean;
+  /** Each part's weight in the drawing (Presence, 65: its share of the points against the others'); none: all alike. */
+  weights?: number[];
   /** What the effects add (effects.ts `reportOf`), each a second, beside the flame's own. */
   extra?: Partial<Record<'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping', number>>;
   /** The picture's tiles, where a reading arrived this frame (one frame may bring several, or none). */
@@ -182,6 +184,14 @@ export function worstWindow(rates: number[], cols: number, rows: number): number
   return worst;
 }
 
+/** How much of the points moves between parts from weights `b` to `a`: half the summed change of each one's share. */
+function sharesMoved(a: number[], b: number[]): number {
+  const sa = a.reduce((x, w) => x + w, 0);
+  const sb = b.reduce((x, w) => x + w, 0);
+  if (!(sa > 0 && sb > 0) || a.length !== b.length) return 0;
+  return a.reduce((x, w, i) => x + Math.abs(w / sa - b[i] / sb), 0) / 2;
+}
+
 /** All the meters, frame by frame. */
 export class Meters {
   private flashes = new Flashes();
@@ -212,7 +222,11 @@ export class Meters {
     this.motion += (mean(s.turnRates.map(Math.abs)) + (x.motion ?? 0) - this.motion) * k;
     // A new look jumps by design: that frame's change is the look's, counted in looksPerMinute, not churn.
     const jumped = s.look !== null;
-    this.shape += ((jumped ? 0 : change(s.shape, was.shape) + change(s.spread, was.spread)) + (x.shapeChurn ?? 0) - this.shape) * k;
+    // Presence (65) moves the picture's points between its parts: the share that moves counts as a part's shape
+    // changing by as much (a part flaring from a sixth of the points to a third, against the others, as much as one
+    // part's shape changing by a sixth).
+    const moved = s.weights && was.weights ? sharesMoved(s.weights, was.weights) / dt : 0;
+    this.shape += ((jumped ? 0 : change(s.shape, was.shape) + change(s.spread, was.spread) + moved) + (x.shapeChurn ?? 0) - this.shape) * k;
     this.colour += ((jumped ? 0 : hueChange + Math.abs(s.saturation - was.saturation) / dt) + (x.colourChurn ?? 0) - this.colour) * k;
     const pump = s.scale > 0 && was.scale > 0 ? Math.abs(Math.log(s.scale / was.scale)) / dt : 0;
     this.zoom += (pump + (x.zoomPumping ?? 0) - this.zoom) * k;

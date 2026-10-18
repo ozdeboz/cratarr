@@ -85,6 +85,7 @@ export function* prechecking(
       t: k * dt,
       turnRates: a.rates,
       shape: a.shape,
+      weights: a.parts.map((p) => p.weight ?? 1),
       hue: a.parts.map((p) => p.hue),
       spread: a.parts.map((p) => p.spread ?? 1),
       scale: a.scale,

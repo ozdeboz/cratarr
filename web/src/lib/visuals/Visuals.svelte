@@ -1392,6 +1392,7 @@
         // The dive's turn counts as each part's.
         turnRates: renderer?.diveTurnRate ? d.rates.map((r) => r + renderer!.diveTurnRate) : d.rates,
         shape: d.shape,
+        weights: d.parts.map((p) => p.weight ?? 1),
         hue: d.parts.map((p) => p.hue),
         spread: d.parts.map((p) => p.spread ?? 1),
         scale: d.scale,
