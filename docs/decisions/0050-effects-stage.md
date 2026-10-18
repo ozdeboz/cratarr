@@ -278,3 +278,23 @@ a made-up track) and wants both: "Basically, yes, I want both, so this is seriou
   exist, 0.41 with three effects; the loop's read-back 0.86; the fluid's light carrying a loop effect and Facets 0.56;
   frames held at 55 fps but for a loop effect's few doubled frames. **On the devices still to come:** neither the
   tablet nor the phone was reachable; the same script runs there when they are.
+
+## Amendment, 2026-10-19: the look's own route columns (65.1)
+
+- **Every effect control a route target** (the owner: "I want matrix targets for all effect controls"), and **Lens and
+  the other discrete settings** ("Also for lens and other discrete"; "Go" on the design): twenty-one columns at the
+  grid's end, in the Look's order, each named for the setting it moves (routes.ts):
+  - each engine's and the Loop's **Amount** a level, as Fluid's: its slider the most, its routes the conditions;
+  - their two **controls** swings about where their sliders set them, a route's full amount across the whole range
+    (stepped controls, as Kaleid's sides, move in steps); a column is named for the chosen effect's control (Sides,
+    Spin…), "—" where the effect has none, its routes resting until one has;
+  - **Colours, Form, Symmetry, Mirror, Lens, Lattice and each engine's choice** at moments, as Symmetry was: each time
+    a route rises past half way the setting moves to another value (the same on every device of a group), a pinned
+    one staying. The Colours move only among the look's four families (Cover and Fire are chosen by hand); an engine
+    set to None stays off, and one that moves to another effect takes its controls back to their middle. Symmetry's
+    moment moves Symmetry alone now that Mirror has its own.
+- **Moments are new looks**: a moment was never counted (neither live nor in the precheck), so the governor's gap
+  between moments had no meter behind it; the looks-a-minute meter counts each now.
+- The effects' reports, the governor's hold on them and the precheck all take the routed Amounts and controls; the
+  Look's rows mark where the routes have them now. No default routes go into these columns, and the dice leave them as
+  they are (a roll keeps base's routes into them), so nothing changes on screen until the owner routes something.
