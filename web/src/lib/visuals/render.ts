@@ -11,7 +11,7 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import { MARK, colourOf, PARTS, type Flame } from './flame';
-import { Fluid, gridFor, type Flow, type Force } from './fluid';
+import { Fluid, gridFor, WAVE_BEND, WAVE_K, type Flow, type Force } from './fluid';
 import { diveCamera, diveFit, diveTarget, type DiveFit } from './zoom';
 import { FlashMeter } from './flashmeter';
 import type { Tiles } from './meters';
@@ -440,6 +440,9 @@ uniform float uFire;
 // cell's size in texture coordinates.
 uniform sampler2D uVelocity;
 uniform float uWarp;
+// The waves where nothing flows (fluid.ts): the picture bent across their way as their crest passes.
+uniform vec4 uWave;
+uniform float uWaveK;
 uniform vec2 uUvPerCell;
 out vec4 o;
 ${BAD}
@@ -452,6 +455,12 @@ void main() {
   // A beat's swell: the picture drawn a little larger about its middle.
   vec2 uv = 0.5 + (gl_FragCoord.xy / uView - 0.5) / uZoom;
   if (uWarp > 0.0) uv -= uWarp * textureLod(uVelocity, uv, 0.0).xy * uUvPerCell;
+  if (uWave.x != 0.0) {
+    float aspect = uView.x / uView.y;
+    vec2 n = uWave.yz;
+    vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
+    uv += vec2(-n.y / aspect, n.x) * uWave.x * sin(uWaveK * dot(p, n) - uWave.w);
+  }
   vec2 px = 1.0 / vec2(textureSize(uAcc, 0));
   vec4 a = at(uv, 0.0);
   // The pixel's points by band: shares of one.
@@ -1118,6 +1127,10 @@ export class FlameRenderer {
     gl.uniform1f(this.u(this.show, 'uFire'), look.fire);
     const warp = fluid ? this.warpShown : 0;
     gl.uniform1f(this.u(this.show, 'uWarp'), warp);
+    // Where the fluid flows it carries the waves itself; else the picture is bent by them.
+    const wave = fluid ? undefined : look.flow?.wave;
+    gl.uniform4f(this.u(this.show, 'uWave'), wave ? WAVE_BEND * wave.amount : 0, wave ? Math.cos(wave.angle) : 1, wave ? Math.sin(wave.angle) : 0, wave ? wave.phase : 0);
+    gl.uniform1f(this.u(this.show, 'uWaveK'), WAVE_K);
     if (fluid && warp) {
       gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, fluid.velocity);

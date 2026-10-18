@@ -54,6 +54,9 @@ export type StirInput = {
   loudness: number;
   swell: number;
   bps: number;
+  /** The Waves column now (its routes, scaled), and the track's own time (seconds): the waves' height, way and phase. */
+  waves?: number;
+  position?: number;
   center: [number, number];
   gain?: Gain;
 };
@@ -91,6 +94,8 @@ export function stir(s: Stirring, i: StirInput): { forces: Force[]; flow: Flow }
   const flow: Flow = {
     energy: Math.min(1, Math.max(0, g('loudness', null, 'flow', i.loudness) * (0.7 + 0.6 * g('beat', null, 'flow', pulse)))),
     swirl: Math.max(0, 1 + 2 * g('swell', null, 'swirl', Math.max(0, i.swell)) + 2 * g('section', null, 'swirl', whirl)),
+    // The waves: once round their cycle in eight seconds, their way turning once in two minutes, both with the track.
+    ...(i.waves ? { wave: { amount: i.waves, angle: ((i.position ?? i.t) * 2 * Math.PI) / 120, phase: ((i.position ?? i.t) * 2 * Math.PI) / 8 } } : {}),
   };
   if (!(i.amount > 0)) {
     s.kicks = [];

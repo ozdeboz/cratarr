@@ -1304,6 +1304,8 @@
         loudness: d.lit,
         swell: track[T.swell],
         bps: m.bps,
+        waves: still ? 0 : d.given[A.waves],
+        position: m.position,
         center: [0.5, 0.5],
         // What each push is worth: its route into Stir, Flow or Swirl (the trial's own routes with the rating page's),
         // times that column's scale.

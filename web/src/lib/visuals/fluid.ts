@@ -25,7 +25,16 @@ export type Force = { x: number; y: number; dx: number; dy: number; radius: numb
 
 /** How the fluid moves now: `energy` 0..1 (how long its motion lasts: a calm passage settles within a second, a loud
  *  one flows on), `swirl` 0.. (how strongly its small whirls are kept). */
-export type Flow = { energy: number; swirl: number };
+/** `wave`: the slow giant waves (65): how high (the Waves column's routes), which way they roll (radians) and where in
+ *  their cycle (radians). */
+export type Flow = { energy: number; swirl: number; wave?: Wave };
+export type Wave = { amount: number; angle: number; phase: number };
+
+/** The waves: wavelengths across the screen's height (2π each), how hard they push at their fullest (screen heights a
+ *  second, each second), and how far the picture is bent by them where nothing flows (of the screen's height). */
+export const WAVE_K = 2 * Math.PI * 0.8;
+export const WAVE_PUSH = 0.35;
+export const WAVE_BEND = 0.025;
 
 /** The light the renderer keeps: its colour and density, and its two band-share buffers. */
 export type Light = { acc: WebGLTexture; bandsA: WebGLTexture; bandsB: WebGLTexture };
@@ -73,6 +82,8 @@ uniform vec4 uAt[${MOST_FORCES}];
 uniform vec2 uWay[${MOST_FORCES}];
 uniform float uSwirl;
 uniform float uDt;
+uniform vec4 uWave;
+uniform float uWaveK;
 out vec4 o;
 float curlAt(vec2 uv) {
   float l = texture(uVelocity, uv - vec2(uTexel.x, 0.0)).y;
@@ -91,6 +102,13 @@ void main() {
   vec2 f = 0.5 * vec2(abs(t) - abs(b), abs(r) - abs(l));
   f /= length(f) + 0.0001;
   v += f * uSwirl * c * vec2(1.0, -1.0) * uDt;
+  // The waves: a push across their way, as their crest passes (sideways to the way it rolls, so it neither presses
+  // the flow together nor pulls it apart: the pressure leaves it).
+  if (uWave.x != 0.0) {
+    vec2 n = uWave.yz;
+    vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
+    v += vec2(-n.y / uAspect, n.x) * uWave.x * sin(uWaveK * dot(p, n) - uWave.w) * uGrid.y * uDt;
+  }
   for (int i = 0; i < ${MOST_FORCES}; i++) {
     if (i >= uCount) break;
     vec2 d = vUv - uAt[i].xy;
@@ -271,6 +289,9 @@ export class Fluid {
       gl.uniform2fv(u('uWay'), way);
       gl.uniform1f(u('uSwirl'), SWIRL * Math.max(0, flow.swirl));
       gl.uniform1f(u('uDt'), dt);
+      const w = flow.wave;
+      gl.uniform4f(u('uWave'), w ? WAVE_PUSH * w.amount : 0, w ? Math.cos(w.angle) : 1, w ? Math.sin(w.angle) : 0, w ? w.phase : 0);
+      gl.uniform1f(u('uWaveK'), WAVE_K);
     });
     v.reverse();
 
