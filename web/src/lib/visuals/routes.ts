@@ -12,7 +12,7 @@ export type { Curve, RouteValue } from './curves';
 /** Signals of the whole track. */
 export const TRACK_SIGNALS = ['loudness', 'beat', 'downbeat', 'tempo', 'section', 'harmony', 'centroid', 'key', 'swell', 'buildUp', 'track'] as const;
 /** Signals of each band. */
-export const BAND_SIGNALS = ['level', 'flux', 'hits', 'percussive', 'harmonic', 'percussiveHits', 'crest', 'width', 'bandSwell'] as const;
+export const BAND_SIGNALS = ['level', 'flux', 'hits', 'percussive', 'harmonic', 'percussiveHits', 'crest', 'width', 'bandSwell', 'envelope'] as const;
 export type TrackSignal = (typeof TRACK_SIGNALS)[number];
 export type BandSignal = (typeof BAND_SIGNALS)[number];
 export type Signal = TrackSignal | BandSignal;
@@ -38,6 +38,7 @@ export const SIGNAL_LABEL: Record<Signal, string> = {
   crest: 'Punch',
   width: 'Width',
   bandSwell: 'Swell',
+  envelope: 'Envelope',
 };
 
 /** The picture's aspects. Stir, Flow and Swirl are the fluid's (64.1; the owner asked that what moves it be routes,
@@ -175,6 +176,8 @@ export function defaultRoutes(bands: number): Record<string, number> {
     r[routeKey('level', b, 'rotation')] = 0.6;
     r[routeKey('level', b, 'hue')] = 0.08;
     r[routeKey('hits', b, 'lights')] = 1;
+    // Each band's part as present as its sound (65): its envelope, a hit's flare and what the sound holds.
+    r[routeKey('envelope', b, 'presence')] = 1;
     // Each band's hits kick its part; its level stirs it all the while (as its Continuity shares them).
     r[routeKey('hits', b, 'stir')] = 1;
     r[routeKey('level', b, 'stir')] = 1;

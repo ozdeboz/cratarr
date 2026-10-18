@@ -605,7 +605,8 @@
   const BAND_ROWS = ['Sub', 'Bass', 'Low mid', 'Mid', 'Upper mid', 'Air'];
   const TIMES = (['lighting', 'evolution'] as const).map((key) => ({
     key,
-    label: key === 'lighting' ? 'Lighting' : 'Evolution',
+    // Lighting is Linger since 65 (decision 0050): how long a part's light rings on, and its envelope's release.
+    label: key === 'lighting' ? 'Linger' : 'Evolution',
     min: Math.log2(RANGES[key][0]),
     max: Math.log2(RANGES[key][1]),
   }));

@@ -102,7 +102,7 @@ export const HELP: Record<string, string> = {
 
   // Each band's times.
   lighting:
-    'How long this band’s part of the flame keeps glowing after each hit in this band, such as a drum or a plucked note. At 20 ms it flashes for an instant; at 1 s it glows and fades over a second.',
+    'Linger: how long this band’s part of the flame keeps glowing after each hit in this band, such as a drum or a plucked note, and how fast its Envelope lets go when the sound stops. At 20 ms it flashes for an instant; at 1 s it glows and fades over a second.',
   evolution:
     'How quickly this band’s part of the flame changes shape when what moves it changes (at first, this band getting louder or quieter). At 20 ms it changes at once and can look nervous; at 2 s it changes smoothly, taking two seconds to catch up.',
   continuity:
@@ -172,4 +172,5 @@ export const HELP: Record<string, string> = {
   'signal:crest': 'How punchy this band is: how far its sharp peaks stand out above its average loudness.',
   'signal:width': 'How wide this band sounds between the left and right speakers: low when it comes from the middle, high when it is spread out.',
   'signal:bandSwell': 'Rises while this band grows louder over several seconds.',
+  'signal:envelope': 'How present this band’s sound is now: on each hit it flares to the hit’s strength and rings down over the band’s Linger, and while the sound holds it stays at up to 60% of the band’s level. A struck drum flares and is gone; a held pad glows; a struck chord flares, then glows while it rings.',
 };

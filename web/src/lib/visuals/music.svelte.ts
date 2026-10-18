@@ -13,6 +13,7 @@ import { isLocal } from '../output.svelte';
 import { paused, playing } from '../remote.svelte';
 import { loadWaveform, waveformOf } from '../waveforms.svelte';
 import { beatAt, beatsOf, type Beat, type Beats } from './beats';
+import { followEnvelopes } from './envelope';
 import { startLive, type LiveNow } from './live';
 import { B, BAND_SIGNALS, T, TRACK_SIGNALS } from './routes';
 import { ID, lastOf, lufsAt, seriesAt, signalsOf, type Events, type Signals } from './signals';
@@ -84,15 +85,26 @@ function levelDb(source: string, id: string): number {
 /** What the music's signals keep from frame to frame (a frame's `Music` is read within its frame): the signals now,
  *  each band's last hit, and the key (the chroma's direction on the circle of fifths, followed as a vector, so it turns
  *  the short way round). */
-export type MusicState = { track: Float32Array; bands: Float32Array[]; hits: Steps[]; fifths: { x: number; y: number; at: number } };
+export type MusicState = {
+  track: Float32Array;
+  bands: Float32Array[];
+  hits: Steps[];
+  fifths: { x: number; y: number; at: number };
+  /** Each band's envelope's hold (what its sound still holds, followed), and when it was last followed (ms; −1 never). */
+  held: Float32Array;
+  heldAt: number;
+};
 export function newMusicState(): MusicState {
   return {
     track: new Float32Array(TRACK_SIGNALS.length),
     bands: Array.from({ length: BANDS }, () => new Float32Array(BAND_SIGNALS.length)),
     hits: Array.from({ length: BANDS }, () => ({ index: -1, weight: 1, perSecond: 0, nextIn: null })),
     fifths: { x: 0, y: 0, at: 0 },
+    held: new Float32Array(BANDS),
+    heldAt: -1,
   };
 }
+
 // The visuals' own.
 const own = newMusicState();
 const { track, bands, hits } = own;
@@ -275,6 +287,7 @@ function fromServer(st: MusicState, s: Signals, pos: number, beats: Beats | null
     const next = all?.[b]?.at[hit.index + 1];
     hits[b] = { index: hit.index, weight: hit.value / Math.max(0.05, s.meanStrength[b] ?? 1), perSecond: s.perSecond[b] ?? 0, nextIn: next === undefined ? null : next - pos };
   }
+  followEnvelopes(st, at, lighting);
 }
 
 // The sound heard as it plays: listened to while the visuals ask and the page's own player plays (on the tap it has
@@ -320,6 +333,7 @@ function fromLive(now: LiveNow, at: number, lighting: readonly number[]) {
     const secs = (at - h.since) / 1000;
     hits[b] = { index: h.count - 1, weight: h.strength / Math.max(0.05, h.mean), perSecond: secs > 5 ? (h.count - h.first) / secs : 2, nextIn: null };
   }
+  followEnvelopes(own, at, lighting);
 }
 
 function stopLive() {

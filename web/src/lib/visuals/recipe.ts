@@ -10,7 +10,7 @@
 //
 // Pure: the same seed gives the same recipe (every device of a sync group alike).
 
-import { routeKey, SCALE_KEYS, type Aspect, type Signal } from './routes';
+import { BAND_SIGNALS as BAND_SIGNAL_LIST, routeKey, SCALE_KEYS, type Aspect, type Signal } from './routes';
 import type { BEHAVIOUR_PINS, VisualSettings } from './settings.svelte';
 
 export type RecipeSettings = {
@@ -82,7 +82,7 @@ const EVOLUTION = [0.25, 0.25, 0.25, 0.25, 0.25, 0.25];
  *  and the dice came out about a fifth calmer than 64.1's; the owner kept 64.1's liveliness (64.3: "Yes"). */
 const LEAST_SCALE = 0.75;
 
-const BAND_SIGNALS = new Set<Signal>(['level', 'flux', 'hits', 'percussive', 'harmonic', 'percussiveHits', 'crest', 'width', 'bandSwell']);
+const BAND_SIGNALS = new Set<Signal>(BAND_SIGNAL_LIST);
 
 /** Random numbers from a seed (mulberry32). */
 function randomFrom(seed: number): () => number {
