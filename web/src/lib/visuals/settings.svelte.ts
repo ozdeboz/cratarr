@@ -38,6 +38,9 @@ export type VisualSettings = Preset & {
   flash: number;
   /** Motion: the turning and its steps (0..2). */
   speed: number;
+  /** Calm ↔ Wild (0..1): how much busier than its budgets the governor lets the show be (governor.ts), half as much to
+   *  twice as much; as the standing limits at its middle. */
+  wild: number;
   /** The most brightness shown, after everything (0.1..1). */
   brightness: number;
   /** The grain: how far the sparse parts are blurred into a haze (0: the raw grain; 0.5: three pixels, as before),
@@ -77,6 +80,7 @@ export const DEFAULTS: VisualSettings = {
   intensity: 1,
   flash: 1,
   speed: 1,
+  wild: 0.5,
   brightness: 1,
   smoothing: 0.5,
   floor: 0,
@@ -118,6 +122,7 @@ export const RANGES: Record<Ranged, [number, number]> = {
   intensity: [0, 1],
   flash: [0, 2],
   speed: [0, 2],
+  wild: [0, 1],
   brightness: [0.1, 1],
   smoothing: [0, 1],
   floor: [0, 1],

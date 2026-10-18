@@ -24,6 +24,7 @@ export const SHARED_KEYS = [
   ...PRESET_KEYS,
   'pins',
   'colours',
+  'wild',
   'intensity',
   'flash',
   'speed',

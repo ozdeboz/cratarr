@@ -42,6 +42,7 @@
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects } from './aspects';
   import { newDrift, stepDrift } from './drift';
+  import { holding, newGovernor, STANDING, stepGovernor } from './governor';
   import { Meters, type FrameStats } from './meters';
   import RateMode from './RateMode.svelte';
   import { trial } from './trial.svelte';
@@ -258,6 +259,9 @@
   const COLOURS = ['Rainbow', 'Cover', 'Fire'];
   const MODES: ColourMode[] = ['rainbow', 'cover', 'fire'];
   type Row = { key: One; label: string; step: number; text: (v: number) => string };
+  // The settings the governor holds back now (governor.ts), marked by their label: Flash's swing, Speed's pace, and on
+  // Wild whatever it holds back (the evolving, the hues, the size, the moments too).
+  let governed = $state<Partial<Record<One, boolean>>>({});
   const percent = (v: number) => `${Math.round(v * 100)}%`;
   const thousands = (log2: number) => {
     const n = 2 ** log2;
@@ -273,6 +277,7 @@
     { key: 'intensity', label: 'Intensity', step: 0.05, text: percent },
     { key: 'flash', label: 'Flash', step: 0.05, text: percent },
     { key: 'speed', label: 'Speed', step: 0.05, text: percent },
+    { key: 'wild', label: 'Wild', step: 0.05, text: percent },
     { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
     { key: 'colours', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? 'Rainbow' },
     { key: 'smoothing', label: 'Smoothing', step: 0.05, text: percent },
@@ -525,6 +530,8 @@
     // What the visuals do, measured (meters.ts), and when the rating page last had them.
     const metering = new Meters();
     let meteredAt = 0;
+    // The governor (governor.ts), stepped with the meters four times a second.
+    const governor = newGovernor();
     // The look's walk (drift.ts): when it last walked, and the time since. A track's own look goes into the settings
     // as far as the Track row's route into Drift says: at -100 % all of it (as before Drift), at -50 % half way, at 0
     // none, above 0 away from it. After the panel's Reset (`whole`), all of it.
@@ -722,7 +729,7 @@
       // What is drawn, as the music and the settings give it (aspects.ts). Reduced motion: a quarter of the turning, all
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
-      const d = stepAspects(aspects, m, how, dt, { still, now, matrix: trial.settings ? undefined : matrix, fluidFull: FLUID_FULL });
+      const d = stepAspects(aspects, m, how, dt, { still, now, matrix: trial.settings ? undefined : matrix, fluidFull: FLUID_FULL, levers: governor.levers });
       const { turn, hits, parts, track } = d;
       if (panel && now - metered > 100) {
         metered = now;
@@ -864,7 +871,7 @@
           flow: stirred.flow,
           // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
           // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
-          dt: dt * how.speed * (still ? 0.25 : 1),
+          dt: dt * how.speed * governor.levers.pace * (still ? 0.25 : 1),
           warp: d.warp,
         },
         w,
@@ -888,8 +895,13 @@
       lookCame = null;
       metering.add(stats);
       if (now - meteredAt >= 250) {
+        const values = metering.now();
+        // With the trial of the rating page, only the flashes' rule: its budgets are what the ratings are to tell.
+        const l = stepGovernor(governor, values, { dt: Math.min(1, (now - meteredAt) / 1000), limits: STANDING, wild: how.wild, activity: d.lit, budgets: !trial.settings });
         meteredAt = now;
-        trial.meters = metering.now();
+        trial.meters = values;
+        const marks = { flash: holding(l, 'swing'), speed: holding(l, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(l, k)) };
+        if (marks.flash !== !!governed.flash || marks.speed !== !!governed.speed || marks.wild !== !!governed.wild) governed = marks;
       }
       // A picture for a snapshot, while this frame is still in the canvas.
       if (pictureWanted) {
@@ -1070,7 +1082,7 @@
               {#if g === 2}<h3 use:held={'look'}>Look</h3>{/if}
               {#each rows as row (row.key)}
                 <label class="row" class:pinnable={g === 2}>
-                  <span use:held={row.key}>{row.label}</span>
+                  <span use:held={row.key}>{row.label}{#if governed[row.key]}<span class="governed" aria-label="Held back"></span>{/if}</span>
                   <input
                     type="range"
                     min={RANGES[row.key][0]}
@@ -1623,6 +1635,16 @@
     gap: 2px;
     color: #fff;
     text-shadow: 0 1px 6px rgb(0 0 0 / 0.6);
+  }
+
+  .governed {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: 6px;
+    border-radius: 50%;
+    background: #f0b44c;
+    vertical-align: middle;
   }
 
   .sought {

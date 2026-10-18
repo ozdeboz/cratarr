@@ -3,6 +3,7 @@
 // behaviour's precheck (recipe.ts) steps it over a track's signals to see what a recipe would do before it is shown.
 
 import { PARTS, type Part } from './flame';
+import { FREE, type Levers } from './governor';
 import type { Music } from './music.svelte';
 import { A, ASPECTS, B, BAND_SIGNALS, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix } from './routes';
 import { BANDS, type VisualSettings } from './settings.svelte';
@@ -132,15 +133,17 @@ export const floorOf = (v: number) => (v > 0 ? 0.002 * 500 ** v : 0);
 
 /** One frame of the mapping, `dt` seconds on. `still`: reduced motion (a quarter of the turning, all of it steady, half
  *  the beats' and hits' share, no moments); `now`: the clock in ms (the moments' gap); `matrix`: the routes compiled
- *  (else compiled here, again whenever `s.routes` is another object); `fluidFull`: the fluid's share at Fluid's 100 %. */
+ *  (else compiled here, again whenever `s.routes` is another object); `fluidFull`: the fluid's share at Fluid's 100 %;
+ *  `levers`: what the governor holds back (governor.ts; none by default). */
 export function stepAspects(
   st: AspectsState,
   m: Music,
   s: VisualSettings,
   dt: number,
-  opts: { still: boolean; now: number; matrix?: Matrix; fluidFull: number },
+  opts: { still: boolean; now: number; matrix?: Matrix; fluidFull: number; levers?: Levers },
 ): AspectsNow {
   const { still, now } = opts;
+  const L = opts.levers ?? FREE;
   let matrix = opts.matrix;
   if (!matrix) {
     if (st.routes !== s.routes || !st.matrix) {
@@ -169,17 +172,20 @@ export function stepAspects(
   const envelope = m.playing ? st.lit : 0;
   give(matrix, track, bands, envelope, st.got);
   const W = st.got.whole;
-  const follow2 = 1 - Math.exp(-dt / SLOW_S);
-  const flashed = (v: number, course: number[]) => {
+  // The courses: followed more slowly while the governor holds the flashes back, so they no longer follow each pulse.
+  const follow2 = 1 - Math.exp((-dt * L.swing) / SLOW_S);
+  // The swing about the course: the Flash setting's share, as much of it as the governor lets through (and of the
+  // size's, as much as its pumping is let).
+  const flashed = (v: number, course: number[], held = 1) => {
     if (!course.length) course.push(v, v);
     course[0] += (v - course[0]) * follow2;
     course[1] += (course[0] - course[1]) * follow2;
-    return course[1] + s.flash * (v - course[1]);
+    return course[1] + s.flash * L.swing * held * (v - course[1]);
   };
   // The turning's clock, at the track's tempo (its beats' where they are known, 90 BPM without one); the whole picture
   // turns with the whole track's routes to Rotation.
   const b = m.playing ? m.beat : null;
-  const want = m.playing ? STEP * m.bps * (still ? 0.25 : 1) * s.speed : 0;
+  const want = m.playing ? STEP * m.bps * (still ? 0.25 : 1) * s.speed * L.pace : 0;
   st.clock += (want - st.clock) * Math.min(1, dt * 1.5);
   st.turn += st.clock * 0.6 * W[A.rotation] * dt;
   // Each part, given the whole track's routes and its band's: Shape evolves it (larger, its variations given over to its
@@ -195,7 +201,7 @@ export function stepAspects(
     const k = Math.floor((i * BANDS) / PARTS);
     const own = st.got.band[k];
     const c = still ? 1 : s.continuity[k];
-    const wants = [W[A.shape] + own[A.shape], W[A.hue] + own[A.hue], W[A.spread] + own[A.spread]];
+    const wants = [W[A.shape] + own[A.shape], (W[A.hue] + own[A.hue]) * L.hue, W[A.spread] + own[A.spread]];
     const rate = st.clock * 2 * (W[A.rotation] + own[A.rotation]);
     st.rates[i] = rate;
     const step = m.playing && m.hits ? m.hits[k] : null;
@@ -213,7 +219,7 @@ export function stepAspects(
     const eased = st.pending[i] * Math.min(1, dt / 0.08);
     st.turned[i] += c * rate * dt + eased;
     st.pending[i] -= eased;
-    const follow = Math.min(1, dt / s.evolution[k]);
+    const follow = Math.min(1, dt / (s.evolution[k] * L.evolution));
     const ev = st.evolving[i];
     for (let e = 0; e < 3; e++) ev[e] += (c * wants[e] + (1 - c) * st.held[i][e] - ev[e]) * follow;
     const [shape, hue, spread] = ev;
@@ -226,13 +232,13 @@ export function stepAspects(
   // The moments: what their routes give rising past a half.
   const moment = (mo: Moment, v: number) => {
     if (v < 1 / 3) mo.armed = true;
-    if (!(v > 0.5 && mo.armed && now - mo.at > MOMENT_GAP_MS)) return false;
+    if (!(v > 0.5 && mo.armed && now - mo.at > MOMENT_GAP_MS * L.gap)) return false;
     mo.armed = false;
     mo.at = now;
     return true;
   };
   const moments = { symmetry: !still && moment(st.moments.symmetry, W[A.symmetry]) };
-  const drift = W[A.drift] - track[T.track] * envelope * matrix.track[T.track * ASPECTS.length + A.drift];
+  const drift = (W[A.drift] - track[T.track] * envelope * matrix.track[T.track * ASPECTS.length + A.drift]) / L.evolution;
   const fluid = opts.fluidFull * grainOf(W, s.fluid, A.fluid);
   return {
     given: W,
@@ -247,7 +253,7 @@ export function stepAspects(
     hits,
     // Size: half its size at rest, all of it given all (by default the loudness: smaller when quiet, and a beat's
     // swell).
-    scale: clamp(flashed(0.5 + 0.5 * W[A.size], st.courses.size), 0.25, 1.4),
+    scale: clamp(flashed(0.5 + 0.5 * W[A.size], st.courses.size, L.size), 0.25, 1.4),
     // Trails: each frame keeps this much of the last (longer trails given more, shorter given less).
     keep: clamp(1 - 0.07 * 2 ** (-1.5 * W[A.trails]), 0.5, 0.985),
     // Depth: the display's gamma, 1.5 to 6 (3 as before at its middle); higher lifts more of the faint detail.
