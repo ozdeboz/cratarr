@@ -10,6 +10,7 @@
 // Pure: the same seed gives the same recipe (every device of a sync group alike).
 
 import { routeKey, type Aspect, type Signal } from './routes';
+import type { VisualSettings } from './settings.svelte';
 
 export type RecipeSettings = {
   flash: number;
@@ -153,4 +154,25 @@ export function recipeFor(seed: number, aspects: readonly string[], bands = 6): 
     continuity: Array.from({ length: bands }, () => between(0.2, 0.9)),
   };
   return { seed, routes: r, settings, extras };
+}
+
+/** The settings a recipe makes of `base`: its routes whole (every other route off) and its settings; `base`'s look,
+ *  pins, colours and what the device can afford (Points, Steps, Resolution, FPS, Brightness) kept. */
+export function settingsOf(recipe: Recipe, base: VisualSettings): VisualSettings {
+  const within = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+  const r = recipe.settings;
+  return {
+    ...base,
+    routes: { ...recipe.routes },
+    flash: within(r.flash, 0, 2),
+    speed: within(r.speed, 0, 2),
+    intensity: within(r.intensity, 0, 1),
+    fluid: within(r.fluid, 0, 1),
+    smoothing: within(r.smoothing, 0, 1),
+    floor: within(r.floor, 0, 1),
+    depth: within(r.depth, 0, 1),
+    lighting: r.lighting.map((v) => within(v, 0.02, 1)),
+    evolution: r.evolution.map((v) => within(v, 0.02, 2)),
+    continuity: r.continuity.map((v) => within(v, 0, 1)),
+  };
 }
