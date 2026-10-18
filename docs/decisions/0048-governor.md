@@ -133,9 +133,10 @@ weighted up-down, 1991), learning.ts:
   once each apply their press on the other's), loaded as the visuals open and applied at once, by the governor and the
   dice's precheck alike.
 
-In the lab, against a stand-in server: a thumbs down while motion stood out (1.6 times the defaults' typical) took its
-limit from 0.9 to 0.57 at once; a thumbs up while the governor held motion back loosened it a twentieth (the step
-halved as it turned); Forget let go of it on the server; both presses were kept with the 20 seconds before them.
+In the lab, against a stand-in server: a thumbs down while motion stood out (1.3 of the way from the defaults' typical
+to their most) took its limit from 0.6 to 0.48 at once; a thumbs up while the governor held motion back loosened it a
+twentieth, to 0.50 (the step halved as it turned); Forget let go of it on the server; both presses were kept with the
+20 seconds before them.
 
 ## Consequences
 
