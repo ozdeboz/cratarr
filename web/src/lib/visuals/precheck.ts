@@ -11,7 +11,7 @@ import type { Beats } from './beats';
 import { BUDGETED, budgetOf } from './budget';
 import { Meters, screenTile, type MeterValues } from './meters';
 import { musicOf, newMusicState } from './music.svelte';
-import { settingsOf, type Recipe } from './recipe';
+import { settingsOf, type Recipe, type Scope } from './recipe';
 import { FLUID_FULL, type VisualSettings } from './settings.svelte';
 import type { Signals } from './signals';
 
@@ -62,8 +62,9 @@ export function* prechecking(
   from: number,
   limits: Limits,
   seconds = SECONDS,
+  scope: Scope = 'all',
 ): Generator<void, Checked> {
-  const settings = settingsOf(recipe, base);
+  const settings = settingsOf(recipe, base, scope);
   const aspects = newAspects();
   const state = newMusicState();
   const meters = new Meters();
@@ -112,8 +113,8 @@ export function* prechecking(
 }
 
 /** The run all at once (for tests and the calibration). */
-export function precheck(recipe: Recipe, base: VisualSettings, signals: Signals, beats: Beats | null, from: number, limits: Limits, seconds = SECONDS): Checked {
-  const run = prechecking(recipe, base, signals, beats, from, limits, seconds);
+export function precheck(recipe: Recipe, base: VisualSettings, signals: Signals, beats: Beats | null, from: number, limits: Limits, seconds = SECONDS, scope: Scope = 'all'): Checked {
+  const run = prechecking(recipe, base, signals, beats, from, limits, seconds, scope);
   for (;;) {
     const r = run.next();
     if (r.done) return r.value;
