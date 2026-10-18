@@ -108,7 +108,7 @@ vec2 fx_repeat(vec2 p, float a, float t) {
   vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
   vec4 q = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
   vec4 r = mix(vec4(q.xyw, c.r), vec4(c.r, q.yzx), step(q.x, c.r));
-  float d = q.x - min(q.w, q.y);
+  float d = r.x - min(r.w, r.y);
   return vec3(abs(r.z + (r.w - r.y) / (6.0 * d + 1e-10)), d / (r.x + 1e-10), r.x);
 }
 vec3 fx_colorama_rgb(vec3 c) {
@@ -135,7 +135,7 @@ vec3 fx_colorama(vec3 c, vec2 p, float a, float t) {
   vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
   vec4 q = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
   vec4 r = mix(vec4(q.xyw, c.r), vec4(c.r, q.yzx), step(q.x, c.r));
-  float d = q.x - min(q.w, q.y);
+  float d = r.x - min(r.w, r.y);
   return vec3(abs(r.z + (r.w - r.y) / (6.0 * d + 1e-10)), d / (r.x + 1e-10), r.x);
 }
 vec3 fx_hue_rgb(vec3 c) {
@@ -245,6 +245,57 @@ vec2 fx_scroll(vec2 p, float a, float t) {
   return clamp(mix(vec3(grey), c, 1.0 + a), 0.0, 1.0);
 }`,
     report: () => ({}),
+  },
+  {
+    // After EYESY's Magnify Cloud mode (Critter & Guitari): the idea only, our own shader.
+    id: 13,
+    name: 'magnify',
+    kind: 'shape',
+    slots: ['picture'],
+    glsl: `vec2 fx_magnify(vec2 p, float a, float t) {
+  if (a <= 0.0) return p;
+  // A lens wandering slowly about the middle, half the height across, magnifying what is under it up to two and a
+  // half times at its heart.
+  vec2 m = 0.45 * vec2(sin(0.13 * t), cos(0.17 * t));
+  float r = 0.5;
+  float d = length(p - m) / r;
+  if (d >= 1.0) return p;
+  return m + (p - m) * (1.0 - 0.6 * a * (1.0 - d * d));
+}`,
+    report: (a) => ({ shapeChurn: 0.08 * a }),
+  },
+  {
+    // After EYESY's Concentric and Radiating Square modes (Critter & Guitari): the idea only, our own shader.
+    id: 14,
+    name: 'rings',
+    kind: 'shape',
+    slots: ['picture', 'loop'],
+    glsl: `vec2 fx_rings(vec2 p, float a, float t) {
+  if (a <= 0.0) return p;
+  // Ripples running out from the middle (a ring every seventh of the height, outward at a third of the height a
+  // second), pushing what is read in and out along the way.
+  float r = length(p);
+  if (r < 1e-4) return p;
+  return p + (p / r) * 0.05 * a * sin(14.0 * r - 4.4 * t);
+}`,
+    report: (a) => ({ shapeChurn: 0.1 * a }),
+  },
+  {
+    // After EYESY's Interference mode (Critter & Guitari): the idea only, our own shader.
+    id: 15,
+    name: 'interference',
+    kind: 'colour',
+    slots: ['picture'],
+    glsl: `vec3 fx_interference(vec3 c, vec2 p, float a, float t) {
+  if (a <= 0.0) return c;
+  // Two sets of rings from two slowly drifting points, laid over each other: their moiré darkens the picture in
+  // bands (never brightens it, so it cannot flash).
+  vec2 c1 = 0.6 * vec2(sin(0.07 * t), cos(0.05 * t));
+  vec2 c2 = -c1;
+  float m = 0.5 + 0.5 * cos(22.0 * length(p - c1)) * cos(22.0 * length(p - c2));
+  return c * mix(1.0, m, 0.7 * a);
+}`,
+    report: (a) => ({ shapeChurn: 0.04 * a }),
   },
 ];
 
