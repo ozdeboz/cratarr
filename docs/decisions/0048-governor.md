@@ -41,22 +41,29 @@ refused and another drawn. No picture: the flashes are judged from the brightnes
 About 25 ms a run on a PC, done in slices so a tablet keeps its frames.
 
 **The limits**, to start (DEFAULT_LIMITS), from a baseline: Standard (production as it is) and 20 recipes over 11 varied
-tracks, ambient to techno, at a quarter and three fifths of each (2026-10-18). Standard's typical and most: motion 0.40
-and 0.69, shape 0.32 and 0.55, colour 0.08 and 0.34, pumping 0.14 and 0.32, flashes 1 and 3 a second. The limits sit a
-little above Standard's most (motion 0.9, shape 0.7, colour 0.4, pumping 0.4, flashes 3), so Standard always passes
-(0 of 22 runs refused) and the wildest tenth of recipes does not (50 of 440).
+tracks, ambient to techno, at a quarter and three fifths of each (2026-10-18). They are on **one scale** for the precheck,
+the governor, the ratings and the thumbs (budget.ts): each budgeted meter over its budget at the music's activity then,
+Wild at its middle, so a limit means the same on a quiet passage as on a loud one. On it, Standard's typical (its runs'
+median mean) and most: motion 0.26 and 0.47, shape 0.16 and 0.42, colour 0.04 and 0.35, pumping 0.07 and 0.35; flashes
+1 and 3 a second. The limits sit a quarter above Standard's most, up to the next 0.05 (motion 0.6, shape 0.55, colour
+0.45, pumping 0.45; new looks 4 a minute; flashes 3), so Standard always passes (0 of 22 runs refused) and the wildest
+tenth of recipes does not (48 of 440). The first baseline took the meters as they read (motion 0.9, shape 0.7, colour
+0.4, pumping 0.4) while the governor scaled them by the music, so a quiet passage could hold Standard back.
 
-**The owner's limits**, after: a rating page (the visuals with `?rate=1`) shows two behaviours on the music that plays,
+**The owner's limits**, after: a rating page (Rate in the visuals' panel, or the visuals with `?rate=1`) shows two behaviours on the music that plays,
 A for twenty seconds, then B, and asks which the owner prefers (A, B, the same, neither), keeping each choice with what
 both did (their meters). Four kinds of pair in turn: a recipe against Standard, one recipe at both ends of one axis
 (Flash, Speed, the fluid, Intensity, how long the lights ring), two recipes, Standard at both ends of an axis. About
 twenty pairs, a quarter of an hour on the tablet. The ratings are kept on the server
 (`/api/visuals/ratings`). Fitted (fit.ts) all together: each meter either does not matter to the owner or costs in
-proportion to how far it goes over its limit, and the owner takes the cheaper side of a pair; a meter is given a
-limit only where that explains the choices better by more than a Bayesian information criterion's penalty, each limit
-with the range the ratings cannot tell from it. Against a simulated owner: no limit where there was none (0 in 20
-runs), the true limits within the ranges (15 of 15); twenty random pairs give rough limits, the one-axis pairs tell
-more. Flashes are not fitted: three a second is the rule.
+proportion to how far it goes over its limit, and the owner takes the cheaper side of a pair, or calls them the same
+the closer they cost (Davidson's model of choices with ties, its tie rate fitted too); Neither is counted, not fitted. A
+meter is given a limit only where that explains the answers better by more than a Bayesian information criterion's
+penalty, each limit with the range the ratings cannot tell from it. Against a simulated owner (two meters that matter,
+one strongly, ties among the answers; random pairs): a limit where there was none 0 to 2 times in 60; the strong limit
+found in half the runs at 40 pairs and 17 of 20 at 150, the weak one in 4 of 20 at 150; a limit found held the true one
+within its range 85 to 90 % of the time. So twenty pairs give a first look, not a fit; the one-axis pairs tell more than
+random ones, and the thumbs go on from there. Flashes are not fitted: three a second is the rule.
 
 ### The runtime
 
@@ -82,6 +89,16 @@ under. Pure; the loop applies its levers through the mapping (aspects.ts).
 - **A mark:** a small amber dot by Flash, Speed and Wild shows what the governor holds back now (on Wild, anything).
 - **While the rating page runs a trial,** only the flash rule holds: the budgets are what the ratings are to tell. Each
   trial starts the meters and the governor anew, so one segment's flashes are neither counted nor held back in the next.
+- **The rating page rates only what it should.** Each segment's first two seconds are not measured. The pair starts over
+  from A where what it is compared on changed under it: another track; a seek (a jump over five seconds: a player's
+  clock sets itself right by a second and a half); a look from outside (the loop counts each change of the look that is
+  not Drift's walk or the Symmetry moments, such as a track's look, a recall, the group's, another colour mode, the
+  cover's colours, and while one blends in, A waits, so neither side is measured mid-blend); the picture's size changing
+  over a tenth; the page hidden or stalled over a second; a pause over five seconds (shorter ones are waited out). The
+  run goes on where the visuals move (beside the page or over it) and ends as they close. While it runs, only Close,
+  where they show, Full screen and the transport stay. Each side records its meters, the same on the one scale, what
+  the loop knew (the music's activity, the flash rule's hold, the device's pace), its track and position; the record is
+  version 4, with how often the pair started over after something had been measured.
 
 **The dice** (Randomise, beside Another look): a recipe drawn and run against the playing track from where it is (the
 precheck), a slice a frame, up to eight: the first within the limits as Wild has them (the flashes at three a second
