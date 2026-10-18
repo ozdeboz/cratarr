@@ -61,6 +61,10 @@ export type VisualSettings = Preset & {
    *  zooms into one part of the flame for ever; 0 off, both may run. Levels, as Fluid is: their routes the conditions. */
   tunnel: number;
   dive: number;
+  /** Each band's part's weight in the drawing, the scale of its Presence column (65; routes.ts `COLUMN_SCALES`), and
+   *  the slow giant waves' (the Waves column). */
+  presence: number;
+  waves: number;
   /** Each column of the routes that has no setting of its own, its scale (0..1, 64.2; the owner: "is it impossible to
    *  have each column their own slider?"): what its routes give it, times this. 1 as before; 0 the music leaves it at
    *  rest. routes.ts `COLUMN_SCALES`. */
@@ -109,6 +113,8 @@ export const DEFAULTS: VisualSettings = {
   fluid: 0,
   tunnel: 0,
   dive: 0,
+  presence: 1,
+  waves: 1,
   shape: 1,
   rotation: 1,
   lights: 1,
@@ -163,6 +169,8 @@ export const RANGES: Record<Ranged, [number, number]> = {
   fluid: [0, 1],
   tunnel: [0, 1],
   dive: [0, 1],
+  presence: [0, 1],
+  waves: [0, 1],
   shape: [0, 1],
   rotation: [0, 1],
   lights: [0, 1],

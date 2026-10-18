@@ -48,6 +48,7 @@ export const ASPECTS = [
   'lights',
   'hue',
   'spread',
+  'presence',
   'brightness',
   'size',
   'saturation',
@@ -59,15 +60,18 @@ export const ASPECTS = [
   'stir',
   'flow',
   'swirl',
+  'waves',
   'tunnel',
   'dive',
+  'effects',
+  'facets',
   'look',
   'behaviour',
   'symmetry',
 ] as const;
 export type Aspect = (typeof ASPECTS)[number];
 /** Aspects of each part of the flame: a band's routes act on its own part, the whole track's on every part. */
-export const PART_ASPECTS: readonly Aspect[] = ['shape', 'rotation', 'lights', 'hue', 'spread'];
+export const PART_ASPECTS: readonly Aspect[] = ['shape', 'rotation', 'lights', 'hue', 'spread', 'presence'];
 /** Aspects that act at moments: as what their routes give rises past a half (a new symmetry). */
 export const MOMENT_ASPECTS: readonly Aspect[] = ['symmetry'];
 
@@ -77,6 +81,7 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   lights: 'Lights',
   hue: 'Hue',
   spread: 'Spread',
+  presence: 'Presence',
   brightness: 'Glow',
   size: 'Size',
   saturation: 'Saturation',
@@ -88,8 +93,11 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   stir: 'Stir',
   flow: 'Flow',
   swirl: 'Swirl',
+  waves: 'Waves',
   tunnel: 'Tunnel',
   dive: 'Dive',
+  effects: 'Effects',
+  facets: 'Facets',
   look: 'Look',
   behaviour: 'Behaviour',
   symmetry: 'Symmetry',
@@ -109,6 +117,8 @@ export const COLUMN_SCALES = {
   stir: 'stir',
   flow: 'flow',
   swirl: 'swirl',
+  presence: 'presence',
+  waves: 'waves',
 } as const satisfies Partial<Record<Aspect, keyof VisualSettings>>;
 export const SCALE_KEYS = Object.values(COLUMN_SCALES);
 
@@ -159,6 +169,8 @@ export function defaultRoutes(bands: number): Record<string, number> {
     [routeKey('beat', null, 'flow')]: 1,
     [routeKey('swell', null, 'swirl')]: 1,
     [routeKey('section', null, 'swirl')]: 1,
+    // Slow giant waves as the music swells (65).
+    [routeKey('swell', null, 'waves')]: 1,
   };
   for (let b = 0; b < bands; b++) {
     r[routeKey('level', b, 'shape')] = 1;
