@@ -46,3 +46,18 @@ The owner (2026-10-19): "we need to support multiple users, their own settings".
 - A shared device (the salon tablet) is the owner's: others play on their own phones.
 - The Jellyfin playlist sync is not carried per user; whether it goes from Cratarr altogether is a separate decision.
 - The app signs in per user as it does now; tracks kept for offline play are kept per user.
+
+## Access, decided with the owner (2026-10-19)
+
+- **Losing access:** membership of the `music` group is checked again every hour (the owner: "it will hardly ever
+  happen. Maybe every hour is fine"); one who left loses their sessions, the app's sign-in and their OpenSubsonic
+  password, and the passwords kept for when the directory is down stop working for them.
+- **All music for everyone** (the owner: "All users should see all music"), what is still coming in too.
+- **Changes to the library are the administrators'**: tags, covers, the album fixes, rejecting an album, deleting and
+  moving files. Users keep their own favourites, ratings and playlists.
+- **Asking for new music** (Lidarr, the discovery, downloads) is not offered to users yet.
+- **Now playing shows one's own** (the owner: "now playing shows only your own").
+- **A Users panel**, as Jellyfin's (the owner: "a user panel with a permissions section ... It's probably how Jellyfin
+  does it too"): each user's profile (name and role, from the directory), their permissions (among them what
+  OpenSubsonic apps may do for them: keep tracks to play offline, make and share playlists, public share links; and
+  their app password), and their devices and sign-ins, each to see and end.
