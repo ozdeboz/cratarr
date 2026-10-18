@@ -18,6 +18,11 @@ import type { Tiles } from './meters';
 // The six parts, rotations up to eight arms and as many mirrors.
 const MAX_XFORMS = 22;
 const SLOTS = 8;
+/** The fluid as shown follows the Fluid setting (as its routes move it) over these (s) rising and falling, and is let go
+ *  under the least (of the fluid's own: a fiftieth of Fluid's whole range). */
+const FLUID_RISE = 0.3;
+const FLUID_FALL = 1.5;
+const FLUID_LEAST = 0.002;
 
 // The Cratarr lens (flame.ts's `markOf`, `MARK`): a distance into a set of rings by an area share, written out ring by
 // ring for the shader; then the point into the mark's slice or the rest by its angle.
@@ -531,6 +536,14 @@ export class FlameRenderer {
   private fluid: Fluid | null = null;
   private fluidOut = false;
   private fluidUnwanted = 0;
+  // The fluid as shown, and its read-back: followed rather than switched (2026-10-18: Fluid's routes crossing 0 stopped
+  // the flow on the spot, its warp gone with it, and the smeared light fell apart into specks every time the music
+  // tipped it). Rising over a third of a second, falling over a second and a half; while any is left the fluid keeps
+  // flowing (its pushes stopped, its motion dying away), and only once it is all but nothing is the light faded as
+  // without one, the same as a flow at rest. When the last frame was drawn, for the following's clock.
+  private fluidShown = 0;
+  private warpShown = 0;
+  private shownAt = 0;
   private accFbo: WebGLFramebuffer | null = null;
   private empty: WebGLVertexArrayObject;
   private flip = 0;
@@ -926,7 +939,14 @@ export class FlameRenderer {
 
     // Fade what is there; with the Fluid setting, carry it along the flow as it fades, into the other set of buffers
     // (as the scrub copies), and draw on there.
-    const fluid = this.fluidFor(look.fluid);
+    const at = performance.now();
+    const since = this.shownAt ? Math.min(0.25, (at - this.shownAt) / 1000) : 0;
+    this.shownAt = at;
+    const follow = (shown: number, to: number) => shown + (to - shown) * (1 - Math.exp(-since / (to > shown ? FLUID_RISE : FLUID_FALL)));
+    this.fluidShown = follow(this.fluidShown, Math.max(0, look.fluid));
+    this.warpShown = follow(this.warpShown, Math.max(0, look.warp));
+    if (this.fluidShown < FLUID_LEAST && look.fluid < FLUID_LEAST) this.fluidShown = this.warpShown = 0;
+    const fluid = this.fluidFor(this.fluidShown);
     if (fluid) {
       fluid.push(look.forces);
       fluid.step(look.dt, look.flow);
@@ -1028,7 +1048,7 @@ export class FlameRenderer {
     gl.uniform1f(this.u(this.show, 'uLevels'), levels);
     gl.uniform1f(this.u(this.show, 'uFloor'), look.floor);
     gl.uniform1f(this.u(this.show, 'uFire'), look.fire);
-    const warp = fluid && look.warp > 0 ? look.warp : 0;
+    const warp = fluid ? this.warpShown : 0;
     gl.uniform1f(this.u(this.show, 'uWarp'), warp);
     if (fluid && warp) {
       gl.activeTexture(gl.TEXTURE3);
