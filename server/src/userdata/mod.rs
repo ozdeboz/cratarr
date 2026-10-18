@@ -695,12 +695,14 @@ impl UserData {
         Ok(Snapshot { id, name: name.to_string(), settings: settings.clone(), created, picture: picture.map(str::to_string) })
     }
 
-    /// A snapshot renamed, or given another picture (whichever is given); `None` where the user has none by that id.
-    pub fn change_snapshot(&self, user: &str, id: &str, name: Option<&str>, picture: Option<&str>) -> Result<Option<Snapshot>> {
+    /// A snapshot renamed, given another picture, or saved over with other settings (whichever are given; its time kept);
+    /// `None` where the user has none by that id.
+    pub fn change_snapshot(&self, user: &str, id: &str, name: Option<&str>, picture: Option<&str>, settings: Option<&serde_json::Value>) -> Result<Option<Snapshot>> {
         let db = self.db();
         let changed = db.execute(
-            "UPDATE visual_snapshot SET name = coalesce(?3, name), picture = coalesce(?4, picture) WHERE user = ?1 AND id = ?2",
-            params![user, id, name, picture],
+            "UPDATE visual_snapshot SET name = coalesce(?3, name), picture = coalesce(?4, picture), settings = coalesce(?5, settings)
+               WHERE user = ?1 AND id = ?2",
+            params![user, id, name, picture, settings.map(|s| s.to_string())],
         )?;
         if changed == 0 {
             return Ok(None);
@@ -1247,13 +1249,18 @@ mod tests {
         assert_eq!(mine[1].settings, settings, "kept as sent");
         assert_eq!(mine[1].picture.as_deref(), Some("data:image/jpeg;base64,AAAA"));
         assert_eq!(mine[0].picture, None);
-        let renamed = u.change_snapshot("me", &a.id, Some("Golden hour"), None).unwrap().unwrap();
+        let renamed = u.change_snapshot("me", &a.id, Some("Golden hour"), None, None).unwrap().unwrap();
         assert_eq!((renamed.name.as_str(), renamed.created), ("Golden hour", a.created));
         assert_eq!(renamed.picture.as_deref(), Some("data:image/jpeg;base64,AAAA"), "a rename keeps the picture");
-        let pictured = u.change_snapshot("me", &b.id, None, Some("data:image/png;base64,BBBB")).unwrap().unwrap();
+        let pictured = u.change_snapshot("me", &b.id, None, Some("data:image/png;base64,BBBB"), None).unwrap().unwrap();
         assert_eq!((pictured.name.as_str(), pictured.picture.as_deref()), ("Puds", Some("data:image/png;base64,BBBB")));
-        assert!(u.change_snapshot("you", &a.id, Some("Mine now"), None).unwrap().is_none(), "another user's is not theirs to rename");
+        assert!(u.change_snapshot("you", &a.id, Some("Mine now"), None, None).unwrap().is_none(), "another user's is not theirs to rename");
         assert!(!u.delete_snapshot("you", &a.id).unwrap(), "another user's is not theirs to delete");
+        let over = serde_json::json!({ "v": 2, "flash": 1.2 });
+        let saved = u.change_snapshot("me", &b.id, None, Some("data:image/png;base64,DDDD"), Some(&over)).unwrap().unwrap();
+        assert_eq!((saved.name.as_str(), saved.created, &saved.settings), ("Puds", b.created, &over), "saved over: its name and time kept");
+        assert_eq!(saved.picture.as_deref(), Some("data:image/png;base64,DDDD"));
+        assert!(u.change_snapshot("you", &b.id, None, None, Some(&over)).unwrap().is_none(), "another user's is not theirs to save over");
         assert!(u.delete_snapshot("me", &a.id).unwrap());
         assert_eq!(u.snapshots("me").unwrap().len(), 1);
     }
@@ -1274,7 +1281,7 @@ mod tests {
         let u = UserData::open(Some(&file)).unwrap();
         let mine = u.snapshots("me").unwrap();
         assert_eq!((mine[0].name.as_str(), mine[0].picture.as_deref()), ("Kartlav", None));
-        assert!(u.change_snapshot("me", "a1", None, Some("data:image/jpeg;base64,CC")).unwrap().unwrap().picture.is_some());
+        assert!(u.change_snapshot("me", "a1", None, Some("data:image/jpeg;base64,CC"), None).unwrap().unwrap().picture.is_some());
         drop(u);
         UserData::open(Some(&file)).unwrap();
         let _ = std::fs::remove_file(&file);

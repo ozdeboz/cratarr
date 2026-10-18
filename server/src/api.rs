@@ -474,13 +474,16 @@ async fn add_visual_snapshot(Json(b): Json<NewSnapshot>) -> Response {
     }
 }
 
-/// A snapshot renamed, or given a picture, or both.
+/// A snapshot renamed, given a picture, or saved over with the settings now (any of them).
 #[derive(Deserialize)]
 struct SnapshotChange {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     picture: Option<String>,
+    /// Opaque here, as when it was saved.
+    #[serde(default)]
+    settings: Option<serde_json::Value>,
 }
 
 async fn rename_visual_snapshot(Path(id): Path<String>, Json(b): Json<SnapshotChange>) -> Response {
@@ -496,7 +499,10 @@ async fn rename_visual_snapshot(Path(id): Path<String>, Json(b): Json<SnapshotCh
         Ok(p) => p,
         Err(r) => return r,
     };
-    match served.userdata.change_snapshot(&me, &id, name.as_deref(), picture) {
+    if b.settings.as_ref().is_some_and(|s| s.to_string().len() > crate::app::visuals::MOST_BYTES) {
+        return refused(StatusCode::PAYLOAD_TOO_LARGE, "That snapshot is too large to keep.");
+    }
+    match served.userdata.change_snapshot(&me, &id, name.as_deref(), picture, b.settings.as_ref()) {
         Ok(Some(snapshot)) => Json(snapshot).into_response(),
         Ok(None) => refused(StatusCode::NOT_FOUND, "There is no such snapshot."),
         Err(e) => failed(e),

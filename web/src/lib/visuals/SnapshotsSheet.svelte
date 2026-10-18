@@ -2,9 +2,10 @@
   // The saved looks (decision 0046, amended), from the visuals' bookmark: the app's standard sheet (lib/MenuSheet), a
   // gallery of small pictures. Save first (every slider, and a picture of the visuals now, named after the track and the time, its name
   // then ready to change), Standard second (Cratarr's own, not to be renamed or deleted: shared.svelte.ts), then the
-  // saved ones, newest first. A tap brings one back (the visuals' `recall`); one held is renamed or deleted. The
+  // saved ones, newest first. A tap brings one back (the visuals' `recall`); one held is renamed, saved over with the
+  // visuals as they are now (its name and place kept: the owner, 2026-10-18), or deleted. The
   // owner: "when you press the bookmark button, a sheet opens, because that's our standard format of display".
-  import { deleteVisualsSnapshot, getVisualsSnapshots, renameVisualsSnapshot, saveVisualsSnapshot, type VisualsSnapshot } from '../api';
+  import { deleteVisualsSnapshot, getVisualsSnapshots, renameVisualsSnapshot, saveOverVisualsSnapshot, saveVisualsSnapshot, type VisualsSnapshot } from '../api';
   import Icon from '../Icon.svelte';
   import MenuSheet from '../MenuSheet.svelte';
   import { toast } from '../toast.svelte';
@@ -74,6 +75,22 @@
       toast.fail(e, 'Not renamed');
     }
   }
+  /** Saved over with every setting and a picture of the visuals now; a name being changed goes with it. */
+  async function saveOver(snap: VisualsSnapshot) {
+    if (saving) return;
+    const name = editName.trim();
+    editing = null;
+    saving = true;
+    try {
+      const picture = await capture();
+      const done = await saveOverVisualsSnapshot(snap.id, snapshotNow(), picture, name && name !== snap.name ? name : undefined);
+      list = list.map((x) => (x.id === snap.id ? { ...x, ...done } : x));
+    } catch (e) {
+      toast.fail(e, 'Not saved');
+    } finally {
+      saving = false;
+    }
+  }
   async function remove(snap: VisualsSnapshot) {
     editing = null;
     try {
@@ -118,6 +135,9 @@
               }}
               onblur={() => rename(snap)}
             />
+            <button class="over" aria-label="Save over {snap.name}" use:held={'snapshots:over'} disabled={saving} onpointerdown={(e) => e.preventDefault()} onclick={() => saveOver(snap)}
+              ><Icon name="save" size={16} /></button
+            >
             <button class="delete" aria-label="Delete {snap.name}" onpointerdown={(e) => e.preventDefault()} onclick={() => remove(snap)}><Icon name="trash" size={16} /></button>
           </span>
         </div>
@@ -210,6 +230,7 @@
     font-size: 0.85rem;
   }
 
+  .edit .over,
   .edit .delete {
     display: grid;
     place-items: center;
@@ -221,5 +242,9 @@
     background: rgb(232 112 143 / 0.25);
     color: #fff;
     cursor: pointer;
+  }
+
+  .edit .over {
+    background: rgb(255 255 255 / 0.12);
   }
 </style>

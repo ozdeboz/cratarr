@@ -1197,4 +1197,11 @@ export const saveVisualsSnapshot = (name: string, settings: Record<string, unkno
   });
 export const renameVisualsSnapshot = (id: string, name: string) =>
   request<VisualsSnapshot>(`/api/visuals/snapshots/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+/** A snapshot saved over: the visuals' settings now and a new picture, its name (changed, where given) and time kept. */
+export const saveOverVisualsSnapshot = (id: string, settings: Record<string, unknown>, picture: string | null, name?: string) =>
+  request<VisualsSnapshot>(`/api/visuals/snapshots/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings, ...(picture ? { picture } : {}), ...(name ? { name } : {}) }),
+  });
 export const deleteVisualsSnapshot = (id: string) => request<void>(`/api/visuals/snapshots/${encodeURIComponent(id)}`, { method: 'DELETE' });
