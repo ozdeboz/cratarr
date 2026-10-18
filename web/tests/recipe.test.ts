@@ -102,3 +102,13 @@ test('a recipe from before the columns’ scales gives all of each', () => {
   const got = settingsOf(old, base);
   for (const k of SCALE_KEYS) assert.equal(got[k], 1, k);
 });
+
+test('a roll leaves the look’s own columns (65.1) as they are', () => {
+  const routed = { ...base, routes: { ...base.routes, 'level|0|fx1K1': 0.5, 'beat|-|final': 1, 'swell|-|fx2Amount': 0.7 } } as VisualSettings;
+  for (const scope of ['all', 'movement'] as const) {
+    const s = settingsOf(recipe, routed, scope);
+    assert.equal(s.routes['level|0|fx1K1'], 0.5, scope);
+    assert.equal(s.routes['beat|-|final'], 1, scope);
+    assert.equal(s.routes['swell|-|fx2Amount'], 0.7, scope);
+  }
+});

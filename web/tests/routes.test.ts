@@ -137,3 +137,19 @@ test('a route that walks gives its walk factor’s share of itself, and a level�
   // Without walk factors, as set.
   assert.ok(close(give(m, track, [], 1, given(BANDS)).whole[A.size], 1.4));
 });
+
+test('the look’s columns (65.1): an Amount is a level, a control a swing, a discrete setting a moment', () => {
+  const track = new Float32Array(TRACK_SIGNALS.length);
+  const bands = Array.from({ length: BANDS }, () => new Float32Array(BAND_SIGNALS.length));
+  track[T.beat] = 0.25;
+  const m = compile({ [routeKey('beat', null, 'fx1Amount')]: 1, [routeKey('beat', null, 'fx2K1')]: 0.8, [routeKey('beat', null, 'final')]: 1 }, BANDS);
+  const g = give(m, track, bands, 1, given(BANDS));
+  // The Amount: a condition for reaching its slider (a quarter of the beat, three quarters held back), not added.
+  assert.ok(close(g.level[A.fx1Amount], 0.25), `${g.level[A.fx1Amount]}`);
+  assert.equal(g.whole[A.fx1Amount], 0);
+  // The control: what its route gives, added to where it is set.
+  assert.ok(close(g.whole[A.fx2K1], 0.2), `${g.whole[A.fx2K1]}`);
+  assert.equal(g.level[A.fx2K1], 1);
+  // The Lens: what its route gives, for its moment.
+  assert.ok(close(g.whole[A.final], 0.25));
+});

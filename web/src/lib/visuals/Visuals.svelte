@@ -68,7 +68,7 @@
   import { newStirring, stir } from './stirring';
   import { FlameRenderer } from './render';
   import { DIVE_MOST, TUNNEL_MOST } from './zoom';
-  import { effectsNow, ENGINE_EFFECTS, ENGINES, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
+  import { effectsNow, ENGINE_EFFECTS, ENGINES, knobLabel, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
   import {
     A,
     ASPECT_LABEL,
@@ -78,6 +78,8 @@
     COLUMN_SCALES,
     compile,
     heightOn,
+    AMOUNT_ASPECTS,
+    KNOB_ASPECTS,
     LEVEL_ASPECTS,
     MOMENT_ASPECTS,
     routeKey,
@@ -845,7 +847,20 @@
     share({ routes: { ...Object.fromEntries(before.map((k) => [k, 0])), ...$state.snapshot(s.routes) }, loose: 0 });
   }
   const signed = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
-  const cellLabel = (signal: Signal, aspect: Aspect) => `${SIGNAL_LABEL[signal]}${isBandSignal(signal) ? ` (${pick === null ? 'All' : BAND_ROWS[pick]})` : ''} → ${ASPECT_LABEL[aspect]}`;
+  const cellLabel = (signal: Signal, aspect: Aspect) => `${SIGNAL_LABEL[signal]}${isBandSignal(signal) ? ` (${pick === null ? 'All' : BAND_ROWS[pick]})` : ''} → ${columnName(aspect)}`;
+  // A column's name (65.1): an effect's control is named for the chosen effect's (Sides, Spin…; — where it has none),
+  // with its engine's in front where there is room (the editor's title, a cell's label); an Amount under its engine.
+  const KNOB_SLOT = { fx1K1: ['fx1', 0], fx1K2: ['fx1', 1], fx2K1: ['fx2', 0], fx2K2: ['fx2', 1], fx3K1: ['fx3', 0], fx3K2: ['fx3', 1], fxLoopK1: ['fxLoop', 0], fxLoopK2: ['fxLoop', 1] } as const;
+  const SLOT_ENGINE = { fx1: 'kaleidoscope', fx2: 'eyedo', fx3: 'hydra', fxLoop: 'loop' } as const;
+  function columnName(aspect: Aspect, short = false): string {
+    const knob = KNOB_SLOT[aspect as keyof typeof KNOB_SLOT];
+    if (knob) {
+      const label = knobLabel(SLOT_ENGINE[knob[0]], s[knob[0]], knob[1]) ?? '—';
+      return short ? label : `${ASPECT_LABEL[knob[0]]}: ${label}`;
+    }
+    if (short && (AMOUNT_ASPECTS as readonly string[]).includes(aspect)) return 'Amount';
+    return ASPECT_LABEL[aspect];
+  }
   // Each signal now, for the meters by the rows' names (the picked band's, or the bands' mean), ten times a second
   // while the panel shows.
   let meters = $state<{ track: number[]; bands: number[][]; lit: number }>({ track: [], bands: [], lit: 1 });
@@ -1417,7 +1432,7 @@
           // motion.
           tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
           // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
-          effects: effectsNow(how, d.effects, m.position, beatNow, governor.levers, still),
+          effects: effectsNow(how, d.effects, m.position, beatNow, governor.levers, still, d.routed),
           facets: { amount: d.facets, hex: Math.round(how.lattice) === 1 },
           dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
           forces: stirred.forces,
@@ -1445,7 +1460,7 @@
         // What the effects add (as the governor lets them), the waves' motion where nothing flows, and the zooms'
         // streaming out at the rates the renderer is given (aspects.ts).
         extra: (() => {
-          const fx = settingsReport(how, d.effects, governor.levers, still);
+          const fx = settingsReport(how, d.effects, governor.levers, still, d.routed);
           const zooms = still ? 0 : zoomsMotion(d.tunnel * governor.levers.pace, d.dive * governor.levers.pace);
           return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) + zooms };
         })(),
@@ -1471,7 +1486,12 @@
         meteredAt = now;
         trial.meters = values;
         if (panel) {
-          live = Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, behaving[k] * (k in d.levels ? d.levels[k as keyof typeof d.levels] : 1)]));
+          live = {
+            ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, behaving[k] * (k in d.levels ? d.levels[k as keyof typeof d.levels] : 1)])),
+            // The effects' Amounts and controls as their routes have them now (65.1), marked under their Look rows.
+            ...Object.fromEntries(AMOUNT_ASPECTS.map((k, i) => [k, behaving[k] * (d.routed.amounts[i] ?? 1)])),
+            ...Object.fromEntries(KNOB_ASPECTS.map((k, i) => [k, Math.min(1, Math.max(0, behaving[k] + (d.routed.knobs[i] ?? 0)))])),
+          };
           routeWalkNow = Object.fromEntries(matrix.walks.map((k) => [`route:${k}`, walkFactor[`route:${k}`] ?? 1]));
           density = cell
             ? densityOf(heard, isBandSignal(cell.signal) ? { signal: B[cell.signal as keyof typeof B], band: pick } : { track: T[cell.signal as keyof typeof T] })
@@ -1760,7 +1780,7 @@
               <div class="grid" style:--columns={ASPECTS.length}>
                 <span class="head-corner"></span>
                 {#each ASPECTS as aspect (aspect)}
-                  <span class="aspect" use:held={`aspect:${aspect}`}>{ASPECT_LABEL[aspect]}</span>
+                  <span class="aspect" use:held={`aspect:${aspect}`}>{columnName(aspect, true)}</span>
                 {/each}
               </div>
             </div>

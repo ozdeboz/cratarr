@@ -104,7 +104,7 @@ export function* prechecking(
       tiles: [screenTile(k * dt, luminance)],
       // What the look's effects add, the waves where nothing flows and the zooms' streaming out, as the visuals' meters
       // take them (65): so a recipe's effects, waves and zooms are held to the limits.
-      extra: withMotion(settingsReport(settings, a.effects), wavesMotion(a.given[A.waves], a.fluid) + zoomsMotion(a.tunnel, a.dive)),
+      extra: withMotion(settingsReport(settings, a.effects, undefined, false, a.routed), wavesMotion(a.given[A.waves], a.fluid) + zoomsMotion(a.tunnel, a.dive)),
     });
     if (k * dt < SETTLE_S) continue;
     // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the governor holds

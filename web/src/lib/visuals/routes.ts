@@ -98,7 +98,7 @@ export type Aspect = (typeof ASPECTS)[number];
 export const PART_ASPECTS: readonly Aspect[] = ['shape', 'rotation', 'lights', 'hue', 'spread', 'presence'];
 /** Aspects that act at moments: as what their routes give rises past a half, the setting moves on (a new symmetry, a
  *  new lens, another of an engine's effects…). */
-export const MOMENT_ASPECTS: readonly Aspect[] = ['family', 'form', 'symmetry', 'mirror', 'final', 'lattice', 'fx1', 'fx2', 'fx3', 'fxLoop'];
+export const MOMENT_ASPECTS = ['family', 'form', 'symmetry', 'mirror', 'final', 'lattice', 'fx1', 'fx2', 'fx3', 'fxLoop'] as const satisfies readonly Aspect[];
 /** The look's columns (65.1), which the dice leave as they are (recipe.ts): they move what the look is, not how it
  *  follows the music, and no recipe draws routes into them. */
 export const LOOK_COLUMNS: readonly Aspect[] = [...MOMENT_ASPECTS.filter((a) => a !== 'symmetry'), 'fx1Amount', 'fx1K1', 'fx1K2', 'fx2Amount', 'fx2K1', 'fx2K2', 'fx3Amount', 'fx3K1', 'fx3K2', 'fxLoopAmount', 'fxLoopK1', 'fxLoopK2'];
@@ -182,7 +182,7 @@ export const B = places(BAND_SIGNALS);
 export const A = places(ASPECTS);
 const NA = ASPECTS.length;
 const isPart = ASPECTS.map((a) => PART_ASPECTS.includes(a));
-const isMoment = ASPECTS.map((a) => MOMENT_ASPECTS.includes(a));
+const isMoment = ASPECTS.map((a) => (MOMENT_ASPECTS as readonly Aspect[]).includes(a));
 
 /** A route's key: the signal, its band (`-` for the whole track's), the aspect. */
 export const routeKey = (signal: Signal, band: number | null, aspect: Aspect) => `${signal}|${band ?? '-'}|${aspect}`;

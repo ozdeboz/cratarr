@@ -200,12 +200,54 @@ export const HELP: Record<string, string> = {
     'As the row rises, the look’s effects come up to what Effects sets; below 0, the row takes them down instead. Never above the slider.',
   'aspect:facets':
     'As the row rises, Facets comes up to what its slider sets; below 0, the row takes it down. Never above the slider.',
+  'aspect:mirror':
+    'Each time the row rises past half way, Mirror turns the other way (on or off), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+  'aspect:final':
+    'Each time the row rises past half way, the Lens moves to another lens, or to none, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+  'aspect:form':
+    'Each time the row rises past half way, the flame takes another Form, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+  'aspect:family':
+    'Each time the row rises past half way, the Colours move to another of the look’s four (Spectrum, Arc, Two tones, Three); Cover and Fire, chosen by hand, stay, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+  'aspect:lattice':
+    'Each time the row rises past half way, the Facets’ cells turn from square to hex or back, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+  'aspect:fx1':
+    'Each time the row rises past half way, the Kaleidoscope moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+  'aspect:fx1Amount':
+    'As the row rises, the Kaleidoscope’s Amount comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
+  'aspect:fx1K1':
+    'As the row rises, the Kaleidoscope’s first control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
+  'aspect:fx1K2':
+    'As the row rises, the Kaleidoscope’s second control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
+  'aspect:fx2':
+    'Each time the row rises past half way, EYEDO moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+  'aspect:fx2Amount':
+    'As the row rises, the EYEDO’s Amount comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
+  'aspect:fx2K1':
+    'As the row rises, the EYEDO’s first control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
+  'aspect:fx2K2':
+    'As the row rises, the EYEDO’s second control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
+  'aspect:fx3':
+    'Each time the row rises past half way, the Hydra moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+  'aspect:fx3Amount':
+    'As the row rises, the Hydra’s Amount comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
+  'aspect:fx3K1':
+    'As the row rises, the Hydra’s first control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
+  'aspect:fx3K2':
+    'As the row rises, the Hydra’s second control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
+  'aspect:fxLoop':
+    'Each time the row rises past half way, the Loop moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+  'aspect:fxLoopAmount':
+    'As the row rises, the Loop’s Amount comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
+  'aspect:fxLoopK1':
+    'As the row rises, the Loop’s first control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
+  'aspect:fxLoopK2':
+    'As the row rises, the Loop’s second control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
   'aspect:look':
     'As the row rises, the flame’s look walks: its Detail, Twist, Warp, colours, Spread and Purity move a little further in a direction that changes every bar, never far from where the track set them. Below 0 the look walks back. Pinned settings stay where they are.',
   'aspect:behaviour':
     'As the row rises, the behaviour walks: the Behaviour settings, and the routes set to walk with it, move a little below what you set, in a direction that changes every bar, never above it and never far below. Below 0 they come back up to what you set. Pinned ones stay where they are.',
   'aspect:symmetry':
-    'Each time the row rises past half way, the Symmetry and Mirror settings move to new random values, unless you have pinned them.',
+    'Each time the row rises past half way, the Symmetry setting moves to another of its eight, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
 
   // Route rows: what is measured in the music. The whole track's:
   'signal:loudness': 'How loud the music sounds right now, as you hear it.',

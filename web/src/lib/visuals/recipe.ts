@@ -10,7 +10,7 @@
 //
 // Pure: the same seed gives the same recipe (every device of a sync group alike).
 
-import { BAND_SIGNALS as BAND_SIGNAL_LIST, routeKey, SCALE_KEYS, type Aspect, type Signal } from './routes';
+import { BAND_SIGNALS as BAND_SIGNAL_LIST, LOOK_COLUMNS, routeKey, SCALE_KEYS, type Aspect, type Signal } from './routes';
 import type { BEHAVIOUR_PINS, VisualSettings } from './settings.svelte';
 
 export type RecipeSettings = {
@@ -202,9 +202,12 @@ export function settingsOf(recipe: Recipe, base: VisualSettings, scope: Scope = 
   // The Track row and the fluid's stirring (Stir, Flow, Swirl: how the music pushes the fluid, its defaults today's
   // stirring) are base's: a roll that dropped them would leave the fluid unstirred.
   const stirring = (key: string) => STIRRING.some((c) => key.endsWith(`|${c}`));
+  // The look's own columns (65.1) are base's too: what the look is, not how it follows the music; no recipe draws them.
+  const lookColumn = (key: string) => (LOOK_COLUMNS as readonly string[]).includes(key.slice(key.lastIndexOf('|') + 1));
   const kept = (key: string) =>
     key.startsWith('track|') ||
     stirring(key) ||
+    lookColumn(key) ||
     pinned.has(`route:${key}`) ||
     (scope === 'movement' && !moving(key));
   const routes: VisualSettings['routes'] = {};
