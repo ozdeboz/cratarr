@@ -184,8 +184,16 @@
   // A new look this frame, and why (the meters: a track's own, or one chosen, does not count against the budget).
   type Look = NonNullable<FrameStats['look']>;
   let lookCame: FrameStats['look'] = null;
-  // The rating page (?rate=1, RateMode.svelte): its trial drawn in place of the settings while it runs.
-  const rating = typeof location !== 'undefined' && new URLSearchParams(location.search).has('rate');
+  // The rating page (RateMode.svelte): from the panel's Rate (or ?rate=1 in the address), its trial drawn in place of
+  // the settings while it runs; each start a new run of it (a series stopped is taken up where it was left). While it
+  // runs, the controls that would change the look or how it behaves are away: only Close, where it shows, Full screen
+  // and the transport stay (a track change, a pause or a seek the page itself waits out or starts the pair over for).
+  let ratingRun = $state(typeof location !== 'undefined' && new URLSearchParams(location.search).has('rate') ? 1 : 0);
+  function startRating() {
+    ratingRun++;
+    panel = false;
+    chrome = false;
+  }
   // Another look: a random preset into the look's settings not pinned.
   function rollAnother() {
     loadAnother(Math.floor(Math.random() * 0x100000000), true);
@@ -587,7 +595,10 @@
     // How the music stirs the fluid (stirring.ts).
     const stirring = newStirring();
     // What the visuals do, measured (meters.ts), and when the rating page last had them.
-    const metering = new Meters();
+    let metering = new Meters();
+    // The trial the meters and the governor last measured: each new one (the rating page's A, then B) starts them anew,
+    // so one segment's flashes and motion are not counted, nor held back, in the next.
+    let trialSeen: VisualSettings | null = null;
     let meteredAt = 0;
     // The governor (governor.ts), stepped with the meters four times a second.
     const governor = newGovernor();
@@ -962,6 +973,11 @@
       );
       // What this frame did, measured (meters.ts): the screen read into tiles (back a frame or two later), the parts'
       // motion and change, a new look and why. The meters' values for the rating page four times a second.
+      if (trial.settings !== trialSeen) {
+        trialSeen = trial.settings;
+        metering = new Meters();
+        Object.assign(governor, newGovernor());
+      }
       renderer.measure(w, h, now / 1000);
       const stats: FrameStats = {
         t: now / 1000,
@@ -1122,6 +1138,7 @@
         ><Icon name="close" size={26} /></button
       >
       <div class="corner">
+        {#if !ratingRun}
         <button
           class="round"
           class:on={panel}
@@ -1154,6 +1171,7 @@
             showChrome();
           }}><Icon name="bookmark" size={24} /></button
         >
+        {/if}
         {#if docked}
           <button class="round" aria-label="Over the page" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => setVisualsSide(false)}
             ><Icon name="expand" size={22} /></button
@@ -1169,7 +1187,7 @@
           >
         {/if}
       </div>
-      {#if panel}
+      {#if panel && !ratingRun}
         <div class="panel" role="group" aria-label="Settings" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
           {#each [COMPUTE, SHOW, LOOK] as rows, g (g)}
             <div class="rows" class:look={g > 0}>
@@ -1296,6 +1314,7 @@
                 showChrome();
               }}>Reset</button
             >
+            <button class="reset" use:held={'rate'} onclick={startRating}>Rate</button>
           </div>
         </div>
       {/if}
@@ -1325,7 +1344,7 @@
     <SnapshotsSheet onclose={() => (snapshotsOpen = false)} capture={capturePicture} trackName={np?.name ?? null} {recall} over={!docked} />
   {/if}
   <Help />
-  {#if rating}<RateMode />{/if}
+  {#if ratingRun}{#key ratingRun}<RateMode onstop={() => (ratingRun = 0)} />{/key}{/if}
 </div>
 
 <style>
