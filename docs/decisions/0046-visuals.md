@@ -418,3 +418,51 @@ ready": the sub and bass parts lit on each kick (two a second), the upper bands 
 
 The upper three of the six parts had evolved toward no variation of their own (the three bands' three; linear for the
 rest) since six parts came in: each has its own now.
+
+## Amendment, 2026-10-18: Flash, the grain, and colours from the cover or a fire
+
+The owner after preview 59: "I have a hard time controlling flashiness. Fix that please. One global slider could help
+too?", then "addition to rainbow gradient, I want to have the option for two other color modes, namely album cover and
+fire", and the grain controls claude-5f offered him; "put it all in and ship it".
+
+**Flash** (0 to 200 %, 100 % the look before): each quickly changing aspect (each part's Lights, the Glow, Size and
+Saturation) is its slow course (the value followed twice over 0.3 s) and Flash's share of its swing about that course.
+At 0 a passage's change still shows and a beat's or a hit's swing is gone; at 200 % the swing is twice as large. It acts
+on whatever the routes give, not on the default routes alone. Flashes were hard to tame because:
+- every hit lit at least 0.3 of its light however weak it was: a hit's light is now its strength;
+- each light came on in one frame (a short Lighting time only made that a sharper strobe): where the hits and beats are
+  known ahead (the server's), a hit's light, a beat's and a downbeat's pulse and a section's mark now rise over the
+  40 ms before it, their most still on the moment (a rise after it would have put them behind the beat). The sound
+  heard as it plays cannot be got ahead of: its hits still come on at once;
+- a Lights route below 0 did nothing once the sum was under 0: Lights now runs from -1 to 3, below 0 dimming its part
+  (to 0.4 at -1, with no glow). The six bands' lights do not add up on a pixel: each is weighed by its share of the
+  pixel's points, and the shares sum to one.
+
+**The grain** (each 0 to 100 %, a route's full amount moving it half that, and a column of the routes each):
+- **Smoothing:** how far the sparse parts are blurred into a haze: the density estimation's widest ring, 12 px at most
+  (3, as before, at 50 %); past three pixels the ring reads coarser levels of the buffer, made that frame, so it is a
+  haze rather than eight copies of each speck.
+- **Floor:** the faintest density shown, from a stray speck's to about the flame's mean; fainter goes black, over a
+  span from half of it to twice it so its edge does not crawl. 0 by default.
+- **Depth:** the display's gamma, 1.5 to 6 (3, as before, at 50 %): higher lifts more of the faint detail.
+
+**Colours** (Rainbow, Cover, Fire): Rainbow is the seed's own (the four families). Cover gives the bands the playing
+track's cover's six colours (claude-5f's palette.ts: k-means in OKLab, each pixel weighted by its chroma), darkest to
+the sub and lightest to the air, their lightness brought into 0.58 to 0.86 and their chroma raised a third (up to
+0.26), since on black and through each other they went pale; asked for as the track starts (the next one's too), they
+join the track's blend, and the seed's own stand in where there is no cover. Fire runs the bands from a deep red at
+the sub through orange to a yellow at the air, and the display adds a blackbody's heat by density: the faintest parts a
+deep red to black, the densest yellow, white only at the very hottest. Each part has its own lightness for these (a
+point's is its bands', by how near its colour is to each). The dice give another flame in every mode, its colours the
+mode's.
+
+**Buffers:** 32-bit floats are taken only where they can be filtered as well as blended. The owner's phone (Mali-G615)
+blends them but has no OES_texture_float_linear: its picture was read pixel by pixel and scaled up blocky, grainier,
+from 59 on. It now draws in 16-bit, as the tablet does.
+
+**Measured** (the lab page over the made-up track, the PC's Intel graphics, and the phone off-screen over its debug
+link): the sub's light varied by 0.07 (standard deviation) at Flash 0, 0.19 at 100 % and 0.40 at 200 %, its mean alike;
+it rose from 40 ms before each hit and was most on it. Real covers: The Low End Theory's reds and greens, Force Of The
+Wind's ochres and blues, R.I.P's black and white as greys; no cover, the seed's own. Smoothing's coarser levels, Fire
+and Floor drew on the phone as on the PC, in 16- and 32-bit, through three scrubs that found nothing. The grid's 14
+columns fit a 390 px phone.

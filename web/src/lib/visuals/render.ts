@@ -44,10 +44,11 @@ uniform ivec4 uFinalVarId[2];
 uniform vec4 uFinalVarW[2];
 uniform vec4 uCamera;
 uniform vec2 uTurn;
-// The flame's colours: one lightness and chroma (OKLCH); each band's transform's colour as a point in the colour plane.
-uniform float uLight;
+// The flame's colours: one chroma (OKLCH); each band's transform's colour as a point in the colour plane, and its
+// lightness (a point's is its bands', by how near its colour is to each).
 uniform float uChroma;
 uniform vec2 uBandHue[${PARTS}];
+uniform float uBandLight[${PARTS}];
 const float PI = 3.14159265358979;
 
 // Not a number, or infinite: from the bits, which no compiler's fast arithmetic can assume away (isnan can be).
@@ -202,18 +203,20 @@ void main() {
   if (bad(c.x) || bad(c.y) || dot(c, c) > 4.0) c = vec2(0.0);
   vState = vec4(p, c);
   vSeed = s;
-  vColor = srgb(vec3(uLight, uChroma * c));
   // How much of each band's colour the point is: by how near its colour is to each band's, shares of one.
   float near[${PARTS}];
   float sum = 0.0;
+  float light = 0.0;
   for (int k = 0; k < ${PARTS}; k++) {
     vec2 d = c - uBandHue[k];
     // A bell of nearness, as exp(-12 d²) but without its cost (six a point a step).
     float n = 1.0 / (1.0 + 12.0 * dot(d, d));
     near[k] = n * n * n;
     sum += near[k];
+    light += near[k] * uBandLight[k];
   }
   sum = max(sum, 1e-6);
+  vColor = srgb(vec3(light / sum, uChroma * c));
   vBandA = vec4(near[0], near[1], near[2], near[3]) / sum;
   vBandB = vec2(near[4], near[5]) / sum;
   // Where it is drawn: through the final transform, where the flame has one.
@@ -314,20 +317,29 @@ uniform float uZoom;
 uniform float uFlash;
 uniform sampler2D uBandsA;
 uniform sampler2D uBandsB;
-// Each band's transient now (0..1), and its colour.
+// Each band's light now (-1..3: above 0 its transients', below it dimmed), and its colour.
 uniform float uHit[${PARTS}];
 uniform vec3 uBandRgb[${PARTS}];
 uniform float uCeiling;
 uniform float uSaturation;
+// Smoothing: the most a pixel where few points fell is spread over (pixels of the buffer), and the buffer's levels
+// above its first that it may take that from (none where it has none). Floor: the faintest density shown (on the
+// display's scale, a.a * uK2; 0 for all). The fire's share: a blackbody's heat where the points are dense.
+uniform float uSmooth;
+uniform float uLevels;
+uniform float uFloor;
+uniform float uFire;
 out vec4 o;
 ${BAD}
 // A sample of the buffer, none of it anything but a number (whatever a driver did to it before the scrub came by).
-vec4 at(vec2 uv) { return clean(texture(uAcc, uv)); }
+vec4 at(vec2 uv, float lod) { return clean(textureLod(uAcc, uv, lod)); }
+// A blackbody's colours by its heat (0..1): black, a deep red, orange, yellow, white only at the very hottest.
+vec3 heat(float t) { return clamp(vec3(2.2 * t, 2.2 * t - 0.8, 4.0 * t - 3.3), 0.0, 1.0); }
 void main() {
   // A beat's swell: the picture drawn a little larger about its middle.
   vec2 uv = 0.5 + (gl_FragCoord.xy / uView - 0.5) / uZoom;
   vec2 px = 1.0 / vec2(textureSize(uAcc, 0));
-  vec4 a = at(uv);
+  vec4 a = at(uv, 0.0);
   // The pixel's points by band: shares of one.
   vec4 shareA = clamp(clean(texture(uBandsA, uv)) / max(a.a, 1e-6), 0.0, 1.0);
   vec2 shareB = clamp(clean(texture(uBandsB, uv)).xy / max(a.a, 1e-6), 0.0, 1.0);
@@ -341,18 +353,21 @@ void main() {
   share[4] = shareB.x;
   share[5] = shareB.y;
   // The paper's density estimation, cheaply: where few points fell, the pixel is the mean of a wider ring around it
-  // (up to three pixels out), where many fell it stays sharp.
-  float radius = 3.0 / (1.0 + sqrt(a.a * uK2) * 2.0);
+  // (up to uSmooth pixels out; past three, from a coarser level of the buffer, so the ring is a haze rather than
+  // eight copies), where many fell it stays sharp.
+  float radius = uSmooth / (1.0 + sqrt(a.a * uK2) * 2.0);
   if (radius > 0.4) {
+    float lod = min(uLevels, max(0.0, log2(radius / 3.0)));
     vec2 d = px * radius;
-    vec4 ring = at(uv + vec2(d.x, 0.0)) + at(uv - vec2(d.x, 0.0))
-              + at(uv + vec2(0.0, d.y)) + at(uv - vec2(0.0, d.y))
-              + at(uv + d * 0.7071) + at(uv - d * 0.7071)
-              + at(uv + vec2(d.x, -d.y) * 0.7071) + at(uv + vec2(-d.x, d.y) * 0.7071);
+    vec4 ring = at(uv + vec2(d.x, 0.0), lod) + at(uv - vec2(d.x, 0.0), lod)
+              + at(uv + vec2(0.0, d.y), lod) + at(uv - vec2(0.0, d.y), lod)
+              + at(uv + d * 0.7071, lod) + at(uv - d * 0.7071, lod)
+              + at(uv + vec2(d.x, -d.y) * 0.7071, lod) + at(uv + vec2(-d.x, d.y) * 0.7071, lod);
     a = (a + ring) / 9.0;
   }
   if (a.a <= 0.0) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }
-  float ls = uK1 * log(1.0 + a.a * uK2) / a.a;
+  float x = a.a * uK2;
+  float ls = uK1 * log(1.0 + x) / a.a;
   vec3 c = a.rgb * ls;
   float alpha = a.a * ls;
   // flam3's gamma threshold: below it the curve is a straight line, so the faintest pixels are not lifted into noise.
@@ -360,17 +375,22 @@ void main() {
   float g = alpha < T ? alpha / T * pow(T, 1.0 / uGamma) : pow(min(alpha, 1.0), 1.0 / uGamma);
   vec3 vib = c * (g / max(alpha, 1e-6));
   vec3 flat_ = pow(max(c, 0.0), vec3(1.0 / uGamma));
-  // A beat's flash, after the gamma, so it shows as much in the faint parts as in the bright ones; a band's transient
-  // brightens the points of its colour, and adds a glow of that colour.
+  // A beat's flash, after the gamma, so it shows as much in the faint parts as in the bright ones; a band's light
+  // brightens the points of its colour and adds a glow of that colour, or (below 0) dims them, to 0.4 at -1. The
+  // shares are of one, so the bands' lights are a mean here, never a sum.
   float lit = 0.0;
   vec3 glow = vec3(0.0);
   for (int k = 0; k < ${PARTS}; k++) {
     float h = uHit[k] * share[k];
     lit += h;
-    glow += h * uBandRgb[k];
+    glow += max(h, 0.0) * uBandRgb[k];
   }
-  vec3 shown = mix(flat_, vib, uVibrancy) * uFlash * (1.0 + 0.6 * lit);
-  shown += 0.2 * g * glow;
+  vec3 shown = mix(flat_, vib, uVibrancy);
+  // Fire: the denser, the hotter, over the bands' own colours (which still tell them apart).
+  shown = mix(shown, heat(g), 0.65 * uFire);
+  shown = shown * uFlash * (1.0 + 0.6 * lit) + 0.2 * g * glow;
+  // Floor: fainter than it, black (from half of it to twice it, so its edge does not crawl with the grain).
+  if (uFloor > 0.0) shown *= smoothstep(-1.0, 1.0, log2(x / uFloor));
   // Less colour where the music is quiet (towards its grey of the same brightness).
   shown = mix(vec3(dot(shown, vec3(0.299, 0.587, 0.114))), shown, uSaturation);
   // The most brightness shown, last: no flash or light goes past it.
@@ -392,7 +412,7 @@ export type Shown = {
   zoom: number;
   /** Brighter by this much as shown (a beat's flash): 1 for none. */
   flash: number;
-  /** Each part's transient now, low to high (0..1): its colour's points light up. */
+  /** Each part's light now, low to high (-1..3): its colour's points light up, or below 0 dim. */
   hits: number[];
   /** The most brightness shown (0..1), applied after everything else. */
   ceiling: number;
@@ -400,6 +420,12 @@ export type Shown = {
   exposure: number;
   /** How much of its colour it shows (0: grey, 1: all). */
   saturation: number;
+  /** The most a pixel where few points fell is spread over, in pixels of the buffer (0: none, the raw grain). */
+  smoothing: number;
+  /** The faintest density shown, on the display's scale (0: all of it; 1: about the flame's mean). */
+  floor: number;
+  /** How much of a fire's heat shows (0..1): the densest points yellow-white, the faintest a deep red. */
+  fire: number;
 };
 
 export class FlameRenderer {
@@ -428,18 +454,22 @@ export class FlameRenderer {
   private bands: WebGLTexture | null = null;
   private bandsB: WebGLTexture | null = null;
   private bandRgb = new Float32Array(PARTS * 3);
+  /** The colours buffer's levels above its first (0 where they cannot be filtered). */
+  private levels = 0;
   private accFbo: WebGLFramebuffer | null = null;
   private empty: WebGLVertexArrayObject;
   private flip = 0;
   private count = 0;
   private flame: Flame | null = null;
   private loc = new Map<string, WebGLUniformLocation | null>();
-  /** The buffer's kind: 32-bit floats where they can be blended into, else 16-bit (a pixel stops counting near 2048
-   *  points, only in the densest cores, where the log display hardly shows it), else 8 bits (saturating soon). 16-bit
-   *  ones were the default in preview 56 (4 to 20 % quicker): the densest pixels reach some 60,000 points (measured in
-   *  32-bit ones, 2026-10-18), against a 16-bit float's 65,504, and a GPU whose blending rounds up (Direct3D allows it)
-   *  carries them over into infinity, black for good: the owner's GTX 1650 showed such specks from 56 on, his tablet
-   *  (16-bit, a GPU that rounds to nearest, stuck at 2048) never did. */
+  /** The buffer's kind: 32-bit floats where they can be blended into and filtered, else 16-bit (a pixel stops counting
+   *  near 2048 points, only in the densest cores, where the log display hardly shows it), else 8 bits (saturating
+   *  soon). 16-bit ones were the default in preview 56 (4 to 20 % quicker): the densest pixels reach some 60,000 points
+   *  (measured in 32-bit ones, 2026-10-18), against a 16-bit float's 65,504, and a GPU whose blending rounds up
+   *  (Direct3D allows it) carries them over into infinity, black for good: the owner's GTX 1650 showed such specks from
+   *  56 on, his tablet (16-bit, a GPU that rounds to nearest, stuck at 2048) never did. 32-bit ones that cannot be
+   *  filtered (his phone's Mali-G615 blends them but has no OES_texture_float_linear) were read pixel by pixel and
+   *  scaled up to the screen blocky: the phone's picture grainier from 59 on, and no coarser levels for the smoothing. */
   precision: 32 | 16 | 8;
   get halfFloat(): boolean {
     return this.precision !== 8;
@@ -456,7 +486,8 @@ export class FlameRenderer {
     if (!gl) throw new Error('WebGL2 is not available.');
     this.gl = gl;
     const floats = !!gl.getExtension('EXT_color_buffer_float');
-    this.precision = floats && gl.getExtension('EXT_float_blend') ? 32 : floats || gl.getExtension('EXT_color_buffer_half_float') ? 16 : 8;
+    this.precision =
+      floats && gl.getExtension('EXT_float_blend') && gl.getExtension('OES_texture_float_linear') ? 32 : floats || gl.getExtension('EXT_color_buffer_half_float') ? 16 : 8;
     this.iterate = program(gl, ITERATE, PLOT, ['vState', 'vSeed']);
     this.plot = this.iterate;
     this.fade = program(gl, FULL, FADE);
@@ -570,6 +601,15 @@ export class FlameRenderer {
     this.cur = 0;
     this.use();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // The colours' coarser levels, for a wide smoothing (made each frame it is asked for; here only so the texture is
+    // complete with a filter that reads them), where they can be filtered.
+    this.levels = smooth ? Math.floor(Math.log2(Math.max(width, height))) : 0;
+    if (this.levels)
+      for (const acc of this.accs) {
+        gl.bindTexture(gl.TEXTURE_2D, acc);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.generateMipmap(gl.TEXTURE_2D);
+      }
   }
 
   /** The set in use as `acc`, `bands` and `accFbo`. */
@@ -689,13 +729,14 @@ export class FlameRenderer {
     }
     // The bands' transforms are the first six (flame.ts): each one's colour, a point in the colour plane.
     const parts = Array.from({ length: PARTS }, (_, b) => xs[b] ?? { color: b / PARTS, colorReach: 1 });
-    gl.uniform1f(this.u(this.iterate, 'uLight'), flame.colours.light);
+    const lights = parts.map((_, b) => flame.colours.lights?.[b] ?? flame.colours.light);
     gl.uniform1f(this.u(this.iterate, 'uChroma'), flame.colours.chroma);
     gl.uniform2fv(
       this.u(this.iterate, 'uBandHue'),
       parts.flatMap((x) => [(x.colorReach ?? 1) * Math.cos(2 * Math.PI * x.color), (x.colorReach ?? 1) * Math.sin(2 * Math.PI * x.color)]),
     );
-    parts.forEach((x, b) => this.bandRgb.set(colourOf(flame.colours.light, flame.colours.chroma * (x.colorReach ?? 1), x.color), b * 3));
+    gl.uniform1fv(this.u(this.iterate, 'uBandLight'), lights);
+    parts.forEach((x, b) => this.bandRgb.set(colourOf(lights[b], flame.colours.chroma * (x.colorReach ?? 1), x.color), b * 3));
   }
 
   /** One frame: the old picture fades by `look.keep`, `passes` more steps of every point fall into it, and it shows. */
@@ -769,6 +810,17 @@ export class FlameRenderer {
     gl.uniform3fv(this.u(this.show, 'uBandRgb'), this.bandRgb);
     gl.uniform1f(this.u(this.show, 'uCeiling'), look.ceiling);
     gl.uniform1f(this.u(this.show, 'uSaturation'), look.saturation);
+    // A smoothing wider than three pixels takes its ring from the buffer's coarser levels, made now (only then: the
+    // levels cost a pass over the buffer).
+    const levels = look.smoothing > 3 ? this.levels : 0;
+    if (levels) {
+      gl.bindTexture(gl.TEXTURE_2D, this.acc);
+      gl.generateMipmap(gl.TEXTURE_2D);
+    }
+    gl.uniform1f(this.u(this.show, 'uSmooth'), look.smoothing);
+    gl.uniform1f(this.u(this.show, 'uLevels'), levels);
+    gl.uniform1f(this.u(this.show, 'uFloor'), look.floor);
+    gl.uniform1f(this.u(this.show, 'uFire'), look.fire);
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

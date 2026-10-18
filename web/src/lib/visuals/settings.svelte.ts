@@ -1,6 +1,6 @@
 // The visuals' settings (decision 0046, amended): how much the device draws (points, steps, resolution, frame rate:
-// ceilings the automatic step-down stays under), how the show looks (intensity, speed, brightness, purity, spread,
-// symmetry), each band's times (how long its light rings, how quickly its part evolves, and how much of its motion comes
+// ceilings the automatic step-down stays under), how the show looks (intensity, flash, speed, brightness, purity,
+// spread, the grain, colours, symmetry), each band's times (how long its light rings, how quickly its part evolves, and how much of its motion comes
 // in steps on its own transients), and the routes: how much each of the music's signals drives each aspect of the
 // picture (routes.ts).
 // Changed live from the visuals' panel and kept on this device (a phone and the tablet want different ones); a
@@ -23,6 +23,9 @@ export type VisualSettings = {
   fps: number;
   /** How much the music's loudness sets the show's intensity (0: always all, 1: as loud as it is). */
   intensity: number;
+  /** How much of the picture's quick changes show (its lights, glow, size and colour on hits and beats): 0 only their
+   *  slow course, 1 all of them, 2 twice as much. */
+  flash: number;
   /** Motion: the turning and its steps (0..2). */
   speed: number;
   /** The most brightness shown, after everything (0.1..1). */
@@ -31,6 +34,14 @@ export type VisualSettings = {
   purity: number;
   /** The parts' offsets scaled apart (separate clusters) or together (one shape): 1 is the seed's own. */
   spread: number;
+  /** The grain: how far the sparse parts are blurred into a haze (0: the raw grain; 0.5: three pixels, as before),
+   *  how faint a part goes black (0: none), and how much of the faint detail is lifted (the display's gamma: 0.5 is 3,
+   *  as before). Each 0..1; their routes move them from there. */
+  smoothing: number;
+  floor: number;
+  depth: number;
+  /** The colours: 0 the flame's own (its seed's), 1 the playing track's cover's, 2 a fire's. */
+  colours: number;
   /** The flame's rotations: 0 its own (the seed's), else that many arms. */
   symmetry: number;
   /** Its mirrors: 0 its own, 1 none, 2 as many as its arms (dihedral). */
@@ -55,11 +66,16 @@ export const DEFAULTS: VisualSettings = {
   resolution: null,
   fps: touch ? 30 : 60,
   intensity: 1,
+  flash: 1,
   speed: 1,
   brightness: 1,
   // Six parts mixing their colours go grey: mostly each its band's own.
   purity: 0.75,
   spread: 1,
+  smoothing: 0.5,
+  floor: 0,
+  depth: 0.5,
+  colours: 0,
   symmetry: 0,
   mirror: 0,
   // A kick rings longer than a hat.
@@ -77,10 +93,15 @@ export const RANGES: Record<keyof VisualSettings, [number, number]> = {
   resolution: [0.25, 1],
   fps: [10, 60],
   intensity: [0, 1],
+  flash: [0, 2],
   speed: [0, 2],
   brightness: [0.1, 1],
   purity: [0, 1],
   spread: [0.25, 2.5],
+  smoothing: [0, 1],
+  floor: [0, 1],
+  depth: [0, 1],
+  colours: [0, 2],
   symmetry: [0, 8],
   mirror: [0, 2],
   lighting: [0.02, 1],

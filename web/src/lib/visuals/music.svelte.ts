@@ -12,10 +12,10 @@ import { audioTap, positionNow } from '../localPlayer.svelte';
 import { isLocal } from '../output.svelte';
 import { paused, playing } from '../remote.svelte';
 import { loadWaveform, waveformOf } from '../waveforms.svelte';
-import { beatAt, beatsOf, type Beat } from './beats';
+import { beatAt, beatsOf, type Beat, type Beats } from './beats';
 import { startLive, type LiveNow } from './live';
 import { B, BAND_SIGNALS, T, TRACK_SIGNALS } from './routes';
-import { ID, lastOf, lufsAt, seriesAt, signalsOf, type Signals } from './signals';
+import { ID, lastOf, lufsAt, seriesAt, signalsOf, type Events, type Signals } from './signals';
 import { BANDS, visualSettings } from './settings.svelte';
 
 /** A band's last hit, for the steps the Continuity setting asks for: its place among the band's hits (-1 before the
@@ -88,11 +88,38 @@ let fifths = { x: 0, y: 0, at: 0 };
 // The circle of fifths' place of each pitch class (C, C#, ... B), as an angle.
 const FIFTH_ANGLE = Array.from({ length: 12 }, (_, k) => (2 * Math.PI * ((7 * k) % 12)) / 12);
 
-/** A hit's light: its strength's share, fading over `ring` seconds. */
-const ringOf = (since: number, strength: number, ring: number) => (since > ring * 5 ? 0 : (0.3 + 0.7 * strength) * Math.exp(-since / ring));
+/** A hit's light: as strong as the hit (a weak one weak), fading over `ring` seconds. */
+const ringOf = (since: number, strength: number, ring: number) => (since > ring * 5 ? 0 : strength * Math.exp(-since / ring));
 
 /** A beat's pulse: on at the beat (most on the strong ones), gone within `most` seconds (sooner at a fast tempo). */
 const pulseOf = (b: Beat, most: number, share: number) => (0.35 + 0.65 * b.strength) * Math.exp(-b.since / Math.min(most, share * b.length));
+
+/** Where the hits and beats are known ahead (the server's), a light or pulse rises into each over this long (s) rather
+ *  than coming on all at once, its most still on the moment: a light on in one frame and gone in the next was a strobe
+ *  (2026-10-18). The sound heard as it plays cannot be got ahead of, so its hits still come on at once. */
+const ATTACK = 0.04;
+/** How far a light has risen with `until` seconds to go (0..1, smoothly). */
+function risen(until: number): number {
+  const x = 1 - until / ATTACK;
+  return x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x);
+}
+
+/** A list of events' light at `pos`: the last one's fading over `ring` seconds, and the next one's rising. */
+function lightOf(e: Events | undefined, pos: number, ring: number): number {
+  const last = lastOf(e, pos);
+  const next = lastOf(e, pos + ATTACK);
+  const on = last.index < 0 ? 0 : ringOf(last.since, last.value, ring);
+  return next.index > last.index ? Math.max(on, next.value * risen(ATTACK - next.since)) : on;
+}
+
+/** A beat's pulse at `pos` (`beat`: the one at or before it), rising into the next where it is near; `counts`: whether
+ *  a beat pulses at all (a downbeat's only those that start a bar), and how much. */
+function pulseAt(beats: Beats, beat: Beat | null, pos: number, most: number, share: number, counts: (b: Beat) => number): number {
+  const on = beat ? pulseOf(beat, most, share) * counts(beat) : 0;
+  const next = beatAt(beats, pos + ATTACK);
+  if (!next || (beat && next.index <= beat.index)) return on;
+  return Math.max(on, (0.35 + 0.65 * next.strength) * counts(next) * risen(ATTACK - next.since));
+}
 
 /** The music now. `at` is the frame's time (performance.now()), to move the position on between the player's reports. */
 export function musicNow(at: number): Music {
@@ -130,7 +157,7 @@ export function musicNow(at: number): Music {
   if (signals) {
     stopLive();
     heard = lufsAt(signals, pos);
-    fromServer(signals, pos, beat, at);
+    fromServer(signals, pos, beats ?? null, beat, at);
     from = 'server';
   } else {
     const now = listen();
@@ -148,22 +175,22 @@ export function musicNow(at: number): Music {
 
   track[T.loudness] = intensity;
   track[T.tempo] = bps / 2;
-  if (beat) track[T.beat] = pulseOf(beat, 0.2, 0.35);
+  if (beats) track[T.beat] = pulseAt(beats, beat, pos, 0.2, 0.35, () => 1);
   track[T.key] = Math.atan2(fifths.y, fifths.x) / (2 * Math.PI) + (fifths.y < 0 ? 1 : 0);
   return { key, intensity, bps, beat, track, bands: from ? bands : null, hits: from ? hits : null, from, playing: on };
 }
 
 /** The server's signals at `pos`. */
-function fromServer(s: Signals, pos: number, beat: Beat | null, at: number) {
+function fromServer(s: Signals, pos: number, beats: Beats | null, beat: Beat | null, at: number) {
   const one = (id: number) => seriesAt(s, id, pos)?.[0] ?? 0;
   // A downbeat: a beat that starts its bar, as surely as the server is of where bars start.
   const bar = s.series.get(ID.bar);
-  if (beat && bar) {
-    const place = Math.round((seriesAt(s, ID.bar, pos, beat.index)?.[0] ?? 1) * 255);
-    if (place === 0) track[T.downbeat] = pulseOf(beat, 0.35, 0.6) * Math.min(1, (2 * bar.scale) / 255);
+  if (beats && bar) {
+    const surely = Math.min(1, (2 * bar.scale) / 255);
+    const starts = (b: Beat) => (Math.round((seriesAt(s, ID.bar, pos, b.index)?.[0] ?? 1) * 255) === 0 ? surely : 0);
+    track[T.downbeat] = pulseAt(beats, beat, pos, 0.35, 0.6, starts);
   }
-  const section = lastOf(s.marks.get(ID.boundaries), pos);
-  if (section.index >= 0 && section.since < SECTION_S * 5) track[T.section] = section.value * Math.exp(-section.since / SECTION_S);
+  track[T.section] = lightOf(s.marks.get(ID.boundaries), pos, SECTION_S);
   track[T.harmony] = one(ID.harmonicChange);
   track[T.centroid] = one(ID.centroid);
   track[T.swell] = one(ID.swell);
@@ -200,10 +227,9 @@ function fromServer(s: Signals, pos: number, beat: Beat | null, at: number) {
     v[B.width] = width?.[b] ?? 0;
     v[B.bandSwell] = swell?.[b] ?? 0;
     const ring = visualSettings.lighting[b];
+    v[B.hits] = lightOf(all?.[b], pos, ring);
+    v[B.percussiveHits] = lightOf(drums?.[b], pos, ring);
     const hit = lastOf(all?.[b], pos);
-    v[B.hits] = hit.index < 0 ? 0 : ringOf(hit.since, hit.value, ring);
-    const drum = lastOf(drums?.[b], pos);
-    v[B.percussiveHits] = drum.index < 0 ? 0 : ringOf(drum.since, drum.value, ring);
     hits[b] = { index: hit.index, weight: hit.value / Math.max(0.05, s.meanStrength[b] ?? 1), perSecond: s.perSecond[b] ?? 0 };
   }
 }

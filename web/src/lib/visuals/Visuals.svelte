@@ -5,18 +5,21 @@
   // (lib/visuals/music.svelte.ts) drive the picture's aspects through the routes (lib/visuals/routes.ts), each by an
   // amount: by default the loudness as heard sets its size and colour, the beat flashes and swells it, each band's level
   // evolves, turns and tints its part and its hits light it. The loudness is the envelope of everything else: a quiet
-  // passage is less of a show, not a darker screen.
+  // passage is less of a show, not a darker screen. Its colours are its seed's own, the playing track's cover's or a
+  // fire's (the Colours setting).
   // Over everything, on black. A tap or a mouse move shows the track, the close button, the sliders and the dice for a
   // few seconds; the dice show another flame at random, until the track changes or they are pressed again; the sliders
   // open a panel of settings at the right (lib/visuals/settings.svelte.ts) with the routes' grid, live, until it is
   // closed. Esc, Back or a swipe down closes the visuals. The screen stays on while they show, where the browser allows.
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
+  import { coverUrl } from '../api';
   import Icon from '../Icon.svelte';
   import { reducedMotion } from '../motion';
   import { playing } from '../remote.svelte';
-  import { between, evolved, flameFrom, measure, PARTS, seedOf, withSymmetry, type Flame, type Part } from './flame';
+  import { between, coloured, evolved, flameFrom, measure, PARTS, seedOf, withSymmetry, type ColourMode, type Flame, type Part } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
+  import { coverPalette, type PaletteColour } from './palette';
   import { FlameRenderer } from './render';
   import {
     A,
@@ -106,6 +109,8 @@
   // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then the look.
   type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes'>;
   const MIRROR = ['Auto', 'Off', 'On'];
+  const COLOURS = ['Rainbow', 'Cover', 'Fire'];
+  const MODES: ColourMode[] = ['rainbow', 'cover', 'fire'];
   type Row = { key: One; label: string; step: number; text: (v: number) => string };
   const percent = (v: number) => `${Math.round(v * 100)}%`;
   const thousands = (log2: number) => {
@@ -120,10 +125,15 @@
   ];
   const LOOK: Row[] = [
     { key: 'intensity', label: 'Intensity', step: 0.05, text: percent },
+    { key: 'flash', label: 'Flash', step: 0.05, text: percent },
     { key: 'speed', label: 'Speed', step: 0.05, text: percent },
     { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
+    { key: 'colours', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? 'Rainbow' },
     { key: 'purity', label: 'Purity', step: 0.05, text: percent },
     { key: 'spread', label: 'Spread', step: 0.05, text: percent },
+    { key: 'smoothing', label: 'Smoothing', step: 0.05, text: percent },
+    { key: 'floor', label: 'Floor', step: 0.05, text: percent },
+    { key: 'depth', label: 'Depth', step: 0.05, text: percent },
     { key: 'symmetry', label: 'Symmetry', step: 1, text: (v) => (v ? `${v}` : 'Auto') },
     { key: 'mirror', label: 'Mirror', step: 1, text: (v) => MIRROR[v] ?? 'Auto' },
   ];
@@ -251,6 +261,11 @@
     let symmetryShown = '';
     // A moment's symmetry (the routes' Symmetry), until the next one or another flame.
     let momentSymmetry: { order: number; mirror: boolean } | null = null;
+    // The Colours setting's Cover: the playing track's cover's colours, asked for as it starts (and the next one's, so
+    // they are in as it starts); null until they are, and where it has no cover. Fire: how much of its heat shows,
+    // followed over a second and a half.
+    let cover: { key: string; colours: PaletteColour[] | null } | null = null;
+    let fire = 0;
     let turn = 0;
     // The turning's clock: a route's full amount turns a part once around in 16 beats (the default routes, once in 32
     // on average), at the Speed setting; paused, it slows to a stop.
@@ -277,6 +292,23 @@
     // The moments' state: ready again once what they are given falls under a third, and not within two seconds.
     const moments = { reseed: { armed: true, at: -Infinity }, symmetry: { armed: true, at: -Infinity } };
     const MOMENT_GAP_MS = 2000;
+    // The Flash setting: each quickly changing aspect (each part's lights, the glow, size and saturation) as its slow
+    // course (followed twice over a third of a second: a beat's or a hit's swing all but gone from it, a passage's
+    // change kept) and the setting's share of its swing about that course.
+    const SLOW_S = 0.3;
+    const courses = { lights: Array.from({ length: PARTS }, () => [] as number[]), glow: [] as number[], size: [] as number[], saturation: [] as number[] };
+    let follow2 = 0;
+    const flashed = (v: number, course: number[]) => {
+      if (!course.length) course.push(v, v);
+      course[0] += (v - course[0]) * follow2;
+      course[1] += (course[0] - course[1]) * follow2;
+      return course[1] + s.flash * (v - course[1]);
+    };
+    // The grain's settings (0..1) as their routes move them: a route's full amount moves one half of its range.
+    const grain = (setting: number, aspect: number) => clamp(setting + 0.5 * got.whole[aspect], 0, 1);
+    // Floor: none at 0, then from 0.002 of the display's scale (a stray speck's) up to 1 (the flame's mean), evenly in
+    // its log.
+    const floorOf = (v: number) => (v > 0 ? 0.002 * 500 ** v : 0);
     // How intense the show is (the loudness as heard, followed over a fifth of a second; `lit`: as far as the
     // Intensity setting lets it count), and paused or not.
     let intensity = 0.5;
@@ -363,19 +395,39 @@
         blendStart = now;
         blendMs = next ? BLEND_MS : ANOTHER_MS;
       }
-      // Its symmetry: its own (or a moment's), or as the settings ask; a change blends in over a second and a half.
+      // The colours: the cover's asked for as a track starts, where they are wanted.
+      const mode = MODES[s.colours] ?? 'rainbow';
+      const playingNow = playing();
+      if (mode === 'cover' && playingNow && m.key && cover?.key !== m.key) {
+        const want = m.key;
+        cover = { key: want, colours: null };
+        coverPalette(coverUrl(playingNow)).then(
+          (p) => {
+            if (cover?.key === want) cover = { key: want, colours: p?.colours ?? null };
+          },
+          () => {},
+        );
+        if (playingNow.upcoming[0]) coverPalette(coverUrl({ source: playingNow.source, id: playingNow.upcoming[0].id })).catch(() => {});
+      }
+      const covered = mode === 'cover' && cover?.key === m.key ? cover.colours : null;
+      fire += ((mode === 'fire' ? 1 : 0) - fire) * Math.min(1, dt / 1.5);
+      // Its symmetry: its own (or a moment's), or as the settings ask; its colours, as the Colours setting asks. A change
+      // blends in over a second and a half; the cover's colours coming in while a track's flame blends in join that
+      // blend instead.
       if (base) {
         const order = s.symmetry || momentSymmetry?.order || base.symmetry.order;
         const mirror = s.mirror ? s.mirror === 2 : (momentSymmetry?.mirror ?? base.symmetry.mirror);
-        const want = `${order}/${mirror}`;
+        const shape = `${order}/${mirror}`;
+        const want = `${shape}/${mode}/${covered ? m.key : ''}`;
         if (want !== symmetryShown) {
-          if (symmetryShown !== '' && shown) {
+          const coloursOnly = from && symmetryShown.startsWith(`${shape}/`);
+          if (symmetryShown !== '' && shown && !coloursOnly) {
             from = shown;
             blendStart = now;
             blendMs = ANOTHER_MS;
           }
           symmetryShown = want;
-          to = order === base.symmetry.order && mirror === base.symmetry.mirror ? base : withSymmetry(base, order, mirror);
+          to = coloured(order === base.symmetry.order && mirror === base.symmetry.mirror ? base : withSymmetry(base, order, mirror), mode, covered);
           if (!from) shown = to;
         }
       }
@@ -393,6 +445,7 @@
       const bandsNow = m.bands ?? standIn;
       give(matrix, track, bandsNow, m.playing ? lit : 0, got);
       const W = got.whole;
+      follow2 = 1 - Math.exp(-dt / SLOW_S);
       if (panel && now - metered > 100) {
         metered = now;
         meters = { track: Array.from(track), bands: bandsNow.map((v) => Array.from(v)) };
@@ -438,7 +491,8 @@
         const [shape, hue, spread] = evolving[i];
         const grown = clamp(shape, 0, 1.25);
         parts.push({ turn: turned[i], size: 0.94 + 0.12 * grown, morph: (still ? 0.15 : 0.35) * grown, hue, spread: 2 ** clamp(spread, -2, 2) });
-        hits.push(clamp(W[A.lights] + own[A.lights], 0, 3) * (still ? 0.5 : 1));
+        // Lights: its colour's points lit up, or dimmed where its routes take it below nothing.
+        hits.push(clamp(flashed(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), courses.lights[i]), -1, 3));
       }
       // The moments: another flame (as the dice give), another symmetry (where the Symmetry setting is Auto).
       if (!still && moment(moments.reseed, W[A.reseed], now)) {
@@ -491,23 +545,28 @@
           brightness: 1,
           // Trails: each frame keeps this much of the last (longer trails given more, shorter given less).
           keep: clamp(1 - 0.07 * 2 ** (-1.5 * W[A.trails]), 0.5, 0.985),
-          gamma: 3,
+          // Depth: the display's gamma, 1.5 to 6 (3 as before at its middle); higher lifts more of the faint detail.
+          gamma: 1.5 * 4 ** grain(s.depth, A.depth),
           vibrancy: 1,
           turn,
           // Size: half its size at rest, all of it given all (by default the loudness: smaller when quiet, and a
           // beat's swell).
-          scale: clamp(0.5 + 0.5 * W[A.size], 0.25, 1.4),
+          scale: clamp(flashed(0.5 + 0.5 * W[A.size], courses.size), 0.25, 1.4),
           zoom: 1,
           // Glow: as bright at rest (dimmer only while paused), brighter given more (by default a beat's flash).
-          flash: glow * clamp(1 + 0.5 * W[A.brightness], 0.15, 3),
+          flash: glow * clamp(flashed(1 + 0.5 * W[A.brightness], courses.glow), 0.15, 3),
           hits,
           ceiling: s.brightness,
           // Saturation: a third of its colour at rest, all of it given all (by default the loudness: paler when quiet).
-          saturation: clamp(0.35 + 0.65 * W[A.saturation], 0, 1.25),
+          saturation: clamp(flashed(0.35 + 0.65 * W[A.saturation], courses.saturation), 0, 1.25),
           // The whole picture as bright however much of its frame the flame covers: a flame spread over most of it is
           // shown dimmer, one gathered into a few cells brighter (against one covering a third of its frame), so its
           // shape's changes are not flares.
           exposure: frame ? Math.min(1.5, Math.max(0.4, 0.33 / Math.max(0.05, frame.coverage))) : 1,
+          // Smoothing: up to 12 pixels (3 as before at its middle). Floor: from none to about the flame's mean density.
+          smoothing: 12 * grain(s.smoothing, A.smoothing) ** 2,
+          floor: floorOf(grain(s.floor, A.floor)),
+          fire,
         },
         w,
         h,

@@ -73,8 +73,9 @@ export type Xform = {
   turns: boolean;
 };
 
-/** The lightness and chroma of a flame's colours (OKLCH); each transform has its own hue. */
-export type Colours = { light: number; chroma: number };
+/** The lightness and chroma of a flame's colours (OKLCH); each transform has its own hue. `lights`: each part's own
+ *  lightness, where they differ (a cover's colours, the fire's), in place of `light`. */
+export type Colours = { light: number; chroma: number; lights?: number[] };
 
 export type Flame = {
   xforms: Xform[];
@@ -270,6 +271,45 @@ function randomColours(rnd: () => number, parts: Xform[]): Colours {
     x.colorReach = reach;
   });
   return { light: 0.62 + rnd() * 0.16, chroma: 0.12 + rnd() * 0.08 };
+}
+
+/** The visuals' Colours setting: the seed's own (one of `randomColours`' families), the playing track's cover's, or a
+ *  fire's. */
+export type ColourMode = 'rainbow' | 'cover' | 'fire';
+
+/** The flame's parts coloured by `mode`; its shape as it is. Cover: the cover's colours (`cover`, OKLab, darkest first:
+ *  palette.ts) given to the bands in order, the darkest to the sub and the lightest to the air, their lightness brought
+ *  into what shows on black (0.58 to 0.86, in the cover's order); the seed's own where there is no cover. Fire: from a
+ *  deep red at the sub through orange to a yellow at the air, darker to lighter (the display adds a blackbody's heat
+ *  where the points are dense: render.ts). */
+export function coloured(flame: Flame, mode: ColourMode, cover: { L: number; a: number; b: number }[] | null): Flame {
+  if (mode === 'rainbow' || (mode === 'cover' && !cover?.length)) return flame;
+  let n = 0;
+  const lights: number[] = [];
+  const hues: { hue: number; chroma: number }[] = [];
+  for (let i = 0; i < PARTS; i++) {
+    if (mode === 'fire') {
+      const k = i / (PARTS - 1);
+      lights.push(0.56 + 0.3 * k);
+      hues.push({ hue: 0.07 + 0.2 * k, chroma: 0.17 - 0.03 * k });
+    } else {
+      const c = cover![i % cover!.length];
+      lights.push(0.58 + 0.28 * Math.min(1, Math.max(0, c.L)));
+      // A third more chroma than the cover's own (up to 0.26): its colours are seen against each other, the flame's
+      // against black and through each other, where they went pale (The Low End Theory's reds and greens, 2026-10-18).
+      hues.push({ hue: (((Math.atan2(c.b, c.a) / (2 * Math.PI)) % 1) + 1) % 1, chroma: Math.min(0.26, 1.35 * Math.hypot(c.a, c.b)) });
+    }
+  }
+  const chroma = Math.max(0.05, ...hues.map((h) => h.chroma));
+  return {
+    ...flame,
+    xforms: flame.xforms.map((t) => {
+      if (!t.turns) return t;
+      const h = hues[n++ % PARTS];
+      return { ...t, color: h.hue, colorReach: h.chroma / chroma };
+    }),
+    colours: { light: lights.reduce((a, b) => a + b, 0) / PARTS, chroma, lights },
+  };
 }
 
 /** The flame of a seed: made at random from it until one passes the check, then framed. */
@@ -626,7 +666,14 @@ export function between(from: Flame, to: Flame, k: number): Flame {
     xforms,
     final,
     symmetry: k < 0.5 ? from.symmetry : to.symmetry,
-    colours: { light: mix(from.colours.light, to.colours.light, k), chroma: mix(from.colours.chroma, to.colours.chroma, k) },
+    colours: {
+      light: mix(from.colours.light, to.colours.light, k),
+      chroma: mix(from.colours.chroma, to.colours.chroma, k),
+      lights:
+        from.colours.lights || to.colours.lights
+          ? Array.from({ length: PARTS }, (_, i) => mix(from.colours.lights?.[i] ?? from.colours.light, to.colours.lights?.[i] ?? to.colours.light, k))
+          : undefined,
+    },
     center: [mix(from.center[0], to.center[0], k), mix(from.center[1], to.center[1], k)],
     size: Math.exp(mix(Math.log(from.size), Math.log(to.size), k)),
   };

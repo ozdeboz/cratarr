@@ -36,7 +36,7 @@ export const SIGNAL_LABEL: Record<Signal, string> = {
 };
 
 /** The picture's aspects. */
-export const ASPECTS = ['shape', 'rotation', 'lights', 'hue', 'spread', 'brightness', 'size', 'saturation', 'trails', 'reseed', 'symmetry'] as const;
+export const ASPECTS = ['shape', 'rotation', 'lights', 'hue', 'spread', 'brightness', 'size', 'saturation', 'trails', 'smoothing', 'floor', 'depth', 'reseed', 'symmetry'] as const;
 export type Aspect = (typeof ASPECTS)[number];
 /** Aspects of each part of the flame: a band's routes act on its own part, the whole track's on every part. */
 export const PART_ASPECTS: readonly Aspect[] = ['shape', 'rotation', 'lights', 'hue', 'spread'];
@@ -53,6 +53,9 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   size: 'Size',
   saturation: 'Saturation',
   trails: 'Trails',
+  smoothing: 'Smoothing',
+  floor: 'Floor',
+  depth: 'Depth',
   reseed: 'Reseed',
   symmetry: 'Symmetry',
 };
