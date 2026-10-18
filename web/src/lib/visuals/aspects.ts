@@ -4,6 +4,7 @@
 
 import { PARTS, type Part } from './flame';
 import { WAVE_BEND } from './fluid';
+import { DIVE_MOST, TUNNEL_MOST } from './zoom';
 import type { Levers } from './governor';
 import type { Music } from './music.svelte';
 import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from './routes';
@@ -20,6 +21,11 @@ const SCALED = (Object.entries(COLUMN_SCALES) as [keyof typeof COLUMN_SCALES, (t
  *  (whose points lie about 0.4 of the screen's height out): what the motion meter counts for them. Where the fluid
  *  flows they are part of its flow, which the meters do not see (the governor's pace slows it all the same). */
 export const wavesMotion = (amount: number, fluid: number) => (fluid > 0 ? 0 : (WAVE_BEND * Math.abs(amount) * ((2 * Math.PI) / 8)) / 0.4);
+
+/** How fast the zooms stream the picture out (zoom.ts: each speed its log a second): a point at radius r moves at that
+ *  many e-folds a second times r, as a turn of as many radians a second moves it, so the motion meter counts the Tunnel's
+ *  and the Dive's zoom (the Dive's turn beside it) as that much motion. `tunnel`, `dive`: their levels now (0..1). */
+export const zoomsMotion = (tunnel: number, dive: number) => TUNNEL_MOST * Math.max(0, tunnel) + DIVE_MOST * Math.max(0, dive);
 
 /** Nothing held back (the governor's levers all open). */
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
