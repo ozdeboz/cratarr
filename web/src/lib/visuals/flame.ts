@@ -371,6 +371,10 @@ export type Preset = {
   fx3Amount: number;
   fxLoop: number;
   fxLoopAmount: number;
+  /** Facets (65): how much each cell of a lattice takes on one light where the light flows (0..1: none to hard tiles),
+   *  and the lattice (0 square, 1 hex). */
+  facets: number;
+  lattice: number;
 };
 export const PRESET_KEYS = [
   'form',
@@ -394,13 +398,15 @@ export const PRESET_KEYS = [
   'fx3Amount',
   'fxLoop',
   'fxLoopAmount',
+  'facets',
+  'lattice',
 ] as const;
 /** No effects. */
 const NO_EFFECTS = { fx1: 0, fx1Amount: 0, fx2: 0, fx2Amount: 0, fx3: 0, fx3Amount: 0, fxLoop: 0, fxLoopAmount: 0 };
 export const FORMS = 1000;
 
 /** A preset that always draws something, for when no draw from a seed passes the check. */
-const STANDBY: Preset = { form: 0, detail: 0.5, twist: 0.7, warp: 0.8, symmetry: 4, mirror: 0, final: 0, family: 0, hue: 0, lightness: 0.5, vividness: 0.5, spread: 1, purity: 0.75, ...NO_EFFECTS };
+const STANDBY: Preset = { form: 0, detail: 0.5, twist: 0.7, warp: 0.8, symmetry: 4, mirror: 0, final: 0, family: 0, hue: 0, lightness: 0.5, vividness: 0.5, spread: 1, purity: 0.75, ...NO_EFFECTS, facets: 0, lattice: 0 };
 
 /** A look's effects (effects.ts), drawn from a stream of their own, so a seed's other draws (its form, its colours …)
  *  stay as they were: one look in three one effect or two on the picture, one in five an effect on the loop, at no more
@@ -417,6 +423,12 @@ function effectsDrawn(seed: number): Pick<Preset, keyof typeof NO_EFFECTS> {
   if (n >= 2) [out.fx2, out.fx2Amount] = [pick(picture.filter((e) => e.id !== out.fx1)), 0.3 + rnd() * 0.5];
   if (rnd() < 0.2) [out.fxLoop, out.fxLoopAmount] = [pick(loops), 0.2 + rnd() * 0.4];
   return out;
+}
+
+/** A look's Facets, from a stream of their own too: one look in five, at a third to nine tenths, square or hex alike. */
+function facetsDrawn(seed: number): Pick<Preset, 'facets' | 'lattice'> {
+  const rnd = randomFrom((seed ^ 0x0fac37ed) >>> 0);
+  return rnd() < 0.2 ? { facets: 0.3 + rnd() * 0.6, lattice: rnd() < 0.5 ? 1 : 0 } : { facets: 0, lattice: 0 };
 }
 
 /** The flame of a preset, unframed. */
@@ -468,6 +480,7 @@ export type Drawn = { preset: Preset; own: Preset };
 export function* drawing(seed: number, fixed: Partial<Preset> = {}): Generator<void, Drawn> {
   const rnd = randomFrom(seed);
   const effects = effectsDrawn(seed);
+  const facets = facetsDrawn(seed);
   let best: { preset: Preset; own: Preset; score: number } | null = null;
   for (let attempt = 0; attempt < 24; attempt++) {
     const kind = rnd();
@@ -487,6 +500,7 @@ export function* drawing(seed: number, fixed: Partial<Preset> = {}): Generator<v
       spread: 0.8 + rnd() * 0.5,
       purity: 0.6 + rnd() * 0.35,
       ...effects,
+      ...facets,
     };
     const preset = { ...own, ...fixed };
     if (attempt > 0) yield;

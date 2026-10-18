@@ -148,6 +148,8 @@ export const DEFAULTS: VisualSettings = {
   fx3Amount: 0,
   fxLoop: 0,
   fxLoopAmount: 0,
+  facets: 0,
+  lattice: 0,
   pins: [],
   // A kick rings longer than a hat.
   lighting: [0.2, 0.18, 0.15, 0.13, 0.1, 0.08],
@@ -207,6 +209,8 @@ export const RANGES: Record<Ranged, [number, number]> = {
   fx3Amount: [0, 1],
   fxLoop: [0, LAST_EFFECT],
   fxLoopAmount: [0, 1],
+  facets: [0, 1],
+  lattice: [0, 1],
   effects: [0, 1],
   lighting: [0.02, 1],
   evolution: [0.02, 2],

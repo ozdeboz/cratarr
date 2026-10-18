@@ -460,7 +460,7 @@
     // One saved before the zooms (65): neither.
     for (const k of ['tunnel', 'dive'] as const) if (!(k in settings)) settings[k] = 0;
     // One saved before the effects (65): none, and all of the Effects setting.
-    for (const k of ['fx1', 'fx1Amount', 'fx2', 'fx2Amount', 'fx3', 'fx3Amount', 'fxLoop', 'fxLoopAmount'] as const) if (!(k in settings)) settings[k] = 0;
+    for (const k of ['fx1', 'fx1Amount', 'fx2', 'fx2Amount', 'fx3', 'fx3Amount', 'fxLoop', 'fxLoopAmount', 'facets', 'lattice'] as const) if (!(k in settings)) settings[k] = 0;
     if (!('effects' in settings)) settings.effects = 1;
     delete settings.v;
     // This device's own sliders, on this device only.
@@ -538,7 +538,8 @@
     { key: 'flash', label: 'Flash', step: 0.05, text: percent },
     { key: 'speed', label: 'Speed', step: 0.05, text: percent },
     ...ASPECTS.flatMap((a) => {
-      const key = (COLUMN_SCALES as Partial<Record<Aspect, One>>)[a] ?? ((LEVEL_ASPECTS as readonly Aspect[]).includes(a) ? (a as One) : null);
+      // A level of the look (Facets) has its row in the Look group.
+      const key = (COLUMN_SCALES as Partial<Record<Aspect, One>>)[a] ?? ((LEVEL_ASPECTS as readonly Aspect[]).includes(a) && !(PRESET_KEYS as readonly string[]).includes(a) ? (a as One) : null);
       return key ? [column(key, a)] : [];
     }),
   ];
@@ -578,6 +579,9 @@
     { key: 'lightness', label: 'Lightness', step: 0.01, text: percent },
     { key: 'vividness', label: 'Vividness', step: 0.01, text: percent },
     { key: 'purity', label: 'Purity', step: 0.05, text: percent },
+    // Facets (65): where the light flows, each cell of a lattice one light.
+    { key: 'facets', label: 'Facets', step: 0.05, text: percent },
+    { key: 'lattice', label: 'Lattice', step: 1, text: (v) => (v ? 'Hex' : 'Square') },
     // The look's effects (65): three on the picture, one on the loop, each with its amount.
     ...([1, 2, 3] as const).flatMap((n) => [
       { key: `fx${n}` as One, label: `Effect ${n}`, step: 1, text: effectName },
@@ -1374,6 +1378,7 @@
           tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
           // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
           effects: effectsNow(how, d.effects, m.position),
+          facets: { amount: d.facets, hex: Math.round(how.lattice) === 1 },
           dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
           forces: stirred.forces,
           flow: stirred.flow,

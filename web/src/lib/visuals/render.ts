@@ -574,6 +574,8 @@ export type Shown = {
   /** The effects (effects.ts): the picture's chain (its ids and amounts by place, each times the Effects level), the
    *  loop's effect and amount, and the track's own time they move with. None: as before. */
   effects?: { ids: number[]; amounts: number[]; loop: number; loopAmount: number; t: number };
+  /** Facets (where the light flows: fluid.ts): how much (0..1), and on hexagons rather than squares. */
+  facets?: { amount: number; hex: boolean };
   /** The infinite zooms (zoom.ts): how fast, each its log a second (0: off). */
   tunnel: number;
   dive: number;
@@ -1051,7 +1053,7 @@ export class FlameRenderer {
       fluid.push(look.forces);
       fluid.step(look.dt, look.flow);
       const other = 1 - this.cur;
-      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id), amount: loop.amount, t: loop.t } : undefined);
+      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id), amount: loop.amount, t: loop.t } : undefined, look.facets);
       this.cur = other;
       this.use();
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);

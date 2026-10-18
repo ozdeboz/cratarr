@@ -182,11 +182,33 @@ uniform float uZoom;
 uniform float uLoopA;
 uniform float uLoopT;
 uniform float uLoopAspect;
+uniform float uFacets;
+uniform float uLattice;
 layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 bandA;
 layout(location = 2) out vec4 bandB;
 vec4 kept(vec4 v) { return bad(dot(v, vec4(1.0))) ? vec4(0.0) : v * uKeep; }
 ${loop}
+// Facets: where the light is read back, pulled toward its cell's middle (the fluid's cells, square on the screen; or
+// hexagons a cell across), so each cell carries one light: softly at a little, as hard tiles at all of it.
+vec2 facet(vec2 uv) {
+  if (uFacets <= 0.0) return uv;
+  vec2 c = uv / uCell;
+  vec2 centre;
+  if (uLattice < 0.5) centre = floor(c) + 0.5;
+  else {
+    const float S = 0.57735027;
+    float q = (0.57735027 * c.x - c.y / 3.0) / S;
+    float r = (2.0 / 3.0 * c.y) / S;
+    vec3 cube = vec3(q, r, -q - r);
+    vec3 rc = round(cube);
+    vec3 d = abs(rc - cube);
+    if (d.x > d.y && d.x > d.z) rc.x = -rc.y - rc.z;
+    else if (d.y > d.z) rc.y = -rc.x - rc.z;
+    centre = S * vec2(1.7320508 * rc.x + 0.8660254 * rc.y, 1.5 * rc.y);
+  }
+  return mix(uv, centre * uCell, uFacets);
+}
 // Read at the light's own level, never a coarser one: where the flow squeezes, an implicit level blends in some of
 // the coarser levels (made for a wide smoothing, stale otherwise), stepping at every cell's edge, and the steps pile up
 // frame on frame into blocks (2026-10-18: Mali takes 7% of the next level for a 5% squeeze; desktops round it away).
@@ -194,7 +216,7 @@ void main() {
   // The tunnel (zoom.ts): read nearer the middle, so what was drawn is drawn larger.
   vec2 at = 0.5 + (vUv - 0.5) * uZoom;
   at = fx_loop(at, uLoopA, uLoopT, uLoopAspect);
-  vec2 back = at - uDt * texture(uVelocity, at).xy * uCell;
+  vec2 back = facet(at - uDt * texture(uVelocity, at).xy * uCell);
   o = kept(textureLod(uAcc, back, 0.0));
   bandA = kept(textureLod(uBandsA, back, 0.0));
   bandB = kept(textureLod(uBandsB, back, 0.0));
@@ -326,7 +348,7 @@ export class Fluid {
 
   /** The light carried along by the flow into `dst` (a framebuffer of three targets as `light`'s, `width` x `height`),
    *  `keep` of it kept (as the fade keeps it), in place of the renderer's fade. Leaves blending off and `dst` bound. */
-  advect(light: Light, dst: WebGLFramebuffer, keep: number, width: number, height: number, zoom = 1, loop?: Loop) {
+  advect(light: Light, dst: WebGLFramebuffer, keep: number, width: number, height: number, zoom = 1, loop?: Loop, facets?: { amount: number; hex: boolean }) {
     const gl = this.gl;
     gl.disable(gl.BLEND);
     gl.bindVertexArray(this.empty);
@@ -345,6 +367,8 @@ export class Fluid {
     gl.uniform1f(u('uLoopA'), loop?.amount ?? 0);
     gl.uniform1f(u('uLoopT'), loop?.t ?? 0);
     gl.uniform1f(u('uLoopAspect'), width / height);
+    gl.uniform1f(u('uFacets'), facets?.amount ?? 0);
+    gl.uniform1f(u('uLattice'), facets?.hex ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 

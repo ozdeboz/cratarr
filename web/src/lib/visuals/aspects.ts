@@ -101,6 +101,8 @@ export type AspectsNow = {
   tunnel: number;
   /** The look's effects' share now (0..1): the Effects setting as its routes let it through. */
   effects: number;
+  /** Facets now (0..1): the look's, as its routes let it through. */
+  facets: number;
   dive: number;
   /** How far the look and the behaviour walk (drift.ts): what the Look and Behaviour columns' routes give them, but
    *  the Track row's (its move at a new track is the track's own, not a walk). */
@@ -310,6 +312,7 @@ export function stepAspects(
     warp: 0.12 * fluid,
     tunnel: levelOf(st.got, s.tunnel, A.tunnel),
     effects: levelOf(st.got, s.effects, A.effects),
+    facets: levelOf(st.got, s.facets, A.facets),
     dive: levelOf(st.got, s.dive, A.dive),
     look: walkOf(A.look),
     behaviour: walkOf(A.behaviour),
