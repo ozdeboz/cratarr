@@ -174,3 +174,25 @@ drift correction are global and hidden. None measures with a microphone. The own
   in steps of 5, heard at once while the finger moves. It is Snapcast's per-client latency: that device plays that
   much earlier. Kept in `players.json`.
 - The buffer (1 s) and Snapcast's own drift correction stay out of sight.
+
+## Amended (2026-10-18): the group's visuals
+
+The owner: "the visualizations should be shared between the sync play group so that controlling it in one place
+controls it in another." The group shares whatever shapes the picture (the look and its pins, colours, Intensity,
+Flash, Speed, the grain, the fluid, the routes, the bands' times: the page's list, decision 0046); what a device can
+afford (Points, Steps, Resolution, FPS) and how bright its screen should be stay its own. Built in preview 63.
+
+- **Kept by Cratarr, per group** (by its leader), in memory: dropped when no player is in the group any more, gone with
+  a restart (the group's devices start it again). `GET /api/groups/{leader}/visuals`: `{ version, settings }`, or 404
+  until a device has started them.
+- **A change:** `PUT /api/groups/{leader}/visuals` with `{ base, settings, writer }`. Its settings are merged into the
+  group's: top-level keys replace, `routes` replace key by key, so two people moving different sliders at once do not
+  undo each other. `base` 0 starts the group's visuals only where it has none (409 otherwise: two devices joining an
+  empty group at once, and the second takes the first's); any other base, the last change wins. 404 for a group no
+  player is in; 413 beyond 64 KB, or a writer id beyond 64 characters.
+- **Versions** start from the clock (milliseconds) and only rise, even across a restart, so a page can ignore any it
+  has seen.
+- **Heard** on the players' live channel (`/api/events/players`) as `visuals`: `{ group, version, settings, writer }`,
+  the group's whole settings each time (a page that missed one is right again with the next) and the page that wrote
+  it (`writer`, the page's own id: it skips its own echo). A channel that fell behind gets every group's as it is now.
+- **Joining** a group adopts its visuals (an empty group takes the joiner's); leaving keeps what was showing.
