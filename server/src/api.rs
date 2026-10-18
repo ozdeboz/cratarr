@@ -31,6 +31,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/visuals/snapshots", get(visual_snapshots).post(add_visual_snapshot))
         .route("/api/visuals/snapshots/{id}", axum::routing::patch(rename_visual_snapshot).delete(delete_visual_snapshot))
         .route("/api/visuals/ratings", get(visual_ratings).post(add_visual_rating))
+        .route("/api/visuals/thumbs", get(visual_thumbs).post(add_visual_thumb))
+        .route("/api/visuals/limits", get(visual_limits).put(put_visual_limits).delete(forget_visual_limits))
         .route("/api/players/{name}/log", get(player_log_last).post(player_log_add))
         .route("/api/diagnostics", get(diagnostics_rows))
         .route("/api/diagnostics/download", get(diagnostics_download))
@@ -542,6 +544,92 @@ async fn add_visual_rating(Json(b): Json<NewRating>) -> Response {
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
     let rating = crate::userdata::Rating { at, a: b.a, b: b.b, choice: b.choice, track: b.track, context: b.context };
     match served.userdata.add_rating(&me, &rating) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => failed(e),
+    }
+}
+
+/// The owner's thumbs on the visuals (decision 0048), the oldest first.
+async fn visual_thumbs() -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    match served.userdata.thumbs(&me) {
+        Ok(all) => Json(all).into_response(),
+        Err(e) => failed(e),
+    }
+}
+
+/// A thumb: `thumb` "up" or "down", and whatever else the page sent with it (kept as it is).
+async fn add_visual_thumb(Json(b): Json<serde_json::Map<String, serde_json::Value>>) -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    let thumb = match b.get("thumb").and_then(|t| t.as_str()) {
+        Some(t @ ("up" | "down")) => t.to_string(),
+        _ => return refused(StatusCode::BAD_REQUEST, "A thumb is up or down."),
+    };
+    if serde_json::Value::Object(b.clone()).to_string().len() > RATING_BYTES {
+        return refused(StatusCode::PAYLOAD_TOO_LARGE, "That thumb is too large to keep.");
+    }
+    let mut body = b;
+    body.remove("thumb");
+    match served.userdata.add_thumb(&me, &thumb, &body) {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => failed(e),
+    }
+}
+
+/// What the visuals' governor learned from the thumbs (decision 0048); 404 while nothing is.
+async fn visual_limits() -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    match served.userdata.learned(&me) {
+        Ok(Some(l)) => Json(l).into_response(),
+        Ok(None) => refused(StatusCode::NOT_FOUND, "Nothing learned yet."),
+        Err(e) => failed(e),
+    }
+}
+
+/// `base`: the version the page last had (0 where nothing is learned yet); `limits`: each limit as the page keeps it;
+/// `at`: as of when (the page's epoch milliseconds).
+#[derive(Deserialize)]
+struct LearnedBody {
+    base: i64,
+    limits: serde_json::Map<String, serde_json::Value>,
+    at: i64,
+}
+
+/// The most learned limits may hold, as JSON (bytes): a handful of numbers each.
+const LEARNED_BYTES: usize = 4 * 1024;
+
+async fn put_visual_limits(Json(b): Json<LearnedBody>) -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    let limits = serde_json::Value::Object(b.limits);
+    if limits.to_string().len() > LEARNED_BYTES {
+        return refused(StatusCode::PAYLOAD_TOO_LARGE, "Those limits are too large to keep.");
+    }
+    match served.userdata.put_learned(&me, b.base, &limits, b.at) {
+        Ok(Ok(version)) => Json(json!({ "version": version })).into_response(),
+        Ok(Err(crate::userdata::Stale)) => refused(StatusCode::CONFLICT, "They were learned further meanwhile."),
+        Err(e) => failed(e),
+    }
+}
+
+/// What was learned, forgotten (the limits back where they started).
+async fn forget_visual_limits() -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    match served.userdata.forget_learned(&me) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => failed(e),
     }

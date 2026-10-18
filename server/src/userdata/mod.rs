@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS visual_snapshot (
 CREATE TABLE IF NOT EXISTS visual_rating (
   user TEXT NOT NULL, at INTEGER NOT NULL, a TEXT NOT NULL, b TEXT NOT NULL, choice TEXT NOT NULL, track TEXT,
   context TEXT);
+CREATE TABLE IF NOT EXISTS visual_thumb (user TEXT NOT NULL, at INTEGER NOT NULL, thumb TEXT NOT NULL, body TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS visual_limits (
+  user TEXT PRIMARY KEY, version INTEGER NOT NULL, limits TEXT NOT NULL, at INTEGER NOT NULL);
 ";
 
 /// Until 2026-10-16 the album panel's heart starred the album's id as a song's, where no Subsonic app looked; it is the
@@ -192,6 +195,31 @@ pub struct Snapshot {
     pub picture: Option<String>,
 }
 
+/// One of the owner's thumbs on the visuals as they were (decision 0048): up or down, and what the page sent with it
+/// (what the visuals did over the 20 seconds before it, the settings, the track, what it changed: opaque here).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Thumb {
+    /// Epoch milliseconds, the server's.
+    pub at: i64,
+    pub thumb: String,
+    #[serde(flatten)]
+    pub body: serde_json::Map<String, serde_json::Value>,
+}
+
+/// What the visuals' governor learned from the thumbs (decision 0048): its limits as the page keeps them (opaque here),
+/// as of `at` (the page's epoch milliseconds), and the version they were kept at (the clock's milliseconds or after, so
+/// it never goes back across a restart).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Learned {
+    pub version: i64,
+    pub limits: serde_json::Value,
+    pub at: i64,
+}
+
+/// Learned limits not kept: the page's version was not the one kept (another device learned meanwhile).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stale;
+
 /// One of the owner's pairwise ratings of two behaviours of the visuals (the governor's calibration, decision 0046,
 /// amended): what was shown as A and as B (their recipes, opaque here), which was preferred ("a", "b", "same" or
 /// "neither"), the track it played on, and anything else the rating page noted.
@@ -230,6 +258,10 @@ pub struct UserData {
 
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
 /// One queue per account was kept before (`play_queue`); each moves to the app that saved it, the song that played
@@ -696,6 +728,65 @@ impl UserData {
             Ok(Rating { at: r.get(0)?, a: json(r.get(1)?), b: json(r.get(2)?), choice: r.get(3)?, track: r.get(4)?, context: json(r.get(5)?) })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A thumb kept, at the server's time now.
+    pub fn add_thumb(&self, user: &str, thumb: &str, body: &serde_json::Map<String, serde_json::Value>) -> Result<Thumb> {
+        let at = now_ms();
+        self.db().execute(
+            "INSERT INTO visual_thumb (user, at, thumb, body) VALUES (?1, ?2, ?3, ?4)",
+            params![user, at, thumb, serde_json::Value::Object(body.clone()).to_string()],
+        )?;
+        Ok(Thumb { at, thumb: thumb.to_string(), body: body.clone() })
+    }
+
+    /// A user's thumbs, the oldest first.
+    pub fn thumbs(&self, user: &str) -> Result<Vec<Thumb>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT at, thumb, body FROM visual_thumb WHERE user = ?1 ORDER BY at, rowid")?;
+        let rows = st.query_map([user], |r| {
+            let body: String = r.get(2)?;
+            let body = match serde_json::from_str(&body) {
+                Ok(serde_json::Value::Object(m)) => m,
+                _ => serde_json::Map::new(),
+            };
+            Ok(Thumb { at: r.get(0)?, thumb: r.get(1)?, body })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What a user's governor learned, if anything.
+    pub fn learned(&self, user: &str) -> Result<Option<Learned>> {
+        let db = self.db();
+        Ok(db
+            .query_row("SELECT version, limits, at FROM visual_limits WHERE user = ?1", [user], |r| {
+                let limits: String = r.get(1)?;
+                Ok(Learned { version: r.get(0)?, limits: serde_json::from_str(&limits).unwrap_or(serde_json::Value::Null), at: r.get(2)? })
+            })
+            .optional()?)
+    }
+
+    /// What was learned, kept over the version `base` (0: where nothing is kept yet); the new version, or `Stale` where
+    /// `base` is not the one kept. Read and written under the one connection's lock, so of two at once one wins.
+    pub fn put_learned(&self, user: &str, base: i64, limits: &serde_json::Value, at: i64) -> Result<std::result::Result<i64, Stale>> {
+        let db = self.db();
+        let kept: Option<i64> = db.query_row("SELECT version FROM visual_limits WHERE user = ?1", [user], |r| r.get(0)).optional()?;
+        if kept.unwrap_or(0) != base {
+            return Ok(Err(Stale));
+        }
+        let version = now_ms().max(base + 1);
+        db.execute(
+            "INSERT INTO visual_limits (user, version, limits, at) VALUES (?1, ?2, ?3, ?4)
+               ON CONFLICT (user) DO UPDATE SET version = excluded.version, limits = excluded.limits, at = excluded.at",
+            params![user, version, limits.to_string(), at],
+        )?;
+        Ok(Ok(version))
+    }
+
+    /// What was learned, forgotten: the next keeps over version 0.
+    pub fn forget_learned(&self, user: &str) -> Result<()> {
+        self.db().execute("DELETE FROM visual_limits WHERE user = ?1", [user])?;
+        Ok(())
     }
 
     /// Whether there was such a snapshot to delete.
@@ -1187,6 +1278,40 @@ mod tests {
         drop(u);
         UserData::open(Some(&file)).unwrap();
         let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn thumbs_are_kept_per_user_in_order_as_sent() {
+        let u = UserData::open(None).unwrap();
+        let body = |n: i64| serde_json::json!({ "relative": { "motion": 0.6 }, "changed": null, "n": n }).as_object().unwrap().clone();
+        let first = u.add_thumb("me", "down", &body(1)).unwrap();
+        u.add_thumb("you", "up", &body(9)).unwrap();
+        u.add_thumb("me", "up", &body(2)).unwrap();
+        let mine = u.thumbs("me").unwrap();
+        assert_eq!(mine.iter().map(|t| (t.thumb.as_str(), t.body["n"].as_i64().unwrap())).collect::<Vec<_>>(), [("down", 1), ("up", 2)]);
+        assert_eq!(mine[0], first);
+        assert!(mine[0].at > 1_700_000_000_000, "the server's time, in milliseconds");
+        let sent = serde_json::to_value(&mine[0]).unwrap();
+        assert_eq!((sent["thumb"].as_str(), sent["n"].as_i64(), sent["relative"]["motion"].as_f64()), (Some("down"), Some(1), Some(0.6)), "flat, as sent");
+    }
+
+    #[test]
+    fn learned_limits_keep_a_version_and_refuse_a_stale_one() {
+        let u = UserData::open(None).unwrap();
+        let limits = serde_json::json!({ "motion": { "value": 0.57, "step": 0.1, "dir": -1 } });
+        assert_eq!(u.learned("me").unwrap(), None);
+        assert_eq!(u.put_learned("me", 5, &limits, 1).unwrap(), Err(Stale), "nothing kept: only base 0 keeps");
+        let first = u.put_learned("me", 0, &limits, 1).unwrap().unwrap();
+        assert!(first > 1_700_000_000_000, "versions from the clock, so a restart never goes back");
+        assert_eq!(u.put_learned("me", 0, &limits, 2).unwrap(), Err(Stale), "another device kept them meanwhile");
+        let looser = serde_json::json!({ "motion": { "value": 0.6, "step": 0.05, "dir": 1 } });
+        let second = u.put_learned("me", first, &looser, 3).unwrap().unwrap();
+        assert!(second > first);
+        assert_eq!(u.learned("me").unwrap(), Some(Learned { version: second, limits: looser, at: 3 }));
+        assert_eq!(u.learned("you").unwrap(), None, "each user's own");
+        u.forget_learned("me").unwrap();
+        assert_eq!(u.learned("me").unwrap(), None);
+        assert!(u.put_learned("me", 0, &limits, 4).unwrap().is_ok(), "forgotten: base 0 keeps again");
     }
 
     #[test]
