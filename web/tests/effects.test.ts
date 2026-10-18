@@ -8,7 +8,7 @@ test('every effect is one function of its kind, named after it, and its id is it
   for (const e of EFFECTS) {
     assert.ok(!ids.has(e.id), `id ${e.id} once`);
     ids.add(e.id);
-    const head = { shape: `vec2 fx_${e.name}(vec2 p, float a, float t)`, colour: `vec3 fx_${e.name}(vec3 c, vec2 p, float a, float t)`, echo: `vec3 fx_${e.name}(vec3 c, vec2 p, float a, float t, sampler2D prev)` }[e.kind];
+    const head = { shape: `vec2 fx_${e.name}(vec2 p, float a, float t, vec2 k)`, colour: `vec3 fx_${e.name}(vec3 c, vec2 p, float a, float t, vec2 k)`, echo: `vec3 fx_${e.name}(vec3 c, vec2 p, float a, float t, vec2 k, sampler2D prev)` }[e.kind];
     assert.ok(e.glsl.includes(head), `${e.name}: ${head}`);
     assert.ok(!/\bdiscard\b/.test(e.glsl) && !/\btexture\(/.test(e.glsl), `${e.name}: no discard, no implicit-LOD reads`);
     if (e.slots.includes('loop')) assert.equal(e.kind, 'shape', `${e.name}: the loop takes shapes only`);
@@ -20,17 +20,20 @@ test('a chain: shapes before the read, colours after, each by its place; nothing
   assert.equal(pictureShader([999]), null, 'an effect not known shows nothing');
   const s = pictureShader([2, 1, 0])!;
   const read = s.indexOf('vec3 c = textureLod(uPicture');
-  assert.ok(s.indexOf('p = fx_kaleid(p, uFxA[1], uFxT);') < read, 'the shape first, by its place');
-  assert.ok(s.indexOf('c = fx_posterize(c, p, uFxA[0], uFxT);') > read, 'the colour after');
+  assert.ok(s.indexOf('p = fx_kaleid(p, uFxA[1], uFxT, uFxK[1]);') < read, 'the shape first, by its place');
+  assert.ok(s.indexOf('c = fx_posterize(c, p, uFxA[0], uFxT, uFxK[0]);') > read, 'the colour after');
   assert.equal(s.split('vec2 fx_kaleid(').length, 2, 'each function once');
   assert.deepEqual(chainOf([1, 2, 999], 'loop').map((e) => e.name), ['kaleid'], 'a colour and one not known: not for the loop');
 });
 
 test('the loop: a shape on the buffer’s coordinates, else the identity; reports add up by amount', () => {
-  assert.ok(loopFunction(1).includes('p = fx_kaleid(p, a, t);'));
+  assert.ok(loopFunction(1).includes('p = fx_kaleid(p, a, t, k);'));
   assert.ok(loopFunction(2).includes('return uv;'), 'a colour is not for the loop');
+  // Kaleid at its knobs' middles: no spin, so no motion; its spin knob turned up, as fast as it turns.
   const r = reportOf([1, 1], [0.5, 1], 'picture');
-  assert.ok(Math.abs(r.motion! - 0.075) < 1e-12 && Math.abs(r.shapeChurn! - 0.15) < 1e-12, JSON.stringify(r));
+  assert.ok(r.motion === 0 && Math.abs(r.shapeChurn! - 0.15) < 1e-12, JSON.stringify(r));
+  const spun = reportOf([1], [1], 'picture', [[0.5, 1]]);
+  assert.ok(Math.abs(spun.motion! - 0.2) < 1e-12, JSON.stringify(spun));
   assert.deepEqual(reportOf([1], [0], 'picture'), {});
 });
 
@@ -71,4 +74,15 @@ test('three engines: every effect in exactly one, the loop’s its shapes; a set
   assert.equal(loopEffect(1), LOOP_EFFECTS[0].id);
   const fx = effectsNow({ fx1: 2, fx1Amount: 0.5, fx2: 1, fx2Amount: 1, fx3: 0, fx3Amount: 1, fxLoop: 0, fxLoopAmount: 0 }, 1, 0);
   assert.deepEqual(fx.ids, [ENGINE_EFFECTS.kaleidoscope[1].id, ENGINE_EFFECTS.eyedo[0].id, 0]);
+});
+
+test('each effect has at most two knobs, each a label and its text; the rows a chosen one shows', () => {
+  for (const e of EFFECTS) {
+    assert.ok(e.knobs.length <= 2, `${e.name}: two knobs at most`);
+    for (const k of e.knobs) assert.ok(k.label && typeof k.text(0.5) === 'string' && k.text(0) !== undefined && k.text(1) !== undefined, `${e.name}: ${k.label}`);
+  }
+  const kaleid = EFFECTS.find((e) => e.name === 'kaleid')!;
+  assert.deepEqual(kaleid.knobs.map((k) => k.label), ['Sides', 'Spin']);
+  assert.equal(kaleid.knobs[0].text(0.5), '7');
+  assert.equal(kaleid.knobs[1].text(0.5), 'None');
 });

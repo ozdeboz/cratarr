@@ -8,9 +8,9 @@
 // - the loop: shapes only, on where the light kept from frame to frame is read back (the fade's, the tunnel's, the
 //   fluid's), so the flame's own trails are bent, turned, folded as they fade.
 //
-// A chain is a few effects' ids with their amounts; it is compiled into one shader a slot, rebuilt only when its ids
-// change: the amounts are uniforms. Each effect says what it adds to the meters (meters.ts), so the governor holds it
-// back as it holds the flame back. Pure: no GL here.
+// A chain is a few effects' ids with their amounts and knobs; it is compiled into one shader a slot, rebuilt only when
+// its ids change: the amounts and knobs are uniforms. Each effect says what it adds to the meters (meters.ts), so the
+// governor holds it back as it holds the flame back. Pure: no GL here.
 
 import type { VisualSettings } from './settings.svelte';
 
@@ -27,25 +27,52 @@ export const ENGINES: readonly { key: Engine; label: string }[] = [
 /** The meters an effect adds to, each a second at its amount (the meters' own units). */
 export type Report = Partial<Record<'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping', number>>;
 
+/** One of an effect's own controls (the owner: "one or two of the most relevant controls per chosen subeffect"): its
+ *  label in the panel, and its value (0..1, the half way a middle setting) as the panel shows it. */
+export type Knob = { label: string; text: (v: number) => string };
+
+/** An effect's two knobs (0..1 each; one it has no knob for is ignored). */
+export type Knobs = readonly [number, number];
+
 export type Effect = {
   /** Stable, kept in settings: never reused. */
   id: number;
   /** The panel's label. */
   name: string;
-  /** shape: \`vec2 fx_<name>(vec2 p, float a, float t)\`, where to read instead; colour: \`vec3 fx_<name>(vec3 c, vec2 p,
-   *  float a, float t)\`; echo: \`vec3 fx_<name>(vec3 c, vec2 p, float a, float t, sampler2D prev)\` (sample it with
-   *  \`fx_prev(prev, q)\`). p: centred, aspect-true (y −1..1, x ±aspect); a: its amount (0: none, it must change
-   *  nothing); t: the track's own time (seconds). On the picture, `fx_beat()` gives the beat: x where in it (0..1),
-   *  y how long since it fell (seconds; long ago where there is none), z its strength (0..1), w where in its bar (0..1). */
+  /** shape: \`vec2 fx_<name>(vec2 p, float a, float t, vec2 k)\`, where to read instead; colour: \`vec3 fx_<name>(vec3 c,
+   *  vec2 p, float a, float t, vec2 k)\`; echo: \`vec3 fx_<name>(vec3 c, vec2 p, float a, float t, vec2 k, sampler2D
+   *  prev)\` (sample it with \`fx_prev(prev, q)\`). p: centred, aspect-true (y −1..1, x ±aspect); a: its amount (0: none,
+   *  it must change nothing); t: the track's own time (seconds); k: its knobs (0..1, the half way a middle setting). On the
+   *  picture, \`fx_beat()\` gives the beat: x where in it (0..1), y how long since it fell (seconds; long ago where there
+   *  is none), z its strength (0..1), w where in its bar (0..1). */
   kind: 'shape' | 'colour' | 'echo';
-  /** Its engine (the picture's three, each one of its sub-effects at a time: `ENGINES`). */
+  /** Its engine (the picture's three, each one of its sub-effects at a time: \`ENGINES\`). */
   engine: Engine;
   /** Where it may go: the loop takes shapes only. */
   slots: readonly ('picture' | 'loop')[];
+  /** Its own controls, at most two, in \`k\`'s order. */
+  knobs: readonly Knob[];
   /** One GLSL ES 3.00 function \`fx_<name>\`, and helpers named \`fx_<name>_…\`. */
   glsl: string;
-  report: (amount: number) => Report;
+  report: (amount: number, k: Knobs) => Report;
 };
+
+const between = (lo: number, hi: number, v: number) => lo + (hi - lo) * v;
+const pct = (v: number) => `${Math.round(v * 100)}%`;
+const fixed = (lo: number, hi: number, digits: number, unit = '') => (v: number) => `${between(lo, hi, v).toFixed(digits)}${unit}`;
+const signedPct = (v: number) => (Math.abs(v - 0.5) < 0.01 ? 'None' : `${v > 0.5 ? '+' : '−'}${Math.round(Math.abs(v - 0.5) * 200)}%`);
+
+const HSV = (name: string) => `vec3 fx_${name}_hsv(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 q = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 r = mix(vec4(q.xyw, c.r), vec4(c.r, q.yzx), step(q.x, c.r));
+  float d = r.x - min(r.w, r.y);
+  return vec3(abs(r.z + (r.w - r.y) / (6.0 * d + 1e-10)), d / (r.x + 1e-10), r.x);
+}
+vec3 fx_${name}_rgb(vec3 c) {
+  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}`;
 
 export const EFFECTS: readonly Effect[] = [
   {
@@ -55,18 +82,22 @@ export const EFFECTS: readonly Effect[] = [
     engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture', 'loop'],
-    glsl: `vec2 fx_kaleid(vec2 p, float a, float t) {
+    knobs: [
+      { label: 'Sides', text: (v) => `${Math.floor(2 + v * 10)}` },
+      { label: 'Spin', text: signedPct },
+    ],
+    glsl: `vec2 fx_kaleid(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // As many sides as its amount asks (2 to 12), turning slowly.
-  float n = floor(2.0 + a * 10.0);
+  // Its sides (2 to 12), turning either way (none at the half way); its amount how far the picture is folded into it.
+  float n = floor(2.0 + k.x * 10.0);
   float r = length(p);
-  float th = atan(p.y, p.x) + t * 0.05 * a;
+  float th = atan(p.y, p.x) + t * (k.y - 0.5) * 0.4;
   float side = 6.28318530718 / n;
   th = mod(th, side);
   th = min(th, side - th);
-  return r * vec2(cos(th), sin(th));
+  return mix(p, r * vec2(cos(th), sin(th)), a);
 }`,
-    report: (a) => ({ motion: 0.05 * a, shapeChurn: 0.1 * a }),
+    report: (a, k) => ({ motion: Math.abs(k[1] - 0.5) * 0.4 * a, shapeChurn: 0.1 * a }),
   },
   {
     // ported from hydra-synth (AGPL-3.0), posterize
@@ -75,10 +106,11 @@ export const EFFECTS: readonly Effect[] = [
     engine: 'hydra',
     kind: 'colour',
     slots: ['picture'],
-    glsl: `vec3 fx_posterize(vec3 c, vec2 p, float a, float t) {
+    knobs: [{ label: 'Steps', text: (v) => `${Math.round(between(16, 2, v))}` }],
+    glsl: `vec3 fx_posterize(vec3 c, vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return c;
-  // From many steps (none to see) down to three a channel.
-  float steps = mix(64.0, 3.0, a);
+  // From many steps (none to see) down to its own (16 to 2 a channel) at all of it.
+  float steps = mix(64.0, mix(16.0, 2.0, k.x), a);
   return mix(c, floor(c * steps + 0.5) / steps, min(1.0, a * 2.0));
 }`,
     report: () => ({}),
@@ -90,13 +122,13 @@ export const EFFECTS: readonly Effect[] = [
     engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture'],
+    knobs: [{ label: 'Tiles', text: fixed(1, 6, 1, '×') }],
     glsl: `float fx_repeat_tri(float x) { return abs(mod(x + 1.0, 4.0) - 2.0) - 1.0; }
-vec2 fx_repeat(vec2 p, float a, float t) {
+vec2 fx_repeat(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // From one picture to four across, mirrored at each seam so none shows; eased in from none.
-  float n = 1.0 + 3.0 * a;
-  vec2 tiled = vec2(fx_repeat_tri(p.x * n), fx_repeat_tri(p.y * n));
-  return mix(p, tiled, smoothstep(0.0, 0.15, a));
+  // From one picture to six across, mirrored at each seam so none shows.
+  float n = 1.0 + 5.0 * k.x;
+  return mix(p, vec2(fx_repeat_tri(p.x * n), fx_repeat_tri(p.y * n)), a);
 }`,
     report: (a) => ({ shapeChurn: 0.05 * a }),
   },
@@ -107,10 +139,11 @@ vec2 fx_repeat(vec2 p, float a, float t) {
     engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture', 'loop'],
-    glsl: `vec2 fx_pixelate(vec2 p, float a, float t) {
+    knobs: [{ label: 'Size', text: (v) => `${Math.round(between(64, 6, v))} cells` }],
+    glsl: `vec2 fx_pixelate(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // From fine (two hundred cells across the height) to coarse (eight).
-  float cells = 0.5 * mix(200.0, 8.0, a * a);
+  // From fine (two hundred cells across the height) to its own size (64 to 6) at all of it.
+  float cells = 0.5 * mix(200.0, mix(64.0, 6.0, k.x), a * a);
   return (floor(p * cells) + 0.5) / cells;
 }`,
     report: () => ({}),
@@ -122,26 +155,20 @@ vec2 fx_repeat(vec2 p, float a, float t) {
     engine: 'hydra',
     kind: 'colour',
     slots: ['picture'],
-    glsl: `vec3 fx_colorama_hsv(vec3 c) {
-  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
-  vec4 q = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
-  vec4 r = mix(vec4(q.xyw, c.r), vec4(c.r, q.yzx), step(q.x, c.r));
-  float d = r.x - min(r.w, r.y);
-  return vec3(abs(r.z + (r.w - r.y) / (6.0 * d + 1e-10)), d / (r.x + 1e-10), r.x);
-}
-vec3 fx_colorama_rgb(vec3 c) {
-  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
-  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
-}
-vec3 fx_colorama(vec3 c, vec2 p, float a, float t) {
+    knobs: [
+      { label: 'Spread', text: pct },
+      { label: 'Cycle', text: pct },
+    ],
+    glsl: `${HSV('colorama')}
+vec3 fx_colorama(vec3 c, vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return c;
-  // Each colour's hue moved by its own brightness and slowly round with the track (a twentieth of a turn a second at
-  // all of it): the colours shift in bands.
+  // Each colour's hue moved by its own brightness (its spread) and round with the track (up to a tenth of a turn a
+  // second): the colours shift in bands.
   vec3 h = fx_colorama_hsv(c);
-  h.x = fract(h.x + a * (0.6 * h.z + 0.05 * t));
+  h.x = fract(h.x + a * (1.2 * k.x * h.z + 0.1 * k.y * t));
   return fx_colorama_rgb(h);
 }`,
-    report: (a) => ({ colourChurn: 0.05 * a }),
+    report: (a, k) => ({ colourChurn: 0.1 * k[1] * a }),
   },
   {
     // ported from hydra-synth (AGPL-3.0), hue
@@ -150,18 +177,9 @@ vec3 fx_colorama(vec3 c, vec2 p, float a, float t) {
     engine: 'hydra',
     kind: 'colour',
     slots: ['picture'],
-    glsl: `vec3 fx_hue_hsv(vec3 c) {
-  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
-  vec4 q = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
-  vec4 r = mix(vec4(q.xyw, c.r), vec4(c.r, q.yzx), step(q.x, c.r));
-  float d = r.x - min(r.w, r.y);
-  return vec3(abs(r.z + (r.w - r.y) / (6.0 * d + 1e-10)), d / (r.x + 1e-10), r.x);
-}
-vec3 fx_hue_rgb(vec3 c) {
-  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
-  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
-}
-vec3 fx_hue(vec3 c, vec2 p, float a, float t) {
+    knobs: [],
+    glsl: `${HSV('hue')}
+vec3 fx_hue(vec3 c, vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return c;
   // Every colour turned round the wheel by as much as half a turn; held, not cycling.
   vec3 h = fx_hue_hsv(c);
@@ -177,6 +195,10 @@ vec3 fx_hue(vec3 c, vec2 p, float a, float t) {
     engine: 'hydra',
     kind: 'shape',
     slots: ['picture', 'loop'],
+    knobs: [
+      { label: 'Scale', text: fixed(0.5, 5, 1) },
+      { label: 'Speed', text: pct },
+    ],
     glsl: `float fx_ripple_hash(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }
 float fx_ripple_noise(vec2 q) {
   vec2 i = floor(q);
@@ -184,14 +206,14 @@ float fx_ripple_noise(vec2 q) {
   vec2 u = f * f * (3.0 - 2.0 * f);
   return mix(mix(fx_ripple_hash(i), fx_ripple_hash(i + vec2(1.0, 0.0)), u.x), mix(fx_ripple_hash(i + vec2(0.0, 1.0)), fx_ripple_hash(i + vec2(1.0, 1.0)), u.x), u.y);
 }
-vec2 fx_ripple(vec2 p, float a, float t) {
+vec2 fx_ripple(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // Moved by a slow noise, as far as a tenth of the height at all of it.
-  vec2 q = p * 2.0 + vec2(0.0, 0.15 * t);
+  // Moved by a noise of its scale, drifting at its speed, as far as a tenth of the height at all of it.
+  vec2 q = p * mix(0.5, 5.0, k.x) + vec2(0.0, 0.4 * k.y * t);
   vec2 n = vec2(fx_ripple_noise(q), fx_ripple_noise(q + vec2(5.2, 1.3))) - 0.5;
   return p + 0.2 * a * n;
 }`,
-    report: (a) => ({ shapeChurn: 0.15 * a }),
+    report: (a, k) => ({ shapeChurn: 0.3 * k[1] * a }),
   },
   {
     // ported from hydra-synth (AGPL-3.0), modulate (by the visuals' own flow)
@@ -200,13 +222,14 @@ vec2 fx_ripple(vec2 p, float a, float t) {
     engine: 'hydra',
     kind: 'shape',
     slots: ['picture', 'loop'],
-    glsl: `vec2 fx_stream(vec2 p, float a, float t) {
+    knobs: [{ label: 'Length', text: (v) => `${Math.round(between(0.05, 0.5, v) * 1000)} ms` }],
+    glsl: `vec2 fx_stream(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // Read from upstream: the picture drawn along the fluid's flow (nothing where it does not flow), up to a fifth of a
-  // second of it.
-  return p - 0.2 * a * fx_flow(p);
+  // Read from upstream: the picture drawn along the fluid's flow (nothing where it does not flow), as much of it as
+  // its length (a twentieth to a half of a second).
+  return p - mix(0.05, 0.5, k.x) * a * fx_flow(p);
 }`,
-    report: (a) => ({ shapeChurn: 0.1 * a }),
+    report: (a, k) => ({ shapeChurn: 0.36 * between(0.05, 0.5, k[0]) * a }),
   },
   {
     // ported from hydra-synth (AGPL-3.0), src(o0) fed back, scaled and turned
@@ -215,15 +238,20 @@ vec2 fx_ripple(vec2 p, float a, float t) {
     engine: 'hydra',
     kind: 'echo',
     slots: ['picture'],
-    glsl: `vec3 fx_echo(vec3 c, vec2 p, float a, float t, sampler2D prev) {
+    knobs: [
+      { label: 'Zoom', text: pct },
+      { label: 'Turn', text: pct },
+    ],
+    glsl: `vec3 fx_echo(vec3 c, vec2 p, float a, float t, vec2 k, sampler2D prev) {
   if (a <= 0.0) return c;
-  // The last picture, a little larger and turned, kept where it is brighter: trails that stream out and round.
-  float s = 1.0 + 0.03 * a;
-  float r = 0.006 * a;
+  // The last picture, larger by its zoom (up to six in a hundred a frame) and turned by its turn (up to 0.012 of a
+  // radian a frame), kept where it is brighter: trails that stream out and round.
+  float s = 1.0 + 0.06 * k.x * a;
+  float r = 0.012 * k.y * a;
   vec2 q = mat2(cos(r), -sin(r), sin(r), cos(r)) * p / s;
   return max(c, fx_prev(prev, q) * (0.75 + 0.2 * a));
 }`,
-    report: (a) => ({ motion: 0.35 * a, zoomPumping: 0 }),
+    report: (a, k) => ({ motion: 0.7 * k[1] * a }),
   },
   {
     // ported from hydra-synth (AGPL-3.0), rotate
@@ -232,13 +260,17 @@ vec2 fx_ripple(vec2 p, float a, float t) {
     engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture', 'loop'],
-    glsl: `vec2 fx_rotate(vec2 p, float a, float t) {
+    knobs: [
+      { label: 'Speed', text: pct },
+      { label: 'Way', text: (v) => (v < 0.5 ? 'Left' : 'Right') },
+    ],
+    glsl: `vec2 fx_rotate(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // The whole turning slowly with the track (a twentieth of a turn a second at all of it).
-  float r = 0.314159 * a * t;
+  // The whole turning with the track, up to a tenth of a turn a second, its way left or right.
+  float r = 0.628318 * k.x * a * t * (k.y < 0.5 ? 1.0 : -1.0);
   return mat2(cos(r), -sin(r), sin(r), cos(r)) * p;
 }`,
-    report: (a) => ({ motion: 0.314159 * a }),
+    report: (a, k) => ({ motion: 0.628318 * k[0] * a }),
   },
   {
     // ported from hydra-synth (AGPL-3.0), scroll
@@ -247,14 +279,19 @@ vec2 fx_ripple(vec2 p, float a, float t) {
     engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture', 'loop'],
+    knobs: [
+      { label: 'Speed', text: pct },
+      { label: 'Way', text: (v) => `${Math.round(v * 360)}°` },
+    ],
     glsl: `float fx_scroll_tri(float x) { return abs(mod(x + 1.0, 4.0) - 2.0) - 1.0; }
-vec2 fx_scroll(vec2 p, float a, float t) {
+vec2 fx_scroll(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // Drifting sideways and up with the track, mirrored where it wraps (a tenth of the height a second at all of it).
-  vec2 q = p + a * t * vec2(0.1, 0.04);
+  // Drifting its way with the track (up to a fifth of the height a second), mirrored where it wraps.
+  float w = 6.28318530718 * k.y;
+  vec2 q = p + a * t * 0.2 * k.x * vec2(cos(w), sin(w));
   return vec2(fx_scroll_tri(q.x), fx_scroll_tri(q.y));
 }`,
-    report: (a) => ({ motion: 0.1 * a }),
+    report: (a, k) => ({ motion: 0.2 * k[0] * a }),
   },
   {
     // ported from hydra-synth (AGPL-3.0), saturate
@@ -263,7 +300,8 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     engine: 'hydra',
     kind: 'colour',
     slots: ['picture'],
-    glsl: `vec3 fx_saturate(vec3 c, vec2 p, float a, float t) {
+    knobs: [],
+    glsl: `vec3 fx_saturate(vec3 c, vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return c;
   // Its colour drawn out from its grey, up to twice as far.
   float grey = dot(c, vec3(0.2126, 0.7152, 0.0722));
@@ -278,15 +316,19 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     engine: 'kaleidoscope',
     kind: 'shape',
     slots: ['picture'],
-    glsl: `vec2 fx_magnify(vec2 p, float a, float t) {
+    knobs: [
+      { label: 'Size', text: pct },
+      { label: 'Power', text: (v) => `${(1 / (1 - between(0.3, 0.9, v))).toFixed(1)}×` },
+    ],
+    glsl: `vec2 fx_magnify(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // A lens wandering slowly about the middle, half the height across, magnifying what is under it up to two and a
-  // half times at its heart.
+  // A lens of its size (a quarter to nine tenths of the height across) wandering slowly about the middle, magnifying
+  // what is under it by its power at its heart.
   vec2 m = 0.45 * vec2(sin(0.13 * t), cos(0.17 * t));
-  float r = 0.5;
+  float r = mix(0.25, 0.9, k.x);
   float d = length(p - m) / r;
   if (d >= 1.0) return p;
-  return m + (p - m) * (1.0 - 0.6 * a * (1.0 - d * d));
+  return m + (p - m) * (1.0 - mix(0.3, 0.9, k.y) * a * (1.0 - d * d));
 }`,
     report: (a) => ({ shapeChurn: 0.08 * a }),
   },
@@ -297,15 +339,19 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     engine: 'eyedo',
     kind: 'shape',
     slots: ['picture', 'loop'],
-    glsl: `vec2 fx_rings(vec2 p, float a, float t) {
+    knobs: [
+      { label: 'Count', text: (v) => `${Math.round(between(6, 30, v))}` },
+      { label: 'Speed', text: pct },
+    ],
+    glsl: `vec2 fx_rings(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // Ripples running out from the middle (a ring every seventh of the height, outward at a third of the height a
-  // second), pushing what is read in and out along the way.
+  // Ripples running out from the middle (6 to 30 to the height, outward at one to eight a second), pushing what is
+  // read in and out along the way.
   float r = length(p);
   if (r < 1e-4) return p;
-  return p + (p / r) * 0.05 * a * sin(14.0 * r - 4.4 * t);
+  return p + (p / r) * 0.05 * a * sin(mix(6.0, 30.0, k.x) * r - mix(1.0, 8.0, k.y) * t);
 }`,
-    report: (a) => ({ shapeChurn: 0.1 * a }),
+    report: (a, k) => ({ shapeChurn: 0.2 * k[1] * a }),
   },
   {
     // After EYESY's Interference mode (Critter & Guitari): the idea only, our own shader.
@@ -314,16 +360,22 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     engine: 'eyedo',
     kind: 'colour',
     slots: ['picture'],
-    glsl: `vec3 fx_interference(vec3 c, vec2 p, float a, float t) {
+    knobs: [
+      { label: 'Scale', text: (v) => `${Math.round(between(10, 40, v))}` },
+      { label: 'Drift', text: pct },
+    ],
+    glsl: `vec3 fx_interference(vec3 c, vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return c;
-  // Two sets of rings from two slowly drifting points, laid over each other: their moiré darkens the picture in
-  // bands (never brightens it, so it cannot flash).
-  vec2 c1 = 0.6 * vec2(sin(0.07 * t), cos(0.05 * t));
+  // Two sets of rings (their scale 10 to 40) from two points drifting at its drift, laid over each other: their moiré
+  // darkens the picture in bands (never brightens it, so it cannot flash).
+  float d = 0.14 * k.y;
+  vec2 c1 = 0.6 * vec2(sin(d * t), cos(0.7 * d * t));
   vec2 c2 = -c1;
-  float m = 0.5 + 0.5 * cos(22.0 * length(p - c1)) * cos(22.0 * length(p - c2));
+  float s = mix(10.0, 40.0, k.x);
+  float m = 0.5 + 0.5 * cos(s * length(p - c1)) * cos(s * length(p - c2));
   return c * mix(1.0, m, 0.7 * a);
 }`,
-    report: (a) => ({ shapeChurn: 0.04 * a }),
+    report: (a, k) => ({ shapeChurn: 0.08 * k[1] * a }),
   },
   {
     // After EYESY's trigger modes (Critter & Guitari): the idea only, our own shader.
@@ -332,14 +384,17 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     engine: 'eyedo',
     kind: 'shape',
     slots: ['picture'],
-    glsl: `vec2 fx_pulse(vec2 p, float a, float t) {
+    knobs: [
+      { label: 'Swell', text: (v) => `${Math.round(between(0.03, 0.25, v) * 100)}%` },
+      { label: 'Decay', text: (v) => `${Math.round(between(0.06, 0.4, v) * 1000)} ms` },
+    ],
+    glsl: `vec2 fx_pulse(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // On each beat the picture swells (up to a tenth larger, as strong as the beat) and eases back over a sixth of a
-  // second.
+  // On each beat the picture swells (by its swell, as strong as the beat) and eases back over its decay.
   vec4 b = fx_beat();
-  return p / (1.0 + 0.1 * a * b.z * exp(-b.y / 0.16));
+  return p / (1.0 + mix(0.03, 0.25, k.x) * a * b.z * exp(-b.y / mix(0.06, 0.4, k.y)));
 }`,
-    report: (a) => ({ zoomPumping: 0.4 * a }),
+    report: (a, k) => ({ zoomPumping: 3 * between(0.03, 0.25, k[0]) * a }),
   },
   {
     // After EYESY's trigger modes (Critter & Guitari): the idea only, our own shader.
@@ -348,14 +403,18 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     engine: 'eyedo',
     kind: 'shape',
     slots: ['picture'],
-    glsl: `vec2 fx_burst(vec2 p, float a, float t) {
+    knobs: [
+      { label: 'Speed', text: pct },
+      { label: 'Width', text: pct },
+    ],
+    glsl: `vec2 fx_burst(vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return p;
-  // On each beat a ring of motion runs out from the middle (two heights a second), pushing what it passes outward,
-  // fading over half a second.
+  // On each beat a ring of motion (its width) runs out from the middle (one to four heights a second, its speed),
+  // pushing what it passes outward, fading over half a second.
   vec4 b = fx_beat();
   float r = length(p);
   if (r < 1e-4) return p;
-  float ring = exp(-pow((r - 2.0 * b.y) / 0.09, 2.0));
+  float ring = exp(-pow((r - mix(1.0, 4.0, k.x) * b.y) / mix(0.04, 0.2, k.y), 2.0));
   return p - (p / r) * 0.07 * a * b.z * ring * exp(-b.y / 0.5);
 }`,
     report: (a) => ({ shapeChurn: 0.12 * a }),
@@ -367,12 +426,16 @@ vec2 fx_scroll(vec2 p, float a, float t) {
     engine: 'eyedo',
     kind: 'colour',
     slots: ['picture'],
-    glsl: `vec3 fx_halo(vec3 c, vec2 p, float a, float t) {
+    knobs: [
+      { label: 'Speed', text: pct },
+      { label: 'Width', text: pct },
+    ],
+    glsl: `vec3 fx_halo(vec3 c, vec2 p, float a, float t, vec2 k) {
   if (a <= 0.0) return c;
-  // On each beat a dark ring runs out from the middle (one and a half heights a second) and fades: it only ever
-  // darkens, so it cannot flash.
+  // On each beat a dark ring (its width) runs out from the middle (its speed) and fades: it only ever darkens, so it
+  // cannot flash.
   vec4 b = fx_beat();
-  float ring = exp(-pow((length(p) - 1.5 * b.y) / 0.06, 2.0));
+  float ring = exp(-pow((length(p) - mix(0.8, 3.0, k.x) * b.y) / mix(0.03, 0.15, k.y), 2.0));
   return c * (1.0 - 0.6 * a * b.z * ring * exp(-b.y / 0.7));
 }`,
     report: (a) => ({ shapeChurn: 0.05 * a }),
@@ -389,7 +452,7 @@ export const ENGINE_EFFECTS: Record<Engine, readonly Effect[]> = {
   hydra: [9, 7, 8, 5, 6, 12, 2].map((id) => byId.get(id)!),
 };
 export const LOOP_EFFECTS: readonly Effect[] = [1, 4, 7, 8, 10, 11, 14].map((id) => byId.get(id)!);
-/** An engine's sub-effect at `place` (1..), or the loop's: its id (0: none). */
+/** An engine's sub-effect at \`place\` (1..), or the loop's: its id (0: none). */
 export const engineEffect = (engine: Engine, place: number) => ENGINE_EFFECTS[engine][Math.round(place) - 1]?.id ?? 0;
 export const loopEffect = (place: number) => LOOP_EFFECTS[Math.round(place) - 1]?.id ?? 0;
 /** An effect by its id (none for 0 or one not known: a setting from a later version shows nothing, rather than fails). */
@@ -403,13 +466,15 @@ export function chainOf(ids: readonly number[], slot: 'picture' | 'loop'): Effec
   return ids.map(effectOf).filter((e): e is Effect => !!e && e.slots.includes(slot));
 }
 
-/** What a chain adds to the meters a second at its amounts (each id's amount by place). */
-export function reportOf(ids: readonly number[], amounts: readonly number[], slot: 'picture' | 'loop'): Report {
+const HALF: Knobs = [0.5, 0.5];
+
+/** What a chain adds to the meters a second at its amounts and knobs (each id's by place). */
+export function reportOf(ids: readonly number[], amounts: readonly number[], slot: 'picture' | 'loop', knobs: readonly Knobs[] = []): Report {
   const out: Report = {};
   ids.forEach((id, k) => {
     const e = effectOf(id);
     if (!e || !e.slots.includes(slot) || !(amounts[k] > 0)) return;
-    for (const [m, v] of Object.entries(e.report(amounts[k])) as [keyof Report, number][]) out[m] = (out[m] ?? 0) + v;
+    for (const [m, v] of Object.entries(e.report(amounts[k], knobs[k] ?? HALF)) as [keyof Report, number][]) out[m] = (out[m] ?? 0) + v;
   });
   return out;
 }
@@ -424,18 +489,19 @@ vec2 fx_flow(vec2 p) {
   return v * 2.0 * vec2(uAspect, 1.0);
 }`;
 
-/** The picture slot's fragment shader for a chain (its ids by place, as \`uFxA\`'s), or null where nothing is in it:
- *  the picture (\`uPicture\`) read where its shapes say, then its colours and echoes (\`uPrev\`: the last finished one). */
+/** The picture slot's fragment shader for a chain (its ids by place, as \`uFxA\`'s and \`uFxK\`'s), or null where nothing
+ *  is in it: the picture (\`uPicture\`) read where its shapes say, then its colours and echoes (\`uPrev\`: the last
+ *  finished one). */
 export function pictureShader(ids: readonly number[]): string | null {
   const placed = ids.map((id, k) => ({ e: effectOf(id), k })).filter((x): x is { e: Effect; k: number } => !!x.e && x.e.slots.includes('picture'));
   if (!placed.length) return null;
   const once = [...new Map(placed.map(({ e }) => [e.id, e.glsl])).values()].join('\n');
   const call = ({ e, k }: { e: Effect; k: number }) =>
     e.kind === 'shape'
-      ? `  p = fx_${e.name}(p, uFxA[${k}], uFxT);`
+      ? `  p = fx_${e.name}(p, uFxA[${k}], uFxT, uFxK[${k}]);`
       : e.kind === 'colour'
-        ? `  c = fx_${e.name}(c, p, uFxA[${k}], uFxT);`
-        : `  c = fx_${e.name}(c, p, uFxA[${k}], uFxT, uPrev);`;
+        ? `  c = fx_${e.name}(c, p, uFxA[${k}], uFxT, uFxK[${k}]);`
+        : `  c = fx_${e.name}(c, p, uFxA[${k}], uFxT, uFxK[${k}], uPrev);`;
   return `#version 300 es
 precision highp float;
 uniform sampler2D uPicture;
@@ -443,6 +509,7 @@ uniform sampler2D uPrev;
 uniform vec2 uView;
 uniform float uAspect;
 uniform float uFxA[${MOST_PICTURE}];
+uniform vec2 uFxK[${MOST_PICTURE}];
 uniform float uFxT;
 uniform vec4 uFxBeat;
 uniform sampler2D uFlow;
@@ -459,35 +526,59 @@ ${placed.filter(({ e }) => e.kind !== 'shape').map(call).join('\n')}
 }`;
 }
 
-/** `fx_flow` where nothing flows (the loop's carry pass): none. The fluid's light pass gives its own (fluid.ts). */
+/** \`fx_flow\` where nothing flows (the loop's carry pass): none. The fluid's light pass gives its own (fluid.ts). */
 export const NO_FLOW = `vec2 fx_flow(vec2 p) { return vec2(0.0); }`;
 
-/** The loop slot's GLSL for one effect: \`vec2 fx_loop(vec2 uv, float a, float t, float aspect)\` on a buffer's
+/** The loop slot's GLSL for one effect: \`vec2 fx_loop(vec2 uv, float a, float t, float aspect, vec2 k)\` on a buffer's
  *  coordinates (0..1), for the passes that read the kept light back; none (the identity) where it is not a shape. */
 export function loopFunction(id: number, flow = NO_FLOW): string {
   const e = effectOf(id);
   if (!e || !e.slots.includes('loop') || e.kind !== 'shape')
-    return `vec2 fx_loop(vec2 uv, float a, float t, float aspect) { return uv; }`;
+    return `vec2 fx_loop(vec2 uv, float a, float t, float aspect, vec2 k) { return uv; }`;
   return `${flow}
 ${e.glsl}
-vec2 fx_loop(vec2 uv, float a, float t, float aspect) {
+vec2 fx_loop(vec2 uv, float a, float t, float aspect, vec2 k) {
   vec2 p = (uv - 0.5) * 2.0 * vec2(aspect, 1.0);
-  p = fx_${e.name}(p, a, t);
+  p = fx_${e.name}(p, a, t, k);
   return vec2(p.x / aspect, p.y) * 0.5 + 0.5;
 }`;
 }
 
 /** The look's effects as a setting holds them (settings.svelte.ts). */
-export type EffectSettings = Pick<VisualSettings, 'fx1' | 'fx2' | 'fx3' | 'fx1Amount' | 'fx2Amount' | 'fx3Amount' | 'fxLoop' | 'fxLoopAmount'>;
+export type EffectSettings = Pick<
+  VisualSettings,
+  | 'fx1'
+  | 'fx2'
+  | 'fx3'
+  | 'fx1Amount'
+  | 'fx2Amount'
+  | 'fx3Amount'
+  | 'fxLoop'
+  | 'fxLoopAmount'
+  | 'fx1K1'
+  | 'fx1K2'
+  | 'fx2K1'
+  | 'fx2K2'
+  | 'fx3K1'
+  | 'fx3K2'
+  | 'fxLoopK1'
+  | 'fxLoopK2'
+>;
 
-/** The look's effects for the renderer (render.ts `Shown.effects`): each amount times what the Effects setting's routes
- *  let through (`level`); `t` the track's own time (s). */
+/** The look's effects for the renderer (render.ts \`Shown.effects\`): each amount times what the Effects setting's routes
+ *  let through (\`level\`); each one's knobs; \`t\` the track's own time (s); the beat. */
 export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null) => ({
   // Each engine's sub-effect (its setting the place in the engine's list), in the engines' order.
   ids: [how.fx1, how.fx2, how.fx3].map((place, k) => engineEffect(ENGINES[k].key, place)),
   amounts: [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a) => a * level),
+  knobs: [
+    [how.fx1K1, how.fx1K2],
+    [how.fx2K1, how.fx2K2],
+    [how.fx3K1, how.fx3K2],
+  ] as Knobs[],
   loop: loopEffect(how.fxLoop),
   loopAmount: how.fxLoopAmount * level,
+  loopKnobs: [how.fxLoopK1, how.fxLoopK2] as Knobs,
   t,
   beat: beatOf(beat),
 });
@@ -504,7 +595,7 @@ export const beatOf = (b: Beat | null): [number, number, number, number] =>
  *  meters and the precheck's, so the governor and the dice hold an effect alike. */
 export function settingsReport(how: EffectSettings, level: number): Report {
   const fx = effectsNow(how, level, 0);
-  const out: Report = { ...reportOf(fx.ids, fx.amounts, 'picture') };
-  for (const [k, v] of Object.entries(reportOf([fx.loop], [fx.loopAmount], 'loop')) as [keyof Report, number][]) out[k] = (out[k] ?? 0) + v;
+  const out: Report = { ...reportOf(fx.ids, fx.amounts, 'picture', fx.knobs) };
+  for (const [k, v] of Object.entries(reportOf([fx.loop], [fx.loopAmount], 'loop', [fx.loopKnobs])) as [keyof Report, number][]) out[k] = (out[k] ?? 0) + v;
   return out;
 }

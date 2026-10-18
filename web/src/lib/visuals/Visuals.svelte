@@ -68,7 +68,7 @@
   import { newStirring, stir } from './stirring';
   import { FlameRenderer } from './render';
   import { DIVE_MOST, TUNNEL_MOST } from './zoom';
-  import { effectsNow, ENGINE_EFFECTS, ENGINES, LOOP_EFFECTS, settingsReport } from './effects';
+  import { effectsNow, ENGINE_EFFECTS, ENGINES, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
   import {
     A,
     ASPECT_LABEL,
@@ -461,6 +461,7 @@
     for (const k of ['tunnel', 'dive'] as const) if (!(k in settings)) settings[k] = 0;
     // One saved before the effects (65): none, and all of the Effects setting.
     for (const k of ['fx1', 'fx1Amount', 'fx2', 'fx2Amount', 'fx3', 'fx3Amount', 'fxLoop', 'fxLoopAmount', 'facets', 'lattice'] as const) if (!(k in settings)) settings[k] = 0;
+    for (const k of ['fx1K1','fx1K2','fx2K1','fx2K2','fx3K1','fx3K2','fxLoopK1','fxLoopK2'] as const) if (!(k in settings)) settings[k] = 0.5;
     if (!('effects' in settings)) settings.effects = 1;
     delete settings.v;
     // This device's own sliders, on this device only.
@@ -549,7 +550,11 @@
     const e = list[Math.round(v) - 1];
     return e ? e.name[0].toUpperCase() + e.name.slice(1) : 'None';
   };
-  const LOOK: Row[] = [
+  // Under each engine (and the loop), the chosen sub-effect's own knobs, labelled by it (65; the owner: "one or two of
+  // the most relevant controls per chosen subeffect").
+  const knobRows = (prefix: 'fx1' | 'fx2' | 'fx3' | 'fxLoop', effect: Effect | undefined): Row[] =>
+    (effect?.knobs ?? []).map((knob, i) => ({ key: `${prefix}K${i + 1}` as One, label: knob.label, step: 0.05, text: knob.text }));
+  const LOOK: Row[] = $derived([
     { key: 'family', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? '' },
     { key: 'form', label: 'Form', step: 1, text: (v) => `${v}` },
     { key: 'detail', label: 'Detail', step: 0.01, text: percent },
@@ -570,10 +575,12 @@
     ...([1, 2, 3] as const).flatMap((n) => [
       { key: `fx${n}` as One, label: ENGINES[n - 1].label, step: 1, text: subName(ENGINE_EFFECTS[ENGINES[n - 1].key]) },
       { key: `fx${n}Amount` as One, label: 'Amount', step: 0.05, text: percent },
+      ...knobRows(`fx${n}`, ENGINE_EFFECTS[ENGINES[n - 1].key][Math.round(s[`fx${n}`]) - 1]),
     ]),
     { key: 'fxLoop', label: 'Loop', step: 1, text: subName(LOOP_EFFECTS) },
     { key: 'fxLoopAmount', label: 'Loop amount', step: 0.05, text: percent },
-  ];
+    ...knobRows('fxLoop', LOOP_EFFECTS[Math.round(s.fxLoop) - 1]),
+  ]);
   const isLook = (key: string) => (PRESET_KEYS as readonly string[]).includes(key);
   const lookNow = () => Object.fromEntries(PRESET_KEYS.map((k) => [k, s[k]]));
   // A look's setting let go of: back to the preset's value.
@@ -624,13 +631,24 @@
   const devicePixels = () => innerWidth * innerHeight * Math.min(devicePixelRatio || 1, 2) ** 2;
   const valueOf = (key: One) => s[key] as number;
   function set(key: One, v: number) {
+    const before = s[key];
     (s as Record<One, number | null>)[key] = v;
     // The look's settings and the behaviour's sliders moved are pinned: a track's or the dice's preset, and Drift,
     // leave them as they are.
     if (isPinnable(key) && !s.pins.includes(key)) s.pins = [...s.pins, key];
+    // Another sub-effect chosen for an engine (or the loop): its knobs start from their middles, not where the last
+    // one's were, and are not pinned.
+    const knobs: Partial<Record<One, number>> = {};
+    if ((key === 'fx1' || key === 'fx2' || key === 'fx3' || key === 'fxLoop') && Math.round(v) !== Math.round(Number(before))) {
+      for (const k of [`${key}K1`, `${key}K2`] as One[]) {
+        (s as Record<One, number | null>)[k] = 0.5;
+        knobs[k] = 0.5;
+      }
+      s.pins = s.pins.filter((p) => !(p in knobs));
+    }
     saveVisualSettings();
     // To the sync group: all but what is this device's own (its cost, its brightness).
-    if ((SHARED_KEYS as readonly string[]).includes(key)) share({ [key]: v, ...(isPinnable(key) ? { pins: [...s.pins] } : {}) });
+    if ((SHARED_KEYS as readonly string[]).includes(key)) share({ [key]: v, ...knobs, ...(isPinnable(key) ? { pins: [...s.pins] } : {}) });
     showChrome();
   }
   // Full screen, where the browser can: a button for it, which leaves it again (64.2: it went away, and only the

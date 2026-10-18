@@ -371,6 +371,15 @@ export type Preset = {
   fx3Amount: number;
   fxLoop: number;
   fxLoopAmount: number;
+  /** Each engine's (and the loop's) sub-effect's two knobs (0..1, the half way a middle setting). */
+  fx1K1: number;
+  fx1K2: number;
+  fx2K1: number;
+  fx2K2: number;
+  fx3K1: number;
+  fx3K2: number;
+  fxLoopK1: number;
+  fxLoopK2: number;
   /** Facets (65): how much each cell of a lattice takes on one light where the light flows (0..1: none to hard tiles),
    *  and the lattice (0 square, 1 hex). */
   facets: number;
@@ -398,11 +407,36 @@ export const PRESET_KEYS = [
   'fx3Amount',
   'fxLoop',
   'fxLoopAmount',
+  'fx1K1',
+  'fx1K2',
+  'fx2K1',
+  'fx2K2',
+  'fx3K1',
+  'fx3K2',
+  'fxLoopK1',
+  'fxLoopK2',
   'facets',
   'lattice',
 ] as const;
 /** No effects. */
-const NO_EFFECTS = { fx1: 0, fx1Amount: 0, fx2: 0, fx2Amount: 0, fx3: 0, fx3Amount: 0, fxLoop: 0, fxLoopAmount: 0 };
+const NO_EFFECTS = {
+  fx1: 0,
+  fx1Amount: 0,
+  fx2: 0,
+  fx2Amount: 0,
+  fx3: 0,
+  fx3Amount: 0,
+  fxLoop: 0,
+  fxLoopAmount: 0,
+  fx1K1: 0.5,
+  fx1K2: 0.5,
+  fx2K1: 0.5,
+  fx2K2: 0.5,
+  fx3K1: 0.5,
+  fx3K2: 0.5,
+  fxLoopK1: 0.5,
+  fxLoopK2: 0.5,
+};
 export const FORMS = 1000;
 
 /** A preset that always draws something, for when no draw from a seed passes the check. */
@@ -425,6 +459,8 @@ function effectsDrawn(seed: number): Pick<Preset, keyof typeof NO_EFFECTS> {
     out[`${key}Amount` as 'fx1Amount'] = 0.3 + rnd() * 0.5;
   }
   if (rnd() < 0.2) [out.fxLoop, out.fxLoopAmount] = [place(LOOP_EFFECTS.length), 0.2 + rnd() * 0.4];
+  // Their knobs, drawn last (so the draws above stay as they were): somewhere in their middle half.
+  for (const k of ['fx1K1', 'fx1K2', 'fx2K1', 'fx2K2', 'fx3K1', 'fx3K2', 'fxLoopK1', 'fxLoopK2'] as const) out[k] = 0.25 + rnd() * 0.5;
   return out;
 }
 

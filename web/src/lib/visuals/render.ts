@@ -341,6 +341,7 @@ uniform float uZoom;
 uniform float uKeep;
 uniform float uLoopA;
 uniform float uLoopT;
+uniform vec2 uLoopK;
 layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 bandA;
 layout(location = 2) out vec4 bandB;
@@ -349,7 +350,7 @@ vec4 kept(vec4 v) { return bad(dot(v, vec4(1.0))) ? vec4(0.0) : v * uKeep; }
 ${loop}
 void main() {
   vec2 at = 0.5 + (gl_FragCoord.xy / uSize - 0.5) * uZoom;
-  at = fx_loop(at, uLoopA, uLoopT, uSize.x / uSize.y);
+  at = fx_loop(at, uLoopA, uLoopT, uSize.x / uSize.y, uLoopK);
   o = kept(textureLod(uAcc, at, 0.0));
   bandA = kept(textureLod(uBandsA, at, 0.0));
   bandB = kept(textureLod(uBandsB, at, 0.0));
@@ -573,7 +574,16 @@ export type Shown = {
   fluid: number;
   /** The effects (effects.ts): the picture's chain (its ids and amounts by place, each times the Effects level), the
    *  loop's effect and amount, and the track's own time they move with. None: as before. */
-  effects?: { ids: number[]; amounts: number[]; loop: number; loopAmount: number; t: number; beat?: [number, number, number, number] };
+  effects?: {
+    ids: number[];
+    amounts: number[];
+    knobs?: readonly (readonly [number, number])[];
+    loop: number;
+    loopAmount: number;
+    loopKnobs?: readonly [number, number];
+    t: number;
+    beat?: [number, number, number, number];
+  };
   /** Facets (where the light flows: fluid.ts): how much (0..1), and on hexagons rather than squares. */
   facets?: { amount: number; hex: boolean };
   /** The infinite zooms (zoom.ts): how fast, each its log a second (0: off). */
@@ -1048,12 +1058,12 @@ export class FlameRenderer {
     const fluid = this.fluidFor(this.fluidShown);
     // The loop slot's effect, where there is one.
     const fxl = look.effects;
-    const loop = fxl && fxl.loop && fxl.loopAmount > 0 ? { id: fxl.loop, amount: fxl.loopAmount, t: fxl.t } : null;
+    const loop = fxl && fxl.loop && fxl.loopAmount > 0 ? { id: fxl.loop, amount: fxl.loopAmount, t: fxl.t, knobs: fxl.loopKnobs } : null;
     if (fluid) {
       fluid.push(look.forces);
       fluid.step(look.dt, look.flow);
       const other = 1 - this.cur;
-      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id, FLOW_IN_LIGHT), amount: loop.amount, t: loop.t } : undefined, look.facets);
+      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id, FLOW_IN_LIGHT), amount: loop.amount, t: loop.t, knobs: loop.knobs } : undefined, look.facets);
       this.cur = other;
       this.use();
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
@@ -1283,6 +1293,7 @@ export class FlameRenderer {
     gl.uniform1f(u('uAspect'), into.w / into.h);
     gl.uniform1fv(u('uFxA'), Float32Array.from({ length: MOST_PICTURE }, (_, k) => fx.amounts[k] ?? 0));
     gl.uniform1f(u('uFxT'), fx.t);
+    gl.uniform2fv(u('uFxK'), Float32Array.from({ length: MOST_PICTURE * 2 }, (_, i) => fx.knobs?.[i >> 1]?.[i & 1] ?? 0.5));
     gl.uniform4f(u('uFxBeat'), ...(fx.beat ?? ([0, 1000, 0, 0] as const)));
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -1306,7 +1317,7 @@ export class FlameRenderer {
 
   /** The tunnel's pass where nothing flows: the buffers copied into the other set, read `zoom` nearer the middle and
    *  kept as the fade keeps them. */
-  private tunnel(keep: number, zoom: number, loop: { id: number; amount: number; t: number } | null = null) {
+  private tunnel(keep: number, zoom: number, loop: { id: number; amount: number; t: number; knobs?: readonly [number, number] } | null = null) {
     const gl = this.gl;
     const other = 1 - this.cur;
     gl.disable(gl.BLEND);
@@ -1334,6 +1345,7 @@ export class FlameRenderer {
     gl.useProgram(p);
     gl.uniform1f(gl.getUniformLocation(p, 'uLoopA'), loop?.amount ?? 0);
     gl.uniform1f(gl.getUniformLocation(p, 'uLoopT'), loop?.t ?? 0);
+    gl.uniform2f(gl.getUniformLocation(p, 'uLoopK'), loop?.knobs?.[0] ?? 0.5, loop?.knobs?.[1] ?? 0.5);
     gl.uniform1i(gl.getUniformLocation(p, 'uAcc'), 0);
     gl.uniform1i(gl.getUniformLocation(p, 'uBandsA'), 1);
     gl.uniform1i(gl.getUniformLocation(p, 'uBandsB'), 2);
