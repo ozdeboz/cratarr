@@ -166,6 +166,19 @@
     prefs.sidebar = false;
     player.full = true;
   }
+  // Full screen, where the browser can and the page is not already (the app's view may be): over the page, then the
+  // whole screen.
+  const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled && typeof document.documentElement.requestFullscreen === 'function';
+  let fullscreen = $state(typeof document !== 'undefined' && !!document.fullscreenElement);
+  $effect(() => {
+    const changed = () => (fullscreen = !!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', changed);
+    return () => document.removeEventListener('fullscreenchange', changed);
+  });
+  function goFullscreen() {
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+    if (place === 'side') maximise();
+  }
   // Beside the page again: the player moves into the panel, unless a playlist or crate is viewed there: that keeps the
   // panel, and the mini-player's tap brings the player over it.
   function toSidebar() {
@@ -336,6 +349,9 @@
         <button class="corner" aria-label="Over the page" onclick={maximise}><Icon name="expand" size={20} /></button>
       {:else if player.roomy}
         <button class="corner" aria-label="Beside the page" onclick={toSidebar}><Icon name="sidebar" size={22} /></button>
+      {/if}
+      {#if canFullscreen && !fullscreen}
+        <button class="corner" aria-label="Full screen" onclick={goFullscreen}><Icon name="fullscreen" size={20} /></button>
       {/if}
     </div>
     <!-- Finamp's layout: the cover's region, then the controls' box with three groups spread in it (track name,

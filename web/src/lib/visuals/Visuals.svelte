@@ -17,7 +17,10 @@
   import Icon from '../Icon.svelte';
   import { reducedMotion } from '../motion';
   import { toast } from '../toast.svelte';
-  import { playing } from '../remote.svelte';
+  import { player } from '../live.svelte';
+  import { panel as sidePanel } from '../panel.svelte';
+  import { prefs } from '../prefs.svelte';
+  import { playing, send } from '../remote.svelte';
   import {
     between,
     coloured,
@@ -39,7 +42,8 @@
   import { musicNow, stopMusic } from './music.svelte';
   import { longPress } from './longPress';
   import { coverPalette, type PaletteColour } from './palette';
-  import { applyShared, followGroup, share, SHARED_KEYS, SHARED_V, sharedNow } from './shared.svelte';
+  import { setVisualsSide } from './shown.svelte';
+  import { applyShared, followGroup, groupLook, share, SHARED_KEYS, SHARED_V, sharedNow, showing } from './shared.svelte';
   import { held } from './held.svelte';
   import Help from './Help.svelte';
   import { FlameRenderer } from './render';
@@ -73,7 +77,8 @@
     type VisualSettings,
   } from './settings.svelte';
 
-  let { onclose }: { onclose: () => void } = $props();
+  // `docked`: beside the page, in the panel at the right (App.svelte), rather than over all of it.
+  let { onclose, docked = false }: { onclose: () => void; docked?: boolean } = $props();
 
   let canvas: HTMLCanvasElement;
   let chrome = $state(true);
@@ -131,9 +136,9 @@
   // milliseconds on a slow tablet, and all of them at once held a frame up by a seventh of a second there (2026-10-18).
   // Then how it blends in, and whether it goes to the sync group (the dice's, a Reset's: a track's and the moments' come
   // out the same on every device anyway).
-  let drawingNow: { draws: Generator<void, Drawn>; blend: number; share: boolean } | null = null;
+  let drawingNow: { draws: Generator<void, Drawn>; blend: number; share: boolean; load: boolean } | null = null;
   function loadAnother(seed: number, toGroup = false) {
-    drawingNow = { draws: presetDraws(seed, pinned()), blend: ANOTHER_MS, share: toGroup };
+    drawingNow = { draws: presetDraws(seed, pinned()), blend: ANOTHER_MS, share: toGroup, load: true };
   }
   // The dice: a random preset into the look's settings not pinned.
   function rollAnother() {
@@ -166,9 +171,7 @@
     const settings = { ...snap.settings };
     delete settings.v;
     drawingNow = null;
-    applyShared(settings);
-    s.pins = [...PRESET_KEYS];
-    saveVisualSettings();
+    applyShared({ ...settings, pins: [...PRESET_KEYS] });
     nextBlend = ANOTHER_MS;
     share(sharedNow());
     showChrome();
@@ -290,6 +293,23 @@
     if ((SHARED_KEYS as readonly string[]).includes(key)) share({ [key]: v, ...(isLook(key) ? { pins: [...s.pins] } : {}) });
     showChrome();
   }
+  // Full screen, where the browser can and the visuals are not already (the app's view may be): a button for it.
+  const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled && typeof document.documentElement.requestFullscreen === 'function';
+  let fullscreen = $state(typeof document !== 'undefined' && !!document.fullscreenElement);
+  function goFullscreen() {
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+    if (docked) setVisualsSide(false);
+    showChrome();
+  }
+  // Beside the page, where the player goes (it moves there too), or over it again; as the full player's own buttons.
+  function beside() {
+    prefs.sidebar = true;
+    player.min = false;
+    player.full = false;
+    sidePanel.playerTop = false;
+    setVisualsSide(true);
+  }
+
   function togglePanel() {
     panel = !panel;
     if (panel) readSnapshots();
@@ -351,7 +371,8 @@
 
   onMount(() => {
     showChrome();
-    history.pushState({ ...history.state, visuals: true }, '');
+    // Moved beside the page or over it, the visuals are the same step of the history.
+    if (!history.state?.visuals) history.pushState({ ...history.state, visuals: true }, '');
     const popped = () => {
       if (!closed && !history.state?.visuals) {
         closed = true;
@@ -361,7 +382,7 @@
     addEventListener('popstate', popped);
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
     addEventListener('keydown', onKey);
-    document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {});
+    if (!docked) document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {});
 
     let lock: WakeLockSentinel | null = null;
     const wake = () => {
@@ -373,6 +394,8 @@
     };
     wake();
     document.addEventListener('visibilitychange', wake);
+    const fullscreenChanged = () => (fullscreen = !!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', fullscreenChanged);
     // The sync group this device plays in, if any: its visuals followed, this one's changes sent to it.
     const stopGroup = followGroup();
 
@@ -557,14 +580,24 @@
         const toGroup = resets !== resetsSeen;
         key = m.key;
         resetsSeen = resets;
+        showing(m.key);
+        // In a sync group that already set a look for this track (a device further on sent it), that look; the track's
+        // own is still drawn, for a pin let go of.
+        const theirs = toGroup ? null : groupLook(m.key);
+        if (theirs) {
+          nextBlend = blend;
+          loadPreset({ ...lookNow(), ...theirs } as Preset);
+        }
         const fixed = pinned();
         if (ahead?.drawn && ahead.key === m.key && ahead.pins === JSON.stringify(fixed)) {
           current = ahead.drawn.own;
-          nextBlend = blend;
           drawingNow = null;
-          loadPreset(ahead.drawn.preset);
-          if (toGroup) share(lookNow());
-        } else drawingNow = { draws: presetDraws(seedOf(m.key ?? 'cratarr'), fixed), blend, share: toGroup };
+          if (!theirs) {
+            nextBlend = blend;
+            loadPreset(ahead.drawn.preset);
+            if (toGroup) share(lookNow());
+          }
+        } else drawingNow = { draws: presetDraws(seedOf(m.key ?? 'cratarr'), fixed), blend, share: toGroup, load: !theirs };
       }
       // A preset being drawn: as many draws as fit in six milliseconds of this frame, then into the settings.
       if (drawingNow) {
@@ -573,11 +606,13 @@
         while (!next.done && performance.now() < until) next = drawingNow.draws.next();
         if (next.done) {
           current = next.value.own;
-          nextBlend = drawingNow.blend;
-          const toGroup = drawingNow.share;
+          const { blend, share: toGroup, load } = drawingNow;
           drawingNow = null;
-          loadPreset(next.value.preset);
-          if (toGroup) share(lookNow());
+          if (load) {
+            nextBlend = blend;
+            loadPreset(next.value.preset);
+            if (toGroup) share(lookNow());
+          }
         }
       }
       // The colours: the cover's asked for as a track starts, where they are wanted.
@@ -825,6 +860,7 @@
       removeEventListener('popstate', popped);
       removeEventListener('keydown', onKey);
       document.removeEventListener('visibilitychange', wake);
+      document.removeEventListener('fullscreenchange', fullscreenChanged);
       lock?.release().catch(() => {});
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       renderer?.dispose();
@@ -853,6 +889,7 @@
 
 <div
   class="visuals"
+  class:docked
   class:bare={!chrome}
   role="dialog"
   aria-modal="true"
@@ -884,6 +921,20 @@
         <button class="round" aria-label="Another look" use:held={'dice'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={rollAnother}
           ><Icon name="dice" size={26} /></button
         >
+        {#if docked}
+          <button class="round" aria-label="Over the page" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => setVisualsSide(false)}
+            ><Icon name="expand" size={22} /></button
+          >
+        {:else if player.roomy}
+          <button class="round" aria-label="Beside the page" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={beside}
+            ><Icon name="sidebar" size={24} /></button
+          >
+        {/if}
+        {#if canFullscreen && !fullscreen}
+          <button class="round" aria-label="Full screen" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={goFullscreen}
+            ><Icon name="fullscreen" size={24} /></button
+          >
+        {/if}
       </div>
       {#if panel}
         <div class="panel" role="group" aria-label="Settings" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
@@ -1049,6 +1100,14 @@
           <strong>{np.name}</strong>
           {#if np.artist}<span>{np.artist}</span>{/if}
         </div>
+        <div class="transport">
+          <button class="round" aria-label="Previous track" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => send('previous')}
+            ><Icon name="previous" size={26} /></button
+          >
+          <button class="round" aria-label="Next track" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => send('next')}
+            ><Icon name="next" size={26} /></button
+          >
+        </div>
       {/if}
     </div>
   {/if}
@@ -1064,6 +1123,12 @@
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
+  }
+
+  /* Beside the page: in the panel at the right, under the page's own layers. */
+  .visuals.docked {
+    position: absolute;
+    z-index: 1;
   }
 
   .visuals.bare {
@@ -1501,12 +1566,20 @@
   .track {
     position: absolute;
     left: max(24px, env(safe-area-inset-left));
-    right: 24px;
+    right: 136px;
     bottom: max(24px, env(safe-area-inset-bottom));
     display: grid;
     gap: 2px;
     color: #fff;
     text-shadow: 0 1px 6px rgb(0 0 0 / 0.6);
+  }
+
+  .transport {
+    position: absolute;
+    right: max(16px, env(safe-area-inset-right));
+    bottom: max(16px, env(safe-area-inset-bottom));
+    display: flex;
+    gap: 8px;
   }
 
   .track strong {

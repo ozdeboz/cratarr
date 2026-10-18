@@ -52,6 +52,10 @@ export const HELP: Record<string, string> = {
   vividness: 'How vivid the colours are, with Rainbow colours. At 0 they are soft and muted; at 100% as vivid as they go.',
   final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',
   pin: 'You moved this setting, so it keeps your value when the next track starts, and the dice leave it alone. Tap the pin to let each track set it again.',
+  snapshots:
+    'Saved looks. Tap one to bring it back: everything that shapes the picture returns as it was when saved, and its Look settings are pinned, so the next track keeps it. Hold one to rename or delete it. They are kept on the server, so every device sees them.',
+  'snapshots:save':
+    'Saves everything that shapes the picture now (the Look, Colours, Flash, the grain, the routes and the band times), named after the playing track.',
   dice: 'Another look: every Look setting you have not pinned moves to a new random value.',
 
   // The bands, as headings of their own settings and as the routes' choice of band.

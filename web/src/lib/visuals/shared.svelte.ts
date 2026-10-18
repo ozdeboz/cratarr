@@ -6,15 +6,17 @@
 // A device joining a group adopts the group's settings (a group with none yet takes the joiner's); one leaving keeps
 // what it was showing. What the owner changes goes to the server as it is made, a drag's many changes once every 150 ms
 // and only the settings changed (the server merges them, the routes route by route, so two people moving different
-// sliders do not undo each other), and comes back to every device on the live channel's `visuals` event; a device
-// knows its own changes by `writer` and takes none older than the last it took. A track's preset and the music's
-// moments are not sent: every device works out the same ones.
+// sliders do not undo each other), and comes back to every device on the live channel's `visuals` event, with all of
+// the group's settings; a device knows its own changes by `writer` and takes none older than the last it took.
+// A track's preset and the music's moments are not sent: every device works out the same ones. So the look's settings
+// not pinned are the group's only on the track they were sent on (`lookFor`: the dice's, a Reset's, a recall's); on
+// another track each device has that track's own, as every other device does.
 // The saved looks (snapshots, on the server for every device) hold the same settings.
 
 import { ApiError, getGroupVisuals, putGroupVisuals } from '../api';
 import { on } from '../events.svelte';
 import { head, playOn } from '../playOn.svelte';
-import { PRESET_KEYS } from './flame';
+import { PRESET_KEYS, type Preset } from './flame';
 import { keptFrom, saveVisualSettings, visualSettings, type VisualSettings } from './settings.svelte';
 
 /** The settings shared, and saved in a snapshot. */
@@ -33,7 +35,7 @@ export const SHARED_KEYS = [
   'evolution',
   'continuity',
 ] as const satisfies readonly (keyof VisualSettings)[];
-export type Shared = Partial<Record<(typeof SHARED_KEYS)[number], unknown>>;
+export type Shared = Partial<Record<(typeof SHARED_KEYS)[number] | 'lookFor', unknown>>;
 /** The shared settings' form, kept with a snapshot so a later one can be read: 1 since 2026-10-18. */
 export const SHARED_V = 1;
 
@@ -45,20 +47,45 @@ export function sharedNow(): Shared {
   return Object.fromEntries(SHARED_KEYS.map((k) => [k, $state.snapshot(visualSettings[k])]));
 }
 
-/** Shared settings into this device's (each brought into its range; the routes as given, others as they were not). */
+/** Shared settings into this device's (each brought into its range): of the look's, those pinned, and those not pinned
+ *  where they were sent for the track showing. */
 export function applyShared(settings: Record<string, unknown>) {
-  const clean = keptFrom({ ...$state.snapshot(visualSettings), ...settings, pins: settings.pins ?? visualSettings.pins });
-  for (const k of SHARED_KEYS) if (k in settings) (visualSettings as Record<string, unknown>)[k] = clean[k];
+  const given = { ...settings };
+  const pins = Array.isArray(given.pins) ? (given.pins as string[]) : visualSettings.pins;
+  if (given.lookFor !== track) for (const k of PRESET_KEYS) if (!pins.includes(k)) delete given[k];
+  const clean = keptFrom({ ...$state.snapshot(visualSettings), ...given, pins });
+  for (const k of SHARED_KEYS) if (k in given) (visualSettings as Record<string, unknown>)[k] = clean[k];
   saveVisualSettings();
 }
 
-// The group followed (its leader's name), the last version taken, and the changes waiting to be sent.
+// The group followed (its leader's name), the last version taken, its settings as last heard (and as this page has
+// changed them since), the changes waiting to be sent and the ones on their way, and the track the page shows.
 let group: string | null = null;
 let version = 0;
-// (and the ones on their way)
+let known: Record<string, unknown> = {};
 let outgoing: Shared = {};
 let sending: Shared = {};
 let pending: ReturnType<typeof setTimeout> | undefined;
+let track: string | null = null;
+
+/** Settings merged into others, the routes route by route. */
+const merged = (into: Record<string, unknown>, more: Record<string, unknown>) => ({
+  ...into,
+  ...more,
+  ...(more.routes && typeof more.routes === 'object' ? { routes: { ...((into.routes as object) ?? {}), ...(more.routes as object) } } : {}),
+});
+
+/** The track the visuals show now (`source/id`). */
+export function showing(key: string | null) {
+  track = key;
+}
+
+/** The look the group set for track `key` (the dice's, a Reset's, a recall's), where it set one: taken in place of the
+ *  track's own when it starts (a device whose track changed after the group's look was sent). */
+export function groupLook(key: string | null): Partial<Preset> | null {
+  if (!group || !key || known.lookFor !== key) return null;
+  return Object.fromEntries(PRESET_KEYS.filter((k) => k in known).map((k) => [k, known[k]])) as Partial<Preset>;
+}
 
 /** The group this page's player is in: the app's own, or the one the page plays on. */
 const groupNow = () => {
@@ -71,15 +98,13 @@ export function followGroup(): () => void {
   const stopEvents = on<{ group: string; version: number; settings: Record<string, unknown>; writer: string }>('visuals', (e) => {
     if (!group || e.group !== group || e.writer === writer || !(e.version > version)) return;
     version = e.version;
+    known = merged(known, e.settings);
     // Not over a change of this page's still to be sent or on its way: it is the later one, and the server will have
     // it.
-    const mine = { ...sending, ...outgoing, routes: { ...((sending.routes as object) ?? {}), ...((outgoing.routes as object) ?? {}) } };
+    const mine = merged(sending, outgoing);
     const settings = { ...e.settings };
-    for (const k of Object.keys(mine)) if (k !== 'routes') delete settings[k as keyof typeof settings];
-    const routes = Object.keys(mine.routes).length ? (mine.routes as Record<string, number>) : undefined;
-    if (routes && settings.routes && typeof settings.routes === 'object') {
-      settings.routes = { ...(settings.routes as Record<string, number>), ...routes };
-    }
+    for (const k of Object.keys(mine)) if (k !== 'routes' && k !== 'lookFor') delete settings[k];
+    if (mine.routes && settings.routes && typeof settings.routes === 'object') settings.routes = { ...(settings.routes as object), ...(mine.routes as object) };
     applyShared(settings);
   });
   const stopWatch = $effect.root(() => {
@@ -94,6 +119,7 @@ export function followGroup(): () => void {
     clearTimeout(pending);
     outgoing = {};
     sending = {};
+    known = {};
     group = null;
     version = 0;
   };
@@ -105,36 +131,41 @@ const status = (e: unknown) => (e instanceof ApiError ? e.status : undefined);
 async function joined(g: string | null) {
   group = g;
   version = 0;
+  known = {};
   outgoing = {};
   if (!g) return;
+  const take = (got: { version: number; settings: Record<string, unknown> }) => {
+    version = got.version;
+    known = { ...got.settings };
+    applyShared(got.settings);
+  };
   try {
     const got = await getGroupVisuals(g);
-    if (group !== g) return;
-    version = got.version;
-    applyShared(got.settings);
+    if (group === g) take(got);
   } catch (e) {
     if (status(e) !== 404 || group !== g) return;
     // A group with none yet takes this device's; where another got there first, its are taken.
+    const mine = { ...sharedNow(), lookFor: track };
     try {
-      const made = await putGroupVisuals(g, { base: 0, settings: sharedNow(), writer });
-      if (group === g) version = Math.max(version, made.version);
+      const made = await putGroupVisuals(g, { base: 0, settings: mine, writer });
+      if (group !== g) return;
+      version = Math.max(version, made.version);
+      known = merged(known, mine);
     } catch (e2) {
       if (status(e2) !== 409 || group !== g) return;
       const got = await getGroupVisuals(g).catch(() => null);
-      if (got && group === g) {
-        version = got.version;
-        applyShared(got.settings);
-      }
+      if (got && group === g) take(got);
     }
   }
 }
 
 /** The owner changed shared settings (`changes`: the settings changed; the routes only those changed): sent to the
- *  group, if the page is in one. */
+ *  group, if the page is in one. Look settings go with the track they are for. */
 export function share(changes: Shared) {
   if (!group) return;
-  const routes = changes.routes as Record<string, number> | undefined;
-  outgoing = { ...outgoing, ...changes, ...(routes ? { routes: { ...((outgoing.routes as Record<string, number>) ?? {}), ...routes } } : {}) };
+  const sent: Shared = PRESET_KEYS.some((k) => k in changes) ? { ...changes, lookFor: track } : changes;
+  outgoing = merged(outgoing, sent);
+  known = merged(known, sent);
   clearTimeout(pending);
   pending = setTimeout(flush, 150);
 }

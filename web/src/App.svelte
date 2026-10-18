@@ -135,6 +135,8 @@
     untrack(collapse);
   });
   const sidebar = $derived(inSidebar());
+  // The visuals beside the page: in the panel where the player goes, while it is there (a narrow window: over the page).
+  const visualsBeside = $derived(visuals.open && visuals.side && sidebar);
   const overlay = $derived(player.full && !sidebar);
   // The mini-player stands in for the player wherever the panel does not show it (decision 0023); with nothing to play
   // it is the small button for where music plays.
@@ -439,7 +441,7 @@
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
       <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} />{:else}<PlaylistView />{/if}
+          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}
@@ -495,7 +497,7 @@
     </div>
   {/if}
 
-  {#if visuals.open}
+  {#if visuals.open && !visualsBeside}
     <Visuals onclose={() => (visuals.open = false)} />
   {/if}
   <Toasts />

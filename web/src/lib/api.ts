@@ -1166,7 +1166,7 @@ export const putGroupVisuals = (group: string, body: { base: number; settings: R
   });
 
 /** A saved look of the visuals: the settings that shape the picture, named (after the track it was saved on). */
-export type VisualsSnapshot = { id: string; name: string; settings: Record<string, unknown>; created: string };
+export type VisualsSnapshot = { id: string; name: string; settings: Record<string, unknown>; /** Epoch seconds. */ created: number };
 export const getVisualsSnapshots = () => quietly<VisualsSnapshot[]>('/api/visuals/snapshots');
 export const saveVisualsSnapshot = (name: string, settings: Record<string, unknown>) =>
   request<VisualsSnapshot>('/api/visuals/snapshots', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, settings }) });
