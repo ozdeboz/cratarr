@@ -97,12 +97,15 @@ export type AspectsNow = {
   floor: number;
   fluid: number;
   warp: number;
+  /** The infinite zooms' speeds (0..1 of their most: zoom.ts), as their routes let their sliders through. */
+  tunnel: number;
+  dive: number;
   /** How far the look and the behaviour walk (drift.ts): what the Look and Behaviour columns' routes give them, but
    *  the Track row's (its move at a new track is the track's own, not a walk). */
   look: number;
   behaviour: number;
   /** Each level's share of its setting its routes let through now (1: all of it). */
-  levels: { fluid: number; smoothing: number; floor: number; depth: number };
+  levels: { fluid: number; smoothing: number; floor: number; depth: number; tunnel: number; dive: number };
   /** The moments come this frame: another symmetry (none with reduced motion). */
   moments: { symmetry: boolean };
 };
@@ -286,10 +289,19 @@ export function stepAspects(
     smoothing: 12 * levelOf(st.got, s.smoothing, A.smoothing) ** 2,
     floor: floorOf(levelOf(st.got, s.floor, A.floor)),
     // Each level's share of its setting the routes let through now (the sliders' live marks).
-    levels: { fluid: st.got.level[A.fluid], smoothing: st.got.level[A.smoothing], floor: st.got.level[A.floor], depth: st.got.level[A.depth] },
+    levels: {
+      fluid: st.got.level[A.fluid],
+      smoothing: st.got.level[A.smoothing],
+      floor: st.got.level[A.floor],
+      depth: st.got.level[A.depth],
+      tunnel: st.got.level[A.tunnel],
+      dive: st.got.level[A.dive],
+    },
     // Fluid: the light carried along a flow (none at 0), read back along it a little as it shows.
     fluid,
     warp: 0.12 * fluid,
+    tunnel: levelOf(st.got, s.tunnel, A.tunnel),
+    dive: levelOf(st.got, s.dive, A.dive),
     look: walkOf(A.look),
     behaviour: walkOf(A.behaviour),
     moments,

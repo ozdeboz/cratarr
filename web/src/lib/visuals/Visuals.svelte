@@ -67,6 +67,7 @@
   import Help from './Help.svelte';
   import { newStirring, stir } from './stirring';
   import { FlameRenderer } from './render';
+  import { DIVE_MOST, TUNNEL_MOST } from './zoom';
   import {
     A,
     ASPECT_LABEL,
@@ -348,7 +349,7 @@
   // stands, as at Wild's most (`loosened`), till the next roll, an undo (back to what stood before), Reset or a recall.
   // Three flashes a second over a quarter of the screen stay the rule. A single tap waits out the double's window (a
   // roll takes about as long anyway).
-  const BEHAVIOUR = ['routes', 'flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', ...SCALE_KEYS, 'lighting', 'evolution', 'continuity'] as const;
+  const BEHAVIOUR = ['routes', 'flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', 'tunnel', 'dive', ...SCALE_KEYS, 'lighting', 'evolution', 'continuity'] as const;
   const TRIES = 8;
   const DOUBLE_MS = 250;
   let rollWanted: Scope | null = null;
@@ -455,6 +456,8 @@
     if ((settings.v ?? 1) === 1 && typeof settings.fluid === 'number') settings.fluid = fluidFrom63(settings.fluid);
     // One saved before the columns' scales (64.2): all of each.
     for (const k of SCALE_KEYS) if (!(k in settings)) settings[k] = 1;
+    // One saved before the zooms (65): neither.
+    for (const k of ['tunnel', 'dive'] as const) if (!(k in settings)) settings[k] = 0;
     delete settings.v;
     // This device's own sliders, on this device only.
     applyDevice(settings);
@@ -1330,6 +1333,10 @@
           floor: d.floor,
           fire,
           fluid: fluidNow,
+          // The zooms (zoom.ts): as fast as their routes let their sliders, held back with the pace; none with reduced
+          // motion.
+          tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
+          dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
           forces: stirred.forces,
           flow: stirred.flow,
           // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
@@ -1352,7 +1359,8 @@
       renderer.measure(w, h, now / 1000);
       const stats: FrameStats = {
         t: now / 1000,
-        turnRates: d.rates,
+        // The dive's turn counts as each part's.
+        turnRates: renderer?.diveTurnRate ? d.rates.map((r) => r + renderer!.diveTurnRate) : d.rates,
         shape: d.shape,
         hue: d.parts.map((p) => p.hue),
         spread: d.parts.map((p) => p.spread ?? 1),

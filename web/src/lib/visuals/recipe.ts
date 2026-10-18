@@ -26,6 +26,9 @@ export type RecipeSettings = {
   continuity: number[];
   /** Each column's scale (64.2; settings.svelte.ts `COLUMN_SCALES`). */
   scales: Record<(typeof SCALE_KEYS)[number], number>;
+  /** The infinite zooms (65): most rolls neither. */
+  tunnel?: number;
+  dive?: number;
 };
 
 export type Recipe = {
@@ -164,6 +167,10 @@ export function recipeFor(seed: number, aspects: readonly string[], bands = 6): 
     evolution: EVOLUTION.map((v) => v * 2 ** between(-0.7, 1.3)),
     continuity: Array.from({ length: bands }, () => between(0.2, 0.9)),
     scales: Object.fromEntries(SCALE_KEYS.map((k) => [k, between(LEAST_SCALE, 1)])) as RecipeSettings['scales'],
+    // The zooms, drawn last so a seed's other draws stay as they were: about one roll in three a tunnel, one in four a
+    // dive, at no more than their middle.
+    tunnel: rnd() < 0.7 ? 0 : between(0.2, 0.6),
+    dive: rnd() < 0.75 ? 0 : between(0.2, 0.6),
   };
   return { seed, routes: r, settings, extras };
 }
@@ -223,5 +230,8 @@ export function settingsOf(recipe: Recipe, base: VisualSettings, scope: Scope = 
     continuity: takes('continuity') ? r.continuity.map((v, b) => (pinned.has(`continuity:${b}`) ? base.continuity[b] : within(v, 0, 1))) : base.continuity,
     // Each column's scale (a recipe from before 64.2 has none: all of each).
     ...(Object.fromEntries(SCALE_KEYS.map((k) => [k, one(k, within(r.scales?.[k] ?? 1, 0, 1))])) as RecipeSettings['scales']),
+    // The zooms (a recipe from before 65 has none: off).
+    tunnel: one('tunnel', within(r.tunnel ?? 0, 0, 1)),
+    dive: one('dive', within(r.dive ?? 0, 0, 1)),
   };
 }

@@ -159,6 +159,7 @@ uniform sampler2D uBandsB;
 uniform vec2 uCell;
 uniform float uDt;
 uniform float uKeep;
+uniform float uZoom;
 layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 bandA;
 layout(location = 2) out vec4 bandB;
@@ -167,7 +168,9 @@ vec4 kept(vec4 v) { return bad(dot(v, vec4(1.0))) ? vec4(0.0) : v * uKeep; }
 // the coarser levels (made for a wide smoothing, stale otherwise), stepping at every cell's edge, and the steps pile up
 // frame on frame into blocks (2026-10-18: Mali takes 7% of the next level for a 5% squeeze; desktops round it away).
 void main() {
-  vec2 back = vUv - uDt * texture(uVelocity, vUv).xy * uCell;
+  // The tunnel (zoom.ts): read nearer the middle, so what was drawn is drawn larger.
+  vec2 at = 0.5 + (vUv - 0.5) * uZoom;
+  vec2 back = at - uDt * texture(uVelocity, at).xy * uCell;
   o = kept(textureLod(uAcc, back, 0.0));
   bandA = kept(textureLod(uBandsA, back, 0.0));
   bandB = kept(textureLod(uBandsB, back, 0.0));
@@ -292,7 +295,7 @@ export class Fluid {
 
   /** The light carried along by the flow into `dst` (a framebuffer of three targets as `light`'s, `width` x `height`),
    *  `keep` of it kept (as the fade keeps it), in place of the renderer's fade. Leaves blending off and `dst` bound. */
-  advect(light: Light, dst: WebGLFramebuffer, keep: number, width: number, height: number) {
+  advect(light: Light, dst: WebGLFramebuffer, keep: number, width: number, height: number, zoom = 1) {
     const gl = this.gl;
     gl.disable(gl.BLEND);
     gl.bindVertexArray(this.empty);
@@ -305,6 +308,7 @@ export class Fluid {
     gl.uniform2f(u('uCell'), ...this.uvPerCell);
     gl.uniform1f(u('uDt'), this.lastDt);
     gl.uniform1f(u('uKeep'), keep);
+    gl.uniform1f(u('uZoom'), zoom);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 

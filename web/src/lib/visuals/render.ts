@@ -12,6 +12,7 @@
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import { MARK, colourOf, PARTS, type Flame } from './flame';
 import { Fluid, gridFor, type Flow, type Force } from './fluid';
+import { diveCamera, diveFit, diveTarget, type DiveFit } from './zoom';
 import { FlashMeter } from './flashmeter';
 import type { Tiles } from './meters';
 
@@ -77,6 +78,12 @@ uniform ivec4 uFinalVarId[2];
 uniform vec4 uFinalVarW[2];
 uniform vec4 uCamera;
 uniform vec2 uTurn;
+// The dive (zoom.ts): its part, how far into the loop (0..1: also the share of points drawn as that part's copy), and
+// the camera's zoom and turn about the part's fixed point (a complex factor, then the point).
+uniform int uDive;
+uniform int uDiveI;
+uniform float uDiveT;
+uniform vec4 uDiveZ;
 // The flame's colours: one chroma (OKLCH); each band's transform's colour as a point in the colour plane, and its
 // lightness (a point's is its bands', by how near its colour is to each).
 uniform float uChroma;
@@ -254,10 +261,34 @@ void main() {
   vColor = srgb(vec3(light / sum, uChroma * c));
   vBandA = vec4(near[0], near[1], near[2], near[3]) / sum;
   vBandB = vec2(near[4], near[5]) / sum;
+  // The dive: some points drawn as the dived-to part's copy of them (that copy is the whole, smaller: drawn larger as
+  // the loop goes on, it becomes the whole again), all through the camera's zoom about the part's fixed point.
+  vec2 drawn = p;
+  if (uDive == 1 && !lost) {
+    uint s2 = s ^ 0x9e3779b9u;
+    if (rnd(s2) < uDiveT) {
+      int j = uDiveI;
+      vec3 hj = vec3(p, 1.0);
+      vec2 qj = vec2(dot(uAbc[j], hj), dot(uDef[j], hj));
+      float rj2 = dot(qj, qj) + 1e-12;
+      float rj = sqrt(rj2);
+      float thj = atan(qj.x, qj.y);
+      vec2 pj = vec2(0.0);
+      for (int k = 0; k < ${SLOTS}; k++) {
+        float w = uVarW[j * 2 + k / 4][k % 4];
+        if (w == 0.0) continue;
+        pj += w * variation(uVarId[j * 2 + k / 4][k % 4], qj, rj2, rj, thj, uAbc[j], uDef[j], s2);
+      }
+      if (j < ${PARTS} && ((uPostMask >> j) & 1) == 1) pj = vec2(dot(uPostAbc[j], vec3(pj, 1.0)), dot(uPostDef[j], vec3(pj, 1.0)));
+      if (!(bad(pj.x) || bad(pj.y))) drawn = pj;
+    }
+    vec2 d = drawn - uDiveZ.zw;
+    drawn = uDiveZ.zw + vec2(uDiveZ.x * d.x - uDiveZ.y * d.y, uDiveZ.y * d.x + uDiveZ.x * d.y);
+  }
   // Where it is drawn: through the final transform, where the flame has one.
-  vec2 shown = p;
+  vec2 shown = drawn;
   if (uHasFinal == 1 && !lost) {
-    vec3 fh = vec3(p, 1.0);
+    vec3 fh = vec3(drawn, 1.0);
     vec2 fq = vec2(dot(uFinalAbc, fh), dot(uFinalDef, fh));
     float fr2 = dot(fq, fq) + 1e-12;
     float fr = sqrt(fr2);
@@ -297,6 +328,27 @@ layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 bandA;
 layout(location = 2) out vec4 bandB;
 void main() { o = vec4(0.0, 0.0, 0.0, uKeep); bandA = o; bandB = o; }`;
+
+// The tunnel (zoom.ts), where nothing flows: the light kept, read nearer the middle (drawn larger), in place of the fade.
+const TUNNEL = `#version 300 es
+precision highp float;
+uniform sampler2D uAcc;
+uniform sampler2D uBandsA;
+uniform sampler2D uBandsB;
+uniform vec2 uSize;
+uniform float uZoom;
+uniform float uKeep;
+layout(location = 0) out vec4 o;
+layout(location = 1) out vec4 bandA;
+layout(location = 2) out vec4 bandB;
+bool bad(float x) { return (floatBitsToUint(x) & 0x7f800000u) == 0x7f800000u; }
+vec4 kept(vec4 v) { return bad(dot(v, vec4(1.0))) ? vec4(0.0) : v * uKeep; }
+void main() {
+  vec2 at = 0.5 + (gl_FragCoord.xy / uSize - 0.5) * uZoom;
+  o = kept(textureLod(uAcc, at, 0.0));
+  bandA = kept(textureLod(uBandsA, at, 0.0));
+  bandB = kept(textureLod(uBandsB, at, 0.0));
+}`;
 
 // Not a number, or infinite, from the bits (see ITERATE's).
 // A value not a number is nothing; an infinite one, the most a 16-bit float holds short of infinity (by its sign: a
@@ -494,6 +546,9 @@ export type Shown = {
    *  along by the fluid (fluid.ts), pushed by `forces` and moving as `flow` says, `dt` seconds a frame, and the picture
    *  is read back along the flow by `warp` seconds of it. */
   fluid: number;
+  /** The infinite zooms (zoom.ts): how fast, each its log a second (0: off). */
+  tunnel: number;
+  dive: number;
   forces: Force[];
   flow: Flow;
   dt: number;
@@ -519,6 +574,12 @@ export class FlameRenderer {
   private fbos: WebGLFramebuffer[] = [];
   private cur = 0;
   private scrubbing: WebGLProgram;
+  private tunneling: WebGLProgram;
+  /** The dive now (zoom.ts): its part and that part's fit, how far into the loop, when the fit was made and for which
+   *  flame's parts. */
+  private dive: { j: number; fit: DiveFit; t: number; at: number; parts: number } | null = null;
+  /** How fast the dive turns the picture now (radians a second): the motion meter counts it with the parts' own. */
+  diveTurnRate = 0;
   private finding: WebGLProgram;
   private query: WebGLQuery | null = null;
   private frames = 0;
@@ -592,6 +653,7 @@ export class FlameRenderer {
     this.fade = program(gl, FULL, FADE);
     this.show = program(gl, FULL, SHOW);
     this.scrubbing = program(gl, FULL, SCRUB);
+    this.tunneling = program(gl, FULL, TUNNEL);
     this.finding = program(gl, FULL, FIND);
     this.carrying = program(gl, FULL, CARRY);
     this.empty = gl.createVertexArray()!;
@@ -951,9 +1013,14 @@ export class FlameRenderer {
       fluid.push(look.forces);
       fluid.step(look.dt, look.flow);
       const other = 1 - this.cur;
-      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height);
+      fluid.advect({ acc: this.acc!, bandsA: this.bands!, bandsB: this.bandsB! }, this.fbos[other], look.keep, this.width, this.height, this.tunnelZoom(look.tunnel, since));
       this.cur = other;
       this.use();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
+      gl.viewport(0, 0, this.width, this.height);
+      gl.enable(gl.BLEND);
+    } else if (look.tunnel > 0) {
+      this.tunnel(look.keep, this.tunnelZoom(look.tunnel, since));
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.accFbo);
       gl.viewport(0, 0, this.width, this.height);
       gl.enable(gl.BLEND);
@@ -969,6 +1036,7 @@ export class FlameRenderer {
     gl.useProgram(this.iterate);
     gl.uniform4f(this.u(this.iterate, 'uCamera'), flame.center[0], flame.center[1], look.scale / flame.size, this.width / this.height);
     gl.uniform2f(this.u(this.iterate, 'uTurn'), Math.cos(look.turn), Math.sin(look.turn));
+    this.diveStep(look.dive, since);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.feedback);
     const unseen = this.fuse;
@@ -1082,6 +1150,80 @@ export class FlameRenderer {
   /** The screen's readings the GPU has finished, the oldest first. */
   tiles(): Tiles[] {
     return this.meter?.poll() ?? [];
+  }
+
+  /** The tunnel's factor this frame at `rate`: read this much nearer the middle (under 1: drawn larger). */
+  private tunnelZoom(rate: number, since: number) {
+    return rate > 0 ? Math.exp(-rate * since) : 1;
+  }
+
+  /** The tunnel's pass where nothing flows: the buffers copied into the other set, read `zoom` nearer the middle and
+   *  kept as the fade keeps them. */
+  private tunnel(keep: number, zoom: number) {
+    const gl = this.gl;
+    const other = 1 - this.cur;
+    gl.disable(gl.BLEND);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbos[other]);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.bindVertexArray(this.empty);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.accs[this.cur]);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.bandSets[this.cur]);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.bandSetsB[this.cur]);
+    const p = this.tunneling;
+    gl.useProgram(p);
+    gl.uniform1i(gl.getUniformLocation(p, 'uAcc'), 0);
+    gl.uniform1i(gl.getUniformLocation(p, 'uBandsA'), 1);
+    gl.uniform1i(gl.getUniformLocation(p, 'uBandsB'), 2);
+    gl.uniform2f(gl.getUniformLocation(p, 'uSize'), this.width, this.height);
+    gl.uniform1f(gl.getUniformLocation(p, 'uZoom'), zoom);
+    gl.uniform1f(gl.getUniformLocation(p, 'uKeep'), keep);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.activeTexture(gl.TEXTURE0);
+    this.cur = other;
+    this.use();
+  }
+
+  /** The dive's camera for this frame at `rate` (the points' program in use). Its part is chosen as a loop starts (and
+   *  for a flame of other parts), its fit made again four times a second as the flame moves. Let go of (`rate` 0)
+   *  mid-loop, it finishes the loop gently and rests at the whole, so the picture never stops zoomed in. */
+  private diveStep(rate: number, since: number) {
+    const gl = this.gl;
+    const flame = this.flame;
+    const off = () => {
+      gl.uniform1i(this.u(this.iterate, 'uDive'), 0);
+      this.dive = null;
+      this.diveTurnRate = 0;
+    };
+    if (!flame || (rate <= 0 && !this.dive)) return off();
+    const now = performance.now();
+    let d = this.dive;
+    if (!d || d.parts !== flame.xforms.length) {
+      const target = diveTarget(flame);
+      if (!target) return off();
+      d = this.dive = { j: target.j, fit: target, t: 0, at: now, parts: flame.xforms.length };
+    } else if (now - d.at > 250) {
+      const fit = diveFit(flame, d.j);
+      if (fit) d.fit = fit;
+      d.at = now;
+    }
+    const speed = rate > 0 ? rate : 0.15;
+    const camera = diveCamera(d.fit, d.t, speed);
+    d.t += since / Math.max(0.5, Math.log(1 / Math.hypot(d.fit.a[0], d.fit.a[1])) / speed);
+    if (d.t >= 1) {
+      // A loop done: the part become the whole. Let go of, the dive rests here; else the next loop's part is chosen.
+      if (rate <= 0) return off();
+      const target = diveTarget(flame);
+      if (!target) return off();
+      this.dive = { j: target.j, fit: target, t: d.t % 1, at: now, parts: flame.xforms.length };
+    }
+    this.diveTurnRate = camera.turnRate;
+    gl.uniform1i(this.u(this.iterate, 'uDive'), 1);
+    gl.uniform1i(this.u(this.iterate, 'uDiveI'), d.j);
+    gl.uniform1f(this.u(this.iterate, 'uDiveT'), d.t);
+    gl.uniform4f(this.u(this.iterate, 'uDiveZ'), camera.zoom[0], camera.zoom[1], camera.at[0], camera.at[1]);
   }
 
   private fluidFor(amount: number): Fluid | null {

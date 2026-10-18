@@ -59,6 +59,8 @@ export const ASPECTS = [
   'stir',
   'flow',
   'swirl',
+  'tunnel',
+  'dive',
   'look',
   'behaviour',
   'symmetry',
@@ -86,6 +88,8 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   stir: 'Stir',
   flow: 'Flow',
   swirl: 'Swirl',
+  tunnel: 'Tunnel',
+  dive: 'Dive',
   look: 'Look',
   behaviour: 'Behaviour',
   symmetry: 'Symmetry',
@@ -245,7 +249,7 @@ export const given = (bands: number): Given => ({
  *  multiply. A straight one of amount a gives 1 − e·a·(1 − s) rising with its signal s, of −a 1 − e·a·s falling; quiet
  *  (e → 0) every route lets all through. The bands' routes into one: their geometric mean, as the swings take the bands'
  *  mean. */
-export const LEVEL_ASPECTS: readonly Aspect[] = ['smoothing', 'floor', 'depth', 'fluid'];
+export const LEVEL_ASPECTS: readonly Aspect[] = ['smoothing', 'floor', 'depth', 'fluid', 'tunnel', 'dive'];
 const isLevel = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
 
 /** What a route gives at its signal `v`: its curve's height, a straight one's amount times the signal. */

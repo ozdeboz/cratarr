@@ -57,6 +57,10 @@ export type VisualSettings = Preset & {
    *  the fluid made); above it they are carried along by a flow the music stirs, like smoke. Its route moves it. Its
    *  whole range is `FLUID_FULL` of the fluid's own. */
   fluid: number;
+  /** The infinite zooms' speeds (0..1 of their most, 65; zoom.ts): Tunnel streams the light outward for ever, Dive
+   *  zooms into one part of the flame for ever; 0 off, both may run. Levels, as Fluid is: their routes the conditions. */
+  tunnel: number;
+  dive: number;
   /** Each column of the routes that has no setting of its own, its scale (0..1, 64.2; the owner: "is it impossible to
    *  have each column their own slider?"): what its routes give it, times this. 1 as before; 0 the music leaves it at
    *  rest. routes.ts `COLUMN_SCALES`. */
@@ -103,6 +107,8 @@ export const DEFAULTS: VisualSettings = {
   floor: 0,
   depth: 0.5,
   fluid: 0,
+  tunnel: 0,
+  dive: 0,
   shape: 1,
   rotation: 1,
   lights: 1,
@@ -155,6 +161,8 @@ export const RANGES: Record<Ranged, [number, number]> = {
   floor: [0, 1],
   depth: [0, 1],
   fluid: [0, 1],
+  tunnel: [0, 1],
+  dive: [0, 1],
   shape: [0, 1],
   rotation: [0, 1],
   lights: [0, 1],
@@ -210,7 +218,7 @@ const fresh = (): VisualSettings => ({
 const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly string[]).includes(k);
 /** The behaviour's sliders that pin as the Look's do, moved by hand (the owner, 2026-10-18: "I try to pin the behavior
  *  instead of the look"): a pinned one the dice and Drift leave as it is. The columns' scales are among them. */
-export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', ...SCALE_KEYS] as const;
+export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', 'tunnel', 'dive', ...SCALE_KEYS] as const;
 /** Each band's times, pinned one by one (`lighting:2`: the Low mid's Lighting): the dice leave a pinned one. */
 export const BAND_TIMES = ['lighting', 'evolution', 'continuity'] as const;
 export const bandPin = (key: (typeof BAND_TIMES)[number], band: number) => `${key}:${band}`;
