@@ -259,7 +259,7 @@ export const given = (bands: number): Given => ({
  *  multiply. A straight one of amount a gives 1 − e·a·(1 − s) rising with its signal s, of −a 1 − e·a·s falling; quiet
  *  (e → 0) every route lets all through. The bands' routes into one: their geometric mean, as the swings take the bands'
  *  mean. */
-export const LEVEL_ASPECTS: readonly Aspect[] = ['smoothing', 'haze', 'fluid', 'tunnel', 'dive'];
+export const LEVEL_ASPECTS: readonly Aspect[] = ['smoothing', 'haze', 'fluid', 'tunnel', 'dive', 'effects'];
 const isLevel = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
 
 /** What a route gives at its signal `v`: its curve's height, a straight one's amount times the signal. */

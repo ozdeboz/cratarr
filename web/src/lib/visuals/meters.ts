@@ -35,6 +35,8 @@ export type FrameStats = {
   look: 'track' | 'dice' | 'moment' | null;
   /** A new symmetry this frame (a moment). */
   symmetry: boolean;
+  /** What the effects add (effects.ts `reportOf`), each a second, beside the flame's own. */
+  extra?: Partial<Record<'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping', number>>;
   /** The picture's tiles, where a reading arrived this frame (one frame may bring several, or none). */
   tiles: Tiles[];
 };
@@ -206,13 +208,14 @@ export class Meters {
     const change = (a: number[], b: number[]) => mean(a.map((x, i) => Math.abs(x - (b[i] ?? x)))) / dt;
     // A hue that comes round is no change: its shortest way.
     const hueChange = mean(s.hue.map((h, i) => Math.abs((((h - (was.hue[i] ?? h)) % 1) + 1.5) % 1 - 0.5))) / dt;
-    this.motion += (mean(s.turnRates.map(Math.abs)) - this.motion) * k;
+    const x = s.extra ?? {};
+    this.motion += (mean(s.turnRates.map(Math.abs)) + (x.motion ?? 0) - this.motion) * k;
     // A new look jumps by design: that frame's change is the look's, counted in looksPerMinute, not churn.
     const jumped = s.look !== null;
-    this.shape += ((jumped ? 0 : change(s.shape, was.shape) + change(s.spread, was.spread)) - this.shape) * k;
-    this.colour += ((jumped ? 0 : hueChange + Math.abs(s.saturation - was.saturation) / dt) - this.colour) * k;
+    this.shape += ((jumped ? 0 : change(s.shape, was.shape) + change(s.spread, was.spread)) + (x.shapeChurn ?? 0) - this.shape) * k;
+    this.colour += ((jumped ? 0 : hueChange + Math.abs(s.saturation - was.saturation) / dt) + (x.colourChurn ?? 0) - this.colour) * k;
     const pump = s.scale > 0 && was.scale > 0 ? Math.abs(Math.log(s.scale / was.scale)) / dt : 0;
-    this.zoom += (pump - this.zoom) * k;
+    this.zoom += (pump + (x.zoomPumping ?? 0) - this.zoom) * k;
   }
 
   now(): MeterValues {

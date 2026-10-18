@@ -68,6 +68,7 @@
   import { newStirring, stir } from './stirring';
   import { FlameRenderer } from './render';
   import { DIVE_MOST, TUNNEL_MOST } from './zoom';
+  import { effectOf, reportOf } from './effects';
   import {
     A,
     ASPECT_LABEL,
@@ -458,6 +459,9 @@
     for (const k of SCALE_KEYS) if (!(k in settings)) settings[k] = 1;
     // One saved before the zooms (65): neither.
     for (const k of ['tunnel', 'dive'] as const) if (!(k in settings)) settings[k] = 0;
+    // One saved before the effects (65): none, and all of the Effects setting.
+    for (const k of ['fx1', 'fx1Amount', 'fx2', 'fx2Amount', 'fx3', 'fx3Amount', 'fxLoop', 'fxLoopAmount'] as const) if (!(k in settings)) settings[k] = 0;
+    if (!('effects' in settings)) settings.effects = 1;
     delete settings.v;
     // This device's own sliders, on this device only.
     applyDevice(settings);
@@ -538,6 +542,28 @@
       return key ? [column(key, a)] : [];
     }),
   ];
+  // An effect setting's text: its effect's name, or none.
+  const effectName = (v: number) => {
+    const e = effectOf(Math.round(v));
+    return e ? e.name[0].toUpperCase() + e.name.slice(1) : 'None';
+  };
+  // The look's effects for the renderer (render.ts `Shown.effects`), each amount times what the Effects setting's
+  // routes let through; and what they add to the meters.
+  const effectsNow = (how: VisualSettings, level: number, t: number) => ({
+    ids: [how.fx1, how.fx2, how.fx3].map(Math.round),
+    amounts: [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a) => a * level),
+    loop: Math.round(how.fxLoop),
+    loopAmount: how.fxLoopAmount * level,
+    t,
+  });
+  const effectsReport = (how: VisualSettings, level: number) => {
+    const fx = effectsNow(how, level, 0);
+    const picture = reportOf(fx.ids, fx.amounts, 'picture');
+    const loop = reportOf([fx.loop], [fx.loopAmount], 'loop');
+    const out: Record<string, number> = { ...picture };
+    for (const [k, v] of Object.entries(loop)) out[k] = (out[k] ?? 0) + (v ?? 0);
+    return out;
+  };
   const LOOK: Row[] = [
     { key: 'family', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? '' },
     { key: 'form', label: 'Form', step: 1, text: (v) => `${v}` },
@@ -552,6 +578,13 @@
     { key: 'lightness', label: 'Lightness', step: 0.01, text: percent },
     { key: 'vividness', label: 'Vividness', step: 0.01, text: percent },
     { key: 'purity', label: 'Purity', step: 0.05, text: percent },
+    // The look's effects (65): three on the picture, one on the loop, each with its amount.
+    ...([1, 2, 3] as const).flatMap((n) => [
+      { key: `fx${n}` as One, label: `Effect ${n}`, step: 1, text: effectName },
+      { key: `fx${n}Amount` as One, label: `Amount ${n}`, step: 0.05, text: percent },
+    ]),
+    { key: 'fxLoop', label: 'Loop', step: 1, text: effectName },
+    { key: 'fxLoopAmount', label: 'Loop amount', step: 0.05, text: percent },
   ];
   const isLook = (key: string) => (PRESET_KEYS as readonly string[]).includes(key);
   const lookNow = () => Object.fromEntries(PRESET_KEYS.map((k) => [k, s[k]]));
@@ -1338,6 +1371,8 @@
           // The zooms (zoom.ts): as fast as their routes let their sliders, held back with the pace; none with reduced
           // motion.
           tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
+          // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
+          effects: effectsNow(how, d.effects, m.position),
           dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
           forces: stirred.forces,
           flow: stirred.flow,
@@ -1361,6 +1396,8 @@
       renderer.measure(w, h, now / 1000);
       const stats: FrameStats = {
         t: now / 1000,
+        // What the effects add to the meters (effects.ts), beside the flame's own.
+        extra: effectsReport(how, d.effects),
         // The dive's turn counts as each part's.
         turnRates: renderer?.diveTurnRate ? d.rates.map((r) => r + renderer!.diveTurnRate) : d.rates,
         shape: d.shape,

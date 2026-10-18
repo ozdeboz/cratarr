@@ -8,6 +8,10 @@
 // that keeps nothing (a private window) starts from the defaults each time.
 
 import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
+import { EFFECTS } from './effects';
+
+/** The highest effect's id, the effect settings' top. */
+const LAST_EFFECT = Math.max(...EFFECTS.map((e) => e.id));
 import { defaultRoutes, isRoute, keyNow, SCALE_KEYS, type RouteValue } from './routes';
 import { curveFrom, valueOf } from './curves';
 import { QUALITY } from './quality';
@@ -58,6 +62,8 @@ export type VisualSettings = Preset & {
   /** The infinite zooms' speeds (0..1 of their most, 65; zoom.ts): Tunnel streams the light outward for ever, Dive
    *  zooms into one part of the flame for ever; 0 off, both may run. Levels, as Fluid is: their routes the conditions. */
   tunnel: number;
+  /** The most of the look's effects (0..1, 65): the Effects column's routes are its conditions, as Fluid's. */
+  effects: number;
   dive: number;
   /** Each band's part's weight in the drawing, the scale of its Presence column (65; routes.ts `COLUMN_SCALES`), and
    *  the slow giant waves' (the Waves column). */
@@ -105,6 +111,7 @@ export const DEFAULTS: VisualSettings = {
   haze: 0,
   fluid: 0,
   tunnel: 0,
+  effects: 1,
   dive: 0,
   presence: 1,
   waves: 1,
@@ -133,6 +140,14 @@ export const DEFAULTS: VisualSettings = {
   spread: 1,
   // Six parts mixing their colours go grey: mostly each its band's own.
   purity: 0.75,
+  fx1: 0,
+  fx1Amount: 0,
+  fx2: 0,
+  fx2Amount: 0,
+  fx3: 0,
+  fx3Amount: 0,
+  fxLoop: 0,
+  fxLoopAmount: 0,
   pins: [],
   // A kick rings longer than a hat.
   lighting: [0.2, 0.18, 0.15, 0.13, 0.1, 0.08],
@@ -184,6 +199,15 @@ export const RANGES: Record<Ranged, [number, number]> = {
   vividness: [0, 1],
   spread: [0.25, 2.5],
   purity: [0, 1],
+  fx1: [0, LAST_EFFECT],
+  fx1Amount: [0, 1],
+  fx2: [0, LAST_EFFECT],
+  fx2Amount: [0, 1],
+  fx3: [0, LAST_EFFECT],
+  fx3Amount: [0, 1],
+  fxLoop: [0, LAST_EFFECT],
+  fxLoopAmount: [0, 1],
+  effects: [0, 1],
   lighting: [0.02, 1],
   evolution: [0.02, 2],
   continuity: [0, 1],
@@ -205,7 +229,7 @@ const fresh = (): VisualSettings => ({
 const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly string[]).includes(k);
 /** The behaviour's sliders that pin as the Look's do, moved by hand (the owner, 2026-10-18: "I try to pin the behavior
  *  instead of the look"): a pinned one the dice and Drift leave as it is. The columns' scales are among them. */
-export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothing', 'haze', 'tunnel', 'dive', ...SCALE_KEYS] as const;
+export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothing', 'haze', 'tunnel', 'dive', 'effects', ...SCALE_KEYS] as const;
 /** Each band's times, pinned one by one (`lighting:2`: the Low mid's Lighting): the dice leave a pinned one. */
 export const BAND_TIMES = ['lighting', 'evolution', 'continuity'] as const;
 export const bandPin = (key: (typeof BAND_TIMES)[number], band: number) => `${key}:${band}`;

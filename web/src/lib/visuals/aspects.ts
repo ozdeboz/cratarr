@@ -99,6 +99,8 @@ export type AspectsNow = {
   warp: number;
   /** The infinite zooms' speeds (0..1 of their most: zoom.ts), as their routes let their sliders through. */
   tunnel: number;
+  /** The look's effects' share now (0..1): the Effects setting as its routes let it through. */
+  effects: number;
   dive: number;
   /** How far the look and the behaviour walk (drift.ts): what the Look and Behaviour columns' routes give them, but
    *  the Track row's (its move at a new track is the track's own, not a walk). */
@@ -307,6 +309,7 @@ export function stepAspects(
     fluid,
     warp: 0.12 * fluid,
     tunnel: levelOf(st.got, s.tunnel, A.tunnel),
+    effects: levelOf(st.got, s.effects, A.effects),
     dive: levelOf(st.got, s.dive, A.dive),
     look: walkOf(A.look),
     behaviour: walkOf(A.behaviour),
