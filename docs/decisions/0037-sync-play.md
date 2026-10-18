@@ -1,6 +1,6 @@
 # 0037: Sync play: one queue on several of Cratarr's players at once
 
-- Status: proposed
+- Status: accepted (built 2026-10-16 over Snapcast, 0bc3ade0 and on; marked at the owner's word, 2026-10-19)
 - Date: 2026-10-16
 - Builds on: 0031 (the Android app and Play On), 0033 (Cratarr holds the queues)
 
