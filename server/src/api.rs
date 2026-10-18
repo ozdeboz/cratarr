@@ -30,6 +30,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/groups/{group}/visuals", get(group_visuals).put(put_group_visuals))
         .route("/api/visuals/snapshots", get(visual_snapshots).post(add_visual_snapshot))
         .route("/api/visuals/snapshots/{id}", axum::routing::patch(rename_visual_snapshot).delete(delete_visual_snapshot))
+        .route("/api/visuals/ratings", get(visual_ratings).post(add_visual_rating))
         .route("/api/players/{name}/log", get(player_log_last).post(player_log_add))
         .route("/api/diagnostics", get(diagnostics_rows))
         .route("/api/diagnostics/download", get(diagnostics_download))
@@ -494,6 +495,52 @@ async fn rename_visual_snapshot(Path(id): Path<String>, Json(b): Json<SnapshotCh
     match served.userdata.change_snapshot(&me, &id, name.as_deref(), picture) {
         Ok(Some(snapshot)) => Json(snapshot).into_response(),
         Ok(None) => refused(StatusCode::NOT_FOUND, "There is no such snapshot."),
+        Err(e) => failed(e),
+    }
+}
+
+/// The owner's pairwise ratings of the visuals' behaviours (the governor's calibration), the oldest first.
+async fn visual_ratings() -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    match served.userdata.ratings(&me) {
+        Ok(all) => Json(all).into_response(),
+        Err(e) => failed(e),
+    }
+}
+
+/// `a` and `b`: what was shown (their recipes, opaque here); `choice`: "a", "b", "same" or "neither".
+#[derive(Deserialize)]
+struct NewRating {
+    a: serde_json::Value,
+    b: serde_json::Value,
+    choice: String,
+    #[serde(default)]
+    track: Option<String>,
+    #[serde(default)]
+    context: serde_json::Value,
+}
+
+/// The most a rating may hold, as JSON (bytes).
+const RATING_BYTES: usize = 32 * 1024;
+
+async fn add_visual_rating(Json(b): Json<NewRating>) -> Response {
+    let (served, me) = match snapshot_keeper() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    if !["a", "b", "same", "neither"].contains(&b.choice.as_str()) {
+        return refused(StatusCode::BAD_REQUEST, "A rating's choice is a, b, same or neither.");
+    }
+    if b.a.to_string().len() + b.b.to_string().len() + b.context.to_string().len() > RATING_BYTES {
+        return refused(StatusCode::PAYLOAD_TOO_LARGE, "That rating is too large to keep.");
+    }
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let rating = crate::userdata::Rating { at, a: b.a, b: b.b, choice: b.choice, track: b.track, context: b.context };
+    match served.userdata.add_rating(&me, &rating) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => failed(e),
     }
 }

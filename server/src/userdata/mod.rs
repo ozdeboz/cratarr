@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS playlist_entry (
 CREATE TABLE IF NOT EXISTS visual_snapshot (
   user TEXT NOT NULL, id TEXT NOT NULL, name TEXT NOT NULL, settings TEXT NOT NULL, created INTEGER NOT NULL, picture TEXT,
   PRIMARY KEY (user, id));
+CREATE TABLE IF NOT EXISTS visual_rating (
+  user TEXT NOT NULL, at INTEGER NOT NULL, a TEXT NOT NULL, b TEXT NOT NULL, choice TEXT NOT NULL, track TEXT,
+  context TEXT);
 ";
 
 /// Until 2026-10-16 the album panel's heart starred the album's id as a song's, where no Subsonic app looked; it is the
@@ -187,6 +190,20 @@ pub struct Snapshot {
     pub created: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub picture: Option<String>,
+}
+
+/// One of the owner's pairwise ratings of two behaviours of the visuals (the governor's calibration, decision 0046,
+/// amended): what was shown as A and as B (their recipes, opaque here), which was preferred ("a", "b", "same" or
+/// "neither"), the track it played on, and anything else the rating page noted.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Rating {
+    /// Epoch milliseconds.
+    pub at: i64,
+    pub a: serde_json::Value,
+    pub b: serde_json::Value,
+    pub choice: String,
+    pub track: Option<String>,
+    pub context: serde_json::Value,
 }
 
 /// An Incoming album promoted (kept into Music) or rejected (deleted) by its id: what was done, and the key that
@@ -659,6 +676,26 @@ impl UserData {
         Ok(db
             .query_row(&format!("SELECT {SNAPSHOT_COLUMNS} FROM visual_snapshot WHERE user = ?1 AND id = ?2"), params![user, id], snapshot_of)
             .optional()?)
+    }
+
+    /// A rating kept.
+    pub fn add_rating(&self, user: &str, r: &Rating) -> Result<()> {
+        self.db().execute(
+            "INSERT INTO visual_rating (user, at, a, b, choice, track, context) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![user, r.at, r.a.to_string(), r.b.to_string(), r.choice, r.track, r.context.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// A user's ratings, the oldest first (as they were given).
+    pub fn ratings(&self, user: &str) -> Result<Vec<Rating>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT at, a, b, choice, track, context FROM visual_rating WHERE user = ?1 ORDER BY at, rowid")?;
+        let json = |s: String| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null);
+        let rows = st.query_map([user], |r| {
+            Ok(Rating { at: r.get(0)?, a: json(r.get(1)?), b: json(r.get(2)?), choice: r.get(3)?, track: r.get(4)?, context: json(r.get(5)?) })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Whether there was such a snapshot to delete.
@@ -1150,5 +1187,25 @@ mod tests {
         drop(u);
         UserData::open(Some(&file)).unwrap();
         let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn ratings_are_kept_per_user_in_order() {
+        let u = UserData::open(None).unwrap();
+        let r = |at: i64, choice: &str| Rating {
+            at,
+            a: serde_json::json!({ "seed": 1 }),
+            b: serde_json::json!({ "seed": 2 }),
+            choice: choice.to_string(),
+            track: Some("cratarr/tr-1".into()),
+            context: serde_json::json!({ "secs": 20 }),
+        };
+        u.add_rating("me", &r(2, "b")).unwrap();
+        u.add_rating("me", &r(1, "a")).unwrap();
+        u.add_rating("you", &r(3, "same")).unwrap();
+        let mine = u.ratings("me").unwrap();
+        assert_eq!(mine.iter().map(|x| (x.at, x.choice.as_str())).collect::<Vec<_>>(), [(1, "a"), (2, "b")]);
+        assert_eq!(mine[0].a, serde_json::json!({ "seed": 1 }));
+        assert_eq!(mine[0].context, serde_json::json!({ "secs": 20 }));
     }
 }
