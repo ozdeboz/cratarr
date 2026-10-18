@@ -339,8 +339,9 @@
     showChrome();
   }
 
-  // The dice: everything at random, a look and how it behaves (a recipe: recipe.ts), both to the group. Each recipe is
-  // first run against the playing track from where it is (precheck.ts), a slice a frame: the first within the limits
+  // The dice: everything at random, a look and how it behaves (a recipe: recipe.ts), both to the group. Each try draws
+  // its look first (65: a look brings its effects, which count against the limits) and runs the recipe with it against
+  // the playing track from where it is (precheck.ts), a slice a frame: the first within the limits
   // (the governor's, as Calm ↔ Wild has them; three flashes a second whatever it says) is taken, after eight the one
   // over them by least; where the track's signals are not known yet the first, the governor holding it as it plays.
   // The undo puts back the look and behaviour from before (until the next roll).
@@ -355,7 +356,9 @@
   const TRIES = 8;
   const DOUBLE_MS = 250;
   let rollWanted: Scope | null = null;
-  let rolling: { run: Generator<void, Recipe>; scope: Scope } | null = null;
+  let rolling: { run: Generator<void, Rolled>; scope: Scope } | null = null;
+  // A roll's recipe and, for a full one, the look drawn with it (and checked with it).
+  type Rolled = { recipe: Recipe; look: Drawn | null };
   const wildNow = (wild: number) => (s.loose ? Math.max(wild, 1) : wild);
   let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings>; loose: number } | null>(null);
   let diceWait = 0;
@@ -374,24 +377,27 @@
     rollWanted = scope;
     showChrome();
   }
-  function* rollingFor(base: VisualSettings, key: string | null, from: number, scope: Scope): Generator<void, Recipe> {
+  function* rollingFor(base: VisualSettings, key: string | null, from: number, scope: Scope): Generator<void, Rolled> {
     const [source, id] = key ? [key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)] : ['', ''];
     const signals = key ? signalsOf(source, id) : null;
     const beats = key ? (beatsOf(source, id) ?? null) : null;
     const wild = 2 ** (2 * ((scope === 'movement' ? Math.max(base.wild, 1) : base.wild) - 0.5));
     const limits: Record<string, number> = { ...Object.fromEntries(Object.entries(limitsNow).map(([k, v]) => [k, v * wild])), flash: DEFAULT_LIMITS.flash };
-    let best: { recipe: Recipe; by: number } | null = null;
+    let best: (Rolled & { by: number }) | null = null;
     for (let k = 0; k < TRIES; k++) {
       const recipe = recipeFor(Math.floor(Math.random() * 0x100000000), ASPECTS);
-      if (!signals) return recipe;
-      const checked: Checked = yield* prechecking(recipe, base, signals, beats, from, limits, undefined, scope);
-      if (checked.ok) return recipe;
+      // A full roll's look, drawn as Another look draws it (what is pinned kept), before the check, so the check is of
+      // what will show; a double tap keeps the look.
+      const look = scope === 'all' ? yield* presetDraws(Math.floor(Math.random() * 0x100000000), pinned()) : null;
+      if (!signals) return { recipe, look };
+      const checked: Checked = yield* prechecking(recipe, look ? { ...base, ...look.preset } : base, signals, beats, from, limits, undefined, scope);
+      if (checked.ok) return { recipe, look };
       const by = checked.over.reduce((sum, m) => sum + (checked.worst[m as keyof typeof checked.worst] as number) / (limits[m] ?? 1), 0);
-      if (!best || by < best.by) best = { recipe, by };
+      if (!best || by < best.by) best = { recipe, look, by };
     }
-    return best!.recipe;
+    return best!;
   }
-  function rolled(recipe: Recipe, scope: Scope) {
+  function rolled({ recipe, look }: Rolled, scope: Scope) {
     const now = $state.snapshot(s) as VisualSettings;
     undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings>, loose: now.loose };
     const next = settingsOf(recipe, now, scope);
@@ -399,7 +405,8 @@
     s.loose = scope === 'movement' ? 1 : 0;
     saveVisualSettings();
     share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), loose: s.loose });
-    if (scope === 'all') loadAnother(Math.floor(Math.random() * 0x100000000), true);
+    // The look the roll was checked with, into the settings as a drawn one is (blended in, to the group).
+    if (look) drawingNow = { draws: (function* (): Generator<void, Drawn> { return look; })(), blend: ANOTHER_MS, share: true, load: true, why: 'dice' };
   }
   function undoRoll() {
     if (!undo) return;
