@@ -43,7 +43,9 @@ pub enum Verdict {
     Duplicate { library: usize, why: String },
 }
 
-/// Compare one incoming album with the library albums (`library[i]`, referred to by index in the verdict).
+/// Compare one incoming album with the library albums (`library[i]`, referred to by index in the verdict). The
+/// library's index (below) does this for real; this plain version is what the tests hold it to.
+#[cfg(test)]
 pub fn classify(incoming: &AlbumFacts, library: &[AlbumFacts]) -> Verdict {
     let Some(i) = find_same(incoming, library) else { return Verdict::New };
     let owned = &library[i];
@@ -54,7 +56,9 @@ pub fn classify(incoming: &AlbumFacts, library: &[AlbumFacts]) -> Verdict {
 }
 
 /// The library album that is the same album: by release group first, else by artist and title with case, accents
-/// and punctuation folded away (as the Albums comparison does). `None` when nothing matches.
+/// and punctuation folded away (as the Albums comparison does). `None` when nothing matches. (The tests' plain
+/// version, as `classify`.)
+#[cfg(test)]
 pub fn find_same(incoming: &AlbumFacts, library: &[AlbumFacts]) -> Option<usize> {
     if let Some(rg) = incoming.release_group.as_deref().filter(|r| !r.is_empty()) {
         if let Some(i) = library.iter().position(|l| l.release_group.as_deref() == Some(rg)) {

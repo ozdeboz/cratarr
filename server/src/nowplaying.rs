@@ -18,7 +18,9 @@ pub struct Started {
 }
 
 /// The track that is currently playing according to the activity log, if any.
-/// `None` also means "the log says everything has stopped"; callers decide whether to fall back.
+/// `None` also means "the log says everything has stopped"; callers decide whether to fall back. (The source reads
+/// every one playing, `playing_from_activity`; this is the tests'.)
+#[cfg(test)]
 pub fn current_from_activity(entries: &[ActivityEntry], now_epoch: i64, max_age_secs: i64) -> Option<Started> {
     playing_from_activity(entries, now_epoch, max_age_secs).into_iter().next()
 }

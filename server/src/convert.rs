@@ -170,6 +170,8 @@ pub fn needs_conversion(path: &Path) -> Result<Option<SourceFormat>> {
 /// pictures. The output appears whole or not at all: it is written to a temporary file next to it, then renamed.
 /// `output` may be `input` itself. It gets the input's permissions, as a copy would (a new file's own were 644 where
 /// the library's files are 664, so the group could not write the converted ones: NAS, 2026-10-15).
+/// (The queue converts through `to_cd_flac_told`, to show its progress; this is the tests'.)
+#[cfg(test)]
 pub fn to_cd_flac(input: &Path, output: &Path) -> Result<Report> {
     to_cd_flac_told(input, output, |_| {})
 }

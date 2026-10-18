@@ -20,9 +20,12 @@ pub struct Session {
     pub id: Option<String>,
     /// The account the player is signed in with.
     pub user_id: Option<String>,
+    /// Jellyfin sends these two; nothing reads them now (the tests build sessions with them), kept as its API has them.
+    #[allow(dead_code)]
     pub supports_remote_control: Option<bool>,
     /// Remote commands the client says it takes. Finamp reports `SupportsRemoteControl: false` yet lists commands
     /// here and does play what it is sent (observed on 10.11), so a non-empty list counts as controllable too.
+    #[allow(dead_code)]
     pub supported_commands: Option<Vec<String>>,
     pub last_activity_date: Option<String>,
     /// When the player last reported playback (start, progress or stop); `0001-01-01…` when it never did.
