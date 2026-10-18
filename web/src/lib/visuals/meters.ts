@@ -6,9 +6,12 @@
 // Flashes are WCAG 2.2's (success criterion 2.3.1, "Three Flashes or Below Threshold"): a general flash is a pair of
 // opposing changes in relative luminance of 0.1 or more where the darker is below 0.8; a red flash a pair of opposing
 // transitions into or out of a saturated red (R / (R + G + B) at least 0.8) that move its chromaticity more than 0.2
-// in CIE 1976 u'v'; no more than three of either in any second, over more than a quarter of any 10° field of view
-// (WCAG's estimate: a third of the screen across and down). A tile flashes at its own rate; the screen's is the rate a
-// quarter of some third-by-third window of tiles reaches.
+// in CIE 1976 u'v'; no more than three of either in any second. A tile flashes at its own rate. Over how much of the
+// screen is the owner's: "Full screen flashes at most 3 times per second, but if there is some minor flashing deep
+// inside a cloud, it shouldn't be limited", and of the choices, a quarter of the whole screen (2026-10-18): the rate a
+// quarter of all the tiles reach is `flash`, which the governor holds to three. WCAG's own area (a quarter of any 10°
+// field of view, which it estimates as a third of the screen across and down) is `flashStrict`, measured and reported,
+// not held: on rhythmic music the visuals' beat-lit parts pass three by it (4 to 8 a second, 2026-10-18).
 
 /** One reading of the picture by tiles (flashmeter.ts): each tile's relative luminance, chromaticity (CIE 1976 u',
  *  v') and share of red (R / (R + G + B), linear light), `cols` x `rows` from the bottom left, at `t` seconds. */
@@ -38,12 +41,15 @@ export type FrameStats = {
 
 /** The meters now. */
 export type MeterValues = {
-  /** General flashes a second, the worst window's (WCAG: no more than 3). */
+  /** General flashes a second over a quarter of the screen (the owner's area; held to 3). */
   flash: number;
-  /** Red flashes a second, the worst window's (WCAG: no more than 3). */
+  /** Red flashes a second over a quarter of the screen (held to 3). */
   redFlash: number;
-  /** Either over WCAG's three a second. */
+  /** Either over three a second (over a quarter of the screen). */
   flashFails: boolean;
+  /** General and red flashes a second by WCAG's own area (a quarter of a third-by-third window): reported, not held. */
+  flashStrict: number;
+  redFlashStrict: number;
   /** How fast the parts turn: their mean |turning| (radians a second). */
   motion: number;
   /** How fast the parts change shape and spread: their mean |change| a second. */
@@ -135,16 +141,31 @@ export class Flashes {
     this.tracks.forEach((track, i) => track.add(tiles.t, tiles.luminance[i], tiles.u[i], tiles.v[i], tiles.red[i]));
   }
 
-  /** General and red flashes a second at `t`: the worst window's. */
-  rates(t: number): [number, number] {
-    if (!this.tracks.length) return [0, 0];
+  /** General and red flashes a second at `t`: over a quarter of the screen (the owner's area), and by WCAG's window. */
+  rates(t: number): { general: number; red: number; strictGeneral: number; strictRed: number } {
+    if (!this.tracks.length) return { general: 0, red: 0, strictGeneral: 0, strictRed: 0 };
     const counts = this.tracks.map((track) => track.count(t));
-    return [worstWindow(counts.map((c) => c[0] / 2), this.cols, this.rows), worstWindow(counts.map((c) => c[1] / 2), this.cols, this.rows)];
+    const general = counts.map((c) => c[0] / 2);
+    const red = counts.map((c) => c[1] / 2);
+    return {
+      general: quarterOf(general),
+      red: quarterOf(red),
+      strictGeneral: worstWindow(general, this.cols, this.rows),
+      strictRed: worstWindow(red, this.cols, this.rows),
+    };
   }
 }
 
-/** The rate at least a quarter of some window of a third of the tiles across and down reaches. */
+/** The rate at least a quarter of all the tiles reach. */
+export function quarterOf(rates: number[]): number {
+  if (!rates.length) return 0;
+  const sorted = [...rates].sort((a, b) => b - a);
+  return sorted[Math.max(0, Math.ceil(sorted.length / 4) - 1)];
+}
+
+/** WCAG's area: the rate at least a quarter of some window of a third of the tiles across and down reaches. */
 export function worstWindow(rates: number[], cols: number, rows: number): number {
+
   const wc = Math.max(1, Math.ceil(cols / 3));
   const wr = Math.max(1, Math.ceil(rows / 3));
   let worst = 0;
@@ -168,7 +189,7 @@ export class Meters {
   private shape = 0;
   private colour = 0;
   private zoom = 0;
-  private flash: [number, number] = [0, 0];
+  private flash = { general: 0, red: 0, strictGeneral: 0, strictRed: 0 };
 
   add(s: FrameStats) {
     for (const tiles of s.tiles) this.flashes.add(tiles);
@@ -196,9 +217,11 @@ export class Meters {
 
   now(): MeterValues {
     return {
-      flash: this.flash[0],
-      redFlash: this.flash[1],
-      flashFails: Math.floor(this.flash[0]) > MOST_FLASHES || Math.floor(this.flash[1]) > MOST_FLASHES,
+      flash: this.flash.general,
+      redFlash: this.flash.red,
+      flashFails: Math.floor(this.flash.general) > MOST_FLASHES || Math.floor(this.flash.red) > MOST_FLASHES,
+      flashStrict: this.flash.strictGeneral,
+      redFlashStrict: this.flash.strictRed,
       motion: this.motion,
       shapeChurn: this.shape,
       colourChurn: this.colour,
