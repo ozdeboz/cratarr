@@ -214,3 +214,32 @@ a made-up track) and wants both: "Basically, yes, I want both, so this is seriou
 - The group's shared settings carry one more key: whether a double tap's room stands.
 - The panel gains Quality, Haze, the effects' settings, Facets and Lattice, Tunnel and Dive, and six route columns
   (Presence, Effects, Facets, Waves, Tunnel, Dive), and loses Points, Steps, Resolution, Floor, Depth and Family.
+
+## Amendment, 2026-10-18: as built for 65 (the owner: "All in 65, all now")
+
+- **Fewer sliders** as filled in above: Quality (quality.ts `ceilingOf`; 60 % exactly the defaults before), Haze
+  (aspects.ts `hazeOf`; one route column in place of Floor and Depth, a level either way from 0), and the Colours as
+  the look's Family 0 to 5 (Spectrum, Arc, Two tones, Three drawn with each look; Cover and Fire only by hand, so
+  pinned; under them the bands keep Spectrum's hues). Kept settings and snapshots are form 3; what they replaced is
+  dropped, not converted.
+- **The fifth band is Upper mid**, so the Presence column alone has the name (the owner chose it).
+- **The Envelope** (envelope.ts, pure and tested) is the last band signal, into each band's Presence at 100 % by
+  default; Lighting is labelled **Linger** (its key stays `lighting`).
+- **The effects:** fifteen. Kaleid and Posterize (claude-a5's reference ports), ten more after Hydra (Repeat, Pixelate,
+  Colorama, Hue, Ripple, Stream, Echo, Rotate, Scroll, Saturate), and three after EYESY's modes (the owner: "for effects
+  check out EYESY"): Magnify, Rings and Interference, the ideas only, our own shaders (its repository has no licence).
+- **Held to the limits, three gaps closed:** the meters did not see Presence (a part's weight moves the points between
+  the parts; shape churn now counts the share that moves); the precheck did not count a recipe's effects (effects.ts
+  `settingsReport`, the same for the visuals' meters and the precheck); and it did not count a dive's turn (zoom.ts
+  `diveTurnOf`, fitted once a look).
+- **Calibration** (506 runs: 11 tracks, two places each, Standard over three track looks a track as tracks draw them,
+  26 of 66 with effects): Standard typical and most, motion 0.272 and 0.466, shape 0.279 and 0.683 (0.155 and 0.423
+  before Presence was seen), colour 0.036 and 0.354, pumping 0.068 and 0.351. By the rule only shape churn's limit
+  moves, 0.55 to 0.9; the thumbs' reference values follow. Looks with effects run 5 to 14 % busier than those without.
+  52 of 440 recipes refused (motion 46, flash 9).
+- **The rating mode's Standard** takes every Behaviour slider's default (64.2's column scales kept the device's).
+- **Not done yet:** the stage's cost on the tablet (Mali G52) and the phone (Mali G615), to be measured when the devices
+  are reachable (both were off the network). **Not pixel for pixel:** the chaos game's points are random each frame, so
+  two runs never match; with no effect set the stage stands aside (render.ts `chainFor` null) and the show pass draws
+  to the screen as before, while 65's own defaults (Envelope into Presence, Swell into Waves) change Standard's picture
+  on purpose.
