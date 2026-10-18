@@ -8,13 +8,10 @@ import type { VisualSettings } from '../src/lib/visuals/settings.svelte.ts';
 
 const six = (v: number) => Array<number>(6).fill(v);
 const base = {
-  points: 19,
-  steps: 3,
-  resolution: null,
+  quality: 0.6,
   fps: null,
   brightness: 1,
   wild: 0.5,
-  colours: 0,
   pins: [] as string[],
   routes: { 'track|-|look': -1, 'swell|-|fluid': 0.5, 'loudness|-|hue': 0.3, 'loudness|-|size': 0.9, 'level|0|shape': 0.4 },
   flash: 0.33,
@@ -22,8 +19,7 @@ const base = {
   intensity: 0.55,
   fluid: 0.66,
   smoothing: 0.11,
-  floor: 0.12,
-  depth: 0.13,
+  haze: 0.12,
   lighting: six(0.5),
   evolution: six(0.5),
   continuity: six(0.5),
@@ -45,7 +41,7 @@ test('a movement roll changes only the movement', () => {
   for (const k of ['track|-|look', 'swell|-|fluid', 'loudness|-|hue']) assert.equal(mv.routes[k], base.routes[k], k);
   for (const k of Object.keys(recipe.routes).filter(moving)) assert.equal(mv.routes[k], recipe.routes[k], k);
   for (const k of Object.keys(mv.routes).filter(moving)) assert.equal(mv.routes[k], recipe.routes[k], k);
-  assert.deepEqual([mv.intensity, mv.fluid, mv.smoothing, mv.floor, mv.depth], [0.55, 0.66, 0.11, 0.12, 0.13]);
+  assert.deepEqual([mv.intensity, mv.fluid, mv.smoothing, mv.haze], [0.55, 0.66, 0.11, 0.12]);
   assert.notEqual(mv.flash, 0.33);
   assert.notEqual(mv.speed, 0.44);
   assert.notEqual(mv.lighting[0], 0.5);

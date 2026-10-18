@@ -19,8 +19,7 @@ export type RecipeSettings = {
   intensity: number;
   fluid: number;
   smoothing: number;
-  floor: number;
-  depth: number;
+  haze: number;
   lighting: number[];
   evolution: number[];
   continuity: number[];
@@ -65,7 +64,7 @@ const EXTRAS: Extra[] = [
   { signal: 'percussiveHits', aspect: 'lights', lo: 0.4, hi: 1, family: 'lights' },
   { signal: 'crest', aspect: 'lights', lo: 0.2, hi: 0.6, family: 'lights' },
   { signal: 'loudness', aspect: 'smoothing', lo: -0.4, hi: -0.1, family: 'grain' },
-  { signal: 'centroid', aspect: 'depth', lo: 0.1, hi: 0.3, family: 'grain' },
+  { signal: 'centroid', aspect: 'haze', lo: 0.1, hi: 0.3, family: 'grain' },
   { signal: 'swell', aspect: 'fluid', lo: 0.2, hi: 0.8, family: 'fluid' },
   { signal: 'section', aspect: 'look', lo: 0.3, hi: 1, family: 'look' },
   { signal: 'downbeat', aspect: 'look', lo: 0.1, hi: 0.4, family: 'look' },
@@ -161,8 +160,8 @@ export function recipeFor(seed: number, aspects: readonly string[], bands = 6): 
     // none.
     fluid: Object.keys(r).some((k) => k.endsWith('|fluid')) || rnd() < 0.5 ? between(0.2, 0.7) : 0,
     smoothing: between(0.3, 0.7),
-    floor: between(0, 0.25),
-    depth: between(0.35, 0.65),
+    // Haze about the defaults' (65; in Depth's and Floor's old ranges, the floor's least).
+    haze: between(-0.3, 0.3),
     lighting: LIGHTING.map((v) => v * 2 ** between(-0.7, 1)),
     evolution: EVOLUTION.map((v) => v * 2 ** between(-0.7, 1.3)),
     continuity: Array.from({ length: bands }, () => between(0.2, 0.9)),
@@ -188,7 +187,7 @@ export const MOVEMENT = {
 } as const;
 
 /** The settings a recipe makes of `base`: its routes whole (every other route off) and its settings; `base`'s look,
- *  pins, colours and what the device can afford (Points, Steps, Resolution, FPS, Brightness) kept, and of the rest
+ *  pins, colours and what the device can afford (Quality, FPS, Brightness) kept, and of the rest
  *  what the owner pinned: a behaviour slider, a route ('route:<key>', on or off as it is). The Track row (what a new track does to the look and the behaviour) is base's: a
  *  recipe is how the visuals move with the music, not what a new track brings. */
 /** What a roll changes: everything, or how it moves (`MOVEMENT`). */
@@ -222,8 +221,7 @@ export function settingsOf(recipe: Recipe, base: VisualSettings, scope: Scope = 
     intensity: one('intensity', within(r.intensity, 0, 1)),
     fluid: one('fluid', within(r.fluid, 0, 1)),
     smoothing: one('smoothing', within(r.smoothing, 0, 1)),
-    floor: one('floor', within(r.floor, 0, 1)),
-    depth: one('depth', within(r.depth, 0, 1)),
+    haze: one('haze', within(r.haze ?? 0, -1, 1)),
     // Each band's times as the recipe has them, but a pinned one (`lighting:2`).
     lighting: takes('lighting') ? r.lighting.map((v, b) => (pinned.has(`lighting:${b}`) ? base.lighting[b] : within(v, 0.02, 1))) : base.lighting,
     evolution: takes('evolution') ? r.evolution.map((v, b) => (pinned.has(`evolution:${b}`) ? base.evolution[b] : within(v, 0.02, 2))) : base.evolution,

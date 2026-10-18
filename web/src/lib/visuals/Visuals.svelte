@@ -86,8 +86,8 @@
     type Aspect,
     type Signal,
   } from './routes';
+  import { ceilingOf } from './quality';
   import {
-    autoResolution,
     BANDS,
     DEFAULTS,
     FLUID_FULL,
@@ -319,7 +319,7 @@
       thumb: t,
       meters: meterStats,
       loop: { ...loopStats, device: list[list.length - 1]?.loop.device ?? null },
-      settings: { ...Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])), ...lookNow(), wild: now.wild, colours: now.colours },
+      settings: { ...Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])), ...lookNow(), wild: now.wild },
       track: playingNow ? `${playingNow.source}/${playingNow.id}` : null,
       relative,
       held,
@@ -349,7 +349,7 @@
   // stands, as at Wild's most (`loosened`), till the next roll, an undo (back to what stood before), Reset or a recall.
   // Three flashes a second over a quarter of the screen stay the rule. A single tap waits out the double's window (a
   // roll takes about as long anyway).
-  const BEHAVIOUR = ['routes', 'flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', 'tunnel', 'dive', ...SCALE_KEYS, 'lighting', 'evolution', 'continuity'] as const;
+  const BEHAVIOUR = ['routes', 'flash', 'speed', 'intensity', 'fluid', 'smoothing', 'haze', 'tunnel', 'dive', ...SCALE_KEYS, 'lighting', 'evolution', 'continuity'] as const;
   const TRIES = 8;
   const DOUBLE_MS = 250;
   let rollWanted: Scope | null = null;
@@ -494,9 +494,10 @@
   // behaves, then the look (the preset: pinned where moved).
   type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes' | 'pins'>;
   const MIRROR = ['Off', 'On'];
-  const FAMILIES = ['Spectrum', 'Arc', 'Two tones', 'Three'];
-  const COLOURS = ['Rainbow', 'Cover', 'Fire'];
-  const MODES: ColourMode[] = ['rainbow', 'cover', 'fire'];
+  // The Colours (65: Family folded in, the owner: "YES Family into Colours"): the look's four families, which a track's
+  // look or the dice draw, then the cover's and a fire's, which only a hand chooses (and so pins).
+  const COLOURS = ['Spectrum', 'Arc', 'Two tones', 'Three', 'Cover', 'Fire'];
+  const modeOf = (family: number): ColourMode => (family >= 5 ? 'fire' : family >= 4 ? 'cover' : 'rainbow');
   type Row = { key: One; label: string; step: number; text: (v: number) => string };
   // The settings the governor holds back now (governor.ts), marked by their label: Flash's swing, Speed's pace, and on
   // Wild whatever it holds back (the evolving, the hues, the size, the moments too).
@@ -511,6 +512,7 @@
     return Math.min(1, Math.max(0, (v - lo) / (hi - lo)));
   };
   const percent = (v: number) => `${Math.round(v * 100)}%`;
+  const signedPercent = (v: number) => `${v > 0.004 ? '+' : v < -0.004 ? '−' : ''}${Math.abs(Math.round(v * 100))}%`;
   const thousands = (log2: number) => {
     const n = 2 ** log2;
     return n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}M` : `${Math.round(n / 1024)}k`;
@@ -519,16 +521,14 @@
   // (what the device can afford, how bright, how lively the governor lets it be), then how the visuals behave with the
   // music, then the look.
   const COMPUTE: Row[] = [
-    { key: 'points', label: 'Points', step: 0.25, text: thousands },
-    { key: 'steps', label: 'Steps', step: 1, text: (v) => `${v}` },
-    { key: 'resolution', label: 'Resolution', step: 0.05, text: percent },
+    { key: 'quality', label: 'Quality', step: 0.05, text: percent },
     { key: 'fps', label: 'FPS', step: 5, text: (v) => `${v}` },
     { key: 'brightness', label: 'Brightness', step: 0.05, text: percent },
     { key: 'wild', label: 'Wild', step: 0.05, text: percent },
   ];
   // Then each column of the routes, in the grid's order (64.2; the owner: "each column their own slider"): its scale,
   // or for the four levels the most their routes give.
-  const column = (key: One, aspect: Aspect): Row => ({ key, label: ASPECT_LABEL[aspect], step: 0.05, text: percent });
+  const column = (key: One, aspect: Aspect): Row => ({ key, label: ASPECT_LABEL[aspect], step: 0.05, text: key === 'haze' ? signedPercent : percent });
   const SHOW: Row[] = [
     { key: 'intensity', label: 'Intensity', step: 0.05, text: percent },
     { key: 'flash', label: 'Flash', step: 0.05, text: percent },
@@ -539,7 +539,7 @@
     }),
   ];
   const LOOK: Row[] = [
-    { key: 'colours', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? 'Rainbow' },
+    { key: 'family', label: 'Colours', step: 1, text: (v) => COLOURS[v] ?? '' },
     { key: 'form', label: 'Form', step: 1, text: (v) => `${v}` },
     { key: 'detail', label: 'Detail', step: 0.01, text: percent },
     { key: 'twist', label: 'Twist', step: 0.01, text: percent },
@@ -548,7 +548,6 @@
     { key: 'mirror', label: 'Mirror', step: 1, text: (v) => MIRROR[v] ?? 'Off' },
     { key: 'final', label: 'Lens', step: 1, text: (v) => (v ? (LENSES[v - 1] ?? '') : 'Off') },
     { key: 'spread', label: 'Spread', step: 0.05, text: percent },
-    { key: 'family', label: 'Family', step: 1, text: (v) => FAMILIES[v] ?? '' },
     { key: 'hue', label: 'Hue', step: 0.01, text: (v) => `${Math.round(v * 360)}°` },
     { key: 'lightness', label: 'Lightness', step: 0.01, text: percent },
     { key: 'vividness', label: 'Vividness', step: 0.01, text: percent },
@@ -600,7 +599,7 @@
     showChrome();
   }
   const devicePixels = () => innerWidth * innerHeight * Math.min(devicePixelRatio || 1, 2) ** 2;
-  const valueOf = (key: One) => (key === 'resolution' ? (s.resolution ?? autoResolution(devicePixels())) : s[key]) as number;
+  const valueOf = (key: One) => s[key] as number;
   function set(key: One, v: number) {
     (s as Record<One, number | null>)[key] = v;
     // The look's settings and the behaviour's sliders moved are pinned: a track's or the dice's preset, and Drift,
@@ -858,7 +857,7 @@
     const pace = keptPace();
     let renderer: FlameRenderer | null = null;
     try {
-      renderer = new FlameRenderer(canvas, Math.min(Math.round(2 ** s.points), pace?.points ?? Infinity));
+      renderer = new FlameRenderer(canvas, Math.min(Math.round(2 ** ceilingOf(s.quality, devicePixels()).points), pace?.points ?? Infinity));
     } catch (e) {
       // Why, for a debugger attached to the device (the page says only that it cannot).
       console.warn('Visuals:', e);
@@ -970,7 +969,7 @@
     let partsWhere: ([number, number] | null)[] = [];
     let partsMeasured = 0;
     let metered = 0;
-    let passes = Math.min(s.steps, pace?.passes ?? s.steps);
+    let passes = Math.min(ceilingOf(s.quality, devicePixels()).steps, pace?.passes ?? Infinity);
     let raf = 0;
     let last = performance.now();
     let drawnAt = 0;
@@ -1100,7 +1099,7 @@
         }
       }
       // The colours: the cover's asked for as a track starts, where they are wanted.
-      const mode = MODES[s.colours] ?? 'rainbow';
+      const mode = modeOf(s.family);
       const playingNow = playing();
       if (mode === 'cover' && playingNow && m.key && cover?.key !== m.key) {
         const want = m.key;
@@ -1248,10 +1247,11 @@
       renderer.setFlame(frame ? { ...drawnFlame, center: frame.center, size: frame.size } : drawnFlame);
       const scaleNow = d.scale;
 
-      // The Resolution setting (by default about a megapixel, `autoResolution`) of the screen's own pixels; the screen
-      // scales it up.
+      // What Quality lets the device draw at most (quality.ts `ceilingOf`): its resolution of the screen's own pixels
+      // (at 60 % about a megapixel; the screen scales it up), and below, its points and steps.
       const dpr = Math.min(devicePixelRatio || 1, 2);
-      const r = (s.resolution ?? autoResolution(canvas.clientWidth * canvas.clientHeight * dpr * dpr)) * fit;
+      const top = ceilingOf(s.quality, canvas.clientWidth * canvas.clientHeight * dpr * dpr);
+      const r = top.resolution * fit;
       const w = Math.max(1, Math.round(canvas.clientWidth * dpr * r));
       const h = Math.max(1, Math.round(canvas.clientHeight * dpr * r));
       if (canvas.width !== w || canvas.height !== h) {
@@ -1416,16 +1416,16 @@
         done(pictureOf(canvas));
       }
 
-      // Adapting, under the Points, Steps and Resolution settings, to hold the FPS setting rather than settle under it.
+      // Adapting, under what Quality allows, to hold the FPS setting rather than settle under it.
       // Each second: if more than a fifth of its frames came late for their slot, a step down (steps, then resolution to
       // 60 % of the setting's, then points, halved; several at once where frames took over twice their slot). A step
       // back up (points, then resolution, then steps) only after `wait` seconds in a row with no late frame; a step up
       // taken back within five seconds doubles the wait (up to a minute), so the load settles instead of swinging. The
       // step-down judged its window of frames once per frame after it filled until 2026-10-17 (from one step to the most
       // within a second, behind again, over and over).
-      const most = Math.round(2 ** s.points);
+      const most = Math.round(2 ** top.points);
       if (renderer.pointCount > most) renderer.setPoints(most);
-      passes = Math.min(passes, s.steps);
+      passes = Math.min(passes, top.steps);
       // Not judged: frames while new points settle, or just after a resize (each costs more than the pace it leads to).
       if (renderer.settling || resized) settlingFrames = 2;
       else if (settlingFrames > 0) settlingFrames--;
@@ -1458,7 +1458,7 @@
               ? { points: Math.min(most, points * 2), passes, fit }
               : fit < 1
                 ? { points, passes, fit: Math.min(1, fit / 0.85) }
-                : passes < s.steps
+                : passes < top.steps
                   ? { points, passes: passes + 1, fit }
                   : null;
           if (ceiling && ceiling.until < Date.now()) ceiling = null;

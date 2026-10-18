@@ -11,7 +11,7 @@
   import type { MeterValues } from './meters';
   import { described, pairFor, settingsFor, type Pair } from './rating';
   import { ASPECTS, defaultRoutes } from './routes';
-  import { BANDS, DEFAULTS, visualSettings, type VisualSettings } from './settings.svelte';
+  import { BANDS, BEHAVIOUR_PINS, DEFAULTS, visualSettings, type VisualSettings } from './settings.svelte';
   import { rating, trial, type TrialLoop } from './trial.svelte';
 
   /** Each behaviour is shown this long (s) while the music plays, its first `SETTLE_S` not measured (the picture going
@@ -83,19 +83,14 @@
     return np ? `${np.source}/${np.id}` : null;
   };
 
-  /** Production's behaviour, on this device's own look and settings. */
+  /** Production's behaviour, on this device's own look and settings: every Behaviour slider at its default (the
+   *  columns' scales among them: before 65 those kept this device's, so a Size moved by hand rated as Standard). */
   function standard(): VisualSettings {
     const s = $state.snapshot(visualSettings) as VisualSettings;
     return {
       ...s,
       routes: defaultRoutes(BANDS),
-      flash: DEFAULTS.flash,
-      speed: DEFAULTS.speed,
-      intensity: DEFAULTS.intensity,
-      fluid: DEFAULTS.fluid,
-      smoothing: DEFAULTS.smoothing,
-      floor: DEFAULTS.floor,
-      depth: DEFAULTS.depth,
+      ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, DEFAULTS[k]])),
       lighting: [...DEFAULTS.lighting],
       evolution: [...DEFAULTS.evolution],
       continuity: [...DEFAULTS.continuity],

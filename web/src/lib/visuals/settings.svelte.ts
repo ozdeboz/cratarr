@@ -1,6 +1,5 @@
-// The visuals' settings (decision 0046, amended): how much the device draws (points, steps, resolution, frame rate:
-// ceilings the automatic step-down stays under), how the show behaves (intensity, flash, speed, brightness, colours, the
-// grain), the look (the preset: the flame's form, detail, twist, warp, symmetry, mirror, lens, colour family, hue,
+// The visuals' settings (decision 0046, amended; 0050): how much the device draws (Quality and the frame rate: ceilings
+// the automatic step-down stays under), how the show behaves (intensity, flash, speed, brightness, the grain and haze), the look (the preset: the flame's form, detail, twist, warp, symmetry, mirror, lens, colour family, hue,
 // lightness, vividness, spread and purity, which a track's key or the dice set and the picture follows; one the owner
 // moved is pinned), each band's times (how long its light rings, how quickly its part evolves, and how much of its
 // motion comes in steps on its own transients), and the routes: how much each of the music's signals drives each aspect
@@ -11,10 +10,12 @@
 import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
 import { defaultRoutes, isRoute, keyNow, SCALE_KEYS, type RouteValue } from './routes';
 import { curveFrom, valueOf } from './curves';
+import { QUALITY } from './quality';
 
 const KEY = 'cratarr-visuals';
-/** The kept settings' form: 2 since 64 (Fluid on its finer scale); none before. */
-const FORM = 2;
+/** The kept settings' form: 3 since 65 (Quality, Haze, Family as Colours: what they replace is dropped, not converted,
+ *  by the owner's choice); 2 since 64 (Fluid on its finer scale); none before. */
+const FORM = 3;
 /** Fluid's whole range: this much of the fluid's own. In 63 the slider went to all of it, and the owner wanted only its
  *  first few percent ("between 0 and 5% fluid dynamics is about all I want … or maybe 10% should be 100%", 2026-10-18).
  *  64.1 tried a fifth of that (its top washed the owner's phone out: a route took Fluid past it on every punch); the
@@ -27,12 +28,9 @@ export const fluidFrom63 = (v: number) => Math.min(1, v / FLUID_FULL);
 export const BANDS = 6;
 
 export type VisualSettings = Preset & {
-  /** The most points the chaos game runs (log2: 14 is 16k, 21 is 2M). */
-  points: number;
-  /** The most steps of every point drawn per frame. */
-  steps: number;
-  /** The drawing's size against the screen's own pixels (0.25..1); null: this screen's default (`autoResolution`). */
-  resolution: number | null;
+  /** How much the device may draw at most (0..1, 65): its points, steps and resolution, as quality.ts `ceilingOf` maps
+   *  it (60 % the defaults before 65); the device's pace takes it lower where frames come late. */
+  quality: number;
   /** The most frames a second. */
   fps: number;
   /** How much the music's loudness sets the show's intensity (0: always all, 1: as loud as it is). */
@@ -47,12 +45,12 @@ export type VisualSettings = Preset & {
   wild: number;
   /** The most brightness shown, after everything (0.1..1). */
   brightness: number;
-  /** The grain: how far the sparse parts are blurred into a haze (0: the raw grain; 0.5: three pixels, as before),
-   *  how faint a part goes black (0: none), and how much of the faint detail is lifted (the display's gamma: 0.5 is 3,
-   *  as before). Each 0..1; their routes move them from there. */
+  /** The grain: how far the sparse parts are blurred (0: the raw grain; 0.5: three pixels, as before; 0..1). */
   smoothing: number;
-  floor: number;
-  depth: number;
+  /** Haze (−1..1, 65, decision 0050): more of the faint mist lifted into view (the display's gamma from 3 up to 6), or
+   *  less, the faint cut to black (the gamma down to 1.5, a floor up to a fifth of the flame's mean); 0 as the defaults
+   *  were before 65. Its routes take it toward 0, never past what is set. aspects.ts. */
+  haze: number;
   /** How much the light flows (0..1, decision 0047): 0 its trails only fade where they were drawn, as before (nothing of
    *  the fluid made); above it they are carried along by a flow the music stirs, like smoke. Its route moves it. Its
    *  whole range is `FLUID_FULL` of the fluid's own. */
@@ -78,8 +76,6 @@ export type VisualSettings = Preset & {
   stir: number;
   flow: number;
   swirl: number;
-  /** The colours: 0 the preset's own (its family), 1 the playing track's cover's, 2 a fire's. */
-  colours: number;
   /** The look's settings the owner moved: kept as they are when a track or the dice load another preset, until
    *  unpinned. */
   pins: string[];
@@ -98,9 +94,7 @@ const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)
 // Many points in few steps: each step is a transform feedback, which ANGLE on Direct3D 11 (Chrome and Edge on Windows)
 // flushes after; the same points a frame in 3 steps rather than 12 took 4.0 ms against 4.8 on an RTX 4060 (2026-10-17).
 export const DEFAULTS: VisualSettings = {
-  points: 19,
-  steps: 3,
-  resolution: null,
+  quality: QUALITY,
   fps: touch ? 30 : 60,
   intensity: 1,
   flash: 1,
@@ -108,8 +102,7 @@ export const DEFAULTS: VisualSettings = {
   wild: 0.5,
   brightness: 1,
   smoothing: 0.5,
-  floor: 0,
-  depth: 0.5,
+  haze: 0,
   fluid: 0,
   tunnel: 0,
   dive: 0,
@@ -125,7 +118,6 @@ export const DEFAULTS: VisualSettings = {
   stir: 1,
   flow: 1,
   swirl: 1,
-  colours: 0,
   // The look: the playing track's preset replaces these (those not pinned) as soon as the visuals show.
   form: 0,
   detail: 0.5,
@@ -154,9 +146,7 @@ type Ranged = Exclude<keyof VisualSettings, 'pins'>;
 /** Each setting's range, as its slider has it (the bands' times in seconds, though their sliders double). A kept value
  *  outside it (from a version whose range was another) is brought into it. */
 export const RANGES: Record<Ranged, [number, number]> = {
-  points: [14, 21],
-  steps: [1, 16],
-  resolution: [0.25, 1],
+  quality: [0, 1],
   fps: [10, 60],
   intensity: [0, 1],
   flash: [0, 2],
@@ -164,8 +154,7 @@ export const RANGES: Record<Ranged, [number, number]> = {
   wild: [0, 1],
   brightness: [0.1, 1],
   smoothing: [0, 1],
-  floor: [0, 1],
-  depth: [0, 1],
+  haze: [-1, 1],
   fluid: [0, 1],
   tunnel: [0, 1],
   dive: [0, 1],
@@ -181,7 +170,6 @@ export const RANGES: Record<Ranged, [number, number]> = {
   stir: [0, 1],
   flow: [0, 1],
   swirl: [0, 1],
-  colours: [0, 2],
   form: [0, FORMS - 1],
   detail: [0, 1],
   twist: [0, 1],
@@ -189,7 +177,8 @@ export const RANGES: Record<Ranged, [number, number]> = {
   symmetry: [1, 8],
   mirror: [0, 1],
   final: [0, LENSES.length],
-  family: [0, 3],
+  // Family is the Colours setting (65): the preset's four (Spectrum, Arc, Two tones, Three), then Cover and Fire.
+  family: [0, 5],
   hue: [0, 1],
   lightness: [0, 1],
   vividness: [0, 1],
@@ -202,16 +191,6 @@ export const RANGES: Record<Ranged, [number, number]> = {
 };
 
 const within = (key: Ranged, v: number) => Math.min(RANGES[key][1], Math.max(RANGES[key][0], v));
-
-/** The pixels the display pass draws by default: about a megapixel. The points fall into a buffer of at most 0.6 MP
- *  anyway; drawing that out to every pixel of a large screen cost the most of a frame on integrated graphics (5.5 ms of
- *  22 at 2560 x 1600, measured 2026-10-17) and showed little more. */
-const AUTO_PIXELS = 1.2e6;
-
-/** This screen's default resolution: up to `AUTO_PIXELS` of its own pixels. */
-export function autoResolution(devicePixels: number): number {
-  return Math.min(1, Math.max(0.25, Math.sqrt(AUTO_PIXELS / Math.max(1, devicePixels))));
-}
 
 /** The defaults, their lists their own (the settings change in place). */
 const fresh = (): VisualSettings => ({
@@ -226,7 +205,7 @@ const fresh = (): VisualSettings => ({
 const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly string[]).includes(k);
 /** The behaviour's sliders that pin as the Look's do, moved by hand (the owner, 2026-10-18: "I try to pin the behavior
  *  instead of the look"): a pinned one the dice and Drift leave as it is. The columns' scales are among them. */
-export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothing', 'floor', 'depth', 'tunnel', 'dive', ...SCALE_KEYS] as const;
+export const BEHAVIOUR_PINS = ['flash', 'speed', 'intensity', 'fluid', 'smoothing', 'haze', 'tunnel', 'dive', ...SCALE_KEYS] as const;
 /** Each band's times, pinned one by one (`lighting:2`: the Low mid's Lighting): the dice leave a pinned one. */
 export const BAND_TIMES = ['lighting', 'evolution', 'continuity'] as const;
 export const bandPin = (key: (typeof BAND_TIMES)[number], band: number) => `${key}:${band}`;

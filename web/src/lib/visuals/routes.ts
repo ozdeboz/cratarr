@@ -54,8 +54,7 @@ export const ASPECTS = [
   'saturation',
   'trails',
   'smoothing',
-  'floor',
-  'depth',
+  'haze',
   'fluid',
   'stir',
   'flow',
@@ -87,8 +86,7 @@ export const ASPECT_LABEL: Record<Aspect, string> = {
   saturation: 'Saturation',
   trails: 'Trails',
   smoothing: 'Smoothing',
-  floor: 'Floor',
-  depth: 'Depth',
+  haze: 'Haze',
   fluid: 'Fluid',
   stir: 'Stir',
   flow: 'Flow',
@@ -255,13 +253,13 @@ export const given = (bands: number): Given => ({
   level: new Float32Array(NA).fill(1),
 });
 
-/** The levels (64.1; the owner: "The other sliders are simply limits"): Smoothing, Floor, Depth and Fluid are each the
- *  most its setting gives, and each of its routes a condition for reaching it: a route lets through all of it where its
+/** The levels (64.1; the owner: "The other sliders are simply limits"): Smoothing, Haze, Fluid, Tunnel and Dive are each
+ *  the most its setting gives (Haze, either way from 0: the most of it, more or less), and each of its routes a condition for reaching it: a route lets through all of it where its
  *  curve is at its peak, less as it falls short (as much less as the envelope says), never under nothing; they
  *  multiply. A straight one of amount a gives 1 − e·a·(1 − s) rising with its signal s, of −a 1 − e·a·s falling; quiet
  *  (e → 0) every route lets all through. The bands' routes into one: their geometric mean, as the swings take the bands'
  *  mean. */
-export const LEVEL_ASPECTS: readonly Aspect[] = ['smoothing', 'floor', 'depth', 'fluid', 'tunnel', 'dive'];
+export const LEVEL_ASPECTS: readonly Aspect[] = ['smoothing', 'haze', 'fluid', 'tunnel', 'dive'];
 const isLevel = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
 
 /** What a route gives at its signal `v`: its curve's height, a straight one's amount times the signal. */

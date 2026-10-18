@@ -1,7 +1,7 @@
 // The visuals shared by a sync play group (decision 0046, amended; the server keeps each group's settings: claude-5f's
 // /api/groups/{group}/visuals). Everything that shapes the picture is shared, so a slider moved on one device moves on
-// all of them: the look and its pins, colours, intensity, flash, speed, the grain, the routes and each band's times.
-// What each device can afford (points, steps, resolution, frame rate) and its brightness (a bright room, a dark one)
+// all of them: the look (its colours among it) and its pins, intensity, flash, speed, the grain and haze, the routes and
+// each band's times. What each device can afford (Quality, frame rate) and its brightness (a bright room, a dark one)
 // stay its own.
 // A device joining a group adopts the group's settings (a group with none yet takes the joiner's); one leaving keeps
 // what it was showing. What the owner changes goes to the server as it is made, a drag's many changes once every 150 ms
@@ -24,14 +24,12 @@ import { keptFrom, saveVisualSettings, visualSettings, type VisualSettings } fro
 export const SHARED_KEYS = [
   ...PRESET_KEYS,
   'pins',
-  'colours',
   'wild',
   'intensity',
   'flash',
   'speed',
   'smoothing',
-  'floor',
-  'depth',
+  'haze',
   'fluid',
   'tunnel',
   'dive',
@@ -44,10 +42,11 @@ export const SHARED_KEYS = [
 export type Shared = Partial<Record<(typeof SHARED_KEYS)[number] | 'lookFor', unknown>>;
 /** What each device keeps its own in a group (what it can afford, its room's brightness), but a snapshot keeps too:
  *  recalled, they come back on the device that recalls it, and are never sent to the group. */
-export const DEVICE_KEYS = ['points', 'steps', 'resolution', 'fps', 'brightness'] as const satisfies readonly (keyof VisualSettings)[];
+export const DEVICE_KEYS = ['quality', 'fps', 'brightness'] as const satisfies readonly (keyof VisualSettings)[];
 /** A snapshot's form, kept with it so a later one can be read: 1, the shared settings (the first ones, from 63); 2,
- *  every slider (2026-10-18). */
-export const SNAPSHOT_V = 2;
+ *  every slider (2026-10-18); 3, 65's (Quality, Haze, the Colours as the look's: what they replaced is not read, by the
+ *  owner's choice). */
+export const SNAPSHOT_V = 3;
 
 /** Every slider as it is now, for a snapshot. */
 export function snapshotNow(): Record<string, unknown> {
@@ -224,20 +223,18 @@ export const STANDARD = {
   name: 'Standard',
   created: 0,
   settings: {
-    v: 2,
-    points: 19,
-    steps: 3,
-    resolution: null,
+    v: 3,
+    // 62's Points, Steps and Resolution (19, 3 and the screen's default) are Quality's 60 %; its Floor 0 and Depth 50 %
+    // Haze's 0; its Colours (the preset's own) the look's, nothing pinned.
+    quality: 0.6,
     fps: null,
     brightness: 1,
     pins: [],
-    colours: 0,
     intensity: 1,
     flash: 1,
     speed: 1,
     smoothing: 0.5,
-    floor: 0,
-    depth: 0.5,
+    haze: 0,
     fluid: 0,
     tunnel: 0,
     dive: 0,

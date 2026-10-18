@@ -342,7 +342,7 @@ function huesOf(family: number, hue: number, f: number[]): { color: number; reac
  *  - detail, twist, warp (0..1): how far the parts contract (tight, dense cores to large, wispy forms), how far they
  *    turn (straight arms to spirals), how much of each is its variations rather than plain (gentle to wild);
  *  - symmetry (1 to 8 arms), mirror (0 or 1), final (the Lens: 0 none, else one of `LENSES`, 1 the first);
- *  - family (0 to 3: spectrum, arc, two tones, three), hue (where the colours start, a turn of the wheel), lightness and
+ *  - family (0 to 3: spectrum, arc, two tones, three; 4 and 5, the Colours' Cover and Fire, chosen only by hand), hue (where the colours start, a turn of the wheel), lightness and
  *    vividness (0..1: OKLCH lightness 0.55 to 0.85, chroma 0.06 to 0.26);
  *  - spread and purity, as `evolved` takes them. */
 export type Preset = {
@@ -370,7 +370,8 @@ const STANDBY: Preset = { form: 0, detail: 0.5, twist: 0.7, warp: 0.8, symmetry:
 function build(p: Preset): Flame {
   const rnd = randomFrom(seedOf(`form ${Math.round(p.form)}`));
   const parts = Array.from({ length: PARTS }, () => partOf(Array.from({ length: DRAWS }, rnd), p));
-  huesOf(Math.round(p.family), p.hue, Array.from({ length: 2 + PARTS }, rnd)).forEach((h, i) => {
+  // The Colours' Cover and Fire (65: family 4 and 5) colour over the bands' own hues: Spectrum's, the most apart.
+  huesOf(p.family > 3.5 ? 0 : Math.round(p.family), p.hue, Array.from({ length: 2 + PARTS }, rnd)).forEach((h, i) => {
     parts[i].color = h.color;
     parts[i].colorReach = h.reach;
   });

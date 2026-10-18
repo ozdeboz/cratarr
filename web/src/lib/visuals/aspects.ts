@@ -105,7 +105,7 @@ export type AspectsNow = {
   look: number;
   behaviour: number;
   /** Each level's share of its setting its routes let through now (1: all of it). */
-  levels: { fluid: number; smoothing: number; floor: number; depth: number; tunnel: number; dive: number };
+  levels: { fluid: number; smoothing: number; haze: number; tunnel: number; dive: number };
   /** The moments come this frame: another symmetry (none with reduced motion). */
   moments: { symmetry: boolean };
 };
@@ -146,6 +146,11 @@ export const levelOf = (g: Given, setting: number, aspect: number) => clamp(sett
 /** Floor: none at 0, then from 0.002 of the display's scale (a stray speck's) up to 1 (the flame's mean), evenly in its
  *  log. */
 export const floorOf = (v: number) => (v > 0 ? 0.002 * 500 ** v : 0);
+
+/** Haze (−1..1, 65, decision 0050) as the display shows it: Depth's and Floor's own curves on one axis, 0 as their
+ *  defaults were (gamma 3, no floor). More haze lifts the faint mist (the gamma up to 6); less cuts it (the gamma down
+ *  to 1.5, a floor up to Floor's 75 %: a fifth of the flame's mean; its 100 %, the mean, blacked out half the flame). */
+export const hazeOf = (h: number) => ({ gamma: 3 * 2 ** h, floor: h < 0 ? floorOf(0.75 * -h) : 0 });
 
 /** One frame of the mapping, `dt` seconds on. `still`: reduced motion (a quarter of the turning, all of it steady, half
  *  the beats' and hits' share, no moments); `now`: the clock in ms (the moments' gap); `matrix`: the routes compiled
@@ -263,6 +268,8 @@ export function stepAspects(
   const moments = { symmetry: !still && moment(st.moments.symmetry, W[A.symmetry]) };
   const walkOf = (a: number) => (W[a] - track[T.track] * envelope * matrix.track[T.track * ASPECTS.length + a]) / L.evolution;
   const fluid = opts.fluidFull * levelOf(st.got, s.fluid, A.fluid);
+  // Haze either way from 0, its routes taking it toward 0 (a level both ways).
+  const haze = hazeOf(clamp(s.haze * st.got.level[A.haze], -1, 1));
   return {
     given: W,
     track,
@@ -279,21 +286,20 @@ export function stepAspects(
     scale: clamp(flashed(0.5 + 0.5 * W[A.size], st.courses.size, L.size), 0.25, 1.4),
     // Trails: each frame keeps this much of the last (longer trails given more, shorter given less).
     keep: clamp(1 - 0.07 * 2 ** (-1.5 * W[A.trails]), 0.5, 0.985),
-    // Depth: the display's gamma, 1.5 to 6 (3 as before at its middle); higher lifts more of the faint detail.
-    gamma: 1.5 * 4 ** levelOf(st.got, s.depth, A.depth),
+    // Haze: the display's gamma (higher lifts more of the faint detail) and its floor, `hazeOf`.
+    gamma: haze.gamma,
     // Glow: as bright at rest (dimmer only while paused), brighter given more (by default a beat's flash).
     flash: st.glow * clamp(flashed(1 + 0.5 * W[A.brightness], st.courses.glow), 0.15, 3),
     // Saturation: a third of its colour at rest, all of it given all (by default the loudness: paler when quiet).
     saturation: clamp(flashed(0.35 + 0.65 * W[A.saturation], st.courses.saturation), 0, 1.25),
-    // Smoothing: up to 12 pixels (3 as before at its middle). Floor: from none to about the flame's mean density.
+    // Smoothing: up to 12 pixels (3 as before at its middle).
     smoothing: 12 * levelOf(st.got, s.smoothing, A.smoothing) ** 2,
-    floor: floorOf(levelOf(st.got, s.floor, A.floor)),
+    floor: haze.floor,
     // Each level's share of its setting the routes let through now (the sliders' live marks).
     levels: {
       fluid: st.got.level[A.fluid],
       smoothing: st.got.level[A.smoothing],
-      floor: st.got.level[A.floor],
-      depth: st.got.level[A.depth],
+      haze: st.got.level[A.haze],
       tunnel: st.got.level[A.tunnel],
       dive: st.got.level[A.dive],
     },

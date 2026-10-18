@@ -8,13 +8,9 @@
 
 export const HELP: Record<string, string> = {
   // How much the device draws.
-  points:
-    'The picture is drawn by points that keep jumping around the flame’s shape, leaving light where they land. More points give a finer, fuller, less grainy picture and the most work for the graphics chip: at 16k it is coarse and grainy but light on the device; at 2M finest and heaviest. A device that cannot keep up uses fewer, never more than this.',
-  steps:
-    'How many times each point jumps and lands per frame. At 1 the picture fills in slowly and costs least; at 16 it fills in fastest and smoothest, costing about as much as sixteen times the points.',
-  resolution:
-    'How sharp the picture is against the screen’s own pixels. At 25% it is soft and light on the device; at 100% it is as sharp as the screen. Either way it is scaled to fill the screen.',
-  fps: 'The most frames a second. At 10 the movement is choppy but light on the device; at 60 it is smoothest. If the device cannot keep up, the visuals lower Steps, then Resolution, then Points by themselves (never above what you set) and raise them again when there is room.',
+  quality:
+    'How much the device may draw at most: how many points make the picture, how many times each jumps per frame, and how sharp it is against the screen. At 60% as the visuals have always drawn; at 100% four times the points, twice the jumps and all of the screen’s sharpness, the most work for the graphics chip; at 0 coarse and grainy, but light on the device. A device that cannot keep up draws less by itself, never more than this.',
+  fps: 'The most frames a second. At 10 the movement is choppy but light on the device; at 60 it is smoothest. If the device cannot keep up, the visuals draw less by themselves (fewer jumps per frame, then less sharpness, then fewer points; never more than Quality allows) and draw more again when there is room.',
 
   // How the picture responds and looks.
   intensity:
@@ -48,32 +44,28 @@ export const HELP: Record<string, string> = {
   swirl:
     'Swirl: how much of what the routes into the Swirl column give reaches the picture. At 100% all of it; lower, every swing as much smaller, keeping its shape; at 0 nothing sets it whirling.',
   smoothing:
-    'Where few points have landed, the picture looks grainy. Smoothing softens those sparse areas into a haze, while the dense areas stay sharp. At 0 you see the raw grain of single points; at 100% the sparse areas become a soft haze up to twelve pixels wide. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
-  floor:
-    'How faint an area of the picture can be and still show. At 0 everything shows, down to single stray points; at 100% everything fainter than the flame’s average fades to black, leaving only its brightest areas. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
-  depth:
-    'How much faint detail is lifted into view. At 0 only the bright structure shows, with strong contrast; at 100% the faint mist and grain around it are lifted almost as bright as the flame. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
+    'Where few points have landed, the picture looks grainy. Smoothing softens those sparse areas into a soft blur, while the dense areas stay sharp. At 0 you see the raw grain of single points; at 100% the sparse areas blur up to twelve pixels wide. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
+  haze:
+    'Haze: the faint mist and grain around the flame. At 0 it shows as the visuals always showed it. Towards +100% more of it is lifted into view, until it is almost as bright as the flame; towards −100% less, and the faintest areas fade to black, leaving the bright structure clean. What you set here is the most it reaches either way: routes into it, and Behaviour’s walk, only ever take it toward 0.',
   fluid:
     'How much the picture flows like smoke. At 0 the flame’s trails simply fade where they were drawn, and nothing of the fluid runs. Up to 100% they drift and curl more and more in a flow the music stirs, gently by design: at 100% a strong flow, still a flame, not all smoke. How the music stirs it is in the routes’ Stir, Flow and Swirl columns: by default each band’s hits kick its part, beats push out from the centre in a pattern that turns with the tempo, downbeats shove harder and a new section sets a whirl going. Above 0 it costs a little more of the graphics chip. What you set here is the most it reaches: routes into it, and Behaviour’s walk, only ever take it lower.',
-  colours:
-    'Where the colours of the flame’s six parts come from. Rainbow: from the Look settings Family, Hue, Lightness and Vividness. Cover: six colours from the playing album’s cover, the darkest for the bass and the lightest for the treble. Fire: deep red for the bass to yellow for the treble, the densest areas glowing white-hot.',
+  family:
+    'Where the colours of the flame’s six parts come from. Spectrum: spread round the whole colour wheel. Arc: along part of it, warm or cool. Two tones: two colours from opposite sides of the wheel, the bands taking them in turn. Three: three colours, each for two neighbouring bands. Each track’s look picks one of these four, with Hue, Lightness and Vividness. Cover: six colours from the playing album’s cover, the darkest for the bass and the lightest for the treble. Fire: deep red for the bass to yellow for the treble, the densest areas glowing white-hot. Choose one and it is pinned.',
   symmetry: 'How many times the flame repeats around its centre, like the arms of a star. At 1 it does not repeat; at 8 it has eight arms.',
   mirror: 'Off: the arms are turned copies of each other, all curling the same way. On: each arm also gets a mirror image, like in a kaleidoscope.',
 
   // The look a track or the dice sets (the preset); each can be moved, and then stays as you set it.
   look: 'The settings that decide what the flame looks like: its shape and its colours. When a track starts it sets them to that track’s own look, the same each time it plays; the dice set them at random. A setting you move stays where you put it (it is pinned) until you tap its pin.',
   behaviour:
-    'Behaviour: how the visuals move with the music. Each of these settings is the most it goes to: Behaviour’s walk (a route into the Behaviour column) moves them a little below what you set and back, never above, and the routes into Smoothing, Floor, Depth and Fluid only ever take those lower. Below Speed, each column of the routes has its slider, in the grid’s order; the mark under each slider shows where it is now. Move one and it is pinned: the dice leave it and it no longer walks; tap the pin to let go.',
+    'Behaviour: how the visuals move with the music. Each of these settings is the most it goes to: Behaviour’s walk (a route into the Behaviour column) moves them a little below what you set and back, never above, and the routes into Smoothing, Haze, Fluid, Tunnel and Dive only ever take those lower (Haze toward 0). Below Speed, each column of the routes has its slider, in the grid’s order; the mark under each slider shows where it is now. Move one and it is pinned: the dice leave it and it no longer walks; tap the pin to let go.',
   form: 'The flame’s basic shape, from 0 to 999. Each number gives the six parts their own kinds of curve, and neighbouring numbers are not alike. Detail, Twist and Warp then shape whichever form it is.',
   detail:
     'How the flame’s parts fold into themselves. At 0 each part is a dense, compact core; at 100% it is large, open and wispy, with more fine detail.',
   twist: 'How much the flame’s parts turn as they repeat into themselves. At 0 they reach straight outwards; at 100% they wind into tight spirals.',
   warp: 'How much the flame’s parts bend. At 0 their lines stay straight and their edges sharp; at 100% they curl into swirls, bubbles and loops.',
-  family:
-    'How the six parts’ colours are chosen, with Rainbow colours. Spectrum: spread round the whole colour wheel. Arc: along part of it, warm or cool. Two tones: two colours from opposite sides of the wheel, the bands taking them in turn. Three: three colours, each for two neighbouring bands.',
-  hue: 'Turns all the colours round the colour wheel together, keeping how they relate (with Rainbow colours). 0° and 360° are the same colours: a full turn.',
-  lightness: 'How light the colours are, with Rainbow colours. At 0 they are deep and rich; at 100% light and pastel.',
-  vividness: 'How vivid the colours are, with Rainbow colours. At 0 they are soft and muted; at 100% as vivid as they go.',
+  hue: 'Turns all the colours round the colour wheel together, keeping how they relate (not with Cover or Fire). 0° and 360° are the same colours: a full turn.',
+  lightness: 'How light the colours are (not with Cover or Fire). At 0 they are deep and rich; at 100% light and pastel.',
+  vividness: 'How vivid the colours are (not with Cover or Fire). At 0 they are soft and muted; at 100% as vivid as they go.',
   final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',
   pin: 'You moved this setting, so it keeps your value when the next track starts, and Another look and the dice leave it alone. Tap the pin to let each track set it again.',
   snapshots:
@@ -81,12 +73,12 @@ export const HELP: Record<string, string> = {
   'snapshots:standard':
     'The visuals as Cratarr made them before snapshots existed, kept so they can always be brought back: every setting to its default, every pin let go, and each track its own look again. It cannot be renamed or deleted.',
   'snapshots:save':
-    'Saves the visuals as they are now: every setting, from the Look and the routes to Points and Brightness, with a small picture, named after the playing track and the time (tap the name to change it). In a sync group, bringing it back sets the shared settings on every device, and Points, Steps, Resolution, FPS and Brightness only on the device you bring it back on.',
+    'Saves the visuals as they are now: every setting, from the Look and the routes to Quality and Brightness, with a small picture, named after the playing track and the time (tap the name to change it). In a sync group, bringing it back sets the shared settings on every device, and Quality, FPS and Brightness only on the device you bring it back on.',
   'snapshots:over':
     'Save over: puts the visuals as they are now into this snapshot, every setting and a new small picture, keeping its name and its place among the others.',
   another: 'Another look: every Look setting you have not pinned moves to a new random value.',
   randomise:
-    'Randomise. A tap: everything at random, a new look (every Look setting you have not pinned) and new values for how the visuals move with the music: the routes and every Behaviour setting, each column’s slider among them, and each band’s times. A double tap: only how they move, the routes into Shape, Lights, Rotation and Size and those four sliders, Speed, Flash and the bands’ times; the look, the colours, the grain and smoke and every other route stay, and until the next roll, an undo or a Reset it may be as lively as Wild at 100% allows. Either way each roll is first tried against the next half minute of the playing track and passed over if it would be livelier than allowed or flash over a quarter of the screen more than three times a second (after eight tries, the one closest to fitting is taken). What you pinned (settings and routes), the Track row, Colours, Wild, Points, Steps, Resolution, FPS and Brightness stay. In a sync group, every device gets it.',
+    'Randomise. A tap: everything at random, a new look (every Look setting you have not pinned) and new values for how the visuals move with the music: the routes and every Behaviour setting, each column’s slider among them, and each band’s times. A double tap: only how they move, the routes into Shape, Lights, Rotation and Size and those four sliders, Speed, Flash and the bands’ times; the look, the colours, the grain and smoke and every other route stay, and until the next roll, an undo or a Reset it may be as lively as Wild at 100% allows. Either way each roll is first tried against the next half minute of the playing track and passed over if it would be livelier than allowed or flash over a quarter of the screen more than three times a second (after eight tries, the one closest to fitting is taken). What you pinned (settings and routes), the Track row, Wild, Quality, FPS and Brightness stay. In a sync group, every device gets it.',
   'thumbs-up':
     'Thumbs up: you like the visuals as they are now. If they are being held back just then (the amber dot), the limit doing it is eased a step, so they get more room. Otherwise your thumb is only kept, with how lively the last 20 seconds were, to tune the limits later. The limit on flashes never changes.',
   'thumbs-down':
@@ -120,7 +112,7 @@ export const HELP: Record<string, string> = {
   routes:
     'Routes connect the music to the picture. Each row is something measured in the music, each column something in the picture, and each square a curve: how that row moves that column, as the row goes from nothing to full. Tap a square to shape it. The top rows measure the whole track and act on every part of the flame. The rows below measure one band each, picked above them, and act on that band’s part; in the columns for the whole picture, the bands count together. Each square shows its curve, scaled to fit, and fills from the bottom as far as its route gives right now, green the one way, pink the other. A solid outline means pinned (the dice leave it), a dashed one the square you picked, and a border of long dashes on the move a route that walks with Behaviour.',
   'route:curve':
-    'How this row moves this column. Across: the row, from nothing at the left to full at the right. Up: what the route does, from −100% at the bottom (the opposite way, or for Smoothing, Floor, Depth and Fluid, taking it lower) through 0 on the middle line to +100% at the top. Drag the two round handles to shape the curve, and the one at the right edge to scale the whole of it; green above the middle line, pink below. The white dot is where the row is now, and the faint shape behind the curve is where it has been over the last half minute of music: put the curve’s bend where it usually is. With All bands picked, the curve is the six bands’ together, dashed where they differ, and shaping it sets all six. Shaping a square pins it.',
+    'How this row moves this column. Across: the row, from nothing at the left to full at the right. Up: what the route does, from −100% at the bottom (the opposite way, or for Smoothing, Haze, Fluid, Tunnel and Dive, taking it lower; Haze toward 0) through 0 on the middle line to +100% at the top. Drag the two round handles to shape the curve, and the one at the right edge to scale the whole of it; green above the middle line, pink below. The white dot is where the row is now, and the faint shape behind the curve is where it has been over the last half minute of music: put the curve’s bend where it usually is. With All bands picked, the curve is the six bands’ together, dashed where they differ, and shaping it sets all six. Shaping a square pins it.',
   'route:walks':
     'Walks with Behaviour: this route’s effect walks a little below its curve and back as Behaviour’s walk goes, never above it, even while it is pinned. Its square gets a border of long dashes that moves as the walk does.',
   'route:zero': 'Zero: this route does nothing any more, its curve flat on the middle line and its square empty (with All bands picked, for all six). Like any change to a square, it pins the route, so the dice leave it at nothing.',
@@ -142,7 +134,7 @@ export const HELP: Record<string, string> = {
   'aspect:saturation': 'As the row rises, the colours get richer; below 0, paler.',
   'aspect:trails': 'As the row rises, the movement leaves longer trails; below 0, shorter ones.',
   'aspect:smoothing': 'As the row rises, Smoothing comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
-  'aspect:floor': 'As the row rises, Floor comes up to what its slider sets, so the faint areas fade out; below 0, the row takes it down and they come back. Never above the slider.',
+  'aspect:haze': 'As the row rises, Haze comes up to what its slider sets, more haze or less; below 0, the row takes it toward none instead. Never past the slider.',
   'aspect:fluid': 'As the row rises, Fluid comes up to what its slider sets and the picture flows more like smoke; below 0, the row takes it down. Never above the slider.',
   'aspect:stir':
     'How hard this row pushes the fluid. By default each band’s hits kick its part of the flame, the beats push out from the centre in a pattern that turns with the tempo, downbeats shove harder, a new section sets a whirl going, and each band’s level stirs it steadily. Across the curve is the push’s own strength (for a hit, how hard it is); below 0 it pushes the other way. Loudness does not scale it.',
@@ -150,7 +142,6 @@ export const HELP: Record<string, string> = {
     'How much life the flow has. By default the loudness sets its energy and the beat makes it breathe with the pulse. Below 0 the row calms it instead. Loudness does not scale it beyond its own row.',
   'aspect:swirl':
     'How much the flow whirls. By default a swell sets it turning and a new section starts a whirl. Below 0 it whirls the other way. Loudness does not scale it.',
-  'aspect:depth': 'As the row rises, Depth comes up to what its slider sets and more faint detail is lifted into view; below 0, the row takes it down. Never above the slider.',
   'aspect:look':
     'As the row rises, the flame’s look walks: its Detail, Twist, Warp, colours, Spread and Purity move a little further in a direction that changes every bar, never far from where the track set them. Below 0 the look walks back. Pinned settings stay where they are.',
   'aspect:behaviour':

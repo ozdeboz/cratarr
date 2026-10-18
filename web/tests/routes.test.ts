@@ -78,10 +78,10 @@ test('a level’s routes multiply, its bands’ by their geometric mean', () => 
   assert.ok(close(give(m, track, [], 1, given(BANDS)).level[A.smoothing], 0.5 * 0.25));
   // One band's route into a level: its factor to the sixth root, as the swings take the bands' mean.
   const bands = Array.from({ length: BANDS }, () => new Float32Array(BAND_SIGNALS.length));
-  const mb = compile({ [routeKey('flux', 0, 'floor')]: 1 }, BANDS);
-  assert.ok(close(give(mb, track, bands, 1, given(BANDS)).level[A.floor], 0 ** (1 / BANDS)));
+  const mb = compile({ [routeKey('flux', 0, 'haze')]: 1 }, BANDS);
+  assert.ok(close(give(mb, track, bands, 1, given(BANDS)).level[A.haze], 0 ** (1 / BANDS)));
   bands[0][B.flux] = 0.5;
-  assert.ok(close(give(mb, track, bands, 1, given(BANDS)).level[A.floor], 0.5 ** (1 / BANDS)));
+  assert.ok(close(give(mb, track, bands, 1, given(BANDS)).level[A.haze], 0.5 ** (1 / BANDS)));
 });
 
 test('a curved route gives its curve’s height, and a level its curve’s pull below its peak', () => {
@@ -91,12 +91,12 @@ test('a curved route gives its curve’s height, and a level its curve’s pull 
   const { table, peak } = tableOf(c);
   assert.ok(close(peak, 1, 1e-3) && close(heightAt(table, 0), 0) && close(heightAt(table, 1), 1, 1e-3));
   assert.ok(heightAt(table, 0.3) > 0.85, 'high early');
-  const m = compile({ [routeKey('beat', null, 'size')]: c, [routeKey('beat', null, 'depth')]: c }, BANDS);
+  const m = compile({ [routeKey('beat', null, 'size')]: c, [routeKey('beat', null, 'haze')]: c }, BANDS);
   const track = new Float32Array(TRACK_SIGNALS.length);
   track[T.beat] = 0.3;
   const g = give(m, track, [], 1, given(BANDS));
   assert.ok(close(g.whole[A.size], heightAt(table, 0.3), 1e-5));
-  assert.ok(close(g.level[A.depth], 1 - (peak - heightAt(table, 0.3)), 1e-5));
+  assert.ok(close(g.level[A.haze], 1 - (peak - heightAt(table, 0.3)), 1e-5));
 });
 
 test('a crossing curve reaches all of its level at its top, and its height goes below 0 where it dips', () => {
