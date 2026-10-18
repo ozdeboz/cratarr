@@ -17,7 +17,7 @@ import { ApiError, getGroupVisuals, putGroupVisuals } from '../api';
 import { on } from '../events.svelte';
 import { head, playOn } from '../playOn.svelte';
 import { PRESET_KEYS, type Preset } from './flame';
-import { keptFrom, saveVisualSettings, visualSettings, type VisualSettings } from './settings.svelte';
+import { FLUID_SCALE, fluidFrom64, keptFrom, saveVisualSettings, visualSettings, type VisualSettings } from './settings.svelte';
 
 /** The settings shared, and saved in a snapshot. */
 export const SHARED_KEYS = [
@@ -37,13 +37,13 @@ export const SHARED_KEYS = [
   'evolution',
   'continuity',
 ] as const satisfies readonly (keyof VisualSettings)[];
-export type Shared = Partial<Record<(typeof SHARED_KEYS)[number] | 'lookFor', unknown>>;
+export type Shared = Partial<Record<(typeof SHARED_KEYS)[number] | 'lookFor' | 'fluidScale', unknown>>;
 /** What each device keeps its own in a group (what it can afford, its room's brightness), but a snapshot keeps too:
  *  recalled, they come back on the device that recalls it, and are never sent to the group. */
 export const DEVICE_KEYS = ['points', 'steps', 'resolution', 'fps', 'brightness'] as const satisfies readonly (keyof VisualSettings)[];
 /** A snapshot's form, kept with it so a later one can be read: 1, the shared settings (the first ones, from 63); 2,
- *  every slider (2026-10-18). */
-export const SNAPSHOT_V = 2;
+ *  every slider (2026-10-18); 3, Fluid on 64.1's scale. */
+export const SNAPSHOT_V = 3;
 
 /** Every slider as it is now, for a snapshot. */
 export function snapshotNow(): Record<string, unknown> {
@@ -65,13 +65,15 @@ const writer = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.rando
 
 /** The shared settings as they are now. */
 export function sharedNow(): Shared {
-  return Object.fromEntries(SHARED_KEYS.map((k) => [k, $state.snapshot(visualSettings[k])]));
+  return { ...Object.fromEntries(SHARED_KEYS.map((k) => [k, $state.snapshot(visualSettings[k])])), fluidScale: FLUID_SCALE };
 }
 
 /** Shared settings into this device's (each brought into its range): of the look's, those pinned, and those not pinned
  *  where they were sent for the track showing. */
 export function applyShared(settings: Record<string, unknown>) {
   const given = { ...settings };
+  // A Fluid sent by 64 (no scale with it): on this scale.
+  if (typeof given.fluid === 'number' && given.fluidScale !== FLUID_SCALE) given.fluid = fluidFrom64(given.fluid);
   const pins = Array.isArray(given.pins) ? (given.pins as string[]) : visualSettings.pins;
   if (given.lookFor !== track) for (const k of PRESET_KEYS) if (!pins.includes(k)) delete given[k];
   const clean = keptFrom({ ...$state.snapshot(visualSettings), ...given, pins });
@@ -187,7 +189,8 @@ async function joined(g: string | null) {
  *  group, if the page is in one. Look settings go with the track they are for. */
 export function share(changes: Shared) {
   if (!group) return;
-  const sent: Shared = PRESET_KEYS.some((k) => k in changes) ? { ...changes, lookFor: track } : changes;
+  const scaled: Shared = 'fluid' in changes ? { ...changes, fluidScale: FLUID_SCALE } : changes;
+  const sent: Shared = PRESET_KEYS.some((k) => k in scaled) ? { ...scaled, lookFor: track } : scaled;
   outgoing = merged(outgoing, sent);
   known = merged(known, sent);
   clearTimeout(pending);
@@ -220,7 +223,7 @@ export const STANDARD = {
   name: 'Standard',
   created: 0,
   settings: {
-    v: 2,
+    v: 3,
     points: 19,
     steps: 3,
     resolution: null,

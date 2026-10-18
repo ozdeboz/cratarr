@@ -83,7 +83,9 @@
     BANDS,
     DEFAULTS,
     FLUID_FULL,
+    FLUID_SCALE,
     fluidFrom63,
+    fluidFrom64,
     RANGES,
     resetRoutes,
     loadPreset,
@@ -416,9 +418,11 @@
   }
   function recall(snap: VisualsSnapshot) {
     const settings: Record<string, unknown> = { ...snap.settings };
-    // One saved in 63: its Fluid on the finer scale since.
-    if ((settings.v ?? 1) === 1 && typeof settings.fluid === 'number') settings.fluid = fluidFrom63(settings.fluid);
+    // One saved in 63 or 64: its Fluid on this scale (and so marked, for the group).
+    if (typeof settings.fluid === 'number' && (settings.v ?? 1) === 1) settings.fluid = fluidFrom63(settings.fluid);
+    else if (typeof settings.fluid === 'number' && settings.v === 2) settings.fluid = fluidFrom64(settings.fluid);
     delete settings.v;
+    settings.fluidScale = FLUID_SCALE;
     // This device's own sliders, on this device only.
     applyDevice(settings);
     // Its routes whole: any route it does not have (one set since, or a default added since) off.
