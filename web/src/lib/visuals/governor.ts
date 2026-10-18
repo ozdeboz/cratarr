@@ -24,7 +24,7 @@ export type Levers = { swing: number; pace: number; evolution: number; hue: numb
 export const FREE: Readonly<Levers> = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
 
 /** Each budgeted meter's lever, and how far that lever may go. */
-const LEVERS: Record<Budgeted, { lever: keyof Levers; most: number }> = {
+export const LEVERS: Readonly<Record<Budgeted, { lever: keyof Levers; most: number }>> = {
   motion: { lever: 'pace', most: 0.25 },
   shapeChurn: { lever: 'evolution', most: 4 },
   colourChurn: { lever: 'hue', most: 0.2 },
