@@ -118,3 +118,12 @@ export function diveCamera(fit: DiveFit, t: number, rate: number): { zoom: [numb
     turnRate: -turn / divePeriod(fit, rate),
   };
 }
+
+/** How fast a dive at `rate` would turn the picture for this flame (radians a second, unsigned): the dive's turn,
+ *  foreseen from the part it would dive into, for the precheck to count as the live governor does
+ *  (`renderer.diveTurnRate`). 0 where there is no dive or no part to dive into. */
+export function diveTurnOf(flame: Flame, rate: number): number {
+  if (!(rate > 0)) return 0;
+  const target = diveTarget(flame);
+  return target ? Math.abs(diveCamera(target, 0, rate).turnRate) : 0;
+}

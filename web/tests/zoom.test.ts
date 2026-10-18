@@ -57,3 +57,11 @@ test('Presence: a part’s weight in the drawing scaled, the symmetry’s rotati
   assert.equal(out.xforms[1].weight, 1, 'none given: as drawn');
   assert.equal(out.xforms[2].weight, 0.7, 'a rotation of the symmetry: as it was');
 });
+
+test('the dive’s turn foreseen: the part’s turn over the loop’s period, none without a dive', async () => {
+  const { diveTurnOf } = await import('../src/lib/visuals/zoom.ts');
+  const flame = flameOf([similar(0.5, 0.3, [0.4, -0.2]), similar(0.1, 0, [0.9, 0.9])]);
+  assert.equal(diveTurnOf(flame, 0), 0);
+  // A loop doubles the zoom: ln 2 / rate seconds, turning 0.3 in it.
+  assert.ok(close(diveTurnOf(flame, 0.2), (0.3 * 0.2) / Math.log(2), 1e-6));
+});
