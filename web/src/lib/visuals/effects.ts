@@ -68,6 +68,184 @@ export const EFFECTS: readonly Effect[] = [
 }`,
     report: () => ({}),
   },
+  {
+    // ported from hydra-synth (AGPL-3.0), repeat
+    id: 3,
+    name: 'repeat',
+    kind: 'shape',
+    slots: ['picture'],
+    glsl: `float fx_repeat_tri(float x) { return abs(mod(x + 1.0, 4.0) - 2.0) - 1.0; }
+vec2 fx_repeat(vec2 p, float a, float t) {
+  if (a <= 0.0) return p;
+  // From one picture to four across, mirrored at each seam so none shows; eased in from none.
+  float n = 1.0 + 3.0 * a;
+  vec2 tiled = vec2(fx_repeat_tri(p.x * n), fx_repeat_tri(p.y * n));
+  return mix(p, tiled, smoothstep(0.0, 0.15, a));
+}`,
+    report: (a) => ({ shapeChurn: 0.05 * a }),
+  },
+  {
+    // ported from hydra-synth (AGPL-3.0), pixelate
+    id: 4,
+    name: 'pixelate',
+    kind: 'shape',
+    slots: ['picture', 'loop'],
+    glsl: `vec2 fx_pixelate(vec2 p, float a, float t) {
+  if (a <= 0.0) return p;
+  // From fine (two hundred cells across the height) to coarse (eight).
+  float cells = 0.5 * mix(200.0, 8.0, a * a);
+  return (floor(p * cells) + 0.5) / cells;
+}`,
+    report: () => ({}),
+  },
+  {
+    // ported from hydra-synth (AGPL-3.0), colorama
+    id: 5,
+    name: 'colorama',
+    kind: 'colour',
+    slots: ['picture'],
+    glsl: `vec3 fx_colorama_hsv(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 q = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 r = mix(vec4(q.xyw, c.r), vec4(c.r, q.yzx), step(q.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  return vec3(abs(r.z + (r.w - r.y) / (6.0 * d + 1e-10)), d / (r.x + 1e-10), r.x);
+}
+vec3 fx_colorama_rgb(vec3 c) {
+  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+vec3 fx_colorama(vec3 c, vec2 p, float a, float t) {
+  if (a <= 0.0) return c;
+  // Each colour's hue moved by its own brightness and slowly round with the track (a twentieth of a turn a second at
+  // all of it): the colours shift in bands.
+  vec3 h = fx_colorama_hsv(c);
+  h.x = fract(h.x + a * (0.6 * h.z + 0.05 * t));
+  return fx_colorama_rgb(h);
+}`,
+    report: (a) => ({ colourChurn: 0.05 * a }),
+  },
+  {
+    // ported from hydra-synth (AGPL-3.0), hue
+    id: 6,
+    name: 'hue',
+    kind: 'colour',
+    slots: ['picture'],
+    glsl: `vec3 fx_hue_hsv(vec3 c) {
+  vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+  vec4 q = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+  vec4 r = mix(vec4(q.xyw, c.r), vec4(c.r, q.yzx), step(q.x, c.r));
+  float d = q.x - min(q.w, q.y);
+  return vec3(abs(r.z + (r.w - r.y) / (6.0 * d + 1e-10)), d / (r.x + 1e-10), r.x);
+}
+vec3 fx_hue_rgb(vec3 c) {
+  vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+  return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+}
+vec3 fx_hue(vec3 c, vec2 p, float a, float t) {
+  if (a <= 0.0) return c;
+  // Every colour turned round the wheel by as much as half a turn; held, not cycling.
+  vec3 h = fx_hue_hsv(c);
+  h.x = fract(h.x + 0.5 * a);
+  return fx_hue_rgb(h);
+}`,
+    report: () => ({}),
+  },
+  {
+    // ported from hydra-synth (AGPL-3.0), modulate (by noise)
+    id: 7,
+    name: 'ripple',
+    kind: 'shape',
+    slots: ['picture', 'loop'],
+    glsl: `float fx_ripple_hash(vec2 q) { return fract(sin(dot(q, vec2(127.1, 311.7))) * 43758.5453); }
+float fx_ripple_noise(vec2 q) {
+  vec2 i = floor(q);
+  vec2 f = fract(q);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(fx_ripple_hash(i), fx_ripple_hash(i + vec2(1.0, 0.0)), u.x), mix(fx_ripple_hash(i + vec2(0.0, 1.0)), fx_ripple_hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+vec2 fx_ripple(vec2 p, float a, float t) {
+  if (a <= 0.0) return p;
+  // Moved by a slow noise, as far as a tenth of the height at all of it.
+  vec2 q = p * 2.0 + vec2(0.0, 0.15 * t);
+  vec2 n = vec2(fx_ripple_noise(q), fx_ripple_noise(q + vec2(5.2, 1.3))) - 0.5;
+  return p + 0.2 * a * n;
+}`,
+    report: (a) => ({ shapeChurn: 0.15 * a }),
+  },
+  {
+    // ported from hydra-synth (AGPL-3.0), modulate (by the visuals' own flow)
+    id: 8,
+    name: 'stream',
+    kind: 'shape',
+    slots: ['picture', 'loop'],
+    glsl: `vec2 fx_stream(vec2 p, float a, float t) {
+  if (a <= 0.0) return p;
+  // Read from upstream: the picture drawn along the fluid's flow (nothing where it does not flow), up to a fifth of a
+  // second of it.
+  return p - 0.2 * a * fx_flow(p);
+}`,
+    report: (a) => ({ shapeChurn: 0.1 * a }),
+  },
+  {
+    // ported from hydra-synth (AGPL-3.0), src(o0) fed back, scaled and turned
+    id: 9,
+    name: 'echo',
+    kind: 'echo',
+    slots: ['picture'],
+    glsl: `vec3 fx_echo(vec3 c, vec2 p, float a, float t, sampler2D prev) {
+  if (a <= 0.0) return c;
+  // The last picture, a little larger and turned, kept where it is brighter: trails that stream out and round.
+  float s = 1.0 + 0.03 * a;
+  float r = 0.006 * a;
+  vec2 q = mat2(cos(r), -sin(r), sin(r), cos(r)) * p / s;
+  return max(c, fx_prev(prev, q) * (0.75 + 0.2 * a));
+}`,
+    report: (a) => ({ motion: 0.35 * a, zoomPumping: 0 }),
+  },
+  {
+    // ported from hydra-synth (AGPL-3.0), rotate
+    id: 10,
+    name: 'rotate',
+    kind: 'shape',
+    slots: ['picture', 'loop'],
+    glsl: `vec2 fx_rotate(vec2 p, float a, float t) {
+  if (a <= 0.0) return p;
+  // The whole turning slowly with the track (a twentieth of a turn a second at all of it).
+  float r = 0.314159 * a * t;
+  return mat2(cos(r), -sin(r), sin(r), cos(r)) * p;
+}`,
+    report: (a) => ({ motion: 0.314159 * a }),
+  },
+  {
+    // ported from hydra-synth (AGPL-3.0), scroll
+    id: 11,
+    name: 'scroll',
+    kind: 'shape',
+    slots: ['picture', 'loop'],
+    glsl: `float fx_scroll_tri(float x) { return abs(mod(x + 1.0, 4.0) - 2.0) - 1.0; }
+vec2 fx_scroll(vec2 p, float a, float t) {
+  if (a <= 0.0) return p;
+  // Drifting sideways and up with the track, mirrored where it wraps (a tenth of the height a second at all of it).
+  vec2 q = p + a * t * vec2(0.1, 0.04);
+  return vec2(fx_scroll_tri(q.x), fx_scroll_tri(q.y));
+}`,
+    report: (a) => ({ motion: 0.1 * a }),
+  },
+  {
+    // ported from hydra-synth (AGPL-3.0), saturate
+    id: 12,
+    name: 'saturate',
+    kind: 'colour',
+    slots: ['picture'],
+    glsl: `vec3 fx_saturate(vec3 c, vec2 p, float a, float t) {
+  if (a <= 0.0) return c;
+  // Its colour drawn out from its grey, up to twice as far.
+  float grey = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  return clamp(mix(vec3(grey), c, 1.0 + a), 0.0, 1.0);
+}`,
+    report: () => ({}),
+  },
 ];
 
 const byId = new Map(EFFECTS.map((e) => [e.id, e]));

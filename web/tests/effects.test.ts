@@ -23,7 +23,7 @@ test('a chain: shapes before the read, colours after, each by its place; nothing
   assert.ok(s.indexOf('p = fx_kaleid(p, uFxA[1], uFxT);') < read, 'the shape first, by its place');
   assert.ok(s.indexOf('c = fx_posterize(c, p, uFxA[0], uFxT);') > read, 'the colour after');
   assert.equal(s.split('vec2 fx_kaleid(').length, 2, 'each function once');
-  assert.deepEqual(chainOf([1, 2, 7], 'loop').map((e) => e.name), ['kaleid']);
+  assert.deepEqual(chainOf([1, 2, 999], 'loop').map((e) => e.name), ['kaleid'], 'a colour and one not known: not for the loop');
 });
 
 test('the loop: a shape on the buffer’s coordinates, else the identity; reports add up by amount', () => {
