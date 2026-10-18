@@ -163,11 +163,14 @@ layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 bandA;
 layout(location = 2) out vec4 bandB;
 vec4 kept(vec4 v) { return bad(dot(v, vec4(1.0))) ? vec4(0.0) : v * uKeep; }
+// Read at the light's own level, never a coarser one: where the flow squeezes, an implicit level blends in some of
+// the coarser levels (made for a wide smoothing, stale otherwise), stepping at every cell's edge, and the steps pile up
+// frame on frame into blocks (2026-10-18: Mali takes 7% of the next level for a 5% squeeze; desktops round it away).
 void main() {
   vec2 back = vUv - uDt * texture(uVelocity, vUv).xy * uCell;
-  o = kept(texture(uAcc, back));
-  bandA = kept(texture(uBandsA, back));
-  bandB = kept(texture(uBandsB, back));
+  o = kept(textureLod(uAcc, back, 0.0));
+  bandA = kept(textureLod(uBandsA, back, 0.0));
+  bandB = kept(textureLod(uBandsB, back, 0.0));
 }`;
 
 type Target = { texture: WebGLTexture; fbo: WebGLFramebuffer };
