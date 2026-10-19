@@ -224,6 +224,20 @@ void main() {
   bandB = kept(textureLod(uBandsB, back, 0.0));
 }`;
 
+// A picture carried along by the velocity (the picture loop's Fluid, decision 0056: `carry`), nothing of it lost: what
+// fades is the loop's Keep's. At no time (`uDt` 0) it reads back exactly where it draws: a plain copy.
+const PICTURE = `${HEAD}
+uniform sampler2D uVelocity;
+uniform sampler2D uPicture;
+uniform vec2 uCell;
+uniform float uDt;
+out vec4 o;
+void main() {
+  vec2 back = vUv - uDt * texture(uVelocity, vUv).xy * uCell;
+  vec4 v = textureLod(uPicture, back, 0.0);
+  o = bad(dot(v, vec4(1.0))) ? vec4(0.0) : v;
+}`;
+
 type Target = { texture: WebGLTexture; fbo: WebGLFramebuffer };
 
 /** `fx_flow` in the light pass, for a loop effect that reads the flow (effects.ts Stream): the velocity where p is, in
@@ -267,7 +281,7 @@ export class Fluid {
     if (!Fluid.supported(gl)) throw new Error('This device cannot draw into float textures.');
     this.gl = gl;
     this.empty = gl.createVertexArray()!;
-    const programs = { FORCE, JACOBI, CARRY, LIGHT: lightSource(NO_LOOP) };
+    const programs = { FORCE, JACOBI, CARRY, PICTURE, LIGHT: lightSource(NO_LOOP) };
     for (const [name, source] of Object.entries(programs)) this.programs.set(name, program(gl, VERTEX, source));
     this.resize(gridW, gridH);
   }
@@ -389,6 +403,24 @@ export class Fluid {
     gl.uniform2f(u('uLoopK'), loop?.knobs?.[0] ?? 0.5, loop?.knobs?.[1] ?? 0.5);
     gl.uniform1f(u('uFacets'), facets?.amount ?? 0);
     gl.uniform1f(u('uLattice'), facets?.hex ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  /** A picture (`input`, `width` x `height`) carried along by the flow into `out` (null: the screen), `amount` of the
+   *  last step's way (0: a plain copy). The picture loop's Fluid (decision 0056); `advect` is the flame's own. Leaves
+   *  blending off and `out` bound. */
+  carry(input: WebGLTexture, out: WebGLFramebuffer | null, width: number, height: number, amount: number) {
+    const gl = this.gl;
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(this.empty);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, out);
+    if (out) gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+    gl.viewport(0, 0, width, height);
+    const prog = this.use('PICTURE');
+    const u = (name: string) => this.location(prog, name);
+    this.bind(prog, { uVelocity: this.velocity, uPicture: input });
+    gl.uniform2f(u('uCell'), ...this.uvPerCell);
+    gl.uniform1f(u('uDt'), this.lastDt * Math.max(0, amount));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
