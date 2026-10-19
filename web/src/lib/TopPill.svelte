@@ -19,6 +19,7 @@
     device = true,
     order = null,
     tempos = null,
+    filter = true,
   }: {
     /** The page it is on (its search, its own filters and View), or null in the panel. */
     page?: string | null;
@@ -28,6 +29,8 @@
     order?: ListOrder | null;
     /** The panel list's tempos, for its filter's tempo selector (decision 0041). */
     tempos?: readonly (number | null | undefined)[] | null;
+    /** The filter's button; not on local mode's pages (decision 0052), which have only their search. */
+    filter?: boolean;
   } = $props();
   let filterOpen = $state(false);
   let viewOpen = $state(false);
@@ -75,7 +78,7 @@
     {#if words}
       <button class:lit={pageView.query.trim() !== ''} aria-label={words} title={words} onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
     {/if}
-    <button class:lit={filtering} aria-label="Filter" title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}><Icon name="funnel" size={22} /></button>
+    {#if filter}<button class:lit={filtering} aria-label="Filter" title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}><Icon name="funnel" size={22} /></button>{/if}
     {#if view && (page || order)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)}><Icon name="sliders" size={22} /></button>{/if}
     {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
     {#if page && pageView.action}

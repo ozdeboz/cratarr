@@ -42,6 +42,15 @@ export const appInfo = $state({
    *  chosen; null: Android's own choice (Automatic), as again whenever an output comes or goes. */
   outputs: [] as AppOutput[],
   output: null as string | null,
+  /** Automatic in the user's order (the owner: "Automatic follows it", with a switch back to Android's): the first
+   *  connected one in `known`, every output seen, in that order. */
+  ordered: false,
+  known: [] as AppOutput[],
+  /** Local mode (decision 0052): which mode plays, Cratarr's or the device's own music; `local`: a local folder is on
+   *  and Android lets the app read them (the switcher shows); Android's permission for the device's music. */
+  mode: 'cratarr' as 'cratarr' | 'device',
+  local: false,
+  deviceMusic: 'unasked' as 'unasked' | 'denied' | 'granted',
 });
 
 /** One of the device's audio outputs: `id` "type:name" (or the type alone, for one with no name). */
@@ -98,6 +107,10 @@ export const setDevice = (change: {
   levelling?: boolean;
   /** This device's audio output by its id; null: Automatic. */
   output?: string | null;
+  /** Automatic in the user's order, or Android's; the order (ids of `known`); one not connected forgotten. */
+  ordered?: boolean;
+  order?: string[];
+  forget?: string;
 }) =>
   toApp({ type: 'device-set', ...change });
 /** Keeps these tracks on the device, in the quality the settings say. */
@@ -138,6 +151,11 @@ if (port) {
       appInfo.levelling = m.levelling !== false;
       appInfo.outputs = Array.isArray(m.outputs) ? (m.outputs as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
       appInfo.output = typeof m.output === 'string' && appInfo.outputs.some((o) => o.id === m.output) ? m.output : null;
+      appInfo.ordered = m.ordered === true;
+      appInfo.known = Array.isArray(m.known) ? (m.known as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
+      appInfo.mode = m.mode === 'device' ? 'device' : 'cratarr';
+      appInfo.local = m.local === true;
+      appInfo.deviceMusic = m.deviceMusic === 'granted' || m.deviceMusic === 'denied' ? m.deviceMusic : 'unasked';
     }
     if (m.type === 'network-test') {
       networkTest.local = typeof m.local === 'boolean' ? m.local : null;

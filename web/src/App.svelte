@@ -3,6 +3,11 @@
   import Health from './Health.svelte';
   import Settings from './Settings.svelte';
   import Library from './Library.svelte';
+  import LocalAlbums from './LocalAlbums.svelte';
+  import LocalArtists from './LocalArtists.svelte';
+  import LocalTracks from './LocalTracks.svelte';
+  import ModeSwitcher from './lib/ModeSwitcher.svelte';
+  import { localMode, switchable } from './lib/deviceMusic.svelte';
   import Insights from './Insights.svelte';
   import Downloads from './Downloads.svelte';
   import SettingsPanel from './lib/SettingsPanel.svelte';
@@ -59,6 +64,11 @@
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
   // In the app only: what is kept on this device (decision 0033, step 4), playable without a connection.
   const DOWNLOADS: Page = { id: 'downloads', href: '#/downloads', label: 'Downloads', icon: 'download' };
+  // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
+  const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Albums', icon: 'disc' };
+  const LOCAL_ARTISTS: Page = { id: 'local-artists', href: '#/local/artists', label: 'Artists', icon: 'users' };
+  const LOCAL_TRACKS: Page = { id: 'local-tracks', href: '#/local/tracks', label: 'Tracks', icon: 'music' };
+  const LOCAL = [LOCAL_ALBUMS, LOCAL_ARTISTS, LOCAL_TRACKS];
 
   // Phones get a bottom bar. Up to five fit; beyond that the first four stay and the rest go under "More".
   const BAR_SLOTS = 5;
@@ -72,7 +82,7 @@
       history.replaceState(history.state, '', LIBRARY.href + (rest ? `?${rest}` : ''));
       return LIBRARY.id;
     }
-    return [HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DOWNLOADS].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
+    return [HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DOWNLOADS, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
@@ -168,6 +178,9 @@
   // 400 px and the player 275 px. Its width is dragged at its edge and remembered.
   const NAV_WIDTH = 240;
   const TOP_BAR = 65;
+  /** The phone's slim row of the mode switcher over the tabs (decision 0052, mock C), while it shows. */
+  const SLIM = 34;
+  const topBar = $derived(TOP_BAR + (switchable() ? SLIM : 0));
   /** The mini-player's height with its margin, kept free under the page and the toasts. */
   const MINI_SPACE = 88;
   const miniSpace = $derived(mini && playing() ? MINI_SPACE : 0);
@@ -175,7 +188,7 @@
   // has a step before this one; on the right, on a page with something to play, the pill (lib/TopPill): the filter
   // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
   // page). The page starts under the row, so at rest nothing lies under it.
-  const PLAYABLE = ['playlists', 'crates', 'library', 'downloads'];
+  const PLAYABLE = ['playlists', 'crates', 'library', 'downloads', 'local-albums', 'local-artists', 'local-tracks'];
   // A part of the settings in the panel (lib/SettingsPanel), when the panel shows one.
   const settingsShown = $derived(SECTIONS.find((x) => x.id === settingsOf(panel.viewed))?.id ?? (null as SettingsSection | null));
   // Beside Settings' list a part is always open: the one last open in this browser, else the first; opened in place, so
@@ -227,7 +240,7 @@
   let aboutOpen = $state(false);
   $effect(() => {
     const root = document.documentElement.style;
-    root.setProperty('--top-h', phone ? `${TOP_BAR}px` : '0px');
+    root.setProperty('--top-h', phone ? `${topBar}px` : '0px');
     root.setProperty('--bottom-h', `${miniSpace}px`);
   });
   // The playing cover's colour, for the floating controls' surface (app.css --float-bg): the mini-player's.
@@ -244,7 +257,7 @@
   });
   let area = $state({ w: 0, h: 0 });
   $effect(() => {
-    const on = () => (area = { w: innerWidth - (phone ? 0 : NAV_WIDTH), h: innerHeight - (phone ? TOP_BAR : 0) });
+    const on = () => (area = { w: innerWidth - (phone ? 0 : NAV_WIDTH), h: innerHeight - (phone ? topBar : 0) });
     on();
     addEventListener('resize', on);
     return () => removeEventListener('resize', on);
@@ -374,10 +387,21 @@
             : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN: Page[] = [LIBRARY, CRATES, PLAYLISTS];
+  const MAIN: Page[] = $derived(localMode() ? LOCAL : [LIBRARY, CRATES, PLAYLISTS]);
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
-  // Health is the library's, so its administrators' (decision 0051).
-  const APART: Page[] = $derived([...(inApp ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS]);
+  // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
+  const APART: Page[] = $derived(localMode() ? [SETTINGS] : [...(inApp ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS]);
+  // A switch of the mode (decision 0052) goes to the first page of the mode it went to, unless the page is one both
+  // have (Settings).
+  $effect(() => {
+    const local = localMode();
+    // No visuals in local mode (the owner: "In local mode, the visuals feature is not supported").
+    if (local) untrack(() => (visuals.open = false));
+    const p = untrack(() => page);
+    if (p === 'settings') return;
+    if (local && !p.startsWith('local-')) location.hash = LOCAL_ALBUMS.href;
+    else if (!local && p.startsWith('local-')) location.hash = LIBRARY.href;
+  });
   const ALL = $derived([...MAIN, ...APART]);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : ALL.slice(0, BAR_SLOTS - 1));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
@@ -397,12 +421,17 @@
     onpointerleave={(e) => e.pointerType === 'mouse' && navDrag === null && (peek = false)}
   >
     <aside class="sidebar" class:peek>
-      <div class="brand">
-        <span class="logo"><Mark /></span>
-        <span class="name">Cratarr</span>
-      </div>
-      {#if connection}
-        <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
+      <!-- The mode switcher with a local folder on (decision 0052, mock B); otherwise the mark and the connection line. -->
+      {#if switchable()}
+        <ModeSwitcher {connection} />
+      {:else}
+        <div class="brand">
+          <span class="logo"><Mark /></span>
+          <span class="name">Cratarr</span>
+        </div>
+        {#if connection}
+          <a class="conn" class:down={!connection.ok} href={keepViewed("#/settings")}><i aria-hidden="true"></i><span class="label">{connection.text}</span></a>
+        {/if}
       {/if}
 
       <nav aria-label="Pages">
@@ -441,6 +470,12 @@
       <Downloads />
     {:else if page === 'library'}
       <Library />
+    {:else if page === 'local-albums'}
+      <LocalAlbums />
+    {:else if page === 'local-artists'}
+      <LocalArtists />
+    {:else if page === 'local-tracks'}
+      <LocalTracks />
     {:else if status && !status.music && me.admin}
       <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
     {:else if page === 'insights'}
@@ -504,7 +539,7 @@
       {:else}
         <span></span>
       {/if}
-      {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} /></SheetArea>{/if}
+      {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} filter={!page.startsWith('local-')} /></SheetArea>{/if}
       {#if page === 'settings'}
         <span class="navpill"><button aria-label="About" title="About" onclick={() => (aboutOpen = true)}><Icon name="info" size={22} /></button></span>
       {/if}
@@ -537,6 +572,9 @@
   <ProgressBar />
 
   <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
+    <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on. -->
+    {#if switchable()}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
+    <div class="tabs">
     {#each bar as p (p.id)}
       <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}
         ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
@@ -550,6 +588,7 @@
         onclick={() => (moreOpen = !moreOpen)}><Icon name="more" /><span>More</span></button
       >
     {/if}
+    </div>
   </nav>
 </div>
 
@@ -738,15 +777,24 @@
     inset: 0 0 auto;
     z-index: 20;
     display: flex;
-    justify-content: space-around;
+    flex-direction: column;
     padding: calc(6px + env(safe-area-inset-top)) 8px 6px;
     background: color-mix(in srgb, var(--surface) 88%, transparent);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border);
   }
 
+  .bar .tabs {
+    display: flex;
+    justify-content: space-around;
+  }
+
+  .bar .slim {
+    padding: 0 4px 4px;
+  }
+
   .bar a,
-  .bar button {
+  .bar .tabs > button {
     flex: 1 1 0;
     display: flex;
     flex-direction: column;

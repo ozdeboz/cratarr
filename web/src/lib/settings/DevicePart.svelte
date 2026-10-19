@@ -2,7 +2,11 @@
   // This device (decision 0031): the app's own settings, this device's only; they act at once. How it keeps music
   // (quality, mobile data, the budget) is under Sync (decision 0038), how it reaches Cratarr under Network. In a
   // browser: its name as a Play On player (lib/playOnTarget), this browser's only.
+  // Local music (decision 0052, local mode): Android's permission while it is not given, then the folders Android found
+  // music in, each with its track count and a switch; local mode reads only those on, and with one on the switcher shows.
   import { allowBackground, appInfo, inApp, setDevice } from '../app.svelte';
+  import { allowDeviceMusic, askFolders, device, setFolder } from '../deviceMusic.svelte';
+  import { plural } from '../insights.svelte';
   import { prefs } from '../prefs.svelte';
   import { defaultBrowserName } from '../playOnTarget.svelte';
   import Group from './Group.svelte';
@@ -15,6 +19,9 @@
     () => setDevice({ stayReady: false }),
   );
 
+  $effect(() => {
+    if (inApp && appInfo.deviceMusic === 'granted') askFolders();
+  });
   let naming = $state(false);
   const name = $derived(inApp ? (appInfo.player ?? '') : prefs.browserName || defaultBrowserName());
   function rename(v: string) {
@@ -43,6 +50,27 @@
     </Item>
   {/if}
 </Group>
+
+{#if inApp}
+  <Group title="Local music">
+    {#if appInfo.deviceMusic !== 'granted'}
+      <Item
+        name="This device's music"
+        line={appInfo.deviceMusic === 'denied' ? 'Not allowed' : 'Not read'}
+        tone={appInfo.deviceMusic === 'denied' ? 'warn' : null}
+        more="Allowed, the app finds the music on this device, and the folders you turn on here play in Local, beside Cratarr."
+      >
+        <button onclick={allowDeviceMusic}>Allow</button>
+      </Item>
+    {:else if device.folders?.length}
+      {#each device.folders as f (f.path)}
+        <Item name={f.name} line={plural(f.tracks, 'track')} toggle={{ checked: f.on, onchange: (on) => setFolder(f.path, on) }} />
+      {/each}
+    {:else if device.folders}
+      <Item name="No music found on this device" />
+    {/if}
+  </Group>
+{/if}
 
 {#if naming}
   <ValueSheet title="Player name" value={name} placeholder={inApp ? '' : defaultBrowserName()} allowEmpty={false} onsave={rename} onclose={() => (naming = false)} />

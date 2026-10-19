@@ -20,11 +20,16 @@
   import { loadWaveform, waveformOf } from './waveforms.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
+  import { playingCrateOuts } from './crates.svelte';
+  import { localMode } from './deviceMusic.svelte';
+  import HeartSheet from './HeartSheet.svelte';
+  import { longpress } from './longpress';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { visuals } from './visuals/shown.svelte';
   import { keepViewed, panel } from './panel.svelte';
   import { goToArtist, mainArtist } from './albums.svelte';
   import { artistFavorite } from './api';
+  import { toast } from './toast.svelte';
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
@@ -136,6 +141,11 @@
   let menuAt = $state<DOMRect | null>(null);
   // The menu's entries, or straight to its playlists (the top bar's playlists button).
   let menuStart = $state<'menu' | 'lists'>('menu');
+  // A long press on the heart (the owner): Favourite, the crate's Excludes (decision 0024, amended 2026-10-19: the
+  // track or its album, from the crate the queue came from, its own tracks; here only, not the track's menu: "Heart
+  // sheet only"), and Exclude globally (lib/HeartSheet).
+  let heartMenu = $state(false);
+
   // More music's sheet (Radio and Autoplay), from the radio button.
   let moreOpen = $state(false);
   let queueOpen = $state(false);
@@ -343,7 +353,8 @@
           onclick={() => (sleepOpen = true)}><Icon name="moon" size={22} /></button
         >
       {/if}
-      {#if np}
+      <!-- Not in local mode (decision 0052; the owner: "In local mode, the visuals feature is not supported"). -->
+      {#if np && !localMode()}
         <button class="corner" aria-label="Visuals" aria-haspopup="dialog" onclick={() => (visuals.open = true)}><Icon name="visuals" size={22} /></button>
       {/if}
       {#if place === 'side'}
@@ -483,18 +494,22 @@
             onclick={() => (outputOpen = true)}
             ><Icon name="speaker" size={24} />{#if !playsHere() && np.player}<small>{np.player}</small>{/if}</button
           >
-          <!-- In the middle (the owner). Always there; until the server says whether it is a favourite, not to be pressed. -->
+          <!-- In the middle (the owner). Always there; until the server says whether it is a favourite, not to be pressed.
+               Not in local mode (decision 0052: no hearts for the device's own music). -->
+          {#if !localMode()}
           <button
             class="fav"
             class:on={favorite()}
             disabled={pending() || np.favorite === null}
             aria-label={favorite() ? 'Favourite' : 'Not a favourite'}
             aria-pressed={favorite()}
-            onclick={toggleFavorite}><Icon name="heart" size={26} /></button
+            onclick={toggleFavorite}
+            use:longpress={() => (heartMenu = true)}><Icon name="heart" size={26} /></button
           >
+          {/if}
           <!-- More music (Radio and Autoplay, decision 0036, amended), where the device button was; only where the page holds the queue.
                A tap opens its sheet; lit while either is on. -->
-          {#if isLocal()}
+          {#if isLocal() && !localMode()}
             <button
               class="act radio more"
               class:on={local.radio || local.autoplay !== null}
@@ -524,6 +539,15 @@
 
 {#if menuAt}
   <TrackMenu start={menuStart} onplaylists={place === 'overlay' ? toPlaylistsPage : null} onclose={() => (menuAt = null)} />
+{/if}
+{#if heartMenu && np}
+  <HeartSheet
+    track={np}
+    cover={src}
+    favourite={{ on: favorite(), disabled: pending() || np.favorite === null, flip: toggleFavorite }}
+    outs={playingCrateOuts()}
+    onclose={() => (heartMenu = false)}
+  />
 {/if}
 {#if outputOpen}
   <OutputSheet onclose={() => (outputOpen = false)} />

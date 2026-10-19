@@ -49,7 +49,7 @@
     start = 'menu',
     queue: place = null,
     onplaylists = null,
-    out = null,
+    outs = [],
   }: {
     onclose: () => void;
     track?: MenuTrack | null;
@@ -57,9 +57,9 @@
     queue?: QueuePlace | null;
     /** Opened from a component over the whole page (the full player): its playlists' step offers the Playlists page. */
     onplaylists?: (() => void) | null;
-    /** Opened on a list one can take it out of (a crate, a playlist; a queue a crate started): Remove from it, as a
-     *  swipe left does there (the owner, 2026-10-19). */
-    out?: { label: string; icon: IconName; run: () => void } | null;
+    /** Opened on a list one can take it out of: Remove from a playlist, Exclude from a crate (the track, its album), as
+     *  a swipe left does there (the owner, 2026-10-19). */
+    outs?: { label: string; icon: IconName; run: () => void }[];
   } = $props();
 
   const np = $derived(playing());
@@ -67,10 +67,13 @@
   const forPlaying = $derived(!place && (!track || (!!np && np.source === track.source && np.id === track.id)));
   const t = $derived<MenuTrack | null>(forPlaying ? np : track);
 
+  /** One of the device's own (local mode, decision 0052): none of Cratarr's (hearts, playlists, downloads, share,
+   *  details); Play next, Add to queue, its album and artist, the web search. */
+  const onDevice = $derived(t?.source === 'device');
   // Another track's playlists and heart, asked for when its menu opens.
   let other = $state<TrackState | null>(null);
   $effect(() => {
-    if (forPlaying || !track) return;
+    if (forPlaying || !track || track.source === 'device') return;
     const { source, id } = track;
     trackState(source, id).then(
       (v) => (other = v),
@@ -338,7 +341,7 @@
         {#if addable}
           <MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />
         {/if}
-        {#if inApp && t}
+        {#if inApp && t && !onDevice}
           {@const one = t}
           <MenuEntry
             icon="arrowDownToLine"
@@ -349,14 +352,15 @@
             }}
           />
         {/if}
-        <MenuEntry icon="share" label="Share" onclick={shareIt} />
-        <MenuEntry icon="info" label="Details" onclick={showDetails} />
+        {#if !onDevice}
+          <MenuEntry icon="share" label="Share" onclick={shareIt} />
+          <MenuEntry icon="info" label="Details" onclick={showDetails} />
+        {/if}
         <MenuEntry icon="search" label="Web search" onclick={webSearch} />
         {#if movesHere && !forPlaying}
           <MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />
         {/if}
-        {#if out}
-          {@const o = out}
+        {#each outs as o (o.label)}
           <MenuEntry
             icon={o.icon}
             label={o.label}
@@ -366,7 +370,7 @@
               o.run();
             }}
           />
-        {/if}
+        {/each}
       </div>
     {:else if step === 'lists'}
       <PlaylistToggles title="Add to / remove from playlists" {playlists} ticked={(p) => p.member}>

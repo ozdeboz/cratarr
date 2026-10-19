@@ -71,6 +71,9 @@
     viewGenre,
     type CrateDraft,
   } from './crates.svelte';
+  import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
+  import RowHeart from './RowHeart.svelte';
+  import type { ExcludeEntry } from './crates.svelte';
   import CrateEditor from './CrateEditor.svelte';
   import SelectSheet from './SelectSheet.svelte';
   import { Reorder } from './reorder.svelte';
@@ -115,7 +118,7 @@
   import { on } from './events.svelte';
   import { swipe } from './swipe';
   import SwipeBehind from './SwipeBehind.svelte';
-  import LeftOutSheet from './LeftOutSheet.svelte';
+  import ExcludedSheet from './ExcludedSheet.svelte';
   import { toast } from './toast.svelte';
   import { me } from './me.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
@@ -248,6 +251,9 @@
 
   // The album's heart: shows the change at once, back as it was when the server refuses.
   const albumFav = $derived(album ? isFavorite(album.source, album.id) : false);
+  /** An album or artist of the device's own music (local mode, decision 0052): played and played next, nothing of
+   *  Cratarr's (hearts, menus, About, radio, select). */
+  const onDevice = $derived((album?.source ?? artist?.source) === DEVICE);
   async function toggleAlbumFavorite() {
     if (!album) return;
     const { source: s, id: a } = album;
@@ -297,14 +303,14 @@
     const asked = c
       ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav, alb)
       : a
-        ? albumView(a.source, a.id).then((r) => {
+        ? (a.source === DEVICE ? Promise.resolve(deviceAlbumView(a.id)) : albumView(a.source, a.id)).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id)
               albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays };
             return { ...r, total: r.rows.length };
           })
         : ar
-          ? artistView(ar.source, ar.name).then((r) => {
+          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : artistView(ar.source, ar.name)).then((r) => {
               if (want === id) {
                 artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite };
                 // Their picture: their newest album's cover (Symfonium's, without an artist's photo).
@@ -323,7 +329,7 @@
         source = r.source;
         total = r.total;
         listGenres = r.genres;
-        loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
+        if (r.source !== DEVICE) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
       },
       (e) => {
         if (want === id) error = e instanceof Error ? e.message : 'Unexpected error';
@@ -655,8 +661,8 @@
   let menuOpen = $state(false);
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
   let menuStart = $state<'menu' | 'delete'>('menu');
-  /** `out`: its list's Remove from (a crate's, one's own playlist's), as a swipe left there. */
-  let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists'; out?: { label: string; icon: IconName; run: () => void } | null } | null>(null);
+  /** `outs`: its list's Remove from (one's own playlist) or Exclude from (a crate: the track, its album). */
+  let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists'; outs?: { label: string; icon: IconName; run: () => void }[] } | null>(null);
   const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null });
 
   // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
@@ -667,7 +673,7 @@
   const barActions = $derived.by((): BarAction[] => {
     const play = (key: PlayMode, icon: IconName, label: string): BarAction => ({ key, icon, label, run: () => act(key), disabled: !canPlay });
     const list = [play('play', 'play', 'Play')];
-    if (album) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
+    if (album && !onDevice) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
     list.push(play('shuffle', 'shuffle', 'Shuffle'));
     if (!crate) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
     // An artist as the radio's input (decision 0036), as a crate is: their tracks, and like them from anywhere.
@@ -919,11 +925,11 @@
   }
 
   // Swipes on a list's rows (the owner, 2026-10-19: "on any library content list in the panel, swiping to the left should
-  // remove it from that list"): right plays the track next on every list; left takes it out of the crate (its left-out
-  // list, decision 0024 amended) or out of the playlist file (one's own), at once, with Undo. An album's or an artist's
+  // remove it from that list"): right plays the track next on every list; left excludes it from the crate (decision
+  // 0024 amended: "exclude, not remove") or takes it out of the playlist file (one's own), at once, with Undo. An album's or an artist's
   // tracks are no list of one's own: no left. What each does shows in the strip the row uncovers (lib/SwipeBehind).
   const PLAY_NEXT = { icon: 'playNext', label: 'Play next' } as const;
-  const OUT_OF_CRATE = { icon: 'crateOut', label: 'Remove', danger: true } as const;
+  const OUT_OF_CRATE = { icon: 'crateOut', label: 'Exclude', danger: true } as const;
   const OUT_OF_PLAYLIST = { icon: 'listRemove', label: 'Remove', danger: true } as const;
   /** A swipe left on a row of `list` (a playlist's id; the crate viewed): null where it takes nothing out. */
   function outOf(r: PlaylistRow, list: string): (() => 'away') | null {
@@ -934,12 +940,24 @@
     if (!pl || pl.mine === false || (multi ? !(list in sections) : list !== id)) return null;
     return () => outOfPlaylist(list, r);
   }
-  /** How many tracks the crate viewed leaves out by hand, and their sheet. */
+  /** How many tracks and albums the crate viewed excludes, and their sheet. */
   const leftOut = $derived(crate && !crateEditing ? (crates.list?.find((x) => x.id === crate)?.left_out ?? 0) : 0);
   let leftOutOpen = $state(false);
-  /** A row's menu: Remove from the list, doing what its swipe left does. */
-  const menuOut = (out: (() => 'away') | null, list: string) =>
-    out ? { label: `Remove from ${crate ? crateName(crate) : list}`, icon: (crate ? 'crateOut' : 'listRemove') as IconName, run: () => void out() } : null;
+  /** A row's menu: Remove from one's own playlist, as its swipe left does. A crate's Excludes are its heart's (one
+   *  thing in one place, as the full player's: the owner, "Heart sheet only"). */
+  function menuOuts(out: (() => 'away') | null, list: string) {
+    return out && !crate ? [{ label: `Remove from ${list}`, icon: 'listRemove' as IconName, run: () => void out() }] : [];
+  }
+  /** A row's heart's sheet (lib/HeartSheet) in a crate: Exclude the track (as its swipe left), or its album. */
+  function crateExcludes(out: (() => 'away') | null, r: PlaylistRow): ExcludeEntry[] {
+    const c = crate;
+    if (!c || !out) return [];
+    const name = crateName(c);
+    return [
+      { label: `Exclude from ${name}`, icon: 'crateOut', run: () => void out() },
+      ...(r.album_id ? [{ label: `Exclude album from ${name}`, icon: 'crateOut' as const, run: () => albumOutOfCrate(c, r) }] : []),
+    ];
+  }
   /** The row leaves the list as it slides out (the list is keyed by place, so the next takes its row). */
   function dropShown(list: string, r: PlaylistRow) {
     setTimeout(() => {
@@ -950,11 +968,21 @@
   }
   function outOfCrate(c: string, r: PlaylistRow) {
     dropShown(id, r);
-    leaveOut(c, source, [r.id!]).catch((e) => {
-      toast.fail(e, "It wasn't taken out");
+    leaveOut(c, source, { ids: [r.id!] }).catch((e) => {
+      toast.fail(e, "It wasn't excluded");
       saved++;
     });
     return 'away' as const;
+  }
+  /** The row's whole album out of the crate (the owner: "exclude album from crate"): its rows leave the list. */
+  function albumOutOfCrate(c: string, r: PlaylistRow) {
+    const a = r.album_id;
+    if (!a) return;
+    for (const x of rows?.filter((x) => x.album_id === a) ?? []) dropShown(id, x);
+    leaveOut(c, source, { albums: [a] }).catch((e) => {
+      toast.fail(e, "It wasn't excluded");
+      saved++;
+    });
   }
   // A playlist's line out of its file. Swipes in a row wait for each other: each save names the lines as the one before
   // left them (the server refuses a save over lines that changed), and the list is read again once they are all done.
@@ -1387,6 +1415,8 @@
           {:else}
             <button class="icon" aria-label="Make playlist" title="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
           {/if}
+        {:else if onDevice}
+          <!-- The device's own music (local mode, decision 0052): no heart, no Cratarr menu. -->
         {:else if artist}
           {#if artistHead?.favorite !== undefined}
             <button class="icon" class:fav={artistHead.favorite} aria-pressed={artistHead.favorite} aria-label="Favourite" onclick={toggleArtistFavorite}
@@ -1482,8 +1512,8 @@
           <!-- A genre opens in the panel (its own crate). -->
           {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
           {#if p?.dead || chosenDead}<p class="details dead missing">{p?.dead || chosenDead} missing</p>{/if}
-          <!-- A crate's tracks taken out by hand (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
-          {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} left out</span></button>{/if}
+          <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
+          {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
         </div>
         {#if headTempo}
           <div class="head-spread">
@@ -1616,7 +1646,7 @@
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
       </ol>
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
-      {#if album && albumHead}
+      {#if album && albumHead && !onDevice}
         <!-- As Symfonium's album: the artist's other albums, then About. -->
         {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
         {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
@@ -1723,8 +1753,8 @@
       onclick={() => (selecting && i !== null ? tick(i) : playFrom(name, src, list, r))}
       attach={fromAction(swipe, () => ({ enabled: !selecting, right: ok ? () => playNext(r, src) : null, left: out }))}
       attachMain={fromAction(longpress, () => () => {
-        if (!ok) return;
-        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu', out: menuOut(out, name) };
+        if (!ok || onDevice) return;
+        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, name) };
         else if (selecting) selectSheet = true;
         else startSelect(i);
       })}
@@ -1738,14 +1768,24 @@
   </li>
 {/snippet}
 
-<!-- A track's row ends in ⋮ (its menu, Symfonium's), or in select mode in its tick. -->
+<!-- A track's row ends in its heart (as the queue's rows: a tap its playlists, a long press its sheet, lib/HeartSheet;
+     not for the device's own music) and ⋮ (its menu, Symfonium's), or in select mode in its tick. -->
 {#snippet rowEnd(r: PlaylistRow, src: string, i: number | null, out: (() => 'away') | null = null, list = '')}
   {#if selecting && i !== null}
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
       ><Icon name={selecting.has(i) ? 'circleCheck' : 'circle'} size={24} /></button
     >
-  {:else}
-    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu', out: menuOut(out, list) })}
+  {:else if !onDevice}
+    <RowHeart
+      source={src}
+      id={r.id!}
+      name={r.name ?? r.file}
+      artist={r.artist}
+      cover={coverUrl({ source: src, id: r.id!, album_id: r.album_id })}
+      outs={crateExcludes(out, r)}
+      onopen={() => (trackMenu = { track: asTrack(r, src), start: 'lists' })}
+    />
+    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, list) })}
       ><Icon name="moreVert" size={22} /></button
     >
   {/if}
@@ -1767,7 +1807,7 @@
       disabled={!ok}
       onclick={() => (selecting ? tick(i) : playFrom(title, source, list, r))}
       attach={fromAction(swipe, () => ({ enabled: ok && !selecting, right: () => playNext(r, source) }))}
-      attachMain={fromAction(longpress, () => () => ok && (selecting ? (selectSheet = true) : startSelect(i)))}
+      attachMain={fromAction(longpress, () => () => ok && !onDevice && (selecting ? (selectSheet = true) : startSelect(i)))}
     >
       {#snippet lead()}
         <span class="num">{#if here}<span class="dots" class:still={paused()} aria-label="Playing"><i></i><i></i><i></i><i></i></span>{:else}{i + 1}{/if}</span>
@@ -1778,7 +1818,7 @@
 {/snippet}
 
 {#snippet cover(r: PlaylistRow, src: string, here = false)}
-  <TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
+  <TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id, album_id: r.album_id }) : null} playing={here} paused={paused()} />
 {/snippet}
 
 {#if menuOpen && selected.length}
@@ -1798,10 +1838,10 @@
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
 {#if trackMenu}
-  <TrackMenu track={trackMenu.track} start={trackMenu.start} out={trackMenu.out} onclose={() => (trackMenu = null)} />
+  <TrackMenu track={trackMenu.track} start={trackMenu.start} outs={trackMenu.outs} onclose={() => (trackMenu = null)} />
 {/if}
 {#if leftOutOpen && crate}
-  <LeftOutSheet crate={crate} onchange={() => saved++} onclose={() => (leftOutOpen = false)} />
+  <ExcludedSheet {crate} onchange={() => saved++} onclose={() => (leftOutOpen = false)} />
 {/if}
 {#if artistMenuOpen && artist}
   <ArtistMenu

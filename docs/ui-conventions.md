@@ -12,6 +12,15 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
 - **Navigation:** from 1024 px a sidebar on the left; below it a bar of pages fixed along the **top** (icon and label,
   up to five, the rest under More).
+- **Cratarr | Local** (decision 0052, the owner's picks): in the app, once a local folder is on (Settings → This device
+  → Local music), the sidebar's top is the mode switcher (`lib/ModeSwitcher.svelte`, mock B): a bordered button, the
+  mark on its 38 px tile, the mode over "● Connected" or this device's name, the up-down chevrons; a tap opens the two
+  modes, the current one lit, no icons. On a phone the same in a slim row (34 px) over the tabs (mock C). Without a
+  local folder, and in a browser, the top is as it was. While Local plays, a note before the device's name. A switch is
+  the whole app: what plays pauses and is put by, the other mode's queue comes back paused, and the page goes to the
+  mode's first page. Local's menu: Albums, Artists, Tracks, Settings; its pages as the Library's (search, no filter),
+  its albums and artists in the panel as Cratarr's, with nothing of Cratarr's: no hearts, playlists, crates, radio,
+  Insights, track menus beyond Play next, Add to queue, its album and artist.
 - **The player is part of the app shell** (decision 0018, after Finamp), on every page: since Cratarr plays music
   itself (decision 0022) it is a player, not only a remote for adding what plays. Which server a browser follows is
   chosen in the filter sheet (the funnel in the floating pill: a card per server), not on the pages; no choice is
@@ -36,6 +45,11 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     the track is analysed (decision 0035) the bar is its **waveform**: its loudness along it as bars (against its own
     loudest), what has played in the accent; the handle shows only while held. Elsewhere the thin line. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
     cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere (over the page and beside it): swipe up opens the queue, swipe down closes.
+    A long press on any heart (2026-10-19: the full and the mini player's, the queue's playing card's, every track
+    row's) opens the same sheet (`lib/HeartSheet.svelte`): Favourite (its switch), the crate's Excludes where they
+    apply (the players: the crate the queue came from, its own tracks; a crate's rows: that crate; none in the Queue
+    sheet), and Exclude globally (decision 0024, amended). Track rows end in a heart before ⋮ everywhere (the panel's
+    lists too): a tap its playlists, a long press the sheet. The device's own music (local mode) has no hearts.
   - **Where it shows:** with room for it (a content area of 800 × 500 px or more) the full player sits beside the page
     by itself while something plays, resizable at its edge (handle in the middle), the width remembered; its chevron
     folds it to the mini-player until that is tapped. Otherwise the mini-player shows, and opens the full player
@@ -58,10 +72,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     artist and the album, not the album the queue plays, Radio's or Autoplay's mark before them; length, heart, ⋮). A tap plays
     a row; a row's cover held plays its track from a third of the way in until the finger lifts, over what plays,
     which then goes on where it was (decided 2026-10-16; this browser's own stream for now). Playing on this device a row's handle reorders and a swipe left past 65 % removes it,
-    with no undo, as Finamp; the server's player takes neither command. In a queue a crate started, its own tracks
-    (not added by hand, by Radio or by Autoplay) can be taken out of the crate: the crate-with-a-cross beside the
-    playing card's heart (the next track plays), and "Remove from <crate>" in a row's menu (decision 0024, amended
-    2026-10-19); Undo follows. A long-press or right-click opens a menu, the
+    with no undo, as Finamp; the server's player takes neither command. Excluding from a crate is not offered here
+    (the owner, 2026-10-19: "It makes no sense to have the button there"). A long-press or right-click opens a menu, the
     same everywhere in the sheet: on the playing track's card (it has no ⋯) the playing track's own menu; on a row a
     menu about its place in the queue: Play now and Play next (moving it there on this device; "Play again next", a
     copy, on the server's player), then Add to playlist, the favourite and Remove from queue (this device).
@@ -72,13 +84,15 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     Whichever side plays, the player looks and works the same; playlists, the heart and the info chips act on the
     track that plays there. A track this device cannot play is skipped with one error line naming it. In the app,
     under This device while it plays (alone or in a group), its audio output: the one it sounds on by its icon and
-    name; a tap opens a step with Automatic (Android's own choice) and each output, the chosen one ticked (2026-10-19).
-    Following a group the row is greyed: the group's player makes the sound.
+    name; a tap opens a step with Automatic and each output, the chosen one ticked (2026-10-19). Automatic is Android's
+    own choice, or with "My order" on the first connected output in the user's order: every output seen, dragged by
+    its handle, those not connected greyed (a swipe left forgets one); off, the handles go. Following a group the row
+    is greyed: the group's player makes the sound.
   Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`,
   `lib/remote.svelte.ts`).
 - **Swipes on rows** (`lib/swipe.ts`, the owner 2026-10-19): the row follows the finger; past 65 % of its width the
-  action runs, else it springs back. Left takes it out of the list it is in (the queue, a crate, one's own
-  playlist), with Undo except in the queue; right plays it next (an album's, an artist's, a crate's and a playlist's
+  action runs, else it springs back. Left takes it out of the list it is in: Remove from the queue or one's own
+  playlist, Exclude from a crate (decision 0024, amended), with Undo except in the queue; right plays it next (an album's, an artist's, a crate's and a playlist's
   tracks). A way with no action does not move. What it does shows in the strip the row uncovers, growing from the
   edge with the move (`lib/SwipeBehind.svelte`): the action's icon and word, red for removing, the accent for Play
   next, on a light tint of the same colour.

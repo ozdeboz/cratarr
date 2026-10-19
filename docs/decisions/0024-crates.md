@@ -134,41 +134,32 @@ The owner: "a play button on the crates, which automatically plays it with shuff
 - **A big crate is sampled.** A crate comes 500 tracks at a time, so the queue takes up to three stretches of 500 from
   anywhere in it, shuffled together. A crate of up to 1,500 tracks plays whole.
 
-## Amendment (2026-10-19): a crate's tracks taken out by hand
+## Amendment (2026-10-19): exclusions, a crate's and Cratarr's
 
 The owner: "whenever a crate has added tracks to the queue, those tracks should get a button to remove them from the
-crate", and, of the open points, each as recommended: a left-out list per crate; a button on the playing card and an
-entry in the menus; the track leaves the queue too; an Undo toast. Its icon is the crate with a cross where its handle
-is (the owner chose it from three).
+crate"; then, of the open points, a list per crate, the track leaving the queue too, an Undo toast; later: not in the
+Queue sheet ("It makes no sense to have the button there") but in the crate's panel and the full player; "I want
+crate exclusions and I want global exclusions"; "exclude album from crate"; and the word: "exclude, not remove". Its
+icon is the crate with a cross where its handle is (the owner chose it from three); the global one's is a ban.
 
-- **A left-out list per crate** (`left_out` in `crates.json`), for every crate: one's own, Unlisted and a genre's. It
-  beats the conditions and both toggles (a left-out favourite stays out), and everything that reads a crate's tracks
-  leaves them out: its rows and size, the tempo spread, Play and Shuffle (its card's too), Make playlist, radio within
-  it. `POST`/`DELETE /api/crates/{id}/left-out {source, ids}` take out and put back, journaled (Undo);
-  `GET /api/crates/{id}/left-out` lists them; each crate carries `left_out: n`.
-- **From a queue the crate started** (its card's Shuffle, its panel's Play or Shuffle), on its own tracks only (not
-  those added by hand, by Radio or by Autoplay): the crate-with-a-cross beside the playing card's heart in the Queue
-  sheet, and "Remove from <crate>" in a row's menu. The track leaves the queue too; the playing one gives way to the
-  next. The page knows the queue's crate by the queue's name, as the sheet's chip does.
-- **From the crate's panel**: a swipe left on a track (decision 0023, amended the same day), or its menu's "Remove from
-  <crate>".
-- **Undo** follows in a toast ("Removed from Test."), the one notice of its kind: a single tap changes the crate.
-- **Putting back**: "N left out" under the crate's name in its panel (any crate, so not only in the editor, which
-  Unlisted and a genre's crate have none of) opens their list: each put back, or Put all back, with Undo again.
-
-## Amendment (2026-10-19): excluded from a crate, and everywhere (the server's part)
-
-The owner, for release 69: "I want crate exclusions and I want global exclusions." Global means every automatic pick.
-The word in the page is **Exclude**; the server's names stay `left_out` for a crate.
-
-- **From a crate.** A crate's left-out list holds single tracks (their lines) and, as a rule, whole albums (their ids:
-  the album's tracks now and later). `POST`/`DELETE /api/crates/{id}/left-out {source, ids?, albums?}` →
-  `{left_out, undo}`; `GET` → `{source, rows, albums: [{id, title, artist}]}`, `rows` the single tracks. A crate's
-  `left_out` counts both. Journaled for Undo.
-- **Everywhere.** Each account has one list of excluded tracks (lines in its `crates.json`). `POST`/`DELETE
-  /api/excluded {source, ids}` → `{excluded, undo}`; `GET /api/excluded` → `{source, excluded, rows}`. Journaled.
-  - Left out of every crate (one's own, Unlisted, genres), as a crate's left-out list is: rows, counts, stats, the
-    tempo spread, Make playlist, a crate's radio, Kept.
-  - Never picked by Radio, Autoplay, Similar songs, the shuffles of the library and of the favourites, or Subsonic's
-    random songs.
-  - Still played when chosen by hand: an album, a playlist, a search, tracks named one by one, a queue taken up.
+- **A crate's exclusions** (`left_out` in `crates.json`), for every crate: one's own, Unlisted and a genre's. Tracks,
+  and whole albums (the album's tracks now and later). They beat the conditions and both toggles (an excluded favourite
+  stays out), and everything that reads a crate's tracks leaves them out: its rows and size, the tempo spread, Play and
+  Shuffle (its card's too), Make playlist, radio within it. `POST`/`DELETE /api/crates/{id}/left-out {source, ids,
+  albums}` exclude and put back, journaled (Undo); `GET` lists them (`rows`, `albums`); each crate carries `left_out`.
+- **Global exclusions** (`/api/excluded`, the same three calls with `ids`): out of every crate, and never picked by
+  Radio, Autoplay or a shuffle of the library or the favourites; a track still plays when chosen (its album, a
+  playlist, a track tapped, a queue taken up).
+- **Where**: in a crate's panel, a swipe left on a track (Exclude); and a long press on any heart opens the heart's
+  sheet (the owner, 2026-10-19: every track
+  row's, the full and the mini player's, the queue's playing card's): Favourite, the crate's two where they apply (a
+  crate's rows; in the players while a queue the crate started plays its own track; never in the Queue sheet), and
+  "Exclude globally". The crate's Excludes are in the sheet only, not in the track menus (one thing in one place:
+  "Heart sheet only").
+- **The queue**: what is excluded leaves what plays here too (a crate's: the queue it started, its own tracks; global:
+  any but those added by hand); the playing one gives way to the next. Undo puts it back in the crate or the list, not
+  in the queue.
+- **Undo** follows in a toast ("Excluded from Test.", "Excluded globally."), the one notice of its kind.
+- **Putting back**: "N excluded" under a crate's name in its panel (any crate, which the editor is not: Unlisted and a
+  genre's have none) and at the top of the Library page (the global ones) open their list (lib/ExcludedSheet): each put
+  back, or Put all back, with Undo again.

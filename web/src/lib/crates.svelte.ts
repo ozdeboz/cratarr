@@ -1,8 +1,8 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
-import { albumCoverUrl, crateImageUrl, crateRows, getCrates, leaveOutOfCrate, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites, type PlaylistRow } from './api';
-import type { LocalTrack } from './localPlayer.svelte';
-import { playPlaylistFrom } from './output.svelte';
+import { albumCoverUrl, crateImageUrl, crateRows, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites, type PlaylistRow } from './api';
+import { dropFromQueue, local, type LocalTrack } from './localPlayer.svelte';
+import { isLocal, playPlaylistFrom, shownPlaylists } from './output.svelte';
 import { prefs } from './prefs.svelte';
 import { viewPlaylist } from './panel.svelte';
 import { toast } from './toast.svelte';
@@ -227,12 +227,43 @@ export async function shuffleCrate(id: string, name: string) {
   await playPlaylistFrom(name, first.source, shuffled(tracks), 0);
 }
 
-// Tracks taken out of a crate by hand (decision 0024, amended 2026-10-19): from its panel (a swipe left, a track's menu)
-// or from a queue it started (the playing card's button, a track's menu). It leaves them out whatever its conditions and
-// toggles say; Undo puts them back (the owner: "Undo toast", the one notice of its kind). Its sizes are read again.
-export async function leaveOut(id: string, source: string, ids: string[]) {
+/** An Exclude in the heart's sheet (lib/HeartSheet). */
+export type ExcludeEntry = { label: string; icon: 'crateOut'; run: () => void };
+
+/** The playing track's crate Excludes, for the players' hearts (the full player's and the mini player's; not the Queue
+ *  sheet's): from the crate the queue came from, the track or its album, for the crate's own tracks. */
+export function playingCrateOuts(): ExcludeEntry[] {
+  const c = queueCrate();
+  const t = local.queue[local.index];
+  if (!c || !t || t.lane) return [];
+  const name = crateName(c);
+  const fail = (e: unknown) => toast.fail(e, "It wasn't excluded");
+  const album = t.album_id;
+  return [
+    { label: `Exclude from ${name}`, icon: 'crateOut', run: () => void leaveOut(c, t.source, { ids: [t.id] }).catch(fail) },
+    ...(album ? [{ label: `Exclude album from ${name}`, icon: 'crateOut' as const, run: () => void leaveOut(c, t.source, { albums: [album] }).catch(fail) }] : []),
+  ];
+}
+
+/** The crate the queue playing here came from, by the queue's name (a playlist of the same name wins): the Queue
+ *  sheet's chip, and Remove from it in the full player's menu. */
+export function queueCrate(from: string | null = isLocal() ? local.from : null): string | null {
+  if (!from || shownPlaylists().some((p) => p.id === from)) return null;
+  return crates.list?.find((c) => c.name === from)?.id ?? null;
+}
+
+// A crate's exclusions (decision 0024, amended 2026-10-19; the owner's word: "exclude, not remove"): tracks, or a
+// track's whole album, from its panel (a swipe left, a track's menu) or the full player (its menu, a long press on its
+// heart) while a queue it started plays; not from the Queue sheet (the owner: "It makes no sense to have the button
+// there"). It leaves them out whatever its conditions and toggles say; Undo puts them back (the owner: "Undo toast",
+// the one notice of its kind). Its sizes are read again.
+export async function leaveOut(id: string, source: string, what: Excluding) {
   const name = crateName(id);
-  const { undo } = await leaveOutOfCrate(id, source, ids);
-  withUndo(`Removed from ${name}.`, [undo], { after: () => loadCrates() });
+  const { undo } = await leaveOutOfCrate(id, source, what);
+  // Out of the crate, out of the queue it started too (the owner: "it leaves the queue too"), its own tracks only (not
+  // those added by hand, by Radio or by Autoplay); Undo puts them back in the crate only.
+  if (queueCrate() === id)
+    dropFromQueue((t) => !t.lane && t.source === source && (!!what.ids?.includes(t.id) || (!!t.album_id && !!what.albums?.includes(t.album_id))));
+  withUndo(`Excluded from ${name}.`, [undo], { after: () => loadCrates() });
   await loadCrates();
 }

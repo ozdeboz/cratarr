@@ -133,6 +133,8 @@ export const albumUses = $state<Record<string, Record<string, AlbumUse>>>({});
 const NOT_USED: AlbumUse = { plays: 0, rating: 0 };
 export const useOf = (source: string, id: string): AlbumUse => albumUses[source]?.[id] ?? NOT_USED;
 export async function loadAlbumUses(source: string) {
+  // The device's own music (local mode, decision 0052) is none of Cratarr's: no plays to ask about.
+  if (source === 'device') return;
   try {
     albumUses[source] = await getAlbumUses(source);
   } catch {

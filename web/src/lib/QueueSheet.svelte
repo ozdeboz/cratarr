@@ -27,12 +27,13 @@
   import QueuesSheet from './QueuesSheet.svelte';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
-  import { clearUpcoming, local, jump as localJump, moveUpcoming, removePlaying, removeUpcoming, restoreUpcoming } from './localPlayer.svelte';
+  import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming } from './localPlayer.svelte';
   import MoreMusicSheet, { moreMusicLine, moreMusicParts } from './MoreMusicSheet.svelte';
   import { canPreview, endPreview, preview, startPreview } from './preview.svelte';
   import { hold } from './hold';
   import { albumSubject, viewPlaylist } from './panel.svelte';
-  import { crateName, crates, CRATE, leaveOut } from './crates.svelte';
+  import { CRATE, queueCrate } from './crates.svelte';
+  import HeartSheet from './HeartSheet.svelte';
   import { player } from './live.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { isLocal, shownPlaylists } from './output.svelte';
@@ -75,34 +76,9 @@
     const first = own[0];
     if (first?.album_id && own.every((t) => t.album_id === first.album_id)) return albumSubject(first.source, first.album_id);
     if (shownPlaylists().some((p) => p.id === from)) return from;
-    const c = crates.list?.find((x) => x.name === from);
-    return c ? CRATE + c.id : null;
+    const c = queueCrate(from);
+    return c ? CRATE + c : null;
   });
-  // A queue a crate started (its chip's crate), on its own tracks (not added by hand, by Radio or by Autoplay): the
-  // playing card's crate-with-a-cross and a row's menu take the track out of the crate (decision 0024, amended
-  // 2026-10-19: the owner's "playing card + menus"), and out of the queue: the playing one gives way to the next.
-  const fromCrate = $derived(fromView?.startsWith(CRATE) ? fromView.slice(CRATE.length) : null);
-  /** The crate's own track at `place` (the playing one: null). */
-  const ownTrack = (place: QueuePlace | null) => {
-    if (!fromCrate) return false;
-    const i = place === null ? local.index : place.list === 'previous' ? place.at : local.index + 1 + place.at;
-    return !!local.queue[i] && !local.queue[i].lane;
-  };
-  async function outOfCrate(t: MenuTrack, place: QueuePlace | null) {
-    const c = fromCrate;
-    if (!c) return;
-    heavy();
-    try {
-      await leaveOut(c, t.source, [t.id]);
-      if (place === null) removePlaying();
-      else if (place.list === 'upcoming') removeUpcoming(place.at);
-    } catch (e) {
-      toast.fail(e, "It wasn't taken out");
-    }
-  }
-  /** A row's menu (or the playing card's): Remove from the crate, for the crate's own tracks. */
-  const outFor = (m: { track: MenuTrack; queue: QueuePlace | null }) =>
-    ownTrack(m.queue) && fromCrate ? { label: `Remove from ${crateName(fromCrate)}`, icon: 'crateOut' as const, run: () => outOfCrate(m.track, m.queue) } : null;
   function openFrom() {
     const v = fromView;
     if (!v) return;
@@ -191,6 +167,9 @@
   // Swipe left removes (this device; lib/swipe.ts): the row slides out, then the track leaves the queue. Remove shows
   // in the strip it uncovers (lib/SwipeBehind).
   const REMOVE = { icon: 'trash', label: 'Remove', danger: true } as const;
+  // A long press on the playing card's heart: Favourite and Exclude globally (lib/HeartSheet; no crate Excludes in the
+  // Queue sheet, the owner).
+  let heartMenu = $state(false);
   const removeSwiped = (i: number) => {
     setTimeout(() => removeUpcoming(i), reducedMotion() ? 0 : 200);
     return 'away' as const;
@@ -220,7 +199,8 @@
 
 <!-- Finamp's row heart (lib/RowHeart.svelte): a tap opens its playlists, a long-press makes it a favourite or not. -->
 {#snippet rowHeart(t: MenuTrack)}
-  <RowHeart source={t.source} id={t.id} name={t.name} onopen={() => showMenu({ track: t, start: 'lists', queue: null })} />
+  <!-- None for the device's own music (local mode, decision 0052). -->
+  {#if t.source !== 'device'}<RowHeart source={t.source} id={t.id} name={t.name} artist={t.artist} cover={t.album_id ? albumCoverUrl(t.source, t.album_id) : null} onopen={() => showMenu({ track: t, start: 'lists', queue: null })} />{/if}
 {/snippet}
 
 {#if np}
@@ -306,14 +286,15 @@
           <span>{np.artist ?? ''}</span>
         </div>
         <span class="ntime">{clockText(pos)}{dur ? ` / ${clockText(dur)}` : ''}</span>
-        {#if ownTrack(null)}
-          <button class="nbtn" aria-label={`Remove from ${crateName(fromCrate ?? '')}`} title="Remove from crate" onclick={() => outOfCrate(asTrack(np, np.source), null)}
-            ><Icon name="crateOut" size={28} /></button
-          >
-        {/if}
-        {#if np.favorite !== null}
-          <button class="nbtn" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
-            ><Icon name="heart" size={28} /></button
+        {#if np.favorite !== null && np.source !== 'device'}
+          <button
+            class="nbtn"
+            class:on={favorite()}
+            disabled={pending()}
+            aria-label={favorite() ? 'Favourite' : 'Not a favourite'}
+            aria-pressed={favorite()}
+            onclick={toggleFavorite}
+            use:longpress={() => (heartMenu = true)}><Icon name="heart" size={28} /></button
           >
         {/if}
       </div>
@@ -393,12 +374,14 @@
     track={menuFor.track}
     start={menuFor.start}
     queue={menuFor.queue}
-    out={outFor(menuFor)}
     onclose={() => (menuShown = false)}
   />
 {/if}
 {#if saving}
   <QueuePlaylistSheet onclose={() => (saving = false)} />
+{/if}
+{#if heartMenu && np}
+  <HeartSheet track={np} cover={src} favourite={{ on: favorite(), disabled: pending() || np.favorite === null, flip: toggleFavorite }} onclose={() => (heartMenu = false)} />
 {/if}
 {#if switching}
   <QueuesSheet onclose={() => (switching = false)} />

@@ -4,7 +4,10 @@
 // band sections give, from running statistics instead of the whole track: each band's level (dB over the 30 under its
 // running loudest) and flux (against its running loudest), its hits (picked as the server picks them: a peak of the
 // flux over the median around it), and the loudness as heard (EBU R128 momentary, through its K-weighting filters).
-// Only what can be heard as it plays: novelty, sections, bars and harmonic change wait for the server.
+// Only what can be heard as it plays: novelty, sections, bars and harmonic change wait for the server. In the app, its
+// player hears it instead (startAppLive) and the same statistics are kept here.
+
+import { onApp, toApp } from '../app.svelte';
 
 /** Each band's edges (Hz; 0 open), as the server's section 0 has them. */
 export const LIVE_EDGES: readonly (readonly [number, number])[] = [
@@ -82,6 +85,66 @@ const median = (v: number[]) => {
   return s[Math.floor(s.length / 2)];
 };
 
+/** The running statistics over each band's energy and flux, tick by tick, whichever ear hears the sound: this page's
+ *  own analyser (startLive) or the app's player (startAppLive). */
+function hearing() {
+  const ticksOf = (ms: number) => Math.max(1, Math.round(ms / TICK_MS));
+  const memory = ticksOf(MEMORY_S * 1000);
+  const levels = LIVE_EDGES.map(() => new Recent(memory));
+  const fluxes = LIVE_EDGES.map(() => new Recent(memory));
+  const strengths = LIVE_EDGES.map(() => new Recent(64));
+  const tops = LIVE_EDGES.map(() => ({ level: -100, flux: 1e-6, strong: 1e-6 }));
+  const bands: LiveBand[] = LIVE_EDGES.map(() => ({ level: 0, flux: 0, hits: 0, lastHitStrength: 0 }));
+  const lastHit = LIVE_EDGES.map(() => -Infinity);
+  let loudness: number | null = null;
+  let toppedAt = 0;
+
+  return {
+    /** One tick's energy and flux per band, heard at `now` (performance.now()'s clock). */
+    tick(energy: ArrayLike<number>, flux: ArrayLike<number>, now: number) {
+      if (now - toppedAt > TOPS_EVERY_MS) {
+        toppedAt = now;
+        tops.forEach((t, b) => {
+          t.level = levels[b].percentile(0.98, -100) ?? -100;
+          t.flux = Math.max(fluxes[b].percentile(0.98, 0) ?? 1e-6, 1e-6);
+          t.strong = Math.max(strengths[b].percentile(0.9, 0) ?? 1e-6, 1e-6);
+        });
+      }
+      for (let b = 0; b < LIVE_EDGES.length; b++) {
+        const level = 10 * Math.log10((energy[b] ?? 0) + 1e-12);
+        const f0 = flux[b] ?? 0;
+        levels[b].push(level);
+        fluxes[b].push(f0);
+        const t = tops[b];
+        bands[b].level = level > -100 ? Math.min(1, Math.max(0, (level - (t.level - RANGE_DB)) / RANGE_DB)) : 0;
+        bands[b].flux = Math.min(1, f0 / t.flux);
+        // A hit, three ticks late (about 35 ms): the flux then was the largest around it, over the median of the 120 ms
+        // before and the 35 ms after it by a tenth of the band's top, and not under a sixth of it.
+        const near = 3;
+        const window = fluxes[b].last(ticksOf(120) + near + 1);
+        const at = window.length - 1 - near;
+        if (at < near) continue;
+        const f = window[at];
+        const around = window.slice(Math.max(0, at - near), at).concat(window.slice(at + 1));
+        if (f < t.flux / 6 || around.some((x, i) => (i < near ? x >= f : x > f))) continue;
+        if (f < median(window) + t.flux / 10) continue;
+        const when = now - near * TICK_MS;
+        if (when - lastHit[b] < GAP_MS[b]) continue;
+        lastHit[b] = when;
+        strengths[b].push(f);
+        bands[b].hits++;
+        bands[b].lastHitStrength = Math.min(1, f / t.strong);
+      }
+    },
+    /** The K-weighted mean square of the last 400 ms or so, the channels mixed to one: as if both carried it (R128
+     *  sums the channels). */
+    loudness(meanSquare: number, stereo: boolean) {
+      loudness = meanSquare > 1e-10 ? -0.691 + 10 * Math.log10(meanSquare * (stereo ? 2 : 1)) : null;
+    },
+    now: (): LiveNow => ({ loudness, bands: bands.map((b) => ({ ...b })) }),
+  };
+}
+
 /**
  * Listens to `source` (the page player's route, before its gain) in `context`. `now()` is what it has heard lately;
  * `stop()` lets go of it.
@@ -116,16 +179,8 @@ export function startLive(source: AudioNode, context: AudioContext): { now(): Li
     band[k] = LIVE_EDGES.findIndex(([lo, hi]) => hz >= lo && (hi === 0 || hz < hi));
   }
   const previous = new Float32Array(bins);
-  const ticksOf = (ms: number) => Math.max(1, Math.round(ms / TICK_MS));
-  const memory = ticksOf(MEMORY_S * 1000);
-  const levels = LIVE_EDGES.map(() => new Recent(memory));
-  const fluxes = LIVE_EDGES.map(() => new Recent(memory));
-  const strengths = LIVE_EDGES.map(() => new Recent(64));
-  const tops = LIVE_EDGES.map(() => ({ level: -100, flux: 1e-6, strong: 1e-6 }));
-  const bands: LiveBand[] = LIVE_EDGES.map(() => ({ level: 0, flux: 0, hits: 0, lastHitStrength: 0 }));
-  const lastHit = LIVE_EDGES.map(() => -Infinity);
-  let loudness: number | null = null;
-  let toppedAt = 0;
+  const heard = hearing();
+  const every100 = Math.max(1, Math.round(100 / TICK_MS));
   let tick = 0;
   // The analyser's dB as a magnitude (its own scale: only how the flux compresses depends on it).
   const toMagnitude = (d: number) => (d === -Infinity ? 0 : 10 ** (d / 20));
@@ -145,53 +200,19 @@ export function startLive(source: AudioNode, context: AudioContext): { now(): Li
       energy[b] += m * m;
       flux[b] += rise;
     }
-    const now = performance.now();
-    if (now - toppedAt > TOPS_EVERY_MS) {
-      toppedAt = now;
-      tops.forEach((t, b) => {
-        t.level = levels[b].percentile(0.98, -100) ?? -100;
-        t.flux = Math.max(fluxes[b].percentile(0.98, 0) ?? 1e-6, 1e-6);
-        t.strong = Math.max(strengths[b].percentile(0.9, 0) ?? 1e-6, 1e-6);
-      });
-    }
-    for (let b = 0; b < LIVE_EDGES.length; b++) {
-      const level = 10 * Math.log10(energy[b] + 1e-12);
-      levels[b].push(level);
-      fluxes[b].push(flux[b]);
-      const t = tops[b];
-      bands[b].level = level > -100 ? Math.min(1, Math.max(0, (level - (t.level - RANGE_DB)) / RANGE_DB)) : 0;
-      bands[b].flux = Math.min(1, flux[b] / t.flux);
-      // A hit, three ticks late (about 35 ms): the flux then was the largest around it, over the median of the 120 ms
-      // before and the 35 ms after it by a tenth of the band's top, and not under a sixth of it.
-      const near = 3;
-      const window = fluxes[b].last(ticksOf(120) + near + 1);
-      const at = window.length - 1 - near;
-      if (at < near) continue;
-      const f = window[at];
-      const around = window.slice(Math.max(0, at - near), at).concat(window.slice(at + 1));
-      if (f < t.flux / 6 || around.some((x, i) => (i < near ? x >= f : x > f))) continue;
-      if (f < median(window) + t.flux / 10) continue;
-      const when = now - near * TICK_MS;
-      if (when - lastHit[b] < GAP_MS[b]) continue;
-      lastHit[b] = when;
-      strengths[b].push(f);
-      bands[b].hits++;
-      bands[b].lastHitStrength = Math.min(1, f / t.strong);
-    }
+    heard.tick(energy, flux, performance.now());
     // The loudness, about every 100 ms.
-    if (tick % ticksOf(100) === 0) {
+    if (tick % every100 === 0) {
       temporal.getFloatTimeDomainData(wave);
       let sum = 0;
       for (const x of wave) sum += x * x;
-      const meanSquare = sum / wave.length;
-      // Two channels mixed to one by the analyser: as if both carried it (R128 sums the channels).
-      loudness = meanSquare > 1e-10 ? -0.691 + 10 * Math.log10(meanSquare * (stereo ? 2 : 1)) : null;
+      heard.loudness(sum / wave.length, stereo);
     }
   };
   const timer = setInterval(listen, TICK_MS);
 
   return {
-    now: () => ({ loudness, bands: bands.map((b) => ({ ...b })) }),
+    now: heard.now,
     stop: () => {
       clearInterval(timer);
       for (const node of [spectral, shelf]) {
@@ -203,6 +224,31 @@ export function startLive(source: AudioNode, context: AudioContext): { now(): Li
       }
       shelf.disconnect();
       pass.disconnect();
+    },
+  };
+}
+
+/**
+ * In the app, where its own player makes the sound (the owner: "I do want live sound"): the app taps what it plays
+ * and sends each band's energy and flux tick by tick (LIVE_EDGES' bands, every 12 ms, batched about 20 times a second)
+ * and the K-weighted mean square about every 100 ms; the statistics are this page's, as above. Asked for while the
+ * visuals listen ({type: 'live', on}).
+ */
+export function startAppLive(): { now(): LiveNow; stop(): void } {
+  const heard = hearing();
+  onApp('live', (m) => {
+    const ticks = Array.isArray(m.ticks) ? (m.ticks as { energy?: number[]; flux?: number[] }[]) : [];
+    const step = typeof m.tickMs === 'number' ? m.tickMs : TICK_MS;
+    const end = performance.now();
+    ticks.forEach((t, i) => heard.tick(t.energy ?? [], t.flux ?? [], end - (ticks.length - 1 - i) * step));
+    if (typeof m.meanSquare === 'number') heard.loudness(m.meanSquare, typeof m.channels === 'number' ? m.channels >= 2 : true);
+  });
+  toApp({ type: 'live', on: true });
+  return {
+    now: heard.now,
+    stop: () => {
+      toApp({ type: 'live', on: false });
+      onApp('live', () => {});
     },
   };
 }
