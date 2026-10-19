@@ -9,7 +9,7 @@
 import type { AspectsNow } from '../aspects';
 import { MOMENT_GAP, heightOf, letThrough, shapeOf, type MomentRequest } from '../evaluate';
 import { seedOf } from '../flame';
-import type { Levers } from '../governor';
+import type { Levers } from './sidechain';
 import { MODULATORS, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';

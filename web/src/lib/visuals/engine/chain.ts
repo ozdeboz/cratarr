@@ -6,13 +6,13 @@
 import type { AspectsNow } from '../aspects';
 import { hazeOf, levelOf } from '../aspects';
 import { PARTS, type Part } from '../flame';
-import type { Levers } from '../governor';
+import type { Levers } from './sidechain';
 import type { Music } from '../music-core';
 import { A, AMOUNT_ASPECTS, KNOB_ASPECTS, MOMENT_ASPECTS, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { courseStep, newFlash, newMoment, stepFlash, stepMoment, type FlashState, type MomentState } from './modules';
 
-/** Nothing held back (the governor's levers all open). */
+/** Nothing held back (the sidechaining's levers all open). */
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 type MomentAspect = (typeof MOMENT_ASPECTS)[number];

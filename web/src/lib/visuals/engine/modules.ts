@@ -18,7 +18,7 @@ export function stepEnvelope(st: EnvelopeState, heard: number, playing: boolean,
 }
 
 /** Clock: the turning's rate at the track's tempo (`bps`), a route's full amount turning a part once round in 16 beats,
- *  at Speed (and the governor's pace); a quarter with reduced motion; paused, it slows to a stop over two thirds of a
+ *  at Speed (and the sidechaining's pace); a quarter with reduced motion; paused, it slows to a stop over two thirds of a
  *  second. */
 export type ClockState = { rate: number };
 export const newClock = (): ClockState => ({ rate: 0 });
@@ -41,11 +41,11 @@ export function stepTrack(st: TrackState, key: string | null, now: number, bps: 
 
 /** Flash: a quickly changing value as its slow course (followed twice over SLOW_S: a beat's or a hit's swing all but
  *  gone from it, a passage's change kept) and Flash's share of its swing about that course (`held`: as much of it as
- *  the governor lets through). One per target, its course its own. */
+ *  the sidechaining lets through). One per target, its course its own. */
 export const SLOW_S = 0.3;
 export type FlashState = number[];
 export const newFlash = (): FlashState => [];
-/** How far the courses follow this frame: slower while the governor holds the swing back. */
+/** How far the courses follow this frame: slower while the sidechaining holds the swing back. */
 export const courseStep = (dt: number, swingLever: number) => 1 - Math.exp((-dt * swingLever) / SLOW_S);
 export function stepFlash(course: FlashState, v: number, follow: number, flash: number, swingLever: number, held = 1): number {
   if (!course.length) course.push(v, v);
@@ -55,7 +55,7 @@ export function stepFlash(course: FlashState, v: number, follow: number, flash: 
 }
 
 /** Moments: what a step's cables give rising past a half fires it; ready again once that falls under a third, and not
- *  within MOMENT_GAP_MS (times the governor's gap). */
+ *  within MOMENT_GAP_MS (times the sidechaining's gap). */
 export const MOMENT_GAP_MS = 2000;
 export type MomentState = { armed: boolean; at: number };
 export const newMoment = (): MomentState => ({ armed: true, at: -Infinity });

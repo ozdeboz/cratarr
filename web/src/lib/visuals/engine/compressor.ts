@@ -1,4 +1,4 @@
-// A sidechain compressor for values (decision 0057; the owner: the governor goes, "we shouldn't reinvent it"): the
+// A sidechain compressor for values (decision 0057; the owner: standard sidechaining, "we shouldn't reinvent it"): the
 // textbook design of Giannoulis, Massberg and Reiss, "Digital Dynamic Range Compressor Design: A Tutorial and
 // Analysis", JAES 60(6), 2012. The key's level in dB; a soft-knee gain computer (their eq. 4); the gain reduction
 // smoothed by the smooth decoupled peak detector (their eq. 17), attack and release as time constants in seconds,
@@ -38,4 +38,26 @@ export function stepCompressor(st: CompressorState, input: number, key: number, 
   const reduction = Math.max(0, st.smooth);
   const gain = 10 ** ((k.makeup - reduction) / 20);
   return { out: input * gain, reduction, gain };
+}
+
+/** A ducker (the broadcast sidechain: while the key is over its threshold, the input is held down toward a fixed
+ *  depth, coming in over the attack; held that long after the key last went over; let back over the release once the
+ *  key is under its threshold times `hysteresis`, and in between held where it is, the window of a broadcast AGC's
+ *  gating): what a meter that counts (flashes a second, looks a minute) needs, where a compressor's reduction in
+ *  proportion to how far over would settle with the count still over. The window lets it settle as deep as the key
+ *  needs instead of swinging between none and all. */
+export type DuckerKnobs = { threshold: number; depth: number; attack: number; hold: number; release: number; hysteresis: number };
+export type DuckerState = { reduction: number; since: number };
+export const newDucker = (): DuckerState => ({ reduction: 0, since: Infinity });
+
+export function stepDucker(st: DuckerState, input: number, key: number, k: DuckerKnobs, dt: number): { out: number; reduction: number; gain: number } {
+  const step = Number.isFinite(dt) ? Math.max(0, dt) : 0;
+  const v = Number.isFinite(key) ? key : Infinity;
+  if (v > k.threshold) st.since = 0;
+  else st.since += step;
+  const target = v > k.threshold ? k.depth : v < k.threshold * k.hysteresis && st.since >= k.hold ? 0 : st.reduction;
+  const time = target > st.reduction ? k.attack : k.release;
+  st.reduction += (target - st.reduction) * (time > 0 ? 1 - Math.exp(-step / time) : 1);
+  const gain = 10 ** (-st.reduction / 20);
+  return { out: input * gain, reduction: st.reduction, gain };
 }

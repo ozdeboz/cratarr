@@ -3,7 +3,7 @@
 // the equivalence harness holds frame for frame to aspects.ts, before the port evaluator gives in place of the routes.
 
 import type { AspectsNow } from '../aspects';
-import type { Levers } from '../governor';
+import type { Levers } from './sidechain';
 import type { Music } from '../music-core';
 import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, compile, give, given, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
