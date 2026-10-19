@@ -37,9 +37,9 @@ test('Intensity, Flash and Speed move to the modules that do them; the column sc
   assert.equal(m.flash.knobs.flash, 1.4);
   assert.equal(m.clock.knobs.speed, 0.7);
   for (const k of ['intensity', 'flash', 'speed']) assert.ok(!(k in m.frame.knobs), k);
-  assert.equal(m.scale.knobs.size, 0.5);
-  assert.ok(!m.show, 'Show split into its parts');
-  for (const id of ['music', 'track', 'envelope', 'clock', 'flash', 'frame', 'flame', 'tonemap', 'curve', 'saturate', 'blur', 'scale', 'bend', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
+  assert.equal(m.flame.knobs.zoom, 0.5, "Show's Size is the Flame's zoom");
+  assert.equal(m.show.type, 'device');
+  for (const id of ['music', 'track', 'envelope', 'clock', 'flash', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
 });
 
 test('the extras come as they are: their modules, and their cables from a modulator or from Music with their reference and speed', () => {
@@ -53,5 +53,20 @@ test('the extras come as they are: their modules, and their cables from a modula
   assert.deepEqual(by['calm-size'].from, { module: 'breath', port: 'out' });
   assert.deepEqual(by['calm-hue'].from, { module: 'music', port: 'swell', speed: 'slow' });
   assert.deepEqual(by['calm-in'].to, { module: 'breath', port: 'in' });
-  assert.deepEqual(by['calm-size'].to, { module: 'scale', port: 'size' }, "a cable into Show's size goes into Scale");
+  assert.deepEqual(by['calm-size'].to, { module: 'flame', port: 'zoom' }, "a cable into Show's size goes into the Flame's zoom");
+  assert.deepEqual(by['calm-saturation'].to, { module: 'show', port: 'saturation' }, "Show's saturation keeps its address");
+});
+
+test('flatten: the Show device opened up, its modules in order, a cable into its exposed knob led to the module behind', async () => {
+  const { flatten } = await import('../src/lib/visuals/v2.ts');
+  const s = copy(DEFAULTS);
+  s.routes = { [routeKey('loudness', null, 'saturation')]: 0.8 };
+  const f = flatten(toV2(s));
+  const ids = f.modules.map((m) => m.id);
+  for (const id of ['show/bend', 'show/blur', 'show/tonemap', 'show/curve', 'show/saturate']) assert.ok(ids.includes(id), id);
+  assert.ok(!ids.includes('show'));
+  const c = f.cables.find((x) => x.id === routeKey('loudness', null, 'saturation'))!;
+  assert.deepEqual(c.to, { module: 'show/saturate', port: 'saturation' });
+  const chain = f.cables.filter((x) => x.id.startsWith('show/show-')).map((x) => `${x.from.module}>${x.to.module}`);
+  assert.deepEqual(chain, ['show/bend>show/blur', 'show/blur>show/tonemap', 'show/tonemap>show/curve', 'show/curve>show/saturate']);
 });

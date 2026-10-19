@@ -15,7 +15,7 @@ export type PortType = 'picture' | 'light' | 'audio' | 'value' | 'trigger';
 /** A port: its id on its module, its name, its type; `channels`: a band's six at once (VCV's polyphonic cable; a
  *  cable may take one of them); `normal`: what it is wired to unless a cable is plugged in (Eurorack's normalled
  *  connection: shown faint, broken by a cable). */
-export type Port = { id: string; label: string; type: PortType; channels?: number; normal?: PortRef };
+export type Port = { id: string; label: string; type: PortType; channels?: number; normal?: PortRef; polymorphic?: boolean };
 
 /** One end of a cable: a module's port, a channel of it where it has several. */
 export type PortRef = { module: string; port: string; channel?: number };
@@ -25,8 +25,10 @@ export type Ports = { in: Port[]; out: Port[] };
 /** The signals that are events: a beat, a band's hits. Into a value port they come as a pulse. */
 export const TRIGGER_SIGNALS: ReadonlySet<string> = new Set(['beat', 'downbeat', 'section', 'hits', 'percussiveHits']);
 
-/** Whether a cable may go from a port of `from` type into one of `to` type: the same, or a trigger into a value. */
-export const fits = (from: PortType, to: PortType) => from === to || (from === 'trigger' && to === 'value');
+/** Whether a cable may go from a port of `from` type into one of `to` type: the same, or a trigger into a value; a
+ *  polymorphic port (`light` or `picture`, its output following its input, as VCV's modules take any voltage) either. */
+export const fits = (from: PortType, to: PortType, polymorphic = false) =>
+  from === to || (from === 'trigger' && to === 'value') || (polymorphic && (from === 'light' || from === 'picture') && (to === 'light' || to === 'picture'));
 
 const knobPort = (k: Knob): Port => ({ id: k.id, label: k.label, type: 'value' });
 const PICTURE_IN: Port = { id: 'picture', label: 'Picture', type: 'picture' };
@@ -182,24 +184,25 @@ export const LOOPER = declared(
   [VALUE_OUT],
 );
 
-/** Show's parts (0057): each of its knobs, the module that takes it (id and type alike), in Show's order. Tone map
- *  turns the flame's light into a picture; the rest are picture modules. */
-export const SHOW_PARTS: readonly { knob: string; type: string; label: string }[] = [
+/** The Show device's modules (0057 §6), in the order that draws exactly today's picture (claude-632, render.ts's
+ *  show pass): each with the knob it took from Show (id and type alike). Bend and Blur take light or a picture
+ *  (polymorphic); Tone map turns light into a picture; the compositor fuses the five into one pass. Show's Size is
+ *  the Flame's own zoom, not here. */
+export const SHOW_PARTS: readonly { knob: string; type: string; label: string; polymorphic?: boolean }[] = [
+  { knob: 'waves', type: 'bend', label: 'Bend', polymorphic: true },
+  { knob: 'smoothing', type: 'blur', label: 'Blur', polymorphic: true },
   { knob: 'glow', type: 'tonemap', label: 'Tone map' },
   { knob: 'haze', type: 'curve', label: 'Curve' },
   { knob: 'saturation', type: 'saturate', label: 'Saturate' },
-  { knob: 'smoothing', type: 'blur', label: 'Blur' },
-  { knob: 'size', type: 'scale', label: 'Scale' },
-  { knob: 'waves', type: 'bend', label: 'Bend' },
 ];
 
 /** Show's parts as module types, each with its knob as Show's type has it (`show`: patch.ts cratarrTypes's). */
 export function showPartTypes(show: ModuleType): Declared[] {
-  return SHOW_PARTS.map(({ knob: id, type, label: name }) => {
+  return SHOW_PARTS.map(({ knob: id, type, label: name, polymorphic }) => {
     const k = show.knobs.find((x) => x.id === id);
     const knobs = k ? [k] : [];
-    const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : PICTURE_IN;
-    return declared(type, name, 'module', knobs, [input], [PICTURE_OUT]);
+    const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : polymorphic ? { ...PICTURE_IN, polymorphic } : PICTURE_IN;
+    return declared(type, name, 'module', knobs, [input], [polymorphic ? { ...PICTURE_OUT, polymorphic } : PICTURE_OUT]);
   });
 }
 

@@ -196,6 +196,26 @@ come later** (the owner):
 4. **Looper**: records a value (a knob's movement, a macro) over a number of bars and loops it in sync with the Clock;
    record, overdub, clear. In the rack it sits on the knob itself: hold Record, turn the knob.
 
+- **Filter bank and band control, the modular way** (the owner: multiband control is how modular synths do it; "this
+  completely replaces our previous implementation of band control"). In a synth, multiband control is a filter bank
+  (a crossover splitting the audio into bands), a follower on each band, and polyphonic cables carrying the bands
+  on. So:
+  - **Filter bank:** `audio` in, six bands out on one 6-channel cable, a standard crossover (Linkwitz–Riley) with
+    movable split points. Into followers, or any module, per band. For the live sound, or bands of one's own.
+  - **Music keeps its analysed bands** as the precise source: measured on the server over the whole track, each
+    against the track's own typical, with hits, flux and percussive/harmonic that a live filter bank cannot give. They
+    come out as 6-channel cables too.
+  - **Everything band-specific becomes polyphony:**
+    - a band is a channel of a cable, not a kind of route;
+    - a module fed six channels runs six times (one ADSR, six envelopes);
+    - the flame's six parts take six channels;
+    - per-band knobs (Evolution, Continuity, the ADSR's release that was Linger) are polyphonic knobs, one value a
+      channel.
+  - **Retired with it:**
+    - the band routes and their "Every band / one band" choice;
+    - the Bands pages and the band pins;
+    - the `lighting`/`evolution`/`continuity` settings arrays.
+    The conversion turns them into channels and polyphonic knobs.
 - VCV's other basics are named and sorted as VCV does: Sample & Hold, Random (our Drift), Slew (our followers).
 - Each shows its state on its node and its row (VCV's lights): the LFO's wave with a moving dot, the ADSR's shape
   lighting as it runs, the Sequencer's step.
