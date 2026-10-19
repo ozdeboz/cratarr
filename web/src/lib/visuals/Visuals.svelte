@@ -75,6 +75,11 @@
   import { evaluate, newEvalState, type Evaluated } from './evaluate';
   import { askStep, morphTo, newMorph, stepMorph } from './morph';
   import { chainRoutes, CHAINS, SCRATCH, type Chain } from './chains';
+  import { cableOf, freeCableId, isRouteId, knobLabel as cableKnobLabel, newCable, removeCables, reroute, sourceLabel, type Cables, type Source } from './cable-actions';
+  import CableMenu from './CableMenu.svelte';
+  import CableSheet from './CableSheet.svelte';
+  import KnobCables from './KnobCables.svelte';
+  import SourcePicker from './SourcePicker.svelte';
   import { leavingIds, morphedPatch, morphModules, rolledExtra, sameModules, withLeaving } from './chain-morph';
   import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
@@ -562,7 +567,7 @@
       const [mid, kid] = splitKnob(mk);
       const module = extraModule(mid);
       const label = `${module ? moduleName(module) : (MODULE_LABEL[mid] ?? mid)} · ${ROW_OF.get(SETTING_OF.get(mk) as One)?.label ?? anyKnob(mid, kid)?.label ?? kid}`;
-      return { mk, n, label, page: ASPECT_OF.has(mk) ? `cables:${mk}` : `xcables:${mk}` };
+      return { mk, n, label, page: `moves:${mk}` };
     });
   });
   const chainNow = $derived(
@@ -783,12 +788,6 @@
     const n = Number(m.slice(2));
     return subName(ENGINE_EFFECTS[ENGINES[n - 1].key])(s[`fx${n}` as One] as number);
   }
-  // How many routes move a column (each band's counted).
-  function cablesInto(aspect: Aspect): number {
-    let n = 0;
-    for (const [k, v] of Object.entries(s.routes)) if (k.endsWith(`|${aspect}`) && Math.abs(endOf(v)) > 1e-6) n++;
-    return n;
-  }
   // What moves a column, a row each: a whole-track signal; a band signal as one row where every band's is the same,
   // else one a band.
   type CableRow = { id: string; signal: Signal; pick: number | null; label: string; sub: string; v: number };
@@ -811,18 +810,6 @@
     pick = c.pick;
     cell = isOpen(c, aspect) ? null : { signal: c.signal, aspect };
     showChrome();
-  }
-  // A cable added: half the way, opened in the editor on the knob's page (`to`: that page's place in the path).
-  function addCable(signal: Signal, band: number | null, aspect: Aspect, to: number) {
-    pick = band;
-    if (keysOf(signal, aspect).every((k) => Math.abs(endOf(s.routes[k] ?? 0)) < 1e-6)) setCurve(signal, aspect, straight(0.5), true);
-    path = path.slice(0, to);
-    cell = { signal, aspect };
-    showChrome();
-  }
-  function removeCable(signal: Signal, aspect: Aspect) {
-    setCurve(signal, aspect, straight(0), true);
-    cell = null;
   }
   // ---- Building with the patch (decision 0056): the layers past the flame, the picture's own loop, the modulators ----
   const MODULATOR_TYPES = Object.values(MODULATORS);
@@ -953,6 +940,81 @@
   const KNOB_MORPH = 0.15;
   let morphNext: number | null = null;
   const GRAPH_TYPES: Record<string, ModuleType> = Object.fromEntries([...EXTRA_TYPES, ...cratarrTypes(RANGES, DEFAULTS)].map((t) => [t.type, t]));
+  // ---- Cables in the rack (the owner on 70: "each line is clickable, removable"; a long press "to get the option to
+  // delete or reroute"): claude-5f's KnobCables, CableSheet, CableMenu and SourcePicker over cable-actions.ts ----------
+  const cablesNow = (): Cables => ({ routes: $state.snapshot(s.routes) as Record<string, RouteValue>, extra: $state.snapshot(s.extra) as PatchExtra });
+  // The cables as they are to be: kept, and to the group once a change is done (a curve being dragged goes when let go).
+  function setCables(next: Cables, done = true) {
+    s.routes = next.routes;
+    s.extra = next.extra;
+    saveVisualSettings();
+    if (done) share({ routes: $state.snapshot(s.routes), extra: $state.snapshot(s.extra) });
+    showChrome();
+  }
+  const kindOf = (to: { module: string; knob: string }) => anyKnob(to.module, to.knob)?.kind ?? 'swing';
+  // The cables into a knob (`module.knob`), the routes' that are on and the extras'.
+  const cablesInto = (mk: string) => patchNow.cables.filter((c) => `${c.to.module}.${c.to.knob}` === mk && (!isRouteId(c.id) || endOf(c.value) !== 0));
+  const cableName = (c: Cable) => `${sourceLabel(c.from, s.extra.modulators, GRAPH_TYPES)} → ${cableKnobLabel(c.to, GRAPH_TYPES, morphModules(s.extra))}`;
+  // Every knob a cable may go into, by name (a Reroute's target).
+  const cableKnobs = $derived(
+    [...modulesOf(patchNow).values()].flatMap((m) =>
+      (GRAPH_TYPES[m.type]?.knobs ?? [])
+        .filter((k) => !k.device && k.kind !== 'step')
+        .map((k) => ({ module: m.id, knob: k.id, label: cableKnobLabel({ module: m.id, knob: k.id }, GRAPH_TYPES, morphModules(s.extra)) })),
+    ),
+  );
+  let menuCable = $state<string | null>(null);
+  // A picked source as a cable's: a new modulator made first.
+  function sourceFrom(pick: Source, cs: Cables): { from: Cable['from']; cables: Cables } {
+    if (!('newModulator' in pick)) return { from: pick as Cable['from'], cables: cs };
+    const id = newId(pick.newModulator);
+    return { from: { modulator: id }, cables: { ...cs, extra: { ...cs.extra, modulators: [...cs.extra.modulators, freshModule(pick.newModulator, id)] } } };
+  }
+  // "+ Add" on a knob's page: a cable from the picked source at half, opened.
+  function addCable(mk: string, pick: Source) {
+    const [mid, kid] = splitKnob(mk);
+    const made = sourceFrom(pick, cablesNow());
+    const c = newCable(made.from as never, { module: mid, knob: kid }, kindOf({ module: mid, knob: kid }), freeCableId(made.cables));
+    const cs = made.cables;
+    setCables(isRouteId(c.id) ? { ...cs, routes: { ...cs.routes, [c.id]: c.value } } : { ...cs, extra: { ...cs.extra, cables: [...cs.extra.cables, c] } });
+    path = [...path.slice(0, -1), `cable:${c.id}`];
+  }
+  // A cable as its page changed it: its source (with its reference and speed: a route then becomes an extra cable),
+  // its value, its mode. A new id (a route's key) follows in the trail.
+  function changeCable(id: string, next: Cable, done: boolean) {
+    let cs = cablesNow();
+    const was = cableOf(cs, id);
+    if (!was) return;
+    let now = id;
+    if (JSON.stringify(was.from) !== JSON.stringify(next.from)) {
+      const r = reroute(cs, id, 'from', next.from as never, kindOf(next.to));
+      if (!r) return;
+      cs = r.cables;
+      now = r.id;
+    }
+    cs = isRouteId(now)
+      ? { ...cs, routes: { ...cs.routes, [now]: next.value } }
+      : { ...cs, extra: { ...cs.extra, cables: cs.extra.cables.map((c) => (c.id === now ? { ...c, value: next.value, mode: next.mode } : c)) } };
+    setCables(cs, done);
+    if (now !== id) path = path.map((p) => (p === `cable:${id}` ? `cable:${now}` : p));
+  }
+  function removeCable(id: string) {
+    setCables(removeCables(cablesNow(), [id]));
+    path = path.filter((p) => p !== `cable:${id}`);
+  }
+  // One end moved (a Reroute): to the picked source or knob; the cable's page, if open, follows it.
+  function rerouteCable(id: string, end: 'from' | 'to', pick: Source | { module: string; knob: string }) {
+    const cs = cablesNow();
+    const was = cableOf(cs, id);
+    if (!was) return;
+    const made = end === 'from' ? sourceFrom(pick as Source, cs) : { from: was.from, cables: cs };
+    const to = end === 'to' ? (pick as { module: string; knob: string }) : was.to;
+    const r = reroute(made.cables, id, end, (end === 'from' ? made.from : to) as never, kindOf(to));
+    if (!r) return;
+    setCables(r.cables);
+    path = path.filter((p) => !p.startsWith('reroute:')).map((p) => (p === `cable:${id}` ? `cable:${r.id}` : p));
+  }
+
   const GRAPH_KEY = 'cratarr-visuals-graph';
   let graphAt = $state<Record<string, { x: number; y: number }>>(
     (() => {
@@ -1049,6 +1111,13 @@
     }
     if (kind === 'xaddband') return SIGNAL_LABEL[a as Signal] ?? b;
     if (kind === 'addband') return SIGNAL_LABEL[a as Signal] ?? b;
+    if (kind === 'moves') return anyKnob(...splitKnob(a))?.label ?? ROW_OF.get(SETTING_OF.get(a) as One)?.label ?? a;
+    if (kind === 'cable') {
+      const c = cableOf({ routes: s.routes, extra: s.extra }, page.slice('cable:'.length));
+      return c ? sourceLabel(c.from, s.extra.modulators, GRAPH_TYPES) : 'Cable';
+    }
+    if (kind === 'cableadd') return 'Add';
+    if (kind === 'reroute') return 'Reroute';
     return { bands: 'Bands', chains: 'Chains', cables: 'Cables', device: 'This device' }[kind] ?? kind;
   }
   const devicePixels = () => innerWidth * innerHeight * Math.min(devicePixelRatio || 1, 2) ** 2;
@@ -2114,15 +2183,15 @@
     <div class="knob">
       {@render settingRow(row)}
       {#if cables && aspect}
-        {@const n = cablesInto(aspect)}
-        <button class="moves" class:on={n > 0} aria-label="What moves {row.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`cables:${mk}`)}
+        {@const n = cablesInto(mk).length}
+        <button class="moves" class:on={n > 0} aria-label="What moves {row.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`moves:${mk}`)}
           >{#if n}<span>{n}</span>{/if}<Icon name="chevronRight" size={16} /></button
         >
       {:else if cables && cableable(mk)}
         <!-- A knob no column reaches: the extras' cables into it (as a module's past the chain). -->
         {@const [mid, kid] = splitKnob(mk)}
-        {@const n = cablesTo(mid, kid).length}
-        <button class="moves" class:on={n > 0} aria-label="What moves {row.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`xcables:${mk}`)}
+        {@const n = cablesInto(`${mid}.${kid}`).length}
+        <button class="moves" class:on={n > 0} aria-label="What moves {row.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`moves:${mk}`)}
           >{#if n}<span>{n}</span>{/if}<Icon name="chevronRight" size={16} /></button
         >
       {:else if cables}
@@ -2144,7 +2213,7 @@
       <output>{knobText(k, m.knobs[k.id] ?? k.default)}</output>
       <span></span>
     </label>
-    <button class="moves" class:on={n > 0} aria-label="What moves {k.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`xcables:${m.id}.${k.id}`)}
+    <button class="moves" class:on={n > 0} aria-label="What moves {k.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`moves:${m.id}.${k.id}`)}
       >{#if n}<span>{n}</span>{/if}<Icon name="chevronRight" size={16} /></button
     >
   </div>
@@ -2304,6 +2373,29 @@
               {@render goRow('Cables', `${cableGroups.reduce((n, g) => n + g.n, 0)} in all`, 'cables')}
               {@render goRow('This device', 'Quality, frame rate, brightness', 'device')}
             </div>
+          {:else if here.startsWith('moves:')}
+            {@const mk = here.slice('moves:'.length)}
+            <KnobCables cables={cablesInto(mk)} label={(c) => sourceLabel(c.from, s.extra.modulators, GRAPH_TYPES)} onopen={(id) => go(`cable:${id}`)} onlongpress={(id) => (menuCable = id)} onadd={() => go(`cableadd:${mk}`)} />
+          {:else if here.startsWith('cable:')}
+            {@const id = here.slice('cable:'.length)}
+            {@const c = cableOf({ routes: s.routes, extra: s.extra }, id)}
+            {#if c}
+              <CableSheet
+                cable={c}
+                types={GRAPH_TYPES}
+                modulators={s.extra.modulators}
+                modules={morphModules(s.extra)}
+                onchange={(next, done) => changeCable(id, next, done)}
+                onremove={() => removeCable(id)}
+                onreroute={(end) => go(`reroute:${end}:${id}`)}
+              />
+            {/if}
+          {:else if here.startsWith('cableadd:')}
+            {@const mk = here.slice('cableadd:'.length)}
+            <SourcePicker mode="source" types={GRAPH_TYPES} modulators={s.extra.modulators} onpick={(pick) => addCable(mk, pick as Source)} onclose={() => back()} />
+          {:else if here.startsWith('reroute:')}
+            {@const [, end, id] = here.split(':') as [string, 'from' | 'to', string]}
+            <SourcePicker mode={end === 'from' ? 'source' : 'knob'} types={GRAPH_TYPES} modulators={s.extra.modulators} knobs={cableKnobs} onpick={(pick) => rerouteCable(id, end, pick)} onclose={() => back()} />
           {:else if here === 'chains'}
             <div class="rows">
               {#each CHAINS as c (c.id)}<button class="go" class:on={chainNow?.id === c.id} onclick={() => applyChain(c)}><span class="name">{c.label}<small>{c.line}</small></span></button>{/each}
@@ -2377,63 +2469,6 @@
                 {@render bandPinOf('continuity', 'Continuity', b)}
               </label>
             </div>
-          {:else if here.startsWith('cables:')}
-            {@const mk = here.slice('cables:'.length)}
-            {@const aspect = ASPECT_OF.get(mk)}
-            <div class="rows">{@render knobRow(mk, false)}</div>
-            {#if aspect}
-              <div class="rows">
-                <h3 use:held={'moves'}>Moved by</h3>
-                {#each cableRows(aspect) as c (c.id)}
-                  <button class="go" class:on={isOpen(c, aspect)} onclick={() => openCable(c, aspect)}
-                    ><span class="name">{c.label}{#if c.sub}<small>{c.sub}</small>{/if}</span><output>{signed(c.v)}</output></button
-                  >
-                  {#if isOpen(c, aspect) && edited}
-                    <div class="route">
-                      <CurveEditor
-                        curve={edited.curve}
-                        mixed={edited.mixed}
-                        live={liveOnCurve}
-                        {density}
-                        walks={edited.walks}
-                        pinned={edited.pinned}
-                        onchange={(curve, done) => setCurve(c.signal, aspect, curve, done)}
-                        onwalks={(on) => setWalks(c.signal, aspect, on)}
-                        onpin={(on) => setPins(keysOf(c.signal, aspect).map((k) => `route:${k}`), on)}
-                      />
-                      <button class="reset danger" onclick={() => removeCable(c.signal, aspect)}>Remove</button>
-                    </div>
-                  {/if}
-                {/each}
-                <button class="go add" onclick={() => go(`add:${mk}`)}><span class="name">+ Add</span></button>
-              </div>
-            {/if}
-          {:else if here.startsWith('add:')}
-            {@const mk = here.slice('add:'.length)}
-            {@const aspect = ASPECT_OF.get(mk)}
-            {#if aspect}
-              <div class="rows">
-                <h3>The whole track</h3>
-                {#each TRACK_SIGNALS as t (t)}
-                  <button class="go" onclick={() => addCable(t, null, aspect, path.length - 1)}><span class="name">{SIGNAL_LABEL[t]}</span></button>
-                {/each}
-              </div>
-              <div class="rows">
-                <h3>Each band</h3>
-                {#each BAND_SIGNALS as b (b)}{@render goRow(SIGNAL_LABEL[b], '', `addband:${b}:${mk}`)}{/each}
-              </div>
-            {/if}
-          {:else if here.startsWith('addband:')}
-            {@const [, signal, mk] = here.split(':')}
-            {@const aspect = ASPECT_OF.get(mk)}
-            {#if aspect}
-              <div class="rows">
-                <button class="go" onclick={() => addCable(signal as Signal, null, aspect, path.length - 2)}><span class="name">Every band</span></button>
-                {#each BAND_ROWS as band, b (band)}
-                  <button class="go" onclick={() => addCable(signal as Signal, b, aspect, path.length - 2)}><span class="name">{band}</span></button>
-                {/each}
-              </div>
-            {/if}
           {:else if here === 'newlayer' || here === 'newloop' || here === 'newmodulator' || here.startsWith('newmodule:')}
             <div class="rows">
               {#if here === 'newlayer'}
@@ -2485,57 +2520,13 @@
               {#if t.inputs?.length}
                 <div class="rows">
                   <h3>Inputs</h3>
-                  {#each t.inputs as port (port)}{@render goRow(port === 'in' ? 'Input' : port[0].toUpperCase() + port.slice(1), `${cablesTo(m.id, port).length} cables`, `xcables:${m.id}.${port}`)}{/each}
+                  {#each t.inputs as port (port)}{@render goRow(port === 'in' ? 'Input' : port[0].toUpperCase() + port.slice(1), `${cablesTo(m.id, port).length} cables`, `moves:${m.id}.${port}`)}{/each}
                 </div>
               {/if}
               {#if !s.extra.layers.some((l) => l.source.id === m.id)}
                 <div class="rows"><button class="go danger" onclick={() => removeExtra(m.id)}><span class="name">Remove</span></button></div>
               {/if}
             {/if}
-          {:else if here.startsWith('xcables:')}
-            {@const [mid, kid] = splitKnob(here.slice('xcables:'.length))}
-            <div class="rows">
-              <h3 use:held={'moves'}>Moved by</h3>
-              {#each cablesTo(mid, kid) as c (c.id)}
-                <button class="go" class:on={openCableId === c.id} onclick={() => (openCableId = openCableId === c.id ? null : c.id)}
-                  ><span class="name">{cableFromName(c)}</span><output>{signed(endOf(c.value))}</output></button
-                >
-                {#if openCableId === c.id}
-                  <div class="route">
-                    <CurveEditor curve={curveOf(c.value)} mixed={false} live={null} density={null} walks={false} pinned={false} onchange={(curve, done) => setExtraCable(c.id, curve, done)} onwalks={() => {}} onpin={() => {}} />
-                    <button class="reset danger" onclick={() => removeExtraCable(c.id)}>Remove</button>
-                  </div>
-                {/if}
-              {/each}
-              <button class="go add" onclick={() => go(`xadd:${mid}.${kid}`)}><span class="name">+ Add</span></button>
-            </div>
-          {:else if here.startsWith('xadd:')}
-            {@const [mid, kid] = splitKnob(here.slice('xadd:'.length))}
-            {#if s.extra.modulators.some((x) => x.id !== mid)}
-              <div class="rows">
-                <h3>Modulators</h3>
-                {#each s.extra.modulators.filter((x) => x.id !== mid) as x (x.id)}
-                  <button class="go" onclick={() => addExtraCable(mid, kid, { modulator: x.id }, path.length - 1)}><span class="name">{moduleName(x)}</span></button>
-                {/each}
-              </div>
-            {/if}
-            <div class="rows">
-              <h3>The whole track</h3>
-              {#each TRACK_SIGNALS as t (t)}<button class="go" onclick={() => addExtraCable(mid, kid, { signal: t }, path.length - 1)}><span class="name">{SIGNAL_LABEL[t]}</span></button>{/each}
-            </div>
-            <div class="rows">
-              <h3>Each band</h3>
-              {#each BAND_SIGNALS as b (b)}{@render goRow(SIGNAL_LABEL[b], '', `xaddband:${b}:${mid}.${kid}`)}{/each}
-            </div>
-          {:else if here.startsWith('xaddband:')}
-            {@const [, signal, target] = here.split(':')}
-            {@const [mid, kid] = splitKnob(target)}
-            <div class="rows">
-              <button class="go" onclick={() => addExtraCable(mid, kid, { signal }, path.length - 2)}><span class="name">Every band</span></button>
-              {#each BAND_ROWS as band, b (band)}
-                <button class="go" onclick={() => addExtraCable(mid, kid, { signal, band: b }, path.length - 2)}><span class="name">{band}</span></button>
-              {/each}
-            </div>
           {:else if here === 'device'}
             <div class="rows">
               {#each ['quality', 'fps', 'brightness'] as k (k)}{@render settingRow(ROW_OF.get(k as One))}{/each}
@@ -2601,6 +2592,13 @@
   {/if}
   {#if sought}
     <div class="sought" class:back={sought.side < 0} aria-live="polite">{sought.side > 0 ? '+' : '−'}{sought.secs} s</div>
+  {/if}
+  {#if menuCable}
+    {@const c = cableOf({ routes: s.routes, extra: s.extra }, menuCable)}
+    {@const id = menuCable}
+    {#if c}
+      <CableMenu title={cableName(c)} onremove={() => removeCable(id)} onreroute={() => go(`reroute:to:${id}`)} onclose={() => (menuCable = null)} />
+    {/if}
   {/if}
   {#if snapshotsOpen}
     <SnapshotsSheet onclose={() => (snapshotsOpen = false)} capture={capturePicture} trackName={np?.name ?? null} {recall} over={!docked} />
@@ -2927,24 +2925,7 @@
     cursor: pointer;
   }
 
-  .route {
-    position: sticky;
-    /* Down to the panel's edge (its padding), so nothing shows under it; over the grid's sticky names and header. */
-    bottom: -10px;
-    z-index: 3;
-    display: grid;
-    gap: 4px;
-    margin: 8px -8px 0;
-    padding: 8px 10px 10px;
-    border-radius: 10px 10px 0 0;
-    background: rgb(36 36 42);
-    box-shadow: 0 -6px 12px rgb(0 0 0 / 0.35);
-    font-size: 0.85rem;
-  }
 
-  .route span {
-    color: rgb(255 255 255 / 0.75);
-  }
 
   .foot {
     display: flex;
