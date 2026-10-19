@@ -1,5 +1,6 @@
 <script lang="ts">
-  // A modulation cable on the patch graph: dashed, its amount on it; selected, a × unplugs it.
+  // A modulation cable on the patch graph: dashed; its amount shown while it or a node at its ends is in focus;
+  // selected, a × unplugs it.
   import { getContext } from 'svelte';
   import { BaseEdge, EdgeLabel, getBezierPath, type EdgeProps } from '@xyflow/svelte';
   import { GRAPH, type GraphActions } from './patchgraph';
@@ -10,10 +11,12 @@
 </script>
 
 <BaseEdge {path} interactionWidth={16} class="cable-path" />
-<EdgeLabel x={labelX} y={labelY} selectEdgeOnClick class="cable-label nodrag nopan">
-  <span class:selected>{(data as { amount: string } | undefined)?.amount ?? ''}</span>
-  {#if selected}<button onclick={() => graph.disconnect(id)} aria-label="Unplug">×</button>{/if}
-</EdgeLabel>
+{#if selected || (data as { lit?: boolean } | undefined)?.lit}
+  <EdgeLabel x={labelX} y={labelY} selectEdgeOnClick class="cable-label nodrag nopan">
+    <span class:selected>{(data as { amount: string } | undefined)?.amount ?? ''}</span>
+    {#if selected}<button onclick={() => graph.disconnect(id)} aria-label="Unplug">×</button>{/if}
+  </EdgeLabel>
+{/if}
 
 <style>
   span {

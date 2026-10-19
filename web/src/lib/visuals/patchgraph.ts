@@ -37,8 +37,9 @@ export type ModuleData = {
   /** Where the picture comes in and goes out (none: no picture). */
   in: Side | null;
   out: Side | null;
-  /** A loop's last module: its picture also goes back to the loop's first. */
+  /** A loop's last module (its picture also goes back to the loop's first), and that first. */
   feedback: boolean;
+  feedbackIn: boolean;
   modulator: boolean;
 };
 export type SignalData = { kind: 'signal'; label: string; ref: SignalRef };
@@ -73,7 +74,7 @@ export type GraphEdge = {
   label?: string;
   deletable: boolean;
   selectable: boolean;
-  data?: { amount: string };
+  data?: { amount: string; lit?: boolean };
 };
 
 /** Graph ids that are not a module's (a module's node is its id). */
@@ -90,11 +91,12 @@ const KNOB_W = 44;
 const KNOBS_ACROSS = 6;
 /** How many knobs a module shows before it is opened out (its cabled ones always); a modulator shows its cabled ones. */
 const SHOWN = 3;
-const GAP_X = 64;
-const GAP_Y = 28;
+const GAP_X = 56;
 const PAD = 16;
 const BOX_TOP = 30;
-const ROW_ACROSS = 6;
+/** Signals and modulators: at most this many rows; one goes to another row rather than this far right of its place. */
+const SOURCE_ROWS = 4;
+const SLACK = 60;
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
@@ -165,7 +167,9 @@ export type GraphInput = {
   sizes?: Record<string, Size>;
 };
 
-/** The patch as Svelte Flow's nodes and edges. */
+/** The patch as Svelte Flow's nodes and edges. The picture runs left to right: each layer a row in its box (its own
+ *  loop at the row's end), the layers stacked, then the blend, the loop, finish and the screen in one row; the frame
+ *  under the screen. Signals and modulators sit under the knobs they move, so their cables run short and mostly up. */
 export function graphOf({ patch, types, positions = {}, signals = [], open = new Set(), sizes = {} }: GraphInput): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
@@ -177,7 +181,8 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
   const size = (n: GraphNode) => sizes[n.id] ?? sizeOf(n.data);
   const put = (id: string, auto: XY) => positions[id] ?? auto;
 
-  const moduleData = (m: Module, flow: { in: Side | null; out: Side | null; feedback?: boolean }): ModuleData => {
+  type Flow = { in: Side | null; out: Side | null; feedback?: boolean; feedbackIn?: boolean };
+  const moduleData = (m: Module, flow: Flow): ModuleData => {
     const t = typeOf(m, types);
     const modulator = t.place === 'modulator';
     const all = t.knobs.filter((k) => !k.device);
@@ -205,52 +210,43 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
       in: flow.in,
       out: flow.out,
       feedback: !!flow.feedback,
+      feedbackIn: !!flow.feedbackIn,
       modulator,
     };
   };
 
   const node = (id: string, data: NodeData, auto: XY, parent?: string): GraphNode => {
     const n: GraphNode = { id, type: 'patch', position: put(id, auto), data, deletable: false };
-    if (parent) Object.assign(n, { parentId: parent, extent: 'parent', expandParent: true });
+    if (parent) {
+      Object.assign(n, { parentId: parent, extent: 'parent', expandParent: true });
+      n.position = { x: Math.max(4, n.position.x), y: Math.max(BOX_TOP - 8, n.position.y) };
+    }
     if (data.kind !== 'module') n.connectable = data.kind === 'signal';
     nodes.push(n);
     return n;
   };
-  const picture = (a: string, b: string, aHandle = 'out', label?: string) =>
-    edges.push({ id: `pic:${a}>${b}`, source: a, target: b, sourceHandle: aHandle, targetHandle: 'in', class: 'picture', deletable: false, selectable: false, ...(label ? { label } : {}) });
+  const picture = (a: string, b: string, label?: string) =>
+    edges.push({ id: `pic:${a}>${b}`, source: a, target: b, sourceHandle: 'out', targetHandle: 'in', class: 'picture', deletable: false, selectable: false, ...(label ? { label } : {}) });
 
-  /** A box around a chain: its row of modules, then a column (a loop), each placed inside it. Returns the box's node
-   *  and its last module's id. */
-  const chain = (boxId: string, label: string, row: Module[], column: Module[], first: { in: Side | null }, origin: XY) => {
+  /** A box around a row of modules, those from `loopAt` on a loop (its last back to its first). */
+  const chain = (boxId: string, label: string, row: Module[], loopAt: number, firstIn: Side | null, origin: XY) => {
     const box: GraphNode = { id: boxId, type: 'box', position: put(boxId, origin), data: { kind: 'box', label }, deletable: false, selectable: false, connectable: false, zIndex: -1 };
     nodes.push(box);
     const inside: GraphNode[] = [];
+    const loops = row.length - loopAt > 1;
     let x = PAD;
     row.forEach((m, i) => {
-      const flow = { in: i === 0 ? first.in : ('left' as Side), out: 'right' as Side };
+      const flow: Flow = { in: i === 0 ? firstIn : 'left', out: 'right', feedback: loops && i === row.length - 1, feedbackIn: loops && i === loopAt };
       const n = node(m.id, moduleData(m, flow), { x, y: BOX_TOP }, boxId);
       inside.push(n);
       x += size(n).width + GAP_X;
     });
-    let y = BOX_TOP;
-    column.forEach((m, i) => {
-      const last = i === column.length - 1;
-      const flow = {
-        in: i === 0 ? (row.length ? 'left' : first.in) : ('top' as Side),
-        out: last ? ('right' as Side) : ('bottom' as Side),
-        feedback: last && column.length > 1,
-      };
-      const n = node(m.id, moduleData(m, flow), { x, y }, boxId);
-      inside.push(n);
-      y += size(n).height + GAP_Y;
-    });
-    const all = [...row, ...column];
-    for (let i = 1; i < all.length; i++) picture(all[i - 1].id, all[i].id);
-    if (column.length > 1)
-      edges.push({ id: `fb:${column.at(-1)!.id}>${column[0].id}`, source: column.at(-1)!.id, target: column[0].id, sourceHandle: 'fb', targetHandle: 'in', type: 'smoothstep', class: 'feedback', label: 'feedback', deletable: false, selectable: false });
+    for (let i = 1; i < row.length; i++) picture(row[i - 1].id, row[i].id);
+    if (loops)
+      edges.push({ id: `fb:${row.at(-1)!.id}>${row[loopAt].id}`, source: row.at(-1)!.id, target: row[loopAt].id, sourceHandle: 'fb', targetHandle: 'fbin', type: 'smoothstep', class: 'feedback', label: 'feedback', deletable: false, selectable: false });
     box.width = Math.max(120, ...inside.map((n) => n.position.x + size(n).width)) + PAD;
-    box.height = Math.max(60, ...inside.map((n) => n.position.y + size(n).height)) + PAD;
-    return { box, last: all.at(-1)?.id ?? null };
+    box.height = Math.max(60, ...inside.map((n) => n.position.y + size(n).height)) + PAD + (loops ? 24 : 0);
+    return { box, last: row.at(-1)?.id ?? null };
   };
 
   // The layers, one box each, stacked.
@@ -258,66 +254,100 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
   let right = 0;
   const toBlend: { id: string; label?: string }[] = [];
   for (const l of patch.layers) {
-    const { box, last } = chain(layerBox(l.id), typeOf(l.source, types).label, [l.source, ...l.modules], l.loop, { in: null }, { x: 0, y });
+    const row = [l.source, ...l.modules, ...l.loop];
+    const { box, last } = chain(layerBox(l.id), typeOf(l.source, types).label, row, row.length - l.loop.length, null, { x: 0, y });
     y = box.position.y + box.height! + 40;
     right = Math.max(right, box.position.x + box.width!);
     const b = l.blend;
     if (last) toBlend.push({ id: last, label: b.mode === 'add' && b.amount === 1 ? undefined : `${b.mode} ${Math.round(b.amount * 100)}%` });
   }
-  const layersBottom = y;
+  let bottom = Math.max(0, y - 40);
 
-  // The blend, the picture's loop, finish and the screen.
-  const blendData: MarkData = { kind: 'blend', label: 'Blend', in: 'left', out: 'right' };
-  const blend = node(BLEND, blendData, { x: right + GAP_X, y: Math.max(0, (layersBottom - 40) / 2 - 18) });
-  for (const f of toBlend) picture(f.id, BLEND, 'out', f.label);
+  // The blend, the picture's loop, finish and the screen, in a row level with the layers' middle.
+  const mid = Math.max(0, bottom / 2 - 18);
+  const blend = node(BLEND, { kind: 'blend', label: 'Blend', in: 'left', out: 'right' }, { x: right + GAP_X, y: mid });
+  for (const f of toBlend) picture(f.id, BLEND, f.label);
   let from = BLEND;
-  let bottom = layersBottom;
   let x = blend.position.x + size(blend).width + GAP_X;
   if (patch.loop.length) {
-    const { box, last } = chain(LOOP, 'Loop', [], patch.loop, { in: 'left' }, { x, y: Math.max(0, blend.position.y - BOX_TOP - 4) });
+    const { box, last } = chain(LOOP, 'Loop', patch.loop, 0, 'left', { x, y: Math.max(0, mid - BOX_TOP - 4) });
     picture(BLEND, patch.loop[0].id);
     from = last!;
     x = box.position.x + box.width! + GAP_X;
     bottom = Math.max(bottom, box.position.y + box.height!);
   }
-  let fy = Math.max(0, blend.position.y - 4);
-  let wide = 120;
-  patch.finish.forEach((m, i) => {
-    const n = node(m.id, moduleData(m, { in: i === 0 ? 'left' : 'top', out: 'bottom' }), { x, y: fy });
+  for (const m of patch.finish) {
+    const n = node(m.id, moduleData(m, { in: 'left', out: 'right' }), { x, y: Math.max(0, mid - 4) });
     picture(from, m.id);
     from = m.id;
-    fy = n.position.y + size(n).height + GAP_Y;
-    wide = Math.max(wide, size(n).width);
-  });
-  const screenData: MarkData = { kind: 'screen', label: 'Screen', in: patch.finish.length ? 'top' : 'left', out: null };
-  const screen = node(SCREEN, screenData, { x, y: fy });
+    x = n.position.x + size(n).width + GAP_X;
+    bottom = Math.max(bottom, n.position.y + size(n).height);
+  }
+  const screen = node(SCREEN, { kind: 'screen', label: 'Screen', in: 'left', out: null }, { x, y: mid });
   picture(from, SCREEN);
   bottom = Math.max(bottom, screen.position.y + 36);
 
-  // The whole frame: knobs, no picture.
-  const frame = node(patch.frame.id, moduleData(patch.frame, { in: null, out: null }), { x: x + wide + GAP_X, y: Math.max(0, blend.position.y - 4) });
+  // The whole frame: knobs, no picture; under the screen.
+  const frame = node(patch.frame.id, moduleData(patch.frame, { in: null, out: null }), { x: screen.position.x, y: bottom + 48 });
   bottom = Math.max(bottom, frame.position.y + size(frame).height);
 
-  // Signals and modulators along the bottom.
-  const sources: { id: string; data: NodeData }[] = [];
+  // Where each knob and port is across, to put what cables into it under it.
+  const abs = (n: GraphNode) => {
+    const p = n.parentId ? nodes.find((b) => b.id === n.parentId)!.position : { x: 0, y: 0 };
+    return { x: p.x + n.position.x, y: p.y + n.position.y };
+  };
+  const knobX = new Map<string, number>();
+  for (const n of nodes) {
+    if (n.data.kind !== 'module') continue;
+    const at = abs(n);
+    n.data.knobs.forEach((k, i) => knobX.set(`${n.id}.${k.id}`, at.x + 10 + (i % KNOBS_ACROSS) * KNOB_W + KNOB_W / 2));
+    for (const p of n.data.ports) knobX.set(`${n.id}.${p.id}`, at.x);
+  }
+
+  // Signals and modulators along the bottom, each under the middle of what it moves, in as few rows as keep them near.
+  type Source = { id: string; data: NodeData; want: number };
+  const sources: Source[] = [];
   const seen = new Set<string>();
+  const want = (mine: (c: Cable) => boolean) => {
+    const xs = patch.cables.filter(mine).map((c) => knobX.get(`${c.to.module}.${c.to.knob}`)).filter((v): v is number => v !== undefined);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : Infinity;
+  };
   for (const r of [...patch.cables.flatMap((c) => ('modulator' in c.from ? [] : [c.from])), ...signals]) {
     const id = signalKey(r);
     if (seen.has(id)) continue;
     seen.add(id);
-    sources.push({ id, data: { kind: 'signal', label: signalLabel(r), ref: r } });
+    sources.push({ id, data: { kind: 'signal', label: signalLabel(r), ref: r }, want: want((c) => !('modulator' in c.from) && signalKey(c.from) === id) });
   }
-  for (const m of patch.modulators) sources.push({ id: m.id, data: moduleData(m, { in: null, out: null }) });
-  let sy = bottom + 140;
-  for (let i = 0; i < sources.length; i += ROW_ACROSS) {
-    let sx = 0;
-    let rowH = 0;
-    for (const s of sources.slice(i, i + ROW_ACROSS)) {
-      const n = node(s.id, s.data, { x: sx, y: sy });
-      sx += Math.max(190, size(n).width + 40);
-      rowH = Math.max(rowH, size(n).height);
-    }
-    sy += rowH + 60;
+  for (const m of patch.modulators) sources.push({ id: m.id, data: moduleData(m, { in: null, out: null }), want: want((c) => 'modulator' in c.from && c.from.modulator === m.id) });
+  type Row = { cursor: number; items: { s: Source; x: number; size: Size }[] };
+  const rows: Row[] = [];
+  const placedAt = new Map<string, number>();
+  // What only feeds a modulator's port goes in once that modulator is placed, just left of it.
+  const later = sources.filter((s) => !Number.isFinite(s.want) && patch.cables.some((c) => (('modulator' in c.from ? c.from.modulator : signalKey(c.from)) === s.id)));
+  const first = sources.filter((s) => !later.includes(s)).sort((a, b) => a.want - b.want);
+  const toPort = (s: Source) => {
+    const xs = patch.cables
+      .filter((c) => ('modulator' in c.from ? c.from.modulator : signalKey(c.from)) === s.id)
+      .map((c) => placedAt.get(c.to.module))
+      .filter((v): v is number => v !== undefined);
+    return xs.length ? Math.min(...xs) - (sizes[s.id] ?? sizeOf(s.data)).width / 2 - 24 : Infinity;
+  };
+  for (const s of [...first, ...later]) {
+    if (later.includes(s)) s.want = toPort(s);
+    const sz = sizes[s.id] ?? sizeOf(s.data);
+    const desired = Number.isFinite(s.want) ? s.want - sz.width / 2 : Math.max(0, ...rows.map((r) => r.cursor));
+    let row = rows.find((r) => r.cursor <= desired + SLACK);
+    if (!row && rows.length < SOURCE_ROWS) rows.push((row = { cursor: -Infinity, items: [] }));
+    row ??= rows.reduce((a, b) => (b.cursor < a.cursor ? b : a));
+    const at = Math.max(desired, row.cursor);
+    row.items.push({ s, x: at, size: sz });
+    placedAt.set(s.id, at);
+    row.cursor = at + sz.width + 16;
+  }
+  let sy = bottom + 120;
+  for (const r of rows) {
+    for (const it of r.items) node(it.s.id, it.s.data, { x: Math.round(it.x), y: sy });
+    sy += Math.max(...r.items.map((it) => it.size.height)) + 28;
   }
 
   // The modulation cables, where both ends are drawn.

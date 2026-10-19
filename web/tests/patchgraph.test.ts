@@ -122,6 +122,19 @@ test('knobs: a few shown, the cabled ones always, never the device’s; opened o
   assert.deepEqual(o('lfo').knobs.map((k) => k.id), ['rate', 'shape', 'offset', 'amount']);
 });
 
+test('signals and modulators sit under what they move, a port’s feed beside its modulator', () => {
+  const { nodes } = graphOf({ patch: sample(), types });
+  const by = new Map(nodes.map((n) => [n.id, n]));
+  const k1 = by.get('k1')!;
+  const box = by.get(layerBox('one'))!;
+  const turn = box.position.x + k1.position.x + 10 + 1 * 44 + 22;
+  const lfo = by.get('lfo')!;
+  assert.ok(Math.abs(lfo.position.x + 75 - turn) < 1, `lfo at ${lfo.position.x}, Turn at ${turn}`);
+  const level = by.get(signalKey({ signal: 'level', band: 0 }))!;
+  assert.ok(level.position.x < by.get('fol')!.position.x);
+  assert.ok(Math.min(lfo.position.y, level.position.y) > Math.max(...nodes.filter((n) => n.data.kind === 'module' && !(n.data as ModuleData).modulator && !n.parentId).map((n) => n.position.y)));
+});
+
 test('positions given are kept, a box grows round a module moved inside it', () => {
   const auto = graphOf({ patch: sample(), types });
   const box = auto.nodes.find((n) => n.id === layerBox('one'))!;
@@ -136,7 +149,7 @@ test('positions given are kept, a box grows round a module moved inside it', () 
 test('signals asked for are drawn once, beside those cabled', () => {
   const g = graphOf({ patch: sample(), types, signals: [{ signal: 'beat' }, { signal: 'tempo' }, { signal: 'level', band: 0, speed: 'slow' }] });
   const ids = g.nodes.filter((n) => n.data.kind === 'signal').map((n) => n.id);
-  assert.deepEqual(ids, ['signal:level|0|track|fast', 'signal:beat|-|track|fast', 'signal:tempo|-|track|fast', 'signal:level|0|track|slow']);
+  assert.deepEqual(ids.sort(), ['signal:beat|-|track|fast', 'signal:level|0|track|fast', 'signal:level|0|track|slow', 'signal:tempo|-|track|fast']);
 });
 
 test('connections: from an output to a knob or a port, never to a picture handle, itself, or twice', () => {
