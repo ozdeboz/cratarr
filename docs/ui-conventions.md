@@ -175,6 +175,13 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Share** (track, album, one playlist): the item in words ("Artist – Title") and its link here, through the
   phone's share sheet (the app's in the app), else copied.
 - **A favourite album's cover** carries a small heart in its upper right corner, in the Library's rows and tiles.
+- **A missing cover** (the owner, 2026-10-19 for 70: "if they don't exist, we need a better way to show up than a broken
+  component"; stand-in A from claude-5f's mock) is the same everywhere: our record mark, faint (the text colour at
+  28 %, 45 % of the tile), on a tile a step lighter than the page (`--tile`), with the corners of the cover it stands
+  in for. No other icon, also where a crate, playlist, artist or snapshot used to show its own. Every cover is
+  `lib/Cover.svelte`, which shows it when there is no address or the image fails to load; a failed address is
+  remembered, so the same album shows the stand-in at once everywhere. The players and the queue's card show it only
+  when there is no cover to load, not while one loads. Blurred backdrops simply leave out a cover that fails.
 - **Downloads** (in the app) is the Library's list of what is on this device (decided 2026-10-16: "a special case of
   the library page"): the same rows or covers, order, size, search and select, each album as the Library lists it
   (else as its download says), the count with the space they take ("3 albums · 225 MB"). A cover plays what is on the

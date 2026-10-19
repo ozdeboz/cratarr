@@ -15,7 +15,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import Waveform from './Waveform.svelte';
   import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
@@ -25,6 +25,7 @@
   import { localMode } from './deviceMusic.svelte';
   import HeartSheet from './HeartSheet.svelte';
   import { isCircle } from './circle';
+  import Cover from './Cover.svelte';
   import CoverOverview from './CoverOverview.svelte';
   import { detailsOf, factsOf } from './trackFacts.svelte';
   import { longpress } from './longpress';
@@ -407,10 +408,12 @@
     <!-- Finamp's layout: the cover's region, then the controls' box with three groups spread in it (track name,
          controls, actions); in landscape side by side. Sizes from lib/playerLayout.ts. -->
     <div class="album" style:width={layout ? `${layout.album.width}px` : null} style:height={layout ? `${layout.album.height}px` : null}>
-      {#if np && src}
+      <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
+      {#if np && (src || !coverSrc())}
         {#key src}
           <button
             class="cover-btn"
+            class:blurred={overview}
             style:width={layout ? `${layout.cover}px` : null}
             style:height={layout ? `${layout.cover}px` : null}
             aria-label="Play or pause"
@@ -418,7 +421,7 @@
             onclick={coverTap}
             oncontextmenu={(e) => (e.preventDefault(), openMenu(e))}
           >
-            <img class="cover" class:blurred={overview} {src} alt="" draggable="false" onerror={() => coverFailed(src)} />
+            <Cover {src} lazy={false} onfail={coverFailed} />
             {#if overview}<CoverOverview track={np} />{/if}
           </button>
         {/key}
@@ -775,15 +778,13 @@
     touch-action: none;
   }
 
-  /* As Finamp's: radius 8, a soft shadow under it. */
-  .cover {
-    display: block;
-    width: 100%;
-    height: 100%;
+  /* The cover (lib/Cover), as Finamp's: radius 8, a soft shadow under it. */
+  .cover-btn {
     border-radius: 8px;
-    object-fit: cover;
-    background: var(--surface);
     box-shadow: 0 4px 24px rgb(0 0 0 / 0.3);
+  }
+
+  .cover-btn > :global(.cover) {
     user-select: none;
     transition: filter 220ms ease-out;
   }
@@ -857,7 +858,7 @@
   }
 
   /* Under the overview. */
-  .cover.blurred {
+  .cover-btn.blurred > :global(.cover) {
     filter: blur(14px) saturate(1.2);
   }
 

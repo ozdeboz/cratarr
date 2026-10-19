@@ -23,6 +23,8 @@
   --accent-text: #06281a;
   --warn: #f5b942;
   --danger: #ff6b6b;
+  /* A missing cover's tile (lib/Cover's stand-in): a step lighter than the page. */
+  --tile: #20242c;
   /* The floating controls' surface (the pill, back, ✕, the mark, the select bars): the colour of the mini-player's
      unplayed part (the playing cover's at 25 % over the page), a little see-through, what is under it blurred. */
   --float-bg: color-mix(in srgb, color-mix(in srgb, var(--now-accent) 25%, var(--bg)) 70%, transparent);
@@ -43,6 +45,7 @@
     --accent-text: #ffffff;
     --warn: #a86a00;
     --danger: #c62d2d;
+    --tile: #e7eaef;
     color-scheme: light;
   }
 }
@@ -57,6 +60,7 @@
   --accent-text: #ffffff;
   --warn: #a86a00;
   --danger: #c62d2d;
+  --tile: #e7eaef;
   color-scheme: light;
 }
 

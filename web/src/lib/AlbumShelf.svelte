@@ -9,6 +9,7 @@
   import { untrack, type Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
   import { albumCoverUrl, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
+  import Cover from './Cover.svelte';
   import { addedOn, albumPlay, loadAlbumUses, playAlbums, playListedAlbum, quality, tracksOfAlbums, useOf, weak } from './albums.svelte';
   import { download, inApp } from './app.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
@@ -63,7 +64,6 @@
   $effect(() => {
     pageView.width = width;
   });
-  let noCover = $state<Record<string, boolean>>({});
 
   // Only what is near is made (2026-10-16: the whole Library at once hung the app). Each server's albums are cut into
   // blocks of whole grid rows, each its own grid, so the columns line up from block to block. A block is made while it
@@ -495,11 +495,7 @@
 <!-- An album's cover; a favourite's has a small heart in its upper right corner (as Symfonium's lists). -->
 {#snippet cover(s: ShelfSource, a: ListedAlbum)}
   <span class="art">
-    {#if noCover[a.id]}
-      <span class="none" aria-hidden="true"></span>
-    {:else}
-      <img src={albumCoverUrl(s.id, a.id)} alt="" loading="lazy" decoding="async" onerror={() => (noCover[a.id] = true)} />
-    {/if}
+    <Cover src={albumCoverUrl(s.id, a.id)} />
     {#if isFavorite(s.id, a.id)}<span class="fav" role="img" aria-label="Favourite"><Icon name="heart" size={12} /></span>{/if}
   </span>
 {/snippet}
@@ -676,8 +672,7 @@
     box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
   }
 
-  .cover > :not(.corner),
-  img {
+  .cover > :not(.corner) {
     display: block;
     width: 100%;
     height: 100%;
@@ -686,12 +681,6 @@
 
   .art {
     position: relative;
-    display: block;
-    width: 100%;
-    height: 100%;
-  }
-
-  .art > .none {
     display: block;
     width: 100%;
     height: 100%;

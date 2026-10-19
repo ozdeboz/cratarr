@@ -123,6 +123,7 @@
   import { me } from './me.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import MarkLoader from './MarkLoader.svelte';
+  import Cover, { mosaicOf } from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
   import type { PlayMode } from './api';
 
@@ -177,10 +178,6 @@
               : multi
               ? `${ids.length} playlists`
               : id,
-  );
-  /** The cover's place without covers: a genre's, a crate's or an album's icon. */
-  const heroIcon = $derived(
-    creating ? 'playlists' : crate && genreOf(crate) !== null ? 'music' : crate || crateEditing ? 'crates' : artist ? 'user' : 'albums',
   );
   const isPermanentCrate = $derived(!!crate && (crates.list?.find((c) => c.id === crate)?.permanent ?? true));
   const p = $derived(plain || multi ? null : (shownPlaylists().find((x) => x.id === id) ?? null));
@@ -381,6 +378,9 @@
     }
     return crate && genreOf(crate) === null ? crateArt(crate) : covers;
   });
+  // As drawn: covers that fail to load leave a mosaic (lib/Cover).
+  const coversShown = $derived(mosaicOf(covers));
+  const heroShown = $derived(mosaicOf(heroArt));
   /** Edit mode: there is a picture of its own to remove (as saved, or picked). */
   const ownImage = $derived(crateImage ? crateImage !== 'remove' : !!crates.list?.find((c) => c.id === builder?.id)?.image);
 
@@ -1288,8 +1288,8 @@
     {#if making}
       <header class="head">
         <div class="top">
-        <div class="art" class:mosaic={covers.length === 4}>
-          {#each covers as c, i (i)}<img src={c} alt="" />{:else}<span class="noart"><Icon name={heroIcon} size={48} /></span>{/each}
+        <div class="art" class:mosaic={coversShown.length === 4}>
+          {#each coversShown as c, i (i)}<Cover src={c} />{:else}<Cover src={null} />{/each}
         </div>
           <div class="info fields">
             <label class="field">
@@ -1301,8 +1301,8 @@
       </div>
       </header>
     {:else if !other}
-      <div class="hero" class:mosaic={heroArt.length === 4} class:bare={!heroArt.length}>
-        {#each heroArt as c, i (i)}<img src={c} alt="" />{:else}{#if !crateEditing}<span class="noart"><Icon name={heroIcon} size={56} /></span>{/if}{/each}
+      <div class="hero" class:mosaic={heroShown.length === 4} class:bare={!heroShown.length}>
+        {#each heroShown as c, i (i)}<Cover src={c} lazy={false} />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
         {#if crateEditing}
           <!-- The crate's own picture, set or removed with Save. -->
           <span class="art-tools">
@@ -1498,13 +1498,13 @@
           {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
           {#if album && albumHead?.artist}
             <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
-              >{#if covers[0]}<img src={covers[0]} alt="" />{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
+              >{#if covers[0]}<span class="chip-art"><Cover src={covers[0]} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
                   ><Icon name="heart" size={16} /></i
                 >{/if}</button
             >
           {:else if artist?.tracks}
             <button class="chip" onclick={() => viewOver(artistSubject(artist.source, artist.name))}
-              >{#if heroArt[0]}<img src={heroArt[0]} alt="" />{/if}<span>{artist.name}</span>{#if artistHead?.favorite}<i class="liked" role="img" aria-label="Favourite"
+              >{#if heroArt[0]}<span class="chip-art"><Cover src={heroArt[0]} /></span>{/if}<span>{artist.name}</span>{#if artistHead?.favorite}<i class="liked" role="img" aria-label="Favourite"
                   ><Icon name="heart" size={16} /></i
                 >{/if}</button
             >
@@ -2151,22 +2151,7 @@
 
   .art.mosaic {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .art img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .noart {
-    display: grid;
-    place-items: center;
-    width: 100%;
-    height: 100%;
-    color: var(--muted);
+    grid-template: 1fr 1fr / 1fr 1fr;
   }
 
   .info {
@@ -2418,25 +2403,15 @@
     background: var(--bg);
   }
 
-  .hero img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
   .hero.mosaic {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template: 1fr 1fr / 1fr 1fr;
   }
 
-  /* A crate has no cover: a band with its icon. */
+  /* Nothing with a cover (a new crate, say): a band with the stand-in (lib/Cover). */
   .hero.bare {
-    display: grid;
-    place-items: center;
     aspect-ratio: auto;
     height: 168px;
-    color: var(--muted);
   }
 
   /* Edit mode's Change image (and Remove), in the middle of the cover's place. */
@@ -2556,11 +2531,11 @@
     padding-left: 16px;
   }
 
-  .chip img {
+  .chip-art {
     flex: none;
+    display: block;
     width: 36px;
     height: 36px;
-    object-fit: cover;
   }
 
   .chip span {

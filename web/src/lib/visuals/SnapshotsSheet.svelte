@@ -6,6 +6,7 @@
   // visuals as they are now (its name and place kept: the owner, 2026-10-18), or deleted. The
   // owner: "when you press the bookmark button, a sheet opens, because that's our standard format of display".
   import { deleteVisualsSnapshot, getVisualsSnapshots, renameVisualsSnapshot, saveOverVisualsSnapshot, saveVisualsSnapshot, type VisualsSnapshot } from '../api';
+  import Cover from '../Cover.svelte';
   import Icon from '../Icon.svelte';
   import MenuSheet from '../MenuSheet.svelte';
   import { toast } from '../toast.svelte';
@@ -119,7 +120,7 @@
     {#each list as snap (snap.id)}
       {#if editing === snap.id}
         <div class="tile editing">
-          <span class="pic">{#if snap.picture}<img src={snap.picture} alt="" />{:else}<Icon name="bookmark" size={24} />{/if}</span>
+          <span class="pic"><Cover src={snap.picture} /></span>
           <span class="edit">
             <input
               aria-label="Name"
@@ -143,7 +144,7 @@
         </div>
       {:else}
         <button class="tile" use:longPress={() => edit(snap)} onclick={() => recall(snap)}>
-          <span class="pic">{#if snap.picture}<img src={snap.picture} alt="" />{:else}<Icon name="bookmark" size={24} />{/if}</span>
+          <span class="pic"><Cover src={snap.picture} /></span>
           <span class="name">{snap.name}</span>
         </button>
       {/if}
@@ -186,12 +187,9 @@
     border-radius: 8px;
     background: rgb(255 255 255 / 0.06);
     color: rgb(255 255 255 / 0.7);
-  }
-
-  .pic img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+    /* A snapshot without a picture: lib/Cover's stand-in, in the sheet's own white. */
+    --cover-tile: transparent;
+    --cover-mark: rgb(255 255 255 / 0.28);
   }
 
   .glyph {
