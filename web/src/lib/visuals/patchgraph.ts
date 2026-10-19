@@ -37,8 +37,10 @@ export type KnobView = {
   /** A polyphonic knob drawn as one (0057 §4b: a band's six): each channel's knob id, value and place in the range; the
    *  knob's own `value` and `at` their mean. */
   channels?: { id: string; value: number; at: number }[];
-  /** A step knob's `<id>:next` trigger (0057 §7e), drawn as a small diamond beside it. */
+  /** A step knob's `<id>:next` trigger (0057 §7e), drawn as a small diamond beside it; a level knob's `<id>:gain`
+   *  input (§7e), a small dot beside it. */
   next?: boolean;
+  gain?: boolean;
 };
 
 export type ModuleData = {
@@ -252,7 +254,9 @@ export function faceHeight(f: ModuleData['face']): number {
 
 /** A step knob's trigger port (ports.ts: `<knob>:next`), and whether a port id is one. */
 export const nextPort = (knob: string) => `${knob}:next`;
-const isNext = (port: string) => port.endsWith(':next');
+export const gainPort = (knob: string) => `${knob}:gain`;
+/** A port drawn by its knob (its next, its gain), not in the port rows. */
+const isNext = (port: string) => port.endsWith(':next') || port.endsWith(':gain');
 
 /** A module's knobs as drawn (shared by the v1 and v2 graphs): a band's knobs (`lighting.0` … `.5`) as one polyphonic
  *  knob (0057 §4b; ports.ts polyKnobs), its channels kept as `<id>.<channel>`, opened out (`<module>.<knob>` in `open`)
@@ -275,7 +279,9 @@ export function knobViews(
     return each;
   });
   const hasNext = (k: Knob) => k.kind === 'step' && k.randomize !== false;
-  const ids = (k: Knob) => [...(k.channels ? channelKnobs(k).map((x) => x.id) : [k.id]), ...(hasNext(k) ? [nextPort(k.id)] : [])];
+  const hasGain = (k: Knob) => k.kind === 'level';
+  const own = (k: Knob) => (k.channels ? channelKnobs(k).map((x) => x.id) : [k.id]);
+  const ids = (k: Knob) => [...own(k), ...(hasNext(k) ? [nextPort(k.id)] : []), ...(hasGain(k) ? [gainPort(k.id)] : [])];
   const opened = o.open.has(m.id);
   let room = o.room;
   const shown = all.filter((k) => {
@@ -286,17 +292,18 @@ export function knobViews(
   const atOf = (k: Knob, value: number) => (k.max > k.min ? clamp01((value - k.min) / (k.max - k.min)) : 0);
   // Shown in the type's order, cabled or not.
   const knobs: KnobView[] = shown.map((k) => {
-    const ring = (at: number) => ringOf(at, ids(k).flatMap(o.cablesInto));
+    const ring = (at: number) => ringOf(at, own(k).flatMap(o.cablesInto));
+    const beside = { ...(hasNext(k) ? { next: true } : {}), ...(hasGain(k) ? { gain: true } : {}) };
     if (!k.channels) {
       const value = m.knobs[k.id] ?? k.default;
-      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...(hasNext(k) ? { next: true } : {}) };
+      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...beside };
     }
     const channels = channelKnobs(k).map((x) => {
       const value = m.knobs[x.id] ?? m.knobs[k.id] ?? x.default;
       return { id: x.id, value, at: atOf(k, value) };
     });
     const value = channels.reduce((a, c) => a + c.value, 0) / channels.length;
-    return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), channels };
+    return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), channels, ...beside };
   });
   return { knobs, hidden: all.length - shown.length };
 }
@@ -605,7 +612,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     if (!ids.has(source) || !target) continue;
     // Into a channel of a polyphonic knob drawn as one: onto that knob.
     const knob = target.knobs.find((k) => k.id === c.to.knob) ?? target.knobs.find((k) => k.channels?.some((x) => x.id === c.to.knob));
-    const next = target.knobs.some((k) => k.next && nextPort(k.id) === c.to.knob);
+    const next = target.knobs.some((k) => (k.next && nextPort(k.id) === c.to.knob) || (k.gain && gainPort(k.id) === c.to.knob));
     if (!knob && !next && !target.ports.some((p) => p.id === c.to.knob)) continue;
     const from = portOf(c.from);
     const data: CableData = { amount: amountLabel(c.value, c.mode), wire: from.type, ...(from.channels ? { channels: from.channels } : {}), ...(muted(c) ? { muted: true as const } : {}) };
@@ -636,7 +643,7 @@ export function cableOf(
   const to = { module: dst.module, knob: c.targetHandle.slice(2) };
   const given = src.kind === 'signal' ? src.type : src.kind === 'module' ? (src.gives?.type ?? 'value') : 'value';
   const port = dst.ports.find((p) => p.id === to.knob);
-  if (given === 'audio' || !fits(given, port?.type ?? (isNext(to.knob) ? 'trigger' : 'value'), port?.polymorphic)) return null;
+  if (given === 'audio' || !fits(given, port?.type ?? (to.knob.endsWith(':next') ? 'trigger' : 'value'), port?.polymorphic)) return null;
   const same = (f: Cable['from']) => ('modulator' in f && 'modulator' in from ? f.modulator === from.modulator : !('modulator' in f) && !('modulator' in from) && signalKey(f) === signalKey(from));
   if (cables.some((x) => x.to.module === to.module && x.to.knob === to.knob && same(x.from))) return null;
   return { from, to };
@@ -863,7 +870,7 @@ export function handleOf(d: ModuleData, dir: 'in' | 'out', port: string): string
  *  that knob's); null where it has none (a knob its type does not declare). */
 export function handleAt(d: ModuleData, dir: 'in' | 'out', port: string): string | null {
   if (dir === 'out') return d.v2?.pout === port || d.v2?.mod === port || d.outs.some((o) => o.id === port) ? handleOf(d, 'out', port) : null;
-  if (d.v2?.pin === port || d.ports.some((x) => x.id === port) || d.knobs.some((k) => k.id === port || (k.next && nextPort(k.id) === port))) return handleOf(d, 'in', port);
+  if (d.v2?.pin === port || d.ports.some((x) => x.id === port) || d.knobs.some((k) => k.id === port || (k.next && nextPort(k.id) === port) || (k.gain && gainPort(k.id) === port))) return handleOf(d, 'in', port);
   const poly = d.knobs.find((k) => k.channels?.some((c) => c.id === port));
   return poly ? knobHandle(poly.id) : null;
 }

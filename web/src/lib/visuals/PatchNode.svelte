@@ -12,7 +12,7 @@
   import PatchFace from './PatchFace.svelte';
   import Icon from '../Icon.svelte';
   import { clockLights } from './faces';
-  import { GRAPH, knobHandle, MOD_OUT, nextPort, polyTurned, type GraphActions, type KnobView, type NodeData, type Side } from './patchgraph';
+  import { GRAPH, gainPort, knobHandle, MOD_OUT, nextPort, polyTurned, type GraphActions, type KnobView, type NodeData, type Side } from './patchgraph';
 
   let { id, data, selected }: { id: string; data: NodeData; selected?: boolean } = $props();
   const graph = getContext<GraphActions>(GRAPH);
@@ -98,6 +98,7 @@
             <PatchKnob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.channels ? `${k.id}.0` : k.id)} />
             <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="in-mod t-value" style="top: 17.5px; bottom: auto" />
             {#if k.next}<Handle type="target" id={knobHandle(nextPort(k.id))} position={Position.Left} class="in-mod t-trigger next" style="top: 6px; left: 2px" />{/if}
+            {#if k.gain}<Handle type="target" id={knobHandle(gainPort(k.id))} position={Position.Right} class="in-mod t-value next" style="top: 6px; right: 2px" />{/if}
             {#if k.channels}
               <button class="poly nodrag" aria-label="{k.label}: each band" title="Each band" onclick={() => graph.toggle(pair(k))}>{k.channels.length}</button>
             {:else if polyOf(k) && graph.opened(pair(k)) && k.id.endsWith('.0')}
@@ -478,7 +479,7 @@
       bottom: -6px !important;
     }
   }
-  /* A step knob's next: a small diamond at its dial's upper left. */
+  /* A step knob's next: a small diamond at its dial's upper left; a level knob's gain, a small dot at its upper right. */
   .node :global(.svelte-flow__handle.next) {
     width: 8px;
     height: 8px;

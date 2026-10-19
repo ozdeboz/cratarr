@@ -826,3 +826,15 @@ test('Make device inside a device, and unmade there: ids taken at the level get 
   applyV2(p, { kind: 'unmake', scope: ['show'], device: inner.id });
   assert.ok(show().modules.some((m) => m.id === 'curve-2'));
 });
+
+test("a level knob's gain is a dot beside it, not a port row; its cables do not ring the knob", () => {
+  const { gainPort } = await_graph;
+  const p: Patch = { ...sample(), cables: [{ id: 'g', from: { modulator: 'lfo' }, to: { module: 'k1', knob: gainPort('amount') }, value: 1, mode: 'swing' }] };
+  const g = graphOf({ patch: p, types });
+  const d = g.nodes.find((n) => n.id === 'k1')!.data as ModuleData;
+  const amount = d.knobs.find((k) => k.id === 'amount')!;
+  assert.equal(amount.gain, true);
+  assert.equal(amount.ring, null);
+  assert.ok(!d.ports.some((x) => x.id.endsWith(':gain')));
+  assert.equal(g.edges.find((e) => e.id === 'g')?.targetHandle, 'k:amount:gain');
+});

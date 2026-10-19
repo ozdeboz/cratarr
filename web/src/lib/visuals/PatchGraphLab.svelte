@@ -15,6 +15,7 @@
   import { EXTRA_TYPES } from './registry';
   import { toV2 } from './v2';
   import { change, newStore, redo, undo } from './patch-store';
+  import { helpFor } from './module-help';
   import { WAVES } from './sources/waves';
   import { DEFAULTS, RANGES } from './settings.svelte';
   import { applyV2, editKey, withModulator, type PickRequest, type V2Edit, type XY } from './patchgraph';
@@ -275,6 +276,7 @@
     positions={v2mode ? here : positions}
     openAtStart={query.get('open')?.split(',') ?? []}
     sheetHeight={sheetH}
+    {helpFor}
     {onconnect}
     {ondisconnect}
     {onknob}

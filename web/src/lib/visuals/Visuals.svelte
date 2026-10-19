@@ -85,6 +85,7 @@
   import PatchGraph from './PatchGraph.svelte';
   import { withModulator, type PickRequest } from './patchgraph';
   import { LiveFaces } from './faces.svelte';
+  import { helpFor } from './module-help';
   import { BLENDS, cratarrPatch, cratarrTypes, modulesOf, type ModuleType } from './patch';
   import { SOURCE_TYPES } from './sources/index';
   import { MODULATORS } from './modulators/modulators';
@@ -2267,6 +2268,7 @@
             onaddmodulator={(type) => graphAdd('modulators', type)}
             onpick={graphPick}
             live={liveFaces}
+            {helpFor}
           />
         </div>
       {/if}

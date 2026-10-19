@@ -124,6 +124,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     glow: GLOW,
   },
   waves: {
+    audio: 'The sound to draw: Music’s unless unplugged.',
     width: 'How wide the line is; none at 0.',
     amplitude: 'How far the wave swings from its line.',
     circle: 'From a line (0) to a circle (1).',

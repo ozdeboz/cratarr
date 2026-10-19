@@ -142,7 +142,7 @@
     /** How much of the graph's bottom an open sheet covers (px): the fitted view keeps clear of it. */
     sheetHeight?: number;
     /** A module's help (module-help.ts), for its long press's menu. */
-    helpFor?: (type: string, port?: string) => string | null;
+    helpFor?: (type: string, port?: string) => string | null | undefined;
   } = $props();
 
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
