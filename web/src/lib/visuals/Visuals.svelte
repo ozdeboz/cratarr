@@ -555,10 +555,10 @@
     path = [];
     showChrome();
   }
-  const sameRoutes = (c: Chain) => {
-    const on = (r: Record<string, RouteValue>) => Object.entries(r).filter(([, v]) => endOf(v) !== 0).map(([k, v]) => `${k}=${JSON.stringify(v)}`).sort().join(',');
-    return on(s.routes) === on(c.routes);
-  };
+  // A chain is its modules and its cables (which go from where into what), not their amounts: the dice and the knobs
+  // move those within it (the owner: "chains become presets, then within that we can freely evolve").
+  const wiring = (routes: Record<string, RouteValue>, extra: PatchExtra) =>
+    [...Object.entries(routes).filter(([, v]) => endOf(v) !== 0).map(([k]) => k), ...extra.cables.map((c) => `${JSON.stringify(c.from)}>${c.to.module}.${c.to.knob}`)].sort().join(',');
   // Every cable by the knob it moves: its page (a column's routes, or the extras' cables into a knob).
   const cableGroups = $derived.by(() => {
     const by = new Map<string, number>();
@@ -571,7 +571,7 @@
     });
   });
   const chainNow = $derived(
-    [SCRATCH, ...CHAINS].find((c) => sameRoutes(c) && sameModules(s.extra, c.extra) && !s.extra.cables.length && (c.settings?.flameLayer ?? 1) === s.flameLayer) ?? null,
+    [SCRATCH, ...CHAINS].find((c) => wiring(s.routes, s.extra) === wiring(c.routes, c.extra) && sameModules(s.extra, c.extra) && (c.settings?.flameLayer ?? 1) === s.flameLayer) ?? null,
   );
 
   // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show

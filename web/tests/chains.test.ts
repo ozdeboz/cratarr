@@ -28,7 +28,8 @@ test('Calm, Pulse and Flow, and from scratch: lowercase ids, each found by its i
 test('few cables, each a route there is (its signal, its band, its column)', () => {
   for (const c of ALL) {
     const keys = Object.keys(c.routes);
-    assert.ok(keys.length <= 8, `${c.id}: ${keys.length} cables`);
+    const n = keys.length + c.extra.cables.length;
+    assert.ok(n <= 8, `${c.id}: ${n} cables`);
     for (const k of keys) {
       const [signal, band, aspect] = k.split('|');
       assert.ok((ASPECTS as readonly string[]).includes(aspect), `${c.id}: ${k}`);
@@ -58,4 +59,14 @@ test('each chain is kept as it is: its routes (the defaults it leaves out kept o
     assert.deepEqual(on, c.routes, c.id);
     assert.deepEqual(extraFrom(JSON.parse(JSON.stringify(c.extra)), extraType), c.extra, c.id);
   }
+});
+
+test("the study's lessons: modulators first, the turning with time, the colour's cables slow, Flow's own loop", () => {
+  for (const c of CHAINS) {
+    assert.ok(c.extra.modulators.length > 0, `${c.id}: no modulator`);
+    assert.ok(!Object.keys(c.routes).some((k) => k.endsWith('|rotation')), `${c.id}: the music turns it`);
+    for (const x of c.extra.cables) if (x.to.knob === 'rotation') assert.ok('modulator' in x.from, `${c.id}: ${x.id}`);
+    for (const x of c.extra.cables) if (x.to.knob === 'hue' && 'signal' in x.from) assert.equal(x.from.speed, 'slow', `${c.id}: ${x.id}`);
+  }
+  assert.deepEqual(chainOf('flow')!.extra.loop.map((m) => m.type), ['warp', 'keep']);
 });

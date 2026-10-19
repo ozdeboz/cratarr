@@ -8,7 +8,8 @@
 // (form, colours …) stays the track's own, as a preset leaves it.
 
 import type { RouteValue } from './curves';
-import { emptyExtra, type PatchExtra } from './patch';
+import { emptyExtra, type Cable, type Module, type PatchExtra } from './patch';
+import { extraType } from './registry';
 import { defaultRoutes, routeKey } from './routes';
 import type { VisualSettings } from './settings.svelte';
 
@@ -42,50 +43,85 @@ export type Chain = { id: string; label: string; line: string; routes: Record<st
 /** None of the loop's and finish's own: what every chain starts from, so one chosen after another leaves none of it. */
 const QUIET: ChainSettings = { flameLayer: 1, fluid: 0, tunnel: 0, dive: 0, effects: 0, facets: 0, waves: 0, fx1Amount: 0, fx2Amount: 0, fx3Amount: 0, fxLoopAmount: 0 };
 
+// What the preset study taught (9,109 of Cream of the Crop's presets, read for how they are made, none of them copied;
+// visuals-milkdrop-direction): a preset makes its own modulators first and drives through them, not the raw signals;
+// its beat test sits at typical (our gate's Above 1); the music drives the drawing and the zoom, while turning and
+// drifting go with time; decay and finish stay put; the look follows the slow inputs, only the hits the fast ones;
+// most run the picture's own loop (warp and keep). Each chain below holds to that, in at most eight cables.
+
+/** One of the extras' modules at its type's defaults, some set (`over`). */
+function mod(type: string, id: string, over: Record<string, number> = {}): Module {
+  const t = extraType(type);
+  return { id, type, knobs: { ...Object.fromEntries((t?.knobs ?? []).map((k) => [k.id, k.default])), ...over } };
+}
+const cable = (id: string, from: Cable['from'], module: string, knob: string, value: number, mode: Cable['mode'] = 'swing'): Cable => ({ id, from, to: { module, knob }, value, mode });
+
 export const CHAINS: readonly Chain[] = [
   {
+    // A slow follower of the loudness breathes the size and the colour's strength; the turning wanders with time; the
+    // hue moves with the swells, slowly.
     id: 'calm',
     label: 'Calm',
     line: 'Breathes with the loudness; its colours drift with the swells.',
-    routes: {
-      [routeKey('loudness', null, 'size')]: 0.6,
-      [routeKey('loudness', null, 'saturation')]: 0.8,
-      [routeKey('loudness', null, 'rotation')]: 0.15,
-      [routeKey('swell', null, 'hue')]: 0.15,
+    routes: {},
+    extra: {
+      ...emptyExtra(),
+      modulators: [mod('slow', 'breath', { attack: 0.8, release: 2.5 }), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      cables: [
+        cable('calm-in', { signal: 'loudness' }, 'breath', 'in', 1),
+        cable('calm-size', { modulator: 'breath' }, 'show', 'size', 0.5),
+        cable('calm-saturation', { modulator: 'breath' }, 'show', 'saturation', 0.6),
+        cable('calm-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
+        cable('calm-hue', { signal: 'swell', speed: 'slow' }, 'flame', 'hue', 0.15),
+      ],
     },
-    extra: emptyExtra(),
     settings: { ...QUIET, flash: 0.3, speed: 0.6, smoothing: 0.6, trails: 1 },
   },
   {
+    // The bass's hits through a beat gate (at typical, lifting after each) push the size and the glow; a fast follower
+    // of the loudness the colour; the downbeats glow; the sub's hits light the flame's parts; the turning wanders.
     id: 'pulse',
     label: 'Pulse',
-    line: 'The beat and the bass: size and light on every beat, the low end lighting its parts.',
+    line: 'The beat and the bass: size and light on every hit, the low end lighting its parts.',
     routes: {
-      [routeKey('loudness', null, 'size')]: 0.7,
-      [routeKey('loudness', null, 'saturation')]: 1,
-      [routeKey('loudness', null, 'rotation')]: 0.3,
-      [routeKey('beat', null, 'size')]: 0.25,
-      [routeKey('beat', null, 'brightness')]: 0.4,
       [routeKey('downbeat', null, 'brightness')]: 0.3,
       [routeKey('hits', 0, 'lights')]: 1,
-      [routeKey('hits', 1, 'lights')]: 0.8,
     },
-    extra: emptyExtra(),
+    extra: {
+      ...emptyExtra(),
+      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.15, amount: 1 }), mod('fast', 'body'), mod('drift', 'wander', { rate: 0.1, amount: 1 })],
+      cables: [
+        cable('pulse-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
+        cable('pulse-body-in', { signal: 'loudness' }, 'body', 'in', 1),
+        cable('pulse-size', { modulator: 'kick' }, 'show', 'size', 0.3),
+        cable('pulse-glow', { modulator: 'kick' }, 'show', 'glow', 0.4),
+        cable('pulse-saturation', { modulator: 'body' }, 'show', 'saturation', 0.8),
+        cable('pulse-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
+      ],
+    },
     settings: { ...QUIET, flash: 1, speed: 1 },
   },
   {
+    // Smoke: the fluid stirred by the beats and the sub, flowing with the loudness (slowly), whirled by the swells; the
+    // picture's own loop keeps a trail of it, the bass's hits zooming it in, its turn wandering.
     id: 'flow',
     label: 'Flow',
     line: 'Smoke: the fluid stirred by the beats and the bass, whirled by the swells, little flashing.',
     routes: {
       [routeKey('beat', null, 'stir')]: 1,
       [routeKey('hits', 0, 'stir')]: 1,
-      [routeKey('loudness', null, 'flow')]: 1,
       [routeKey('swell', null, 'swirl')]: 1,
-      [routeKey('loudness', null, 'size')]: 0.6,
-      [routeKey('loudness', null, 'rotation')]: 0.15,
     },
-    extra: emptyExtra(),
+    extra: {
+      ...emptyExtra(),
+      loop: [mod('warp', 'flow-warp', { zoom: 0.05 }), mod('keep', 'flow-keep', { amount: 0.6, trails: 0.5 })],
+      modulators: [mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      cables: [
+        cable('flow-flow', { signal: 'loudness', speed: 'slow' }, 'fluid', 'flow', 1),
+        cable('flow-zoom', { signal: 'hits', band: 1 }, 'flow-warp', 'zoom', 0.2),
+        cable('flow-turn', { modulator: 'wander' }, 'flow-warp', 'turn', 0.3),
+      ],
+    },
     settings: { ...QUIET, fluid: 0.8, stir: 1, flow: 1, swirl: 1, flash: 0.3, speed: 0.8, trails: 1 },
   },
 ];
