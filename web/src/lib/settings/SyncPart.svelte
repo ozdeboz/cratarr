@@ -3,11 +3,11 @@
   // and in which quality. This device's own; it acts at once. Only in the app. Its Reset: all four back to their
   // defaults (lib/settings/reset); what is kept stays.
   import Seg from '../Seg.svelte';
-  import SettingRow from '../SettingRow.svelte';
-  import Switch from '../Switch.svelte';
   import { appInfo, inApp, setDevice } from '../app.svelte';
   import { kept } from '../kept.svelte';
   import { downloadedSize } from './editor.svelte';
+  import Group from './Group.svelte';
+  import Item from './Item.svelte';
   import { offerReset } from './reset.svelte';
 
   const BUDGETS: { value: string; label: string }[] = [
@@ -28,29 +28,18 @@
 </script>
 
 {#if inApp}
-  <section aria-labelledby="sync-h">
-    <h2 id="sync-h">Sync</h2>
-    <p class="lede">This device only.</p>
-
-    <SettingRow
-      label="Storage"
-      hint={kept.known ? `${downloadedSize(kept.used)} used` : null}
+  <Group title="This device">
+    <Item
+      name="Storage"
+      line={kept.known ? `${downloadedSize(kept.used)} used` : null}
       more="When it runs out, what was kept longest ago shrinks first: its tracks furthest from its start go."
     >
-      <Seg
-        label="Storage"
-        options={BUDGETS}
-        bind:value={() => String(appInfo.syncBudgetGb), (v) => setDevice({ syncBudgetGb: Number(v) })}
-      />
-    </SettingRow>
-    <SettingRow label="Quality" more="Originals: the files as they are. Smaller copies: Cratarr makes 160 kb/s Opus copies of lossless files; lossy files come as they are.">
+      <Seg label="Storage" options={BUDGETS} bind:value={() => String(appInfo.syncBudgetGb), (v) => setDevice({ syncBudgetGb: Number(v) })} />
+    </Item>
+    <Item name="Quality" more="Originals: the files as they are. Smaller copies: Cratarr makes 160 kb/s Opus copies of lossless files; lossy files come as they are.">
       <Seg label="Quality" options={QUALITY} bind:value={() => appInfo.downloadQuality, (v) => setDevice({ downloadQuality: v })} />
-    </SettingRow>
-    <div class="pref">
-      <Switch label="Download over mobile data" checked={appInfo.downloadOverMobile} onchange={(on) => setDevice({ downloadOverMobile: on })} />
-    </div>
-    <div class="pref">
-      <Switch label="Only while charging" checked={appInfo.syncOnlyCharging} onchange={(on) => setDevice({ syncOnlyCharging: on })} />
-    </div>
-  </section>
+    </Item>
+    <Item name="Download over mobile data" toggle={{ checked: appInfo.downloadOverMobile, onchange: (on) => setDevice({ downloadOverMobile: on }) }} />
+    <Item name="Only while charging" toggle={{ checked: appInfo.syncOnlyCharging, onchange: (on) => setDevice({ syncOnlyCharging: on }) }} />
+  </Group>
 {/if}

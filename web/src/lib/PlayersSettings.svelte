@@ -1,19 +1,27 @@
 <script lang="ts">
   // Settings → Players (sync play, decision 0037): each player's speaker delay, how late its speaker sounds, so a group
   // sounds as one. Set for any player from any device (standing between two speakers), heard at once while the finger
-  // moves, as Snapweb and Iris set Snapcast's per-client latency. 0 to 500 ms in steps of 5.
+  // moves, as Snapweb and Iris set Snapcast's per-client latency. 0 to 500 ms in steps of 5. What every player has is
+  // said once (the group's heading), each player's value on its row; a tap opens its slider in a sheet (the settings'
+  // North Star, 2026-10-19). Then the Kodis (lib/KodiSettings), each with its own page (`thing`).
   import { setPlayerDelay } from './api';
   import Icon from './Icon.svelte';
   import KodiSettings from './KodiSettings.svelte';
-  import MoreInfo from './MoreInfo.svelte';
+  import MenuSheet from './MenuSheet.svelte';
   import { playOn } from './playOn.svelte';
+  import Group from './settings/Group.svelte';
+  import Item from './settings/Item.svelte';
   import { toast } from './toast.svelte';
+
+  let { thing = null }: { thing?: string | null } = $props();
 
   const MAX = 500;
   /** A Kodi's delay is its own buffering too: up to the group's whole buffer. */
   const KODI_MAX = 1000;
   const maxOf = (name: string) => (playOn.players.find((p) => p.name === name)?.kind === 'kodi' ? KODI_MAX : MAX);
   const STEP = 5;
+  const DELAY_MORE =
+    "How late each player's speaker sounds. In a group, a player whose speaker sounds late (Bluetooth, a soundbar's processing) plays that much earlier, so the group sounds as one.\n\nStand between two speakers and move it until they sound together. A Kodi's counts its own buffering too, up to a second.";
 
   const players = $derived([...playOn.players].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
 
@@ -49,81 +57,42 @@
     };
     go();
   }
+
+  // The player whose delay is being set, in its sheet.
+  let adjusting = $state<string | null>(null);
 </script>
 
-<section aria-label="Players">
-  {#each players as p (p.name)}
-    {@const ms = delay(p.name)}
-    <div class="player">
-      <span class="name">{p.name}{#if !p.online}<small>offline</small>{/if}</span>
-      <span class="l"
-        >Speaker delay <MoreInfo
-          label="Speaker delay"
-          text={"In a group, a player whose speaker sounds late (Bluetooth, a soundbar's processing) plays that much earlier, so the group sounds as one.\n\nStand between two speakers and move it until they sound together. A Kodi's counts its own buffering too, up to a second."}
-        /><small>How late it sounds</small></span
-      >
-      <div class="delay">
-        <button aria-label="Less" title="Less" disabled={ms <= 0} onclick={() => set(p.name, ms - STEP)}><Icon name="minus" size={20} /></button>
-        <input
-          type="range"
-          min="0"
-          max={maxOf(p.name)}
-          step={STEP}
-          value={ms}
-          aria-label="Speaker delay of {p.name}"
-          oninput={(e) => set(p.name, Number(e.currentTarget.value))}
-        />
-        <button aria-label="More" title="More" disabled={ms >= maxOf(p.name)} onclick={() => set(p.name, ms + STEP)}><Icon name="plus" size={20} /></button>
-        <output>{ms} ms</output>
-      </div>
+{#if !thing}
+  <Group title="Speaker delay" more={DELAY_MORE}>
+    {#each players as p (p.name)}
+      <Item lead={p.online ? 'on' : 'off'} name={p.name} line={p.online ? null : 'Offline'} value={`${delay(p.name)} ms`} onclick={() => (adjusting = p.name)} />
+    {:else}
+      <Item name="No players yet" />
+    {/each}
+  </Group>
+{/if}
+<KodiSettings {thing} />
+
+{#if adjusting}
+  {@const name = adjusting}
+  {@const ms = delay(name)}
+  <MenuSheet label="Speaker delay" title={name} chips={['Speaker delay']} onclose={() => (adjusting = null)}>
+    <div class="delay">
+      <button aria-label="Less" title="Less" disabled={ms <= 0} onclick={() => set(name, ms - STEP)}><Icon name="minus" size={20} /></button>
+      <input type="range" min="0" max={maxOf(name)} step={STEP} value={ms} aria-label="Speaker delay of {name}" oninput={(e) => set(name, Number(e.currentTarget.value))} />
+      <button aria-label="More" title="More" disabled={ms >= maxOf(name)} onclick={() => set(name, ms + STEP)}><Icon name="plus" size={20} /></button>
+      <output>{ms} ms</output>
     </div>
-  {:else}
-    <p class="none">No players yet</p>
-  {/each}
-</section>
-<KodiSettings />
+  </MenuSheet>
+{/if}
 
 <style>
-  section {
-    display: grid;
-    gap: 12px;
-    padding: 4px 0 16px;
-  }
-
-  .player {
-    display: grid;
-    gap: 4px;
-    padding: 12px 16px;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--text) 5%, transparent);
-  }
-
-  .name {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    font-size: 16px;
-    font-weight: 600;
-  }
-
-  small {
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 400;
-  }
-
-  .l {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    font-size: 15px;
-  }
-
   .delay {
     display: flex;
     align-items: center;
     gap: 6px;
-    min-height: 44px;
+    min-height: 56px;
+    padding: 0 16px 16px;
   }
 
   .delay input {
@@ -160,9 +129,5 @@
     width: 6ch;
     text-align: right;
     font-variant-numeric: tabular-nums;
-  }
-
-  .none {
-    color: var(--muted);
   }
 </style>

@@ -1,14 +1,19 @@
 <script lang="ts">
   // Users (decision 0051; the owner: "a user panel with a permissions section ... It's probably how Jellyfin does it
-  // too"): every account, its name and role from the directory (read-only: they are set there), whether it is active
-  // (one who left the directory's music group is deactivated, their data kept), what it may do beyond listening, and its
-  // devices and sign-ins, each to end. Its administrators' only. Acts at once.
+  // too"): every account a row, its role and whether it is active in a line; its own page behind it (`thing`: the
+  // name, the settings' North Star, 2026-10-19): its name and role from the directory (read-only: they are set there),
+  // whether it is active (one who left the directory's music group is deactivated, their data kept), what it may do
+  // beyond listening, and its devices and sign-ins, each to end. Its administrators' only. Acts at once.
   import { endSession, getUsers, removable, removeDevice, setPermissions, type OwnDevice, type Permissions, type User, type UserSession } from '../api';
-  import MoreInfo from '../MoreInfo.svelte';
+  import { backFromThing, openThing } from '../panel.svelte';
   import PageLoading from '../PageLoading.svelte';
-  import Switch from '../Switch.svelte';
+  import { nameThing } from '../settingsSections.svelte';
   import { toast } from '../toast.svelte';
+  import Group from './Group.svelte';
+  import Item from './Item.svelte';
   import { when } from './when';
+
+  let { thing = null }: { thing?: string | null } = $props();
 
   // Downloading and changing playlists bind OpenSubsonic apps; sharing playlists binds Cratarr too. Public share links
   // (`links`) wait until links are offered.
@@ -28,6 +33,18 @@
       },
     );
   load();
+
+  const open = $derived(thing && users ? (users.find((u) => u.name === thing) ?? null) : null);
+  nameThing(() => (open ? open.name : null));
+  $effect(() => {
+    if (thing && users && !open) backFromThing('users');
+  });
+
+  /** A user's line: role, and inactive or how many devices. */
+  const lineOf = (u: User) =>
+    [u.admin ? 'Administrator' : 'User', !u.active ? 'inactive' : u.devices.length ? `${u.devices.length} ${u.devices.length === 1 ? 'device' : 'devices'}` : null]
+      .filter(Boolean)
+      .join(' · ');
 
   async function permit(u: User, key: keyof Permissions, on: boolean) {
     const was = u.permissions[key];
@@ -59,125 +76,44 @@
   }
 </script>
 
-<section aria-labelledby="users-h">
-  <h2 id="users-h">Users</h2>
-  {#if users === null}
-    <PageLoading />
-  {:else}
-    {#each users as u (u.name)}
-      <details class="user">
-        <summary>
-          <span class="name">{u.name}</span>
-          <span class="role">{u.admin ? 'Administrator' : 'User'}{#if !u.active} · Inactive{/if}</span>
-        </summary>
-        {#if !u.admin}
-          <div class="group">
-            <h3>Permissions <MoreInfo label="Permissions" text="Apps: OpenSubsonic apps. Administrators may do everything." /></h3>
-          </div>
-          <div class="checks">
-            {#each PERMISSIONS as p (p.key)}
-              <Switch label={p.label} checked={u.permissions[p.key]} disabled={!u.active} onchange={(on) => permit(u, p.key, on)} />
-            {/each}
-          </div>
-        {/if}
-        {#if u.devices.length}
-          <div class="group"><h3>Devices</h3></div>
-          <ul class="list">
-            {#each u.devices as d (d.id)}
-              <li>
-                <span class="what">{d.name}<small>{d.kind}</small></span>
-                {#if d.online}<span class="when">Online</span>{:else if d.last_seen}<span class="when">{when(d.last_seen)}</span>{/if}
-                {#if removable(d)}<button onclick={() => remove(u, d)}>Remove</button>{/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-        {#if u.sessions.length}
-          <div class="group"><h3>Signed in</h3></div>
-          <ul class="list">
-            {#each u.sessions as s (s.id)}
-              <li>
-                <span class="what">{s.device}</span>
-                <span class="when">{when(s.last_used)}</span>
-                <button onclick={() => end(u, s)}>Sign out</button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </details>
-    {/each}
+{#if users === null}
+  <PageLoading />
+{:else if open}
+  {@const u = open}
+  <Group>
+    <Item name={u.admin ? 'Administrator' : 'User'} line={u.active ? 'From the directory' : 'Inactive: no longer in the music group'} tone={u.active ? null : 'warn'} />
+  </Group>
+  {#if !u.admin}
+    <Group title="Permissions" more="Apps: OpenSubsonic apps. Administrators may do everything.">
+      {#each PERMISSIONS as p (p.key)}
+        <Item name={p.label} disabled={!u.active} toggle={{ checked: u.permissions[p.key], onchange: (on) => permit(u, p.key, on) }} />
+      {/each}
+    </Group>
   {/if}
-</section>
-
-<style>
-  .user {
-    border-top: 1px solid var(--border);
-  }
-
-  .user:first-of-type {
-    border-top: 0;
-  }
-
-  .user summary {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    min-height: 52px;
-    padding: 14px 0;
-    cursor: pointer;
-  }
-
-  .user[open] summary {
-    padding-bottom: 4px;
-  }
-
-  .name {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
-    font-weight: 600;
-  }
-
-  .role {
-    color: var(--muted);
-    white-space: nowrap;
-  }
-
-  .user[open] {
-    padding-bottom: 12px;
-  }
-
-  .group {
-    padding: 16px 0 4px;
-  }
-
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .list li {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .what {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .what small {
-    margin-left: 8px;
-    color: var(--muted);
-  }
-
-  .when {
-    color: var(--muted);
-    white-space: nowrap;
-  }
-</style>
+  {#if u.devices.length}
+    <Group title="Devices">
+      {#each u.devices as d (d.id)}
+        <Item lead={d.online ? 'on' : 'off'} name={d.name} line={`${d.kind} · ${d.online ? 'online' : d.last_seen ? when(d.last_seen) : 'offline'}`}>
+          {#if removable(d)}<button onclick={() => remove(u, d)}>Remove</button>{/if}
+        </Item>
+      {/each}
+    </Group>
+  {/if}
+  {#if u.sessions.length}
+    <Group title="Signed in">
+      {#each u.sessions as s (s.id)}
+        <Item name={s.device} line={when(s.last_used)}>
+          <button onclick={() => end(u, s)}>Sign out</button>
+        </Item>
+      {/each}
+    </Group>
+  {/if}
+{:else if !thing}
+  <Group>
+    {#each users as u (u.name)}
+      <Item name={u.name} line={lineOf(u)} onclick={() => openThing('users', u.name)} />
+    {:else}
+      <Item name="No users yet" />
+    {/each}
+  </Group>
+{/if}

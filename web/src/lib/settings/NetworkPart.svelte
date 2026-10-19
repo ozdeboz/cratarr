@@ -4,10 +4,11 @@
   // carries only the local network); the app looks again at every change of network. The address in use, and a test of
   // both. Signing in away from home is Cratarr's sign-in page (decision 0039), not a setting here. This device's own; it
   // acts at once. Only in the app.
-  import SettingRow from '../SettingRow.svelte';
-  import Switch from '../Switch.svelte';
   import { appInfo, inApp, networkTest, setDevice, testNetwork } from '../app.svelte';
+  import Group from './Group.svelte';
+  import Item from './Item.svelte';
   import { offerReset } from './reset.svelte';
+  import ValueSheet from './ValueSheet.svelte';
 
   // Its Reset: Prefer local network off; the addresses stay (lib/settings/reset).
   offerReset(
@@ -15,18 +16,14 @@
     () => setDevice({ preferLocal: false }),
   );
 
-  /** An address field's change, sent as typed (the app tries https:// and then http:// when no scheme is typed). */
-  function changed(e: Event & { currentTarget: HTMLInputElement }, which: 'public' | 'local') {
-    const field = e.currentTarget;
-    const typed = field.value.trim();
-    // The public address is never cleared: the app needs it.
+  /** An address as typed (the app tries https:// and then http:// when no scheme is typed). The public address is
+   *  never cleared: the app needs it. One the app does not take leaves the one before, and a row names it. */
+  function changed(typed: string, which: 'public' | 'local') {
     if (which === 'public' ? typed && typed !== appInfo.publicAddress : typed !== (appInfo.localAddress ?? '')) {
       setDevice(which === 'public' ? { public: typed, server: typed } : { local: typed });
     }
-    // The address kept, until the app answers with the one it took (where Cratarr answers); one it does not take
-    // leaves this one, and a line names it.
-    field.value = (which === 'public' ? appInfo.publicAddress : appInfo.localAddress) ?? '';
   }
+  let editing = $state<'public' | 'local' | null>(null);
 
   // The test's answer, Finamp's way; only what failed is named (this device not signed in as that).
   const result = $derived.by(() => {
@@ -41,65 +38,37 @@
 </script>
 
 {#if inApp}
-  <section aria-labelledby="network-h">
-    <h2 id="network-h">Network</h2>
-    <p class="lede">This device only.</p>
-    {#if appInfo.refused}
-      <p class="error" role="alert">Cratarr does not answer at {appInfo.refused}</p>
-    {/if}
-    <label class="pref">
-      <span class="l">Public address</span>
-      <input
-        type="url"
-        value={appInfo.publicAddress ?? ''}
-        spellcheck="false"
-        autocapitalize="off"
-        autocomplete="off"
-        onchange={(e) => changed(e, 'public')}
-      />
-    </label>
+  <Group title="This device">
+    {#if appInfo.refused}<Item lead="bad" name="Cratarr does not answer" line={appInfo.refused} tone="bad" wrap />{/if}
+    <Item name="Public address" line={appInfo.publicAddress ?? 'Not set'} wrap onclick={() => (editing = 'public')} />
     {#if appInfo.addresses}
-      <div class="pref">
-        <Switch
-          label="Prefer local network"
-          hint="The local network address when it answers"
-          more="On, the app uses the local network address whenever it answers (at home, or over a VPN that carries only the local network), and the public address otherwise. It looks again at every change of network."
-          checked={appInfo.preferLocal}
-          onchange={(on) => setDevice({ preferLocal: on })}
-        />
-      </div>
+      <Item
+        name="Prefer local network"
+        line="The local network address when it answers"
+        more="On, the app uses the local network address whenever it answers (at home, or over a VPN that carries only the local network), and the public address otherwise. It looks again at every change of network."
+        toggle={{ checked: appInfo.preferLocal, onchange: (on) => setDevice({ preferLocal: on }) }}
+      />
       <!-- Only while it is used (as Finamp shows a setting's deeper ones only while they apply); kept while off. -->
       {#if appInfo.preferLocal}
-        <label class="pref">
-          <span class="l">Local network address</span>
-          <input
-            type="url"
-            value={appInfo.localAddress ?? ''}
-            placeholder="http://192.168.1.5:8081"
-            spellcheck="false"
-            autocapitalize="off"
-            autocomplete="off"
-            onchange={(e) => changed(e, 'local')}
-          />
-        </label>
+        <Item name="Local network address" line={appInfo.localAddress || 'Not set'} wrap onclick={() => (editing = 'local')} />
       {/if}
-      <SettingRow label="Active address">
-        <span class="active">{appInfo.inUse ?? ''}</span>
-      </SettingRow>
-      <SettingRow label="Test both connections" hint={networkTest.testing ? null : result}>
+      <Item name="Active address" line={appInfo.inUse ?? ''} wrap />
+      <Item name="Test both connections" line={networkTest.testing ? null : result}>
         <button disabled={networkTest.testing} aria-busy={networkTest.testing} onclick={testNetwork}>Test</button>
-      </SettingRow>
+      </Item>
     {/if}
-  </section>
+  </Group>
 {/if}
 
-<style>
-  .error {
-    color: var(--danger, #c33);
-  }
-
-  .active {
-    color: var(--muted);
-    overflow-wrap: anywhere;
-  }
-</style>
+{#if editing}
+  {@const which = editing}
+  <ValueSheet
+    title={which === 'public' ? 'Public address' : 'Local network address'}
+    type="url"
+    value={(which === 'public' ? appInfo.publicAddress : appInfo.localAddress) ?? ''}
+    placeholder={which === 'local' ? 'http://192.168.1.5:8081' : ''}
+    allowEmpty={which === 'local'}
+    onsave={(v) => changed(v, which)}
+    onclose={() => (editing = null)}
+  />
+{/if}

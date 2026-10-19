@@ -260,8 +260,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   deeper settings"; chosen: these three, not a quick-settings card):
   - **One short line, the rest behind an (i).** A setting shows its name and at most one short line; a longer
     explanation opens from an (i) beside it, in a sheet with the setting's name (`lib/MoreInfo`; `more` on
-    `lib/Switch` and `lib/SettingRow`), as Finamp's subtitle with a more-info dialog. The (i) is never inside another
-    control (a switch's row, a field's label): beside it.
+    `lib/Switch`, `lib/SettingRow` and `lib/settings/Item`), as Finamp's subtitle with a more-info dialog. The (i) is
+    never inside another control (a switch's row, a field's label): beside it.
   - **Deeper only while it applies.** A setting that only matters while another is on shows only then, and keeps its
     value meanwhile (Network's local address under Prefer local network; Diagnostics' areas under More detail;
     Libraries' format and dot under a used library), as Finamp shows the bitrate only while transcoding is on.
@@ -269,6 +269,30 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     confirm naming what goes back, its preferences return to their defaults. Never servers, accounts, keys, folders,
     addresses, the sign-in requirement or what was imported: Connections, Libraries, Players, Authentication and its
     Directory have none.
+- **A part is groups of rows** (the settings' North Star, the owner 2026-10-19: "a bit of a mess. No streamlined
+  style or layout", then "build it"). Every setting is a row; every thing is a row that opens its own page; rows sit
+  in plainly titled groups, and nothing else.
+  - **The group** (`lib/settings/Group`): a small muted heading, an (i) when it has more to say, then its rows in one
+    rounded block with a line between them. Never a card inside a card.
+    - What every row of a group shares is said once, in the heading (Players: Speaker delay over each player's row).
+    - Where a part's settings are kept is its group's heading ("This browser", "This device"), not a sentence.
+  - **The row** (`lib/settings/Item`): its name, at most one short line, and one thing at its end:
+    - the switch, the whole row being it;
+    - a value and ›, which opens the value's sheet: `lib/settings/ValueSheet` to type it (from the top), or
+      `lib/settings/ChoiceSheet` to choose one of several;
+    - › alone, which opens a thing's own page;
+    - a control of its own: a choice of a few (`lib/Seg`), or one small button (Check, Remove, Sign out, Revoke);
+    - or the row is the act itself: "+ Add …" in the accent, the last row of its group; "Remove …" in red, last on a
+      thing's own page, asked again in `lib/settings/ConfirmSheet`.
+  - **A thing** (a server, Lidarr, a library, a Kodi, a user) is a row with a dot and its state in the line. It opens
+    its own page in the panel (`settings:<part>/<thing>`, a step Back returns from), with back in place of ✕ and its
+    name as the title. The page is made the same way.
+  - **State** is a dot (on, off, warn, bad) and a line, everywhere: a server's connection, a player online, a key
+    shown once.
+  - **Fields that go together** (a new password with the current one, a new key) are typed in one sheet
+    (`lib/settings/FormSheet`).
+  - **Saving is unchanged.** A value taken in its sheet goes into the editor, and the Save bar saves it
+    (`lib/settings/SaveBar`). Kodi keeps its own, as it is saved apart. What acts at once still does.
 
 - **Shared pieces, not each page's own layout** (decided 2026-10-16): a sheet's or a setting's card is `lib/Card`
   (its title and a muted note, then what it holds); a setting's row is `lib/SettingRow` (its name at the start, its

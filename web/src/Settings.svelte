@@ -8,7 +8,7 @@
   import { me } from './lib/me.svelte';
   import { appInfo, downloads, inApp } from './lib/app.svelte';
   import Icon from './lib/Icon.svelte';
-  import { panel, SETTINGS, viewPlaylist } from './lib/panel.svelte';
+  import { panel, SETTINGS, settingsOf, viewPlaylist } from './lib/panel.svelte';
   import { playOn } from './lib/playOn.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { kept } from './lib/kept.svelte';
@@ -101,7 +101,7 @@
         <h2 id="settings-g{g}">{g ? 'Server' : 'Personal'}</h2>
         <div class="list">
           {#each group as c (c.id)}
-            {@const open = panel.viewed === SETTINGS + c.id}
+            {@const open = settingsOf(panel.viewed) === c.id}
             {@const l = line(c.id)}
             <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(SETTINGS + c.id)}>
               <Icon name={c.icon} size={24} />
