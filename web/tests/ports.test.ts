@@ -34,3 +34,18 @@ test('a cable fits by type: the same, or a trigger into a value', () => {
   assert.ok(fits('picture', 'picture') && fits('value', 'value') && fits('trigger', 'trigger') && fits('trigger', 'value'));
   assert.ok(!fits('value', 'picture') && !fits('picture', 'value') && !fits('value', 'trigger'));
 });
+
+test('v2: a picture cycle must pass through a Feedback', async () => {
+  const { cyclesClosed, FEEDBACK, GRAPH_MODULES, MIX } = await import('../src/lib/visuals/ports.ts');
+  const { WARP } = await import('../src/lib/visuals/loopmods.ts');
+  const types = new Map([...GRAPH_MODULES, WARP].map((t) => [t.type, t]));
+  const typeOf = (t: string) => types.get(t);
+  const m = (id: string, type: string) => ({ id, type, knobs: {} });
+  const c = (id: string, from: string, to: string, port = 'picture') => ({ id, from: { module: from, port: 'picture' }, to: { module: to, port }, value: 1, mode: 'swing' as const });
+  const looped = { v: 2 as const, modules: [m('mix', 'mix'), m('warp', 'warp'), m('fb', 'feedback')], cables: [c('a', 'mix', 'fb', 'picture'), c('b', 'fb', 'warp'), c('c', 'warp', 'mix', 'in2')], macros: [], pins: [] };
+  assert.ok(cyclesClosed(looped, typeOf));
+  const open = { ...looped, cables: [c('a', 'mix', 'warp'), c('c', 'warp', 'mix', 'in2')] };
+  assert.ok(!cyclesClosed(open, typeOf));
+  assert.equal(FEEDBACK.type, 'feedback');
+  assert.equal(MIX.ports.in.filter((p) => p.type === 'picture').length, 4);
+});
