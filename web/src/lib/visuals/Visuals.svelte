@@ -1390,6 +1390,9 @@
     // What the patch's cables make of today's settings that are no column (chain-cables.ts), as last worked out: the
     // look's as the flame is made, Purity as drawn, the bands' times and the behaviour as the aspects take them.
     let cabled: Cabled = { settings: {}, bands: {} };
+    // The settings cables moved when the flame was last made: one let go of (a trial starting, a cable taken out) returns
+    // to its setting, not a change from outside.
+    let cabledBefore = new Set<string>();
     const lookOf = (k: string) => ((cabled.settings as Record<string, number | undefined>)[k] ?? s[k as keyof VisualSettings]) as number;
     // The walking routes' factors (`Matrix.walks` order) and the matrix they are for (a route changed: none till the
     // next step).
@@ -1594,7 +1597,7 @@
         const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
         const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
         // A cable's move is the patch's own, not from outside.
-        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k) && !(k in cabled.settings));
+        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k) && !(k in cabled.settings) && !cabledBefore.has(k));
         if (outside) looksOutside++;
         if (blend && shown) {
           from = shown;
@@ -1603,6 +1606,7 @@
           blendOutside = outside;
         }
         made = Object.fromEntries(SHAPING.map((k) => [k, lookOf(k)]));
+        cabledBefore = new Set(Object.keys(cabled.settings));
         madeColours = colours;
         to = coloured(base!, mode, covered);
         if (!from) shown = to;
@@ -1635,7 +1639,7 @@
           m.track[T.track] = trackNow[T.track];
           read = signalsFor(normal, m, now);
           const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
-          if (extraCables.length) giveCables(got, extraCables, src, envelope, cableWalk, BANDS);
+          if (extraCables.length && !trial.settings) giveCables(got, extraCables, src, envelope, cableWalk, BANDS);
           cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
         },
       });

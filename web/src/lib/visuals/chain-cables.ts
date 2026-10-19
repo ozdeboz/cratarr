@@ -112,12 +112,12 @@ export function giveCables(out: Given, cables: readonly Cable[], src: CableSourc
 }
 
 /** Today's settings a cable may move that are no column: the look's that make the flame (moved by degrees: each a step
- *  of `LOOK_STEPS` of its range, so the flame is made again only as one moves that far), Purity, and the frame's
+ *  of `LOOK_STEPS` of its range, so a cable moving one is not a flame made again every frame), Purity, and the frame's
  *  behaviour the aspects take; and the bands' times, each band's own knob (`lighting.2`). */
 export const LOOK_SETTINGS = ['detail', 'twist', 'warp', 'lightness', 'vividness'] as const;
 export const CABLED_SETTINGS = [...LOOK_SETTINGS, 'purity', 'intensity', 'flash', 'speed'] as const;
 export const BAND_SETTINGS = ['lighting', 'evolution', 'continuity'] as const;
-const LOOK_STEPS = 256;
+const LOOK_STEPS = 32;
 
 /** What the cables make of those settings this frame (only those a cable reaches). */
 export type Cabled = { settings: Partial<Record<(typeof CABLED_SETTINGS)[number], number>>; bands: Partial<Record<(typeof BAND_SETTINGS)[number], number[]>> };
