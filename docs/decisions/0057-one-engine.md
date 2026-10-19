@@ -149,6 +149,25 @@ Each of today's hidden behaviours becomes a module with ports, in the graph:
 - **Macros.** The whole frame's Intensity, Flash, Speed and Wild become the top patch's macros, with visible cables into
   what they move.
 
+### 3b. Five categories, no look and behaviour
+
+The owner: "we should make no distinction between look and behavior"; then agreed to five categories by what a module
+does with signals, as modular synths and video synthesizers group them (LZX, TouchDesigner):
+
+| Category | Does | Ours |
+|---|---|---|
+| **Sources** | make a picture | Flame, Shapes, Waves; later Plasma, Gradient, Cells, Cover |
+| **Effects** | a picture in, a picture out | Fold, Bend, Blur, Tone map, Curve, Saturate, Warp, Keep, Glow, Tint, Displace, the flame's own loop |
+| **Mixers** | several pictures into one | Mix, Mask, Feedback |
+| **Modulators** | the signals that move knobs | LFO, Random, ADSR, Clock, Compressor, Grid; later Sequencer, Looper |
+| **In / Out** | where signals enter and leave | Music, Filter bank, Meter; Screen |
+
+- Each module type has its category (rack.ts `categoryOf`); a device's follows from what it exposes.
+- The graph's lanes, the module picker and Randomize's scopes follow the categories.
+- Look and Behaviour go everywhere: settings, pins, walks, scopes.
+- **A whole category can be pinned** (the owner): Randomize then leaves every module in it as it is, a new track's
+  too. It is saved with a preset like any pin (`category:<name>`).
+
 ### 4. Freely routable pictures
 
 The owner: "freely routable". The picture side is a free graph, as the value side is, not a fixed line of places.
@@ -258,12 +277,9 @@ how far it goes. The double tap's "loose" (twice the governor's limits) goes wit
 - **Its scopes** (the owner: "randomize everything, randomize effects, randomize generators … when long pressing the
   randomize button, … a drop down with the various different options"):
   - Everything;
-  - Look: the sources' knobs (the flame's shape and colours, Shapes, Waves);
-  - Effects: the picture modules' knobs;
-  - Generators: the control modules (LFO, Random, ADSR, Clock, Compressor …);
+  - Sources, Effects, Mixers, Modulators: the five categories' knobs (§3b; In / Out has none to roll);
   - Cables: the amounts of the cables there are.
-  - The scopes are the lanes the wiring gives (rack.ts), not a list kept by hand, so a new module falls into one by
-    itself.
+  - The scopes are the categories, so a new module falls into one by itself.
 - **The button:** a tap randomizes everything. A long press opens the app's menu (MenuSheet, as every long-press menu)
   with the scopes. The double tap's movement-only roll goes.
 - **A module's own menu** has Randomize too, for that module alone (VCV's per-module Randomize).
