@@ -68,6 +68,7 @@
   import { newStirring, stir } from './stirring';
   import { FlameRenderer } from './render';
   import { Compositor } from './compose';
+  import { recordPictures } from './recorder';
   import { newNormalState, signalsFor } from './normal';
   import { cabledSettings, cableGain, cableSignals, giveCables, type Cabled } from './chain-cables';
   import { shapeOf } from './evaluate';
@@ -1292,6 +1293,8 @@
     } catch (e) {
       console.warn('Visuals: no layers past the flame on this device', e);
     }
+    // The picture lab's recorder (development only, where the lab asks): each frame's inputs, for a replay.
+    if (import.meta.env.DEV && renderer) recordPictures(renderer, compositor);
     const normal = newNormalState();
     // The patch's cables, modulators and macros made into each knob's value this frame (claude-632's evaluate.ts):
     // what the compositor draws with; today's chain stays with aspects.ts.

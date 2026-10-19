@@ -596,6 +596,8 @@ export type Shown = {
   warp: number;
 };
 
+export type RendererOptions = { random?: () => number; now?: () => number };
+
 export class FlameRenderer {
   private gl: WebGL2RenderingContext;
   /** The patch past the flame (decision 0056, compose.ts): when `active`, the flame's picture goes into a texture even
@@ -703,12 +705,18 @@ export class FlameRenderer {
   width = 0;
   height = 0;
 
+  /** Where the points start (each its place and seed), and the clock (ms): a replay gives its own (the picture lab). */
+  private random: () => number;
+  private now: () => number;
+
   /** `points`: how many carry the chaos game at first. `power`: which GPU a computer with two should draw on (the
    *  fast one: by default a browser may take the one that saves power, several times slower). */
-  constructor(canvas: HTMLCanvasElement, points: number, power: WebGLPowerPreference = 'high-performance') {
+  constructor(canvas: HTMLCanvasElement, points: number, power: WebGLPowerPreference = 'high-performance', options: RendererOptions = {}) {
     const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false, powerPreference: power });
     if (!gl) throw new Error('WebGL2 is not available.');
     this.gl = gl;
+    this.random = options.random ?? Math.random;
+    this.now = options.now ?? (() => performance.now());
     const floats = !!gl.getExtension('EXT_color_buffer_float');
     this.precision =
       floats && gl.getExtension('EXT_float_blend') && gl.getExtension('OES_texture_float_linear') ? 32 : floats || gl.getExtension('EXT_color_buffer_half_float') ? 16 : 8;
@@ -742,7 +750,7 @@ export class FlameRenderer {
   /** Whether points added lately are still settling, or a program was just made (an effect's, as it is first chosen:
    *  making it makes a frame or two late, some while after): the frames meanwhile are not the device's usual pace. */
   get settling(): boolean {
-    return this.ready < this.count || performance.now() - this.madeAt < 600;
+    return this.ready < this.count || this.now() - this.madeAt < 600;
   }
 
   /** Buffers for `n` points: the ones running kept where they are, the rest new at random. */
@@ -755,9 +763,9 @@ export class FlameRenderer {
     const f = new Float32Array(data);
     const u = new Uint32Array(data);
     for (let i = this.count; i < n; i++) {
-      f[i * 5] = Math.random() * 2 - 1;
-      f[i * 5 + 1] = Math.random() * 2 - 1;
-      u[i * 5 + 4] = (Math.random() * 0xfffffffe + 1) >>> 0;
+      f[i * 5] = this.random() * 2 - 1;
+      f[i * 5 + 1] = this.random() * 2 - 1;
+      u[i * 5 + 4] = (this.random() * 0xfffffffe + 1) >>> 0;
     }
     for (const v of this.vaos) gl.deleteVertexArray(v);
     this.buffers = [];
@@ -804,9 +812,9 @@ export class FlameRenderer {
     const f = new Float32Array(data);
     const u = new Uint32Array(data);
     for (let i = 0; i < n; i++) {
-      f[i * 5] = Math.random() * 2 - 1;
-      f[i * 5 + 1] = Math.random() * 2 - 1;
-      u[i * 5 + 4] = (Math.random() * 0xfffffffe + 1) >>> 0;
+      f[i * 5] = this.random() * 2 - 1;
+      f[i * 5 + 1] = this.random() * 2 - 1;
+      u[i * 5 + 4] = (this.random() * 0xfffffffe + 1) >>> 0;
     }
     for (let k = 0; k < 2; k++) {
       const b = gl.createBuffer()!;
@@ -1067,7 +1075,7 @@ export class FlameRenderer {
 
     // Fade what is there; with the Fluid setting, carry it along the flow as it fades, into the other set of buffers
     // (as the scrub copies), and draw on there.
-    const at = performance.now();
+    const at = this.now();
     const since = this.shownAt ? Math.min(0.25, (at - this.shownAt) / 1000) : 0;
     this.shownAt = at;
     const follow = (shown: number, to: number) => shown + (to - shown) * (1 - Math.exp(-since / (to > shown ? FLUID_RISE : FLUID_FALL)));
@@ -1086,7 +1094,7 @@ export class FlameRenderer {
     if (fluid) {
       if (loop && !this.lightLoops.has(loop.id)) {
         this.lightLoops.add(loop.id);
-        this.madeAt = performance.now();
+        this.madeAt = this.now();
       }
       fluid.push(look.forces);
       fluid.step(look.dt, look.flow);
@@ -1218,7 +1226,7 @@ export class FlameRenderer {
     const picture = into && composing ? this.compose!.run(into.tex[2], into.w, into.h) : into ? into.tex[2] : null;
     if (chain && into && picture) this.finish(chain, look.effects!, into, picture, screenWidth, screenHeight);
     else if (into && picture) this.toScreen(picture, screenWidth, screenHeight);
-    else if (this.fx && performance.now() - this.fx.last > 10_000) this.freeFx();
+    else if (this.fx && this.now() - this.fx.last > 10_000) this.freeFx();
   }
 
   /** The fluid, where the Fluid setting asks for one (`amount` over 0) and this device can make it; let go after ten
@@ -1265,7 +1273,7 @@ export class FlameRenderer {
         console.warn('Visuals: an effects chain did not compile here', ids, e);
       }
       this.fxPrograms.set(key, p);
-      this.madeAt = performance.now();
+      this.madeAt = this.now();
     }
     return this.fxPrograms.get(key) ?? null;
   }
@@ -1295,7 +1303,7 @@ export class FlameRenderer {
       gl.bindTexture(gl.TEXTURE_2D, null);
       this.fx = { tex, fbo, w: this.width, h: this.height, cur: 0, last: 0 };
     }
-    this.fx.last = performance.now();
+    this.fx.last = this.now();
     return this.fx;
   }
 
@@ -1389,7 +1397,7 @@ export class FlameRenderer {
         p = this.carrying2.get(0) ?? program(gl, FULL, tunnelSource(loopFunction(0)));
       }
       this.carrying2.set(id, p);
-      this.madeAt = performance.now();
+      this.madeAt = this.now();
     }
     gl.useProgram(p);
     const u = (n: string) => this.uniform(p!, n);
@@ -1421,7 +1429,7 @@ export class FlameRenderer {
       this.diveTurnRate = 0;
     };
     if (!flame || (rate <= 0 && !this.dive)) return off();
-    const now = performance.now();
+    const now = this.now();
     let d = this.dive;
     if (!d || d.parts !== flame.xforms.length) {
       const target = diveTarget(flame);
@@ -1450,7 +1458,7 @@ export class FlameRenderer {
   }
 
   private fluidFor(amount: number): Fluid | null {
-    const now = performance.now();
+    const now = this.now();
     if (!(amount > 0)) {
       if (this.fluid && now - this.fluidUnwanted > 10_000) {
         this.fluid.dispose();
