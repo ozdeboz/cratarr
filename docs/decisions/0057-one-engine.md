@@ -271,6 +271,9 @@ how far it goes. The double tap's "loose" (twice the governor's limits) goes wit
   scopes, by "Another look" and by a new track's seeded Randomize. Cables still move it: a cable is a choice, not a
   roll. A pin can be on one knob, one channel of a polyphonic knob, a cable's amount, or a whole module or device. It
   shows as a pin mark on the knob's ring.
+- **A preset keeps its pins** (the owner: "when loading a preset, its pinned knobs stay pinned"). A saved preset, a
+  snapshot and a device all save their pins with them, as the v2 patch's `pins` does. Loading one sets the pins to
+  its own; nothing pinned before carries over into it. Undo brings back the pins with the rest.
 
 ### 4e. A track's look: its seed
 
