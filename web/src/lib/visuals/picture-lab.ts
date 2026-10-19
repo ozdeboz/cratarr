@@ -14,20 +14,25 @@ import type { Tiles } from './meters';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { emptyExtra } from './patch';
 import { flameOf, lookOf, signalKey, type RecordedCompose, type Recording, type RecordRequest } from './recorder';
-import type { FlameRenderer, RendererOptions } from './render';
+import { chainOfShown } from './chain-params';
+import type { FlameRenderer, RendererOptions, Shown } from './render';
 import type { VisualSettings } from './settings.svelte';
 import { ID } from './signal-ids';
 
 /** The pipelines a replay can run: today's renderer and compositor (`current`), and the frozen copies every step is
  *  compared with (`legacy`: render-legacy.ts, compose-legacy.ts). */
-type Renderer = Pick<FlameRenderer, 'setPoints' | 'setFlame' | 'resize' | 'frame' | 'measure' | 'tiles' | 'dispose' | 'pointCount' | 'precision' | 'context' | 'compose'>;
+type Renderer = Pick<FlameRenderer, 'setPoints' | 'setFlame' | 'resize' | 'measure' | 'tiles' | 'dispose' | 'pointCount' | 'precision' | 'context' | 'compose'> & {
+  frame(passes: number, look: never, w: number, h: number): void;
+};
+/** Each takes the recorded look as its renderer reads it (`look`): the frozen one as one, today's by node. */
 type Pipeline = {
+  look: (l: Shown) => unknown;
   Renderer: new (canvas: HTMLCanvasElement, points: number, power: WebGLPowerPreference, options: RendererOptions) => Renderer;
   Compositor: new (gl: WebGL2RenderingContext) => Pick<Compositor, 'run' | 'prune' | 'dispose'>;
 };
 const PIPELINES: Record<string, () => Promise<Pipeline>> = {
-  current: async () => ({ Renderer: (await import('./render')).FlameRenderer, Compositor: (await import('./compose')).Compositor }),
-  legacy: async () => ({ Renderer: (await import('./render-legacy')).FlameRenderer, Compositor: (await import('./compose-legacy')).Compositor }),
+  current: async () => ({ Renderer: (await import('./render')).FlameRenderer, Compositor: (await import('./compose')).Compositor, look: chainOfShown }),
+  legacy: async () => ({ Renderer: (await import('./render-legacy')).FlameRenderer, Compositor: (await import('./compose-legacy')).Compositor, look: (l) => l }),
 };
 
 // ---- Scenes: the settings a recording is made in (the look's own pinned, so the track's preset leaves them) ----
@@ -187,7 +192,7 @@ async function load(name: string): Promise<Recording> {
 const SEED = 20261020;
 
 /** `digest`: every frame's pixels hashed (FNV-1a), to tell two runs of the lab apart. */
-type Side = { name: string; canvas: HTMLCanvasElement; renderer: Renderer; compositor: InstanceType<Pipeline['Compositor']>; tiles: Tiles[]; pixels: Uint8Array; digest: number };
+type Side = { name: string; look: Pipeline['look']; canvas: HTMLCanvasElement; renderer: Renderer; compositor: InstanceType<Pipeline['Compositor']>; tiles: Tiles[]; pixels: Uint8Array; digest: number };
 
 function frameOf(c: RecordedCompose): FrameInfo {
   return { dt: c.frame.dt, time: c.frame.time, beat: c.frame.beat, signals: (ref) => c.frame.signals[signalKey(ref)] ?? 0, waveform: c.frame.waveform ? Float32Array.from(c.frame.waveform) : null };
@@ -204,7 +209,7 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
     document.body.append(canvas);
     const renderer = new p.Renderer(canvas, rec.points, 'high-performance', { random: randomFrom(seed), now: () => clock.at });
     if (bits) renderer.precision = bits;
-    return { name: key, canvas, renderer, compositor: new p.Compositor(renderer.context), tiles: [], pixels: new Uint8Array(0), digest: 0x811c9dc5 };
+    return { name: key, look: p.look, canvas, renderer, compositor: new p.Compositor(renderer.context), tiles: [], pixels: new Uint8Array(0), digest: 0x811c9dc5 };
   };
   const sides = [await make(a, SEED), await make(b, seedB)];
   const perFrame: number[] = [];
@@ -233,7 +238,7 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
       const c = f.compose;
       const knobsOf = (m: Module) => c?.knobs[m.id] ?? m.knobs;
       r.compose = c ? { active: true, run: (picture, width, height) => s.compositor.run(picture, width, height, c.extra, knobsOf, frameOf(c), c.flame) } : null;
-      r.frame(f.passes, lookOf(f.look), f.w, f.h);
+      r.frame(f.passes, s.look(lookOf(f.look)) as never, f.w, f.h);
       const gl = r.context;
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       if (s.pixels.length !== f.w * f.h * 4) s.pixels = new Uint8Array(f.w * f.h * 4);

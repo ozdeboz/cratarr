@@ -69,6 +69,7 @@
   import { FlameRenderer } from './render';
   import { Compositor } from './compose';
   import { recordPictures } from './recorder';
+  import { chainNow as nodesNow } from './chain-params';
   import { newNormalState, signalsFor } from './normal';
   import { cabledSettings, cableGain, cableSignals, giveCables, type Cabled } from './chain-cables';
   import { shapeOf } from './evaluate';
@@ -87,8 +88,7 @@
   import { BLENDS, cratarrPatch, cratarrTypes, modulesOf, type ModuleType } from './patch';
   import { SOURCE_TYPES } from './sources/index';
   import { MODULATORS } from './modulators/modulators';
-  import { DIVE_MOST, TUNNEL_MOST } from './zoom';
-  import { effectsNow, ENGINE_EFFECTS, ENGINES, knobLabel, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
+  import { ENGINE_EFFECTS, ENGINES, knobLabel, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
   import {
     A,
     ASPECT_LABEL,
@@ -1837,40 +1837,20 @@
       }
       renderer.frame(
         passes,
-        {
-          brightness: 1,
-          keep: d.keep,
-          gamma: d.gamma,
-          vibrancy: 1,
-          turn,
-          scale: scaleNow,
-          zoom: 1,
-          flash: d.flash,
-          hits,
+        nodesNow(d, {
+          how,
+          levers: governor.levers,
+          still,
           ceiling: s.brightness,
-          saturation: d.saturation,
-          // The whole picture as bright however much of its frame the flame covers: a flame spread over most of it is
-          // shown dimmer, one gathered into a few cells brighter (against one covering a third of its frame), so its
-          // shape's changes are not flares.
-          exposure: frame ? Math.min(1.5, Math.max(0.4, 0.33 / Math.max(0.05, frame.coverage))) : 1,
-          smoothing: d.smoothing,
-          floor: d.floor,
+          coverage: frame ? frame.coverage : null,
           fire,
-          fluid: fluidNow,
-          // The zooms (zoom.ts): as fast as their routes let their sliders, held back with the pace; none with reduced
-          // motion.
-          tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
-          // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
-          effects: effectsNow(how, d.effects, m.position, beatNow, governor.levers, still, d.routed),
-          facets: { amount: d.facets, hex: Math.round(how.lattice) === 1 },
-          dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
+          position: m.position,
+          beat: beatNow,
           forces: stirred.forces,
           flow: stirred.flow,
-          // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
-          // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
-          dt: dt * behaving.speed * governor.levers.pace * (still ? 0.25 : 1),
-          warp: d.warp,
-        },
+          dt,
+          speed: behaving.speed,
+        }),
         w,
         h,
       );

@@ -4,7 +4,7 @@
 import { PARTS } from '../flame';
 import { WAVE_BEND, WAVE_K, type Fluid } from '../fluid';
 import { program } from '../sources/gl';
-import type { Shown } from '../render';
+import type { ShowParams } from '../chain-params';
 import type { Light } from './light';
 import type { FlamePoints } from './points';
 import { BAD, FULL, uniforms } from './shared';
@@ -134,7 +134,7 @@ export class Show {
 
   /** The light (`points`'s in `light`, `passes` steps this frame) shown into the target bound, `viewWidth` x
    *  `viewHeight`; `fluid` the one it was carried along, its read-back `warpShown`. */
-  draw(light: Light, points: FlamePoints, look: Shown, passes: number, fluid: Fluid | null, warpShown: number, viewWidth: number, viewHeight: number) {
+  draw(light: Light, points: FlamePoints, look: ShowParams, passes: number, fluid: Fluid | null, warpShown: number, viewWidth: number, viewHeight: number) {
     const gl = this.gl;
     gl.viewport(0, 0, viewWidth, viewHeight);
     gl.useProgram(this.show);
