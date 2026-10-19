@@ -26,7 +26,6 @@ export const SHARED_KEYS = [
   'extra',
   ...PRESET_KEYS,
   'pins',
-  'muted',
   'wild',
   'intensity',
   'flash',

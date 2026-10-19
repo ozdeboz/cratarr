@@ -410,7 +410,6 @@ export function cratarrPatch(s: VisualSettings): Patch {
     });
   }
   const extra = s.extra ?? emptyExtra();
-  const muted = new Set(s.muted ?? []);
   return {
     v: 1,
     frame: m('frame'),
@@ -421,8 +420,7 @@ export function cratarrPatch(s: VisualSettings): Patch {
     loop: extra.loop,
     finish: [m('fx1'), m('fx2'), m('fx3')],
     modulators: extra.modulators,
-    // A muted cable (`s.muted`) is in the patch as it is set, `off`: it gives nothing (claude-5f's evaluate, give).
-    cables: [...cables, ...extra.cables].map((c) => (muted.has(c.id) ? { ...c, off: true as const } : c)),
+    cables: [...cables, ...extra.cables],
     macros: extra.macros,
     pins: s.pins.map(pinOf).filter((p): p is string => p !== null),
   };
@@ -455,9 +453,7 @@ export function settingsOf(p: Patch, base: VisualSettings): VisualSettings {
   // is kept with the extras.
   const aspectOf = new Map(ASPECTS.map((a) => [ASPECT_KNOB[a].join('.'), a]));
   const extraCables: Cable[] = [];
-  out.muted = p.cables.filter((c) => (c as { off?: true }).off).map((c) => c.id);
-  for (const raw of p.cables) {
-    const { off: _off, ...c } = raw as Cable & { off?: true };
+  for (const c of p.cables) {
     const aspect = aspectOf.get(`${c.to.module}.${c.to.knob}`);
     const key = 'signal' in c.from && aspect && !c.from.reference && !c.from.speed ? routeKey(c.from.signal as never, c.from.band ?? null, aspect) : null;
     if (key && isRoute(key, BANDS) && key === c.id) out.routes[key] = c.value;

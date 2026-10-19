@@ -90,8 +90,6 @@ export type VisualSettings = Preset & {
   /** The look's settings the owner moved: kept as they are when a track or the dice load another preset, until
    *  unpinned. */
   pins: string[];
-  /** The cables muted (70.1): kept with their amounts, giving nothing, by id (a route's key or an extra cable's id). */
-  muted: string[];
   /** Each band's (sub, bass, low mid, mid, upper mid, air) light after a transient: how long it rings (seconds). */
   lighting: number[];
   /** Each band's loudness evolving its transform: how long it takes to follow (seconds). */
@@ -171,7 +169,6 @@ export const DEFAULTS: VisualSettings = {
   facets: 0,
   lattice: 0,
   pins: [],
-  muted: [],
   // A kick rings longer than a hat.
   lighting: [0.2, 0.18, 0.15, 0.13, 0.1, 0.08],
   evolution: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
@@ -180,7 +177,7 @@ export const DEFAULTS: VisualSettings = {
   extra: emptyExtra(),
 };
 
-type Ranged = Exclude<keyof VisualSettings, 'pins' | 'muted' | 'extra'>;
+type Ranged = Exclude<keyof VisualSettings, 'pins' | 'extra'>;
 
 /** Each setting's range, as its slider has it (the bands' times in seconds, though their sliders double). A kept value
  *  outside it (from a version whose range was another) is brought into it. */
@@ -256,7 +253,6 @@ const within = (key: Ranged, v: number) => Math.min(RANGES[key][1], Math.max(RAN
 const fresh = (): VisualSettings => ({
   ...DEFAULTS,
   pins: [],
-  muted: [],
   lighting: [...DEFAULTS.lighting],
   evolution: [...DEFAULTS.evolution],
   continuity: [...DEFAULTS.continuity],
@@ -316,8 +312,6 @@ export function keptFrom(kept: Record<string, unknown>): VisualSettings {
     if (k === 'extra') out.extra = extraFrom(v, extraType);
     else if (k === 'pins') {
       if (Array.isArray(v)) out.pins = v.filter((x): x is string => typeof x === 'string' && isPinnable(x));
-    } else if (k === 'muted') {
-      if (Array.isArray(v)) out.muted = [...new Set(v.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 80))];
     } else if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = within(k, v);
     // Six bands' times; three (kept before the six bands, 2026-10-18) each for two of them.
     else if (Array.isArray(v) && (v.length === 6 || v.length === 3) && v.every((x) => typeof x === 'number' && Number.isFinite(x))) {
