@@ -1,11 +1,12 @@
 <script lang="ts">
-  // Account (decision 0051, several users): who is signed in and their role, both from the directory and read-only;
-  // the address apps reach Cratarr at; their own password for OpenSubsonic apps (whose sign-in needs the password
-  // itself, which a directory never gives); their devices (each plays only on its own) and their sign-ins, each to end.
-  // Acts at once.
-  import { endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
+  // Account (decision 0051, several users): who is signed in and their role, read-only; the address apps reach Cratarr
+  // at; their password: a Cratarr account's own (0051, amended 2026-10-19; it is its OpenSubsonic one too), or for a
+  // directory's account its own password for OpenSubsonic apps (whose sign-in needs the password itself, which a
+  // directory never gives); their devices (each plays only on its own) and their sign-ins, each to end. Acts at once.
+  import { changeOwnPassword, endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
   import { loadMe, me } from '../me.svelte';
   import { toast } from '../toast.svelte';
+  import FormSheet from './FormSheet.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
@@ -19,6 +20,27 @@
     } catch (e) {
       toast.fail(e, 'Could not set the password');
       throw e;
+    }
+  }
+
+  // A Cratarr account's own password: the current one and a new one.
+  let changing = $state(false);
+  let current = $state('');
+  let next = $state('');
+  let busy = $state(false);
+  let error = $state<string | null>(null);
+  async function change() {
+    busy = true;
+    error = null;
+    try {
+      await changeOwnPassword(current, next);
+      changing = false;
+      current = '';
+      next = '';
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
     }
   }
 
@@ -44,7 +66,9 @@
 <Group>
   {#if me.name}<Item name={me.name} line={me.admin ? 'Administrator' : 'User'} />{:else}<Item name={me.admin ? 'Administrator' : 'User'} />{/if}
   <Item name="Address" line={location.origin} wrap />
-  {#if me.name}
+  {#if me.name && me.directory === false}
+    <Item name="Password" value="Change" onclick={() => ((error = null), (changing = true))} />
+  {:else if me.name}
     <Item
       name="App password"
       more="OpenSubsonic apps sign in with your name and this password, never your directory password."
@@ -79,6 +103,13 @@
   </Group>
 {/if}
 
+{#if changing}
+  <FormSheet title="Change password" submitLabel="Change" canSubmit={!!current && !!next} {busy} {error} onsubmit={change} onclose={() => ((changing = false), (current = ''), (next = ''), (error = null))}>
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>Current password<input type="password" bind:value={current} autocomplete="current-password" autofocus /></label>
+    <label>New password<input type="password" bind:value={next} autocomplete="new-password" /></label>
+  </FormSheet>
+{/if}
 {#if setting}
   <ValueSheet title="App password" type="password" value="" placeholder="New password" allowEmpty={false} saveLabel="Save" onsave={savePassword} onclose={() => (setting = false)} />
 {/if}

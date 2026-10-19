@@ -1,22 +1,19 @@
 <script lang="ts">
   // Authentication (the owner, 2026-10-16: not "Subsonic"), its administrators' since several users (decision 0051):
-  // Cratarr's own account, an administrator apart from the directory; whether every request needs a sign-in (decision
-  // 0043); the API keys for what cannot sign in on a page (Home Assistant, scripts), each acting for its owner, only
-  // reading or also in control, each to revoke; the directory. Switching the requirement and making a key ask for the
-  // password again, in a sheet (the settings' North Star, 2026-10-19). Acts at once. Each user's sign-ins are under
-  // Account and Users; the address apps take is under Account.
+  // whether every request needs a sign-in (decision 0043); the API keys for what cannot sign in on a page (Home
+  // Assistant, scripts), each acting for its owner, only reading or also in control, each to revoke; the directory.
+  // Switching the requirement and making a key ask for the password again, in a sheet (the settings' North Star,
+  // 2026-10-19). Acts at once. The accounts are all in Users (0051, amended 2026-10-19: Cratarr's fallback administrator
+  // is one of them); each one's own password and sign-ins are under Account, the address apps take too.
   import { getApiKeys, getSignInRequired, getUsers, newApiKey, revokeApiKey, setSignInRequired, type ApiKey, type KeyScope } from '../api';
   import { me } from '../me.svelte';
   import Seg from '../Seg.svelte';
   import DirectoryPart from './DirectoryPart.svelte';
-  import { ed } from './editor.svelte';
   import FormSheet from './FormSheet.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
-  import ValueSheet from './ValueSheet.svelte';
   import { when } from './when';
 
-  const AUTH_MORE = "Cratarr's own administrator account, apart from the directory. Sign in to these pages with it. Subsonic apps take Cratarr's address with this account's own name and password (never a directory's).";
   const REQUIRED_MORE =
     'On, every page and API request needs a sign-in, an API key or a signed link, on the home network too. Off, Cratarr asks none itself: a proxy in front of it may. Subsonic apps always sign in with their name and password.\n\nSwitching it asks for the password again.';
   const KEYS_MORE = 'For what cannot sign in on a page: Home Assistant, scripts. A key shows once, when it is made; revoking one ends it at once.';
@@ -45,10 +42,7 @@
       () => (required = null),
     );
   };
-  // On opening, and after a new password.
-  $effect(() => {
-    if (!ed.sub.busy) load();
-  });
+  load();
 
   const failed = (e: unknown) => (error = e instanceof Error ? e.message : String(e));
 
@@ -107,82 +101,37 @@
     }
   }
 
-  // The password: the current one and a new one, in a sheet.
-  let changing = $state(false);
-  async function changePassword() {
-    await ed.changePassword();
-    if (!ed.sub.current && !ed.sub.password) changing = false;
-  }
-  // Before there is an account: its name and password, typed in their sheets, then made.
-  let typing = $state<'user' | 'password' | null>(null);
   const keyLine = (k: ApiKey) => [k.owner, k.scope === 'read' ? 'Read only' : null, k.last_used ? when(k.last_used) : 'Not used yet'].filter(Boolean).join(' · ');
 </script>
 
-{#if ed.sub.accounts}
-  {#if ed.sub.accounts.length === 0}
-    <Group title="Administrator account" more={AUTH_MORE}>
-      <Item name="Username" line={ed.sub.user || 'Not set'} onclick={() => (typing = 'user')} />
-      <Item name="Password" line={ed.sub.password ? 'Set' : 'Not set'} onclick={() => (typing = 'password')} />
-      <Item name="Create account" kind="add" disabled={ed.sub.busy || !ed.sub.user.trim() || !ed.sub.password} busy={ed.sub.busy} onclick={ed.createAccount} />
-    </Group>
-  {:else}
-    <Group title="Administrator account" more={AUTH_MORE}>
-      <Item name="Account" value={ed.sub.accounts.join(', ')} />
-      <Item name="Password" value="Change" onclick={() => (changing = true)} />
-      {#if required !== null}
-        <Item
-          name="Sign-in required everywhere"
-          more={REQUIRED_MORE}
-          disabled={busy}
-          toggle={{ checked: switching ?? required, onchange: (on) => (switching = on === required ? null : on) }}
-        />
-      {/if}
-    </Group>
+{#if required !== null}
+  <Group title="Sign-in">
+    <Item
+      name="Sign-in required everywhere"
+      more={REQUIRED_MORE}
+      disabled={busy}
+      toggle={{ checked: switching ?? required, onchange: (on) => (switching = on === required ? null : on) }}
+    />
+  </Group>
+{/if}
 
-    <Group title="API keys" more={KEYS_MORE}>
-      {#each keys as k (k.id)}
-        <Item name={k.name} line={keyLine(k)}>
-          <button onclick={() => revoke(k)}>Revoke</button>
-        </Item>
-      {/each}
-      {#if made}
-        {@const m = made}
-        <Item lead="on" name={`${m.name}: shown only now`} line={m.key} wrap>
-          <button onclick={() => navigator.clipboard?.writeText(m.key)}>Copy</button>
-        </Item>
-      {/if}
-      <Item name="New key" kind="add" onclick={() => ((error = null), (making = true))} />
-    </Group>
-    {#if error && !making && switching === null}<Group><Item lead="bad" name={error} /></Group>{/if}
-    <DirectoryPart />
+<Group title="API keys" more={KEYS_MORE}>
+  {#each keys as k (k.id)}
+    <Item name={k.name} line={keyLine(k)}>
+      <button onclick={() => revoke(k)}>Revoke</button>
+    </Item>
+  {/each}
+  {#if made}
+    {@const m = made}
+    <Item lead="on" name={`${m.name}: shown only now`} line={m.key} wrap>
+      <button onclick={() => navigator.clipboard?.writeText(m.key)}>Copy</button>
+    </Item>
   {/if}
-{/if}
+  <Item name="New key" kind="add" onclick={() => ((error = null), (making = true))} />
+</Group>
+{#if error && !making && switching === null}<Group><Item lead="bad" name={error} /></Group>{/if}
+<DirectoryPart />
 
-{#if typing}
-  <ValueSheet
-    title={typing === 'user' ? 'Username' : 'Password'}
-    type={typing === 'user' ? 'text' : 'password'}
-    value={typing === 'user' ? ed.sub.user : ed.sub.password}
-    onsave={(v) => {
-      if (typing === 'user') ed.sub.user = v;
-      else ed.sub.password = v;
-    }}
-    onclose={() => (typing = null)}
-  />
-{/if}
-{#if changing}
-  <FormSheet
-    title="Change password"
-    submitLabel="Change"
-    canSubmit={!!ed.sub.current && !!ed.sub.password}
-    busy={ed.sub.busy}
-    onsubmit={changePassword}
-    onclose={() => ((changing = false), (ed.sub.current = ''), (ed.sub.password = ''))}
-  >
-    <label>Current password<input type="password" bind:value={ed.sub.current} autocomplete="current-password" /></label>
-    <label>New password<input type="password" bind:value={ed.sub.password} autocomplete="new-password" /></label>
-  </FormSheet>
-{/if}
 {#if switching !== null}
   <FormSheet
     title={switching ? 'Sign-in required everywhere' : 'Sign-in not required'}

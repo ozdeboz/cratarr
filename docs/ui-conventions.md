@@ -244,8 +244,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
       - Libraries (one row per server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its
         files in, or a warning when it can't; then the names, the trash, the catalogue status and tag splitting);
       - Players;
-      - Users;
-      - Authentication (the account Subsonic apps sign in with; decided 2026-10-16, not "Subsonic");
+      - Users (every account, decision 0051, amended 2026-10-19: Cratarr's own, added here with "+ Add user", and a
+        directory's, read-only; each with its own page);
+      - Authentication (decided 2026-10-16, not "Subsonic": the sign-in requirement, the API keys, the directory);
       - Import (plays, favourites, ratings and added dates from a server);
       - Diagnostics.
   - **About** (version, port, file locations) is not a part: it is a sheet opened from the info button at the page's

@@ -105,3 +105,33 @@ The owner (2026-10-19): "we need to support multiple users, their own settings".
   for OpenSubsonic apps alike.
 - **Not covered yet**: deleting an album stops it first only on the deleting administrator's own player; another
   user's device finds it gone at its next track.
+
+## Amendment, 2026-10-19: Cratarr's own accounts beside the directory's
+
+The owner: "LLDAP shouldn't be the only way for us to manage users in Cratarr, since not everybody would use Cratarr
+with LLDAP"; of the proposal, "Yes, we do it the way you proposed."
+
+- **Two kinds of account, one Users list.**
+  - Cratarr's own: made in Users by an administrator.
+  - The directory's: when one is set up, made at the first sign-in, as above.
+  - Permissions, devices, sign-ins, privacy and what is one's own are the same for both. Only where the name, the
+    password and the role live differs.
+- **Adding one.** An administrator gives its name, a password, and whether it administers.
+  - The first account there is administers, whatever is chosen (nghe's setup).
+  - The person signs in with it and changes the password themselves (Account → Password).
+  - A Cratarr account's password is also its OpenSubsonic one. The app password stays for directory accounts.
+- **A Cratarr account's page.**
+  - Its role. Never one's own, and never the last active administrator's.
+  - A new password.
+  - **Remove**: as leaving the directory, the account is switched off, its data kept and its sign-ins ended.
+    **Restore** switches it on again. Nothing is deleted for good.
+- **A directory account** stays read-only here: its name and role are set in the directory.
+- **Names** are unique across both kinds, case set aside.
+- **The fallback administrator.** Cratarr's account from before (`subsonic-users.json`) is one of Cratarr's accounts in
+  Users. Authentication no longer has an account group of its own; it keeps the sign-in requirement, the API keys
+  and the directory.
+- **Borrowed.**
+  - The server's account routes are translated from nghe (vnghia/nghe, AGPL-3.0: `route/user`: create,
+    update_role, update_password, setup), with its notice.
+  - Navidrome's user screens (GPL-3.0-or-later) are the checklist of rules.
+  - Jellyfin's Users panel (GPL-2.0-only) is the design only: no code.

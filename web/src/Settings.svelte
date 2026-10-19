@@ -4,7 +4,7 @@
   // name, what it is set to now in a line, and ›. A tap opens the part in the panel (lib/SettingsPanel): beside the list
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button at the page's top right (App, lib/AboutSheet).
-  import { getImport, getLogLevels, getSettings, getSubsonicAccounts, getUsers, type ImportJob, type Settings } from './lib/api';
+  import { getApiKeys, getImport, getLogLevels, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
   import { me } from './lib/me.svelte';
   import { appInfo, downloads, inApp } from './lib/app.svelte';
   import Icon from './lib/Icon.svelte';
@@ -17,7 +17,8 @@
   // The last answer (kept for the panel too), read again here.
   const s = $derived<Settings | null>(settingsRead.s);
   let lastImport = $state<ImportJob | null>(null);
-  let accounts = $state<string[] | null>(null);
+  let signIn = $state<boolean | null>(null);
+  let keyCount = $state<number | null>(null);
   let users = $state<number | null>(null);
   // Read again after each save in the panel; the server's settings only for its administrators.
   $effect(() => {
@@ -31,8 +32,12 @@
       (v) => (settingsRead.s = v),
       () => {},
     );
-    getSubsonicAccounts().then(
-      (a) => (accounts = a.accounts),
+    getSignInRequired().then(
+      (r) => (signIn = r.required),
+      () => {},
+    );
+    getApiKeys().then(
+      (r) => (keyCount = r.keys.length),
       () => {},
     );
     getUsers().then(
@@ -76,7 +81,10 @@
       case 'users':
         return users === null ? '' : users === 1 ? '1 user' : `${users} users`;
       case 'auth':
-        return accounts === null ? '' : accounts.length ? accounts.join(' · ') : 'No account';
+        // Whether every request needs a sign-in, and the keys (the accounts are under Users, 0051 amended).
+        return [signIn === null ? null : signIn ? 'Sign-in required' : 'Sign-in not required', keyCount ? `${keyCount} ${keyCount === 1 ? 'key' : 'keys'}` : null]
+          .filter(Boolean)
+          .join(' · ');
       case 'import':
         return lastImport?.finished ? `Last ${new Date(lastImport.finished * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : 'Not yet';
       case 'network':
