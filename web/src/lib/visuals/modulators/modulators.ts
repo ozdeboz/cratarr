@@ -302,8 +302,8 @@ const lfo = define(
   ['clock', 'reset'],
 );
 
-/** A number −1..1 for each whole step of a walk, the same for the same seed (an integer hash). */
-function point(seed: number, i: number): number {
+/** A number −1..1 for each whole step of a walk, the same for the same seed (an integer hash); the Grid's jitter too. */
+export function point(seed: number, i: number): number {
   let h = Math.imul(i ^ Math.imul(seed, 0x9e3779b9), 0x85ebca6b);
   h ^= h >>> 13;
   h = Math.imul(h, 0xc2b2ae35);
