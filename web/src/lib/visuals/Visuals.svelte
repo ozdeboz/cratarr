@@ -42,7 +42,8 @@
   import { musicNow, stopMusic } from './music.svelte';
   import { newAspects, stepAspects, wavesMotion, zoomsMotion } from './aspects';
   import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
-  import { curveOf, endOf, heightAt, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
+  import { curveOf, endOf, heightAt, straight, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
+  import { ASPECT_KNOB, emptyExtra, SETTING_KNOB } from './patch';
   import CurveEditor from './CurveEditor.svelte';
   import { densityOf, newHistory, remember } from './history';
   import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
@@ -67,6 +68,19 @@
   import Help from './Help.svelte';
   import { newStirring, stir } from './stirring';
   import { FlameRenderer } from './render';
+  import { Compositor } from './compose';
+  import { newNormalState, signalsFor } from './normal';
+  import { cabledSettings, cableGain, cableSignals, giveCables, type Cabled } from './chain-cables';
+  import { shapeOf } from './evaluate';
+  import { evaluate, newEvalState, type Evaluated } from './evaluate';
+  import { askStep, morphTo, newMorph, stepMorph } from './morph';
+  import { leavingIds, morphedPatch, morphModules, rolledExtra, withLeaving } from './chain-morph';
+  import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
+  import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
+  import PatchGraph from './PatchGraph.svelte';
+  import { cratarrPatch, cratarrTypes, type ModuleType } from './patch';
+  import { SOURCE_TYPES } from './sources/index';
+  import { MODULATORS } from './modulators/modulators';
   import { DIVE_MOST, TUNNEL_MOST } from './zoom';
   import { effectsNow, ENGINE_EFFECTS, ENGINES, knobLabel, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
   import {
@@ -363,7 +377,7 @@
   // A roll's recipe and, for a full one, the look drawn with it (and checked with it).
   type Rolled = { recipe: Recipe; look: Drawn | null };
   const wildNow = (wild: number) => (s.loose ? Math.max(wild, 1) : wild);
-  let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings>; loose: number } | null>(null);
+  let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings>; loose: number; extra: PatchExtra } | null>(null);
   let diceWait = 0;
   function diceTapped() {
     if (diceWait) {
@@ -402,12 +416,15 @@
   }
   function rolled({ recipe, look }: Rolled, scope: Scope) {
     const now = $state.snapshot(s) as VisualSettings;
-    undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings>, loose: now.loose };
+    undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings>, loose: now.loose, extra: now.extra };
     const next = settingsOf(recipe, now, scope);
     for (const k of BEHAVIOUR) if (!s.pins.includes(k)) (s as Record<string, unknown>)[k] = next[k];
     s.loose = scope === 'movement' ? 1 : 0;
+    // A full roll evolves the extras within their chain too (decision 0056): their knobs anew, morphed to as a look
+    // blends in; the chain itself (modules, cables) as it is.
+    if (scope === 'all') s.extra = rolledExtra(now.extra, GRAPH_TYPES, Math.random);
     saveVisualSettings();
-    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), loose: s.loose });
+    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), loose: s.loose, extra: $state.snapshot(s.extra) });
     // The look the roll was checked with, into the settings as a drawn one is (blended in, to the group).
     if (look) drawingNow = { draws: (function* (): Generator<void, Drawn> { return look; })(), blend: ANOTHER_MS, share: true, load: true, why: 'dice' };
   }
@@ -419,10 +436,10 @@
     rolling = null;
     nextBlend = ANOTHER_MS;
     lookCame = 'dice';
-    Object.assign(s, was.behaviour, was.look, { pins: was.pins });
+    Object.assign(s, was.behaviour, was.look, { pins: was.pins, extra: was.extra });
     s.loose = was.loose;
     saveVisualSettings();
-    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), ...lookNow(), pins: [...s.pins], loose: s.loose });
+    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), ...lookNow(), pins: [...s.pins], loose: s.loose, extra: $state.snapshot(s.extra) });
     showChrome();
   }
 
@@ -473,6 +490,8 @@
     for (const k of ['fx1', 'fx1Amount', 'fx2', 'fx2Amount', 'fx3', 'fx3Amount', 'fxLoop', 'fxLoopAmount', 'facets', 'lattice'] as const) if (!(k in settings)) settings[k] = 0;
     for (const k of ['fx1K1','fx1K2','fx2K1','fx2K2','fx3K1','fx3K2','fxLoopK1','fxLoopK2'] as const) if (!(k in settings)) settings[k] = 0.5;
     if (!('effects' in settings)) settings.effects = 1;
+    // One saved before the patch (70): the chain as it was then, today's alone. A recall sets the chain whole.
+    if (!('extra' in settings)) settings.extra = emptyExtra();
     delete settings.v;
     // This device's own sliders, on this device only.
     applyDevice(settings);
@@ -507,7 +526,7 @@
   }
     // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show
   // behaves, then the look (the preset: pinned where moved).
-  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes' | 'pins'>;
+  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes' | 'pins' | 'extra'>;
   const MIRROR = ['Off', 'On'];
   // The Colours (65: Family folded in, the owner: "YES Family into Colours"): the look's four families, which a track's
   // look or the dice draw, then the cover's and a fire's, which only a hand chooses (and so pins).
@@ -651,6 +670,332 @@
     saveVisualSettings();
     share({ continuity: [...s.continuity], pins: [...s.pins] });
     showChrome();
+  }
+  // ---- The nested panel (decision 0056, step 2) ----------------------------------------------------------------------
+  // The patch's things as pages, over today's settings (patch.ts: the Cratarr chain is exactly them): the top (the chain,
+  // the whole frame, the layers, finish, all the cables, this device); a layer; a module and its knobs; a knob's cables
+  // (what moves it, each opened in the curve's editor) and adding one; the flame's bands. `path` is where it is.
+  let path = $state<string[]>([]);
+  let panelBox = $state<HTMLElement | null>(null);
+  const here = $derived(path.at(-1) ?? '');
+  function go(page: string) {
+    path = [...path, page];
+    cell = null;
+    panelBox?.scrollTo(0, 0);
+    showChrome();
+  }
+  function back(steps = 1) {
+    path = path.slice(0, Math.max(0, path.length - steps));
+    cell = null;
+    panelBox?.scrollTo(0, 0);
+    showChrome();
+  }
+  // A knob's setting today, and its route column where it has one; each setting's row (its label, step and text).
+  const SETTING_OF = new Map(Object.entries(SETTING_KNOB).map(([k, [m, id]]) => [`${m}.${id}`, k as One]));
+  const ASPECT_OF = new Map(ASPECTS.map((a) => [ASPECT_KNOB[a].join('.'), a]));
+  const ROW_OF = $derived(new Map([...COMPUTE, ...SHOW, ...LOOK].map((r) => [r.key, r])));
+  const MODULE_LABEL: Record<string, string> = {
+    flame: 'Flame',
+    show: 'Show',
+    fluid: 'Fluid',
+    tunnel: 'Tunnel',
+    dive: 'Dive',
+    trails: 'Trails',
+    'loop-effect': 'Loop effect',
+    fx1: ENGINES[0].label,
+    fx2: ENGINES[1].label,
+    fx3: ENGINES[2].label,
+  };
+  // Each module's knobs (`module.knob`) as its page groups them.
+  const effectKnobs = (m: string) => [{ title: null, knobs: ['effect', 'amount', 'k1', 'k2'].map((k) => `${m}.${k}`) }];
+  const GROUPS: Record<string, { title: string | null; knobs: string[] }[]> = {
+    flame: [
+      { title: 'Look', knobs: ['family', 'form', 'detail', 'twist', 'warp', 'symmetry', 'mirror', 'final', 'spread', 'hue', 'lightness', 'vividness', 'purity'].map((k) => `flame.${k}`) },
+      { title: 'Moved by the music', knobs: ['shape', 'rotation', 'lights', 'presence'].map((k) => `flame.${k}`) },
+    ],
+    show: [{ title: null, knobs: ['size', 'glow', 'saturation', 'smoothing', 'haze', 'waves'].map((k) => `show.${k}`) }],
+    fluid: [{ title: null, knobs: ['fluid', 'stir', 'flow', 'swirl', 'facets', 'lattice'].map((k) => `fluid.${k}`) }],
+    tunnel: [{ title: null, knobs: ['tunnel.tunnel'] }],
+    dive: [{ title: null, knobs: ['dive.dive'] }],
+    trails: [{ title: null, knobs: ['trails.trails'] }],
+    'loop-effect': effectKnobs('loop-effect'),
+    fx1: effectKnobs('fx1'),
+    fx2: effectKnobs('fx2'),
+    fx3: effectKnobs('fx3'),
+  };
+  // The flame layer's own loop, in its order.
+  const FLAME_LOOP = ['fluid', 'tunnel', 'dive', 'trails', 'loop-effect'];
+  // A module's line under its name: what it is set to now.
+  function moduleLine(m: string): string {
+    const off = (v: number) => (v > 0 ? percent(v) : 'Off');
+    if (m === 'flame') return 'Look, moved by the music, bands';
+    if (m === 'show') return `Size, glow, haze ${signedPercent(s.haze)}`;
+    if (m === 'fluid') return off(s.fluid);
+    if (m === 'tunnel') return off(s.tunnel);
+    if (m === 'dive') return off(s.dive);
+    if (m === 'trails') return percent(s.trails);
+    if (m === 'loop-effect') return subName(LOOP_EFFECTS)(s.fxLoop);
+    const n = Number(m.slice(2));
+    return subName(ENGINE_EFFECTS[ENGINES[n - 1].key])(s[`fx${n}` as One] as number);
+  }
+  // How many routes move a column (each band's counted).
+  function cablesInto(aspect: Aspect): number {
+    let n = 0;
+    for (const [k, v] of Object.entries(s.routes)) if (k.endsWith(`|${aspect}`) && Math.abs(endOf(v)) > 1e-6) n++;
+    return n;
+  }
+  // What moves a column, a row each: a whole-track signal; a band signal as one row where every band's is the same,
+  // else one a band.
+  type CableRow = { id: string; signal: Signal; pick: number | null; label: string; sub: string; v: number };
+  function cableRows(aspect: Aspect): CableRow[] {
+    const out: CableRow[] = [];
+    for (const t of TRACK_SIGNALS) {
+      const v = endOf(s.routes[routeKey(t, null, aspect)] ?? 0);
+      if (Math.abs(v) > 1e-6) out.push({ id: t, signal: t, pick: null, label: SIGNAL_LABEL[t], sub: '', v });
+    }
+    for (const b of BAND_SIGNALS) {
+      const vs = Array.from({ length: BANDS }, (_, i) => endOf(s.routes[routeKey(b, i, aspect)] ?? 0));
+      if (vs.every((v) => Math.abs(v) < 1e-6)) continue;
+      if (vs.every((v) => Math.abs(v - vs[0]) < 1e-6)) out.push({ id: b, signal: b, pick: null, label: SIGNAL_LABEL[b], sub: 'Every band', v: vs[0] });
+      else vs.forEach((v, i) => Math.abs(v) > 1e-6 && out.push({ id: `${b}:${i}`, signal: b, pick: i, label: SIGNAL_LABEL[b], sub: BAND_ROWS[i], v }));
+    }
+    return out;
+  }
+  const isOpen = (c: CableRow, aspect: Aspect) => cell?.aspect === aspect && cell.signal === c.signal && pick === c.pick;
+  function openCable(c: CableRow, aspect: Aspect) {
+    pick = c.pick;
+    cell = isOpen(c, aspect) ? null : { signal: c.signal, aspect };
+    showChrome();
+  }
+  // A cable added: half the way, opened in the editor on the knob's page (`to`: that page's place in the path).
+  function addCable(signal: Signal, band: number | null, aspect: Aspect, to: number) {
+    pick = band;
+    if (keysOf(signal, aspect).every((k) => Math.abs(endOf(s.routes[k] ?? 0)) < 1e-6)) setCurve(signal, aspect, straight(0.5), true);
+    path = path.slice(0, to);
+    cell = { signal, aspect };
+    showChrome();
+  }
+  function removeCable(signal: Signal, aspect: Aspect) {
+    setCurve(signal, aspect, straight(0), true);
+    cell = null;
+  }
+  // ---- Building with the patch (decision 0056): the layers past the flame, the picture's own loop, the modulators ----
+  const MODULATOR_TYPES = Object.values(MODULATORS);
+  /** A module of the extras by its id, and what holds it. */
+  function extraModule(id: string): Module | undefined {
+    const e = s.extra;
+    for (const l of e.layers) for (const m of [l.source, ...l.modules, ...l.loop]) if (m.id === id) return m;
+    return [...e.loop, ...e.modulators].find((m) => m.id === id);
+  }
+  const moduleName = (m: Module) => {
+    const t = extraType(m.type);
+    const same = [...s.extra.layers.flatMap((l) => [l.source, ...l.modules, ...l.loop]), ...s.extra.loop, ...s.extra.modulators].filter((x) => x.type === m.type);
+    return `${t?.label ?? m.type}${same.length > 1 ? ` ${same.indexOf(m) + 1}` : ''}`;
+  };
+  // A change to the extras: kept, and to the group, as every setting is.
+  function changeExtra(f: (e: PatchExtra) => void) {
+    f(s.extra);
+    saveVisualSettings();
+    share({ extra: $state.snapshot(s.extra) });
+    showChrome();
+  }
+  const takenIds = () => {
+    const e = s.extra;
+    return new Set([
+      ...['frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3', 'loop', 'finish'],
+      ...e.layers.flatMap((l) => [l.id, l.source.id, ...l.modules.map((m) => m.id), ...l.loop.map((m) => m.id)]),
+      ...e.loop.map((m) => m.id),
+      ...e.modulators.map((m) => m.id),
+    ]);
+  };
+  function newId(prefix: string): string {
+    const taken = takenIds();
+    for (let n = 1; ; n++) if (!taken.has(`${prefix}-${n}`)) return `${prefix}-${n}`;
+  }
+  const freshModule = (type: string, id: string): Module => ({ id, type, knobs: Object.fromEntries((extraType(type)?.knobs ?? []).map((k) => [k.id, k.default])) });
+  function addLayer(type: string) {
+    const id = newId(type);
+    changeExtra((e) => e.layers.push({ id, source: freshModule(type, `${id}-source`), modules: [], loop: [], blend: { mode: 'add', amount: 1 } }));
+    path = [...path.slice(0, -1), `xlayer:${id}`];
+  }
+  function addTo(where: 'loop' | 'modulators' | string, type: string) {
+    const id = newId(type);
+    changeExtra((e) => {
+      if (where === 'loop') e.loop.push(freshModule(type, id));
+      else if (where === 'modulators') e.modulators.push(freshModule(type, id));
+      else e.layers.find((l) => l.id === where)?.modules.push(freshModule(type, id));
+    });
+    path = [...path.slice(0, -1), `xmodule:${id}`];
+  }
+  // A module, a layer, or a modulator removed, with every cable to or from it and what macros it was in.
+  function removeExtra(id: string) {
+    changeExtra((e) => {
+      const gone = new Set([id]);
+      const layer = e.layers.find((l) => l.id === id);
+      if (layer) for (const m of [layer.source, ...layer.modules, ...layer.loop]) gone.add(m.id);
+      e.layers = e.layers.filter((l) => l.id !== id).map((l) => ({ ...l, modules: l.modules.filter((m) => m.id !== id), loop: l.loop.filter((m) => m.id !== id) }));
+      e.loop = e.loop.filter((m) => m.id !== id);
+      e.modulators = e.modulators.filter((m) => m.id !== id);
+      e.cables = e.cables.filter((c) => !gone.has(c.to.module) && !('modulator' in c.from && gone.has(c.from.modulator)));
+      e.macros = e.macros.map((m) => ({ ...m, targets: m.targets.filter((t) => !gone.has(t.module)) }));
+    });
+    back();
+  }
+  function setKnob(id: string, knob: string, v: number) {
+    const m = extraModule(id);
+    if (!m) return;
+    m.knobs[knob] = v;
+    morphNext = KNOB_MORPH;
+    saveVisualSettings();
+    share({ extra: $state.snapshot(s.extra) });
+    showChrome();
+  }
+  const knobText = (k: Knob, v: number) => (k.kind === 'step' ? `${Math.round(v)}` : k.min === 0 && k.max === 1 ? percent(v) : k.min === -1 && k.max === 1 ? signedPercent(v) : v.toFixed(2));
+  const BLEND_NAMES = { add: 'Add', screen: 'Screen', over: 'Over', multiply: 'Multiply' } as const;
+  // The cables into one knob of the extras (or a modulator's port), and adding one: from a signal (the whole track's,
+  // a band's, or every band's mean) or a modulator.
+  const cablesTo = (mid: string, kid: string) => s.extra.cables.filter((c) => c.to.module === mid && c.to.knob === kid);
+  let openCableId = $state<string | null>(null);
+  const cableFromName = (c: Cable) =>
+    'modulator' in c.from
+      ? (() => {
+          const m = extraModule((c.from as { modulator: string }).modulator);
+          return m ? moduleName(m) : 'A modulator';
+        })()
+      : `${SIGNAL_LABEL[c.from.signal as Signal] ?? c.from.signal}${c.from.band !== undefined ? ` · ${BAND_ROWS[c.from.band]}` : ''}`;
+  function addExtraCable(mid: string, kid: string, from: Cable['from'], to: number) {
+    const kind = extraType(extraModule(mid)?.type ?? '')?.knobs.find((k) => k.id === kid)?.kind;
+    const id = newCableId();
+    changeExtra((e) => e.cables.push({ id, from, to: { module: mid, knob: kid }, value: 0.5, mode: kind === 'level' ? 'level' : 'swing' }));
+    path = path.slice(0, to);
+    openCableId = id;
+  }
+  function newCableId(): string {
+    const taken = new Set(s.extra.cables.map((c) => c.id));
+    for (let n = 1; ; n++) if (!taken.has(`cable-${n}`)) return `cable-${n}`;
+  }
+  function setExtraCable(id: string, c: Curve, done: boolean) {
+    const cable = s.extra.cables.find((x) => x.id === id);
+    if (!cable) return;
+    cable.value = kept({ h1: [...c.h1], h2: [...c.h2], h: c.h });
+    if (!done) return;
+    saveVisualSettings();
+    share({ extra: $state.snapshot(s.extra) });
+    showChrome();
+  }
+  function removeExtraCable(id: string) {
+    changeExtra((e) => (e.cables = e.cables.filter((c) => c.id !== id)));
+    openCableId = null;
+  }
+
+  // ---- The graph builder (decision 0056, step 3: claude-632's PatchGraph) beside the panel where there is room ------
+  // The same patch as the panel's, drawn; every edit made the way the panel makes it. Where its nodes stand is this
+  // device's own (kept here, not shared).
+  const patchNow = $derived(cratarrPatch(s));
+  // The extras as set, a new value on any change of them: the frame loop morphs to each (decision 0056, step 6).
+  const extraNow = $derived($state.snapshot(s.extra) as PatchExtra);
+  // The next change's morph (seconds): a knob moved here, over a moment (`KNOB_MORPH`); anything else (a module added or
+  // removed, a recall, the dice, the group's) as a look blends in.
+  const KNOB_MORPH = 0.15;
+  let morphNext: number | null = null;
+  const GRAPH_TYPES: Record<string, ModuleType> = Object.fromEntries([...EXTRA_TYPES, ...cratarrTypes(RANGES, DEFAULTS)].map((t) => [t.type, t]));
+  const GRAPH_KEY = 'cratarr-visuals-graph';
+  let graphAt = $state<Record<string, { x: number; y: number }>>(
+    (() => {
+      try {
+        return JSON.parse(localStorage.getItem(GRAPH_KEY) ?? '{}');
+      } catch {
+        return {};
+      }
+    })(),
+  );
+  let wide = $state(typeof innerWidth === 'number' ? innerWidth >= 1100 : false);
+  $effect(() => {
+    const resized = () => (wide = innerWidth >= 1100);
+    addEventListener('resize', resized);
+    return () => removeEventListener('resize', resized);
+  });
+  const graphShown = $derived(panel && wide && !docked && !rating.run);
+  function graphConnect(from: Cable['from'], to: Cable['to']) {
+    const aspect = ASPECT_OF.get(`${to.module}.${to.knob}`);
+    if ('signal' in from && aspect && !from.reference && !from.speed) {
+      // A route can hold it: one band's, or (a band signal without one) every band's.
+      pick = from.band ?? null;
+      setCurve(from.signal as Signal, aspect, straight(0.5), true);
+      return;
+    }
+    const kind = GRAPH_TYPES[[...extraModulesAll(), patchNow.frame].find((m) => m.id === to.module)?.type ?? '']?.knobs.find((k) => k.id === to.knob)?.kind;
+    const id = newCableId();
+    changeExtra((e) => e.cables.push({ id, from, to, value: 0.5, mode: kind === 'level' ? 'level' : 'swing' }));
+  }
+  const extraModulesAll = () => [...s.extra.layers.flatMap((l) => [l.source, ...l.modules, ...l.loop]), ...s.extra.loop, ...s.extra.modulators];
+  function graphDisconnect(id: string) {
+    if (id in s.routes) {
+      const [signal, band, aspect] = id.split('|') as [Signal, string, Aspect];
+      pick = band === '-' ? null : Number(band);
+      setCurve(signal, aspect, straight(0), true);
+    } else removeExtraCable(id);
+  }
+  function graphKnob(mid: string, kid: string, v: number) {
+    const key = SETTING_OF.get(`${mid}.${kid}`);
+    if (key) return set(key, v);
+    const band = /^(lighting|evolution|continuity)\.(\d)$/.exec(kid);
+    if (mid === 'flame' && band) {
+      if (band[1] === 'continuity') setContinuity(Number(band[2]), v);
+      else setTime(band[1] as 'lighting' | 'evolution', Number(band[2]), Math.log2(v));
+      return;
+    }
+    setKnob(mid, kid, v);
+  }
+  function graphMove(id: string, x: number, y: number) {
+    graphAt = { ...graphAt, [id]: { x, y } };
+    try {
+      localStorage.setItem(GRAPH_KEY, JSON.stringify(graphAt));
+    } catch {
+      /* this visit only */
+    }
+  }
+  // A node opened: its page in the panel.
+  function graphOpen(id: string) {
+    const chainPage: Record<string, string[]> = {
+      flame: ['layer:flame', 'module:flame'],
+      show: ['layer:flame', 'module:show'],
+      ...Object.fromEntries(FLAME_LOOP.map((m) => [m, ['layer:flame', `module:${m}`]])),
+      fx1: ['module:fx1'],
+      fx2: ['module:fx2'],
+      fx3: ['module:fx3'],
+      'layer:flame': ['layer:flame'],
+    };
+    const layer = id.startsWith('layer:') ? s.extra.layers.find((l) => l.id === id.slice('layer:'.length)) : undefined;
+    path = chainPage[id] ?? (layer ? [`xlayer:${layer.id}`] : extraModule(id) ? [`xmodule:${id}`] : []);
+    cell = null;
+    panelBox?.scrollTo(0, 0);
+    showChrome();
+  }
+
+  // A page's name in the breadcrumb.
+  function pageLabel(page: string): string {
+    const [kind, a = '', b = ''] = page.split(':');
+    if (kind === 'layer' || kind === 'module') return MODULE_LABEL[a] ?? a;
+    if (kind === 'band') return BAND_ROWS[Number(a)] ?? a;
+    if (kind === 'cables') return ROW_OF.get(SETTING_OF.get(a) as One)?.label ?? a;
+    if (kind === 'add' || kind === 'xadd' || kind.startsWith('new')) return 'Add';
+    if (kind === 'xlayer') {
+      const l = s.extra.layers.find((x) => x.id === a);
+      return l ? moduleName(l.source) : a;
+    }
+    if (kind === 'xmodule') {
+      const m = extraModule(a);
+      return m ? moduleName(m) : a;
+    }
+    if (kind === 'xcables') {
+      const [mid, kid] = a.split('.');
+      const m = extraModule(mid);
+      return extraType(m?.type ?? '')?.knobs.find((k) => k.id === kid)?.label ?? (extraType(m?.type ?? '')?.inputs?.includes(kid) ? 'Input' : kid);
+    }
+    if (kind === 'xaddband') return SIGNAL_LABEL[a as Signal] ?? b;
+    if (kind === 'addband') return SIGNAL_LABEL[a as Signal] ?? b;
+    return { bands: 'Bands', grid: 'All cables', device: 'This device' }[kind] ?? kind;
   }
   const devicePixels = () => innerWidth * innerHeight * Math.min(devicePixelRatio || 1, 2) ** 2;
   const valueOf = (key: One) => s[key] as number;
@@ -942,6 +1287,28 @@
       console.warn('Visuals:', e);
       unsupported = true;
     }
+    // The patch past the flame (decision 0056): the other layers and the picture's own loop, drawn between the flame's
+    // show and finish (compose.ts). Its knobs as set for now; the cables move them once the evaluator is in.
+    let compositor: Compositor | null = null;
+    try {
+      compositor = renderer ? new Compositor(renderer.context) : null;
+    } catch (e) {
+      console.warn('Visuals: no layers past the flame on this device', e);
+    }
+    const normal = newNormalState();
+    // The patch's cables, modulators and macros made into each knob's value this frame (claude-632's evaluate.ts):
+    // what the compositor draws with; today's chain stays with aspects.ts.
+    const evalState = newEvalState();
+    let evaluated: Evaluated | null = null;
+    // The morph (claude-632's morph.ts): the extras' knobs from one state to the next, never a cut; a chain change's
+    // modules fading in from neutral and out to it (drawn till then: chain-morph.ts); a step only at its module's
+    // neutral, the evaluator's moments too.
+    const morph = newMorph(morphModules(extraNow), GRAPH_TYPES);
+    let morphedTo = extraNow;
+    let drawnExtra = extraNow;
+    let goingBefore = 0;
+    let shownKnobs: Record<string, Record<string, number>> = {};
+    const knobsOf = (m: Module) => evaluated?.knobs[m.id] ?? shownKnobs[m.id] ?? m.knobs;
 
     // What shows: the flame blended from (`from`) to the playing track's (`to`); `shown` is the last one drawn, so a
     // track that starts mid-blend blends on from where it was.
@@ -1011,6 +1378,10 @@
     // The behaviour's walk (drift.ts): each walking slider's factor on its set value now (none: as set).
     const walking = newBehaviourWalk();
     let walkFactor: Record<string, number> = {};
+    // What the patch's cables make of today's settings that are no column (chain-cables.ts), as last worked out: the
+    // look's as the flame is made, Purity as drawn, the bands' times and the behaviour as the aspects take them.
+    let cabled: Cabled = { settings: {}, bands: {} };
+    const lookOf = (k: string) => ((cabled.settings as Record<string, number | undefined>)[k] ?? s[k as keyof VisualSettings]) as number;
     // The walking routes' factors (`Matrix.walks` order) and the matrix they are for (a route changed: none till the
     // next step).
     let routeWalk: Float32Array | undefined;
@@ -1115,7 +1486,7 @@
 
       // How it behaves: as the settings say, or as the rating page's trial does (the look stays the settings').
       const how = trial.settings ?? s;
-      const m = musicNow(now, how.lighting);
+      const m = musicNow(now, cabled.bands.lighting ?? how.lighting);
       if (m.key !== key || resets !== resetsSeen) {
         // A track's preset into the look's settings not pinned (after the panel's Reset, the playing one's again): the
         // first shows at once, each next blends in. Drawn ahead where it was (the next track's, at idle time, with the
@@ -1207,13 +1578,14 @@
       // asked; a choice (Form, Symmetry, Mirror, Lens, Family) or another colour mode over a second and a half; a
       // setting dragged by degrees at once; the cover's colours coming in while a flame blends in join that blend.
       const colours = `${mode}/${covered ? m.key : ''}`;
-      const changed = !made ? SHAPING : SHAPING.filter((k) => made![k] !== s[k]);
+      const changed = !made ? SHAPING : SHAPING.filter((k) => made![k] !== lookOf(k));
       if (changed.length || colours !== madeColours) {
         // Unframed: the framing below measures what is drawn anyway.
-        if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, s[k]])) as Preset, false);
+        if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, lookOf(k)])) as Preset, false);
         const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
         const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
-        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k));
+        // A cable's move is the patch's own, not from outside.
+        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k) && !(k in cabled.settings));
         if (outside) looksOutside++;
         if (blend && shown) {
           from = shown;
@@ -1221,7 +1593,7 @@
           blendMs = blend;
           blendOutside = outside;
         }
-        made = Object.fromEntries(SHAPING.map((k) => [k, s[k]]));
+        made = Object.fromEntries(SHAPING.map((k) => [k, lookOf(k)]));
         madeColours = colours;
         to = coloured(base!, mode, covered);
         if (!from) shown = to;
@@ -1233,7 +1605,14 @@
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
       // How it behaves now: as set, each walking slider at its walk's share of it (not with the rating page's trial).
-      const behaving = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
+      const walked = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
+      // And as the patch's cables move it (last frame's: they are read once the aspects have the signals).
+      const behaving = trial.settings ? how : ({ ...walked, ...cabled.settings, ...cabled.bands } as VisualSettings);
+      // The signals, read once a frame (normal.ts), with the Track pulse aspects.ts makes; and the patch's cables into
+      // today's columns (chain-cables.ts) given beside the routes, from them and the modulators as last stepped.
+      let read: (ref: SignalRef) => number = () => 0;
+      const extraCables = s.extra?.cables ?? [];
+      const cableWalk = Object.fromEntries(extraCables.map((c) => [c.id, walkFactor[`cable:${c.id}`] ?? 1]));
       const d = stepAspects(aspects, m, behaving, dt, {
         still,
         now,
@@ -1241,6 +1620,15 @@
         fluidFull: FLUID_FULL,
         levers: governor.levers,
         routeWalk: routeWalkFor === matrix ? routeWalk : undefined,
+        // The Track pulse goes into Music's own track (which the next frame makes anew) for signalsFor to read; the
+        // modulators feeding these cables are last frame's (the evaluator steps after, on the envelope made here).
+        extra: (got, trackNow, envelope) => {
+          m.track[T.track] = trackNow[T.track];
+          read = signalsFor(normal, m, now);
+          const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
+          if (extraCables.length) giveCables(got, extraCables, src, envelope, cableWalk, BANDS);
+          cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
+        },
       });
       const { turn, hits, parts, track } = d;
       if (m.playing && m.hits)
@@ -1277,7 +1665,7 @@
           dt: driftDt,
           seed: seedOf(m.key ?? 'cratarr'),
           bar: Math.floor((m.beat ? m.beat.index : m.position * 2) / 4),
-          keys: [...BEHAVIOUR_PINS, ...matrix.walks.map((k) => `route:${k}`)],
+          keys: [...BEHAVIOUR_PINS, ...matrix.walks.map((k) => `route:${k}`), ...(s.extra?.cables ?? []).filter((c) => shapeOf(c.value).walks).map((c) => `cable:${c.id}`)],
           pins: s.pins.filter((p) => !p.startsWith('route:')),
         });
         routeWalk = Float32Array.from(matrix.walks, (k) => walkFactor[`route:${k}`] ?? 1);
@@ -1312,7 +1700,7 @@
       const k = from ? Math.min(1, (now - blendStart) / blendMs) : 1;
       shown = from && k < 1 ? between(from, to, k * k * (3 - 2 * k)) : to;
       if (k >= 1) from = null;
-      const drawnFlame = evolved(shown, parts, s.purity, s.spread);
+      const drawnFlame = evolved(shown, parts, lookOf('purity'), s.spread);
       if (!measure && now - measured > 500) {
         measured = now;
         // The first all at once: the picture starts framed.
@@ -1404,8 +1792,40 @@
         // times that column's scale.
         gain: (signal, band, aspect, x) =>
           behaving[aspect] *
-          (trial.settings ? (aspects.matrix ? heightOn(aspects.matrix, signal, band, aspect, x) : x) : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined)),
+          (trial.settings
+            ? aspects.matrix
+              ? heightOn(aspects.matrix, signal, band, aspect, x)
+              : x
+            : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined) + cableGain(extraCables, signal, band, aspect, x, cableWalk)),
       });
+      // The patch past the flame, this frame: on when there is anything of it, morphed to the extras as set.
+      const extraSet = extraNow;
+      const extraChanged = extraSet !== morphedTo;
+      if (extraChanged) {
+        morphTo(morph, morphModules(extraSet), morphNext ?? ANOTHER_MS / 1000, GRAPH_TYPES);
+        morphNext = null;
+        morphedTo = extraSet;
+      }
+      const morphFrame = stepMorph(morph, dt, m.bps > 0 ? 1 / m.bps : null, GRAPH_TYPES);
+      shownKnobs = { ...morphFrame.knobs, ...Object.fromEntries(morphFrame.leaving.map((l) => [l.id, l.knobs])) };
+      const extra = withLeaving(extraSet, drawnExtra, leavingIds(morphFrame.leaving));
+      if (compositor && (extraChanged || morphFrame.leaving.length !== goingBefore)) compositor.prune(extra);
+      goingBefore = morphFrame.leaving.length;
+      drawnExtra = extra;
+      if (compositor && renderer) {
+        const p = morphedPatch(patchNow, morphFrame.knobs);
+        evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat }, walk: cableWalk }) : null;
+        // A step its cables move on: taken at its module's next neutral.
+        for (const r of evaluated?.moments ?? []) askStep(morph, r.module, r.knob, GRAPH_TYPES);
+        const active = Compositor.active(extra, knobsOf);
+        renderer.compose = active
+          ? {
+              active,
+              run: (picture, width, height) =>
+                compositor!.run(picture, width, height, extra, knobsOf, { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }),
+            }
+          : null;
+      }
       renderer.frame(
         passes,
         {
@@ -1607,6 +2027,7 @@
       lock?.release().catch(() => {});
       // The full screen the visuals over the page went to ends with them; beside it, they made none.
       if (!docked && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      compositor?.dispose();
       renderer?.dispose();
       stopGroup();
       stopIdle?.();
@@ -1614,6 +2035,74 @@
     };
   });
 </script>
+
+{#snippet settingRow(row: Row | undefined)}
+  {#if row}
+    <label class="row pinnable">
+      <span use:held={row.key}>{row.label}{#if governed[row.key]}<span class="governed" aria-label="Held back" use:held={'held'}></span>{/if}</span>
+      <span class="slider">
+        <input type="range" min={RANGES[row.key][0]} max={RANGES[row.key][1]} step={row.step} value={valueOf(row.key)} oninput={(e) => set(row.key, Number(e.currentTarget.value))} />
+        {#if liveAt(row.key) !== null}<i class="live" style:left="calc(8px + {liveAt(row.key)} * (100% - 16px))"></i>{/if}
+      </span>
+      <output>{row.text(valueOf(row.key))}</output>
+      {#if s.pins.includes(row.key) && isPinnable(row.key)}
+        <button
+          class="pin"
+          aria-label="Unpin {row.label}"
+          use:held={'pin'}
+          onclick={(e) => {
+            e.preventDefault();
+            unpin(row.key);
+          }}><Icon name="pin" size={16} /></button
+        >
+      {:else}
+        <span></span>
+      {/if}
+    </label>
+  {/if}
+{/snippet}
+
+<!-- A knob of the patch (decision 0056): its setting's row, and where a route column reaches it, what moves it. -->
+{#snippet knobRow(mk: string, cables = true)}
+  {@const key = SETTING_OF.get(mk)}
+  {@const row = key ? ROW_OF.get(key) : undefined}
+  {@const aspect = ASPECT_OF.get(mk)}
+  {#if row}
+    <div class="knob">
+      {@render settingRow(row)}
+      {#if cables && aspect}
+        {@const n = cablesInto(aspect)}
+        <button class="moves" class:on={n > 0} aria-label="What moves {row.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`cables:${mk}`)}
+          >{#if n}<span>{n}</span>{/if}<Icon name="chevronRight" size={16} /></button
+        >
+      {:else if cables}
+        <span class="moves-gap" aria-hidden="true"></span>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
+<!-- A knob of a module past today's chain (decision 0056): its value in the extras, and what moves it. -->
+{#snippet extraKnobRow(m: Module, k: Knob)}
+  {@const n = cablesTo(m.id, k.id).length}
+  <div class="knob">
+    <label class="row pinnable">
+      <span>{k.label}</span>
+      <span class="slider">
+        <input type="range" min={k.min} max={k.max} step={k.kind === 'step' ? 1 : (k.max - k.min) / 100} value={m.knobs[k.id] ?? k.default} oninput={(e) => setKnob(m.id, k.id, Number(e.currentTarget.value))} />
+      </span>
+      <output>{knobText(k, m.knobs[k.id] ?? k.default)}</output>
+      <span></span>
+    </label>
+    <button class="moves" class:on={n > 0} aria-label="What moves {k.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`xcables:${m.id}.${k.id}`)}
+      >{#if n}<span>{n}</span>{/if}<Icon name="chevronRight" size={16} /></button
+    >
+  </div>
+{/snippet}
+
+{#snippet goRow(label: string, line: string, page: string)}
+  <button class="go" onclick={() => go(page)}><span class="name">{label}{#if line}<small>{line}</small>{/if}</span><Icon name="chevronRight" size={18} /></button>
+{/snippet}
 
 {#snippet bandPinOf(key: 'lighting' | 'evolution' | 'continuity', label: string, b: number)}
   {#if s.pins.includes(bandPin(key, b))}
@@ -1725,45 +2214,284 @@
           >
         {/if}
       </div>
+      {#if graphShown}
+        <div class="graph" role="group" aria-label="Patch" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
+          <PatchGraph
+            patch={patchNow}
+            types={GRAPH_TYPES}
+            positions={graphAt}
+            onconnect={graphConnect}
+            ondisconnect={graphDisconnect}
+            onknob={graphKnob}
+            onmove={graphMove}
+            onopen={graphOpen}
+          />
+        </div>
+      {/if}
       {#if panel && !rating.run}
-        <div class="panel" role="group" aria-label="Settings" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
-          {#each [COMPUTE, SHOW, LOOK] as rows, g (g)}
-            <div class="rows" class:look={g > 0}>
-              {#if g === 1}<h3 use:held={'behaviour'}>Behaviour</h3>{:else if g === 2}<h3 use:held={'look'}>Look</h3>{/if}
-              {#each rows as row (row.key)}
-                <label class="row" class:pinnable={g > 0}>
-                  <span use:held={row.key}>{row.label}{#if governed[row.key]}<span class="governed" aria-label="Held back" use:held={'held'}></span>{/if}</span>
-                  <span class="slider">
-                    <input
-                      type="range"
-                      min={RANGES[row.key][0]}
-                      max={RANGES[row.key][1]}
-                      step={row.step}
-                      value={valueOf(row.key)}
-                      oninput={(e) => set(row.key, Number(e.currentTarget.value))}
-                    />
-                    {#if liveAt(row.key) !== null}<i class="live" style:left="calc(8px + {liveAt(row.key)} * (100% - 16px))"></i>{/if}
-                  </span>
-                  <output>{row.text(valueOf(row.key))}</output>
-                  {#if g > 0}
-                    {#if s.pins.includes(row.key) && isPinnable(row.key)}
-                      <button
-                        class="pin"
-                        aria-label="Unpin {row.label}"
-                        use:held={'pin'}
-                        onclick={(e) => {
-                          e.preventDefault();
-                          unpin(row.key);
-                        }}><Icon name="pin" size={16} /></button
-                      >
-                    {:else}
-                      <span></span>
-                    {/if}
-                  {/if}
+        <div class="panel" role="group" aria-label="Settings" bind:this={panelBox} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
+          {#if path.length}
+            <div class="crumbs">
+              <button class="back" aria-label="Back" onclick={() => back()}><Icon name="back" size={20} /></button>
+              <span class="trail"
+                >{#each path as page, i (i)}{#if i}<span class="sep">›</span>{/if}<span class:here={i === path.length - 1}>{pageLabel(page)}</span>{/each}</span
+              >
+            </div>
+          {/if}
+          {#if !path.length}
+            <div class="rows">
+              <h3>Chain</h3>
+              <div class="go still"><span class="name">Cratarr<small>The flame with its own loop, then three effects</small></span></div>
+            </div>
+            <div class="rows">
+              <h3 use:held={'behaviour'}>Whole frame</h3>
+              {#each ['intensity', 'flash', 'speed', 'wild'] as k (k)}{@render settingRow(ROW_OF.get(k as One))}{/each}
+            </div>
+            <div class="rows">
+              <h3>Layers</h3>
+              {@render goRow('Flame', 'Its look, its show, its own loop', 'layer:flame')}
+              {#each s.extra.layers as l (l.id)}{@render goRow(moduleName(l.source), `${BLEND_NAMES[l.blend.mode]} ${percent(l.blend.amount)}${l.modules.length ? ` · ${l.modules.map(moduleName).join(', ')}` : ''}`, `xlayer:${l.id}`)}{/each}
+              <button class="go add" onclick={() => go('newlayer')}><span class="name">+ Add layer</span></button>
+            </div>
+            <div class="rows">
+              <h3>Loop</h3>
+              {#each s.extra.loop as m (m.id)}{@render goRow(moduleName(m), percent(m.knobs.amount ?? 0), `xmodule:${m.id}`)}{/each}
+              <button class="go add" onclick={() => go('newloop')}><span class="name">+ Add to the loop</span></button>
+            </div>
+            <div class="rows">
+              <h3>Finish</h3>
+              {@render knobRow('frame.effects')}
+              {#each ['fx1', 'fx2', 'fx3'] as m (m)}{@render goRow(MODULE_LABEL[m], moduleLine(m), `module:${m}`)}{/each}
+            </div>
+            <div class="rows">
+              <h3>Modulators</h3>
+              {#each s.extra.modulators as m (m.id)}{@render goRow(moduleName(m), `${s.extra.cables.filter((c) => 'modulator' in c.from && c.from.modulator === m.id).length} cables`, `xmodule:${m.id}`)}{/each}
+              <button class="go add" onclick={() => go('newmodulator')}><span class="name">+ Add modulator</span></button>
+            </div>
+            <div class="rows">
+              <h3>Patch</h3>
+              {@render goRow('All cables', 'Every route, as a grid', 'grid')}
+              {@render goRow('This device', 'Quality, frame rate, brightness', 'device')}
+            </div>
+          {:else if here === 'layer:flame'}
+            <div class="rows">
+              <h3>Source</h3>
+              {@render goRow('Flame', moduleLine('flame'), 'module:flame')}
+            </div>
+            <div class="rows">
+              <h3>On this layer</h3>
+              {@render goRow('Show', moduleLine('show'), 'module:show')}
+            </div>
+            <div class="rows">
+              <h3>Its own loop</h3>
+              {#each FLAME_LOOP as m (m)}{@render goRow(MODULE_LABEL[m], moduleLine(m), `module:${m}`)}{/each}
+            </div>
+          {:else if here.startsWith('module:')}
+            {@const m = here.slice('module:'.length)}
+            {#each GROUPS[m] ?? [] as g, i (i)}
+              <div class="rows">
+                {#if g.title}<h3>{g.title}</h3>{/if}
+                {#each g.knobs as mk (mk)}{@render knobRow(mk)}{/each}
+              </div>
+            {/each}
+            {#if m === 'flame'}
+              <div class="rows">
+                <h3>Each band's part</h3>
+                {@render goRow('Bands', 'Linger, evolution, continuity', 'bands')}
+              </div>
+            {/if}
+          {:else if here === 'bands'}
+            <div class="rows">
+              {#each BAND_ROWS as band, b (band)}{@render goRow(band, `${seconds(s.lighting[b])} · ${seconds(s.evolution[b])} · ${percent(s.continuity[b])}`, `band:${b}`)}{/each}
+            </div>
+          {:else if here.startsWith('band:')}
+            {@const b = Number(here.slice('band:'.length))}
+            <div class="rows">
+              {#each TIMES as time (time.key)}
+                <label class="row pinnable">
+                  <span use:held={time.key}>{time.label}</span>
+                  <input
+                    type="range"
+                    min={time.min}
+                    max={time.max}
+                    step="0.05"
+                    value={Math.log2(s[time.key][b])}
+                    oninput={(e) => setTime(time.key, b, Number(e.currentTarget.value))}
+                  />
+                  <output>{seconds(s[time.key][b])}</output>
+                  {@render bandPinOf(time.key, time.label, b)}
                 </label>
               {/each}
+              <label class="row pinnable">
+                <span use:held={'continuity'}>Continuity</span>
+                <input type="range" min={RANGES.continuity[0]} max={RANGES.continuity[1]} step="0.05" value={s.continuity[b]} oninput={(e) => setContinuity(b, Number(e.currentTarget.value))} />
+                <output>{percent(s.continuity[b])}</output>
+                {@render bandPinOf('continuity', 'Continuity', b)}
+              </label>
             </div>
-          {/each}
+          {:else if here.startsWith('cables:')}
+            {@const mk = here.slice('cables:'.length)}
+            {@const aspect = ASPECT_OF.get(mk)}
+            <div class="rows">{@render knobRow(mk, false)}</div>
+            {#if aspect}
+              <div class="rows">
+                <h3 use:held={'moves'}>Moved by</h3>
+                {#each cableRows(aspect) as c (c.id)}
+                  <button class="go" class:on={isOpen(c, aspect)} onclick={() => openCable(c, aspect)}
+                    ><span class="name">{c.label}{#if c.sub}<small>{c.sub}</small>{/if}</span><output>{signed(c.v)}</output></button
+                  >
+                  {#if isOpen(c, aspect) && edited}
+                    <div class="route">
+                      <CurveEditor
+                        curve={edited.curve}
+                        mixed={edited.mixed}
+                        live={liveOnCurve}
+                        {density}
+                        walks={edited.walks}
+                        pinned={edited.pinned}
+                        onchange={(curve, done) => setCurve(c.signal, aspect, curve, done)}
+                        onwalks={(on) => setWalks(c.signal, aspect, on)}
+                        onpin={(on) => setPins(keysOf(c.signal, aspect).map((k) => `route:${k}`), on)}
+                      />
+                      <button class="reset danger" onclick={() => removeCable(c.signal, aspect)}>Remove</button>
+                    </div>
+                  {/if}
+                {/each}
+                <button class="go add" onclick={() => go(`add:${mk}`)}><span class="name">+ Add</span></button>
+              </div>
+            {/if}
+          {:else if here.startsWith('add:')}
+            {@const mk = here.slice('add:'.length)}
+            {@const aspect = ASPECT_OF.get(mk)}
+            {#if aspect}
+              <div class="rows">
+                <h3>The whole track</h3>
+                {#each TRACK_SIGNALS as t (t)}
+                  <button class="go" onclick={() => addCable(t, null, aspect, path.length - 1)}><span class="name">{SIGNAL_LABEL[t]}</span></button>
+                {/each}
+              </div>
+              <div class="rows">
+                <h3>Each band</h3>
+                {#each BAND_SIGNALS as b (b)}{@render goRow(SIGNAL_LABEL[b], '', `addband:${b}:${mk}`)}{/each}
+              </div>
+            {/if}
+          {:else if here.startsWith('addband:')}
+            {@const [, signal, mk] = here.split(':')}
+            {@const aspect = ASPECT_OF.get(mk)}
+            {#if aspect}
+              <div class="rows">
+                <button class="go" onclick={() => addCable(signal as Signal, null, aspect, path.length - 2)}><span class="name">Every band</span></button>
+                {#each BAND_ROWS as band, b (band)}
+                  <button class="go" onclick={() => addCable(signal as Signal, b, aspect, path.length - 2)}><span class="name">{band}</span></button>
+                {/each}
+              </div>
+            {/if}
+          {:else if here === 'newlayer' || here === 'newloop' || here === 'newmodulator' || here.startsWith('newmodule:')}
+            <div class="rows">
+              {#if here === 'newlayer'}
+                {#each SOURCE_TYPES as t (t.type)}<button class="go" onclick={() => addLayer(t.type)}><span class="name">{t.label}</span></button>{/each}
+              {:else if here === 'newloop'}
+                {#each PICTURE_LOOP_TYPES as t (t.type)}<button class="go" onclick={() => addTo('loop', t.type)}><span class="name">{t.label}</span></button>{/each}
+              {:else if here === 'newmodulator'}
+                {#each MODULATOR_TYPES as t (t.type)}<button class="go" onclick={() => addTo('modulators', t.type)}><span class="name">{t.label}</span></button>{/each}
+              {:else}
+                {#each ENGINE_TYPES as t (t.type)}<button class="go" onclick={() => addTo(here.slice('newmodule:'.length), t.type)}><span class="name">{t.label}</span></button>{/each}
+              {/if}
+            </div>
+          {:else if here.startsWith('xlayer:')}
+            {@const l = s.extra.layers.find((x) => x.id === here.slice('xlayer:'.length))}
+            {#if l}
+              <div class="rows">
+                <h3>Source</h3>
+                {@render goRow(moduleName(l.source), '', `xmodule:${l.source.id}`)}
+              </div>
+              <div class="rows">
+                <h3>On this layer</h3>
+                {#each l.modules as m (m.id)}{@render goRow(moduleName(m), percent(m.knobs.amount ?? 0), `xmodule:${m.id}`)}{/each}
+                <button class="go add" onclick={() => go(`newmodule:${l.id}`)}><span class="name">+ Add module</span></button>
+              </div>
+              <div class="rows">
+                <h3>Blend</h3>
+                <button
+                  class="go"
+                  onclick={() => changeExtra(() => (l.blend.mode = (['add', 'screen', 'over', 'multiply'] as const)[(['add', 'screen', 'over', 'multiply'].indexOf(l.blend.mode) + 1) % 4]))}
+                  ><span class="name">Mode</span><output>{BLEND_NAMES[l.blend.mode]}</output></button
+                >
+                <label class="row pinnable">
+                  <span>Amount</span>
+                  <span class="slider"><input type="range" min="0" max="1" step="0.01" value={l.blend.amount} oninput={(e) => changeExtra(() => (l.blend.amount = Number(e.currentTarget.value)))} /></span>
+                  <output>{percent(l.blend.amount)}</output>
+                  <span></span>
+                </label>
+              </div>
+              <div class="rows"><button class="go danger" onclick={() => removeExtra(l.id)}><span class="name">Remove this layer</span></button></div>
+            {/if}
+          {:else if here.startsWith('xmodule:')}
+            {@const m = extraModule(here.slice('xmodule:'.length))}
+            {@const t = m ? extraType(m.type) : undefined}
+            {#if m && t}
+              <div class="rows">
+                {#each t.knobs as k (k.id)}{@render extraKnobRow(m, k)}{/each}
+              </div>
+              {#if t.inputs?.length}
+                <div class="rows">
+                  <h3>Inputs</h3>
+                  {#each t.inputs as port (port)}{@render goRow(port === 'in' ? 'Input' : port[0].toUpperCase() + port.slice(1), `${cablesTo(m.id, port).length} cables`, `xcables:${m.id}.${port}`)}{/each}
+                </div>
+              {/if}
+              {#if !s.extra.layers.some((l) => l.source.id === m.id)}
+                <div class="rows"><button class="go danger" onclick={() => removeExtra(m.id)}><span class="name">Remove</span></button></div>
+              {/if}
+            {/if}
+          {:else if here.startsWith('xcables:')}
+            {@const [mid, kid] = here.slice('xcables:'.length).split('.')}
+            <div class="rows">
+              <h3 use:held={'moves'}>Moved by</h3>
+              {#each cablesTo(mid, kid) as c (c.id)}
+                <button class="go" class:on={openCableId === c.id} onclick={() => (openCableId = openCableId === c.id ? null : c.id)}
+                  ><span class="name">{cableFromName(c)}</span><output>{signed(endOf(c.value))}</output></button
+                >
+                {#if openCableId === c.id}
+                  <div class="route">
+                    <CurveEditor curve={curveOf(c.value)} mixed={false} live={null} density={null} walks={false} pinned={false} onchange={(curve, done) => setExtraCable(c.id, curve, done)} onwalks={() => {}} onpin={() => {}} />
+                    <button class="reset danger" onclick={() => removeExtraCable(c.id)}>Remove</button>
+                  </div>
+                {/if}
+              {/each}
+              <button class="go add" onclick={() => go(`xadd:${mid}.${kid}`)}><span class="name">+ Add</span></button>
+            </div>
+          {:else if here.startsWith('xadd:')}
+            {@const [mid, kid] = here.slice('xadd:'.length).split('.')}
+            {#if s.extra.modulators.some((x) => x.id !== mid)}
+              <div class="rows">
+                <h3>Modulators</h3>
+                {#each s.extra.modulators.filter((x) => x.id !== mid) as x (x.id)}
+                  <button class="go" onclick={() => addExtraCable(mid, kid, { modulator: x.id }, path.length - 1)}><span class="name">{moduleName(x)}</span></button>
+                {/each}
+              </div>
+            {/if}
+            <div class="rows">
+              <h3>The whole track</h3>
+              {#each TRACK_SIGNALS as t (t)}<button class="go" onclick={() => addExtraCable(mid, kid, { signal: t }, path.length - 1)}><span class="name">{SIGNAL_LABEL[t]}</span></button>{/each}
+            </div>
+            <div class="rows">
+              <h3>Each band</h3>
+              {#each BAND_SIGNALS as b (b)}{@render goRow(SIGNAL_LABEL[b], '', `xaddband:${b}:${mid}.${kid}`)}{/each}
+            </div>
+          {:else if here.startsWith('xaddband:')}
+            {@const [, signal, target] = here.split(':')}
+            {@const [mid, kid] = target.split('.')}
+            <div class="rows">
+              <button class="go" onclick={() => addExtraCable(mid, kid, { signal }, path.length - 2)}><span class="name">Every band</span></button>
+              {#each BAND_ROWS as band, b (band)}
+                <button class="go" onclick={() => addExtraCable(mid, kid, { signal, band: b }, path.length - 2)}><span class="name">{band}</span></button>
+              {/each}
+            </div>
+          {:else if here === 'device'}
+            <div class="rows">
+              {#each ['quality', 'fps', 'brightness'] as k (k)}{@render settingRow(ROW_OF.get(k as One))}{/each}
+            </div>
+          {:else if here === 'grid'}
           <div class="routes" role="group" aria-label="Routes" bind:this={routesBox}>
             <div class="head">
               <h3 use:held={'routes'}>Routes</h3>
@@ -1825,32 +2553,8 @@
               </div>
             {/if}
           </div>
-          {#each BAND_ROWS as band, b (band)}
-            <div class="rows band">
-              <h3 use:held={`band:${b}`}>{band}</h3>
-              {#each TIMES as time (time.key)}
-                <label class="row pinnable">
-                  <span use:held={time.key}>{time.label}</span>
-                  <input
-                    type="range"
-                    min={time.min}
-                    max={time.max}
-                    step="0.05"
-                    value={Math.log2(s[time.key][b])}
-                    oninput={(e) => setTime(time.key, b, Number(e.currentTarget.value))}
-                  />
-                  <output>{seconds(s[time.key][b])}</output>
-                  {@render bandPinOf(time.key, time.label, b)}
-                </label>
-              {/each}
-              <label class="row pinnable">
-                <span use:held={'continuity'}>Continuity</span>
-                <input type="range" min={RANGES.continuity[0]} max={RANGES.continuity[1]} step="0.05" value={s.continuity[b]} oninput={(e) => setContinuity(b, Number(e.currentTarget.value))} />
-                <output>{percent(s.continuity[b])}</output>
-                {@render bandPinOf('continuity', 'Continuity', b)}
-              </label>
-            </div>
-          {/each}
+          {/if}
+          {#if !path.length}
           <div class="foot">
             <span class="fps"
               >{fps} fps · {thousands(Math.log2(Math.max(1, drawing.points)))} × {drawing.steps}{drawing.cleared ? ` · ${drawing.cleared} cleared` : ''}</span
@@ -1869,6 +2573,7 @@
             <button class="reset" use:held={'rate'} onclick={startRating}>Rate</button>
             <button class="reset" use:held={'forget'} onclick={forget}>Forget</button>
           </div>
+          {/if}
         </div>
       {/if}
       {#if np && !panel}
@@ -1998,6 +2703,19 @@
     }
   }
 
+  /* The graph builder (decision 0056): beside the panel where there is room, the same height. */
+  .graph {
+    position: absolute;
+    top: calc(max(12px, env(safe-area-inset-top)) + 56px);
+    left: max(12px, env(safe-area-inset-left));
+    right: calc(max(12px, env(safe-area-inset-right)) + 512px);
+    bottom: max(12px, env(safe-area-inset-bottom));
+    overflow: hidden;
+    border-radius: 14px;
+    background: rgb(14 16 21 / 0.86);
+    pointer-events: auto;
+  }
+
   .panel {
     position: absolute;
     top: calc(max(12px, env(safe-area-inset-top)) + 56px);
@@ -2017,11 +2735,145 @@
     touch-action: pan-y;
   }
 
-  .rows.look,
-  .rows.band {
+  .rows + .rows {
     margin-top: 6px;
     padding-top: 6px;
     border-top: 1px solid rgb(255 255 255 / 0.12);
+  }
+
+  /* Where the panel is (decision 0056): back, then the pages from the top. */
+  .crumbs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 40px;
+    margin-bottom: 4px;
+    font-size: 0.85rem;
+    color: rgb(255 255 255 / 0.6);
+  }
+
+  .crumbs .back {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: rgb(255 255 255 / 0.1);
+    color: #fff;
+    cursor: pointer;
+  }
+
+  .trail {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .trail .sep {
+    margin: 0 5px;
+  }
+
+  .trail .here {
+    color: #fff;
+    font-weight: 600;
+  }
+
+  /* A row that opens a page: its name, a line of what it is now, the chevron. */
+  .go {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 6px 4px;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: #fff;
+    font: inherit;
+    font-size: 0.92rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .go:hover {
+    background: rgb(255 255 255 / 0.06);
+  }
+
+  .go.on {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
+  .go.still {
+    cursor: default;
+  }
+
+  .go.still:hover {
+    background: none;
+  }
+
+  .go .name {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .go small {
+    color: rgb(255 255 255 / 0.55);
+    font-size: 0.8rem;
+  }
+
+  .go output {
+    font-variant-numeric: tabular-nums;
+    color: rgb(255 255 255 / 0.75);
+  }
+
+  .go.add .name {
+    color: var(--accent);
+  }
+
+  /* A knob: its row, and what moves it (how many routes, a page of them). */
+  .knob {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .knob > .row {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .moves {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 2px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    color: rgb(255 255 255 / 0.35);
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  .moves.on {
+    color: var(--accent);
+  }
+
+  /* A knob nothing can move keeps the button's room, so the sliders line up. */
+  .moves-gap {
+    flex: none;
+    width: 30px;
+  }
+
+  .danger {
+    color: var(--danger, #ff6b6b);
   }
 
   .rows h3,

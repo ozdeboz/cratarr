@@ -22,6 +22,8 @@ import { keptFrom, saveVisualSettings, visualSettings, type VisualSettings } fro
 
 /** The settings shared, and saved in a snapshot. */
 export const SHARED_KEYS = [
+  // The patch beyond today's chain (decision 0056), whole.
+  'extra',
   ...PRESET_KEYS,
   'pins',
   'wild',

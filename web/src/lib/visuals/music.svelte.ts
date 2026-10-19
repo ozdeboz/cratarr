@@ -15,6 +15,7 @@ import { loadWaveform, waveformOf } from '../waveforms.svelte';
 import { beatAt, beatsOf, tempoAt, type Beat, type Beats } from './beats';
 import { followEnvelopes } from './envelope';
 import { startAppLive, startLive, type LiveNow } from './live';
+import { typicalOf, type Typical } from './normal';
 import { B, BAND_SIGNALS, T, TRACK_SIGNALS } from './routes';
 import { ID, lastOf, lufsAt, seriesAt, signalsOf, type Events, type Signals } from './signals';
 import { BANDS, visualSettings } from './settings.svelte';
@@ -44,6 +45,11 @@ export type Music = {
   playing: boolean;
   /** Where in the track the picture is drawn (seconds, a little ahead of the sound: `AHEAD`); 0 with none. */
   position: number;
+  /** The track's typical values (normal.ts, decision 0056), from the server's signals and its beats where they are
+   *  in; null with neither. */
+  typical: Typical | null;
+  /** The sound's last samples (−1..1), where this device plays it (live.ts), for the Waves source; null elsewhere. */
+  wave: Float32Array | null;
 };
 
 /** The picture is drawn this far ahead of the sound (seconds): a frame reaches the screen a frame or two after it is
@@ -151,7 +157,7 @@ export function musicNow(at: number, lighting: readonly number[] = visualSetting
   track.fill(0);
   if (!np) {
     stopLive();
-    return { key: null, intensity: 0, bps: 1.5, beat: null, track, bands: null, hits: null, from: null, playing: false, position: 0 };
+    return { key: null, intensity: 0, bps: 1.5, beat: null, track, bands: null, hits: null, from: null, playing: false, position: 0, typical: null, wave: null };
   }
   const key = `${np.source}/${np.id}`;
   loadWaveform(np.source, np.id);
@@ -176,16 +182,17 @@ export function musicNow(at: number, lighting: readonly number[] = visualSetting
   const length = np.progress?.duration_secs ?? null;
   const energy = () => (wave && length ? loudnessAt(wave, pos / length) : null);
 
-  // The bands: the server's, else heard here.
+  // The bands: the server's, else heard here. Heard here either way where this device plays it: its waveform.
+  const now = listen();
   if (signals) {
-    stopLive();
-    return musicOf(signals, beats ?? null, pos, on, { state: own, at, key, lighting, gainDb: levelDb(np.source, np.id), bpm, energy: energy() });
+    const m = musicOf(signals, beats ?? null, pos, on, { state: own, at, key, lighting, gainDb: levelDb(np.source, np.id), bpm, energy: energy() });
+    m.wave = now?.wave ?? null;
+    return m;
   }
   const beat = beats ? beatAt(beats, pos) : null;
   const bps = beats ? 1 / tempoAt(beats, pos) : (bpm ?? 90) / 60;
   let heard: number | null = null;
   let from: Music['from'] = null;
-  const now = listen();
   if (now) {
     heard = now.loudness;
     fromLive(now, at, lighting);
@@ -193,7 +200,8 @@ export function musicNow(at: number, lighting: readonly number[] = visualSetting
   }
   const intensity = intensityOf(heard, levelDb(np.source, np.id), energy());
   finish(own, intensity, bps, beats ?? null, beat, pos);
-  return { key, intensity, bps, beat, track, bands: from ? bands : null, hits: from ? hits : null, from, playing: on, position: pos };
+  const typical = beats ? typicalOf(null, beats) : null;
+  return { key, intensity, bps, beat, track, bands: from ? bands : null, hits: from ? hits : null, from, playing: on, position: pos, typical, wave: now?.wave ?? null };
 }
 
 /** The show's intensity from the loudness heard (LUFS, null where it is not known) at the player's gain (dB), else
@@ -263,7 +271,8 @@ export function musicOf(
   fromServer(st, signals, position, beats, beat, opts.at ?? position * 1000, opts.lighting ?? visualSettings.lighting);
   const intensity = intensityOf(lufsAt(signals, position), opts.gainDb ?? 0, opts.energy ?? null);
   finish(st, intensity, bps, beats, beat, position);
-  return { key: opts.key ?? null, intensity, bps, beat, track: st.track, bands: st.bands, hits: st.hits, from: 'server', playing, position };
+  const typical = typicalOf(signals, beats);
+  return { key: opts.key ?? null, intensity, bps, beat, track: st.track, bands: st.bands, hits: st.hits, from: 'server', playing, position, typical, wave: null };
 }
 
 /** The server's signals at `pos`, into `st`. */
