@@ -120,8 +120,10 @@ pub enum Change {
     Spoken { playlist: String, before: Vec<String>, after: Vec<String> },
     /// One of one's own crates (decision 0024): its definition before and after (`None`: it did not exist).
     Crate { before: Option<crate::crates::CrateDef>, after: Option<crate::crates::CrateDef> },
-    /// A crate's tracks left out by hand (decision 0024, amended 2026-10-19): its list of lines before and after.
-    LeftOut { crate_id: String, before: Vec<String>, after: Vec<String> },
+    /// A crate's tracks and albums left out by hand (decision 0024, amended 2026-10-19): its list before and after.
+    LeftOut { crate_id: String, before: crate::crates::LeftOut, after: crate::crates::LeftOut },
+    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19): their lines before and after.
+    Excluded { before: Vec<String>, after: Vec<String> },
 }
 
 /// One playlist's file before a change, and the fingerprint of the file the change left.

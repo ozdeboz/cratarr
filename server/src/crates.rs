@@ -278,6 +278,27 @@ pub fn leaving_out(lines: &[String], conditions: &[Condition]) -> Vec<Condition>
 /// The left-out list's condition: a line that is one of these.
 const LEFT_OUT: &str = "line";
 
+/// A crate's tracks left out by hand (decision 0024, amended 2026-10-19): single tracks by their lines, and whole albums
+/// by their ids, each album a rule (its tracks now and later).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeftOut {
+    #[serde(default)]
+    pub lines: Vec<String>,
+    #[serde(default)]
+    pub albums: Vec<String>,
+}
+
+impl LeftOut {
+    /// How many it holds: its tracks and its albums.
+    pub fn len(&self) -> usize {
+        self.lines.len() + self.albums.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty() && self.albums.is_empty()
+    }
+}
+
 /// Whether working the conditions out needs the favourite albums (the Library's hearts).
 pub fn needs_favourite_albums(conditions: &[Condition]) -> bool {
     conditions.iter().any(|c| c.axis == "favourite_album")
@@ -331,6 +352,12 @@ struct Stored {
     /// Each crate's tracks left out by hand (decision 0024, amended 2026-10-19), by id: their lines, relative to Music.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     left_out: BTreeMap<String, Vec<String>>,
+    /// Each crate's albums left out by hand, by id: the albums' ids (a rule: an album's tracks now and later).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    left_out_albums: BTreeMap<String, Vec<String>>,
+    /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19: global exclusions): their lines.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    excluded: Vec<String>,
 }
 
 /// One's own crates (decision 0024, issue 2): one file in Cratarr's data folder, the version before each change kept
@@ -395,23 +422,45 @@ impl CrateStore {
         self.write_stored(s).await
     }
 
-    /// A crate's tracks left out by hand (their lines; none until some are).
-    pub async fn left_out(&self, id: &str) -> Result<Vec<String>> {
-        Ok(self.stored().await?.left_out.get(id).cloned().unwrap_or_default())
+    /// A crate's tracks and albums left out by hand (none until some are).
+    pub async fn left_out(&self, id: &str) -> Result<LeftOut> {
+        let s = self.stored().await?;
+        Ok(LeftOut { lines: s.left_out.get(id).cloned().unwrap_or_default(), albums: s.left_out_albums.get(id).cloned().unwrap_or_default() })
     }
 
     /// Every crate's left-out list that holds any.
-    pub async fn all_left_out(&self) -> Result<BTreeMap<String, Vec<String>>> {
-        Ok(self.stored().await?.left_out)
+    pub async fn all_left_out(&self) -> Result<BTreeMap<String, LeftOut>> {
+        let s = self.stored().await?;
+        let mut all: BTreeMap<String, LeftOut> = BTreeMap::new();
+        for (id, lines) in s.left_out {
+            all.entry(id).or_default().lines = lines;
+        }
+        for (id, albums) in s.left_out_albums {
+            all.entry(id).or_default().albums = albums;
+        }
+        Ok(all)
     }
 
-    pub async fn set_left_out(&self, id: &str, lines: Vec<String>) -> Result<()> {
+    pub async fn set_left_out(&self, id: &str, left: LeftOut) -> Result<()> {
         let mut s = self.stored().await?;
-        if lines.is_empty() {
-            s.left_out.remove(id);
-        } else {
-            s.left_out.insert(id.to_string(), lines);
+        for (kept, list) in [(&mut s.left_out, left.lines), (&mut s.left_out_albums, left.albums)] {
+            if list.is_empty() {
+                kept.remove(id);
+            } else {
+                kept.insert(id.to_string(), list);
+            }
         }
+        self.write_stored(s).await
+    }
+
+    /// The tracks excluded from every automatic pick (their lines).
+    pub async fn excluded(&self) -> Result<Vec<String>> {
+        Ok(self.stored().await?.excluded)
+    }
+
+    pub async fn set_excluded(&self, lines: Vec<String>) -> Result<()> {
+        let mut s = self.stored().await?;
+        s.excluded = lines;
         self.write_stored(s).await
     }
 
@@ -682,12 +731,17 @@ mod tests {
         again.set_favourite_albums(&id, Favourites::None).await.unwrap();
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
         assert_eq!(CrateStore::new(dir.to_str()).favourite_albums(&id).await.unwrap(), Favourites::None, "kept, and through a change");
-        // Tracks left out by hand: kept per crate, through a change of it; an empty list is none.
-        again.set_left_out(&id, vec!["x.flac".into()]).await.unwrap();
+        // Tracks and albums left out by hand: kept per crate, through a change of it; an empty list is none.
+        let left = LeftOut { lines: vec!["x.flac".into()], albums: vec!["al-1".into()] };
+        again.set_left_out(&id, left.clone()).await.unwrap();
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
-        assert_eq!(CrateStore::new(dir.to_str()).left_out(&id).await.unwrap(), vec!["x.flac".to_string()]);
-        again.set_left_out(&id, Vec::new()).await.unwrap();
+        assert_eq!(CrateStore::new(dir.to_str()).left_out(&id).await.unwrap(), left);
+        assert_eq!(again.all_left_out().await.unwrap().get(&id).map(LeftOut::len), Some(2));
+        again.set_left_out(&id, LeftOut::default()).await.unwrap();
         assert!(again.all_left_out().await.unwrap().is_empty());
+        // Excluded everywhere: one list for the account, kept.
+        again.set_excluded(vec!["y.flac".into()]).await.unwrap();
+        assert_eq!(CrateStore::new(dir.to_str()).excluded().await.unwrap(), vec!["y.flac".to_string()]);
         assert!(dir.join("crates.json.bak").exists(), "the version before kept");
         assert!(again.delete(&id).await.unwrap());
         assert!(again.list().await.unwrap().is_empty());

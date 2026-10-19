@@ -155,3 +155,20 @@ is (the owner chose it from three).
 - **Undo** follows in a toast ("Removed from Test."), the one notice of its kind: a single tap changes the crate.
 - **Putting back**: "N left out" under the crate's name in its panel (any crate, so not only in the editor, which
   Unlisted and a genre's crate have none of) opens their list: each put back, or Put all back, with Undo again.
+
+## Amendment (2026-10-19): excluded from a crate, and everywhere (the server's part)
+
+The owner, for release 69: "I want crate exclusions and I want global exclusions." Global means every automatic pick.
+The word in the page is **Exclude**; the server's names stay `left_out` for a crate.
+
+- **From a crate.** A crate's left-out list holds single tracks (their lines) and, as a rule, whole albums (their ids:
+  the album's tracks now and later). `POST`/`DELETE /api/crates/{id}/left-out {source, ids?, albums?}` →
+  `{left_out, undo}`; `GET` → `{source, rows, albums: [{id, title, artist}]}`, `rows` the single tracks. A crate's
+  `left_out` counts both. Journaled for Undo.
+- **Everywhere.** Each account has one list of excluded tracks (lines in its `crates.json`). `POST`/`DELETE
+  /api/excluded {source, ids}` → `{excluded, undo}`; `GET /api/excluded` → `{source, excluded, rows}`. Journaled.
+  - Left out of every crate (one's own, Unlisted, genres), as a crate's left-out list is: rows, counts, stats, the
+    tempo spread, Make playlist, a crate's radio, Kept.
+  - Never picked by Radio, Autoplay, Similar songs, the shuffles of the library and of the favourites, or Subsonic's
+    random songs.
+  - Still played when chosen by hand: an album, a playlist, a search, tracks named one by one, a queue taken up.

@@ -384,7 +384,15 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let genre = p.get("genre").map(str::to_string);
             let years = (p.number("fromYear").map(|y| y.max(0) as u32), p.number("toYear").map(|y| y.max(0) as u32));
             let folder = folder_of(p);
-            let mut songs = blocking(move || s.library.random_songs(size, genre.as_deref(), years, folder)).await?;
+            // Never what the listener excluded from automatic picks (Cratarr's decision 0024, amended 2026-10-19).
+            let excluded = match serve.playlists() {
+                Some(pl) => pl.excluded_songs_of(Some(me.as_str())).await.unwrap_or_default(),
+                None => Default::default(),
+            };
+            let more = excluded.len();
+            let mut songs = blocking(move || s.library.random_songs(size + more, genre.as_deref(), years, folder)).await?;
+            songs.retain(|x| !excluded.contains(&x.id));
+            songs.truncate(size);
             annotate_songs(serve, &me, &mut songs)?;
             Ok(Answer::Json(json!({ "randomSongs": { "song": songs } })))
         }
