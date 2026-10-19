@@ -87,13 +87,16 @@ type Declared = ModuleType & { ports: Ports };
 
 /** Today's hidden behaviours as modules (0057 §3). Their knobs are what the old settings held; their ports normalled
  *  to where the behaviour reaches today. claude-5f's engine steps them; the views draw them as any other. */
+const MUSIC_KNOBS: Knob[] = [{ ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 }];
+
 export const MUSIC: Declared = {
   type: 'music',
   label: 'Music',
   place: 'modulator',
-  knobs: [],
+  // A band's envelope's fall (s): its hold, what today's lighting times gave the envelope (claude-5f).
+  knobs: MUSIC_KNOBS,
   ports: {
-    in: [],
+    in: MUSIC_KNOBS.map(knobPortOf),
     out: [
       out('audio', 'Sound', 'audio'),
       ...TRACK_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value')),
@@ -178,7 +181,13 @@ export const ADSR = declared(
   'adsr',
   'ADSR',
   'modulator',
-  [knob('attack', 'Attack', 0, 2, 0.01), knob('decay', 'Decay', 0, 4, 0.2), knob('sustain', 'Sustain', 0, 1, 0, 'level'), knob('release', 'Release', 0, 8, 0.2), knob('amount', 'Amount', 0, 1, 1, 'level')],
+  [
+    ...[knob('attack', 'Attack', 0, 2, 0.04), knob('decay', 'Decay', 0, 4, 0), knob('sustain', 'Sustain', 0, 1, 0, 'level'), knob('release', 'Release', 0.02, 8, 0.2)].map((k) => ({ ...k, channels: 6 })),
+    // How a hit that comes while one rings starts: from the higher of the two (0, as today's lights), or from where it
+    // is (1, the textbook's).
+    knob('retrigger', 'Retrigger', 0, 1, 0, 'step'),
+    knob('amount', 'Amount', 0, 1, 1, 'level'),
+  ],
   [{ id: 'gate', label: 'Gate', type: 'trigger', channels: 6 }],
   [out('out', 'Out', 'value', 6)],
 );
@@ -318,8 +327,8 @@ export const MIX = declared(
 );
 
 /** Feedback: the picture its input had last frame (TouchDesigner's Feedback; VCV Rack's one-step cable): the only
- *  way round a picture cycle. */
-export const FEEDBACK = declared('feedback', 'Feedback', 'module', [], [PICTURE_IN], [PICTURE_OUT]);
+ *  way round a picture cycle. Light or a picture (the flame's own loop runs on light). */
+export const FEEDBACK = declared('feedback', 'Feedback', 'module', [], [{ ...PICTURE_IN, polymorphic: true }], [{ ...PICTURE_OUT, polymorphic: true }]);
 
 /** The screen: what reaches it is drawn, through its flash guard (three flashes a second over the area the owner chose:
  *  fixed, never learned, never removed; `guard` how far it is holding now). */

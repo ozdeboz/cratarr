@@ -85,6 +85,12 @@ function showDevice(show: Module): Device {
  *  `<device>/<module>`, its own cables inside, and the cables to and from its exposed ports led to the modules behind
  *  them. Devices in devices too. */
 export function flatten(p: PatchV2): PatchV2 {
+  return opened(p).patch;
+}
+
+/** `p` flattened, and where each of its devices' exposed ports leads (by `device.port`), through nested ones
+ *  (claude-632's fix). */
+function opened(p: PatchV2): { patch: PatchV2; behind: Map<string, PortRef> } {
   const modules: Module[] = [];
   const cables: CableV2[] = [];
   const behind = new Map<string, PortRef>();
@@ -93,18 +99,31 @@ export function flatten(p: PatchV2): PatchV2 {
       modules.push(m);
       continue;
     }
-    const inner = flatten(m.patch);
+    const inner = opened(m.patch);
     const at = (id: string) => `${m.id}/${id}`;
-    modules.push(...inner.modules.map((x) => ({ ...x, id: at(x.id) })));
-    cables.push(...inner.cables.map((c) => ({ ...c, id: at(c.id), from: { ...c.from, module: at(c.from.module) }, to: { ...c.to, module: at(c.to.module) } })));
-    for (const e of [...m.inputs, ...m.outputs]) behind.set(`${m.id}.${e.as}`, { module: at(e.module), port: e.port, ...(e.channel !== undefined ? { channel: e.channel } : {}) });
+    modules.push(...inner.patch.modules.map((x) => ({ ...x, id: at(x.id) })));
+    cables.push(...inner.patch.cables.map((c) => ({ ...c, id: at(c.id), from: { ...c.from, module: at(c.from.module) }, to: { ...c.to, module: at(c.to.module) } })));
+    for (const e of [...m.inputs, ...m.outputs]) {
+      const r = inner.behind.get(`${e.module}.${e.port}`) ?? e;
+      behind.set(`${m.id}.${e.as}`, { module: at(r.module), port: r.port, ...(e.channel !== undefined ? { channel: e.channel } : {}) });
+    }
   }
   const lead = <T extends PortRef>(r: T): T => {
     const b = behind.get(`${r.module}.${r.port}`);
     return b ? { ...r, module: b.module, port: b.port } : r;
   };
   for (const c of p.cables) cables.push({ ...c, from: lead(c.from), to: lead(c.to) });
-  return { ...p, modules, cables };
+  return { patch: { ...p, modules, cables }, behind };
+}
+
+/** The bands' hits through an ADSR (claude-5f's mapping of today's Linger): `adsr` for the hits, `adsr-drums` for the
+ *  percussive hits, made where a cable needs one; release a band its lighting time, attack 0.04 s, no decay or
+ *  sustain, a hit starting from the higher of the two (as today's lights). */
+const ADSR_OF: Record<string, string> = { hits: 'adsr', percussiveHits: 'adsr-drums' };
+function adsrModule(id: string, lighting: number[]): Module {
+  const knobs: Record<string, number> = { retrigger: 0, amount: 1 };
+  for (let b = 0; b < BANDS; b++) Object.assign(knobs, { [`attack.${b}`]: 0.04, [`decay.${b}`]: 0, [`sustain.${b}`]: 0, [`release.${b}`]: lighting[b] });
+  return { id, type: 'adsr', knobs };
 }
 
 /** Today's settings (with their extras) as a v2 patch. */
@@ -132,6 +151,20 @@ export function toV2(s: VisualSettings): PatchV2 {
   const show = p.layers[0]?.modules.find((m) => m.id === 'show');
   if (flame && show && typeof show.knobs.size === 'number') flame.knobs.zoom = show.knobs.size;
   const target = (to: Cable['to']) => (to.module === 'show' && to.knob === 'size' ? { module: 'flame', port: 'zoom' } : { module: to.module, port: to.knob });
+  // The bands' Linger leaves the Flame: Music's hold, and the ADSRs' release.
+  const lighting = [...s.lighting];
+  for (let b = 0; b < BANDS; b++) {
+    engine.get('music')!.knobs[`hold.${b}`] = lighting[b];
+    if (flame) delete flame.knobs[`lighting.${b}`];
+  }
+  const adsrs = new Map<string, Module>();
+  // A cable from the hits comes from their ADSR (the band's channel, or all of them).
+  const viaAdsr = (from: CableV2['from']): CableV2['from'] => {
+    const id = from.module === 'music' ? ADSR_OF[from.port] : undefined;
+    if (!id) return from;
+    if (!adsrs.has(id)) adsrs.set(id, adsrModule(id, lighting));
+    return { module: id, port: 'out', ...(from.channel !== undefined ? { channel: from.channel } : {}) };
+  };
   const extraIds = new Set((s.extra?.cables ?? []).map((c) => c.id));
   const cables: CableV2[] = [];
   for (const c of p.cables) {
@@ -139,9 +172,12 @@ export function toV2(s: VisualSettings): PatchV2 {
     if (isRoute(c.id, BANDS) && !extraIds.has(c.id)) {
       // A route set to nothing is no cable.
       if (typeof c.value === 'number' && c.value === 0) continue;
-      cables.push({ id: c.id, ...routeFrom(c), to, value: c.value, mode: c.mode });
-    } else cables.push({ id: c.id, from: extraFrom(c), to, value: c.value, mode: c.mode });
+      const r = routeFrom(c);
+      cables.push({ id: c.id, ...r, from: viaAdsr(r.from), to, value: c.value, mode: c.mode });
+    } else cables.push({ id: c.id, from: viaAdsr(extraFrom(c)), to, value: c.value, mode: c.mode });
   }
+  for (const [signal, id] of Object.entries(ADSR_OF))
+    if (adsrs.has(id)) cables.push({ id: `${id}-gate`, from: { module: 'music', port: signal }, to: { module: id, port: 'gate' }, value: 1, mode: 'swing' });
   cables.push(...pictureCables(p));
-  return { v: 2, modules: [...engine.values(), ...modules], cables, macros: p.macros, pins: p.pins };
+  return { v: 2, modules: [...engine.values(), ...adsrs.values(), ...modules], cables, macros: p.macros, pins: p.pins };
 }
