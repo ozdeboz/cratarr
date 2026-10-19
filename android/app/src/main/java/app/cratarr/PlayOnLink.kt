@@ -85,9 +85,13 @@ class PlayOnLink(
     private var heldBack: String? = null
     private var heldAt = 0L
 
+    /** Where the sound goes: a change is reported at once (decision 0033, amended 2026-10-19). */
+    private var outputs: Output.Watch? = null
+
     fun start() {
         if (running) return
         running = true
+        outputs = Output.Watch(service) { soon() }
         volume = player.volume
         player.addListener(this)
         thread = Thread(::listen, "cratarr-play-on").apply { isDaemon = true; start() }
@@ -132,6 +136,8 @@ class PlayOnLink(
     fun stop() {
         closing = "stopped"
         running = false
+        outputs?.stop()
+        outputs = null
         clockThread?.interrupt()
         player.removeListener(this)
         main.removeCallbacks(heartbeat)
@@ -655,6 +661,7 @@ class PlayOnLink(
             .put("volume", (volume * 100).toInt())
             .put("ducked", ducked)
             .put("held", heldBack ?: JSONObject.NULL)
+            .put("output", Output.now(service) ?: JSONObject.NULL)
             .put("queue_id", Prefs(service).queueId.ifEmpty { null } ?: JSONObject.NULL)
             .put("queue_name", Prefs(service).queueName.ifEmpty { null } ?: JSONObject.NULL)
             .put("link", linkJson())

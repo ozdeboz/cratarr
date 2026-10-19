@@ -245,3 +245,17 @@ app, updated, reported nothing queued before it connected, and Cratarr kept only
   carries `queues` (so the players stream and the webhook push the list). `play {radio: true}` starts a radio (decision
   0036): Autoplay seeded from the playlist, album, favourites or tracks named, else from the track that plays, in the
   player's Autoplay mode; its first five tracks play as a queue named "Radio: …", `from` `radio`.
+
+## Amendment (2026-10-19): where a queue was heard
+
+The owner asked to "play the car queue again", and yes to the app saying where its sound goes (release 68).
+
+- The app reports its audio output with each report (`output: {type, name}`: `bluetooth`, `speaker`, `wired`, `usb`,
+  `hdmi`, `remote`, `other`, and the device's own name for all but the speaker), read from Android's routing for media
+  (no permission), and again at once when an output comes or goes. A player's view carries it; pages and Kodi say none.
+- Each queue keeps where it was heard (`played_on: [{player, type, name}]`, at most four, the newest last), noted while
+  it plays and moving with it (a handover, a switch); the list shows it.
+- A queue started of no playlist or album while its player's sound goes to a Bluetooth device of its own name takes
+  that name (the car's, say) instead of "Library", "Favourites" or its tracks'. Renamed as any other.
+- `queue {played_on: "<text>"}` takes up the newest queue heard on an output or player whose name holds the text: this
+  player's list first, then the same account's other players' lists. It plays from where it stood.

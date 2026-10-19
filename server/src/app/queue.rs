@@ -56,6 +56,32 @@ pub struct Queue {
     /// What it was started from: `playlist`, `album`, `favourites`, `library`, `tracks`, or `player` (started there).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
+    /// Where it was heard (decision 0033, amended 2026-10-19: the players' audio outputs), oldest first, at most
+    /// `PLAYED_ON` different ones: it moves with the queue (a handover, a switch).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub played_on: Vec<PlayedOn>,
+}
+
+/// Where a queue was heard: on which player, through what (its app's audio output: `bluetooth`, `speaker`, `wired`,
+/// `usb`, `hdmi`, `remote`, `other`; none where the player does not say) and the device's name where it has one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayedOn {
+    pub player: String,
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// How many places a queue remembers it was heard.
+const PLAYED_ON: usize = 4;
+
+impl PlayedOn {
+    /// Whether `text` names it: in its device's name or its player's, whatever the case.
+    pub fn named(&self, text: &str) -> bool {
+        let t = text.to_lowercase();
+        self.name.as_deref().is_some_and(|n| n.to_lowercase().contains(&t)) || self.player.to_lowercase().contains(&t)
+    }
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -256,11 +282,12 @@ impl Queue {
                 }
                 self.tracks = tracks;
                 self.started = now_secs();
-                // Another queue (decision 0033, amended): its own id and name, not renamed until it is.
+                // Another queue (decision 0033, amended): its own id and name, not renamed until it is, heard nowhere yet.
                 if let Some(id) = &queue_id {
                     self.id = id.clone();
                     self.name = queue_name.clone().unwrap_or_default();
                     self.renamed = false;
+                    self.played_on.clear();
                 }
                 // Something new turns repeat one off; repeat all stays (decision 0033, amended, rule 4).
                 if self.repeat == Repeat::One {
@@ -418,6 +445,19 @@ impl Queue {
         };
         self.version += 1;
         Ok(told)
+    }
+
+    /// It is heard here: the newest of where it was heard (again, it moves last); `true` when that changed.
+    pub fn heard(&mut self, on: PlayedOn) -> bool {
+        if self.played_on.last() == Some(&on) {
+            return false;
+        }
+        self.played_on.retain(|p| *p != on);
+        self.played_on.push(on);
+        if self.played_on.len() > PLAYED_ON {
+            self.played_on.remove(0);
+        }
+        true
     }
 
     /// [`Queue::adopted`]: `true` when the queue changed.

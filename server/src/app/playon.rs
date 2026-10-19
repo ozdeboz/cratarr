@@ -19,7 +19,7 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
-use super::queue::{Queue, Repeat};
+use super::queue::{PlayedOn, Queue, Repeat};
 use super::radio::{AutoMode, Autoplay, AutoplayMode, Mode as RadioMode, RadioBy, from_old};
 use super::{PlaylistService, ToggleError};
 
@@ -110,12 +110,33 @@ pub struct Report {
     /// out or null: nothing holds it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
+    /// Where its sound goes now (decision 0033, amended 2026-10-19), as its app tells: left out by pages, Kodi and
+    /// apps from before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<Output>,
     /// Which queue it plays, and its name (decision 0033, amended): another id than Cratarr's is a queue the player
     /// started itself, and the one before is kept. Apps from before leave them out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_name: Option<String>,
+}
+
+/// A device's audio output (decision 0033, amended 2026-10-19): `bluetooth`, `speaker`, `wired`, `usb`, `hdmi`,
+/// `remote` or `other`, and the device's own name where it has one (a car's Bluetooth, say; none for a speaker).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Output {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+impl Output {
+    /// A queue's name from where it plays: a Bluetooth device's own (a car's), else none.
+    fn queue_name(&self) -> Option<String> {
+        (self.kind == "bluetooth").then(|| self.name.clone()).flatten().filter(|n| !n.trim().is_empty())
+    }
 }
 
 /// A player's link as the player sees it (decision 0045): what Cratarr cannot see while the player's reports still get
@@ -370,7 +391,14 @@ pub enum Command {
     Handover { to: String },
     /// Queue history (decision 0033, amended): the player takes up its queue `id` where it was left, playing if it
     /// played, else paused there; the one it leaves is kept. Handled here; the player is told a play.
-    Queue { id: String },
+    Queue {
+        #[serde(default)]
+        id: String,
+        /// Instead of `id`: the newest queue heard on an output (or player) this names, as "the car queue": this
+        /// player's first, then the same account's other players' (decision 0033, amended 2026-10-19). Played.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        played_on: Option<String>,
+    },
     /// Queue history: queue `id` (the one that plays too) renamed; kept then until deleted. Handled here.
     QueueRename { id: String, name: String },
     /// Queue history: queue `id` out of the list; not the one that plays. Handled here.
@@ -444,6 +472,8 @@ pub struct PlayerView {
     pub ducked: bool,
     /// Why it does not play what it was told to, as it says (its device would not let it); none: nothing holds it.
     pub held: Option<String>,
+    /// Where its sound goes now, as its app says (decision 0033, amended 2026-10-19); none where it does not say.
+    pub output: Option<Output>,
     pub queue_length: usize,
     /// Off, one or all (decision 0033, amended).
     pub repeat: Repeat,
@@ -659,8 +689,9 @@ impl Entry {
             name: if self.queue.name.is_empty() { name_of(&self.queue.tracks) } else { self.queue.name.clone() },
             tracks: self.queue.tracks.len(),
             from: self.queue.from.clone(),
-            updated: now_secs(),
+            updated: self.queue.started,
             playing: true,
+            played_on: self.queue.played_on.clone(),
         });
         let kept = self.kept.iter().map(|k| QueueItem {
             id: k.queue.id.clone(),
@@ -669,6 +700,7 @@ impl Entry {
             from: k.queue.from.clone(),
             updated: k.updated,
             playing: false,
+            played_on: k.queue.played_on.clone(),
         });
         playing.into_iter().chain(kept).collect()
     }
@@ -732,6 +764,7 @@ impl Entry {
             volume: r.volume,
             ducked: r.ducked,
             held: r.held.clone(),
+            output: r.output.clone(),
             queue_length: self.queue.tracks.len(),
             repeat: self.queue.repeat,
             shuffled: shuffled_order(&self.queue.tracks, index),
@@ -810,6 +843,7 @@ fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Op
             volume: own.volume,
             ducked: own.ducked,
             held: own.held,
+            output: own.output,
             // What the device is (a Kodi stays one, so it is never made a leader).
             kind: own.kind,
             ..le.view(l, with_queue)
@@ -892,9 +926,11 @@ pub struct QueueItem {
     pub tracks: usize,
     /// What it was started from (`playlist`, `album`, `favourites`, `library`, `tracks`, `player`).
     pub from: Option<String>,
-    /// When it was left (epoch seconds); for the one that plays, now.
+    /// When it was left (epoch seconds); for the one that plays, when it started (0: not known).
     pub updated: u64,
     pub playing: bool,
+    /// Where it was heard, oldest first.
+    pub played_on: Vec<PlayedOn>,
 }
 
 /// Queues per player, with the one that plays (decision 0033, amended).
@@ -1405,13 +1441,17 @@ impl PlayOn {
                 };
                 if named.is_some() || other {
                     e.keep(standing);
+                    // Without a name of its own: its Bluetooth device's (a car's), else after its tracks.
+                    let given = report.queue_name.clone().filter(|n| !n.trim().is_empty());
+                    let unnamed = || report.output.as_ref().and_then(Output::queue_name).unwrap_or_else(|| name_of(&e.queue.tracks));
                     let (id, name) = match named {
-                        Some(id) => (id, report.queue_name.clone().unwrap_or_else(|| name_of(&e.queue.tracks))),
+                        Some(id) => (id, given.unwrap_or_else(unnamed)),
                         None if e.queue.tracks.is_empty() => (String::new(), String::new()),
-                        None => (super::queue::new_entry(), name_of(&e.queue.tracks)),
+                        None => (super::queue::new_entry(), unnamed()),
                     };
                     e.queue.from = (!id.is_empty()).then(|| "player".to_string());
                     (e.queue.id, e.queue.name, e.queue.renamed) = (id, name, false);
+                    e.queue.played_on.clear();
                 }
                 if let Some(r) = report.repeat {
                     e.queue.repeat = r;
@@ -1442,6 +1482,11 @@ impl PlayOn {
             }
             e.report = Report { queue: None, ..report };
             e.at = Instant::now();
+            // Where its queue is heard (decision 0033, amended 2026-10-19): this player, through its output.
+            if e.report.playing && !e.queue.tracks.is_empty() && e.kind != PlayerKind::Browser {
+                let out = e.report.output.clone();
+                e.queue.heard(PlayedOn { player: name.to_string(), kind: out.as_ref().map(|o| o.kind.clone()), name: out.and_then(|o| o.name) });
+            }
         }
         let track = e.view(name, false).track;
         let new_track = key(track.as_ref()) != e.ids.0;
@@ -1507,7 +1552,8 @@ impl PlayOn {
                 self.dissolve(name);
                 return self.handover(name, &to).await;
             }
-            Command::Queue { id } => return self.switch(name, &id).await,
+            Command::Queue { played_on: Some(text), .. } => return self.switch_to_played_on(name, &text).await,
+            Command::Queue { id, .. } => return self.switch(name, &id).await,
             Command::QueueRename { id, name: new } => return self.rename_queue(name, &id, &new),
             Command::QueueDelete { id } => return self.delete_queue(name, &id),
             Command::Play { from, tracks, .. } if from.radio => return self.start_radio(name, from, tracks).await,
@@ -1543,7 +1589,12 @@ impl PlayOn {
                 }
                 let tracks = self.named(tracks).await;
                 // Its name: as given, else the playlist's, else Cratarr's own (the album's title, say).
-                let queue_name = queue_name.or(from.name).or(from.playlist).unwrap_or_else(|| match started {
+                // Not a playlist or an album, and the player's sound goes to a Bluetooth device of its own name (a car's):
+                // named after that device (decision 0033, amended 2026-10-19).
+                let device = (from.album.is_none() && queue_name.is_none() && from.name.is_none())
+                    .then(|| self.entries().get(name).and_then(|e| e.report.output.as_ref().and_then(Output::queue_name)))
+                    .flatten();
+                let queue_name = queue_name.or(from.name).or(from.playlist).or(device).unwrap_or_else(|| match started {
                     Some("favourites") => "Favourites".into(),
                     Some("library") => "Library".into(),
                     _ => name_of(&tracks),
@@ -1720,7 +1771,7 @@ impl PlayOn {
         if let Some(e) = self.entries().get_mut(&target)
             && e.queue.id == queue.id
         {
-            (e.queue.from, e.queue.renamed) = (queue.from.clone(), queue.renamed);
+            (e.queue.from, e.queue.renamed, e.queue.played_on) = (queue.from.clone(), queue.renamed, queue.played_on.clone());
         }
     }
 
@@ -1815,6 +1866,43 @@ impl PlayOn {
         Box::pin(self.command(name, play)).await?;
         self.settle(name, &k.queue).await;
         tracing::info!(target: "playon", player = name, queue = k.queue.name.as_str(), "queue taken up again");
+        self.changed();
+        Ok(())
+    }
+
+    /// Queue history by where it was heard (decision 0033, amended 2026-10-19): the newest queue heard on an output or
+    /// player `text` names, from this player's list, else from the same account's other players' lists (newest left
+    /// first). Played here from where it stood.
+    async fn switch_to_played_on(&self, name: &str, text: &str) -> Result<(), ToggleError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(ToggleError::Refused("Played on what?".into()));
+        }
+        let found = {
+            let entries = self.entries();
+            let Some(me) = entries.get(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
+            let heard = |k: &&Kept| k.queue.played_on.iter().any(|p| p.named(text));
+            let first = first_owner();
+            let mine = |e: &Entry| e.owner.as_deref().or(first.as_deref()) == me.owner.as_deref().or(first.as_deref());
+            me.kept.iter().find(heard).cloned().or_else(|| {
+                entries.iter().filter(|(n, e)| n.as_str() != name && mine(e)).flat_map(|(_, e)| e.kept.iter().filter(heard)).max_by_key(|k| k.updated).cloned()
+            })
+        };
+        let Some(k) = found else { return Err(ToggleError::Refused(format!("No queue played on {text}."))) };
+        let index = k.entry.as_deref().and_then(|x| k.queue.at(x)).unwrap_or(0);
+        let play = Command::Play {
+            from: PlayFrom { whole: true, ..PlayFrom::default() },
+            tracks: Some(k.queue.tracks.clone()),
+            index,
+            position_ms: k.position_ms,
+            shuffle: false,
+            paused: false,
+            queue_id: Some(k.queue.id.clone()),
+            queue_name: Some(k.queue.name.clone()),
+        };
+        Box::pin(self.command(name, play)).await?;
+        self.settle(name, &k.queue).await;
+        tracing::info!(target: "playon", player = name, queue = k.queue.name.as_str(), played_on = text, "queue taken up again");
         self.changed();
         Ok(())
     }
@@ -2626,7 +2714,7 @@ mod tests {
 
         // Taken up again: from its track and position, playing as it played; Chill kept in its place.
         let transit = list[1].id.clone();
-        p.command("tablet", Command::Queue { id: transit.clone() }).await.unwrap();
+        p.command("tablet", Command::Queue { id: transit.clone(), played_on: None }).await.unwrap();
         let play = told(&mut tablet).into_iter().find(|m| m["command"] == "play").unwrap();
         assert_eq!((play["index"].as_u64(), play["position_ms"].as_u64(), play["paused"].as_bool()), (Some(1), Some(40_000), None));
         assert_eq!(play["tracks"].as_array().map(Vec::len), Some(3), "whole, nothing of Chill's brought along");
@@ -2736,6 +2824,39 @@ mod tests {
         let tablet = all.iter().find(|v| v.name == "tablet").unwrap();
         assert_eq!(tablet.queues.as_ref().map(Vec::len), Some(2));
         assert!(tablet.queue.is_none(), "the tracks themselves only by name");
+    }
+
+    #[tokio::test]
+    async fn a_queue_remembers_where_it_was_heard_and_is_found_by_it() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let (_phone, mut tablet) = (p.connect("Phone").unwrap(), p.connect("Salon tablet").unwrap());
+        let car = Output { kind: "bluetooth".into(), name: Some("JVC KW-M560BT".into()) };
+        // The phone in the car: its output said, and a play of no playlist or album named after the car's device.
+        p.report("Phone", Report { index: -1, output: Some(car.clone()), ..Report::default() }).unwrap();
+        assert_eq!(p.get("Phone").unwrap().output, Some(car.clone()));
+        p.command("Phone", Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).await.unwrap();
+        let version = p.get("Phone").unwrap().queue_version;
+        p.report("Phone", Report { index: 0, version: Some(version), playing: true, output: Some(car.clone()), ..Report::default() }).unwrap();
+        let q = p.get("Phone").unwrap().queues.unwrap().remove(0);
+        assert_eq!(q.name, "JVC KW-M560BT");
+        assert_eq!(q.played_on, vec![PlayedOn { player: "Phone".into(), kind: Some("bluetooth".into()), name: Some("JVC KW-M560BT".into()) }]);
+
+        // Home: the phone's queue goes to the salon and is heard there too; the phone keeps it as it stood.
+        p.command("Phone", Command::Handover { to: "Salon tablet".into() }).await.unwrap();
+        let version = p.get("Salon tablet").unwrap().queue_version;
+        p.report("Salon tablet", Report { index: 0, version: Some(version), playing: true, ..Report::default() }).unwrap();
+        let heard: Vec<String> = p.get("Salon tablet").unwrap().queues.unwrap()[0].played_on.iter().map(|o| o.player.clone()).collect();
+        assert_eq!(heard, ["Phone", "Salon tablet"], "where it was heard moves with it");
+        // Something else in the salon; later "the car queue again": found by the car's device, played from where it was.
+        p.command("Salon tablet", Command::play(vec![t("tr-9")], 0, 0)).await.unwrap();
+        said(&mut tablet);
+        let again = Command::Queue { id: String::new(), played_on: Some("jvc".into()) };
+        p.command("Salon tablet", again).await.unwrap();
+        let play = told(&mut tablet).into_iter().find(|m| m["command"] == "play").unwrap();
+        assert_eq!((play["queue_name"].as_str(), play["paused"].as_bool()), (Some("JVC KW-M560BT"), None), "played");
+        let nowhere = Command::Queue { id: String::new(), played_on: Some("kitchen".into()) };
+        assert!(matches!(p.command("Salon tablet", nowhere).await, Err(ToggleError::Refused(m)) if m == "No queue played on kitchen."));
     }
 
     #[test]
