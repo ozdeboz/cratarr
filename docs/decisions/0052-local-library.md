@@ -86,8 +86,11 @@ features is weird"; and, asked whether a local queue goes away: no, each mode ke
   Android found music in, by their top folder ("Music", "Download"), each with its number of tracks and a switch; the
   first one turned on asks for Android's permission. The switch shows once one is on; the last one off is Cratarr's
   music again.
-- **The phone**: open (the owner's own idea, drawn: More makes the top bar grow a row above its buttons, Cratarr's mark
-  first, the switch there).
+- **The phone** (mock C): a slim row above the tabs, the same switch as the sidebar's in one line (the mark, the mode,
+  "● Connected" or the device's name with its music note, the chooser's arrows), shown only as the sidebar's is: with a
+  local folder on, else the bar stays as now. The owner: "It's either a slim row above the tabs or the expanded menu.
+  And since I don't want to design the expanded menu now, we go for the slim row above the tabs." (The expanded menu:
+  More growing the bar by a row, for later.)
 - **A switch is the whole app, the player too**: what plays pauses and is put by, the other mode's queue comes back
   paused, where it was (as built).
 - **Named Local**, the owner's own word; "This device" stays the name of the player here (where music plays, Settings).
