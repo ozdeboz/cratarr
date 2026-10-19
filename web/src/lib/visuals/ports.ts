@@ -3,7 +3,8 @@
 // (events with their strength). A module type's ports come from what it declares: its knobs are value inputs, a
 // modulator's `inputs` are value inputs, a picture module takes and gives a picture, a modulator gives a value. The
 // modules that hold today's hidden behaviours are declared here, so every one of them shows.
-import type { Knob, ModuleType, Place } from './patch';
+import type { RouteValue } from './curves';
+import type { Knob, Macro, Module, ModuleType, Place } from './patch';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
 export type PortType = 'picture' | 'value' | 'trigger';
@@ -116,3 +117,66 @@ export const WALK = declared('walk', 'Walk', 'modulator', [knob('amount', 'Amoun
 export const SAFETY = declared('safety', 'Safety', 'finish', [knob('wild', 'Wild', 0, 1, 0.5)], [PICTURE_IN], [PICTURE_OUT, out('holding', 'Holding back')]);
 
 export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, SAFETY];
+
+// ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
+
+/** A cable between typed ports. From a signal port of Music it keeps 0056's reference and speed; its `depth` is the
+ *  port that scales it (undefined: normalled to the Envelope; null: unplugged). */
+export type CableV2 = {
+  id: string;
+  from: PortRef & { reference?: 'track' | 'lately' | 'absolute'; speed?: 'fast' | 'slow' };
+  to: PortRef;
+  value: RouteValue;
+  mode: 'level' | 'swing';
+  depth?: PortRef | null;
+};
+
+export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
+
+/** The blends a Mix input takes (0056's, as a step knob per input). */
+export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window'] as const;
+/** How many pictures a Mix takes. */
+export const MIX_INPUTS = 4;
+
+/** Mix: up to four pictures, each by its mode and amount, the first under the rest (0057 §4: blend as a module). */
+export const MIX = declared(
+  'mix',
+  'Mix',
+  'module',
+  Array.from({ length: MIX_INPUTS }, (_, i) => [
+    knob(`mode${i + 1}`, `Mode ${i + 1}`, 0, MIX_MODES.length - 1, i === 0 ? 2 : 1, 'step'),
+    knob(`amount${i + 1}`, `Amount ${i + 1}`, 0, 1, 1, 'level'),
+  ]).flat(),
+  Array.from({ length: MIX_INPUTS }, (_, i): Port => ({ id: `in${i + 1}`, label: `Picture ${i + 1}`, type: 'picture' })),
+  [PICTURE_OUT],
+);
+
+/** Feedback: the picture its input had last frame (TouchDesigner's Feedback; VCV Rack's one-step cable): the only
+ *  way round a picture cycle. */
+export const FEEDBACK = declared('feedback', 'Feedback', 'module', [], [PICTURE_IN], [PICTURE_OUT]);
+
+/** The screen: what reaches it is drawn (after Safety). */
+export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], []);
+
+export const GRAPH_MODULES: readonly Declared[] = [MIX, FEEDBACK, SCREEN];
+
+/** Whether a picture cycle passes through a Feedback, as every one must (§4): the cables' picture graph, by module. */
+export function cyclesClosed(p: PatchV2, typeOf: (type: string) => (ModuleType & { ports?: Ports }) | undefined): boolean {
+  const type = new Map(p.modules.map((m) => [m.id, m.type]));
+  const isPicture = (c: CableV2) => {
+    const t = typeOf(type.get(c.from.module) ?? '');
+    return !!t && portsOf(t).out.find((x) => x.id === c.from.port)?.type === 'picture';
+  };
+  const next = new Map<string, string[]>();
+  for (const c of p.cables) if (isPicture(c) && type.get(c.from.module) !== 'feedback') next.set(c.from.module, [...(next.get(c.from.module) ?? []), c.to.module]);
+  const state = new Map<string, 1 | 2>();
+  const visit = (id: string): boolean => {
+    if (state.get(id) === 2) return true;
+    if (state.get(id) === 1) return false;
+    state.set(id, 1);
+    for (const n of next.get(id) ?? []) if (!visit(n)) return false;
+    state.set(id, 2);
+    return true;
+  };
+  return p.modules.every((m) => visit(m.id));
+}
