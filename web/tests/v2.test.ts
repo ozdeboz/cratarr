@@ -25,7 +25,7 @@ test('the routes as cables: loudness from the Loudness (unscaled), track from Tr
   assert.equal(by[routeKey('beat', null, 'size')], undefined, 'a route at nothing is no cable');
 });
 
-test('Intensity, Flash and Speed move to the modules that do them; the column scales stay the column knobs', () => {
+test('Intensity, Flash and Speed move to the modules that do them', () => {
   const s = copy(DEFAULTS);
   s.intensity = 0.3;
   s.flash = 1.4;
@@ -37,7 +37,7 @@ test('Intensity, Flash and Speed move to the modules that do them; the column sc
   assert.equal(m.accent.knobs.accent, 1.4);
   assert.equal(m.clock.knobs.speed, 0.7);
   for (const k of ['intensity', 'flash', 'speed']) assert.ok(!(k in m.frame.knobs), k);
-  assert.equal(m.flame.knobs.zoom, 0.5, "Show's Size is the Flame's zoom");
+  assert.equal(m.flame.knobs.zoom, 1, "Show's Size is the Flame's zoom; as a column's scale it went into the cables (§7e item 2)");
   assert.equal(m.show.type, 'device');
   for (const id of ['music', 'track', 'envelope', 'clock', 'accent', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
 });
@@ -106,4 +106,24 @@ test('a Drift converts to a Random at its smooth end', () => {
   const wander = toV2(s).modules.find((m) => m.id === 'wander')!;
   assert.equal(wander.type, 'random');
   assert.equal(wander.knobs.shape, 0);
+});
+
+test("a column's scale goes into its cables' amounts (curves' heights too), the column knob at 1; the fluid's stirring left", () => {
+  const s = copy(DEFAULTS);
+  s.size = 0.5;
+  s.rotation = 2;
+  s.stir = 0.3;
+  s.routes = {
+    [routeKey('loudness', null, 'size')]: 0.6,
+    [routeKey('beat', null, 'rotation')]: { h1: [1 / 3, 0.1], h2: [2 / 3, 0.4], h: 0.8 },
+    [routeKey('beat', null, 'stir')]: 1,
+  };
+  const v = toV2(s);
+  const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
+  assert.equal(by[routeKey('loudness', null, 'size')].value, 0.3);
+  assert.deepEqual(by[routeKey('beat', null, 'rotation')].value, { h1: [1 / 3, 0.2], h2: [2 / 3, 0.8], h: 1.6 });
+  assert.equal(by[routeKey('beat', null, 'stir')].value, 1);
+  const m = Object.fromEntries(v.modules.map((x) => [x.id, x]));
+  assert.equal(m.flame.knobs.zoom, 1);
+  assert.equal(m.flame.knobs.rotation, 1);
 });

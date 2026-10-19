@@ -60,6 +60,9 @@ export function polyKnobs(t: ModuleType): ModuleType {
 }
 
 const knobPortOf = (k: Knob): Port => ({ ...knobPort(k), ...(k.channels ? { channels: k.channels } : {}) });
+/** A level knob's gain (0057 §7e item 1): its value times this (0..1), normalled to 1; a VCA's out cabled in, as a
+ *  module's CV-controlled level. */
+const gainPortOf = (k: Knob): Port[] => (k.kind === 'level' ? [{ id: `${k.id}:gain`, label: `${k.label}: gain`, type: 'value', ...(k.channels ? { channels: k.channels } : {}) }] : []);
 /** A step knob's trigger (0057 §7e): it moves on to its next step at its module's neutral, as a Gate fires it. */
 const nextPortOf = (k: Knob): Port[] => (k.kind === 'step' && k.randomize !== false ? [{ id: `${k.id}:next`, label: `${k.label}: next`, type: 'trigger' }] : []);
 
@@ -76,7 +79,7 @@ const TRIGGER_INPUTS: Record<string, Port[]> = {
 export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   if (t.ports) return t.ports;
   const declared = polyKnobs(t).knobs.filter((k) => !k.device);
-  const knobs = [...declared.map(knobPortOf), ...declared.flatMap(nextPortOf)];
+  const knobs = [...declared.map(knobPortOf), ...declared.flatMap(nextPortOf), ...declared.flatMap(gainPortOf)];
   const inputs = [
     ...(t.inputs ?? []).map((id): Port => ({ id, label: id === 'in' ? 'Input' : id[0].toUpperCase() + id.slice(1), type: id === 'trigger' ? 'trigger' : 'value' })),
     ...(TRIGGER_INPUTS[t.type] ?? []),

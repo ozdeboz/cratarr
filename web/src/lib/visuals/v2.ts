@@ -18,8 +18,9 @@
 // The picture side's wiring (which picture goes into which, and the modules it needs: the Screen, the Feedbacks, the
 // Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
 
-import { isRoute } from './routes';
-import { cratarrPatch, modulesOf, type Cable, type Module, type Patch } from './patch';
+import type { RouteValue } from './curves';
+import { COLUMN_SCALES, isRoute } from './routes';
+import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Module, type Patch } from './patch';
 import { isDevice, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import type { VisualSettings } from './settings.svelte';
 
@@ -127,6 +128,20 @@ function adsrModule(id: string, lighting: number[]): Module {
   return { id, type: 'adsr', knobs };
 }
 
+/** A cable's value scaled (0057 §7e item 2): an amount times `s`, a curve's heights times `s`. */
+function scaled(v: RouteValue, s: number): RouteValue {
+  if (s === 1) return v;
+  if (typeof v === 'number') return v * s;
+  return { ...v, h1: [v.h1[0], v.h1[1] * s], h2: [v.h2[0], v.h2[1] * s], h: v.h * s };
+}
+
+/** The column scales (a knob that also scaled every cable into it) folded into each cable's own amount (0057 §7e item 2;
+ *  claude-5f's shape): by column knob, the setting that scales it. The fluid's stir, flow and swirl are scaled where
+ *  it stirs, not here. */
+const SCALE_OF = new Map(
+  (Object.entries(COLUMN_SCALES) as [string, string][]).filter(([a]) => a !== 'stir' && a !== 'flow' && a !== 'swirl').map(([a, key]) => [ASPECT_KNOB[a as keyof typeof ASPECT_KNOB].join('.'), key]),
+);
+
 /** Today's settings (with their extras) as a v2 patch. */
 export function toV2(s: VisualSettings): PatchV2 {
   const p = cratarrPatch(s);
@@ -178,14 +193,29 @@ export function toV2(s: VisualSettings): PatchV2 {
   };
   const extraIds = new Set((s.extra?.cables ?? []).map((c) => c.id));
   const cables: CableV2[] = [];
+  // A column's scale goes into its cables; its knob then scales nothing (1, until the engine drops SCALED).
+  const scaleOf = (to: Cable['to']) => {
+    const key = SCALE_OF.get(`${to.module}.${to.knob}`);
+    return key ? ((s as unknown as Record<string, number>)[key] ?? 1) : 1;
+  };
+  for (const key of SCALE_OF.keys()) {
+    const [mid, kid] = key.split('.');
+    // Show's are inside its device (below); its size is the Flame's zoom.
+    const m = mid === 'show' ? undefined : modules.find((x) => x.id === mid);
+    if (m) m.knobs[kid] = 1;
+  }
+  if (flame && SCALE_OF.has('show.size')) flame.knobs.zoom = 1;
+  const showAsDevice = modules.find((x) => x.id === 'show') as Device | undefined;
+  for (const part of showAsDevice?.patch.modules ?? []) for (const k of Object.keys(part.knobs)) if (SCALE_OF.has(`show.${k}`)) part.knobs[k] = 1;
   for (const c of p.cables) {
     const to = target(c.to);
+    const value = scaled(c.value, scaleOf(c.to));
     if (isRoute(c.id, BANDS) && !extraIds.has(c.id)) {
       // A route set to nothing is no cable.
       if (typeof c.value === 'number' && c.value === 0) continue;
       const r = routeFrom(c);
-      cables.push({ id: c.id, ...r, from: viaAdsr(r.from), to, value: c.value, mode: c.mode });
-    } else cables.push({ id: c.id, from: viaAdsr(extraFrom(c)), to, value: c.value, mode: c.mode });
+      cables.push({ id: c.id, ...r, from: viaAdsr(r.from), to, value, mode: c.mode });
+    } else cables.push({ id: c.id, from: viaAdsr(extraFrom(c)), to, value, mode: c.mode });
   }
   for (const a of adsrs.values()) cables.push(a.gate);
   const wiring = pictureWiring(p);

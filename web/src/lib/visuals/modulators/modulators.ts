@@ -172,6 +172,7 @@ const gate = define(
     knob('lift', 'Lift', 0, 2, 0, 0.3),
     knob('recover', 'Recover', 0, 4, 0, 0.5),
     knob('release', 'Release', 0, 2, 0, 0.1),
+    knob('gap', 'Gap', 0, 10, 0, 0),
     AMOUNT,
   ],
   IN,
@@ -179,11 +180,14 @@ const gate = define(
     let open = false;
     let lifted = 0;
     let y = 0;
+    let since = Infinity;
     return (dt, _signals, k) => {
       lifted *= keep(dt, k.recover);
-      if (!open && k.in > k.above + lifted) {
+      since += dt;
+      if (!open && k.in > k.above + lifted && since >= k.gap) {
         open = true;
         lifted += k.lift;
+        since = 0;
       } else if (open && k.in < k.above * (1 - k.hysteresis)) open = false;
       y = open ? 1 : y * keep(dt, k.release);
       return k.amount * y;
