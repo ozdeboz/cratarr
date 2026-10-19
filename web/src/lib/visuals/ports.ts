@@ -130,7 +130,7 @@ export const TRACK: Declared = {
   label: 'Track',
   place: 'modulator',
   knobs: [],
-  ports: { in: [], out: [out('pulse', 'New track'), out('look', 'Its look', 'trigger')] },
+  ports: { in: [], out: [out('pulse', 'New track'), out('seed', 'Seed')] },
 };
 
 /** A module declared by its knobs (each a value input), its other inputs before them, and its outputs. */
