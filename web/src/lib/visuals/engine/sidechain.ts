@@ -4,7 +4,7 @@
 // holds its depth down while the key is over.
 //
 // - **Flash** (WCAG 2.3.1, a safety rule, not taste): keyed by the flashes a second over a quarter of the screen,
-//   threshold 2.5 (three, with room to act), down to a tenth of the Flash setting's swing at once, held 8 s after the
+//   threshold 2.5 (three, with room to act), down to a tenth of the Accent's swing at once, held 8 s after the
 //   last burst, let back over a few seconds. Fixed: always on (in a trial too), no knob weakens it, Wild included.
 // - **Motion, shape churn, colour churn, zoom pumping, looks a minute**: keyed by their meters against their budgets
 //   (budget.ts: the standing limits, scaled by Wild and the music's activity), down to as far as each lever went before

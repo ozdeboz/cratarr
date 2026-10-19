@@ -39,19 +39,19 @@ export function stepTrack(st: TrackState, key: string | null, now: number, bps: 
   return Math.max(0, 1 - ((now - st.at) / 1000) * bps);
 }
 
-/** Flash: a quickly changing value as its slow course (followed twice over SLOW_S: a beat's or a hit's swing all but
- *  gone from it, a passage's change kept) and Flash's share of its swing about that course (`held`: as much of it as
- *  the sidechaining lets through). One per target, its course its own. */
+/** Accent (was Flash): a quickly changing value as its slow course (followed twice over SLOW_S: a beat's or a hit's
+ *  swing all but gone from it, a passage's change kept) and Accent's share of its swing about that course (`held`: as
+ *  much of it as the sidechaining lets through). One per target, its course its own. */
 export const SLOW_S = 0.3;
-export type FlashState = number[];
-export const newFlash = (): FlashState => [];
+export type AccentState = number[];
+export const newAccent = (): AccentState => [];
 /** How far the courses follow this frame: slower while the sidechaining holds the swing back. */
 export const courseStep = (dt: number, swingLever: number) => 1 - Math.exp((-dt * swingLever) / SLOW_S);
-export function stepFlash(course: FlashState, v: number, follow: number, flash: number, swingLever: number, held = 1): number {
+export function stepAccent(course: AccentState, v: number, follow: number, accent: number, swingLever: number, held = 1): number {
   if (!course.length) course.push(v, v);
   course[0] += (v - course[0]) * follow;
   course[1] += (course[0] - course[1]) * follow;
-  return course[1] + flash * swingLever * held * (v - course[1]);
+  return course[1] + accent * swingLever * held * (v - course[1]);
 }
 
 /** Moments: what a step's cables give rising past a half fires it; ready again once that falls under a third, and not

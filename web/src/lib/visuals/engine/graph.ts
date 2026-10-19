@@ -1,10 +1,11 @@
 // The one engine (decision 0057, step 2): every value and trigger of a v2 patch, a frame at a time, over its typed
-// cables. Music, Track and the Envelope first (what every cable reads and what scales it); then the modulators in the
-// order their cables need (a cycle reads last frame's value, VCV Rack's rule); then what the cables give each of the
-// Cratarr chain's columns, by the routes' rules (routes.ts give: a swing sums, a level lets through, a band's cable into
-// a part's column is that part's own, into another the bands' mean, a moment's their largest), each column's knob its
-// scale; then the chain's own modules (chain.ts); and every other module's knobs as their cables move them (evaluate.ts's
-// rule). What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
+// cables. Music, Track and the Envelope first (what every cable reads and what scales it); then the modulators, VCAs
+// and Merges in the order their cables need (a cycle reads last frame's value, VCV Rack's rule); then what the cables
+// give each of the Cratarr chain's columns, by the routes' rules (routes.ts give: a swing sums, a level lets through, a
+// band's cable into a part's column is that part's own, into another the bands' mean, a moment's their largest; a
+// column's scale is in its cables' amounts, 0057 §7e), a level column's gain input and a moment column's trigger; then
+// the chain's own modules (chain.ts); and every other module's knobs as their cables move them (evaluate.ts's rule).
+// What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
 
 import type { AspectsNow } from '../aspects';
 import { MOMENT_GAP, heightOf, letThrough, shapeOf, type MomentRequest } from '../evaluate';
@@ -14,7 +15,7 @@ import { modulatorOf, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
 import { SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
-import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
+import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newChain, stepChain, type ChainState } from './chain';
 import { NO_STRIKE, adsrOf, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
@@ -37,11 +38,16 @@ for (const [a, [m, k]] of Object.entries(ASPECT_KNOB) as [Aspect, [string, strin
 const columnOf = (a: Aspect): string[] => [...COLUMN].filter(([, i]) => i === A[a]).map(([key]) => key);
 /** Each ADSR gate's strikes, by the Music port its gate reads. */
 const STRIKES: Record<string, 'hits' | 'drums'> = { hits: 'hits', percussiveHits: 'drums' };
-/** Each column a setting scales (COLUMN_SCALES; the fluid's stirring is scaled where it stirs). */
-const SCALED = (Object.entries(COLUMN_SCALES) as [Aspect, string][]).filter(([a]) => a !== 'stir' && a !== 'flow' && a !== 'swirl').map(([a, k]) => [A[a], k] as const);
+/** The modules the graph works out channel by channel (0057 §7e): VCA, in × gain; Merge, a polyphonic input made one. */
+const CHANNELS = BANDS;
+const MERGE_MODES = ['sum', 'mean', 'max', 'geometric'] as const;
+/** A knob's own inputs beside its value (ports.ts): a level knob's gain, a step knob's trigger to its next step. */
+const GAIN = ':gain';
+const NEXT = ':next';
 /** Halved with reduced motion, as the routes read them. */
 const HALVED = new Set(['beat', 'downbeat', 'section']);
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
+const BAND_PORTS: ReadonlySet<string> = new Set(BAND_SIGNALS);
 /** A macro's value as a knob (0..1), as evaluate.ts has it. */
 const MACRO_KNOB: Knob = { id: 'value', label: 'Value', min: 0, max: 1, neutral: 0, default: 0, kind: 'swing' };
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -64,6 +70,10 @@ export type EngineState = {
   /** Each macro's last value; each step's moment (ready, and how long since it last came). */
   macros: Record<string, number>;
   moments: Record<string, { armed: boolean; since: number }>;
+  /** Each VCA's and Merge's channels last frame (a cycle through one reads them). */
+  poly: Record<string, Float64Array>;
+  /** Each trigger input's last value (`module|knob:next`): it fires as it rises past a half. */
+  triggers: Record<string, number>;
 };
 
 export function newEngine(): EngineState {
@@ -83,6 +93,8 @@ export function newEngine(): EngineState {
     values: {},
     macros: {},
     moments: {},
+    poly: {},
+    triggers: {},
   };
 }
 
@@ -158,6 +170,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const xOf = (c: CableV2): number | null => {
     const f = c.from;
     const type = typeOf.get(f.module) ?? f.module;
+    // A VCA's or a Merge's output, as it is (a Merge's one channel whichever is asked).
+    if (type === 'vca' || type === 'merge') return channelsOf(f.module)[type === 'merge' ? 0 : (f.channel ?? 0)];
     if (type === 'adsr') {
       const gate = gateOf.get(f.module);
       // Its strikes read as its gate reads them: as they are (0..), or against the typical (1 = a typical one, halved
@@ -211,6 +225,56 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     return finite(st.values[r.module]);
   };
   const walkOf = (c: CableV2) => (shapeOf(c.value).walks ? finite(opts.walk?.[c.id], 1) : 1);
+  // The VCAs' and Merges' channels this frame (last frame's until each is worked out).
+  const poly: Record<string, Float64Array> = {};
+  const channelsOf = (id: string) => poly[id] ?? st.poly[id] ?? new Float64Array(CHANNELS);
+  /** What a cable gives a port on channel `ch` (a knob's cable's rule: its curve at its source's x, times its depth
+   *  and its walk); a VCA's or a Merge's source taken as it is, along its straight line where the value is a number. */
+  const giveOf = (c: CableV2, ch: number): number => {
+    const type = typeOf.get(c.from.module) ?? c.from.module;
+    const sh = shapeOf(c.value);
+    const along = c.from.channel === undefined && c.to.channel === undefined ? { ...c, from: { ...c.from, channel: ch } } : c;
+    if (type === 'vca' || type === 'merge') {
+      const v = channelsOf(c.from.module)[type === 'merge' ? 0 : (c.from.channel ?? ch)];
+      return (sh.table ? heightOf(sh, clamp(v, 0, 1)) : sh.end * v) * depthOf(c) * walkOf(c);
+    }
+    const x = xOf(type === 'music' && BAND_PORTS.has(c.from.port) ? along : c);
+    return x === null ? 0 : heightOf(sh, x) * depthOf(c) * walkOf(c);
+  };
+  /** What a port takes on channel `ch`: its cables' sum (a cable with no channel of its own reaches every channel). */
+  const takes = (module: string, port: string, ch: number): number => {
+    let sum = 0;
+    for (const c of into.get(`${module}|${port}`) ?? []) if (c.to.channel === undefined || c.to.channel === ch) sum += giveOf(c, ch);
+    return sum;
+  };
+  const plugged = (module: string, port: string, ch: number) => (into.get(`${module}|${port}`) ?? []).some((c) => c.to.channel === undefined || c.to.channel === ch);
+  /** A VCA (in × gain, the gain its knob plus what its gain input takes, 0 to the knob's most; its input normalled to
+   *  1) or a Merge (its channels' sum, mean, largest or geometric mean), channel by channel. */
+  function process(x: Module) {
+    const out = new Float64Array(CHANNELS);
+    if (x.type === 'vca') {
+      const gain = finite(x.knobs.gain, 1);
+      for (let ch = 0; ch < CHANNELS; ch++) out[ch] = (plugged(x.id, 'in', ch) ? takes(x.id, 'in', ch) : 1) * clamp(gain + takes(x.id, 'cv', ch), 0, 2);
+    } else {
+      const v = Array.from({ length: CHANNELS }, (_, ch) => takes(x.id, 'in', ch));
+      const mode = MERGE_MODES[clamp(Math.round(finite(x.knobs.mode, 1)), 0, MERGE_MODES.length - 1)];
+      const one =
+        mode === 'sum' ? v.reduce((a, b) => a + b, 0) : mode === 'mean' ? v.reduce((a, b) => a + b, 0) / CHANNELS : mode === 'max' ? Math.max(...v) : v.reduce((a, b) => a * b, 1) ** (1 / CHANNELS);
+      out.fill(one);
+    }
+    poly[x.id] = out;
+  }
+  /** A level knob's gain input (normalled to 1), 0..1. */
+  const gainOf = (module: string, knob: string) => (into.has(`${module}|${knob}${GAIN}`) ? clamp(takes(module, `${knob}${GAIN}`, 0), 0, 1) : 1);
+  /** A step knob's trigger input: whether it rose past a half this frame (null: nothing plugged into it). */
+  const fired = (module: string, knob: string): boolean | null => {
+    const key = `${module}|${knob}${NEXT}`;
+    if (!into.has(key)) return null;
+    const v = takes(module, `${knob}${NEXT}`, 0);
+    const was = finite(st.triggers[key], 0);
+    st.triggers[key] = v;
+    return v > 0.5 && was <= 0.5;
+  };
 
   const into = new Map<string, CableV2[]>();
   for (const c of p.cables) {
@@ -257,7 +321,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   // The macros and the modulators, in the order their cables (and a modulator's macros) need.
   const knobs: Record<string, Record<string, number>> = {};
   type Node = { id: string; macro?: Macro; module?: Module };
-  const nodes: Node[] = [...p.macros.map((macro) => ({ id: macro.id, macro })), ...running.map((module) => ({ id: module.id, module }))];
+  const processors = p.modules.filter((x) => x.type === 'vca' || x.type === 'merge');
+  const nodes: Node[] = [...p.macros.map((macro) => ({ id: macro.id, macro })), ...running.map((module) => ({ id: module.id, module })), ...processors.map((module) => ({ id: module.id, module }))];
   const ids = new Set(nodes.map((x) => x.id));
   const needs = new Map<string, Set<string>>(nodes.map((x) => [x.id, new Set<string>()]));
   for (const c of p.cables) if (ids.has(c.from.module) && ids.has(c.to.module) && c.from.module !== c.to.module) needs.get(c.to.module)!.add(c.from.module);
@@ -271,6 +336,10 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       continue;
     }
     const x = next.module!;
+    if (x.type === 'vca' || x.type === 'merge') {
+      process(x);
+      continue;
+    }
     const t = modulatorType(x.type)!;
     const k = knobsOf(x, t);
     for (const port of t.inputs ?? []) k[port] = portSum(x.id, port);
@@ -278,6 +347,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     outputs[x.id] = st.modulators[x.id].run.step(step, read, k);
   }
   for (const id of Object.keys(st.modulators)) if (id in outputs) st.values[id] = outputs[id];
+  st.poly = { ...poly };
+  for (const [id, v] of Object.entries(poly)) outputs[`${id}.out`] = v[0];
   for (const id of Object.keys(macros)) st.macros[id] = macros[id];
 
   // The chain's columns: what their cables give, by the routes' rules.
@@ -322,12 +393,17 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
     got.whole[a] += IS_MOMENT[a] ? most : sum / n;
   }
-  const settings = s as unknown as Record<string, number>;
-  for (const [a, k] of SCALED) {
-    const v = settings[k];
-    if (v === 1) continue;
-    got.whole[a] *= v;
-    for (const own of got.band) own[a] *= v;
+  // A level column's gain input (its VCAs), a moment column's trigger (its Gate): 0057 §7e.
+  const firedNow: Partial<Record<Aspect, boolean>> = {};
+  for (const key of into.keys()) {
+    const gain = key.endsWith(GAIN);
+    if (!gain && !key.endsWith(NEXT)) continue;
+    const base = key.slice(0, -(gain ? GAIN : NEXT).length);
+    const a = COLUMN.get(base);
+    if (a === undefined) continue;
+    const [module, knob] = base.split('|');
+    if (gain && IS_LEVEL[a]) got.level[a] *= gainOf(module, knob);
+    if (!gain && IS_MOMENT[a]) firedNow[ASPECTS[a]] ||= fired(module, knob) ?? false;
   }
 
   // The chain's own modules.
@@ -342,7 +418,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     st.chain,
     m,
     s,
-    { given: got, track: raw, bands, lit: env.level, envelope: env.out, glow: env.glow, clock, trackWalk: { look: trackInto('look'), behaviour: trackInto('behaviour') } },
+    { given: got, track: raw, bands, lit: env.level, envelope: env.out, glow: env.glow, clock, trackWalk: { look: trackInto('look'), behaviour: trackInto('behaviour') }, fired: firedNow },
     step,
     opts,
   );
@@ -371,6 +447,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   /** A knob moved from its base by its cables (evaluate.ts's rule: a swing adds, a level lets through; a band's cable
    *  into a knob not a band's own, the bands' mean and geometric mean). */
   function moved(module: string, k: Knob, base: number, cables: CableV2[]): number {
+    if (k.kind === 'step' && fired(module, k.id)) moments.push({ module, knob: k.id });
+    else if (k.kind !== 'step') base *= gainOf(module, k.id);
     if (!cables.length) return clamp(base, k.min, k.max);
     const bandSums = k.kind === 'step' ? new Float64Array(BANDS) : null;
     const ownBand = /\.\d+$/.test(k.id);

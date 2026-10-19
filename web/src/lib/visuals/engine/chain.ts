@@ -10,7 +10,7 @@ import type { Levers } from './sidechain';
 import type { Music } from '../music-core';
 import { A, AMOUNT_ASPECTS, KNOB_ASPECTS, MOMENT_ASPECTS, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
-import { courseStep, newFlash, newMoment, stepFlash, stepMoment, type FlashState, type MomentState } from './modules';
+import { courseStep, newAccent, newMoment, stepAccent, stepMoment, type AccentState, type MomentState } from './modules';
 
 /** Nothing held back (the sidechaining's levers all open). */
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
@@ -18,7 +18,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 type MomentAspect = (typeof MOMENT_ASPECTS)[number];
 
 /** What the chain keeps from frame to frame: the whole picture's turn; each part's turn, evolving aspects, steps and
- *  presence; the moments; the Flash courses (each part's lights, the glow, the size, the saturation). */
+ *  presence; the moments; the Accent courses (each part's lights, the glow, the size, the saturation). */
 export type ChainState = {
   turn: number;
   turned: number[];
@@ -29,7 +29,7 @@ export type ChainState = {
   rates: number[];
   presence: number[];
   moments: Record<MomentAspect, MomentState>;
-  courses: { lights: FlashState[]; glow: FlashState; size: FlashState; saturation: FlashState };
+  courses: { lights: AccentState[]; glow: AccentState; size: AccentState; saturation: AccentState };
 };
 
 export function newChain(): ChainState {
@@ -43,7 +43,7 @@ export function newChain(): ChainState {
     rates: Array<number>(PARTS).fill(0),
     presence: Array<number>(PARTS).fill(0),
     moments: Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, newMoment()])) as Record<MomentAspect, MomentState>,
-    courses: { lights: Array.from({ length: PARTS }, newFlash), glow: newFlash(), size: newFlash(), saturation: newFlash() },
+    courses: { lights: Array.from({ length: PARTS }, newAccent), glow: newAccent(), size: newAccent(), saturation: newAccent() },
   };
 }
 
@@ -60,6 +60,8 @@ export type ChainInputs = {
   clock: number;
   /** What the Track pulse gives the Look and the Behaviour walks (aspects.ts's walkOf subtracts it). */
   trackWalk: { look: number; behaviour: number };
+  /** The moments a Gate fired into a step's `next` (0057 §7e), where one is plugged in: in place of the moment's own. */
+  fired?: Partial<Record<string, boolean>>;
 };
 
 /** One frame of the chain, `dt` seconds on: what aspects.ts's stepAspects returned. */
@@ -76,7 +78,7 @@ export function stepChain(
   const got = x.given;
   const W = got.whole;
   const follow2 = courseStep(dt, L.swing);
-  const flashed = (v: number, course: FlashState, held = 1) => stepFlash(course, v, follow2, s.flash, L.swing, held);
+  const accented = (v: number, course: AccentState, held = 1) => stepAccent(course, v, follow2, s.flash, L.swing, held);
   const b = m.playing ? m.beat : null;
   st.turn += x.clock * 0.6 * W[A.rotation] * dt;
   const hits: number[] = [];
@@ -119,9 +121,11 @@ export function stepChain(
       spread: 2 ** clamp(spread, -2, 2),
       weight: 2 ** (1.5 * st.presence[i]),
     });
-    hits.push(clamp(flashed(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), st.courses.lights[i]), -1, 3));
+    hits.push(clamp(accented(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), st.courses.lights[i]), -1, 3));
   }
-  const moments = Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, !still && stepMoment(st.moments[a], W[A[a]], now, L.gap)])) as Record<MomentAspect, boolean>;
+  const moments = Object.fromEntries(
+    MOMENT_ASPECTS.map((a) => [a, !still && (x.fired?.[a] !== undefined ? x.fired[a]! : stepMoment(st.moments[a], W[A[a]], now, L.gap))]),
+  ) as Record<MomentAspect, boolean>;
   const walkOf = (a: number, track: number) => (W[a] - track) / L.evolution;
   const fluid = opts.fluidFull * levelOf(got, s.fluid, A.fluid);
   const haze = hazeOf(clamp(s.haze * got.level[A.haze], -1, 1));
@@ -136,11 +140,11 @@ export function stepChain(
     shape: shapes,
     parts,
     hits,
-    scale: clamp(flashed(0.5 + 0.5 * W[A.size], st.courses.size, L.size), 0.25, 1.4),
+    scale: clamp(accented(0.5 + 0.5 * W[A.size], st.courses.size, L.size), 0.25, 1.4),
     keep: clamp(1 - 0.07 * 2 ** (-1.5 * W[A.trails]), 0.5, 0.985),
     gamma: haze.gamma,
-    flash: x.glow * clamp(flashed(1 + 0.5 * W[A.brightness], st.courses.glow), 0.15, 3),
-    saturation: clamp(flashed(0.35 + 0.65 * W[A.saturation], st.courses.saturation), 0, 1.25),
+    flash: x.glow * clamp(accented(1 + 0.5 * W[A.brightness], st.courses.glow), 0.15, 3),
+    saturation: clamp(accented(0.35 + 0.65 * W[A.saturation], st.courses.saturation), 0, 1.25),
     smoothing: 12 * levelOf(got, s.smoothing, A.smoothing) ** 2,
     floor: haze.floor,
     levels: { fluid: got.level[A.fluid], smoothing: got.level[A.smoothing], haze: got.level[A.haze], tunnel: got.level[A.tunnel], dive: got.level[A.dive] },
