@@ -165,21 +165,23 @@ pure TypeScript, testable in Node; continuous knobs only; output 0 at its neutra
    conversion to and from today's settings (round-trip tested). Nothing on screen changes. (claude-a5)
 2. The nested panel drawn from the patch, over today's renderer, replacing the Behaviour and Look lists and the route
    grid. (claude-a5)
-3. The graph builder on wide screens (Svelte Flow). (claude-a5)
+3. The graph builder on wide screens (Svelte Flow). (claude-632)
 4. The renderer as modules: the flame layer as today, the picture-level loop, finish, new sources (shapes, waves:
    MilkDrop's kinds, written from scratch), per-layer modules; the cost of a layer measured on both Mali devices, the
    layers capped by it. Fluid as a module (claude-5f's file), a picture-loop variant beside the flame's. (claude-a5,
    claude-5f)
 5. Normalisation: the page works out each signal's typical value from the series it already holds whole (each
    channel's median; a band's hits by their median strength; claude-5f's suggestion: no format change, and every
-   track's signals as kept today work), "lately" and the fast/slow forms too (claude-a5); the modulators (claude-632).
+   track's signals as kept today work), "lately" and the fast/slow forms too, behind one `signalsFor` (claude-5f); the
+   modulators (claude-632, merged).
    The app's live sound sends a short waveform for the Waves source (claude-5f: about 512 mono samples a tick, as
    `wave` in its 'live' message).
 6. Morphing: the neutral rule, chain changes, chains as presets, evolve. (claude-a5)
 
 ## Consequences
 
-- 71 is this release (the owner). Steps 1–3 can ship without a picture change; 4–6 change what can be built.
+- It ships in **70**, whole (the owner: "I want this in 70!!", then, asked whether the rest could follow as 70.x: hold
+  70 for all of it). 70 waits for every step.
 - Old snapshots and shared group state are converted once (`v` in the kept settings); the flame's look stays as drawn.
 - The flash meter and the governor stay last and whole: no chain gets past them.
 - A layer costs a pass on Mali (0047's measure); the number of layers is capped by what the tablet affords.
