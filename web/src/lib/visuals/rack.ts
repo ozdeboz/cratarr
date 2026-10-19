@@ -1,53 +1,75 @@
-// The rack's groups, worked out from the wiring (decision 0057 §4: places are views, not structure): the sources, the
-// picture's chain in the order pictures flow, the control (modules that move knobs), the output. The graph's lanes can
-// use the same. Pure.
+// The five categories (decision 0057 §3b, the owner agreed): what a module does with signals, as modular synths and
+// video synthesizers group them. Sources make a picture, Effects take one and give one, Mixers make one of several,
+// Modulators make the signals that move knobs, In / Out is where signals enter and leave. The graph's lanes, the module
+// picker and Randomize's scopes all follow them. Pure.
 
 import { portsOf, type PatchV2, type Ports } from './ports';
-import type { Module, ModuleType } from './patch';
+import type { Module, ModuleType, Place } from './patch';
 
-export type Lane = 'sources' | 'picture' | 'control' | 'output';
-export type Lanes = Record<Lane, Module[]>;
+export const CATEGORIES = ['sources', 'effects', 'mixers', 'modulators', 'io'] as const;
+export type Category = (typeof CATEGORIES)[number];
+export type ByCategory = Record<Category, Module[]>;
+
+export const CATEGORY_LABEL: Record<Category, string> = { sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', io: 'In / Out' };
+
+/** The types whose category their place does not tell. */
+const DECLARED: Record<string, Category> = {
+  mix: 'mixers',
+  feedback: 'mixers',
+  mask: 'mixers',
+  music: 'io',
+  filterbank: 'io',
+  meter: 'io',
+  screen: 'io',
+  frame: 'io',
+};
+
+const BY_PLACE: Record<Place, Category> = { source: 'sources', module: 'effects', loop: 'effects', finish: 'effects', modulator: 'modulators', frame: 'io' };
+
+/** A type's category: as declared, else by its place. */
+export const categoryOf = (t: ModuleType): Category => DECLARED[t.type] ?? BY_PLACE[t.place] ?? 'effects';
 
 const PICTURE = new Set(['picture', 'light']);
 
-/** Where a module stands, by its ports: a source gives a picture and takes none (the flame takes only its own last
- *  light: `source`); a picture module takes and gives one; the output takes one and gives none; the rest move knobs
- *  (control). */
-export function laneOf(ports: Ports, source = false): Lane {
-  if (source) return 'sources';
-  const takes = ports.in.some((p) => PICTURE.has(p.type));
+/** A device's category, from what it exposes: a picture in and out, an effect; out only, a source; several in, a
+ *  mixer; none, a modulator. */
+export function deviceCategory(ports: Ports): Category {
+  const takes = ports.in.filter((p) => PICTURE.has(p.type)).length;
   const gives = ports.out.some((p) => PICTURE.has(p.type));
   if (gives && !takes) return 'sources';
-  if (gives && takes) return 'picture';
-  if (takes) return 'output';
-  return 'control';
+  if (gives && takes > 1) return 'mixers';
+  if (gives) return 'effects';
+  return takes ? 'io' : 'modulators';
 }
 
-/** A patch's modules by lane; the picture lane in the order pictures flow (a module after what feeds it), ties and
- *  unwired ones as the patch has them. `portsFor`: a module's ports (a device's from what it exposes). */
-export function lanesOf(p: PatchV2, portsFor: (m: Module) => Ports | null, isSource: (m: Module) => boolean = () => false): Lanes {
-  const lanes: Lanes = { sources: [], picture: [], control: [], output: [] };
+/** A patch's modules by category; the effects in the order pictures flow (a module after what feeds it; a Feedback's
+ *  input, its last frame, does not count), ties and unwired ones as the patch has them. */
+export function byCategory(p: PatchV2, types: Record<string, ModuleType>): ByCategory {
+  const out: ByCategory = { sources: [], effects: [], mixers: [], modulators: [], io: [] };
+  const ports = portsFrom(types);
   for (const m of p.modules) {
-    const ports = portsFor(m);
-    if (ports) lanes[laneOf(ports, isSource(m))].push(m);
+    if (m.type === 'device') {
+      const d = ports(m);
+      if (d) out[deviceCategory(d)].push(m);
+      continue;
+    }
+    const t = types[m.type];
+    if (t) out[categoryOf(t)].push(m);
   }
-  // The picture lane in flow order: each module after the picture modules feeding it (Kahn's order; a Feedback's
-  // input, its last frame, does not count).
-  const inLane = new Set(lanes.picture.map((m) => m.id));
-  const before = new Map(lanes.picture.map((m) => [m.id, new Set<string>()]));
+  const inLane = new Set(out.effects.map((m) => m.id));
+  const before = new Map(out.effects.map((m) => [m.id, new Set<string>()]));
   for (const c of p.cables) {
     if (!inLane.has(c.from.module) || !inLane.has(c.to.module) || c.from.module === c.to.module) continue;
-    if (p.modules.find((m) => m.id === c.to.module)?.type === 'feedback') continue;
     before.get(c.to.module)!.add(c.from.module);
   }
   const order: Module[] = [];
-  const left = [...lanes.picture];
+  const left = [...out.effects];
   while (left.length) {
     const i = left.findIndex((m) => [...before.get(m.id)!].every((id) => order.some((x) => x.id === id)));
     order.push(...left.splice(i < 0 ? 0 : i, 1));
   }
-  lanes.picture = order;
-  return lanes;
+  out.effects = order;
+  return out;
 }
 
 /** A module's ports from its type, or a device's from what it exposes. */
