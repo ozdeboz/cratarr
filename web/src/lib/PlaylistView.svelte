@@ -110,6 +110,7 @@
   import { on } from './events.svelte';
   import { swipe } from './swipe';
   import { toast } from './toast.svelte';
+  import { me } from './me.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import PageLoading from './PageLoading.svelte';
@@ -1303,7 +1304,7 @@
           <button class="icon" class:fav={albumFav} aria-pressed={albumFav} aria-label="Favourite" onclick={toggleAlbumFavorite}><Icon name="heart" size={24} /></button>
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (albumMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {:else}
-          {#if p}<button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
+          {#if p && p.mine !== false}<button class="icon" aria-label={`Edit ${id}`} title="Edit" disabled={!rows} onclick={startEdit}><Icon name="pencil" size={22} /></button>{/if}
           <button class="icon" class:fav={allFav} aria-pressed={allFav} aria-label="Favourite" onclick={() => setPlaylistFavorites([...ids], !allFav)}
             ><Icon name="heart" size={24} /></button
           >
@@ -1411,7 +1412,7 @@
       <ExportTab {ids} />
     {:else if tab === 'repair'}
       <RepairTab {ids} />
-    {:else if tab === 'sync'}
+    {:else if tab === 'sync' && me.admin}
       <SyncTab {ids} />
     {:else if multi}
       <!-- Their columns' names once over all of them; each keeps its own order, so the names do not order. -->

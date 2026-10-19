@@ -1,9 +1,10 @@
-<script lang="ts" generics="T extends { id: string; name: string; count: number }">
+<script lang="ts" generics="T extends { id: string; name: string; count: number; mine?: boolean }">
   // A menu's playlists as toggle cards (Add to playlist: a track's, an album's, an artist's), with the standard size
   // buttons (lib/SizeControl, decided 2026-10-16: "so that on mobile we can get two columns"; a button that would
   // change nothing is dimmed) and the lists' header (lib/ListHead: by name, by size, or those it is in ticked first,
   // either way round). The cards sit in columns, as many as the size gives (LIST_WIDTHS: never three on a phone); a
   // name wraps to two lines. Size and order are remembered (prefs.listZoom, listOrder), apart from the Playlists page's.
+  // One's own playlists only: another user's shared one is theirs to change (decision 0051).
   import type { Snippet } from 'svelte';
   import ListHead from './ListHead.svelte';
   import { howMany, LIST_ORDERS, LIST_WIDTHS, playlistBy } from './pageView.svelte';
@@ -27,7 +28,7 @@
   const sorted = $derived.by(() => {
     const by = playlistBy<T>(prefs.listOrder, ticked);
     const turn = prefs.listDown ? -1 : 1;
-    return [...playlists].sort((a, b) => turn * by(a, b));
+    return playlists.filter((p) => p.mine !== false).sort((a, b) => turn * by(a, b));
   });
 </script>
 
@@ -35,7 +36,7 @@
   <span class="heading">{title}</span>
   <SizeControl plain widths={LIST_WIDTHS} {width} bind:value={prefs.listZoom} />
 </div>
-<ListHead fields={LIST_ORDERS} bind:value={prefs.listOrder} bind:down={prefs.listDown} count={howMany(playlists.length, 'playlist')} />
+<ListHead fields={LIST_ORDERS} bind:value={prefs.listOrder} bind:down={prefs.listDown} count={howMany(sorted.length, 'playlist')} />
 <div class="grid" role="group" aria-label="Playlists" bind:clientWidth={width} style:--least="{LIST_WIDTHS[prefs.listZoom]}px">
   {#each sorted as p (p.id)}{@render entry(p)}{/each}
 </div>

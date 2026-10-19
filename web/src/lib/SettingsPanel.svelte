@@ -3,7 +3,8 @@
   // open settings-specific panels"): the Settings page's card opens it, as a playlist opens. Each part is its own file
   // (lib/settings/*Part) over one editor (lib/settings/editor), so what is changed in one part shows the Save bar in
   // all of them and survives going from one to another. Authentication's account, Import, this device's settings and
-  // Display act at once.
+  // Display act at once. The server's parts are its administrators' (decision 0051): for anyone else they show nothing,
+  // and the server's settings are not asked for.
   import Icon from './Icon.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -16,7 +17,10 @@
   import { SECTIONS, type SettingsSection } from './settingsSections.svelte';
   import { ed } from './settings/editor.svelte';
   import { partReset } from './settings/reset.svelte';
+  import AccountPart from './settings/AccountPart.svelte';
   import AuthPart from './settings/AuthPart.svelte';
+  import UsersPart from './settings/UsersPart.svelte';
+  import { me } from './me.svelte';
   import ConnectionsPart from './settings/ConnectionsPart.svelte';
   import DevicePart from './settings/DevicePart.svelte';
   import DisplayPart from './settings/DisplayPart.svelte';
@@ -41,7 +45,10 @@
     askDevice();
     askDownloads();
   }
-  ed.load();
+  $effect(() => {
+    if (me.admin) ed.load();
+  });
+  const allowed = $derived(!SECTIONS.find((x) => x.id === section)?.admin || me.admin);
 
   // A part's Reset (lib/settings/reset): asked once more, in a sheet, before its preferences go back to their defaults.
   let resetting = $state(false);
@@ -70,8 +77,10 @@
     </span>
   </div>
   <div class="scroll">
-    {#if ed.loadError}<Notice text={ed.loadError} />{/if}
-    {#if section === 'device'}
+    {#if ed.loadError && me.admin}<Notice text={ed.loadError} />{/if}
+    {#if !allowed}
+      <!-- Another user's view of an administrator's part: nothing. -->
+    {:else if section === 'device'}
       <DevicePart />
     {:else if section === 'network'}
       <NetworkPart />
@@ -79,6 +88,10 @@
       <SyncPart />
     {:else if section === 'display'}
       <DisplayPart />
+    {:else if section === 'account'}
+      <AccountPart />
+    {:else if section === 'users'}
+      <UsersPart />
     {:else if section === 'players'}
       <PlayersSettings />
     {:else if section === 'diagnostics'}

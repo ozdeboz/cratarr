@@ -1,24 +1,42 @@
 // The parts of the settings (decided 2026-10-16): the Settings page's cards, each opening its part in the panel
 // (lib/SettingsPanel). `settingsSaved` counts the saves, so the cards read what they say again. `settingsRead` is the
 // last answer the server gave: it checks every connection, which takes seconds, so a part opens on that at once.
+// Since several users (decision 0051) the parts are each user's own first, then the server's, which only its
+// administrators see (`admin`).
 import type { Settings } from './api';
 import type { IconName } from './Icon.svelte';
 
-export type SettingsSection = 'device' | 'network' | 'sync' | 'connections' | 'libraries' | 'players' | 'auth' | 'import' | 'display' | 'diagnostics';
+export type SettingsSection =
+  | 'device'
+  | 'network'
+  | 'sync'
+  | 'account'
+  | 'import'
+  | 'display'
+  | 'connections'
+  | 'libraries'
+  | 'players'
+  | 'users'
+  | 'auth'
+  | 'diagnostics';
 
-export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true }[] = [
+export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true; admin?: true }[] = [
   // In a browser too: its name as a Play On player.
   { id: 'device', title: 'This device', icon: 'speaker' },
   { id: 'network', title: 'Network', icon: 'wifi', app: true },
   { id: 'sync', title: 'Sync', icon: 'arrowDownToLine', app: true },
-  { id: 'connections', title: 'Connections', icon: 'server' },
-  { id: 'libraries', title: 'Libraries', icon: 'library' },
-  { id: 'players', title: 'Players', icon: 'speakers' },
-  { id: 'auth', title: 'Authentication', icon: 'user' },
-  { id: 'import', title: 'Import', icon: 'intoBox' },
+  // Who is signed in: their role, their password for OpenSubsonic apps, their devices and sign-ins.
+  { id: 'account', title: 'Account', icon: 'user' },
   { id: 'display', title: 'Display', icon: 'swatch' },
+  { id: 'connections', title: 'Connections', icon: 'server', admin: true },
+  { id: 'libraries', title: 'Libraries', icon: 'library', admin: true },
+  { id: 'players', title: 'Players', icon: 'speakers', admin: true },
+  { id: 'users', title: 'Users', icon: 'users', admin: true },
+  { id: 'auth', title: 'Authentication', icon: 'key', admin: true },
+  // Another server's plays and favourites into an account: its administrators' (listening is private).
+  { id: 'import', title: 'Import', icon: 'intoBox', admin: true },
   // What happened, as Cratarr keeps it (decision 0045).
-  { id: 'diagnostics', title: 'Diagnostics', icon: 'list' },
+  { id: 'diagnostics', title: 'Diagnostics', icon: 'list', admin: true },
 ];
 
 export const settingsSaved = $state({ n: 0 });

@@ -75,6 +75,7 @@
   import { linkTo, share } from './share';
   import { toast } from './toast.svelte';
   import { withUndo } from './undo.svelte';
+  import { me } from './me.svelte';
 
   type Ask = 'move' | 'replace' | 'delete';
   let {
@@ -524,7 +525,8 @@
         {/if}
         <MenuEntry icon="share" label="Share" onclick={shareIt} />
       </MenuGroup>
-      {#if offer && (offer.job !== null || offer.targets.length || offer.replaceable || offer.deletable)}
+      <!-- Changes to the library are its administrators' (decision 0051). -->
+      {#if me.admin && offer && (offer.job !== null || offer.targets.length || offer.replaceable || offer.deletable)}
         {@const o = offer}
         <MenuGroup label="Library">
           {#if o.job !== null}

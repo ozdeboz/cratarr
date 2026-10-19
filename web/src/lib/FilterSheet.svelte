@@ -11,7 +11,8 @@
   import TempoRange from './TempoRange.svelte';
   import { pageView } from './pageView.svelte';
   import { panel } from './panel.svelte';
-  import { getSettings, getStatus, type LibraryUse, type Settings } from './api';
+  import { getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
+  import { me } from './me.svelte';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { prefs } from './prefs.svelte';
@@ -37,10 +38,11 @@
 
   // Each server's own name and its libraries, as Settings → Libraries reads them. The cards show without them until
   // they come: the list of servers alone is enough to choose one.
-  let settings = $state<Settings | null>(null);
+  // (An administrator reads them from the server's settings; anyone else from the libraries, decision 0051.)
+  let settings = $state<LibrariesView | null>(null);
   $effect(() => {
     let gone = false;
-    getSettings().then(
+    (me.admin ? getSettings() : getLibraries()).then(
       (s) => !gone && (settings = s),
       (e) => !gone && toast.fail(e, "The servers' libraries couldn't be loaded"),
     );

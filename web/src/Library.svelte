@@ -17,6 +17,7 @@
   import { isFavorite, loadAlbumFavorites } from './lib/favourites.svelte';
   import { pageView } from './lib/pageView.svelte';
   import { untrack } from 'svelte';
+  import { me } from './lib/me.svelte';
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
@@ -164,7 +165,7 @@
             label={job.state === 'waiting' ? 'Waiting to convert' : `Converting ${job.done} of ${job.total}`}
             value={(job.done + job.part) / Math.max(job.total, 1)}
           />
-        {:else if verdictOf(s, a)}
+        {:else if me.admin && verdictOf(s, a)}
           {@const v = verdictOf(s, a)!}
           <span class="verdict" class:upgrade={v.kind === 'upgrade'} title={v.library}>
             <span class="badge">{v.kind === 'upgrade' ? 'Upgrade' : `In ${music}`}</span>

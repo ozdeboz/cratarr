@@ -4,12 +4,15 @@
   // playlist on its card (a mosaic of its first albums' covers; for several, their covers and "3 playlists"), Play,
   // Shuffle, Play next and Add to queue as the large actions (several: one playlist after another, each track once),
   // then View, the favourite, Pin, Export… and Sync… (they show the panel on that tab), Spoken as… and Rename (one
-  // playlist only), and Delete (one Undo for all), each done inside the sheet.
+  // playlist only), and Delete (one Undo for all), each done inside the sheet. Since several users (decision 0051): one's
+  // own playlist can be shared with the other users; another user's shared one shows whose it is, and is copied rather
+  // than changed (nor repaired); Sync… is the administrators'.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
   import { linkTo, share } from './share';
   import { untrack } from 'svelte';
-  import { deletePlaylist, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers, playlistTrackIds } from './api';
+  import { copyPlaylist, deletePlaylist, setPlaylistShared, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers, playlistTrackIds } from './api';
+  import { me } from './me.svelte';
   import { startRadio } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -23,7 +26,7 @@
   import { refresh } from './live.svelte';
   import { toast } from './toast.svelte';
 
-  type Item = { id: string; name: string; count: number; dead: number; links?: Link[]; spoken?: string[] };
+  type Item = { id: string; name: string; count: number; dead: number; links?: Link[]; spoken?: string[]; owner?: string; shared?: boolean; mine?: boolean };
   let {
     playlists,
     onclose,
@@ -141,6 +144,34 @@
     }
   }
 
+  // Another user's among them: only its owner changes it.
+  const others = $derived(playlists.some((x) => x.mine === false));
+
+  async function setShared(id: string, on: boolean) {
+    try {
+      await setPlaylistShared(id, on);
+      onclose();
+    } catch (e) {
+      fail(e, 'Something went wrong');
+    } finally {
+      refresh();
+    }
+  }
+
+  async function copy(id: string) {
+    if (working) return;
+    working = true;
+    try {
+      await copyPlaylist(id);
+      onclose();
+    } catch (e) {
+      fail(e, 'Something went wrong');
+    } finally {
+      working = false;
+      refresh();
+    }
+  }
+
   function pin() {
     prefs.pinned = allPinned ? prefs.pinned.filter((x) => !ids.includes(x)) : [...prefs.pinned, ...ids.filter((x) => !prefs.pinned.includes(x))];
     onclose();
@@ -197,7 +228,12 @@
   images={covers}
   {title}
   chips={one
-    ? [tracks(one.count), ...(one.dead > 0 ? [missing(one.dead)] : []), ...((one.links ?? []).some((l) => l.target === 'shared') ? ['Shared'] : [])]
+    ? [
+        tracks(one.count),
+        ...(one.dead > 0 ? [missing(one.dead)] : []),
+        ...(one.mine === false && one.owner ? [one.owner] : []),
+        ...(one.shared || (one.links ?? []).some((l) => l.target === 'shared') ? ['Shared'] : []),
+      ]
     : [tracks(playlists.reduce((k, x) => k + x.count, 0)), ...playlists.slice(0, 3).map((x) => x.name), ...(n > 3 ? [`and ${n - 3} more`] : [])]}
   actions={mode === 'menu'
     ? [
@@ -252,12 +288,22 @@
           }}
         />
       {/if}
+      {#if one && one.mine === false && me.permissions.playlists}
+        {@const id = one.id}
+        <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(id)} />
+      {/if}
+      {#if one && one.mine !== false && one.shared !== undefined && me.permissions.share}
+        {@const p = one}
+        <MenuEntry icon="users" label="Shared with other users" switched={!!p.shared} onclick={() => setShared(p.id, !p.shared)} />
+      {/if}
       <!-- The panel's other views of them (back returns to their tracks). -->
       <MenuEntry icon="info" label="Info" onclick={() => viewTab('info')} />
       <MenuEntry icon="download" label="Export…" onclick={() => viewTab('export')} />
-      <MenuEntry icon="repairs" label="Repair…" onclick={() => viewTab('repair')} />
-      <MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync')} />
-      {#if one}
+      {#if !others}
+        <MenuEntry icon="repairs" label="Repair…" onclick={() => viewTab('repair')} />
+        {#if me.admin}<MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync')} />{/if}
+      {/if}
+      {#if one && !others}
         <MenuEntry
           icon="mic"
           label="Spoken as…"
@@ -275,7 +321,9 @@
           }}
         />
       {/if}
-      <MenuEntry icon="trash" label={one ? 'Delete playlist' : `Delete ${ids.length} playlists`} danger onclick={() => (mode = 'delete')} />
+      {#if !others}
+        <MenuEntry icon="trash" label={one ? 'Delete playlist' : `Delete ${ids.length} playlists`} danger onclick={() => (mode = 'delete')} />
+      {/if}
     </div>
   {:else if mode === 'rename' && one}
     <form

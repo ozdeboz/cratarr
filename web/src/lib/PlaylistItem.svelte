@@ -2,7 +2,8 @@
   // A playlist as a row, wherever playlists are listed (docs/ui-conventions.md → Rows): its name, then its marks (pinned,
   // shared with everyone), under it its sync while copies are still being made, and at the end its count with its flags (a favourite's small heart above the
   // problems' dot, in the dot's place, so the row gets no wider). Medium on the Playlists page, small in the Export tab,
-  // large in the Info and Repair tabs; what the row's action is belongs to where it is.
+  // large in the Info and Repair tabs; what the row's action is belongs to where it is. Another user's shared playlist
+  // (decision 0051) says whose it is under its name; one's own shared with the others has the shared mark.
   import type { Snippet } from 'svelte';
   import type { Attachment } from 'svelte/attachments';
   import type { Playlist } from './api';
@@ -56,7 +57,7 @@
 <Row
   {size}
   title={p.name}
-  sub={sub ?? (syncing ? syncMeter : undefined)}
+  sub={sub ?? (syncing ? syncMeter : p.mine === false ? p.owner : undefined)}
   {action}
   {onclick}
   {label}
@@ -71,7 +72,8 @@
 >
   {#snippet badges()}
     {#if prefs.pinned.includes(p.id)}<span class="mark" title="Pinned"><Icon name="pin" size={13} /></span>{/if}
-    {#if shared}<span class="mark" title="Shared with everyone"><Icon name="users" size={13} /></span>{/if}
+    {#if shared}<span class="mark" title="Shared with everyone"><Icon name="users" size={13} /></span>
+    {:else if p.shared && p.mine !== false}<span class="mark" title="Shared with other users"><Icon name="users" size={13} /></span>{/if}
   {/snippet}
   {#snippet meta()}
     {#if fav || dead > 0}

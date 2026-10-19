@@ -1,33 +1,27 @@
 <script lang="ts">
-  // Authentication (the owner, 2026-10-16: not "Subsonic"): the account Subsonic apps and Cratarr's sign-in page (decision
-  // 0039) sign in with; whether every request needs a sign-in (decision 0043); the devices signed in, each to sign out;
-  // the API keys for what cannot sign in on a page (Home Assistant, scripts), each to revoke. Switching the requirement
-  // and making a key ask for the password again. Acts at once.
-  import {
-    getApiKeys,
-    getSignedIn,
-    getSignInRequired,
-    newApiKey,
-    revokeApiKey,
-    setSignInRequired,
-    signOutDevice,
-    type ApiKey,
-    type SignedIn,
-  } from '../api';
+  // Authentication (the owner, 2026-10-16: not "Subsonic"), its administrators' since several users (decision 0051):
+  // Cratarr's own account, an administrator apart from the directory; whether every request needs a sign-in (decision
+  // 0043); the API keys for what cannot sign in on a page (Home Assistant, scripts), each acting for its owner, only
+  // reading or also in control, each to revoke; the directory. Switching the requirement and making a key ask for the
+  // password again. Acts at once. Each user's sign-ins are under Account and Users.
+  import { getApiKeys, getSignInRequired, getUsers, newApiKey, revokeApiKey, setSignInRequired, type ApiKey, type KeyScope } from '../api';
+  import { me } from '../me.svelte';
   import MoreInfo from '../MoreInfo.svelte';
   import Switch from '../Switch.svelte';
   import { ed } from './editor.svelte';
   import DirectoryPart from './DirectoryPart.svelte';
+  import { when } from './when';
 
-  let devices = $state<SignedIn[]>([]);
   let keys = $state<ApiKey[]>([]);
   let required = $state<boolean | null>(null);
   let error = $state<string | null>(null);
 
+  // Whom a key can act for: every user.
+  let owners = $state<string[]>([]);
   const load = () => {
-    getSignedIn().then(
-      (r) => (devices = r.sessions),
-      () => (devices = []),
+    getUsers().then(
+      (u) => (owners = u.filter((x) => x.active).map((x) => x.name)),
+      () => (owners = []),
     );
     getApiKeys().then(
       (r) => (keys = r.keys),
@@ -38,22 +32,12 @@
       () => (required = null),
     );
   };
-  // On opening, and after a new password (which signs the other devices out).
+  // On opening, and after a new password.
   $effect(() => {
     if (!ed.sub.busy) load();
   });
 
   const failed = (e: unknown) => (error = e instanceof Error ? e.message : String(e));
-
-  async function signOut(d: SignedIn) {
-    error = null;
-    try {
-      await signOutDevice(d.id);
-      load();
-    } catch (e) {
-      failed(e);
-    }
-  }
 
   // The requirement: flipping it asks for the password, then switches.
   let switching = $state<boolean | null>(null);
@@ -74,15 +58,18 @@
     }
   }
 
-  // A new key: its name and the password; the key is shown here once.
+  // A new key: its name, whom it acts for (oneself unless chosen), what it may do, and the password; the key is shown
+  // here once.
   let keyName = $state('');
+  let keyOwner = $state('');
+  let keyScope = $state<KeyScope>('control');
   let keyPassword = $state('');
   let made = $state<{ name: string; key: string } | null>(null);
   async function makeKey() {
     error = null;
     busy = true;
     try {
-      const k = await newApiKey(keyName.trim(), keyPassword);
+      const k = await newApiKey(keyName.trim(), keyPassword, keyOwner || undefined, keyScope);
       made = { name: k.name, key: k.key };
       keyName = '';
       load();
@@ -105,14 +92,6 @@
     }
   }
 
-  // When it was last used: the time today, else the day.
-  function when(s: number) {
-    const d = new Date(s * 1000);
-    return d.toDateString() === new Date().toDateString()
-      ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-      : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-  }
-  const accounts = $derived(new Set(devices.map((d) => d.user)).size);
 
   // The password's fields only once asked for (deeper only while it applies): a new password, then back.
   let changing = $state(false);
@@ -126,7 +105,7 @@
   <section aria-labelledby="auth-h">
     <h2 id="auth-h">Authentication</h2>
     <p class="lede">
-      Your account for Cratarr and Subsonic apps <MoreInfo
+      Cratarr's own administrator account, apart from the directory <MoreInfo
         label="Authentication"
         text="Sign in to these pages with it. Subsonic apps take this address with this account's own name and password (never a directory's)."
       />
@@ -190,24 +169,6 @@
         {/if}
       {/if}
 
-      {#if devices.length}
-        <div class="group"><h3 id="signed-in-h">Signed in</h3></div>
-        <ul class="list" aria-labelledby="signed-in-h">
-          {#each devices as d (d.id)}
-            <li>
-              <span class="what">{d.device}{#if accounts > 1}<small>{d.user}</small>{/if}</span>
-              <span class="when">{d.current ? 'This device' : when(d.last_used)}</span>
-              {#if d.current}
-                <!-- Signing out here clears this browser's cookie too. -->
-                <form method="post" action="/signout"><button>Sign out</button></form>
-              {:else}
-                <button onclick={() => signOut(d)}>Sign out</button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {/if}
-
       <div class="group">
         <h3 id="keys-h">
           API keys <MoreInfo label="API keys" text="For what cannot sign in on a page: Home Assistant, scripts. A key shows once, when it is made; revoking one ends it at once." />
@@ -217,7 +178,7 @@
         <ul class="list" aria-labelledby="keys-h">
           {#each keys as k (k.id)}
             <li>
-              <span class="what">{k.name}</span>
+              <span class="what">{k.name}{#if k.owner}<small>{k.owner}{k.scope === 'read' ? ' · Read only' : ''}</small>{/if}</span>
               <span class="when">{k.last_used ? when(k.last_used) : 'Not used yet'}</span>
               <button onclick={() => revoke(k)}>Revoke</button>
             </li>
@@ -232,6 +193,15 @@
       {/if}
       <form class="confirm" onsubmit={(e) => (e.preventDefault(), makeKey())}>
         <input type="text" bind:value={keyName} placeholder="Name" aria-label="Key name" autocomplete="off" spellcheck="false" />
+        {#if owners.length > 1}
+          <select bind:value={keyOwner} aria-label="Acts for">
+            {#each owners as o (o)}<option value={o === me.name ? '' : o}>{o}</option>{/each}
+          </select>
+        {/if}
+        <select bind:value={keyScope} aria-label="Scope">
+          <option value="control">Control</option>
+          <option value="read">Read only</option>
+        </select>
         <input type="password" bind:value={keyPassword} placeholder="Password" aria-label="Password" autocomplete="current-password" />
         <button disabled={busy || !keyName.trim() || !keyPassword} aria-busy={busy}>New key</button>
       </form>
@@ -278,10 +248,6 @@
     white-space: nowrap;
   }
 
-  .list form {
-    display: contents;
-  }
-
   .confirm {
     display: flex;
     flex-wrap: wrap;
@@ -292,6 +258,11 @@
   .confirm input {
     flex: 1 1 140px;
     min-width: 0;
+  }
+
+  .confirm select {
+    flex: 0 1 auto;
+    width: auto;
   }
 
   .made {

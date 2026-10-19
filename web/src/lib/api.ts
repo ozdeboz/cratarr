@@ -16,6 +16,11 @@ export type Playlist = {
   links: Link[];
   /** Other names it is spoken as, for voice assistants (decision 0015). */
   spoken: string[];
+  /** Whose it is (decision 0051), whether its owner shares it with the other users, whether it is the signed-in user's
+   *  own (only its owner changes it). Left out by a server from before several users: one's own, unshared. */
+  owner?: string;
+  shared?: boolean;
+  mine?: boolean;
 };
 
 /** A playlist's sync: "shared" (with everyone), or its copy in an account. */
@@ -513,6 +518,11 @@ export const renamePlaylist = (id: string, to: string) =>
   post<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to });
 export const deletePlaylist = (id: string) =>
   request<{ deleted: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
+/** Shares one's own playlist with the other users, or stops (decision 0051): they see it, play it and copy it. */
+export const setPlaylistShared = (id: string, shared: boolean) =>
+  request<void>(`/api/playlists/${encodeURIComponent(id)}/shared`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shared }) });
+/** Another user's shared playlist, copied into one's own: the copy. */
+export const copyPlaylist = (id: string) => post<Playlist>(`/api/playlists/${encodeURIComponent(id)}/copy`, {});
 
 /** The other names a playlist is spoken as, exactly these. */
 /** The names a playlist is also spoken as, from what was typed (comma-separated). */
@@ -718,11 +728,62 @@ export const signOutDevice = (id: string) => request<void>(`/api/auth/sessions/$
 export const getSignInRequired = () => quietly<{ required: boolean }>('/api/auth/required');
 export const setSignInRequired = (on: boolean, password: string) =>
   request<{ required: boolean }>('/api/auth/required', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on, password }) });
-/** An API key (decision 0043), for what cannot sign in on a page (Home Assistant, scripts): never the key itself. */
-export type ApiKey = { id: string; name: string; created: number; last_used: number | null };
+/** An API key (decision 0043), for what cannot sign in on a page (Home Assistant, scripts): never the key itself. Since
+ *  decision 0051 it acts for its owner, and only reads (`read`) or also plays and changes (`control`). */
+export type KeyScope = 'read' | 'control';
+export type ApiKey = { id: string; name: string; created: number; last_used: number | null; owner?: string; scope?: KeyScope };
 export const getApiKeys = () => quietly<{ keys: ApiKey[] }>('/api/auth/keys');
 /** A new key: `key` is shown in this answer only, never again. */
-export const newApiKey = (name: string, password: string) => post<{ key: string; id: string; name: string }>('/api/auth/keys', { name, password });
+export const newApiKey = (name: string, password: string, owner?: string, scope?: KeyScope) =>
+  post<{ key: string; id: string; name: string }>('/api/auth/keys', { name, password, owner, scope });
+
+/** What a user may do beyond listening (decision 0051), in Cratarr and in OpenSubsonic apps alike: keep tracks to play
+ *  offline, make playlists, share them with the other users, make public share links. */
+export type Permissions = { offline: boolean; playlists: boolean; share: boolean; links: boolean };
+/** A device that belongs to an account (it plays only on its own, decision 0051). */
+export type OwnDevice = { id: string; name: string; kind: string; last_seen: number | null };
+/** One of an account's sign-ins; `current`: the one this page runs on (one's own only). */
+export type UserSession = { id: string; device: string; created: number; last_used: number; current?: boolean };
+/** Whoever is signed in (decision 0051): their name (from the directory), whether they administer this server, what they
+ *  may do, whether they have set a password for OpenSubsonic apps, their devices and sign-ins. */
+export type Me = {
+  name: string | null;
+  admin: boolean;
+  /** Deactivated: left the directory's music group (their data kept). */
+  active?: boolean;
+  /** Signs in through the directory (else Cratarr's own account). */
+  directory?: boolean;
+  permissions: Permissions;
+  app_password?: boolean;
+  devices?: OwnDevice[];
+  sessions?: UserSession[];
+};
+export const getMe = () => quietly<Me>('/api/me');
+/** Ends one of one's own sign-ins, or takes one of one's own devices away. */
+export const endMySession = (id: string) => request<void>(`/api/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
+/** The server's version and when it started, for everyone (the rest of its settings are its administrators'). */
+export const getAbout = () => quietly<{ version: string; started: number }>('/api/about');
+/** Each server's own name and libraries, and what each library is used as, for everyone (the filter): the part of the
+ *  server's settings that is not its administrators' alone. */
+export type LibrariesView = {
+  sources: { id: string; status: { server_name: string | null }; server_libraries: { id: string; name: string }[]; libraries: { music: string[]; incoming: string[] } }[];
+};
+export const getLibraries = () => quietly<LibrariesView>('/api/libraries');
+/** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it). */
+export const setAppPassword = (password: string) =>
+  request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+/** Every user, for the administrators' Users panel: their profile (from the directory), permissions, devices, sign-ins. */
+export type User = { name: string; admin: boolean; active: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[] };
+export const getUsers = () => request<{ users: User[] }>('/api/users').then((r) => r.users);
+export const setPermissions = (name: string, p: Permissions) =>
+  request<void>(`/api/users/${encodeURIComponent(name)}/permissions`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+/** Ends a user's sign-in (an administrator, or the user themselves). */
+export const endSession = (name: string, id: string) =>
+  request<void>(`/api/users/${encodeURIComponent(name)}/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+/** Takes a device from a user: it plays for nobody until it signs in again. */
+export const removeDevice = (name: string, id: string) =>
+  request<void>(`/api/users/${encodeURIComponent(name)}/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const revokeApiKey = (id: string) => request<void>(`/api/auth/keys/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 /** A directory (LDAP) asked first at sign-in (decision 0040): set by the operator in `ldap.json`, shown read-only. */

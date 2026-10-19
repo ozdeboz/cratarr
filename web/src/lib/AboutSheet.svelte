@@ -1,7 +1,9 @@
 <script lang="ts">
   // About Cratarr (the owner, 2026-10-16): a sheet from the info button at the settings page's top right, in place of an
-  // About card among the settings. The version, since when it runs, where the playlists and the settings are, the port.
-  import { getSettings, type Settings } from './api';
+  // About card among the settings. The version, since when it runs, where the playlists and the settings are, the port;
+  // to anyone but an administrator, the version and since when (decision 0051).
+  import { getAbout, getSettings, type Settings } from './api';
+  import { me } from './me.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { since } from './settings/editor.svelte';
   import { settingsRead } from './settingsSections.svelte';
@@ -9,17 +11,29 @@
   let { onclose }: { onclose: () => void } = $props();
 
   // The last answer at once (the settings page's), then the server's latest.
-  const s = $derived<Settings | null>(settingsRead.s);
+  const s = $derived<Settings | null>(me.admin ? settingsRead.s : null);
+  let about = $state<{ version: string; started: number } | null>(null);
   $effect(() => {
-    getSettings().then(
-      (v) => (settingsRead.s = v),
-      () => {},
-    );
+    if (me.admin)
+      getSettings().then(
+        (v) => (settingsRead.s = v),
+        () => {},
+      );
+    else
+      getAbout().then(
+        (a) => (about = a),
+        () => {},
+      );
   });
 </script>
 
-<MenuSheet label="About" title="Cratarr" icon="info" chips={s ? [s.version] : []} {onclose}>
-  {#if s}
+<MenuSheet label="About" title="Cratarr" icon="info" chips={s ? [s.version] : about ? [about.version] : []} {onclose}>
+  {#if about && !s}
+    <dl>
+      <dt>Running since</dt>
+      <dd>{since(about.started)}</dd>
+    </dl>
+  {:else if s}
     <dl>
       <dt>Running since</dt>
       <dd>{since(s.started)}</dd>

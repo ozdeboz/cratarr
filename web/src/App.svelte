@@ -41,6 +41,7 @@
   import { getStatus, type Status } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { jobs } from './lib/jobs.svelte';
+  import { loadMe, me } from './lib/me.svelte';
 
   type Page = { id: string; href: string; label: string; icon: IconName };
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
@@ -304,8 +305,12 @@
     return poll();
   });
 
-  // The conversion queue, followed on every page: its count on the Incoming tab, a toast when an album is done.
-  $effect(() => jobs.start());
+  // Who is signed in (decision 0051): the administrators' parts show for them only.
+  loadMe();
+
+  // The conversion queue, followed on every page (an administrator's): its count on the Incoming tab, a toast when an
+  // album is done.
+  $effect(() => (me.admin ? jobs.start() : undefined));
   const waiting = $derived(jobs.open.length);
 
   // Connection line in the sidebar header.
@@ -349,7 +354,8 @@
   );
   const MAIN: Page[] = [LIBRARY, CRATES, PLAYLISTS];
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
-  const APART: Page[] = inApp ? [DOWNLOADS, INSIGHTS, HEALTH, SETTINGS] : [INSIGHTS, HEALTH, SETTINGS];
+  // Health is the library's, so its administrators' (decision 0051).
+  const APART: Page[] = $derived([...(inApp ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS]);
   const ALL = $derived([...MAIN, ...APART]);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : ALL.slice(0, BAR_SLOTS - 1));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
@@ -407,13 +413,13 @@
     <SheetArea area={() => pageEl}>
     {#if page === 'settings'}
       <Settings />
-    {:else if page === 'health'}
+    {:else if page === 'health' && me.admin}
       <Health />
     {:else if page === 'downloads' && inApp}
       <Downloads />
     {:else if page === 'library'}
       <Library />
-    {:else if status && !status.music}
+    {:else if status && !status.music && me.admin}
       <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
     {:else if page === 'insights'}
       <Insights />

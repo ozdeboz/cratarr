@@ -2,8 +2,10 @@
   // Settings (decided 2026-10-16): a portal of cards, one per part of the settings, each saying in a line what it is set
   // to now. A tap opens the part in the panel (lib/SettingsPanel), as a playlist opens: beside the cards on a wide page,
   // over them on a phone. The card whose part is open is bordered. This device's card only in the app. About is a sheet
-  // from the info button at the page's top right (App, lib/AboutSheet).
-  import { getImport, getSettings, getSubsonicAccounts, type ImportJob, type Settings } from './lib/api';
+  // from the info button at the page's top right (App, lib/AboutSheet). Each user's own parts first; the server's, under
+  // its heading, for its administrators only (decision 0051).
+  import { getImport, getSettings, getSubsonicAccounts, getUsers, type ImportJob, type Settings } from './lib/api';
+  import { me } from './lib/me.svelte';
   import { appInfo, downloads, inApp } from './lib/app.svelte';
   import Icon from './lib/Icon.svelte';
   import { panel, SETTINGS, viewPlaylist } from './lib/panel.svelte';
@@ -16,19 +18,25 @@
   const s = $derived<Settings | null>(settingsRead.s);
   let lastImport = $state<ImportJob | null>(null);
   let accounts = $state<string[] | null>(null);
-  // Read again after each save in the panel.
+  let users = $state<number | null>(null);
+  // Read again after each save in the panel; the server's settings only for its administrators.
   $effect(() => {
     void settingsSaved.n;
-    getSettings().then(
-      (v) => (settingsRead.s = v),
-      () => {},
-    );
     getImport().then(
       (r) => (lastImport = r.job),
       () => {},
     );
+    if (!me.admin) return;
+    getSettings().then(
+      (v) => (settingsRead.s = v),
+      () => {},
+    );
     getSubsonicAccounts().then(
       (a) => (accounts = a.accounts),
+      () => {},
+    );
+    getUsers().then(
+      (u) => (users = u.length),
       () => {},
     );
   });
@@ -56,6 +64,10 @@
       }
       case 'players':
         return playOn.players.map((p) => p.name).join(' · ') || 'None yet';
+      case 'account':
+        return [me.name, me.admin ? 'Administrator' : null].filter(Boolean).join(' · ');
+      case 'users':
+        return users === null ? '' : users === 1 ? '1 user' : `${users} users`;
       case 'auth':
         return accounts === null ? '' : accounts.length ? accounts.join(' · ') : 'No account';
       case 'import':
@@ -71,27 +83,39 @@
     }
   }
 
-  const shown = $derived(SECTIONS.filter((x) => !x.app || inApp));
+  const shown = $derived(SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin)));
+  const groups = $derived([shown.filter((x) => !x.admin), shown.filter((x) => x.admin)]);
 </script>
 
 <main>
-  <div class="cards">
-    {#each shown as c (c.id)}
-      {@const open = panel.viewed === SETTINGS + c.id}
-      <button class="card" class:open aria-pressed={open} onclick={() => viewPlaylist(SETTINGS + c.id)}>
-        <Icon name={c.icon} size={28} />
-        <span class="text">
-          <strong>{c.id === 'device' ? ((inApp ? appInfo.player : prefs.browserName) || (inApp ? c.title : 'This browser')) : c.title}</strong>
-          <small>{c.id === 'device' && inApp && appInfo.player ? c.title : line(c.id)}</small>
-        </span>
-      </button>
-    {/each}
-  </div>
+  {#each groups as group, g (g)}
+    {#if group.length}
+      {#if g}<h2>Server</h2>{/if}
+      <div class="cards">
+        {#each group as c (c.id)}
+          {@const open = panel.viewed === SETTINGS + c.id}
+          <button class="card" class:open aria-pressed={open} onclick={() => viewPlaylist(SETTINGS + c.id)}>
+            <Icon name={c.icon} size={28} />
+            <span class="text">
+              <strong>{c.id === 'device' ? ((inApp ? appInfo.player : prefs.browserName) || (inApp ? c.title : 'This browser')) : c.title}</strong>
+              <small>{c.id === 'device' && inApp && appInfo.player ? c.title : line(c.id)}</small>
+            </span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+  {/each}
 </main>
 
 <style>
   main {
     padding: 16px clamp(12px, 2vw, 32px) 96px;
+  }
+
+  h2 {
+    margin: 28px 0 12px;
+    font-size: 1.05rem;
+    font-weight: 600;
   }
 
   /* As many columns as fit, each card at least 280 px: one on a phone. */
