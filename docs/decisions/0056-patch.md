@@ -170,9 +170,11 @@ pure TypeScript, testable in Node; continuous knobs only; output 0 at its neutra
    MilkDrop's kinds, written from scratch), per-layer modules; the cost of a layer measured on both Mali devices, the
    layers capped by it. Fluid as a module (claude-5f's file), a picture-loop variant beside the flame's. (claude-a5,
    claude-5f)
-5. Normalisation: the server sends each signal's typical value beside today's scale (claude-5f); "lately" and the
-   fast/slow forms worked out in the page; the modulators (claude-632). The app's live sound sends a short waveform
-   for the Waves source (claude-5f).
+5. Normalisation: the page works out each signal's typical value from the series it already holds whole (each
+   channel's median; a band's hits by their median strength; claude-5f's suggestion: no format change, and every
+   track's signals as kept today work), "lately" and the fast/slow forms too (claude-a5); the modulators (claude-632).
+   The app's live sound sends a short waveform for the Waves source (claude-5f: about 512 mono samples a tick, as
+   `wave` in its 'live' message).
 6. Morphing: the neutral rule, chain changes, chains as presets, evolve. (claude-a5)
 
 ## Consequences
