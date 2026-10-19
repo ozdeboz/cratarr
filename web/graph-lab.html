@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graph lab</title>
+<style>
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<!-- Development only (Vite builds index.html alone). The patch graph (decision 0056, step 3) on a sample patch, every
+     edit applied (lib/visuals/PatchGraphLab.svelte); ?cratarr for the Cratarr chain. -->
+<div id="app"></div>
+<script type="module">
+  import { mount } from 'svelte';
+  import '/src/app.css';
+  import Lab from '/src/lib/visuals/PatchGraphLab.svelte';
+  mount(Lab, { target: document.getElementById('app') });
+</script>
+</body>
+</html>
