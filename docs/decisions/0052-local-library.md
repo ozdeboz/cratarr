@@ -66,3 +66,12 @@ features is weird"; and, asked whether a local queue goes away: no, each mode ke
   the player's view then has `mode: device` and that track. Commands: pause, resume, toggle, next, previous, seek,
   volume, duck, unduck and sleep pass; stop pauses; play, a queue taken up and a handover to it pass (the app switches
   back); the rest, and a handover from it, are refused with "That device plays its own music."
+
+## The switch (the owner, 2026-10-19)
+
+- **At the top of the page menu**: "Cratarr | Local", where the connection line is. The menu below shows what that mode
+  has; in Local: the device's albums, artists and tracks with search, the player, the queue and the menus, nothing that
+  is Cratarr's only (hearts, playlists, crates, radio, Insights).
+- **A switch is the whole app, the player too**: what plays pauses and is put by, the other mode's queue comes back
+  paused, where it was (as built).
+- **Named Local**, the owner's own word; "This device" stays the name of the player here (where music plays, Settings).

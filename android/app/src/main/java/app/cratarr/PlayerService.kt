@@ -74,7 +74,7 @@ class PlayerService : MediaSessionService() {
         // Another server or name: Cratarr says the group again once connected.
         if ((key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, null, 0, sync.bufferMs, "")
         if (key == Prefs.LEVELLING) link?.levellingChanged()
-        if (key == Prefs.OUTPUT_CHOICE) applyOutput()
+        if (key == Prefs.OUTPUT_CHOICE || key == Prefs.OUTPUT_ORDERED || key == Prefs.OUTPUT_KNOWN) applyOutput()
         if (key == Prefs.SLEEP) {
             keepSleep()
             link?.sleepChanged()
@@ -272,9 +272,10 @@ class PlayerService : MediaSessionService() {
         applyOutput()
     }
 
+    /** The chosen output, else the first of the owner's order that is there ([Output.preferred]); picked again as
+     *  outputs come and go. */
     private fun applyOutput() {
-        val chosen = prefs.outputChoice.takeIf { it.isNotEmpty() }?.let { Output.find(this, it) }
-        player.setPreferredAudioDevice(chosen)
+        player.setPreferredAudioDevice(Output.preferred(this))
     }
 
     /** The sleep timer as set: the end of the track by the player itself, the time by a wait. */

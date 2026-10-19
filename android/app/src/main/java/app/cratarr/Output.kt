@@ -2,7 +2,7 @@
  * Where the music sounds (decision 0033, amended 2026-10-19): the device Android routes media to now, told to Cratarr
  * with each report, so a queue remembers where it was heard ("the car queue") and one started in the car can take the
  * car's name. Read from Android's own routing (no permission asked); a change (Bluetooth on or off, headphones in or
- * out) is reported at once.
+ * out) is reported at once. Automatic can follow the owner's order of every output seen here ([preferred]).
  */
 package app.cratarr
 
@@ -14,6 +14,8 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 object Output {
@@ -49,6 +51,52 @@ object Output {
     fun find(context: Context, id: String): AudioDeviceInfo? {
         val audio = context.getSystemService(AudioManager::class.java) ?: return null
         return audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter(::choosable).firstOrNull { idOf(it) == id }
+    }
+
+    /** Every output seen here, there now or not, in the owner's order: new ones go at the end (and are kept). */
+    fun known(context: Context): List<JSONObject> {
+        val prefs = Prefs(context)
+        val kept = read(prefs.outputKnown)
+        val ids = kept.map { it.optString("id") }.toSet()
+        val new = all(context).filter { it.getString("id") !in ids }
+        if (new.isEmpty()) return kept
+        val out = kept + new
+        prefs.outputKnown = JSONArray(out).toString()
+        return out
+    }
+
+    /** The owner's order after a drag: the known outputs by [ids]; any not named keep their place after those. */
+    fun order(context: Context, ids: List<String>) {
+        val known = known(context)
+        val byId = known.associateBy { it.optString("id") }
+        val ordered = ids.distinct().mapNotNull(byId::get)
+        Prefs(context).outputKnown = JSONArray(ordered + known.filter { it !in ordered }).toString()
+    }
+
+    /** An output not there now, forgotten (one that is there stays: it would come back at once). */
+    fun forget(context: Context, id: String) {
+        if (all(context).any { it.getString("id") == id }) return
+        Prefs(context).outputKnown = JSONArray(known(context).filter { it.optString("id") != id }).toString()
+    }
+
+    /**
+     * Where the player sends its sound: the output chosen in the sheet while there is one; else, with the owner's order
+     * on, the first output of it that is there now; else none (Android chooses).
+     */
+    fun preferred(context: Context): AudioDeviceInfo? {
+        val prefs = Prefs(context)
+        prefs.outputChoice.takeIf { it.isNotEmpty() }?.let { return find(context, it) }
+        if (!prefs.outputOrdered) return null
+        val there = all(context).map { it.getString("id") }.toSet()
+        val first = known(context).map { it.optString("id") }.firstOrNull { it in there } ?: return null
+        return find(context, first)
+    }
+
+    private fun read(json: String): List<JSONObject> = try {
+        val a = JSONArray(json)
+        (0 until a.length()).mapNotNull { a.optJSONObject(it) }.filter { it.optString("id").isNotEmpty() }
+    } catch (e: JSONException) {
+        emptyList()
     }
 
     /** An output music can be sent to: not a call's (a Bluetooth device's call channel, the earpiece), nor the speaker's

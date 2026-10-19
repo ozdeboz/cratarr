@@ -181,6 +181,21 @@ class Prefs(context: Context) {
         p.edit().putString(if (mode == MODE_DEVICE) DEVICE_QUEUE else CRATARR_QUEUE, snapshot).apply()
     }
 
+    /** Automatic follows the owner's order of outputs (decision 0033, amended 2026-10-19: [Output.preferred]); off:
+     *  Android's own choice. */
+    var outputOrdered: Boolean
+        get() = p.getBoolean(OUTPUT_ORDERED, false)
+        set(value) {
+            p.edit().putBoolean(OUTPUT_ORDERED, value).apply()
+        }
+
+    /** Every output seen here, there or not, in the owner's order, as a JSON array of `{id, type, name}` (Output). */
+    var outputKnown: String
+        get() = p.getString(OUTPUT_KNOWN, null).orEmpty()
+        set(value) {
+            p.edit().putString(OUTPUT_KNOWN, value).apply()
+        }
+
     /** A new queue starts: its own id, and its name (empty: Cratarr names it after its album, artist or first track). */
     fun newQueue(name: String) {
         p.edit().putString(QUEUE_ID, java.util.UUID.randomUUID().toString()).putString(QUEUE_NAME, name).apply()
@@ -298,6 +313,8 @@ class Prefs(context: Context) {
         const val QUEUE_ID = "queue_id"
         const val OUTPUT_CHOICE = "output_choice"
         const val OUTPUT_CHOICE_SET = "output_choice_set"
+        const val OUTPUT_ORDERED = "output_ordered"
+        const val OUTPUT_KNOWN = "output_known"
         const val QUEUE_NAME = "queue_name"
         const val MODE = "mode"
         const val MODE_CRATARR = "cratarr"

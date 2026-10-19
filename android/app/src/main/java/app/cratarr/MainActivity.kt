@@ -353,6 +353,10 @@ class MainActivity : AppCompatActivity() {
                     prefs.outputChoice = if (message.isNull("output")) "" else message.optString("output")
                     prefs.outputChoiceSet = Output.set(this)
                 }
+                // Automatic by the owner's order: on or off, the order after a drag, an output not there forgotten.
+                if (message.has("ordered")) prefs.outputOrdered = message.optBoolean("ordered")
+                message.optJSONArray("order")?.let { a -> Output.order(this, (0 until a.length()).map(a::optString)) }
+                message.optString("forget").takeIf { it.isNotEmpty() }?.let { Output.forget(this, it) }
                 if (message.has("stayReady")) {
                     prefs.stayReady = message.optBoolean("stayReady")
                     PlayerService.ready(this)
@@ -466,6 +470,9 @@ class MainActivity : AppCompatActivity() {
         // Its outputs, and the one chosen (null: Automatic); `output` in Play On's reports is the one that plays.
         .put("outputs", org.json.JSONArray(Output.all(this)))
         .put("output", prefs.outputChoice.ifEmpty { null } ?: org.json.JSONObject.NULL)
+        // Automatic by the owner's order, and every output seen here in that order (`outputs`: those there now).
+        .put("ordered", prefs.outputOrdered)
+        .put("known", org.json.JSONArray(Output.known(this)))
         .put("stayReady", prefs.stayReady)
         // `server`: the public address, for pages from before there were two.
         .put("server", prefs.publicAddress ?: "")
