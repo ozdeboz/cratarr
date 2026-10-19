@@ -312,9 +312,9 @@ mod card_tests {
     fn a_crates_card_counts_its_lines() {
         let now = 1_000_000_000;
         let facts = [
-            crates::Facts { rel: "A/1.flac".into(), genres: vec!["Dub".into(), "Reggae".into()], year: None, bpm: None },
-            crates::Facts { rel: "A/2.flac".into(), genres: vec!["dub".into()], year: None, bpm: None },
-            crates::Facts { rel: "B/1.flac".into(), genres: vec!["Jazz".into()], year: None, bpm: None },
+            crates::Facts { rel: "A/1.flac".into(), genres: vec!["Dub".into(), "Reggae".into()], year: None, bpm: None, ..Default::default() },
+            crates::Facts { rel: "A/2.flac".into(), genres: vec!["dub".into()], year: None, bpm: None, ..Default::default() },
+            crates::Facts { rel: "B/1.flac".into(), genres: vec!["Jazz".into()], year: None, bpm: None, ..Default::default() },
         ];
         let by: HashMap<&str, &crates::Facts> = facts.iter().map(|f| (f.rel.as_str(), f)).collect();
         let song = |id: &str, album: &str, ms: i64, created: i64| RelSong { song: id.into(), album: album.into(), duration_ms: Some(ms), created: Some(created), genres: Vec::new() };

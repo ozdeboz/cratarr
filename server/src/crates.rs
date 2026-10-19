@@ -173,6 +173,12 @@ pub struct Facts {
     pub genres: Vec<String>,
     pub year: Option<f64>,
     pub bpm: Option<f64>,
+    /// AudioMuse's (decision 0054): its energy and CLAP's danceability as 0 to 100, CLAP's moods that stand out, its
+    /// style tags; none where AudioMuse has not heard the file.
+    pub energy: Option<f64>,
+    pub danceability: Option<f64>,
+    pub moods: Vec<String>,
+    pub styles: Vec<String>,
 }
 
 /// What the axes test about the library as a whole: which playlists hold a line, which lines are favourites.
@@ -184,29 +190,41 @@ pub struct World<'a> {
     pub favourite_albums: Option<&'a HashSet<String>>,
 }
 
-const AXES: [(&str, &str, Kind); 6] = [
+const AXES: [(&str, &str, Kind); 10] = [
     ("favourite", "Favourite", Kind::YesNo),
     ("favourite_album", "Favourite album", Kind::YesNo),
     ("playlist", "In playlist", Kind::Membership),
     ("genre", "Genre", Kind::Values),
     ("year", "Year", Kind::Range),
     ("bpm", "BPM", Kind::Range),
+    // AudioMuse's (decision 0054; the owner: crates select on all four).
+    ("mood", "Mood", Kind::Values),
+    ("energy", "Energy", Kind::Range),
+    ("danceability", "Danceability", Kind::Range),
+    ("style", "Style", Kind::Values),
 ];
+
+/// Names as the library has them, the most common first (a genre's or a style's, in any case).
+fn by_count<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut seen: HashMap<String, (String, usize)> = HashMap::new();
+    for n in names {
+        seen.entry(n.to_lowercase()).or_insert_with(|| (n.clone(), 0)).1 += 1;
+    }
+    let mut all: Vec<(String, usize)> = seen.into_values().collect();
+    all.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    all.into_iter().map(|(n, _)| n).collect()
+}
 
 pub fn is_axis(key: &str) -> bool {
     AXES.iter().any(|(k, _, _)| *k == key)
 }
 
-/// The axes with their domains in this library: genres most common first, the years' and BPMs' span.
+/// The axes with their domains in this library: genres, moods and styles most common first, the years', BPMs',
+/// energies' and danceabilities' span.
 pub fn axes(files: &[Facts], playlists: &[String]) -> Vec<AxisView> {
-    let mut genres: HashMap<String, (String, usize)> = HashMap::new();
-    for f in files {
-        for g in &f.genres {
-            genres.entry(g.to_lowercase()).or_insert_with(|| (g.clone(), 0)).1 += 1;
-        }
-    }
-    let mut genres: Vec<(String, usize)> = genres.into_values().collect();
-    genres.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    let genres = by_count(files.iter().flat_map(|f| &f.genres));
+    let moods = by_count(files.iter().flat_map(|f| &f.moods));
+    let styles = by_count(files.iter().flat_map(|f| &f.styles));
     let span = |get: fn(&Facts) -> Option<f64>| {
         let vals: Vec<f64> = files.iter().filter_map(get).collect();
         let min = vals.iter().copied().fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.min(v))));
@@ -219,11 +237,21 @@ pub fn axes(files: &[Facts], playlists: &[String]) -> Vec<AxisView> {
             match key {
                 "playlist" => a.values = playlists.to_vec(),
                 "genre" => {
-                    a.values = genres.iter().map(|(g, _)| g.clone()).collect();
+                    a.values = genres.clone();
                     a.known = files.iter().filter(|f| !f.genres.is_empty()).count();
                 }
                 "year" => (a.min, a.max, a.known) = span(|f| f.year),
                 "bpm" => (a.min, a.max, a.known) = span(|f| f.bpm),
+                "mood" => {
+                    a.values = moods.clone();
+                    a.known = files.iter().filter(|f| f.danceability.is_some()).count();
+                }
+                "energy" => (a.min, a.max, a.known) = span(|f| f.energy),
+                "danceability" => (a.min, a.max, a.known) = span(|f| f.danceability),
+                "style" => {
+                    a.values = styles.clone();
+                    a.known = files.iter().filter(|f| !f.styles.is_empty()).count();
+                }
                 _ => {}
             }
             a
@@ -249,6 +277,10 @@ fn holds(c: &Condition, f: &Facts, w: &World) -> bool {
         ("genre", Value::AnyOf { values }) => values.iter().any(|v| f.genres.iter().any(|g| g.eq_ignore_ascii_case(v))),
         ("year", Value::Range { min, max }) => within(f.year, min, max),
         ("bpm", Value::Range { min, max }) => within(f.bpm, min, max),
+        ("mood", Value::AnyOf { values }) => values.iter().any(|v| f.moods.iter().any(|m| m.eq_ignore_ascii_case(v))),
+        ("style", Value::AnyOf { values }) => values.iter().any(|v| f.styles.iter().any(|s| s.eq_ignore_ascii_case(v))),
+        ("energy", Value::Range { min, max }) => within(f.energy, min, max),
+        ("danceability", Value::Range { min, max }) => within(f.danceability, min, max),
         _ => false,
     };
     yes != c.not
@@ -609,7 +641,7 @@ mod tests {
     }
 
     fn f(rel: &str, genres: &[&str], year: Option<f64>, bpm: Option<f64>) -> Facts {
-        Facts { rel: rel.into(), genres: genres.iter().map(|g| g.to_string()).collect(), year, bpm }
+        Facts { rel: rel.into(), genres: genres.iter().map(|g| g.to_string()).collect(), year, bpm, ..Facts::default() }
     }
 
     fn library() -> (Vec<Facts>, HashMap<String, Vec<String>>, HashSet<String>) {
@@ -657,6 +689,35 @@ mod tests {
         // Not known: nothing is shown on that ground.
         let unknown = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
         assert!(select(&files, &shown(&[], Favourites::All, Favourites::Only), &unknown).is_empty());
+    }
+
+    #[test]
+    fn audiomuses_axes_select_on_mood_energy_danceability_and_style() {
+        let mk = |rel: &str, energy, dance, moods: &[&str], styles: &[&str]| Facts {
+            rel: rel.into(),
+            energy,
+            danceability: dance,
+            moods: moods.iter().map(|s| s.to_string()).collect(),
+            styles: styles.iter().map(|s| s.to_string()).collect(),
+            ..Facts::default()
+        };
+        let files = vec![
+            mk("a", Some(80.0), Some(70.0), &["happy", "party"], &["electronic"]),
+            mk("b", Some(20.0), Some(10.0), &["relaxed"], &["ambient", "electronic"]),
+            mk("c", None, None, &[], &[]),
+        ];
+        let (membership, favourites) = (HashMap::new(), HashSet::new());
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
+        let c = |axis: &str, value: Value| Condition { axis: axis.into(), not: false, value };
+        assert_eq!(select(&files, &[c("mood", Value::AnyOf { values: vec!["Happy".into()] })], &w), vec!["a"]);
+        assert_eq!(select(&files, &[c("energy", Value::Range { min: Some(50.0), max: None })], &w), vec!["a"]);
+        assert_eq!(select(&files, &[c("danceability", Value::Range { min: None, max: Some(50.0) })], &w), vec!["b"]);
+        assert_eq!(select(&files, &[c("style", Value::AnyOf { values: vec!["electronic".into()] })], &w), vec!["a", "b"]);
+        let ax = axes(&files, &[]);
+        let get = |k: &str| ax.iter().find(|a| a.key == k).unwrap();
+        assert_eq!(get("style").values, vec!["electronic", "ambient"], "the most common first");
+        assert_eq!((get("energy").min, get("energy").max, get("energy").known), (Some(20.0), Some(80.0), 2));
+        assert_eq!(get("mood").known, 2, "heard by CLAP");
     }
 
     #[test]

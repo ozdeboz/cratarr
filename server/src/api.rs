@@ -928,6 +928,8 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
     // Its tempo as the library serves it (the BPM tag, else the analysis').
     let bpm = served_song(&app, &source, &id).await.and_then(|s| s.bpm);
     let cat = app.library.catalogue();
+    // Whose plays these are: the listener's (read here, as the blocking work below has no request of its own).
+    let listener = crate::serve::instance().and_then(|s| s.current_user().map(|u| (s, u)));
     let read = tokio::task::spawn_blocking(move || -> Option<serde_json::Value> {
         let track = cat.track_of_source(&source, &id)?;
         let (folder, rel) = cat.file_of(track)?;
@@ -937,7 +939,15 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
         let modified = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs());
         let (file, _) = crate::catalogue::tags::read(&path).ok()?;
         let tags: Vec<serde_json::Value> = file.items.iter().map(|(raw, name, value)| json!({ "name": name.unwrap_or(raw), "value": value })).collect();
-        Some(json!({
+        // The listener's plays of it, and AudioMuse's facts (decision 0054): energy, key, style, mood, danceability.
+        let song = crate::serve::ids::song(track);
+        let plays = listener
+            .as_ref()
+            .and_then(|(s, u)| s.userdata.get(u, crate::userdata::Kind::Song, std::slice::from_ref(&song)).ok())
+            .and_then(|mut m| m.remove(&song));
+        let mut muse = crate::app::audiomuse::details(cat.audiomuse_of(track).as_ref());
+        let muse = muse.as_object_mut().map(std::mem::take).unwrap_or_default();
+        let mut details = json!({
             "path": rel,
             "folder": root.file_name().map(|n| n.to_string_lossy().into_owned()),
             "format": file.format,
@@ -953,7 +963,13 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
             // As the crates' genre axis reads them: what a genre in the panel matches.
             "genres": cat.genres_of_ids(&source, std::slice::from_ref(&id)).pop().unwrap_or_default(),
             "tags": tags,
-        }))
+            "play_count": plays.as_ref().map(|a| a.play_count),
+            "last_played": plays.as_ref().and_then(|a| a.play_date),
+        });
+        if let Some(d) = details.as_object_mut() {
+            d.extend(muse);
+        }
+        Some(details)
     });
     match read.await.ok().flatten() {
         Some(details) => Json(details).into_response(),

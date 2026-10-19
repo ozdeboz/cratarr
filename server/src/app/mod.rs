@@ -12,6 +12,7 @@
 //! - `settings`: the Settings page.
 
 mod albums;
+pub mod audiomuse;
 pub mod analysis_pass;
 pub mod analysis_import;
 mod collection;
@@ -195,6 +196,18 @@ impl App {
         }
     }
 
+    /// AudioMuse's file taken in when it changed (decision 0054); a note in the log of what it brought.
+    async fn audiomuse(&self) {
+        let Some(dir) = self.library.data_dir() else { return };
+        let (cat, path) = (self.library.catalogue(), std::path::Path::new(&dir).join(audiomuse::FILE));
+        match tokio::task::spawn_blocking(move || audiomuse::import_if_changed(&cat, &path)).await {
+            Ok(Ok(Some(c))) => tracing::info!("audiomuse: {} tracks taken in, {} not in the library, {} unreadable lines", c.kept, c.unknown, c.bad),
+            Ok(Ok(None)) => {}
+            Ok(Err(e)) => tracing::warn!("audiomuse: {e:#}"),
+            Err(e) => tracing::warn!("audiomuse: {e}"),
+        }
+    }
+
     /// The one background pass that keeps Cratarr in step with its sources and the library, run every
     /// `SYNC_SECS`. Sources offer no reliable change notifications (webhooks are optional plugins), so it looks:
     /// incoming lists every pass; dead playlist entries and sources still missing their libraries every other pass;
@@ -217,6 +230,10 @@ impl App {
         }
         if pass % 120 == 0 {
             self.incoming.purge_trash().await;
+        }
+        // AudioMuse's analysis from the PC (decision 0054), when its file changed: every five minutes.
+        if pass % 10 == 0 {
+            self.audiomuse().await;
         }
     }
 }

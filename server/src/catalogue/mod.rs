@@ -68,7 +68,29 @@ CREATE TABLE IF NOT EXISTS analysis (
 CREATE TABLE IF NOT EXISTS analysis_shape (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, waveform BLOB, blocks BLOB,
   PRIMARY KEY (folder, rel));
+-- AudioMuse's analysis (decision 0054), by track: taken in whole from the PC where AudioMuse runs.
+CREATE TABLE IF NOT EXISTS audiomuse (
+  track INTEGER PRIMARY KEY, energy REAL, key TEXT, style TEXT, moods TEXT, embedding BLOB);
 ";
+
+/// A track's AudioMuse analysis as kept (decision 0054): AudioMuse's own words for it (`app::audiomuse` reads them).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AudioMuseRow {
+    pub track: i64,
+    pub energy: Option<f64>,
+    /// "D minor".
+    pub key: Option<String>,
+    /// AudioMuse's style tags with their scores, as it writes them.
+    pub style: Option<String>,
+    /// CLAP's moods with their scores, as AudioMuse writes them.
+    pub moods: Option<String>,
+    /// The similarity vector: little-endian 32-bit floats.
+    pub embedding: Option<Vec<u8>>,
+}
+
+fn audiomuse_row(r: &rusqlite::Row) -> rusqlite::Result<AudioMuseRow> {
+    Ok(AudioMuseRow { track: r.get(0)?, energy: r.get(1)?, key: r.get(2)?, style: r.get(3)?, moods: r.get(4)?, embedding: r.get(5)? })
+}
 
 /// A file the catalogue counts: neither gone (no longer where it was, waiting to be recognised elsewhere) nor in the
 /// trash.
@@ -745,6 +767,13 @@ impl Catalogue {
         )?;
         let analysed: HashMap<String, f64> =
             st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        // AudioMuse's (decision 0054), where it heard the file: energy, style tags, CLAP's moods.
+        type Muse = (Option<f64>, Option<String>, Option<String>);
+        let mut st = db.prepare(&format!(
+            "SELECT f.rel, a.energy, a.style, a.moods FROM audiomuse a JOIN files f ON f.track = a.track WHERE f.folder = ?1 AND {PRESENT_F}"
+        ))?;
+        let mut muse: HashMap<String, Muse> =
+            st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))?.collect::<rusqlite::Result<_>>()?;
         Ok(rels
             .into_iter()
             .map(|rel| {
@@ -757,11 +786,23 @@ impl Catalogue {
                         genres.push(v.clone());
                     }
                 }
+                let (mut energy, mut danceability, mut moods, mut styles) = (None, None, Vec::new(), Vec::new());
+                if let Some((e, style, clap)) = muse.remove(&rel) {
+                    let (m, d) = crate::app::audiomuse::moods_and_danceability(&AudioMuseRow { moods: clap, ..AudioMuseRow::default() });
+                    energy = e.map(|e| (e * 100.0).round());
+                    danceability = d.map(|d| (d * 100.0).round());
+                    moods = m.into_iter().map(|(n, _)| n).collect();
+                    styles = crate::app::audiomuse::weighted(style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, _)| n).collect();
+                }
                 crate::crates::Facts {
                     year: crate::crates::year_of(&first),
                     bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)).or_else(|| analysed.get(&rel).map(|b| b.round())),
                     genres,
                     rel,
+                    energy,
+                    danceability,
+                    moods,
+                    styles,
                 }
             })
             .collect())
@@ -1354,6 +1395,30 @@ impl Catalogue {
         store_analysis(&self.db(), folder, rel, size, mtime, a, now_secs())
     }
 
+    /// AudioMuse's analysis (decision 0054), all of it replaced by `rows`: what the PC's export holds now. Blocking.
+    pub fn replace_audiomuse(&self, rows: &[AudioMuseRow]) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        tx.execute("DELETE FROM audiomuse", [])?;
+        {
+            let mut st = tx.prepare("INSERT OR REPLACE INTO audiomuse (track, energy, key, style, moods, embedding) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
+            for r in rows {
+                st.execute(params![r.track, r.energy, r.key, r.style, r.moods, r.embedding])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A track's AudioMuse analysis, where it has one. Blocking.
+    pub fn audiomuse_of(&self, track: i64) -> Option<AudioMuseRow> {
+        self.db()
+            .query_row("SELECT track, energy, key, style, moods, embedding FROM audiomuse WHERE track = ?1", [track], audiomuse_row)
+            .optional()
+            .ok()
+            .flatten()
+    }
+
     /// Several at once, in one transaction (an import's batch). Blocking.
     pub fn store_analyses(&self, items: &[(i64, String, u64, i64, crate::analysis::Analysis)]) -> Result<()> {
         let mut db = self.db();
@@ -1532,11 +1597,12 @@ impl Catalogue {
             .flatten()
     }
 
-    fn meta(&self, key: &str) -> Option<String> {
+    /// A note the catalogue keeps (its `meta` table), by key.
+    pub fn meta(&self, key: &str) -> Option<String> {
         self.db().query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional().ok().flatten()
     }
 
-    fn set_meta(&self, key: &str, value: &str) {
+    pub fn set_meta(&self, key: &str, value: &str) {
         let _ = self.db().execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value]);
     }
 
