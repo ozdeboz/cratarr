@@ -279,13 +279,15 @@
         <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('playlist', from, p.id, !on, p.name)} />
       {/if}
       {#if one}
-        {@const name = one.id}
+        <!-- Titled by its name; linked by its id (another user's shared one is "owner/name"). -->
+        {@const pid = one.id}
+        {@const name = one.name}
         <MenuEntry
           icon="share"
           label="Share"
           onclick={() => {
             onclose();
-            share(name, name, linkTo('playlists', name));
+            share(name, name, linkTo('playlists', pid));
           }}
         />
       {/if}
