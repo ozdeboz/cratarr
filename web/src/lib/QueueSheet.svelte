@@ -21,17 +21,18 @@
   import { longpress } from './longpress';
   import RowHeart from './RowHeart.svelte';
   import { swipe } from './swipe';
+  import SwipeBehind from './SwipeBehind.svelte';
   import { sheetDrag } from './sheetDrag';
   import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
   import QueuesSheet from './QueuesSheet.svelte';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
-  import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming } from './localPlayer.svelte';
+  import { clearUpcoming, local, jump as localJump, moveUpcoming, removePlaying, removeUpcoming, restoreUpcoming } from './localPlayer.svelte';
   import MoreMusicSheet, { moreMusicLine, moreMusicParts } from './MoreMusicSheet.svelte';
   import { canPreview, endPreview, preview, startPreview } from './preview.svelte';
   import { hold } from './hold';
   import { albumSubject, viewPlaylist } from './panel.svelte';
-  import { crates, CRATE } from './crates.svelte';
+  import { crateName, crates, CRATE, leaveOut } from './crates.svelte';
   import { player } from './live.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { isLocal, shownPlaylists } from './output.svelte';
@@ -77,6 +78,31 @@
     const c = crates.list?.find((x) => x.name === from);
     return c ? CRATE + c.id : null;
   });
+  // A queue a crate started (its chip's crate), on its own tracks (not added by hand, by Radio or by Autoplay): the
+  // playing card's crate-with-a-cross and a row's menu take the track out of the crate (decision 0024, amended
+  // 2026-10-19: the owner's "playing card + menus"), and out of the queue: the playing one gives way to the next.
+  const fromCrate = $derived(fromView?.startsWith(CRATE) ? fromView.slice(CRATE.length) : null);
+  /** The crate's own track at `place` (the playing one: null). */
+  const ownTrack = (place: QueuePlace | null) => {
+    if (!fromCrate) return false;
+    const i = place === null ? local.index : place.list === 'previous' ? place.at : local.index + 1 + place.at;
+    return !!local.queue[i] && !local.queue[i].lane;
+  };
+  async function outOfCrate(t: MenuTrack, place: QueuePlace | null) {
+    const c = fromCrate;
+    if (!c) return;
+    heavy();
+    try {
+      await leaveOut(c, t.source, [t.id]);
+      if (place === null) removePlaying();
+      else if (place.list === 'upcoming') removeUpcoming(place.at);
+    } catch (e) {
+      toast.fail(e, "It wasn't taken out");
+    }
+  }
+  /** A row's menu (or the playing card's): Remove from the crate, for the crate's own tracks. */
+  const outFor = (m: { track: MenuTrack; queue: QueuePlace | null }) =>
+    ownTrack(m.queue) && fromCrate ? { label: `Remove from ${crateName(fromCrate)}`, icon: 'crateOut' as const, run: () => outOfCrate(m.track, m.queue) } : null;
   function openFrom() {
     const v = fromView;
     if (!v) return;
@@ -162,7 +188,9 @@
   );
   const drag = $derived(reorder.drag);
 
-  // Swipe left removes (this device; lib/swipe.ts): the row slides out, then the track leaves the queue.
+  // Swipe left removes (this device; lib/swipe.ts): the row slides out, then the track leaves the queue. Remove shows
+  // in the strip it uncovers (lib/SwipeBehind).
+  const REMOVE = { icon: 'trash', label: 'Remove', danger: true } as const;
   const removeSwiped = (i: number) => {
     setTimeout(() => removeUpcoming(i), reducedMotion() ? 0 : 200);
     return 'away' as const;
@@ -278,6 +306,11 @@
           <span>{np.artist ?? ''}</span>
         </div>
         <span class="ntime">{clockText(pos)}{dur ? ` / ${clockText(dur)}` : ''}</span>
+        {#if ownTrack(null)}
+          <button class="nbtn" aria-label={`Remove from ${crateName(fromCrate ?? '')}`} title="Remove from crate" onclick={() => outOfCrate(asTrack(np, np.source), null)}
+            ><Icon name="crateOut" size={28} /></button
+          >
+        {/if}
         {#if np.favorite !== null}
           <button class="nbtn" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
             ><Icon name="heart" size={28} /></button
@@ -306,11 +339,12 @@
               class:lane-end={i > 0 && np.upcoming[i - 1].lane !== t.lane && (np.upcoming[i - 1].lane === 'next' || t.lane === 'radio' || t.lane === 'autoplay')}
               style:transform={drag ? `translateY(${reorder.offset(i)}px)` : null}
             >
+              {#if here}<SwipeBehind left={REMOVE} />{/if}
               <button
                 class="row"
                 onclick={() => play(i)}
                 use:longpress={() => rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i })}
-                use:swipe={{ enabled: here && !drag, onswipe: () => removeSwiped(i) }}
+                use:swipe={{ enabled: here && !drag, left: () => removeSwiped(i) }}
               >
                 {@render heldCover({ source: np.source, id: t.id, album_id: t.album_id, duration_secs: t.duration_secs })}
                 <div><strong>{t.name}</strong><span>{#if t.lane === 'radio'}<i class="radio" title="Radio"><Icon name="radio" size={14} /></i>{:else if t.lane === 'autoplay'}<i class="radio" title="Autoplay"><Icon name="infinity" size={14} /></i>{/if}{@render byline(t)}</span></div>
@@ -359,6 +393,7 @@
     track={menuFor.track}
     start={menuFor.start}
     queue={menuFor.queue}
+    out={outFor(menuFor)}
     onclose={() => (menuShown = false)}
   />
 {/if}

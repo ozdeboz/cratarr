@@ -133,3 +133,25 @@ The owner: "a play button on the crates, which automatically plays it with shuff
 - **Both toggles apply.** The tracks are the ones the crate's two toggles let through, as it shows them.
 - **A big crate is sampled.** A crate comes 500 tracks at a time, so the queue takes up to three stretches of 500 from
   anywhere in it, shuffled together. A crate of up to 1,500 tracks plays whole.
+
+## Amendment (2026-10-19): a crate's tracks taken out by hand
+
+The owner: "whenever a crate has added tracks to the queue, those tracks should get a button to remove them from the
+crate", and, of the open points, each as recommended: a left-out list per crate; a button on the playing card and an
+entry in the menus; the track leaves the queue too; an Undo toast. Its icon is the crate with a cross where its handle
+is (the owner chose it from three).
+
+- **A left-out list per crate** (`left_out` in `crates.json`), for every crate: one's own, Unlisted and a genre's. It
+  beats the conditions and both toggles (a left-out favourite stays out), and everything that reads a crate's tracks
+  leaves them out: its rows and size, the tempo spread, Play and Shuffle (its card's too), Make playlist, radio within
+  it. `POST`/`DELETE /api/crates/{id}/left-out {source, ids}` take out and put back, journaled (Undo);
+  `GET /api/crates/{id}/left-out` lists them; each crate carries `left_out: n`.
+- **From a queue the crate started** (its card's Shuffle, its panel's Play or Shuffle), on its own tracks only (not
+  those added by hand, by Radio or by Autoplay): the crate-with-a-cross beside the playing card's heart in the Queue
+  sheet, and "Remove from <crate>" in a row's menu. The track leaves the queue too; the playing one gives way to the
+  next. The page knows the queue's crate by the queue's name, as the sheet's chip does.
+- **From the crate's panel**: a swipe left on a track (decision 0023, amended the same day), or its menu's "Remove from
+  <crate>".
+- **Undo** follows in a toast ("Removed from Test."), the one notice of its kind: a single tap changes the crate.
+- **Putting back**: "N left out" under the crate's name in its panel (any crate, so not only in the editor, which
+  Unlisted and a genre's crate have none of) opens their list: each put back, or Put all back, with Undo again.

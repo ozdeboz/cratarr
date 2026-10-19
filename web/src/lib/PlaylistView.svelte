@@ -4,7 +4,8 @@
   // screen (lib/components/AlbumScreen) in less room: a bar with ✕ and the menu; the covers beside the name, "N tracks
   // (length)" and the genres; Play, Shuffle, Play next and Add to queue as icons over labels; what Insights knows of it
   // (Related: the Info tab); then the tracks in file order. A tap on a track plays the playlist from
-  // there on the chosen output, a swipe left plays it next, a long-press is its menu; the heart adds it to playlists
+  // there on the chosen output, a swipe right plays it next, a swipe left takes it out of the crate or the playlist (with
+  // Undo; not an album's or an artist's), a long-press is its menu; the heart adds it to playlists
   // (long-press: favourite). Lines the server does not know, or files that are missing, show by file name, dimmed.
   // Edit mode (the pencil; Finamp's playlist edit screen): rows get the reorder handle and ✕ (a swipe left removes too),
   // removed tracks wait in their own section to be restored, and Save writes the playlist once (Cancel drops it).
@@ -58,6 +59,7 @@
     FAVOURITES,
     favouriteAlbumsOf,
     favouritesOf,
+    leaveOut,
     favouritesSaved,
     forgetDraft,
     genreOf,
@@ -112,6 +114,8 @@
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
   import { swipe } from './swipe';
+  import SwipeBehind from './SwipeBehind.svelte';
+  import LeftOutSheet from './LeftOutSheet.svelte';
   import { toast } from './toast.svelte';
   import { me } from './me.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
@@ -651,7 +655,8 @@
   let menuOpen = $state(false);
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
   let menuStart = $state<'menu' | 'delete'>('menu');
-  let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists' } | null>(null);
+  /** `out`: its list's Remove from (a crate's, one's own playlist's), as a swipe left there. */
+  let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists'; out?: { label: string; icon: IconName; run: () => void } | null } | null>(null);
   const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null });
 
   // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
@@ -897,7 +902,8 @@
     }
   }
 
-  // A swipe left plays the track next (Finamp's default swipe on a playlist's rows); the row springs back.
+  // A swipe right plays the track next (it was Finamp's swipe left until the owner gave left to Remove, 2026-10-19); the
+  // row springs back.
   function playNext(r: PlaylistRow, src = source) {
     (async () => {
       try {
@@ -910,6 +916,76 @@
       }
     })();
     return 'back' as const;
+  }
+
+  // Swipes on a list's rows (the owner, 2026-10-19: "on any library content list in the panel, swiping to the left should
+  // remove it from that list"): right plays the track next on every list; left takes it out of the crate (its left-out
+  // list, decision 0024 amended) or out of the playlist file (one's own), at once, with Undo. An album's or an artist's
+  // tracks are no list of one's own: no left. What each does shows in the strip the row uncovers (lib/SwipeBehind).
+  const PLAY_NEXT = { icon: 'playNext', label: 'Play next' } as const;
+  const OUT_OF_CRATE = { icon: 'crateOut', label: 'Remove', danger: true } as const;
+  const OUT_OF_PLAYLIST = { icon: 'listRemove', label: 'Remove', danger: true } as const;
+  /** A swipe left on a row of `list` (a playlist's id; the crate viewed): null where it takes nothing out. */
+  function outOf(r: PlaylistRow, list: string): (() => 'away') | null {
+    const c = crate;
+    if (c) return r.id && !r.missing ? () => outOfCrate(c, r) : null;
+    if (album || artist) return null;
+    const pl = shownPlaylists().find((x) => x.id === list);
+    if (!pl || pl.mine === false || (multi ? !(list in sections) : list !== id)) return null;
+    return () => outOfPlaylist(list, r);
+  }
+  /** How many tracks the crate viewed leaves out by hand, and their sheet. */
+  const leftOut = $derived(crate && !crateEditing ? (crates.list?.find((x) => x.id === crate)?.left_out ?? 0) : 0);
+  let leftOutOpen = $state(false);
+  /** A row's menu: Remove from the list, doing what its swipe left does. */
+  const menuOut = (out: (() => 'away') | null, list: string) =>
+    out ? { label: `Remove from ${crate ? crateName(crate) : list}`, icon: (crate ? 'crateOut' : 'listRemove') as IconName, run: () => void out() } : null;
+  /** The row leaves the list as it slides out (the list is keyed by place, so the next takes its row). */
+  function dropShown(list: string, r: PlaylistRow) {
+    setTimeout(() => {
+      const s = sections[list];
+      if (multi && s && 'rows' in s) sections[list] = { ...s, rows: s.rows.filter((x) => x !== r) };
+      else if (rows) rows = rows.filter((x) => x !== r);
+    }, 200);
+  }
+  function outOfCrate(c: string, r: PlaylistRow) {
+    dropShown(id, r);
+    leaveOut(c, source, [r.id!]).catch((e) => {
+      toast.fail(e, "It wasn't taken out");
+      saved++;
+    });
+    return 'away' as const;
+  }
+  // A playlist's line out of its file. Swipes in a row wait for each other: each save names the lines as the one before
+  // left them (the server refuses a save over lines that changed), and the list is read again once they are all done.
+  const leaving: Record<string, PlaylistRow[]> = {};
+  let outs = 0;
+  let outChain: Promise<unknown> = Promise.resolve();
+  function outOfPlaylist(list: string, r: PlaylistRow) {
+    const s = sections[list];
+    const before = leaving[list] ?? (multi ? (s && 'rows' in s ? s.rows : null) : rows);
+    if (!before) return 'away' as const;
+    const after = before.filter((x) => x !== r);
+    leaving[list] = after;
+    outs++;
+    dropShown(list, r);
+    outChain = outChain
+      .then(async () => {
+        const { undo } = await editPlaylist(
+          list,
+          before.map((x) => x.entry),
+          after.map((x) => x.entry),
+        );
+        withUndo(`Removed from ${list}.`, [undo]);
+      })
+      .catch((e) => toast.fail(e, "It wasn't taken out"))
+      .finally(() => {
+        if (--outs) return;
+        for (const k of Object.keys(leaving)) delete leaving[k];
+        saved++;
+        refresh();
+      });
+    return 'away' as const;
   }
 
   // Edit mode: a working copy of the rows (each with its place in the file, so a restored one goes back there), and of
@@ -1406,6 +1482,8 @@
           <!-- A genre opens in the panel (its own crate). -->
           {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
           {#if p?.dead || chosenDead}<p class="details dead missing">{p?.dead || chosenDead} missing</p>{/if}
+          <!-- A crate's tracks taken out by hand (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
+          {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} left out</span></button>{/if}
         </div>
         {#if headTempo}
           <div class="head-spread">
@@ -1465,12 +1543,13 @@
         {#each editing.rows as x, i (x.at)}
           {@const r = x.r}
           <li class:lifted={reorder.drag?.from === i} style:transform={reorder.drag ? `translateY(${reorder.offset(i)}px)` : null}>
+            <SwipeBehind left={OUT_OF_PLAYLIST} />
             <Row
               size="large"
               title={r.name ?? r.file}
               sub={r.missing ? 'Missing file' : !r.id ? 'Not matched yet' : (r.artist ?? '')}
               off={!r.id || r.missing}
-              attach={fromAction(swipe, () => ({ enabled: !reorder.drag && !editing!.saving, onswipe: () => removeSwiped(i) }))}
+              attach={fromAction(swipe, () => ({ enabled: !reorder.drag && !editing!.saving, left: () => removeSwiped(i) }))}
             >
               {#snippet lead()}{@render cover(r, source)}{/snippet}
               {#snippet action()}
@@ -1614,8 +1693,8 @@
   </div>
 {/snippet}
 
-<!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe left plays it next, a long-press is its
-     menu, the heart adds it to playlists. -->
+<!-- A track's row: a tap plays its playlist (`name`, these rows) from it, a swipe right plays it next, a swipe left takes
+     it out of its crate or playlist, a long-press is its menu, the heart adds it to playlists. -->
 <!-- The list's column names over its tracks (decision 0042): a row of the same shape, so they line up. A tap on one
      orders the list by it where the list has an order of its own to change (`sorts`). -->
 {#snippet columnHead(sorts = true)}
@@ -1631,8 +1710,9 @@
 {#snippet trackRow(r: PlaylistRow, src: string, name: string, list: PlaylistRow[], i: number | null = null, columns = true)}
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
+  {@const out = selecting ? null : outOf(r, name)}
   <li class:now={here} class:ticked={!!selecting && i !== null && selecting.has(i)}>
-    <span class="behind" aria-hidden="true"><Icon name="playNext" size={40} /><span>Play next</span></span>
+    <SwipeBehind right={ok ? PLAY_NEXT : null} left={out ? (crate ? OUT_OF_CRATE : OUT_OF_PLAYLIST) : null} />
     <Row
       size="large"
       title={r.name ?? r.file}
@@ -1641,10 +1721,10 @@
       off={!ok}
       disabled={!ok}
       onclick={() => (selecting && i !== null ? tick(i) : playFrom(name, src, list, r))}
-      attach={fromAction(swipe, () => ({ enabled: ok && !selecting, onswipe: () => playNext(r, src) }))}
+      attach={fromAction(swipe, () => ({ enabled: !selecting, right: ok ? () => playNext(r, src) : null, left: out }))}
       attachMain={fromAction(longpress, () => () => {
         if (!ok) return;
-        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu' };
+        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu', out: menuOut(out, name) };
         else if (selecting) selectSheet = true;
         else startSelect(i);
       })}
@@ -1653,19 +1733,21 @@
       {#snippet sub()}
         {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else if artist}{#if !(columns && shows('album'))}<span class="artist">{r.album ?? ''}</span>{/if}{#if r.year && !(columns && shows('year'))}<span class="album">{r.year}</span>{/if}{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album && !(columns && shows('album'))}<span class="album">{r.album}</span>{/if}{/if}
       {/snippet}
-      {#snippet action()}{#if ok}{@render rowEnd(r, src, i)}{/if}{/snippet}
+      {#snippet action()}{#if ok}{@render rowEnd(r, src, i, out, name)}{/if}{/snippet}
     </Row>
   </li>
 {/snippet}
 
 <!-- A track's row ends in ⋮ (its menu, Symfonium's), or in select mode in its tick. -->
-{#snippet rowEnd(r: PlaylistRow, src: string, i: number | null)}
+{#snippet rowEnd(r: PlaylistRow, src: string, i: number | null, out: (() => 'away') | null = null, list = '')}
   {#if selecting && i !== null}
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
       ><Icon name={selecting.has(i) ? 'circleCheck' : 'circle'} size={24} /></button
     >
   {:else}
-    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu' })}><Icon name="moreVert" size={22} /></button>
+    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu', out: menuOut(out, list) })}
+      ><Icon name="moreVert" size={22} /></button
+    >
   {/if}
 {/snippet}
 
@@ -1675,7 +1757,7 @@
   {@const ok = !!r.id && !r.missing}
   {@const here = ok && !!np && np.id === r.id}
   <li class:now={here} class:ticked={!!selecting && selecting.has(i)}>
-    <span class="behind" aria-hidden="true"><Icon name="playNext" size={40} /><span>Play next</span></span>
+    <SwipeBehind right={PLAY_NEXT} />
     <Row
       size="large"
       title={r.name ?? r.file}
@@ -1684,7 +1766,7 @@
       off={!ok}
       disabled={!ok}
       onclick={() => (selecting ? tick(i) : playFrom(title, source, list, r))}
-      attach={fromAction(swipe, () => ({ enabled: ok && !selecting, onswipe: () => playNext(r, source) }))}
+      attach={fromAction(swipe, () => ({ enabled: ok && !selecting, right: () => playNext(r, source) }))}
       attachMain={fromAction(longpress, () => () => ok && (selecting ? (selectSheet = true) : startSelect(i)))}
     >
       {#snippet lead()}
@@ -1716,7 +1798,10 @@
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
 {#if trackMenu}
-  <TrackMenu track={trackMenu.track} start={trackMenu.start} onclose={() => (trackMenu = null)} />
+  <TrackMenu track={trackMenu.track} start={trackMenu.start} out={trackMenu.out} onclose={() => (trackMenu = null)} />
+{/if}
+{#if leftOutOpen && crate}
+  <LeftOutSheet crate={crate} onchange={() => saved++} onclose={() => (leftOutOpen = false)} />
 {/if}
 {#if artistMenuOpen && artist}
   <ArtistMenu
@@ -2082,6 +2167,17 @@
     color: var(--danger, #c33);
   }
 
+  .left-out {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    cursor: pointer;
+  }
+
   .info-tab {
     padding: 0 8px;
   }
@@ -2201,19 +2297,6 @@
   /* Finamp's track line under the title: the artist, then the album lighter. */
   .rows :global(.row .sub) {
     color: inherit;
-  }
-
-  /* Behind the row while it is swiped: what the swipe does. */
-  .behind {
-    position: absolute;
-    inset: 6px 20px 0;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 4px;
-    color: var(--art-accent, var(--accent));
-    font-weight: 500;
-    font-size: 14px;
   }
 
   .artist {

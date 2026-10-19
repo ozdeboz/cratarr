@@ -1,3 +1,5 @@
+import type { AudioOutput } from './api';
+
 // The Android app (decision 0031): on the server's own pages inside it, `window.CratarrApp` carries JSON messages both
 // ways (android/README.md). There the music plays in the app itself; the page is its face (localPlayer.svelte.ts).
 
@@ -36,7 +38,14 @@ export const appInfo = $state({
   syncOnlyCharging: false,
   /** Levelling (decision 0035): the app's player plays every track about as loud as the next. */
   levelling: true,
+  /** Where this device can sound now (decision 0033, amended 2026-10-19: the Play On sheet chooses), and the one
+   *  chosen; null: Android's own choice (Automatic), as again whenever an output comes or goes. */
+  outputs: [] as AppOutput[],
+  output: null as string | null,
 });
+
+/** One of the device's audio outputs: `id` "type:name" (or the type alone, for one with no name). */
+export type AppOutput = { id: string } & AudioOutput;
 
 /** A track kept on the device: as the page described it when it was downloaded, and how far the download is. */
 export type DownloadedTrack = {
@@ -87,6 +96,8 @@ export const setDevice = (change: {
   syncBudgetGb?: number;
   syncOnlyCharging?: boolean;
   levelling?: boolean;
+  /** This device's audio output by its id; null: Automatic. */
+  output?: string | null;
 }) =>
   toApp({ type: 'device-set', ...change });
 /** Keeps these tracks on the device, in the quality the settings say. */
@@ -125,6 +136,8 @@ if (port) {
       appInfo.syncBudgetGb = typeof m.syncBudgetGb === 'number' ? m.syncBudgetGb : 20;
       appInfo.syncOnlyCharging = m.syncOnlyCharging === true;
       appInfo.levelling = m.levelling !== false;
+      appInfo.outputs = Array.isArray(m.outputs) ? (m.outputs as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
+      appInfo.output = typeof m.output === 'string' && appInfo.outputs.some((o) => o.id === m.output) ? m.output : null;
     }
     if (m.type === 'network-test') {
       networkTest.local = typeof m.local === 'boolean' ? m.local : null;
