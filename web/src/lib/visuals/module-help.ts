@@ -271,6 +271,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     lift: 'How much each opening raises the next one’s threshold.',
     recover: 'How quickly that raised threshold falls back (seconds).',
     release: 'How quickly its output falls once it closes (seconds).',
+    gap: 'The least time between two openings (seconds; 0: none).',
     amount: AMOUNT_OUT,
   },
   counter: { length: 'Steps to a full count: at 4, beats into it count a bar.', amount: AMOUNT_OUT },
