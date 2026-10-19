@@ -1598,7 +1598,8 @@
 
       // How it behaves: as the settings say, or as the rating page's trial does (the look stays the settings').
       const how = trial.settings ?? s;
-      const m = musicNow(now, cabled.bands.lighting ?? how.lighting);
+      // The sound's waveform only while a Waves layer draws it (listening costs a tablet much of a frame).
+      const m = musicNow(now, cabled.bands.lighting ?? how.lighting, s.extra.layers.some((l) => l.source.type === 'waves' && l.blend.amount > 0));
       if (m.key !== key || resets !== resetsSeen) {
         // A track's preset into the look's settings not pinned (after the panel's Reset, the playing one's again): the
         // first shows at once, each next blends in. Drawn ahead where it was (the next track's, at idle time, with the

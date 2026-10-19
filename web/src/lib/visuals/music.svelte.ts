@@ -151,8 +151,9 @@ function pulseAt(beats: Beats, beat: Beat | null, pos: number, most: number, sha
 }
 
 /** The music now. `at` is the frame's time (performance.now()), to move the position on between the player's reports;
- *  `lighting`: each band's hits' ring (s; by default the settings'). */
-export function musicNow(at: number, lighting: readonly number[] = visualSettings.lighting): Music {
+ *  `lighting`: each band's hits' ring (s; by default the settings'); `wantWave`: a source draws the sound's waveform
+ *  (the Waves, decision 0056), so it is listened to even where the server's signals are in. */
+export function musicNow(at: number, lighting: readonly number[] = visualSettings.lighting, wantWave = false): Music {
   const np = playing();
   track.fill(0);
   if (!np) {
@@ -182,13 +183,17 @@ export function musicNow(at: number, lighting: readonly number[] = visualSetting
   const length = np.progress?.duration_secs ?? null;
   const energy = () => (wave && length ? loudnessAt(wave, pos / length) : null);
 
-  // The bands: the server's, else heard here. Heard here either way where this device plays it: its waveform.
-  const now = listen();
+  // The bands: the server's, else heard here. With the server's, heard here only while a source draws the waveform:
+  // listening (the app's sound sent twenty times a second, its statistics kept) costs a tablet much of a frame.
   if (signals) {
+    let wave: Float32Array | null = null;
+    if (wantWave) wave = listen()?.wave ?? null;
+    else stopLive();
     const m = musicOf(signals, beats ?? null, pos, on, { state: own, at, key, lighting, gainDb: levelDb(np.source, np.id), bpm, energy: energy() });
-    m.wave = now?.wave ?? null;
+    m.wave = wave;
     return m;
   }
+  const now = listen();
   const beat = beats ? beatAt(beats, pos) : null;
   const bps = beats ? 1 / tempoAt(beats, pos) : (bpm ?? 90) / 60;
   let heard: number | null = null;
