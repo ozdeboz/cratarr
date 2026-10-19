@@ -13,18 +13,30 @@ import type { Levers } from './sidechain';
 import { MODULATORS, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
-import type { CableV2, PatchV2, PortRef } from '../ports';
+import { SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
 import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newChain, stepChain, type ChainState } from './chain';
-import { newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
+import { NO_STRIKE, adsrOf, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
 
 const NA = ASPECTS.length;
 const IS_LEVEL = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
 const IS_PART = ASPECTS.map((a) => PART_ASPECTS.includes(a));
 const IS_MOMENT = ASPECTS.map((a) => (MOMENT_ASPECTS as readonly Aspect[]).includes(a));
-/** Each chain knob that is a column (`module|knob` → its place in ASPECTS). */
-const COLUMN = new Map<string, number>((Object.entries(ASPECT_KNOB) as [Aspect, [string, string]][]).map(([a, [m, k]]) => [`${m}|${k}`, A[a]]));
+/** Each chain knob that is a column (`module|knob` → its place in ASPECTS); the Show's as its device flattened has
+ *  them (`show/<part>|<knob>`, v2.ts), its Size the Flame's zoom. */
+const COLUMN = new Map<string, number>();
+for (const [a, [m, k]] of Object.entries(ASPECT_KNOB) as [Aspect, [string, string]][]) {
+  COLUMN.set(`${m}|${k}`, A[a]);
+  if (m !== 'show') continue;
+  const part = SHOW_PARTS.find((x) => x.knob === k);
+  if (k === 'size') COLUMN.set('flame|zoom', A[a]);
+  else if (part) COLUMN.set(`show/${part.type}|${k}`, A[a]);
+}
+/** The column a chain aspect's cables go into, flattened. */
+const columnOf = (a: Aspect): string[] => [...COLUMN].filter(([, i]) => i === A[a]).map(([key]) => key);
+/** Each ADSR gate's strikes, by the Music port its gate reads. */
+const STRIKES: Record<string, 'hits' | 'drums'> = { hits: 'hits', percussiveHits: 'drums' };
 /** Each column a setting scales (COLUMN_SCALES; the fluid's stirring is scaled where it stirs). */
 const SCALED = (Object.entries(COLUMN_SCALES) as [Aspect, string][]).filter(([a]) => a !== 'stir' && a !== 'flow' && a !== 'swirl').map(([a, k]) => [A[a], k] as const);
 /** Halved with reduced motion, as the routes read them. */
@@ -102,7 +114,11 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const L = opts.levers ?? OPEN;
   const step = Number.isFinite(dt) ? Math.max(0, dt) : 0;
   const typeOf = new Map(p.modules.map((x) => [x.id, x.type]));
+  const moduleOf = new Map(p.modules.map((x) => [x.id, x]));
   const outputs: Record<string, number> = {};
+  // Each ADSR's gate: the Music port it is keyed by.
+  const gateOf = new Map<string, string>();
+  for (const c of p.cables) if (typeOf.get(c.to.module) === 'adsr' && c.to.port === 'gate' && (typeOf.get(c.from.module) ?? c.from.module) === 'music') gateOf.set(c.to.module, c.from.port);
 
   // Music's raw signals, the Envelope, the Track's pulse.
   const env = stepEnvelope(st.envelope, m.intensity, m.playing, s.intensity, step);
@@ -142,6 +158,13 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const xOf = (c: CableV2): number | null => {
     const f = c.from;
     const type = typeOf.get(f.module) ?? f.module;
+    if (type === 'adsr') {
+      const gate = gateOf.get(f.module);
+      // A module's output, read as it is (as a modulator's); all its channels at once, none (as a band's signal read
+      // raw without its band).
+      if (!gate || !STRIKES[gate] || f.channel === undefined) return 0;
+      return adsrOut(f.module, gate, f.channel);
+    }
     if (type === 'music') {
       if (c.from.reference === 'absolute') {
         const t = T[f.port as keyof typeof T];
@@ -160,6 +183,13 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
     return null;
   };
+  /** An ADSR's output on one channel now (its knobs `<stage>.<channel>`, `amount`). */
+  function adsrOut(id: string, gate: string, ch: number): number {
+    const k = moduleOf.get(id)?.knobs ?? {};
+    const strike = m.strikes?.[ch]?.[STRIKES[gate]] ?? NO_STRIKE;
+    const v = adsrOf(strike, { attack: finite(k[`attack.${ch}`]), decay: finite(k[`decay.${ch}`]), sustain: finite(k[`sustain.${ch}`]), release: finite(k[`release.${ch}`], 0.15) });
+    return v * finite(k.amount, 1);
+  }
   /** What scales a cable: its depth's value (null: nothing, 1; undefined: the Envelope's, normalled). */
   const depthOf = (c: CableV2): number => {
     if (c.depth === null) return 1;
@@ -191,8 +221,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
         sum += (sh.table ? 2 * heightOf(sh, onBeat / 2) : sh.end * onBeat) * w;
         continue;
       }
-      if (type === 'music') {
-        const v = c.from.reference === 'absolute' ? (xOf(c) ?? 0) : finite(read({ signal: c.from.port, band: c.from.channel, reference: c.from.reference, speed: c.from.speed }));
+      if (type === 'music' || type === 'adsr') {
+        const v = c.from.reference === 'absolute' || type === 'adsr' ? (xOf(c) ?? 0) : finite(read({ signal: c.from.port, band: c.from.channel, reference: c.from.reference, speed: c.from.speed }));
         sum += (sh.table ? 2 * heightOf(sh, clamp(v / 2, 0, 1)) : sh.end * v) * w;
         continue;
       }
@@ -296,9 +326,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const clock = stepClock(st.clock, m.bps, m.playing, s.speed, L.pace, opts.still, step);
   outputs['clock.rate'] = clock;
   const trackInto = (a: Aspect) => {
-    const [mod, knob] = ASPECT_KNOB[a];
     let sum = 0;
-    for (const c of into.get(`${mod}|${knob}`) ?? []) if ((typeOf.get(c.from.module) ?? c.from.module) === 'track') sum += depthOf(c) * heightOf(shapeOf(c.value), pulse) * walkOf(c);
+    for (const c of columnOf(a).flatMap((key) => into.get(key) ?? [])) if ((typeOf.get(c.from.module) ?? c.from.module) === 'track') sum += depthOf(c) * heightOf(shapeOf(c.value), pulse) * walkOf(c);
     return sum;
   };
   const aspects = stepChain(

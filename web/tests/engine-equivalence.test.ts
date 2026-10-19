@@ -5,9 +5,8 @@ import assert from 'node:assert/strict';
 import { TRACKS, compare, record, todays, track, type Engine } from './harness/aspects-record.ts';
 const { newEngineV1, stepEngineV1 } = await import('../src/lib/visuals/engine/v1.ts');
 const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
-const { ASPECT_KNOB } = await import('../src/lib/visuals/patch.ts');
-const { LEVEL_ASPECTS } = await import('../src/lib/visuals/routes.ts');
-import type { PatchV2, CableV2 } from '../src/lib/visuals/ports.ts';
+import type { PatchV2 } from '../src/lib/visuals/ports.ts';
+const { flatten, toV2 } = await import('../src/lib/visuals/v2.ts');
 
 const { DEFAULTS } = await import('../src/lib/visuals/settings.svelte.ts');
 const settings = structuredClone(DEFAULTS);
@@ -66,27 +65,7 @@ test('the same with reduced motion, and under each preset chain', async () => {
   }
 });
 
-/** Today's routes as a v2 patch, by the conversion's contract (a5's conversion takes its place when it lands): the
- *  loudness from the Envelope's level, undepthed; the Track's pulse; every other signal from Music, read as it is. */
-function v2Of(routes: Record<string, unknown>): PatchV2 {
-  const cables: CableV2[] = [];
-  for (const [key, value] of Object.entries(routes)) {
-    if (value === 0) continue;
-    const [signal, band, aspect] = key.split('|');
-    const [module, port] = (ASPECT_KNOB as Record<string, [string, string]>)[aspect];
-    const from =
-      signal === 'loudness' && band === '-'
-        ? { module: 'envelope', port: 'level' }
-        : signal === 'track'
-          ? { module: 'track', port: 'pulse' }
-          : { module: 'music', port: signal, reference: 'absolute' as const, ...(band === '-' ? {} : { channel: Number(band) }) };
-    cables.push({ id: key, from, to: { module, port }, value: value as CableV2['value'], mode: (LEVEL_ASPECTS as readonly string[]).includes(aspect) ? 'level' : 'swing', ...(signal === 'loudness' && band === '-' ? { depth: null } : {}) });
-  }
-  const modules = ['music', 'track', 'envelope', 'clock'].map((id) => ({ id, type: id, knobs: {} }));
-  return { v: 2, modules, cables, macros: [], pins: [] };
-}
-
-/** The one engine over the v2 patch's cables. */
+/** The one engine over the cables of today's settings as a v2 patch (a5's toV2), its devices opened up (flatten). */
 const graph = (): Engine => {
   const st = newEngine();
   let p: PatchV2 | null = null;
@@ -94,9 +73,9 @@ const graph = (): Engine => {
   return {
     name: 'engine',
     step: (m, s, dt, opts) => {
-      if (from !== s.routes) {
-        from = s.routes;
-        p = v2Of(s.routes);
+      if (from !== s) {
+        from = s;
+        p = flatten(toV2(s));
       }
       return stepEngine(st, p!, {}, m, () => 0, s, dt, opts).aspects;
     },
@@ -194,13 +173,13 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
       worst = Math.max(worst, d);
       assert.ok(d <= 1e-9, `frame ${k}: shapes-1.${knob} ${mine.knobs['shapes-1'][knob]} against ${v}`);
     }
-    // evaluate.ts left an effect engine on a layer as set (its type is also the chain's finish's): the one engine moves
-    // it, and its Effect (a step) asks for its moments.
-    assert.equal(theirs.knobs.kal, undefined);
+    // An effect engine on a layer (its type also the chain's finish's) is moved by both (evaluate.ts by id since a5's
+    // fix), and its Effect (a step) asks for its moments.
     assert.ok(mine.knobs.kal && mine.knobs.kal.effect === 1);
+    for (const [knob, v] of Object.entries(theirs.knobs.kal)) assert.ok(Math.abs(v - mine.knobs.kal[knob]) <= 1e-9, `frame ${k}: kal.${knob}`);
     for (const id of ['fol', 'osc']) assert.ok(Math.abs(theirs.outputs[id] - mine.outputs[id]) <= 1e-9, `frame ${k}: ${id}`);
     assert.ok(Math.abs(theirs.macros.mac - mine.macros.mac) <= 1e-9);
-    assert.deepEqual(theirs.moments, []);
+    assert.deepEqual(theirs.moments, mine.moments);
     assert.ok(mine.moments.every((x) => x.module === 'kal' && x.knob === 'effect'));
     moments += mine.moments.length;
   }
