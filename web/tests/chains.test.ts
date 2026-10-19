@@ -13,10 +13,10 @@ const { extraType } = await import('../src/lib/visuals/registry.ts');
 
 const ALL = [...CHAINS, SCRATCH];
 
-test('Calm, Pulse and Flow, and from scratch: lowercase ids, each found by its id', () => {
+test('Calm, Pulse, Flow, Tunnel, Scope, Mosaic and Fractal, and from scratch: lowercase ids, each found by its id', () => {
   assert.deepEqual(
     CHAINS.map((c) => c.id),
-    ['calm', 'pulse', 'flow'],
+    ['calm', 'pulse', 'flow', 'tunnel', 'scope', 'mosaic', 'fractal'],
   );
   for (const c of ALL) {
     assert.match(c.id, /^[a-z0-9][a-z0-9-]*$/);
@@ -48,7 +48,7 @@ test("every setting within its range; the presets draw the flame, from scratch n
       const range = (RANGES as Record<string, [number, number]>)[k] ?? (k === 'flameLayer' ? [0, 1] : null);
       assert.ok(range && v >= range[0] && v <= range[1], `${c.id}.${k} = ${v}`);
     }
-  for (const c of CHAINS) assert.equal(c.settings?.flameLayer, 1);
+  for (const c of CHAINS) assert.ok((c.settings?.flameLayer ?? 0) > 0, `${c.id} draws no flame`);
   assert.equal(SCRATCH.settings?.flameLayer, 0);
 });
 

@@ -31,6 +31,10 @@ export type ChainSettings = Partial<
     | 'dive'
     | 'effects'
     | 'facets'
+    | 'fx1'
+    | 'fx1K1'
+    | 'fx3'
+    | 'fx3K1'
     | 'fx1Amount'
     | 'fx2Amount'
     | 'fx3Amount'
@@ -123,6 +127,87 @@ export const CHAINS: readonly Chain[] = [
       ],
     },
     settings: { ...QUIET, fluid: 0.8, stir: 1, flow: 1, swirl: 1, flash: 0.3, speed: 0.8, trails: 1 },
+  },
+  {
+    // MilkDrop's tunnel: the picture's own loop zooming in for ever and keeping its trail, the bass's hits (through a
+    // gate at typical) kicking the zoom, the turn wandering; the flame's own Tunnel streaming outward with the
+    // loudness, slowly.
+    id: 'tunnel',
+    label: 'Tunnel',
+    line: 'Zooming in for ever, the bass kicking it, a trail behind.',
+    routes: {},
+    extra: {
+      ...emptyExtra(),
+      loop: [mod('warp', 'tunnel-warp', { zoom: 0.15 }), mod('keep', 'tunnel-keep', { amount: 0.75, trails: 0.6 })],
+      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.2, amount: 1 }), mod('slow', 'breath'), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      cables: [
+        cable('tunnel-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
+        cable('tunnel-zoom', { modulator: 'kick' }, 'tunnel-warp', 'zoom', 0.3),
+        cable('tunnel-turn', { modulator: 'wander' }, 'tunnel-warp', 'turn', 0.4),
+        cable('tunnel-breath-in', { signal: 'loudness' }, 'breath', 'in', 1),
+        cable('tunnel-stream', { modulator: 'breath' }, 'tunnel', 'tunnel', 0.3, 'level'),
+      ],
+    },
+    settings: { ...QUIET, tunnel: 0.5, flash: 0.5, speed: 0.8 },
+  },
+  {
+    // MilkDrop's waveform: the sound itself drawn (the Waves source) over a dimmed flame, its height with the loudness
+    // (a fast follower), its trail kept and slowly turned by the picture's own loop.
+    id: 'scope',
+    label: 'Scope',
+    line: 'The sound itself drawn as a wave, a trail behind it.',
+    routes: {},
+    extra: {
+      ...emptyExtra(),
+      layers: [{ id: 'scope', source: mod('waves', 'scope-source', { width: 0.008, opacity: 1 }), modules: [], loop: [], blend: { mode: 'screen', amount: 1 } }],
+      loop: [mod('warp', 'scope-warp', { zoom: 0.05 }), mod('keep', 'scope-keep', { amount: 0.7, trails: 0.5 })],
+      modulators: [mod('fast', 'body'), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      cables: [
+        cable('scope-body-in', { signal: 'loudness' }, 'body', 'in', 1),
+        cable('scope-height', { modulator: 'body' }, 'scope-source', 'amplitude', 0.4),
+        cable('scope-turn', { modulator: 'wander' }, 'scope-warp', 'turn', 0.3),
+      ],
+    },
+    settings: { ...QUIET, flameLayer: 0.35, flash: 0.3, speed: 0.6 },
+  },
+  {
+    // Tiles: the Kaleidoscope engine's Repeat over the flame, how many stepping on with each bar (a counter of the
+    // downbeats), Hydra's Posterize flattening the colours into cells; the size breathing slowly, the turn wandering.
+    id: 'mosaic',
+    label: 'Mosaic',
+    line: 'The picture in tiles, their number moving on with each bar.',
+    routes: {},
+    extra: {
+      ...emptyExtra(),
+      modulators: [mod('counter', 'bars', { length: 4, amount: 1 }), mod('slow', 'breath'), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      cables: [
+        cable('mosaic-bars-in', { signal: 'downbeat' }, 'bars', 'in', 1),
+        cable('mosaic-tiles', { modulator: 'bars' }, 'fx1', 'k1', 0.6),
+        cable('mosaic-breath-in', { signal: 'loudness' }, 'breath', 'in', 1),
+        cable('mosaic-size', { modulator: 'breath' }, 'show', 'size', 0.4),
+        cable('mosaic-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
+      ],
+    },
+    settings: { ...QUIET, effects: 1, fx1: 2, fx1K1: 0.3, fx1Amount: 1, fx3: 7, fx3K1: 0.6, fx3Amount: 0.6, flash: 0.4, speed: 0.7 },
+  },
+  {
+    // Self-alike: the flame's Dive zooming into one part of it for ever, the picture's own loop turning and keeping
+    // it as a spiral (MilkDrop's fractal feedback); the bass's hits push the dive, the turn wanders.
+    id: 'fractal',
+    label: 'Fractal',
+    line: 'Diving into the flame for ever, a spiral of itself around it.',
+    routes: {},
+    extra: {
+      ...emptyExtra(),
+      loop: [mod('warp', 'fractal-warp', { zoom: 0.1, turn: 0.1 }), mod('keep', 'fractal-keep', { amount: 0.7, trails: 0.6 })],
+      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.3, amount: 1 }), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      cables: [
+        cable('fractal-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
+        cable('fractal-dive', { modulator: 'kick' }, 'dive', 'dive', 0.3, 'level'),
+        cable('fractal-turn', { modulator: 'wander' }, 'fractal-warp', 'turn', 0.4),
+      ],
+    },
+    settings: { ...QUIET, dive: 0.5, flash: 0.4, speed: 0.7 },
   },
 ];
 
