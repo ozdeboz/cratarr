@@ -4,8 +4,8 @@
   // only: the server's player reports only what comes next), the playing track as a card that fills as it plays
   // (pinned at the top), the "Playing from" header (pinned under it) and what comes next. From Symfonium's queue
   // (decided 2026-10-16): search (in place, the row grown into a field) and Clear (what comes next goes, with Undo) in
-  // the head, shuffle and repeat being the player's; More music (Radio and Autoplay) a pill floating where the queue
-  // ends;
+  // the head, shuffle and repeat being the player's; the queues kept, to switch to one (decision 0033, amended:
+  // lib/QueuesSheet) from the head too; More music (Radio and Autoplay) a pill floating where the queue ends;
   // when the queue ends on the clock; "Playing from" a chip that opens it; a row's album after its artist (not the
   // album the queue plays), and its ⋮.
   // Gestures as Finamp's: drag the handle area down to close; a tap on a row plays it, a long-press (or right-click) is
@@ -23,6 +23,7 @@
   import { swipe } from './swipe';
   import { sheetDrag } from './sheetDrag';
   import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
+  import QueuesSheet from './QueuesSheet.svelte';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
   import { clearUpcoming, local, jump as localJump, moveUpcoming, removeUpcoming, restoreUpcoming } from './localPlayer.svelte';
@@ -91,6 +92,8 @@
   let searching = $state(false);
   /** New playlist from the queue, its name sheet open. */
   let saving = $state(false);
+  /** The queues kept (decision 0033, amended), to switch to one: its sheet open. */
+  let switching = $state(false);
   let query = $state('');
   const q = $derived(searching ? query.trim().toLowerCase() : '');
   const matches = (t: { name: string; artist: string | null; album: string | null }) =>
@@ -233,6 +236,7 @@
           <span class="title">Queue</span>
           <span class="tools">
             <button aria-label="Search the queue" onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
+            <button aria-label="Queues" title="Queues" onclick={() => (switching = true)}><Icon name="list" size={22} /></button>
             <button aria-label="New playlist from the queue" title="New playlist from the queue" onclick={() => (saving = true)}><Icon name="intoBox" size={22} /></button>
             {#if here}<button aria-label="Clear the queue" disabled={!np.upcoming.length} onclick={clear}><Icon name="clearQueue" size={22} /></button>{/if}
           </span>
@@ -360,6 +364,9 @@
 {/if}
 {#if saving}
   <QueuePlaylistSheet onclose={() => (saving = false)} />
+{/if}
+{#if switching}
+  <QueuesSheet onclose={() => (switching = false)} />
 {/if}
 
 <style>
