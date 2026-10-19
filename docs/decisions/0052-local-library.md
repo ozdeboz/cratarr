@@ -55,6 +55,11 @@ features is weird"; and, asked whether a local queue goes away: no, each mode ke
   - `{type: 'device-library-changed'}` comes, unasked, when Android's index of the device's music changes (a couple of
     seconds after the last change): the page asks for the library again when it shows it.
   - Covers: `/__device/cover/{album_id}` on the page's own origin, a JPEG from Android or a 404.
+  - Local folders (amended below): the `app` message's `local` (a folder on, the permission given: the switch shows);
+    `{op: 'allow'}` asks for the permission; `{op: 'folders'}` is answered with `{type: 'device-folders', folders:
+    [{path, name, tracks, on}]}` (or `denied: true`); `{op: 'folder', path, on}` turns one on (asking for the
+    permission first when needed) or off, answered with `app` and `device-folders`. `mode` to `device` and the
+    library need a folder on; the library holds only theirs.
   - Playing uses the `player` calls as ever. Their reports carry `mode`. A `queue` call with the other mode's tracks
     switches to that mode first; tracks of the other mode in `queue`, `add` or `upcoming` are left out. `radio`,
     `autoplay` and `skip_favourites` do nothing in local mode.
@@ -72,6 +77,17 @@ features is weird"; and, asked whether a local queue goes away: no, each mode ke
 - **At the top of the page menu**: "Cratarr | Local", where the connection line is. The menu below shows what that mode
   has; in Local: the device's albums, artists and tracks with search, the player, the queue and the menus, nothing that
   is Cratarr's only (hearts, playlists, crates, radio, Insights).
+- **The sidebar's top, made "more professional"** (mock B, "One switcher"): one bordered button with Cratarr's mark,
+  the mode's name, and under it "● Connected" (Cratarr) or the device's name (Local), with a music note before it while
+  Local plays; a tap opens the two to choose from. The owner: "I only want to show the drop-down component if the
+  user has enabled any local directories. Otherwise, we show it as it is now. Also, I don't want any other icon than
+  our own at the moment."
+- **Local folders.** Local mode reads only the device's music folders turned on in Settings (This device): the folders
+  Android found music in, by their top folder ("Music", "Download"), each with its number of tracks and a switch; the
+  first one turned on asks for Android's permission. The switch shows once one is on; the last one off is Cratarr's
+  music again.
+- **The phone**: open (the owner's own idea, drawn: More makes the top bar grow a row above its buttons, Cratarr's mark
+  first, the switch there).
 - **A switch is the whole app, the player too**: what plays pauses and is put by, the other mode's queue comes back
   paused, where it was (as built).
 - **Named Local**, the owner's own word; "This device" stays the name of the player here (where music plays, Settings).

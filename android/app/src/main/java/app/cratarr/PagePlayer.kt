@@ -66,7 +66,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
                 // A play of the other mode's music is that mode again (Android's permission given), never both in one.
                 val want = modeOf(m.optJSONArray("tracks")) ?: mode
                 if (want != mode) {
-                    if (want == Prefs.MODE_DEVICE && !DeviceMusic.granted(context)) return
+                    if (want == Prefs.MODE_DEVICE && !DeviceMusic.on(context)) return
                     if (!m.optBoolean("switched")) switchMode(want, JSONObject(m.toString()).put("switched", true))
                     return
                 }

@@ -42,6 +42,31 @@ object DeviceMusic {
         else -> "unasked"
     }
 
+    /** Local mode is there: Android lets the app read the device's music, and at least one of its folders is on. */
+    fun on(context: Context): Boolean = granted(context) && Prefs(context).localFolders.isNotEmpty()
+
+    /**
+     * The folders Android found music in, by their top folder ("Music/Artist/Album/" is "Music/"), as `{path, name,
+     * tracks, on}`, the most tracks first. One turned on that holds nothing now still shows, to be turned off.
+     */
+    fun folders(context: Context): JSONArray {
+        val on = Prefs(context).localFolders
+        val counts = HashMap<String, Int>()
+        context.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Audio.Media.RELATIVE_PATH), MUSIC, null, null)?.use { c ->
+            while (c.moveToNext()) {
+                val path = c.getString(0)?.takeIf { it.isNotEmpty() } ?: continue
+                val top = path.substringBefore('/') + "/"
+                counts[top] = (counts[top] ?: 0) + 1
+            }
+        }
+        for (f in on) counts.putIfAbsent(f, 0)
+        return JSONArray(
+            counts.entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key }).map { (path, n) ->
+                JSONObject().put("path", path).put("name", path.trimEnd('/')).put("tracks", n).put("on", path in on)
+            },
+        )
+    }
+
     /** Whether an item is one of the device's own tracks. */
     fun owns(item: MediaItem): Boolean = item.mediaId.startsWith("$SOURCE/")
 
@@ -62,16 +87,19 @@ object DeviceMusic {
         return b.build()
     }
 
-    /** Every music track on the device, as the page describes tracks (`source` device): newest first. */
+    /** Every music track in the folders turned on, as the page describes tracks (`source` device): newest first. */
     fun tracks(context: Context): JSONArray {
         val out = JSONArray()
+        val on = Prefs(context).localFolders.toList()
+        if (on.isEmpty()) return out
+        val inFolders = on.joinToString(" OR ", "(", ")") { "${MediaStore.Audio.Media.RELATIVE_PATH} LIKE ? ESCAPE '\\'" }
+        val folders = on.map { it.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" }.toTypedArray()
         val cols = arrayOf(
             MediaStore.Audio.Media._ID, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.ARTIST, MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.ALBUM_ID, MediaStore.Audio.Media.TRACK, MediaStore.Audio.Media.YEAR, MediaStore.Audio.Media.DURATION,
             MediaStore.Audio.Media.DATE_ADDED,
         )
-        val music = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
-        context.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cols, music, null, "${MediaStore.Audio.Media.DATE_ADDED} DESC")?.use { c ->
+        context.contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, cols, "$MUSIC AND $inFolders", folders, "${MediaStore.Audio.Media.DATE_ADDED} DESC")?.use { c ->
             fun text(i: Int) = c.getString(i)?.trim()?.takeIf { it.isNotEmpty() && it != MediaStore.UNKNOWN_STRING }
             while (c.moveToNext()) {
                 // Android keeps the disc in the thousands of the track number.
@@ -95,6 +123,9 @@ object DeviceMusic {
         }
         return out
     }
+
+    /** Music, not ringtones, alarms or recordings. */
+    private val MUSIC = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
 
     /** An album's cover as JPEG, from Android; null where it has none. */
     fun cover(context: Context, albumId: String, size: Int = 512): ByteArray? = coverBitmap(context, albumId, size)?.let { b ->

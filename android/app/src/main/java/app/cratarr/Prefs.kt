@@ -166,6 +166,15 @@ class Prefs(context: Context) {
             p.edit().putString(MODE, if (value == MODE_DEVICE) MODE_DEVICE else MODE_CRATARR).apply()
         }
 
+    /** Local mode's folders (decision 0052, the owner: local mode shows "if the user has enabled any local
+     *  directories"): the device's music folders turned on, by their path in Android's index ("Music/"). Local mode
+     *  reads only these. */
+    var localFolders: Set<String>
+        get() = p.getStringSet(LOCAL_FOLDERS, null)?.toSet().orEmpty()
+        set(value) {
+            p.edit().putStringSet(LOCAL_FOLDERS, value.toSet()).apply()
+        }
+
     /** Android's permission for the device's music was asked for once (a refusal then shows as such). */
     var deviceMusicAsked: Boolean
         get() = p.getBoolean(DEVICE_MUSIC_ASKED, false)
@@ -320,6 +329,7 @@ class Prefs(context: Context) {
         const val MODE_CRATARR = "cratarr"
         const val MODE_DEVICE = "device"
         const val DEVICE_MUSIC_ASKED = "device_music_asked"
+        const val LOCAL_FOLDERS = "local_folders"
         const val DEVICE_QUEUE = "device_queue"
         const val CRATARR_QUEUE = "cratarr_queue"
         /** The public address (the app's only one before it had two). */

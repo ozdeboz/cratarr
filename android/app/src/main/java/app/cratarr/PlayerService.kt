@@ -141,9 +141,10 @@ class PlayerService : MediaSessionService() {
                 ),
             )
             .build()
-        // Local mode (decision 0052) as it was: its queue again, paused; without Android's permission any more, Cratarr's.
+        // Local mode (decision 0052) as it was: its queue again, paused; without Android's permission or a folder turned
+        // on any more, Cratarr's.
         if (prefs.mode == Prefs.MODE_DEVICE) {
-            if (DeviceMusic.granted(this)) restore(prefs.savedQueue(Prefs.MODE_DEVICE)) else prefs.mode = Prefs.MODE_CRATARR
+            if (DeviceMusic.on(this)) restore(prefs.savedQueue(Prefs.MODE_DEVICE)) else prefs.mode = Prefs.MODE_CRATARR
         }
         link = PlayOnLink(this, player, prefs, sync).also { it.start() }
         Ready.ensure(this, "service started")
@@ -216,7 +217,7 @@ class PlayerService : MediaSessionService() {
     fun switchMode(to: String, why: String): Boolean {
         val mode = if (to == Prefs.MODE_DEVICE) Prefs.MODE_DEVICE else Prefs.MODE_CRATARR
         val was = prefs.mode
-        if (was == mode || (mode == Prefs.MODE_DEVICE && !DeviceMusic.granted(this))) return false
+        if (was == mode || (mode == Prefs.MODE_DEVICE && !DeviceMusic.on(this))) return false
         LinkLog.add(this, "info", "playon", "mode", "to" to mode, "why" to why)
         if (mode == Prefs.MODE_DEVICE && sync.leader != null) sync.leave()
         player.pause()
