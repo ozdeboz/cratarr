@@ -1,10 +1,13 @@
 <script lang="ts">
   // Import: plays, favourites, ratings and added dates from a server into an account; acts at once, followed while
-  // it runs.
-  import { ed } from './editor.svelte';
-  import Switch from '../Switch.svelte';
-  import Meter from '../Meter.svelte';
-  import { IMPORT_WHAT } from './editor.svelte';
+  // it runs. A group per server: from whom and into which account (each chosen in a sheet), what, and the run with its
+  // result (the settings' North Star, 2026-10-19).
+  import ChoiceSheet from './ChoiceSheet.svelte';
+  import { ed, IMPORT_WHAT } from './editor.svelte';
+  import Group from './Group.svelte';
+  import Item from './Item.svelte';
+
+  const MORE = 'Plays, favourites, ratings and added dates from a server, into your account.';
 
   // While an import runs, its progress.
   $effect(() => {
@@ -12,61 +15,60 @@
     const t = setInterval(ed.followImport, 2000);
     return () => clearInterval(t);
   });
+
+  let choosing = $state<{ source: string; which: 'user' | 'account' } | null>(null);
 </script>
 
-  <section aria-labelledby="import-h">
-    <h2 id="import-h">Import</h2>
-    <p class="lede">Plays, favourites, ratings and added dates from a server, into your account.</p>
-    {#if !ed.sub.accounts?.length}
-      <p class="hint">Create an account under Authentication first.</p>
-    {:else}
-      {#each ed.imp.sources as src (src.id)}
-        {@const c = ed.imp.choice[src.id]}
-        {@const job = ed.imp.job?.source === src.id ? ed.imp.job : null}
-        <div class="sub import">
-          <h3>Import from {ed.serverName(src.id)}</h3>
-          {#if src.error}
-            <p class="hint bad">{src.error}</p>
-          {:else if c}
-            {@const none = !Object.values(c.what).some(Boolean) || !c.user || !c.account}
-            <div class="fields pair">
-              <label>
-                <span class="l">From</span>
-                <select bind:value={c.user}>
-                  {#each src.users as u (u.id)}<option value={u.id}>{u.name}</option>{/each}
-                </select>
-              </label>
-              <label>
-                <span class="l">Into</span>
-                <select bind:value={c.account}>
-                  {#each ed.imp.accounts as a (a)}<option value={a}>{a}</option>{/each}
-                </select>
-              </label>
-            </div>
-            <div class="checks">
-              {#each IMPORT_WHAT as w (w.key)}
-                <Switch label={w.label} checked={c.what[w.key]} onchange={(on) => (c.what[w.key] = on)} />
-              {/each}
-            </div>
-            <div class="row">
-              <button disabled={ed.importing || none} onclick={() => ed.runImport(src.id, true)}>Preview</button>
-              <button class="primary" disabled={ed.importing || none} onclick={() => ed.runImport(src.id, false)}>Import</button>
-            </div>
-            {#if job}
-              {#if job.finished === null}
-                {@const st = ed.stepLine(job)}
-                <Meter label={st.label} value={st.value} />
-              {:else if job.error}
-                <p class="hint bad">{job.error}</p>
-              {:else}
-                <p class="state"><span class="dot ok" aria-hidden="true"></span>{ed.importLine(job)}</p>
-              {/if}
-              {#if job.note}<p class="hint warn">{job.note}</p>{/if}
-            {/if}
-          {/if}
-        </div>
-      {:else}
-        <p class="hint">No server to import from.</p>
-      {/each}
-    {/if}
-  </section>
+{#if !ed.sub.accounts?.length}
+  <Group title="Import" more={MORE}><Item name="Create an account under Authentication first" /></Group>
+{:else}
+  {#each ed.imp.sources as src (src.id)}
+    {@const c = ed.imp.choice[src.id]}
+    {@const job = ed.imp.job?.source === src.id ? ed.imp.job : null}
+    <Group title={`From ${ed.serverName(src.id)}`} more={MORE}>
+      {#if src.error}
+        <Item lead="bad" name={src.error} />
+      {:else if c}
+        {@const none = !Object.values(c.what).some(Boolean) || !c.user || !c.account}
+        <Item name="From" value={src.users.find((u) => u.id === c.user)?.name ?? 'Choose…'} onclick={() => (choosing = { source: src.id, which: 'user' })} />
+        <Item name="Into" value={c.account || 'Choose…'} onclick={() => (choosing = { source: src.id, which: 'account' })} />
+        {#each IMPORT_WHAT as w (w.key)}
+          <Item name={w.label} toggle={{ checked: c.what[w.key], onchange: (on) => (c.what[w.key] = on) }} />
+        {/each}
+        {#if job && job.finished === null}
+          {@const st = ed.stepLine(job)}
+          <Item lead="off" name="Importing" line={`${st.label}${st.value ? ` · ${Math.round(st.value * 100)}%` : ''}`} />
+        {:else}
+          <Item
+            lead={job ? (job.error ? 'bad' : 'on') : null}
+            name={job ? (job.error ? 'Not imported' : job.preview ? 'Previewed' : 'Imported') : 'Not run yet'}
+            line={job ? (job.error ?? ed.importLine(job)) : null}
+            tone={job?.error ? 'bad' : null}
+            wrap
+          >
+            <button disabled={ed.importing || none} onclick={() => ed.runImport(src.id, true)}>Preview</button>
+            <button class="primary" disabled={ed.importing || none} onclick={() => ed.runImport(src.id, false)}>Import</button>
+          </Item>
+        {/if}
+        {#if job?.note}<Item lead="warn" name={job.note} />{/if}
+      {/if}
+    </Group>
+  {:else}
+    <Group title="Import" more={MORE}><Item name="No server to import from" /></Group>
+  {/each}
+{/if}
+
+{#if choosing}
+  {@const ch = choosing}
+  {@const src = ed.imp.sources.find((x) => x.id === ch.source)}
+  {@const c = ed.imp.choice[ch.source]}
+  {#if src && c}
+    <ChoiceSheet
+      title={ch.which === 'user' ? 'From' : 'Into'}
+      options={ch.which === 'user' ? src.users.map((u) => ({ value: u.id, label: u.name })) : ed.imp.accounts.map((a) => ({ value: a, label: a }))}
+      value={ch.which === 'user' ? c.user : c.account}
+      onchange={(v) => (ch.which === 'user' ? (c.user = v) : (c.account = v))}
+      onclose={() => (choosing = null)}
+    />
+  {/if}
+{/if}

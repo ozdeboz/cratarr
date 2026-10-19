@@ -2,11 +2,11 @@
   // Display: this browser's own look; acts at once. Its Reset: the theme, the progress bar and levelling back to their
   // defaults (lib/settings/reset).
   import Seg from '../Seg.svelte';
-  import SettingRow from '../SettingRow.svelte';
-  import Switch from '../Switch.svelte';
   import { appInfo, inApp, setDevice } from '../app.svelte';
   import { setLevelling } from '../localPlayer.svelte';
   import { prefs, type Theme } from '../prefs.svelte';
+  import Group from './Group.svelte';
+  import Item from './Item.svelte';
   import { offerReset } from './reset.svelte';
 
   const THEMES: { value: Theme; label: string }[] = [
@@ -26,23 +26,15 @@
   );
 </script>
 
-  <section aria-labelledby="display-h">
-    <h2 id="display-h">Display</h2>
-    <p class="lede">Remembered by this browser only.</p>
-
-    <SettingRow label="Theme"><Seg label="Theme" options={THEMES} bind:value={prefs.theme} /></SettingRow>
-
-    <div class="pref">
-      <Switch label="Progress bar under the playing track" checked={prefs.showProgress} onchange={(on) => (prefs.showProgress = on)} />
-    </div>
-    <!-- Levelling (decision 0035): in the app its own player's, here this browser's. -->
-    <div class="pref">
-      <Switch
-        label="Level the volume"
-        hint="Every track about as loud as the next"
-        more={"Each track plays at about the same loudness, as Cratarr measured it (or as the file's ReplayGain tags say, until it has).\n\nAn album played through keeps its own dynamics; shuffle and radio are levelled track by track."}
-        checked={inApp ? appInfo.levelling : prefs.levelling}
-        onchange={setLevel}
-      />
-    </div>
-  </section>
+<!-- Where it is kept is the group's name: this browser (in the app, this device). -->
+<Group title={inApp ? 'This device' : 'This browser'}>
+  <Item name="Theme"><Seg label="Theme" options={THEMES} bind:value={prefs.theme} /></Item>
+  <Item name="Progress bar under the playing track" toggle={{ checked: prefs.showProgress, onchange: (on) => (prefs.showProgress = on) }} />
+  <!-- Levelling (decision 0035): in the app its own player's, here this browser's. -->
+  <Item
+    name="Level the volume"
+    line="Every track about as loud as the next"
+    more={"Each track plays at about the same loudness, as Cratarr measured it (or as the file's ReplayGain tags say, until it has).\n\nAn album played through keeps its own dynamics; shuffle and radio are levelled track by track."}
+    toggle={{ checked: inApp ? appInfo.levelling : prefs.levelling, onchange: setLevel }}
+  />
+</Group>

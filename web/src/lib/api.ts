@@ -792,9 +792,22 @@ export const getLibraries = () => quietly<LibrariesView>('/api/libraries');
 /** Their own password for OpenSubsonic apps, whose sign-in needs the password itself (a directory never gives it). */
 export const setAppPassword = (password: string) =>
   request<void>('/api/me/subsonic-password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
-/** Every user, for the administrators' Users panel: their profile (from the directory), permissions, devices, sign-ins. */
-export type User = { name: string; admin: boolean; active: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[] };
+/** Every user, for the administrators' Users panel: their profile, permissions, devices, sign-ins. `directory`: an
+ *  account from the directory (its name and role set there); else Cratarr's own (decision 0051, amended 2026-10-19). */
+export type User = { name: string; admin: boolean; active: boolean; directory?: boolean; permissions: Permissions; devices: OwnDevice[]; sessions: UserSession[] };
 export const getUsers = () => request<{ users: User[] }>('/api/users').then((r) => r.users);
+const putJson = (url: string, body: unknown) => request<void>(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const userUrl = (name: string, what: string) => `/api/users/${encodeURIComponent(name)}/${what}`;
+/** A Cratarr account of its own (the first one there is administers, whatever is asked). */
+export const createUser = (name: string, password: string, admin: boolean) => post<User>('/api/users', { name, password, admin });
+/** A Cratarr account's role (never one's own, never the last active administrator's). */
+export const setUserRole = (name: string, admin: boolean) => putJson(userUrl(name, 'role'), { admin });
+/** A Cratarr account's new password, set by an administrator; its other sign-ins end. */
+export const setUserPassword = (name: string, password: string) => putJson(userUrl(name, 'password'), { password });
+/** A Cratarr account switched off (its data kept, its sign-ins ended) or on again. */
+export const setUserActive = (name: string, active: boolean) => putJson(userUrl(name, 'active'), { active });
+/** One's own password, for a Cratarr account (it is its OpenSubsonic one too). */
+export const changeOwnPassword = (current: string, password: string) => putJson('/api/me/password', { current, password });
 export const setPermissions = (name: string, p: Permissions) =>
   request<void>(`/api/users/${encodeURIComponent(name)}/permissions`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
 /** Ends a user's sign-in (an administrator, or the user themselves). */

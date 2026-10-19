@@ -40,4 +40,14 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
 ];
 
 export const settingsSaved = $state({ n: 0 });
+/** Diagnostics' More detail, on or off as last read or set (null: not read yet): its row says it beside the part. */
+export const logDetail = $state({ on: null as boolean | null });
+/** The name of the thing whose own page a part shows (lib/SettingsPanel's title there). */
+export const thingTitle = $state({ text: null as string | null });
+/** A part names the thing its page shows, as long as it shows it (called while the part is made). */
+export function nameThing(name: () => string | null) {
+  $effect(() => {
+    thingTitle.text = name();
+  });
+}
 export const settingsRead = $state({ s: null as Settings | null });

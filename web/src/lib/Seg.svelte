@@ -16,7 +16,9 @@
 
 <div class="seg" role="group" aria-label={label}>
   {#each options as o (o.value)}
+    <!-- type="button": in a form (a sheet's fields) a choice is no submit. -->
     <button
+      type="button"
       class:icon={!!o.icon}
       aria-pressed={value === o.value}
       aria-label={o.icon ? o.label : undefined}

@@ -1,28 +1,45 @@
 <script lang="ts">
-  // Account (decision 0051, several users): who is signed in and their role, both from the directory and read-only;
-  // their own password for OpenSubsonic apps (whose sign-in needs the password itself, which a directory never gives);
-  // their devices (each plays only on its own) and their sign-ins, each to end. Acts at once.
-  import { endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
+  // Account (decision 0051, several users): who is signed in and their role, read-only; the address apps reach Cratarr
+  // at; their password: a Cratarr account's own (0051, amended 2026-10-19; it is its OpenSubsonic one too), or for a
+  // directory's account its own password for OpenSubsonic apps (whose sign-in needs the password itself, which a
+  // directory never gives); their devices (each plays only on its own) and their sign-ins, each to end. Acts at once.
+  import { changeOwnPassword, endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
   import { loadMe, me } from '../me.svelte';
-  import MoreInfo from '../MoreInfo.svelte';
   import { toast } from '../toast.svelte';
+  import FormSheet from './FormSheet.svelte';
+  import Group from './Group.svelte';
+  import Item from './Item.svelte';
+  import ValueSheet from './ValueSheet.svelte';
   import { when } from './when';
 
-  let busy = $state(false);
-
-  // The app password: its field only once asked for.
   let setting = $state(false);
-  let password = $state('');
-  async function savePassword() {
-    busy = true;
+  async function savePassword(password: string) {
     try {
       await setAppPassword(password);
-      setting = false;
       await loadMe();
     } catch (e) {
       toast.fail(e, 'Could not set the password');
+      throw e;
+    }
+  }
+
+  // A Cratarr account's own password: the current one and a new one.
+  let changing = $state(false);
+  let current = $state('');
+  let next = $state('');
+  let busy = $state(false);
+  let error = $state<string | null>(null);
+  async function change() {
+    busy = true;
+    error = null;
+    try {
+      await changeOwnPassword(current, next);
+      changing = false;
+      current = '';
+      next = '';
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
     } finally {
-      password = '';
       busy = false;
     }
   }
@@ -46,113 +63,53 @@
   }
 </script>
 
-<section aria-labelledby="account-h">
-  <h2 id="account-h">Account</h2>
-  <dl class="account">
-    {#if me.name}<dt>Name</dt><dd>{me.name}</dd>{/if}
-    <dt>Role</dt>
-    <dd>{me.admin ? 'Administrator' : 'User'}</dd>
-    <dt>Address</dt>
-    <dd><code>{location.origin}</code></dd>
-  </dl>
-
-  {#if me.name}
-    <div class="group">
-      <h3>
-        App password <MoreInfo label="App password" text="OpenSubsonic apps sign in with your name and this password, never your directory password." />
-      </h3>
-    </div>
-    {#if setting}
-      <form class="confirm" onsubmit={(e) => (e.preventDefault(), savePassword())}>
-        <input type="password" bind:value={password} placeholder="New password" aria-label="New password" autocomplete="new-password" />
-        <button class="primary" disabled={busy || !password} aria-busy={busy}>Save</button>
-        <button type="button" disabled={busy} onclick={() => ((setting = false), (password = ''))}>Cancel</button>
-      </form>
-    {:else}
-      <div class="row"><button onclick={() => (setting = true)}>{me.app_password ? 'Change app password' : 'Set app password'}</button></div>
-    {/if}
+<Group>
+  {#if me.name}<Item name={me.name} line={me.admin ? 'Administrator' : 'User'} />{:else}<Item name={me.admin ? 'Administrator' : 'User'} />{/if}
+  <Item name="Address" line={location.origin} wrap />
+  {#if me.name && me.directory === false}
+    <Item name="Password" value="Change" onclick={() => ((error = null), (changing = true))} />
+  {:else if me.name}
+    <Item
+      name="App password"
+      more="OpenSubsonic apps sign in with your name and this password, never your directory password."
+      value={me.app_password ? 'Set' : 'Not set'}
+      onclick={() => (setting = true)}
+    />
   {/if}
+</Group>
 
-  {#if me.devices?.length}
-    <div class="group"><h3 id="devices-h">Devices</h3></div>
-    <ul class="list" aria-labelledby="devices-h">
-      {#each me.devices as d (d.id)}
-        <li>
-          <span class="what">{d.name}<small>{d.kind}</small></span>
-          {#if d.online}<span class="when">Online</span>{:else if d.last_seen}<span class="when">{when(d.last_seen)}</span>{/if}
-          {#if removable(d)}<button onclick={() => remove(d)}>Remove</button>{/if}
-        </li>
-      {/each}
-    </ul>
-  {/if}
+{#if me.devices?.length}
+  <Group title="Devices">
+    {#each me.devices as d (d.id)}
+      <Item lead={d.online ? 'on' : 'off'} name={d.name} line={`${d.kind} · ${d.online ? 'online' : d.last_seen ? when(d.last_seen) : 'offline'}`}>
+        {#if removable(d)}<button onclick={() => remove(d)}>Remove</button>{/if}
+      </Item>
+    {/each}
+  </Group>
+{/if}
 
-  {#if me.sessions?.length}
-    <div class="group"><h3 id="sessions-h">Signed in</h3></div>
-    <ul class="list" aria-labelledby="sessions-h">
-      {#each me.sessions as s (s.id)}
-        <li>
-          <span class="what">{s.device}</span>
-          <span class="when">{s.current ? 'This device' : when(s.last_used)}</span>
-          {#if s.current}
-            <!-- Signing out here clears this browser's cookie too. -->
-            <form method="post" action="/signout"><button>Sign out</button></form>
-          {:else}
-            <button onclick={() => end(s)}>Sign out</button>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-  {/if}
-</section>
+{#if me.sessions?.length}
+  <Group title="Signed in">
+    {#each me.sessions as s (s.id)}
+      <Item name={s.device} line={s.current ? 'This device' : when(s.last_used)}>
+        {#if s.current}
+          <!-- Signing out here clears this browser's cookie too. -->
+          <form method="post" action="/signout"><button>Sign out</button></form>
+        {:else}
+          <button onclick={() => end(s)}>Sign out</button>
+        {/if}
+      </Item>
+    {/each}
+  </Group>
+{/if}
 
-<style>
-  .group {
-    padding: 24px 0 4px;
-  }
-
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .list li {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .what {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .what small {
-    margin-left: 8px;
-    color: var(--muted);
-  }
-
-  .when {
-    color: var(--muted);
-    white-space: nowrap;
-  }
-
-  .list form {
-    display: contents;
-  }
-
-  .confirm {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin: 8px 0;
-  }
-
-  .confirm input {
-    flex: 1 1 140px;
-    min-width: 0;
-  }
-</style>
+{#if changing}
+  <FormSheet title="Change password" submitLabel="Change" canSubmit={!!current && !!next} {busy} {error} onsubmit={change} onclose={() => ((changing = false), (current = ''), (next = ''), (error = null))}>
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>Current password<input type="password" bind:value={current} autocomplete="current-password" autofocus /></label>
+    <label>New password<input type="password" bind:value={next} autocomplete="new-password" /></label>
+  </FormSheet>
+{/if}
+{#if setting}
+  <ValueSheet title="App password" type="password" value="" placeholder="New password" allowEmpty={false} saveLabel="Save" onsave={savePassword} onclose={() => (setting = false)} />
+{/if}

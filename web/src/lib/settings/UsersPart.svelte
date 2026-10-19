@@ -1,14 +1,43 @@
 <script lang="ts">
   // Users (decision 0051; the owner: "a user panel with a permissions section ... It's probably how Jellyfin does it
-  // too"): every account, its name and role from the directory (read-only: they are set there), whether it is active
-  // (one who left the directory's music group is deactivated, their data kept), what it may do beyond listening, and its
-  // devices and sign-ins, each to end. Its administrators' only. Acts at once.
-  import { endSession, getUsers, removable, removeDevice, setPermissions, type OwnDevice, type Permissions, type User, type UserSession } from '../api';
-  import MoreInfo from '../MoreInfo.svelte';
+  // too"; amended 2026-10-19: "LLDAP shouldn't be the only way for us to manage users"): every account a row, its role
+  // and whether it is active in a line, and "+ Add user" last; its own page behind it (`thing`: the name, the settings'
+  // North Star, 2026-10-19). Two kinds, one list:
+  //   - Cratarr's own accounts, made here: their role, a new password, and Remove (switched off, their data kept;
+  //     Restore switches them on again), never one's own and never the last active administrator's;
+  //   - a directory's accounts: their name and role set there, read-only here; one who left its music group is
+  //     deactivated, their data kept.
+  // Both: what they may do beyond listening, and their devices and sign-ins, each to end. Its administrators' only.
+  // Acts at once; the server says why it refuses, in a line.
+  import {
+    createUser,
+    endSession,
+    getUsers,
+    removable,
+    removeDevice,
+    setPermissions,
+    setUserActive,
+    setUserPassword,
+    setUserRole,
+    type OwnDevice,
+    type Permissions,
+    type User,
+    type UserSession,
+  } from '../api';
+  import { me } from '../me.svelte';
+  import { backFromThing, openThing } from '../panel.svelte';
   import PageLoading from '../PageLoading.svelte';
-  import Switch from '../Switch.svelte';
+  import Seg from '../Seg.svelte';
+  import { nameThing } from '../settingsSections.svelte';
   import { toast } from '../toast.svelte';
+  import ConfirmSheet from './ConfirmSheet.svelte';
+  import FormSheet from './FormSheet.svelte';
+  import Group from './Group.svelte';
+  import Item from './Item.svelte';
+  import ValueSheet from './ValueSheet.svelte';
   import { when } from './when';
+
+  let { thing = null }: { thing?: string | null } = $props();
 
   // Downloading and changing playlists bind OpenSubsonic apps; sharing playlists binds Cratarr too. Public share links
   // (`links`) wait until links are offered.
@@ -16,6 +45,10 @@
     { key: 'offline', label: 'Download in apps' },
     { key: 'playlists', label: 'Change playlists in apps' },
     { key: 'share', label: 'Share playlists' },
+  ];
+  const ROLES: { value: 'user' | 'admin'; label: string }[] = [
+    { value: 'user', label: 'User' },
+    { value: 'admin', label: 'Administrator' },
   ];
 
   let users = $state<User[] | null>(null);
@@ -28,6 +61,23 @@
       },
     );
   load();
+
+  const open = $derived(thing && users ? (users.find((u) => u.name === thing) ?? null) : null);
+  nameThing(() => (open ? open.name : null));
+  $effect(() => {
+    if (thing && users && !open) backFromThing('users');
+  });
+
+  /** A user's line: role, a directory's account, and inactive or how many devices. */
+  const lineOf = (u: User) =>
+    [
+      u.admin ? 'Administrator' : 'User',
+      u.directory ? 'directory' : null,
+      !u.active ? 'inactive' : u.devices.length ? `${u.devices.length} ${u.devices.length === 1 ? 'device' : 'devices'}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  const isMe = (u: User) => !!me.name && u.name === me.name;
 
   async function permit(u: User, key: keyof Permissions, on: boolean) {
     const was = u.permissions[key];
@@ -57,127 +107,166 @@
       toast.fail(e, 'Could not remove it');
     }
   }
+
+  // A Cratarr account's role, password, and Remove or Restore.
+  async function role(u: User, admin: boolean) {
+    const was = u.admin;
+    u.admin = admin;
+    try {
+      await setUserRole(u.name, admin);
+    } catch (e) {
+      u.admin = was;
+      toast.fail(e, 'Could not change the role');
+    }
+  }
+  async function password(u: User, p: string) {
+    try {
+      await setUserPassword(u.name, p);
+      u.sessions = [];
+    } catch (e) {
+      toast.fail(e, 'Could not set the password');
+      throw e;
+    }
+  }
+  async function activate(u: User, active: boolean) {
+    try {
+      await setUserActive(u.name, active);
+      await load();
+    } catch (e) {
+      toast.fail(e, active ? 'Could not restore it' : 'Could not remove it');
+    }
+  }
+  let passwording = $state<User | null>(null);
+  let removing = $state<User | null>(null);
+
+  // A new Cratarr account: its name, a password, and its role; the first one there is administers.
+  const firstOwn = $derived(!!users && !users.some((u) => !u.directory));
+  let adding = $state(false);
+  let newName = $state('');
+  let newPassword = $state('');
+  let newRole = $state<'user' | 'admin'>('user');
+  let busy = $state(false);
+  let error = $state<string | null>(null);
+  async function add() {
+    busy = true;
+    error = null;
+    try {
+      const name = newName.trim();
+      await createUser(name, newPassword, firstOwn || newRole === 'admin');
+      adding = false;
+      newName = '';
+      newPassword = '';
+      newRole = 'user';
+      await load();
+      openThing('users', name);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
 </script>
 
-<section aria-labelledby="users-h">
-  <h2 id="users-h">Users</h2>
-  {#if users === null}
-    <PageLoading />
+{#if users === null}
+  <PageLoading />
+{:else if open}
+  {@const u = open}
+  {#if u.directory}
+    <Group>
+      <Item name={u.admin ? 'Administrator' : 'User'} line={u.active ? 'Managed in the directory' : 'Inactive: no longer in the music group'} tone={u.active ? null : 'warn'} />
+    </Group>
   {:else}
-    {#each users as u (u.name)}
-      <details class="user">
-        <summary>
-          <span class="name">{u.name}</span>
-          <span class="role">{u.admin ? 'Administrator' : 'User'}{#if !u.active} · Inactive{/if}</span>
-        </summary>
-        {#if !u.admin}
-          <div class="group">
-            <h3>Permissions <MoreInfo label="Permissions" text="Apps: OpenSubsonic apps. Administrators may do everything." /></h3>
-          </div>
-          <div class="checks">
-            {#each PERMISSIONS as p (p.key)}
-              <Switch label={p.label} checked={u.permissions[p.key]} disabled={!u.active} onchange={(on) => permit(u, p.key, on)} />
-            {/each}
-          </div>
-        {/if}
-        {#if u.devices.length}
-          <div class="group"><h3>Devices</h3></div>
-          <ul class="list">
-            {#each u.devices as d (d.id)}
-              <li>
-                <span class="what">{d.name}<small>{d.kind}</small></span>
-                {#if d.online}<span class="when">Online</span>{:else if d.last_seen}<span class="when">{when(d.last_seen)}</span>{/if}
-                {#if removable(d)}<button onclick={() => remove(u, d)}>Remove</button>{/if}
-              </li>
-            {/each}
-          </ul>
-        {/if}
-        {#if u.sessions.length}
-          <div class="group"><h3>Signed in</h3></div>
-          <ul class="list">
-            {#each u.sessions as s (s.id)}
-              <li>
-                <span class="what">{s.device}</span>
-                <span class="when">{when(s.last_used)}</span>
-                <button onclick={() => end(u, s)}>Sign out</button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </details>
-    {/each}
+    <Group>
+      {#if isMe(u) || !u.active}
+        <Item name="Role" value={u.admin ? 'Administrator' : 'User'} line={u.active ? null : 'Removed: switched off, their data kept'} tone={u.active ? null : 'warn'} />
+      {:else}
+        <Item name="Role">
+          <Seg label={`Role of ${u.name}`} options={ROLES} bind:value={() => (u.admin ? 'admin' : 'user'), (v) => role(u, v === 'admin')} />
+        </Item>
+      {/if}
+      {#if u.active}<Item name="Password" value="Set a new one" onclick={() => (passwording = u)} />{/if}
+    </Group>
   {/if}
-</section>
+  {#if !u.admin}
+    <Group title="Permissions" more="Apps: OpenSubsonic apps. Administrators may do everything.">
+      {#each PERMISSIONS as p (p.key)}
+        <Item name={p.label} disabled={!u.active} toggle={{ checked: u.permissions[p.key], onchange: (on) => permit(u, p.key, on) }} />
+      {/each}
+    </Group>
+  {/if}
+  {#if u.devices.length}
+    <Group title="Devices">
+      {#each u.devices as d (d.id)}
+        <Item lead={d.online ? 'on' : 'off'} name={d.name} line={`${d.kind} · ${d.online ? 'online' : d.last_seen ? when(d.last_seen) : 'offline'}`}>
+          {#if removable(d)}<button onclick={() => remove(u, d)}>Remove</button>{/if}
+        </Item>
+      {/each}
+    </Group>
+  {/if}
+  {#if u.sessions.length}
+    <Group title="Signed in">
+      {#each u.sessions as s (s.id)}
+        <Item name={s.device} line={when(s.last_used)}>
+          <button onclick={() => end(u, s)}>Sign out</button>
+        </Item>
+      {/each}
+    </Group>
+  {/if}
+  {#if !u.directory && !isMe(u)}
+    <Group>
+      {#if u.active}
+        <Item name={`Remove ${u.name}`} kind="danger" onclick={() => (removing = u)} />
+      {:else}
+        <Item name={`Restore ${u.name}`} kind="add" onclick={() => activate(u, true)} />
+      {/if}
+    </Group>
+  {/if}
+{:else if !thing}
+  <Group>
+    {#each users as u (u.name)}
+      <Item name={u.name} line={lineOf(u)} tone={u.active ? null : 'warn'} onclick={() => openThing('users', u.name)} />
+    {/each}
+    <Item name="Add user" kind="add" onclick={() => ((error = null), (adding = true))} />
+  </Group>
+{/if}
+
+{#if adding}
+  <FormSheet
+    title="Add user"
+    submitLabel="Add"
+    canSubmit={!!newName.trim() && !!newPassword}
+    {busy}
+    {error}
+    onsubmit={add}
+    onclose={() => ((adding = false), (newPassword = ''), (error = null))}
+  >
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>Name<input type="text" bind:value={newName} autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="64" autofocus /></label>
+    <label>Password<input type="password" bind:value={newPassword} autocomplete="new-password" /></label>
+    {#if firstOwn}
+      <p class="first">The first account administers.</p>
+    {:else}
+      <span class="role"><Seg label="Role" options={ROLES} bind:value={newRole} /></span>
+    {/if}
+  </FormSheet>
+{/if}
+{#if passwording}
+  {@const u = passwording}
+  <ValueSheet title={`Password of ${u.name}`} type="password" value="" placeholder="New password" allowEmpty={false} saveLabel="Save" onsave={(p) => password(u, p)} onclose={() => (passwording = null)} />
+{/if}
+{#if removing}
+  {@const u = removing}
+  <ConfirmSheet title={`Remove ${u.name}?`} text="Switched off; their playlists and history are kept." label="Remove" onconfirm={() => activate(u, false)} onclose={() => (removing = null)} />
+{/if}
 
 <style>
-  .user {
-    border-top: 1px solid var(--border);
-  }
-
-  .user:first-of-type {
-    border-top: 0;
-  }
-
-  .user summary {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    min-height: 52px;
-    padding: 14px 0;
-    cursor: pointer;
-  }
-
-  .user[open] summary {
-    padding-bottom: 4px;
-  }
-
-  .name {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
-    font-weight: 600;
-  }
-
   .role {
-    color: var(--muted);
-    white-space: nowrap;
-  }
-
-  .user[open] {
-    padding-bottom: 12px;
-  }
-
-  .group {
-    padding: 16px 0 4px;
-  }
-
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-
-  .list li {
     display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 0;
-    border-top: 1px solid var(--border);
   }
 
-  .what {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .what small {
-    margin-left: 8px;
+  .first {
+    margin: 0;
     color: var(--muted);
-  }
-
-  .when {
-    color: var(--muted);
-    white-space: nowrap;
+    font-size: 13px;
   }
 </style>

@@ -1,11 +1,24 @@
 <script lang="ts">
   // Settings → Players → Kodi (the owner, 2026-10-16): the Kodis Cratarr plays on, driven over Kodi's own remote
   // control ("Allow remote control via HTTP"), nothing installed on Kodi. Each becomes one of the players: "Play on"
-  // reaches it, and a group takes it in as a follower. Its password is never shown again (blank keeps it).
+  // reaches it, and a group takes it in as a follower. Each is a row, its settings on its own page behind it (`thing`:
+  // `kodi:<n>`, the settings' North Star, 2026-10-19), a value typed in a sheet. Saved apart from the other settings,
+  // with its own Save bar. Its password is never shown again (blank keeps it).
   import { getPlayOnSettings, savePlayOnSettings, type KodiSetting } from './api';
-  import Icon from './Icon.svelte';
-  import MoreInfo from './MoreInfo.svelte';
+  import { backFromThing, openThing } from './panel.svelte';
+  import { playOn } from './playOn.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
+  import Group from './settings/Group.svelte';
+  import Item from './settings/Item.svelte';
+  import SaveBar from './settings/SaveBar.svelte';
+  import ValueSheet from './settings/ValueSheet.svelte';
+  import { nameThing } from './settingsSections.svelte';
   import { toast } from './toast.svelte';
+
+  let { thing = null }: { thing?: string | null } = $props();
+
+  const KODI_MORE =
+    "Cratarr drives a Kodi over Kodi's own remote control (Settings → Services → Control → Allow remote control via HTTP); nothing is installed on Kodi. In a group it follows, and never leads.";
 
   let webhooks = $state<string[]>([]);
   let kodis = $state<KodiSetting[]>([]);
@@ -29,6 +42,7 @@
   function add() {
     kodis = [...kodis, { name: kodis.length ? `Kodi ${kodis.length + 1}` : 'Kodi', url: 'http://', user: 'kodi', password: '', stream_from: '' }];
     dirty = true;
+    openThing('players', `kodi:${kodis.length - 1}`);
   }
 
   function remove(i: number) {
@@ -46,120 +60,73 @@
       saving = false;
     }
   }
+
+  const at = $derived(thing?.startsWith('kodi:') ? Number(thing.slice(5)) : null);
+  const open = $derived(at !== null && kodis[at] ? kodis[at] : null);
+  nameThing(() => (open ? open.name : null));
+  // A Kodi gone (removed, or not there once read): back to the list.
+  $effect(() => {
+    if (loaded && at !== null && !open) backFromThing('players');
+  });
+
+  const host = (url: string) => url.replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
+  const online = (name: string) => playOn.players.some((p) => p.kind === 'kodi' && p.name === name && p.online);
+
+  type Typing = { title: string; value: string; type: 'text' | 'url' | 'password'; placeholder?: string; save: (v: string) => void };
+  let typing = $state<Typing | null>(null);
+  let removing = $state(false);
+  const edit = (t: Typing) => (typing = t);
 </script>
 
 {#if loaded}
-  <section class="kodi" aria-label="Kodi">
-    <div class="head">
-      <span
-        >Kodi <MoreInfo
-          label="Kodi"
-          text={"Cratarr drives a Kodi over Kodi's own remote control (Settings → Services → Control → Allow remote control via HTTP); nothing is installed on Kodi. In a group it follows, and never leads.\n\nCratarr for Kodi: the address Kodi reaches Cratarr on, when it is not the one these pages use."}
-        /></span
-      >
-      <button class="icon" aria-label="Add a Kodi" title="Add a Kodi" onclick={add}><Icon name="plus" size={22} /></button>
-    </div>
-    {#each kodis as k, i (i)}
-      <div class="one">
-        <label><span>Name</span><input type="text" bind:value={k.name} oninput={() => (dirty = true)} /></label>
-        <label><span>Address</span><input type="url" placeholder="http://kodi:8080" spellcheck="false" autocapitalize="off" bind:value={k.url} oninput={() => (dirty = true)} /></label>
-        <label><span>User</span><input type="text" autocapitalize="off" spellcheck="false" bind:value={k.user} oninput={() => (dirty = true)} /></label>
-        <label
-          ><span>Password</span><input
-            type="password"
-            autocomplete="new-password"
-            placeholder={k.password_set ? 'Saved' : ''}
-            bind:value={k.password}
-            oninput={() => (dirty = true)}
-          /></label
-        >
-        <label
-          ><span>Cratarr for Kodi</span><input
-            type="url"
-            placeholder={base ?? 'http://cratarr:8081'}
-            spellcheck="false"
-            autocapitalize="off"
-            bind:value={k.stream_from}
-            oninput={() => (dirty = true)}
-          /></label
-        >
-        <button class="icon danger" aria-label="Remove {k.name}" title="Remove" onclick={() => remove(i)}><Icon name="trash" size={20} /></button>
-      </div>
-    {/each}
-    {#if dirty}
-      <div class="bar">
-        <button class="primary" disabled={saving} aria-busy={saving} onclick={save}>Save</button>
-        <button disabled={saving} onclick={() => getPlayOnSettings().then(take)}>Discard</button>
-      </div>
+  {#if open && at !== null}
+    {@const k = open}
+    <Group>
+      <Item name="Name" value={k.name} onclick={() => edit({ title: 'Name', value: k.name, type: 'text', save: (v) => ((k.name = v), (dirty = true)) })} />
+      <Item name="Address" line={k.url} wrap onclick={() => edit({ title: 'Address', value: k.url, type: 'url', placeholder: 'http://kodi:8080', save: (v) => ((k.url = v), (dirty = true)) })} />
+      <Item name="User" value={k.user} onclick={() => edit({ title: 'User', value: k.user, type: 'text', save: (v) => ((k.user = v), (dirty = true)) })} />
+      <Item
+        name="Password"
+        line={k.password ? 'Changed' : k.password_set ? 'Saved' : 'Not set'}
+        onclick={() => edit({ title: 'Password', value: k.password ?? '', type: 'password', save: (v) => ((k.password = v), (dirty = true)) })}
+      />
+      <Item
+        name="Cratarr for Kodi"
+        more="The address Kodi reaches Cratarr on, when it is not the one these pages use."
+        line={k.stream_from || `${base ?? 'http://cratarr:8081'} (the default)`}
+        wrap
+        onclick={() => edit({ title: 'Cratarr for Kodi', value: k.stream_from, type: 'url', placeholder: base ?? 'http://cratarr:8081', save: (v) => ((k.stream_from = v), (dirty = true)) })}
+      />
+    </Group>
+    <Group>
+      <Item name={`Remove ${k.name}`} kind="danger" onclick={() => (removing = true)} />
+    </Group>
+    {#if removing}
+      {@const i = at}
+      <ConfirmSheet
+        title={`Remove ${k.name}?`}
+        label="Remove"
+        onconfirm={() => {
+          remove(i);
+          backFromThing('players');
+        }}
+        onclose={() => (removing = false)}
+      />
     {/if}
-  </section>
+  {:else if !thing}
+    <Group title="Kodi" more={KODI_MORE}>
+      {#each kodis as k, i (i)}
+        <Item lead={online(k.name) ? 'on' : 'off'} name={k.name} line={host(k.url) || 'No address'} onclick={() => openThing('players', `kodi:${i}`)} />
+      {/each}
+      <Item name="Add Kodi" kind="add" onclick={add} />
+    </Group>
+  {/if}
+  {#if dirty}
+    <SaveBar {saving} onsave={save} ondiscard={() => getPlayOnSettings().then(take)} />
+  {/if}
 {/if}
 
-<style>
-  .kodi {
-    display: grid;
-    gap: 10px;
-    padding: 4px 0 16px;
-  }
-
-  .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 16px;
-    font-weight: 600;
-  }
-
-  .one {
-    position: relative;
-    display: grid;
-    gap: 8px;
-    padding: 12px 52px 12px 16px;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--text) 5%, transparent);
-  }
-
-  label {
-    display: grid;
-    grid-template-columns: minmax(96px, 30%) 1fr;
-    align-items: center;
-    gap: 10px;
-    font-size: 15px;
-  }
-
-  label span {
-    color: var(--muted);
-  }
-
-  input {
-    min-width: 0;
-    font: inherit;
-  }
-
-  .one .icon {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-  }
-
-  .icon {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    border: 0;
-    border-radius: 50%;
-    background: none;
-    color: var(--art-accent, var(--accent));
-    cursor: pointer;
-  }
-
-  .icon.danger {
-    color: var(--danger);
-  }
-
-  .bar {
-    display: flex;
-    gap: 16px;
-  }
-</style>
+{#if typing}
+  {@const t = typing}
+  <ValueSheet title={t.title} type={t.type} value={t.value} placeholder={t.placeholder ?? ''} allowEmpty={t.title !== 'Name'} onsave={(v) => t.save(v)} onclose={() => (typing = null)} />
+{/if}

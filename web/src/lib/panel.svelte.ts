@@ -42,9 +42,37 @@ export function artistOf(viewed: string | null): { source: string; name: string;
 /** A playlist being made: the panel's edit mode, with no playlist yet (New playlist, as `crate-new` is New crate). */
 export const NEW_PLAYLIST = 'playlist-new';
 
-/** A part of the settings (`settings:libraries`), opened from the Settings page's cards (lib/SettingsPanel). */
+/** A part of the settings (`settings:libraries`), opened from the Settings page's list (lib/SettingsPanel); a thing's
+ *  own page in it after a slash (`settings:connections/jellyfin`, the settings' North Star, 2026-10-19). */
 export const SETTINGS = 'settings:';
-export const settingsOf = (viewed: string | null) => (viewed?.startsWith(SETTINGS) ? viewed.slice(SETTINGS.length) : null);
+export const settingsOf = (viewed: string | null) => (viewed?.startsWith(SETTINGS) ? viewed.slice(SETTINGS.length).split('/')[0] : null);
+/** The thing whose own page shows in a part of the settings, if one does. */
+export function settingsThing(viewed: string | null): string | null {
+  if (!viewed?.startsWith(SETTINGS)) return null;
+  const at = viewed.indexOf('/', SETTINGS.length);
+  return at < 0 ? null : decodeURIComponent(viewed.slice(at + 1));
+}
+/** A thing's own page in a part of the settings (a server, a library, a Kodi, a user): a step of its own, which Back
+ *  (or the page's back button, backFromThing) returns from. */
+export function openThing(part: string, thing: string) {
+  panel.playerTop = false;
+  history.pushState({ panel: depth() + 1, thing: true }, '', address([`${SETTINGS}${part}/${encodeURIComponent(thing)}`], 'tracks'));
+  read();
+}
+/** Back from a thing's page to its part: the step it was opened as, or else the part in its place (opened by its
+ *  address, or the thing gone). Once while a step back is under way (a removal goes back, and so does its page on
+ *  finding the thing gone). */
+let goingBack = false;
+export function backFromThing(part: string) {
+  if (goingBack) return;
+  if (history.state?.thing) {
+    goingBack = true;
+    addEventListener('popstate', () => (goingBack = false), { once: true });
+    return history.back();
+  }
+  replace(address([`${SETTINGS}${part}`], 'tracks'));
+  read();
+}
 
 export const isSingleSubject = (viewed: string | null) =>
   !!viewed &&
@@ -126,6 +154,14 @@ export function viewSelection(names: string[], tab: Tab = 'tracks') {
 /** Views one playlist (or a crate, or an album) on its Tracks. */
 export const viewPlaylist = (name: string) => viewSelection([name]);
 
+/** Views a subject without a step in the history, even when nothing was viewed: what a page shows by itself (Settings
+ *  opening a part beside its list), which Back does not close. */
+export function viewInPlace(name: string) {
+  panel.playerTop = false;
+  replace(address([name], 'tracks'));
+  read();
+}
+
 /** Views a subject over the one viewed, going deeper (an album's artist, an artist's album, as Symfonium's): a step of
  *  its own, which back returns from. With nothing viewed, as viewPlaylist. */
 export function viewOver(name: string) {
@@ -196,8 +232,8 @@ export function albumGone(source: string, id: string) {
   if (panel.viewed === albumSubject(source, id)) closePlaylist();
 }
 
-/** A page's link that keeps what is viewed viewed. */
+/** A page's link that keeps what is viewed viewed. A part of the settings is the Settings page's own: it stays there. */
 export const keepViewed = (href: string) => {
   const q = location.hash.split('?')[1];
-  return panel.viewed && q ? `${href}?${q}` : href;
+  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) ? `${href}?${q}` : href;
 };
