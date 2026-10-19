@@ -122,6 +122,8 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
     maybe not even the next version"). The thumbs and learning.ts go. The Compressors' thresholds start at the limits
     as they stand when the patch is converted (learned values included, frozen), and are plain knobs from then on. The
     server keeps what was learned, untouched, for whenever the learning returns.
+  - **No rating page** (the owner: "Yes, the rating page should also go"). It existed to calibrate the governor and the
+    learning. Its fitting (fit.ts) and the trial's plumbing go with aspects.ts.
   - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
     (WCAG). It is safety, not taste: never learned, never removable, last.
   - The precheck and the dice read the same thresholds.

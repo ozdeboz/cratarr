@@ -47,8 +47,8 @@
   import CurveEditor from './CurveEditor.svelte';
   import { densityOf, newHistory, remember } from './history';
   import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
-  import { drifted, fresh, limitsOf, thumbed, type Learned } from './learning';
-  import { forgetVisualsLimits, getVisualsLimits, postVisualsThumb, putVisualsLimits } from '../api';
+  import { fresh, limitsOf, type Learned } from './learning';
+  import { getVisualsLimits } from '../api';
   import { toast } from '../toast.svelte';
   import type { MeterValues, Tiles } from './meters';
   import type { TrialLoop } from './trial.svelte';
@@ -57,8 +57,7 @@
   import { recipeFor, settingsOf, STIRRING, type Recipe, type Scope } from './recipe';
   import { signalsOf } from './signals';
   import { Meters, type FrameStats } from './meters';
-  import RateMode from './RateMode.svelte';
-  import { rating, trial } from './trial.svelte';
+  import { trial } from './trial.svelte';
   import { appInfo, inApp } from '../app.svelte';
   import { coverPalette, type PaletteColour } from './palette';
   import { setVisualsSide, visuals } from './shown.svelte';
@@ -224,23 +223,6 @@
   // A new look this frame, and why (the meters: a track's own, or one chosen, does not count against the budget).
   type Look = NonNullable<FrameStats['look']>;
   let lookCame: FrameStats['look'] = null;
-  // The rating page (RateMode.svelte): from the panel's Rate (or ?rate=1 in the address, taken out of it as it starts,
-  // so neither going back nor opening the visuals again starts another), its trial drawn in place of the settings while
-  // it runs; each start a new run of it (a series stopped is taken up where it was left). It goes on where the visuals
-  // move (`rating.run` outlives this mount) and ends as they close. While it runs, the controls that would change the
-  // look or how it behaves are away: only Close, where it shows, Full screen and the transport stay (a track change, a
-  // pause or a seek the page itself waits out or starts the pair over for).
-  if (typeof location !== 'undefined' && new URLSearchParams(location.search).has('rate')) {
-    const url = new URL(location.href);
-    url.searchParams.delete('rate');
-    history.replaceState(history.state, '', url);
-    rating.run++;
-  }
-  function startRating() {
-    rating.run++;
-    panel = false;
-    chrome = false;
-  }
   // Another look: a random preset into the look's settings not pinned.
   function rollAnother() {
     loadAnother(Math.floor(Math.random() * 0x100000000), true);
@@ -248,8 +230,8 @@
   }
 
   // The governor (governor.ts), stepped with the meters four times a second in the loop; and the limits it holds the
-  // picture within, as learned from the thumbs (learning.ts): kept per user on the server, drifted back by the time
-  // since, applied at once.
+  // picture within, as the thumbs had learned them (learning.ts), frozen: no thumbs or learning in this version
+  // (decision 0057: "we drop taste altogether"); the server keeps them as they are.
   const governor = newGovernor();
   let learned = $state<Learned>(fresh(STANDING));
   let learnedVersion = 0;
@@ -259,7 +241,7 @@
     try {
       const got = await getVisualsLimits();
       learnedVersion = got.version;
-      learned = drifted({ ...fresh(STANDING), ...got.limits } as Learned, STANDING, (Date.now() - got.at) / 86_400_000);
+      learned = { ...fresh(STANDING), ...got.limits } as Learned;
     } catch (e) {
       // None learned yet (or not to be had now): where they start.
       if (status(e) === 404) {
@@ -267,98 +249,6 @@
         learned = fresh(STANDING);
       }
     }
-  }
-  // The last 20 seconds, four readings a second: the meters and what the loop knew beside them (for the thumbs).
-  const WINDOW = 80;
-  // `relative`: each budgeted meter against its budget at a limit of 1, as Wild and the music's activity had it then.
-  let recent: { meters: MeterValues; loop: TrialLoop; relative: Record<Budgeted, number> }[] = [];
-  /** The budget the governor holds the picture back by most now, if it holds any back (the flash rule is not one). */
-  function heldMost(): Budgeted | null {
-    let best: Budgeted | null = null;
-    let far = 0;
-    // How far each budget's lever holds back: 0 open, 1 as far as it goes.
-    for (const [k, { lever, most }] of Object.entries(LEVERS) as [Budgeted, { lever: keyof Levers; most: number }][]) {
-      if (!holding(governor.levers, lever)) continue;
-      const v = governor.levers[lever];
-      const by = most > 1 ? (v - 1) / (most - 1) : (1 - v) / (1 - most);
-      if (by > far) {
-        far = by;
-        best = k;
-      }
-    }
-    return best;
-  }
-  // Thumbs up and down on the visuals as they are now (the owner: "a general thumbs up or thumbs down for any
-  // visualization that I currently look at, and it could then decide to tune"): learning.ts decides what, if anything,
-  // to change; each is kept, with the 20 seconds before it, for the periodic fit.
-  let thumbShown = $state<'up' | 'down' | null>(null);
-  let thumbTimer: ReturnType<typeof setTimeout> | undefined;
-  async function thumb(t: 'up' | 'down') {
-    thumbShown = t;
-    clearTimeout(thumbTimer);
-    thumbTimer = setTimeout(() => (thumbShown = null), 600);
-    showChrome();
-    const list = recent.slice();
-    const mean = (pick: (r: (typeof list)[number]) => number) => (list.length ? list.reduce((s, r) => s + pick(r), 0) / list.length : 0);
-    const relative = Object.fromEntries(BUDGETED.map((k) => [k, mean((r) => r.relative[k])])) as Record<Budgeted, number>;
-    const window = { relative: list.length ? relative : {} };
-    const held = heldMost();
-    let { learned: next, changed } = thumbed(learned, STANDING, t, window, held);
-    if (changed) {
-      learned = next;
-      for (let tries = 0; tries < 2; tries++) {
-        try {
-          learnedVersion = (await putVisualsLimits({ base: learnedVersion, limits: learned, at: Date.now() })).version;
-          break;
-        } catch (e) {
-          if (status(e) !== 409 || tries) {
-            toast.fail(e, 'Not saved');
-            break;
-          }
-          // Another device learned meanwhile: its limits, this thumb on them.
-          await loadLearned();
-          ({ learned: next, changed } = thumbed(learned, STANDING, t, window, held));
-          if (!changed) break;
-          learned = next;
-        }
-      }
-    }
-    const summary = <T,>(pick: (r: (typeof list)[number]) => T) => list.map(pick);
-    const meterStats = Object.fromEntries(
-      Object.keys(list[0]?.meters ?? {}).map((k) => {
-        const v = summary((r) => Number(r.meters[k as keyof MeterValues]));
-        return [k, { mean: v.reduce((a, b) => a + b, 0) / v.length, most: Math.max(...v) }];
-      }),
-    );
-    const loopStats = Object.fromEntries(
-      (['intensity', 'bps', 'hitsPerSecond', 'swing', 'points', 'steps', 'fps'] as const).map((k) => {
-        const v = summary((r) => r.loop[k]);
-        return [k, v.length ? { mean: v.reduce((a, b) => a + b, 0) / v.length, least: Math.min(...v) } : null];
-      }),
-    );
-    const now = $state.snapshot(s) as VisualSettings;
-    const playingNow = playing();
-    postVisualsThumb({
-      thumb: t,
-      meters: meterStats,
-      loop: { ...loopStats, device: list[list.length - 1]?.loop.device ?? null },
-      settings: { ...Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])), ...lookNow(), wild: now.wild },
-      track: playingNow ? `${playingNow.source}/${playingNow.id}` : null,
-      relative,
-      held,
-      changed,
-      at: Date.now(),
-    }).catch(() => {});
-  }
-  async function forget() {
-    try {
-      await forgetVisualsLimits();
-      learnedVersion = 0;
-      learned = fresh(STANDING);
-    } catch (e) {
-      toast.fail(e, 'Not forgotten');
-    }
-    showChrome();
   }
 
   // The dice: everything at random, a look and how it behaves (a recipe: recipe.ts), both to the group. Each try draws
@@ -1031,7 +921,7 @@
     addEventListener('resize', resized);
     return () => removeEventListener('resize', resized);
   });
-  const graphShown = $derived(panel && wide && !docked && !rating.run);
+  const graphShown = $derived(panel && wide && !docked);
   function graphConnect(from: Cable['from'], to: Cable['to']) {
     const aspect = ASPECT_OF.get(`${to.module}.${to.knob}`);
     if ('signal' in from && aspect && !from.reference && !from.speed) {
@@ -1987,8 +1877,6 @@
         trialSeen = trial.settings;
         metering = new Meters();
         Object.assign(governor, newGovernor());
-        // Nor is a thumb just after the rating page judged on its trials.
-        recent = [];
       }
       renderer.measure(w, h, now / 1000);
       const stats: FrameStats = {
@@ -2047,9 +1935,6 @@
           fps,
           device: device(),
         };
-        const factor = budgetOf(1, wildNow(how.wild), d.lit);
-        recent.push({ meters: values, loop: trial.loop, relative: Object.fromEntries(BUDGETED.map((k) => [k, values[k] / factor])) as Record<Budgeted, number> });
-        if (recent.length > WINDOW) recent.shift();
         hitsCounted = 0;
         const marks = { flash: holding(l, 'swing'), speed: holding(l, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(l, k)) };
         if (marks.flash !== !!governed.flash || marks.speed !== !!governed.speed || marks.wild !== !!governed.wild) governed = marks;
@@ -2128,8 +2013,6 @@
     raf = requestAnimationFrame(loop);
 
     return () => {
-      // Closed, a rating run ends with them (moved, it goes on where they went).
-      if (!visuals.open) rating.run = 0;
       // Closed some other way: its step of the history goes too. Moved beside the page or over it (still open), the
       // step stays for the visuals where they went: going back here would close them there (2026-10-18: the docked
       // visuals' Full screen left the page full screen with the player, the visuals closed).
@@ -2265,7 +2148,6 @@
         ><Icon name="close" size={26} /></button
       >
       <div class="corner">
-        {#if !rating.run}
         <button
           class="round"
           class:on={panel}
@@ -2298,7 +2180,6 @@
             showChrome();
           }}><Icon name="bookmark" size={24} /></button
         >
-        {/if}
         {#if docked}
           <button class="round" aria-label="Over the page" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => setVisualsSide(false)}
             ><Icon name="expand" size={22} /></button
@@ -2332,7 +2213,7 @@
           />
         </div>
       {/if}
-      {#if panel && !rating.run}
+      {#if panel}
         <div class="panel" role="group" aria-label="Settings" bind:this={panelBox} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
           {#if path.length}
             <div class="crumbs">
@@ -2563,24 +2444,12 @@
                 showChrome();
               }}>Reset</button
             >
-            <button class="reset" use:held={'rate'} onclick={startRating}>Rate</button>
-            <button class="reset" use:held={'forget'} onclick={forget}>Forget</button>
           </div>
           {/if}
         </div>
       {/if}
       {#if np && !panel}
         <div class="track">
-          {#if !rating.run}
-            <div class="thumbs">
-              <button class="round" class:on={thumbShown === 'up'} aria-label="Thumbs up" use:held={'thumbs-up'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => thumb('up')}
-                ><Icon name="thumbsUp" size={22} /></button
-              >
-              <button class="round" class:on={thumbShown === 'down'} aria-label="Thumbs down" use:held={'thumbs-down'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => thumb('down')}
-                ><Icon name="thumbsDown" size={22} /></button
-              >
-            </div>
-          {/if}
           <strong>{np.name}</strong>
           {#if np.artist}<span>{np.artist}</span>{/if}
         </div>
@@ -2612,7 +2481,6 @@
     <SnapshotsSheet onclose={() => (snapshotsOpen = false)} capture={capturePicture} trackName={np?.name ?? null} {recall} over={!docked} />
   {/if}
   <Help />
-  {#if rating.run}{#key rating.run}<RateMode />{/key}{/if}
 </div>
 
 <style>
@@ -2960,11 +2828,6 @@
     cursor: pointer;
   }
 
-  .thumbs {
-    display: flex;
-    gap: 4px;
-    margin: 0 0 6px -12px;
-  }
 
   .track {
     position: absolute;
