@@ -202,6 +202,7 @@ impl IncomingService {
         converted: Vec<crate::journal::Converted>,
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
+        self.complete_covers(at).await;
         let Planned { old_dir, old_files, plan } = self.plan_replace(at, year).await?.map_err(refused)?;
         let music = PathBuf::from(self.lib.music().unwrap_or_default());
         if !self.can_write(&at.root).await || !self.can_write(&music).await {

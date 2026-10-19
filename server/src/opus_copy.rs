@@ -6,6 +6,9 @@
 //! Memory is bounded and small, whatever the length of the track: audio streams through a few thousand frames at a
 //! time and each Ogg page goes out as soon as it is full.
 //!
+//! The album's cover goes inside the copy too (the owner, 2026-10-19: a cover inside every file that leaves Cratarr),
+//! as Ogg's comments carry one; the comment header then spans pages.
+//!
 //! Blocking; run on a blocking thread.
 
 use std::io::Write;
@@ -43,7 +46,7 @@ pub fn copy(input: &Path, out: impl Write, gains: (Option<f64>, Option<f64>)) ->
     let pre_skip = encoder.lookahead()?;
     let mut ogg = Ogg::new(out, serial(input));
     ogg.page(&[&opus_head(channels, pre_skip, format.sample_rate)], 0, BOS)?;
-    ogg.page(&[&opus_tags(input, gains)], 0, 0)?;
+    ogg.packet(&opus_tags(input, gains), 0)?;
 
     // Interleaved samples waiting for a whole frame; the frames' packets waiting for their page.
     let mut pcm: Vec<f32> = Vec::with_capacity(FRAME * channels * 2);
@@ -134,6 +137,9 @@ fn opus_tags(input: &Path, (track, album): (Option<f64>, Option<f64>)) -> Vec<u8
         add("DISCNUMBER", tag.disk().map(|n| n.to_string()));
         add("DATE", tag.date().map(|d| d.to_string()));
     }
+    if let Some(cover) = cover_comment(input) {
+        comments.push(cover);
+    }
     let mut b = Vec::new();
     b.extend_from_slice(b"OpusTags");
     b.extend_from_slice(&(VENDOR.len() as u32).to_le_bytes());
@@ -144,6 +150,43 @@ fn opus_tags(input: &Path, (track, album): (Option<f64>, Option<f64>)) -> Vec<u8
         b.extend_from_slice(c.as_bytes());
     }
     b
+}
+
+/// A cover larger than this goes into a copy as a smaller picture ([`COVER_SIDE`] on its longer side), so the copy stays
+/// small: a cover is a few hundred kB, a minute of the copy about 1.2 MB.
+const COVER_MAX: usize = 300 * 1024;
+const COVER_SIDE: u32 = 1000;
+
+/// The album's cover as Ogg's comments carry one (`METADATA_BLOCK_PICTURE`: a FLAC picture block in base64, the
+/// front cover): the folder's cover file, else the picture inside the track, as Cratarr shows covers (decision 0030).
+/// `None` when the album has none.
+fn cover_comment(input: &Path) -> Option<String> {
+    use base64::Engine;
+    let (mut mime, mut data) = match input.parent().and_then(crate::serve::art::cover_file) {
+        Some(file) => {
+            let data = std::fs::read(file).ok()?;
+            (crate::serve::art::sniff(&data).to_string(), data)
+        }
+        None => crate::serve::art::embedded(input)?,
+    };
+    if data.len() > COVER_MAX
+        && let Ok(Some(small)) = crate::serve::art::resize(&data, COVER_SIDE)
+    {
+        (mime, data) = ("image/jpeg".to_string(), small);
+    }
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    let mut block = Vec::with_capacity(32 + mime.len() + data.len());
+    block.extend_from_slice(&3u32.to_be_bytes());
+    block.extend_from_slice(&(mime.len() as u32).to_be_bytes());
+    block.extend_from_slice(mime.as_bytes());
+    // No description; its size, 24 bits a pixel, no palette.
+    block.extend_from_slice(&0u32.to_be_bytes());
+    for v in [width, height, 24, 0] {
+        block.extend_from_slice(&v.to_be_bytes());
+    }
+    block.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    block.extend_from_slice(&data);
+    Some(format!("METADATA_BLOCK_PICTURE={}", base64::engine::general_purpose::STANDARD.encode(block)))
 }
 
 /// libopus's encoder, for music at [`BITRATE`].
@@ -211,6 +254,8 @@ impl Drop for Encoder {
 
 const BOS: u8 = 0x02;
 const EOS: u8 = 0x04;
+/// A page going on with the packet the page before it began (RFC 3533).
+const CONTINUED: u8 = 0x01;
 
 /// One logical Ogg stream, written a page at a time.
 struct Ogg<W: Write> {
@@ -234,7 +279,27 @@ impl<W: Write> Ogg<W> {
         if lacing.len() > 255 {
             bail!("an Ogg page of {} segments", lacing.len());
         }
-        let mut page = Vec::with_capacity(27 + lacing.len() + packets.iter().map(|p| p.len()).sum::<usize>());
+        self.raw(&lacing, packets, granule, flags)
+    }
+
+    /// One packet over as many pages as it needs (the comment header with a cover): each page as full as a page can
+    /// be (255 segments), those after the first marked as going on with it (RFC 3533); `granule` on each (0: headers,
+    /// RFC 7845 §3).
+    fn packet(&mut self, p: &[u8], granule: u64) -> Result<()> {
+        let mut lacing = vec![255u8; p.len() / 255];
+        lacing.push((p.len() % 255) as u8);
+        let mut at = 0;
+        for (i, chunk) in lacing.chunks(255).enumerate() {
+            let len: usize = chunk.iter().map(|&l| l as usize).sum();
+            self.raw(chunk, &[&p[at..at + len]], granule, if i == 0 { 0 } else { CONTINUED })?;
+            at += len;
+        }
+        Ok(())
+    }
+
+    /// A page as its segments say: `bodies` laid end to end are what `lacing` counts.
+    fn raw(&mut self, lacing: &[u8], bodies: &[&[u8]], granule: u64, flags: u8) -> Result<()> {
+        let mut page = Vec::with_capacity(27 + lacing.len() + bodies.iter().map(|p| p.len()).sum::<usize>());
         page.extend_from_slice(b"OggS");
         page.push(0);
         page.push(flags);
@@ -243,8 +308,8 @@ impl<W: Write> Ogg<W> {
         page.extend_from_slice(&self.sequence.to_le_bytes());
         page.extend_from_slice(&[0; 4]);
         page.push(lacing.len() as u8);
-        page.extend_from_slice(&lacing);
-        for p in packets {
+        page.extend_from_slice(lacing);
+        for p in bodies {
             page.extend_from_slice(p);
         }
         let crc = crc32(&page);
@@ -323,6 +388,10 @@ mod tests {
                     packets.push(std::mem::take(&mut cur));
                 }
             }
+            // A packet going on on the next page: its part on this one.
+            if !cur.is_empty() {
+                packets.push(cur);
+            }
             out.push((b[5], u64::from_le_bytes(b[6..14].try_into().unwrap()), u32::from_le_bytes(b[18..22].try_into().unwrap()), packets));
             b = &b[len..];
         }
@@ -363,6 +432,65 @@ mod tests {
         // About 160 kb/s: 3 s near 60 kB, far below the 529 kB of the WAV.
         assert!(out.len() > 30_000 && out.len() < 90_000, "{} bytes", out.len());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_albums_cover_goes_inside_the_copy_over_as_many_pages_as_it_needs() {
+        use base64::Engine;
+        let dir = std::env::temp_dir().join(format!("cratarr-opus-cover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("a.wav");
+        wav(&input, 44_100, 1.0);
+        // A large cover (noise does not compress): it goes in as a 1000 px JPEG.
+        let mut seed = 1u32;
+        let img = image::RgbImage::from_fn(1200, 1200, |_, _| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            image::Rgb([(seed >> 24) as u8, (seed >> 16) as u8, (seed >> 8) as u8])
+        });
+        img.save(dir.join("cover.png")).unwrap();
+        let mut out = Vec::new();
+        assert!(copy(&input, &mut out, (None, None)).unwrap());
+        let pages = pages(&out);
+        // The comment header: page 1 and those going on with it.
+        let mut tags = pages[1].3.concat();
+        let mut next = 2;
+        while pages[next].0 & CONTINUED != 0 {
+            assert_eq!(pages[next].1, 0, "a header page");
+            tags.extend(pages[next].3.concat());
+            next += 1;
+        }
+        assert!(next > 3, "the comment header spans pages ({next})");
+        assert_eq!(&tags[..8], b"OpusTags");
+        let key = b"METADATA_BLOCK_PICTURE=";
+        let at = tags.windows(key.len()).position(|w| w == key).expect("a picture") + key.len();
+        let len = u32::from_le_bytes(tags[at - key.len() - 4..at - key.len()].try_into().unwrap()) as usize - key.len();
+        let block = base64::engine::general_purpose::STANDARD.decode(&tags[at..at + len]).unwrap();
+        let word = |i: usize| u32::from_be_bytes(block[i..i + 4].try_into().unwrap()) as usize;
+        assert_eq!(word(0), 3, "the front cover");
+        let mime_len = word(4);
+        assert_eq!(&block[8..8 + mime_len], b"image/jpeg");
+        let after = 8 + mime_len + 4 + word(8 + mime_len);
+        assert_eq!((word(after), word(after + 4)), (1000, 1000), "made smaller");
+        let data = &block[after + 20..];
+        assert_eq!(data.len(), word(after + 16));
+        assert_eq!(&data[..3], &[0xFF, 0xD8, 0xFF], "a JPEG");
+        // The music after it, as without a cover.
+        let audio: usize = pages[next..].iter().map(|p| p.3.len()).sum();
+        assert_eq!(audio, 48_000usize.div_ceil(FRAME));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_long_packet_spans_full_pages_and_the_rest() {
+        let mut out = Vec::new();
+        let mut ogg = Ogg::new(&mut out, 7);
+        let p: Vec<u8> = (0..255 * 255 + 300).map(|i| i as u8).collect();
+        ogg.packet(&p, 0).unwrap();
+        let pages = pages(&out);
+        assert_eq!(pages.len(), 2);
+        assert_eq!((pages[0].0, pages[1].0), (0, CONTINUED));
+        assert_eq!(pages[0].3[0].len(), 255 * 255, "a full page of it");
+        assert_eq!(pages[1].3[0].len(), 300, "the packet's end on the second");
     }
 
     /// A copy of a real file, to listen to or check with another decoder: CRATARR_OPUS_IN to CRATARR_OPUS_OUT.

@@ -8,6 +8,7 @@ mod catalogue;
 mod config;
 mod convert;
 mod covers;
+mod covers_inside;
 mod crates;
 mod db;
 mod diagnostics;

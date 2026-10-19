@@ -872,6 +872,7 @@ impl IncomingService {
         converted: Vec<crate::journal::Converted>,
         job: Option<u64>,
     ) -> Result<KeepResult, ToggleError> {
+        self.complete_covers(at).await;
         let (root, plan) = self.plan_move(at, target, year).await?;
         let plan = plan.map_err(|r| match r {
             KeepRefused::NeedsYear => ToggleError::Refused("the album's year is not known".into()),
@@ -949,6 +950,26 @@ impl IncomingService {
             carry_on::carry_on(self.lib.clone(), p, &event);
         }
         Ok(KeepResult { undo: Some(id.to_string()), title: at.album.title.clone(), folder: plan.folder, queued: false })
+    }
+
+    /// Before an album moves into the library: its cover inside every track and as a file next to them (the owner,
+    /// 2026-10-19; `covers_inside`), in its own folder, so the cover file moves with it and an Undo takes it back.
+    /// Never stops the move: what could not be done is logged.
+    async fn complete_covers(&self, at: &Located) {
+        let dir = at.root.join(&at.dir.dir);
+        let shown = dir.display().to_string();
+        match tokio::task::spawn_blocking(move || crate::covers_inside::complete(&dir)).await {
+            Ok(Ok(done)) => {
+                if done.cover_file.is_some() || !done.embedded.is_empty() {
+                    tracing::info!("covers: {shown}: cover file written: {}, inside {} tracks", done.cover_file.is_some(), done.embedded.len());
+                }
+                for (t, why) in done.left {
+                    tracing::warn!("covers: {} left without a picture inside: {why}", t.display());
+                }
+            }
+            Ok(Err(e)) => tracing::warn!("covers: {shown}: {e:#}"),
+            Err(e) => tracing::warn!("covers: {shown}: {e}"),
+        }
     }
 
     /// What became of a server's album after Keep, Replace or Delete; `None` when none of them happened to it.

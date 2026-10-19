@@ -1,6 +1,6 @@
 # 0049: The visuals' beat, downbeat and tempo from a local pulse
 
-- Status: proposed (claude-5f, 2026-10-18; the owner asked for it after "drum hits are sometimes recognized while no
+- Status: accepted, amended 2026-10-19 (Beat this! directly; proposed by claude-5f, 2026-10-18; the owner asked for it after "drum hits are sometimes recognized while no
   beat signal is showing", and for the web's authoritative insight on better beat and downbeat signals, "possibly
   utilizing other signals we already have")
 - Date: 2026-10-18
@@ -75,6 +75,19 @@ For the visuals only; the BPM column keeps 0035's gate.
 
 - Take 1 and 2 with the measurement in 3, or go to Beat this! directly?
 - The interim Tempo fade in 64.1, or wait for this?
+
+## Amendment (2026-10-19): Beat this! directly, and the interim now
+
+The owner answered both (in a5's session, after the proposal was explained): **"Beat this! directly"**, not 1 and 2
+measured against it first; and the interim Tempo fade now.
+
+- **The analysis is Beat this!**: beats and downbeats from its model, run on the NAS through an ONNX runtime (the
+  server's part, claude-5f). Its CPU time on the NAS is measured on a sample first, so the library's pass is planned
+  from a real figure; 1 and 2 above are dropped, the reference sample in 3 stays as the check that it works here.
+- **The interim, in 70** (the page's part, a5: `lib/visuals/music.svelte.ts`): the Tempo row is the tempo times a
+  smoothstep of the last bar's mean beat strength, 0 at 0.15 or less (the break figure) and all of it at 0.5 or more
+  (provisional, not yet measured); 0 without beats or outside the grid, moving across each beat so it never jumps. The
+  turning keeps the grid's tempo (`bps` untouched), so the flame does not stand still in ambient passages.
 
 ## Sources
 
