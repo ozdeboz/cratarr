@@ -555,8 +555,8 @@ vec2 fx_flow(vec2 p) {
 
 /** The picture slot's fragment shader for a chain (its ids by place, as `uFxA`'s and `uFxK`'s), or null where nothing
  *  is in it: the picture (`uPicture`) read where its shapes say, then its colours and echoes (`uPrev`: the last
- *  finished one). */
-export function pictureShader(ids: readonly number[]): string | null {
+ *  finished one). `alpha`: the picture's own alpha kept (a layer's, decision 0056), else opaque (the finished frame). */
+export function pictureShader(ids: readonly number[], alpha = false): string | null {
   const placed = ids.map((id, k) => ({ e: effectOf(id), k })).filter((x): x is { e: Effect; k: number } => !!x.e && x.e.slots.includes('picture'));
   if (!placed.length) return null;
   const once = [...new Map(placed.map(({ e }) => [e.id, e.glsl])).values()].join('\n');
@@ -585,9 +585,10 @@ ${once}
 void main() {
   vec2 p = (gl_FragCoord.xy / uView - 0.5) * 2.0 * vec2(uAspect, 1.0);
 ${placed.filter(({ e }) => e.kind === 'shape').map(call).join('\n')}
-  vec3 c = textureLod(uPicture, vec2(p.x / uAspect, p.y) * 0.5 + 0.5, 0.0).rgb;
+  vec4 src = textureLod(uPicture, vec2(p.x / uAspect, p.y) * 0.5 + 0.5, 0.0);
+  vec3 c = src.rgb;
 ${placed.filter(({ e }) => e.kind !== 'shape').map(call).join('\n')}
-  o = vec4(clamp(c, 0.0, 1.0), 1.0);
+  o = vec4(clamp(c, 0.0, 1.0), ${alpha ? 'src.a' : '1.0'});
 }`;
 }
 
