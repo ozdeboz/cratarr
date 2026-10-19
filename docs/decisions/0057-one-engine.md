@@ -305,6 +305,10 @@ That's clean". So:
 - **Track** gives its `seed` (and its pulse); which knobs a track moves is set where Randomize's reach is set (the
   pins, and Wild for how far).
 - "Another look" is the same Randomize with a new seed.
+- **Reset to seed** (the owner, beside resetting the whole synthesizer): the playing track's own seeded Randomize again,
+  as when the track began. Whatever the dice, "Another look" or the knobs changed since is put back to the track's own
+  values, pins kept, structure untouched, undoable, morphed in. Resetting the whole synthesizer stays what it is: back
+  to an empty patch (Start from scratch). Both are in the Reset menu.
 
 ### 5. Pictures as inputs
 
