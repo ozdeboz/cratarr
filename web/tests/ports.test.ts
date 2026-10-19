@@ -31,8 +31,8 @@ test("today's hidden behaviours are modules; the beats and hits are triggers, a 
 });
 
 test('a cable fits by type: the same, or a trigger into a value', () => {
-  assert.ok(fits('picture', 'picture') && fits('value', 'value') && fits('trigger', 'trigger') && fits('trigger', 'value'));
-  assert.ok(!fits('value', 'picture') && !fits('picture', 'value') && !fits('value', 'trigger'));
+  assert.ok(fits('picture', 'picture') && fits('light', 'light') && fits('value', 'value') && fits('trigger', 'trigger') && fits('trigger', 'value'));
+  assert.ok(!fits('light', 'picture') && !fits('value', 'picture') && !fits('picture', 'value') && !fits('value', 'trigger'));
 });
 
 test('v2: a picture cycle must pass through a Feedback', async () => {

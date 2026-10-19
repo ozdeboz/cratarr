@@ -7,7 +7,9 @@ import type { RouteValue } from './curves';
 import type { Knob, Macro, Module, ModuleType, Place } from './patch';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
-export type PortType = 'picture' | 'value' | 'trigger';
+/** `light`: the flame's accumulated light (its RGBA and its bands' shares) before Show turns it into a picture; the
+ *  flame's own loop works on it (claude-632, step 3). Only Show converts light into a picture. */
+export type PortType = 'picture' | 'light' | 'value' | 'trigger';
 
 /** A port: its id on its module, its name, its type; `channels`: a band's six at once (VCV's polyphonic cable; a
  *  cable may take one of them); `normal`: what it is wired to unless a cable is plugged in (Eurorack's normalled
@@ -136,7 +138,7 @@ export type CableV2 = {
 export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
 
 /** The blends a Mix input takes (0056's, as a step knob per input). */
-export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window'] as const;
+export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window', 'lighten'] as const;
 /** How many pictures a Mix takes. */
 export const MIX_INPUTS = 4;
 

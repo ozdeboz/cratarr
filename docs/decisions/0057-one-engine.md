@@ -46,11 +46,12 @@ and the rack. The Cratarr look is a chain built from those modules, nothing spec
 
 ### 1. Typed ports
 
-Three kinds of signal, each with its own wire in the graph:
+Four kinds of signal, each with its own wire in the graph:
 
 | Type | Carries | Wire |
 |---|---|---|
 | `picture` | a texture each frame | solid |
+| `light` | the flame's accumulated light before Show displays it (its RGBA and its bands' shares); the flame's own loop works on it, and only Show turns it into a picture (claude-632) | solid, thick |
 | `value` | a number each frame (a signal on 1 = typical; a modulator's own range; a knob's) | dashed |
 | `trigger` | events (a beat, a band's hit, a gate opening), each with its strength | dotted |
 
@@ -114,7 +115,8 @@ The owner: "freely routable". The picture side is a free graph, as the value sid
   - One output may feed several inputs (fan-out).
   - A module may take several picture inputs.
   - Nothing has a fixed position.
-- **Blend becomes a module.** Mix takes two or more pictures, each with its mode (add, screen, over, multiply, window)
+- **Blend becomes a module.** Mix takes two or more pictures, each with its mode (add, screen, over, multiply, window,
+  lighten: the brighter, as today's picture loop keeps)
   and amount. "Layers" are no longer a structure, just sources mixed.
 - **Feedback becomes a module.** It gives the picture its own output had last frame (TouchDesigner's Feedback; VCV
   Rack's one-step cable). Today's picture loop is wired from parts: Feedback → Warp → Keep → Mix with the new picture.
@@ -126,6 +128,14 @@ The owner: "freely routable". The picture side is a free graph, as the value sid
   loop, finish) are worked out from the wiring, not stored.
 - **Cycles.** A picture cycle must pass through a Feedback module; the graph refuses any other.
 
+- **Full screen** (the owner: MilkDrop "has full screen graphics. Everything is still a shape drawn on blackness"). Three
+  things make MilkDrop fill the screen, and each gets a module:
+  - **Full-screen sources:** Plasma (noise), Gradient, Cells, the Cover.
+  - **A Warp field:** every point moving its own way (swirl, ripple, push toward a point), driven by values or by a
+    picture through Displace. Not one move for the whole picture.
+  - **Feedback that fills:** a high Keep with an outward zoom, so trails reach the edges and the screen never goes
+    back to black.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
@@ -133,6 +143,7 @@ A module may take a second `picture` input: Hydra's modulate, TouchDesigner's co
 - **Displace**: one picture moves another's coordinates (the flame stirring the shapes);
 - **Mask**: the window mode of 70.1, as a module;
 - **Tint**: the Flame colours of 70.1, as a module, from any picture.
+- **Glow**: 70.1's glow, as a module of its own (one meaning a module).
 
 The tint and glow knobs built into the sources for 70.1 move into these modules.
 
@@ -174,6 +185,15 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 claude-a5 coordinates and owns this record. Interfaces are fixed in step 1 (patch.ts) before steps 2 and 3 build on
 them. Until step 1 lands, steps 2 and 3 work behind today's interfaces (the equivalence harness; the compositor's
 graph walk).
+
+### Conversion details (claude-632, step 3)
+
+- A v1 effects stage samples once with every shape effect applied in slot order, then colours at the final
+  coordinates. As one module per effect, the same picture needs the colour effects and Echo first, in slot order, then
+  the shape effects in reverse slot order. Echo together with a shape effect cannot match exactly: it converts within
+  a measured tolerance, shown to the owner.
+- A module whose morph is bringing it back (target above neutral) keeps running while it is at neutral, so the flame
+  coming back from blend 0 has its light already gathered, as today.
 
 ## Consequences
 
