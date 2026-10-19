@@ -159,6 +159,28 @@ class Prefs(context: Context) {
             p.edit().putString(OUTPUT_CHOICE_SET, value).apply()
         }
 
+    /** Which music the app plays (decision 0052): Cratarr's ([MODE_CRATARR]) or the device's own ([MODE_DEVICE]). */
+    var mode: String
+        get() = if (p.getString(MODE, null) == MODE_DEVICE) MODE_DEVICE else MODE_CRATARR
+        set(value) {
+            p.edit().putString(MODE, if (value == MODE_DEVICE) MODE_DEVICE else MODE_CRATARR).apply()
+        }
+
+    /** Android's permission for the device's music was asked for once (a refusal then shows as such). */
+    var deviceMusicAsked: Boolean
+        get() = p.getBoolean(DEVICE_MUSIC_ASKED, false)
+        set(value) {
+            p.edit().putBoolean(DEVICE_MUSIC_ASKED, value).apply()
+        }
+
+    /** A mode's queue as put by (PlayerService's snapshot, as JSON; empty for none): the one not playing, and local
+     *  mode's while it plays too, so it lasts a restart (Cratarr gives its own back). */
+    fun savedQueue(mode: String): String = p.getString(if (mode == MODE_DEVICE) DEVICE_QUEUE else CRATARR_QUEUE, null).orEmpty()
+
+    fun saveQueue(mode: String, snapshot: String) {
+        p.edit().putString(if (mode == MODE_DEVICE) DEVICE_QUEUE else CRATARR_QUEUE, snapshot).apply()
+    }
+
     /** A new queue starts: its own id, and its name (empty: Cratarr names it after its album, artist or first track). */
     fun newQueue(name: String) {
         p.edit().putString(QUEUE_ID, java.util.UUID.randomUUID().toString()).putString(QUEUE_NAME, name).apply()
@@ -277,6 +299,12 @@ class Prefs(context: Context) {
         const val OUTPUT_CHOICE = "output_choice"
         const val OUTPUT_CHOICE_SET = "output_choice_set"
         const val QUEUE_NAME = "queue_name"
+        const val MODE = "mode"
+        const val MODE_CRATARR = "cratarr"
+        const val MODE_DEVICE = "device"
+        const val DEVICE_MUSIC_ASKED = "device_music_asked"
+        const val DEVICE_QUEUE = "device_queue"
+        const val CRATARR_QUEUE = "cratarr_queue"
         /** The public address (the app's only one before it had two). */
         const val SERVER_URL = "server_url"
         const val LOCAL_URL = "local_url"

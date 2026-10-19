@@ -2,6 +2,8 @@ package app.cratarr
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Bundle
+import androidx.core.content.ContextCompat
 
 import androidx.annotation.OptIn
 import androidx.media3.common.C
@@ -11,6 +13,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionCommand
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -19,7 +22,8 @@ import org.json.JSONObject
  * "op": …}`) become the player's; what the player does goes back to the page as `{"type": "player", "index",
  * "positionMs", "durationMs", "paused", "error", "queue"?}`. The queue's tracks are the page's own (source, id, name,
  * artist, album, album_id), kept with each media item, so a queue the player changed itself (Play On) reaches the page
- * as it is.
+ * as it is. Local mode (decision 0052) plays through the same calls, with the device's own tracks (`source` device);
+ * its reports say which mode's queue they are (`mode`).
  */
 @OptIn(UnstableApi::class)
 class PagePlayer(private val context: Context, private val controller: MediaController, private val send: (String) -> Unit) : Player.Listener {
@@ -27,6 +31,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
     private var previewer: ExoPlayer? = null
     /** The music played when the preview began: it goes on after. */
     private var resumeAfter = false
+    /** A mode switch under way (decision 0052): the page's calls meanwhile wait for it. */
+    private var switching: MutableList<JSONObject>? = null
 
     /** The sleep timer changed (set, or done): the page is told. Held here, as Android keeps listeners only weakly. */
     private val sleepChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -46,28 +52,45 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
     }
 
     fun handle(m: JSONObject) {
+        switching?.let {
+            it.add(m)
+            return
+        }
         val c = controller
+        val mode = Prefs(context).mode
+        val local = mode == Prefs.MODE_DEVICE
         when (m.optString("op")) {
+            // Local mode (decision 0052) on or off, from the app's switch (Android's permission given).
+            "mode" -> switchMode(m.optString("mode"), null)
             "queue" -> {
+                // A play of the other mode's music is that mode again (Android's permission given), never both in one.
+                val want = modeOf(m.optJSONArray("tracks")) ?: mode
+                if (want != mode) {
+                    if (want == Prefs.MODE_DEVICE && !DeviceMusic.granted(context)) return
+                    if (!m.optBoolean("switched")) switchMode(want, JSONObject(m.toString()).put("switched", true))
+                    return
+                }
                 // A new play turns repeat one off; whether it comes shuffled counts for repeat all's next rounds.
                 Repeat.newPlay(context, c)
-                Autoplay.newPlay(context, m.optJSONArray("tracks"))
                 Prefs(context).shuffled = m.optBoolean("shuffled")
                 // Another queue, started here (decision 0033, amended): its own id and the play's name; Cratarr keeps the
-                // one before.
-                Prefs(context).newQueue(m.optString("name"))
-                c.setMediaItems(mediaItems(m.optJSONArray("tracks")), m.optInt("index", 0), m.optLong("positionMs", 0))
+                // one before. Local mode's is its own.
+                if (!local) {
+                    Autoplay.newPlay(context, m.optJSONArray("tracks"))
+                    Prefs(context).newQueue(m.optString("name"))
+                }
+                c.setMediaItems(mediaItems(only(m.optJSONArray("tracks"), mode)), m.optInt("index", 0), m.optLong("positionMs", 0))
                 c.prepare()
                 c.playWhenReady = m.optBoolean("play", true)
             }
-            "add" -> c.addMediaItems(m.optInt("at", c.mediaItemCount), mediaItems(m.optJSONArray("tracks")))
+            "add" -> c.addMediaItems(m.optInt("at", c.mediaItemCount), mediaItems(only(m.optJSONArray("tracks"), mode)))
             "move" -> c.moveMediaItem(m.optInt("from"), m.optInt("to"))
             "remove" -> c.removeMediaItem(m.optInt("index"))
             // Everything after the playing track replaced (the shuffle switch); the playing track plays on.
             "upcoming" -> {
                 if (m.has("shuffled")) Prefs(context).shuffled = m.optBoolean("shuffled")
                 val from = (c.currentMediaItemIndex + 1).coerceAtMost(c.mediaItemCount)
-                c.replaceMediaItems(from, c.mediaItemCount, mediaItems(m.optJSONArray("tracks")))
+                c.replaceMediaItems(from, c.mediaItemCount, mediaItems(only(m.optJSONArray("tracks"), mode)))
             }
             "jump" -> {
                 c.seekTo(m.optInt("index"), 0)
@@ -80,9 +103,10 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             // Kept by the service (Sleep); the change reaches the page as a report.
             "sleep" -> Sleep.set(context, m, "atMs", "endOfTrack")
             // Kept and filled by the service (Radio); the change reaches the page as a report.
-            "radio" -> Radio.command(context, c, m)
-            "autoplay" -> Autoplay.command(context, c, m)
-            "skip_favourites" -> SkipFavourites.set(context, c, m.optBoolean("on"))
+            // Cratarr's alone: not for the device's own music.
+            "radio" -> if (!local) Radio.command(context, c, m)
+            "autoplay" -> if (!local) Autoplay.command(context, c, m)
+            "skip_favourites" -> if (!local) SkipFavourites.set(context, c, m.optBoolean("on"))
             "seek" -> c.seekTo(m.optLong("positionMs"))
             "preview" -> preview(m.optJSONObject("track"), m.optLong("positionMs"))
             "preview-end" -> previewEnd()
@@ -96,10 +120,28 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         }
     }
 
+    /**
+     * Local mode on or off (decision 0052): the service puts one queue by and takes up the other; the page's calls
+     * meanwhile, and [then] (the play that asked for it), wait for it, and the page hears the new mode's queue.
+     */
+    private fun switchMode(to: String, then: JSONObject?) {
+        val waiting = mutableListOf<JSONObject>().also { switching = it }
+        then?.let(waiting::add)
+        val args = Bundle().apply { putString("mode", to) }
+        controller.sendCustomCommand(SessionCommand(PlayerService.COMMAND_MODE, Bundle.EMPTY), args).addListener(
+            {
+                switching = null
+                report(withQueue = true)
+                waiting.forEach(::handle)
+            },
+            ContextCompat.getMainExecutor(context),
+        )
+    }
+
     /** The held track from `positionMs`, the music paused meanwhile. */
     private fun preview(track: JSONObject?, positionMs: Long) {
         val item = track?.let { mediaItems(JSONArray().put(it)).firstOrNull() } ?: return
-        val located = Downloads.locate(context, item, Prefs(context).serverUrl?.trimEnd('/'))
+        val located = DeviceMusic.located(item) ?: Downloads.locate(context, item, Prefs(context).serverUrl?.trimEnd('/'))
         val p = previewer ?: ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playback(context)))
             .build()
@@ -130,6 +172,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         val c = controller
         val out = JSONObject()
             .put("type", "player")
+            .put("mode", Prefs(context).mode)
             .put("index", if (c.mediaItemCount == 0) -1 else c.currentMediaItemIndex)
             .put("positionMs", c.currentPosition)
             .put("durationMs", if (c.duration == C.TIME_UNSET) -1 else c.duration)
@@ -159,6 +202,22 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         ) {
             report(withQueue = events.contains(Player.EVENT_TIMELINE_CHANGED))
         }
+    }
+
+    /** The mode tracks are of (the first's), null for none. */
+    private fun modeOf(tracks: JSONArray?): String? {
+        val t = (0 until (tracks?.length() ?: 0)).firstNotNullOfOrNull { tracks?.optJSONObject(it) } ?: return null
+        return if (t.optString("source") == DeviceMusic.SOURCE) Prefs.MODE_DEVICE else Prefs.MODE_CRATARR
+    }
+
+    /** Only the tracks of [mode]: never both in one queue. */
+    private fun only(tracks: JSONArray?, mode: String): JSONArray {
+        val out = JSONArray()
+        for (i in 0 until (tracks?.length() ?: 0)) {
+            val t = tracks?.optJSONObject(i) ?: continue
+            if ((t.optString("source") == DeviceMusic.SOURCE) == (mode == Prefs.MODE_DEVICE)) out.put(t)
+        }
+        return out
     }
 
     private fun describe(e: PlaybackException): String {

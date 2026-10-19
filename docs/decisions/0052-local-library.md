@@ -41,3 +41,26 @@ features is weird"; and, asked whether a local queue goes away: no, each mode ke
 - Work: the app (the mode, MediaStore, covers, the local queue, its reports), the page (local mode's views and the
   switch, a5), the server (a player in local mode: its reports leave Cratarr's queue alone, control commands pass,
   queue edits are refused, a play takes it back).
+
+## As built (the app and the server, 2026-10-19)
+
+- **The app's bridge** (the page inside the app):
+  - The `app` message has `mode` (`cratarr` or `device`) and `deviceMusic` (`unasked`, `denied` or `granted`: Android's
+    permission); it comes again whenever the mode changes, from the page or from Cratarr.
+  - `{type: 'device-music', op: 'mode', mode}` switches; to `device` without the permission, Android asks first (refused:
+    the mode stays, `deviceMusic` is `denied`). The player's next report has the new mode's queue.
+  - `{type: 'device-music', op: 'library'}` is answered with `{type: 'device-library', tracks}` (newest first), or
+    `{type: 'device-library', denied: true}`. A track: `{source: 'device', id, name, artist, album, album_id, track,
+    disc, year, duration_secs, added}`; `track` is its number on the album (not `n`, a track's place in what plays).
+  - Covers: `/__device/cover/{album_id}` on the page's own origin, a JPEG from Android or a 404.
+  - Playing uses the `player` calls as ever. Their reports carry `mode`. A `queue` call with the other mode's tracks
+    switches to that mode first; tracks of the other mode in `queue`, `add` or `upcoming` are left out. `radio`,
+    `autoplay` and `skip_favourites` do nothing in local mode.
+- **The app**: each mode's queue is put by on a switch (its tracks, the playing one and where, repeat, shuffle) and
+  taken up again, paused; local mode's is also kept as it goes, so it lasts a restart. Entering local mode leaves a
+  group. Radio, Autoplay, Levelling, keeping tracks ahead and counting plays are Cratarr's only. Without the permission
+  any more, the app starts in Cratarr's mode.
+- **The server**: a report with `mode: device` and `device_track` leaves the player's queue, history and give-back alone;
+  the player's view then has `mode: device` and that track. Commands: pause, resume, toggle, next, previous, seek,
+  volume, duck, unduck and sleep pass; stop pauses; play, a queue taken up and a handover to it pass (the app switches
+  back); the rest, and a handover from it, are refused with "That device plays its own music."

@@ -1,7 +1,7 @@
 /*
  * Changed for Cratarr, 2026-10-15: from Jellyfin's JellyfinWebViewClient (jellyfin-android, GPL-2.0), without its
  * script injection and Jellyfin sign-in. Links off the server open outside the app, and a page whose renderer died
- * comes back instead of taking the app down.
+ * comes back instead of taking the app down. Local mode's covers (decision 0052) come from the app.
  */
 package app.cratarr
 
@@ -17,6 +17,7 @@ import android.webkit.WebView
 import androidx.webkit.WebResourceErrorCompat
 import androidx.webkit.WebViewClientCompat
 import androidx.webkit.WebViewFeature
+import java.io.ByteArrayInputStream
 
 class CratarrWebViewClient(
     /** Cratarr's origins (its two addresses'): pages there stay in the app. */
@@ -25,7 +26,18 @@ class CratarrWebViewClient(
     private val onError: (String) -> Unit,
     /** The page's renderer is gone: the WebView must be made anew. */
     private val onGone: () -> Unit,
+    /** An album's cover of the device's own music, as JPEG (null: none); asked for off the main thread. */
+    private val deviceCover: (String) -> ByteArray?,
 ) : WebViewClientCompat() {
+
+    /** Local mode's covers (decision 0052): `/__device/cover/{album_id}` on Cratarr's pages, from Android. */
+    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+        val url = request.url
+        val album = url.path?.takeIf { it.startsWith(DEVICE_COVER) }?.removePrefix(DEVICE_COVER) ?: return null
+        if (Prefs.originOf(url.toString()) !in origins) return null
+        val jpeg = deviceCover(album) ?: return WebResourceResponse("text/plain", null, 404, "Not Found", null, ByteArrayInputStream(ByteArray(0)))
+        return WebResourceResponse("image/jpeg", null, 200, "OK", mapOf("Cache-Control" to "max-age=86400"), ByteArrayInputStream(jpeg))
+    }
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (!request.isForMainFrame || Prefs.originOf(request.url.toString()) in origins) return false
@@ -71,5 +83,6 @@ class CratarrWebViewClient(
 
     private companion object {
         const val TAG = "CratarrWeb"
+        const val DEVICE_COVER = "/__device/cover/"
     }
 }
