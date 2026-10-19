@@ -19,7 +19,7 @@ test('a chain: shapes before the read, colours after, each by its place; nothing
   assert.equal(pictureShader([0, 0, 0]), null);
   assert.equal(pictureShader([999]), null, 'an effect not known shows nothing');
   const s = pictureShader([2, 1, 0])!;
-  const read = s.indexOf('vec3 c = textureLod(uPicture');
+  const read = s.indexOf('vec4 src = textureLod(uPicture');
   assert.ok(s.indexOf('p = fx_kaleid(p, uFxA[1], uFxT[1], uFxK[1]);') < read, 'the shape first, by its place');
   assert.ok(s.indexOf('c = fx_posterize(c, p, uFxA[0], uFxT[0], uFxK[0]);') > read, 'the colour after');
   assert.equal(s.split('vec2 fx_kaleid(').length, 2, 'each function once');
