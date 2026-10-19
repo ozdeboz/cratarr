@@ -74,7 +74,8 @@
   import { shapeOf } from './evaluate';
   import { evaluate, newEvalState, type Evaluated } from './evaluate';
   import { askStep, morphTo, newMorph, stepMorph } from './morph';
-  import { leavingIds, morphedPatch, morphModules, rolledExtra, withLeaving } from './chain-morph';
+  import { chainRoutes, CHAINS, SCRATCH, type Chain } from './chains';
+  import { leavingIds, morphedPatch, morphModules, rolledExtra, sameModules, withLeaving } from './chain-morph';
   import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
   import PatchGraph from './PatchGraph.svelte';
@@ -418,6 +419,9 @@
     const now = $state.snapshot(s) as VisualSettings;
     undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings>, loose: now.loose, extra: now.extra };
     const next = settingsOf(recipe, now, scope);
+    // Within the chain (the owner: "chains become presets, then within that we can freely evolve"): the cables there
+    // are get new amounts; none is added (one the recipe leaves out keeps its own).
+    next.routes = Object.fromEntries(Object.entries(now.routes).map(([k, v]) => [k, endOf(v) !== 0 && k in next.routes && endOf(next.routes[k]) !== 0 ? next.routes[k] : v]));
     for (const k of BEHAVIOUR) if (!s.pins.includes(k)) (s as Record<string, unknown>)[k] = next[k];
     s.loose = scope === 'movement' ? 1 : 0;
     // A full roll evolves the extras within their chain too (decision 0056): their knobs anew, morphed to as a look
@@ -526,7 +530,47 @@
     }
     showChrome();
   }
-    // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show
+    // ---- The chains to start from (the owner on 70: "a few sensible chains as presets, the ability to start from
+  // scratch"; claude-5f's chains.ts) ---------------------------------------------------------------------------------
+  // Applied as a recall is, to the group too: its routes whole, its extras whole, none muted, its settings over the
+  // rest and pinned (a track's preset leaves them), morphed to as a look blends in. The chain shown is the one the
+  // patch still is (its cables as it set them, no extras), else the owner's own.
+  function applyChain(c: Chain) {
+    const settings = (c.settings ?? {}) as Record<string, unknown>;
+    const keys = Object.keys(settings);
+    undo = null;
+    applyShared({
+      ...settings,
+      routes: chainRoutes(c, BANDS),
+      extra: JSON.parse(JSON.stringify(c.extra)),
+      muted: [],
+      loose: 0,
+      pins: [...s.pins.filter((p) => !keys.includes(p)), ...keys.filter((k) => isPinnable(k))],
+    });
+    share(sharedNow());
+    path = [];
+    showChrome();
+  }
+  const sameRoutes = (c: Chain) => {
+    const on = (r: Record<string, RouteValue>) => Object.entries(r).filter(([, v]) => endOf(v) !== 0).map(([k, v]) => `${k}=${JSON.stringify(v)}`).sort().join(',');
+    return on(s.routes) === on(c.routes);
+  };
+  // Every cable by the knob it moves: its page (a column's routes, or the extras' cables into a knob).
+  const cableGroups = $derived.by(() => {
+    const by = new Map<string, number>();
+    for (const c of patchNow.cables) if (endOf(c.value) !== 0) by.set(`${c.to.module}.${c.to.knob}`, (by.get(`${c.to.module}.${c.to.knob}`) ?? 0) + 1);
+    return [...by].map(([mk, n]) => {
+      const [mid, kid] = splitKnob(mk);
+      const module = extraModule(mid);
+      const label = `${module ? moduleName(module) : (MODULE_LABEL[mid] ?? mid)} · ${ROW_OF.get(SETTING_OF.get(mk) as One)?.label ?? anyKnob(mid, kid)?.label ?? kid}`;
+      return { mk, n, label, page: ASPECT_OF.has(mk) ? `cables:${mk}` : `xcables:${mk}` };
+    });
+  });
+  const chainNow = $derived(
+    [SCRATCH, ...CHAINS].find((c) => sameRoutes(c) && sameModules(s.extra, c.extra) && !s.extra.cables.length && (c.settings?.flameLayer ?? 1) === s.flameLayer) ?? null,
+  );
+
+  // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show
   // behaves, then the look (the preset: pinned where moved).
   type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes' | 'pins' | 'muted' | 'extra'>;
   const MIRROR = ['Off', 'On'];
@@ -1006,7 +1050,7 @@
     }
     if (kind === 'xaddband') return SIGNAL_LABEL[a as Signal] ?? b;
     if (kind === 'addband') return SIGNAL_LABEL[a as Signal] ?? b;
-    return { bands: 'Bands', grid: 'All cables', device: 'This device' }[kind] ?? kind;
+    return { bands: 'Bands', chains: 'Chains', cables: 'Cables', device: 'This device' }[kind] ?? kind;
   }
   const devicePixels = () => innerWidth * innerHeight * Math.min(devicePixelRatio || 1, 2) ** 2;
   const valueOf = (key: One) => s[key] as number;
@@ -2268,7 +2312,7 @@
           {#if !path.length}
             <div class="rows">
               <h3>Chain</h3>
-              <div class="go still"><span class="name">Cratarr<small>The flame with its own loop, then three effects</small></span></div>
+              {@render goRow(chainNow?.label ?? 'Your own', chainNow?.line ?? 'Changed since a chain was chosen', 'chains')}
             </div>
             <div class="rows">
               <h3 use:held={'behaviour'}>Whole frame</h3>
@@ -2297,8 +2341,15 @@
             </div>
             <div class="rows">
               <h3>Patch</h3>
-              {@render goRow('All cables', 'Every route, as a grid', 'grid')}
+              {@render goRow('Cables', `${cableGroups.reduce((n, g) => n + g.n, 0)} in all`, 'cables')}
               {@render goRow('This device', 'Quality, frame rate, brightness', 'device')}
+            </div>
+          {:else if here === 'chains'}
+            <div class="rows">
+              {#each CHAINS as c (c.id)}<button class="go" class:on={chainNow?.id === c.id} onclick={() => applyChain(c)}><span class="name">{c.label}<small>{c.line}</small></span></button>{/each}
+            </div>
+            <div class="rows">
+              <button class="go" class:on={chainNow?.id === SCRATCH.id} onclick={() => applyChain(SCRATCH)}><span class="name">{SCRATCH.label}<small>{SCRATCH.line}</small></span></button>
             </div>
           {:else if here === 'layer:flame'}
             <div class="rows">
@@ -2529,68 +2580,13 @@
             <div class="rows">
               {#each ['quality', 'fps', 'brightness'] as k (k)}{@render settingRow(ROW_OF.get(k as One))}{/each}
             </div>
-          {:else if here === 'grid'}
-          <div class="routes" role="group" aria-label="Routes" bind:this={routesBox}>
-            <div class="head">
-              <h3 use:held={'routes'}>Routes</h3>
-              <button
-                class="reset"
-                use:held={'routes:reset'}
-                onclick={() => {
-                  routesReset();
-                  cell = null;
-                }}>Reset</button
-              >
-            </div>
-            <div class="grid-head" bind:this={gridHead}>
-              <div class="grid" style:--columns={ASPECTS.length}>
-                <span class="head-corner"></span>
-                {#each ASPECTS as aspect (aspect)}
-                  <span class="aspect" use:held={`aspect:${aspect}`}>{columnName(aspect, true)}</span>
-                {/each}
-              </div>
-            </div>
-            <div
-              class="grid-scroll"
-              bind:clientWidth={gridView}
-              onscroll={(e) => {
-                if (gridHead) gridHead.scrollLeft = e.currentTarget.scrollLeft;
-              }}
-            >
-              <div class="grid" style:--columns={ASPECTS.length}>
-                {#each TRACK_SIGNALS as signal (signal)}
-                  {@render routeRow(signal)}
-                {/each}
-                <div class="bands" role="radiogroup" aria-label="Band" style:width="{gridView}px">
-                  {#each [null, 0, 1, 2, 3, 4, 5] as b (b ?? -1)}
-                    <button class="chip" class:on={pick === b} role="radio" aria-checked={pick === b} use:held={`band:${b ?? 'all'}`} onclick={() => (pick = b)}
-                      >{b === null ? 'All' : BAND_ROWS[b]}</button
-                    >
-                  {/each}
-                </div>
-                {#each BAND_SIGNALS as signal (signal)}
-                  {@render routeRow(signal)}
-                {/each}
-              </div>
-            </div>
-            {#if cell && edited}
-              {@const { signal, aspect } = cell}
-              <div class="route">
-                <span use:held={'route:curve'}>{cellLabel(signal, aspect)}</span>
-                <CurveEditor
-                  curve={edited.curve}
-                  mixed={edited.mixed}
-                  live={liveOnCurve}
-                  {density}
-                  walks={edited.walks}
-                  pinned={edited.pinned}
-                  onchange={(c, done) => setCurve(signal, aspect, c, done)}
-                  onwalks={(on) => setWalks(signal, aspect, on)}
-                  onpin={(on) => setPins(keysOf(signal, aspect).map((k) => `route:${k}`), on)}
-                />
-              </div>
-            {/if}
-          </div>
+          {:else if here === 'cables'}
+            <!-- Every cable, by the knob it moves (the matrix gone, 70.1: the graph and these rows are where cables are). -->
+            {#each cableGroups as g (g.mk)}
+              {@render goRow(g.label, `${g.n} ${g.n === 1 ? 'cable' : 'cables'}`, g.page)}
+            {:else}
+              <div class="rows"><div class="go still"><span class="name">No cables</span></div></div>
+            {/each}
           {/if}
           {#if !path.length}
           <div class="foot">
