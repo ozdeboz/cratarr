@@ -24,7 +24,8 @@ features is weird"; and, asked whether a local queue goes away: no, each mode ke
   ringtones, alarms or recordings), with Android's audio permission, asked for the first time local mode is opened. No
   index of Cratarr's own; the server keeps nothing of it.
 - **A player of its own.** Its albums, artists and tracks with their covers, searchable; play, play next, add to queue,
-  shuffle, repeat, sleep timer and the visuals (from the live sound: these files have no analysis). It works without a
+  shuffle, repeat and sleep timer; no visuals (the owner, 2026-10-19: "In local mode, the visuals feature is not
+  supported."). It works without a
   connection to Cratarr. Its plays are not counted; nothing goes into crates, playlists, radio or Insights.
 - **Seen and steered from outside, not edited.** While a device is in local mode Cratarr knows it (`mode: device`) and
   what plays (title, artist, album), so pages and Home Assistant show it, and may pause, resume, skip, seek and change
