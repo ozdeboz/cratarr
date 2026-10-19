@@ -70,8 +70,25 @@ inherits = "release"
 lto = false
 codegen-units = 16
 
-# Beat this! on the NAS (decision 0049, amended): the dependencies' arithmetic (tract's, the spectrogram's) at full
-# speed; built for size, the model took three times as long (22-27 s a 30 s piece on the PC, against 7 s). Cratarr's
-# own code stays built for size.
-[profile.release.package."*"]
+# Beat this! on the NAS (decision 0049, amended): tract's and the spectrogram's arithmetic at full speed; the rest stays
+# built for size (all of it at full speed made the image 69 MB instead of 19).
+[profile.release.package.tract-core]
+opt-level = 3
+[profile.release.package.tract-linalg]
+opt-level = 3
+[profile.release.package.tract-data]
+opt-level = 3
+[profile.release.package.tract-hir]
+opt-level = 3
+[profile.release.package.tract-onnx]
+opt-level = 3
+[profile.release.package.tract-onnx-opl]
+opt-level = 3
+[profile.release.package.tract-nnef]
+opt-level = 3
+[profile.release.package.ndarray]
+opt-level = 3
+[profile.release.package.rustfft]
+opt-level = 3
+[profile.release.package.realfft]
 opt-level = 3
