@@ -107,8 +107,9 @@ class PlayerService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_NETWORK)
             // Previous restarts the track after this long in, as the page's player does (Finamp: 5 s).
             .setMaxSeekToPreviousPositionMs(RESTART_AFTER_MS)
-            // Through the device's store first: downloads and the next tracks play from there.
-            .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playback(this)).setLoadErrorHandlingPolicy(Patience()))
+            // Through the device's store first: downloads and the next tracks play from there. The device's own files
+            // (local mode, content://) through Android.
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, Downloads.playback(this))).setLoadErrorHandlingPolicy(Patience()))
             .build()
         player.addListener(Keeper(player))
         sync.attach(player)
@@ -428,13 +429,12 @@ class PlayerService : MediaSessionService() {
      *  mode ([COMMAND_MODE], `mode`). */
     private inner class Callback : MediaSession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-            val given = super.onConnect(session, controller)
-            if (controller.packageName != packageName || !given.isAccepted) return given
-            val commands = given.availableSessionCommands.buildUpon().add(SessionCommand(COMMAND_MODE, Bundle.EMPTY)).build()
-            return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
-                .setAvailableSessionCommands(commands)
-                .setAvailablePlayerCommands(given.availablePlayerCommands)
-                .build()
+            if (controller.packageName != packageName) return super.onConnect(session, controller)
+            // Media3's own defaults for a controller of the app's (every player command), and the mode. Not built on
+            // super's answer: that is a stand-in with no commands at all, which Media3 replaces only when it is returned
+            // as it is (copied, the page's player could do nothing: 69, fixed in 69.1).
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(SessionCommand(COMMAND_MODE, Bundle.EMPTY)).build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller).setAvailableSessionCommands(commands).build()
         }
 
         override fun onCustomCommand(
