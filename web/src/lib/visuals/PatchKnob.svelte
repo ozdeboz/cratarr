@@ -2,7 +2,8 @@
   // A knob on a patch graph's node (decision 0056): its value as an arc over its range, and as a ring outside it the
   // stretch its cables move it over (purple). Turned by dragging up or down (a whole range over 160 px), the wheel or
   // the arrow keys; a step knob by whole steps. Tapped without turning, `ontap` (what moves it). Drawn at true size; the
-  // cable handle is the node's, under it.
+  // cable handle is the node's, under it. A polyphonic knob (a band's six, `knob.channels`) is one dial at their mean
+  // with a tick at each channel's value.
   import { turned, type KnobView } from './patchgraph';
 
   let { knob, size = 26, onturn, ontap }: { knob: KnobView; size?: number; onturn: (value: number) => void; ontap?: () => void } = $props();
@@ -76,6 +77,10 @@
     <path d={arc(0, 1, r - 2)} class="track" />
     {#if knob.at > 0}<path d={arc(0, knob.at, r - 2)} class="value" />{/if}
     {#if knob.ring}<path d={arc(knob.ring[0], knob.ring[1], r + 2.5)} class="ring" />{/if}
+    {#each knob.channels ?? [] as ch (ch.id)}
+      {@const a = A0 + SWEEP * ch.at}
+      <line x1={c + (r - 4.5) * Math.cos(a)} y1={c + (r - 4.5) * Math.sin(a)} x2={c + (r - 0.5) * Math.cos(a)} y2={c + (r - 0.5) * Math.sin(a)} class="tick" />
+    {/each}
     <circle cx={c} cy={c} r={r - 6} class="cap" />
   </svg>
   <span>{drag ? shown : knob.label}</span>
@@ -114,6 +119,12 @@
   .ring {
     stroke: var(--patch-mod);
     stroke-width: 2.5;
+  }
+  .tick {
+    stroke: var(--text);
+    stroke-width: 1.2;
+    stroke-linecap: round;
+    opacity: 0.85;
   }
   .cap {
     fill: var(--border);

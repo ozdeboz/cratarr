@@ -11,7 +11,7 @@
   import PatchKnob from './PatchKnob.svelte';
   import PatchFace from './PatchFace.svelte';
   import { clockLights } from './faces';
-  import { GRAPH, knobHandle, MOD_OUT, type GraphActions, type NodeData, type Side } from './patchgraph';
+  import { GRAPH, knobHandle, MOD_OUT, polyTurned, type GraphActions, type KnobView, type NodeData, type Side } from './patchgraph';
 
   let { id, data, selected }: { id: string; data: NodeData; selected?: boolean } = $props();
   const graph = getContext<GraphActions>(GRAPH);
@@ -20,6 +20,15 @@
   const SIDE: Record<Side, Position> = { left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom };
   // Picture handles sit on the title's line at the sides.
   const at = (s: Side) => (s === 'left' || s === 'right' ? 'top: 19px' : undefined);
+  // A polyphonic knob turned as one: every channel as far.
+  function turn(k: KnobView, v: number) {
+    if (!k.channels) return graph.knob(id, k.id, v);
+    for (const c of polyTurned(k, v)) graph.knob(id, c.id, c.value);
+  }
+  // A polyphonic knob opened out to its channels, or one of them back to the one.
+  const polyOf = (k: KnobView) => (k.channels ? k.id : /^(.+)\.\d+$/.exec(k.id)?.[1]);
+  const pair = (k: KnobView) => `${id}.${polyOf(k)}`;
+
   // The Clock's lights, from the graph's live frame (only a Clock's node reads it).
   const lights = $derived(data.kind === 'module' && data.face?.kind === 'clock' ? (clockLights(graph.live()?.beat ?? null) as Record<string, number>) : null);
 
@@ -66,8 +75,13 @@
       <div class="knobs">
         {#each data.knobs as k (k.id)}
           <div class="kw">
-            <PatchKnob knob={k} onturn={(v) => graph.knob(id, k.id, v)} ontap={() => graph.openKnob(id, k.id)} />
+            <PatchKnob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.channels ? `${k.id}.0` : k.id)} />
             <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="in-mod t-value" style="top: 17.5px; bottom: auto" />
+            {#if k.channels}
+              <button class="poly nodrag" aria-label="{k.label}: each band" title="Each band" onclick={() => graph.toggle(pair(k))}>{k.channels.length}</button>
+            {:else if polyOf(k) && graph.opened(pair(k)) && k.id.endsWith('.0')}
+              <button class="poly nodrag" aria-label="{k.label}: as one" title="As one" onclick={() => graph.toggle(pair(k))}>−</button>
+            {/if}
           </div>
         {/each}
         {#if data.hidden}
@@ -224,6 +238,22 @@
   .kw {
     position: relative;
   }
+  .poly {
+    position: absolute;
+    top: -3px;
+    right: 3px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 9.5px;
+    line-height: 14px;
+  }
+  .poly:hover {
+    color: var(--text);
+  }
   .more {
     width: 44px;
     height: 26px;
@@ -277,6 +307,11 @@
   }
   .node :global(.svelte-flow__handle.t-light) {
     background: var(--wire-light);
+  }
+  /* Points: a small square. */
+  .node :global(.svelte-flow__handle.t-points) {
+    background: var(--wire-points);
+    border-radius: 2px;
   }
   .node :global(.svelte-flow__handle.in-mod.t-trigger.connectingto),
   .node :global(.svelte-flow__handle.in-mod.t-trigger:hover) {

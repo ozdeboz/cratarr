@@ -474,3 +474,57 @@ test("Waves takes the sound by its audio port, normalled from Music's; the frame
   assert.equal(soundOf({ waveform: wave }), wave);
   assert.equal(soundOf({ waveform: null }), null);
 });
+
+// ---- Points, polyphonic knobs, the grid modules (0057 §4b, §4c) ------------------------------------------------------
+
+const { polyTurned } = await import('../src/lib/visuals/patchgraph.ts');
+const { GRID, FOLD, INSTANCE } = await import('../src/lib/visuals/ports.ts');
+
+test('points: a chain line (dash, dot); a Grid is an ordinary node with its jacks, its points into a Fold only', () => {
+  const [dash, gap, dot] = WIRES.points.dash!.split(' ').map(Number);
+  assert.ok(dash > 3 && dot < 0.5 && gap > 0, 'a dash and a dot');
+  assert.ok(new Set(Object.values(WIRES).map((w) => `${w.dash}|${w.width}|${w.double}`)).size === Object.keys(WIRES).length, 'each type its own look');
+  const t = { ...typed, grid: GRID, fold: FOLD, instance: INSTANCE };
+  const p: Patch = {
+    ...wired([{ id: 'g', from: { modulator: 'grid' }, to: { module: 'fold', knob: 'grid' }, value: 1, mode: 'swing' }], [mod('grid', 'grid')]),
+    layers: [{ id: 'w', source: mod('waves', 'waves'), modules: [mod('fold', 'fold'), mod('inst', 'instance')], loop: [], blend: { mode: 'add', amount: 1 } }],
+  };
+  const { nodes, edges } = graphOf({ patch: p, types: t });
+  const d = (id: string) => nodes.find((n) => n.id === id)!.data as ModuleData;
+  assert.deepEqual(d('grid').gives, { type: 'points' });
+  assert.deepEqual(d('grid').outs.map((o) => o.id), ['points', 'index', 'distance', 'angle', 'row', 'column']);
+  assert.deepEqual(d('fold').ports.map((p) => [p.id, p.type]), [['grid', 'points']]);
+  assert.deepEqual(d('inst').ports.map((p) => [p.id, p.type]), [['points', 'points']]);
+  assert.equal(edgeOf(edges, 'g')?.data?.wire, 'points');
+  assert.equal(cableOf({ source: 'grid', target: 'waves', sourceHandle: 'mod', targetHandle: 'k:hue' }, nodes, p.cables), null, 'points into a value: no');
+  assert.ok(cableOf({ source: 'grid', target: 'inst', sourceHandle: 'mod', targetHandle: 'k:points' }, nodes, p.cables));
+});
+
+test("a band's knobs are one polyphonic knob, its six as ticks, opened out to six; turned as one they keep apart", () => {
+  const knob6 = (id: string) => Array.from({ length: 6 }, (_, b) => ({ id: `${id}.${b}`, label: `Linger ${b + 1}`, min: 0, max: 1, neutral: 0, default: 0.5, kind: 'level' as const }));
+  const t = { ...types, src: { ...types.src, knobs: [...knob6('lighting'), knob('a')] } };
+  const s1 = { id: 's1', type: 'src', knobs: { 'lighting.0': 0.2, 'lighting.1': 0.4, 'lighting.2': 0.6, 'lighting.3': 0.8, 'lighting.4': 0.5, 'lighting.5': 0.5 } };
+  const p = (cables: Patch['cables']): Patch => ({ ...sample(), layers: [{ id: 'one', source: s1, modules: [], loop: [], blend: { mode: 'add', amount: 1 } }], cables });
+  const into2: Patch['cables'] = [{ id: 'b2', from: { signal: 'level', band: 2 }, to: { module: 's1', knob: 'lighting.2' }, value: 0.5, mode: 'swing' }];
+  const { nodes, edges } = graphOf({ patch: p(into2), types: t });
+  const d = nodes.find((n) => n.id === 's1')!.data as ModuleData;
+  const poly = d.knobs.find((k) => k.id === 'lighting')!;
+  assert.equal(poly.label, 'Linger');
+  assert.deepEqual(poly.channels!.map((c) => c.id), ['lighting.0', 'lighting.1', 'lighting.2', 'lighting.3', 'lighting.4', 'lighting.5']);
+  assert.ok(Math.abs(poly.value - 0.5) < 1e-9, 'its mean');
+  assert.deepEqual(poly.channels!.map((c) => c.at), [0.2, 0.4, 0.6, 0.8, 0.5, 0.5]);
+  assert.ok(!d.knobs.some((k) => k.id.startsWith('lighting.')), 'no channel knob drawn apart');
+  assert.ok(!d.ports.some((x) => x.id === 'lighting'), 'nor as a port');
+  assert.ok(poly.ring, 'a cable into one channel rings it');
+  assert.equal(edgeOf(edges, 'b2')?.targetHandle, 'k:lighting', 'onto the one knob');
+  // Opened out: six knobs, the cable onto its own channel's.
+  const open = graphOf({ patch: p(into2), types: t, open: new Set(['s1.lighting']) });
+  const o = open.nodes.find((n) => n.id === 's1')!.data as ModuleData;
+  assert.deepEqual(o.knobs.filter((k) => k.id.startsWith('lighting')).map((k) => [k.id, k.label]).slice(0, 2), [['lighting.0', 'Linger 1'], ['lighting.1', 'Linger 2']]);
+  assert.equal(o.knobs.filter((k) => k.id.startsWith('lighting.')).length, 6);
+  assert.equal(edgeOf(open.edges, 'b2')?.targetHandle, 'k:lighting.2');
+  // Turned as one: each channel as far, clamped.
+  const turnedTo = polyTurned(poly, 0.7);
+  assert.deepEqual(turnedTo.map((c) => c.id), poly.channels!.map((c) => c.id));
+  assert.deepEqual(turnedTo.map((c) => Math.round(c.value * 100) / 100), [0.4, 0.6, 0.8, 1, 0.7, 0.7]);
+});

@@ -14,7 +14,7 @@ import { endOf, type RouteValue } from './curves';
 import type { Cable, Knob, Module, ModuleType, Patch, Place, SignalRef } from './patch';
 import { SIGNAL_LABEL, type Signal } from './routes';
 import { ENGINES } from './effects';
-import { cyclesClosed, FEEDBACK, fits, MUSIC, portsOf, type PatchV2, type PortRef, type PortType, type Ports } from './ports';
+import { cyclesClosed, FEEDBACK, fits, MUSIC, polyKnobs, portsOf, type PatchV2, type PortRef, type PortType, type Ports } from './ports';
 import { FACES, type FaceKind } from './faces';
 import { freeCableId, newCable, type Cables } from './cable-actions';
 
@@ -32,6 +32,9 @@ export type KnobView = {
   kind: Knob['kind'];
   at: number;
   ring: [number, number] | null;
+  /** A polyphonic knob drawn as one (0057 §4b: a band's six): each channel's knob id, value and place in the range; the
+   *  knob's own `value` and `at` their mean. */
+  channels?: { id: string; value: number; at: number }[];
 };
 
 export type ModuleData = {
@@ -61,7 +64,7 @@ export type ModuleData = {
   modulator: boolean;
 };
 /** A typed input port on a node (not a knob): cabled, or else normalled where its type says so. */
-export type PortView = { id: string; label: string; type: PortType; channels?: number; cabled: boolean; normal?: PortRef };
+export type PortView = { id: string; label: string; type: PortType; channels?: number; cabled: boolean; normal?: PortRef; polymorphic?: boolean };
 /** An output jack: its handle (`mod`, or `o:<port>`). */
 export type OutView = { id: string; label: string; type: PortType; handle: string };
 /** A signal of Music's: its type (an event's a trigger, the sound audio), a band's six at once `channels` 6. */
@@ -133,6 +136,8 @@ export const WIRES: Readonly<Record<PortType, { dash: string | null; width: numb
   value: { dash: '6 5', width: 1.5, double: false },
   trigger: { dash: '0.1 4.5', width: 2.2, double: false },
   audio: { dash: null, width: 4.5, double: true },
+  // A chain line: dash, dot (0057 §4c).
+  points: { dash: '7 3 0.1 3', width: 2, double: false },
 };
 /** A muted cable's dash, whatever its type. */
 export const MUTED_DASH = '2 8';
@@ -301,21 +306,45 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
   const moduleData = (m: Module, flow: Flow): ModuleData => {
     const t = typeOf(m, types) as ModuleType & { ports?: Ports };
     const declared = portsOf(t);
-    const own = new Set(t.knobs.map((k) => k.id));
+    // Its knobs' ids, a polyphonic knob's own among them (its port is the knob's, not another input).
+    const own = new Set([...t.knobs, ...polyKnobs(t).knobs].map((k) => k.id));
     const modulator = t.place === 'modulator';
-    const all = t.knobs.filter((k) => !k.device);
+    // A band's knobs (`lighting.0` … `.5`) as one polyphonic knob (0057 §4b; ports.ts polyKnobs), its channels kept as
+    // `<id>.<channel>`; opened out (`<module>.<knob>` in `open`) to one knob a channel.
+    const flat = t.knobs.filter((k) => !k.device);
+    const byId = new Map(flat.map((k) => [k.id, k]));
+    const channelKnobs = (k: Knob): Knob[] =>
+      Array.from({ length: k.channels ?? 1 }, (_, c) => byId.get(`${k.id}.${c}`) ?? { ...k, id: `${k.id}.${c}`, label: `${k.label} ${c + 1}`, channels: undefined });
+    const outOf = new Set<string>();
+    const all = polyKnobs({ ...t, knobs: flat }).knobs.flatMap((k) => {
+      if (!k.channels || !open.has(`${m.id}.${k.id}`)) return [k];
+      const each = channelKnobs(k);
+      for (const x of each) outOf.add(x.id);
+      return each;
+    });
+    const ids = (k: Knob) => (k.channels ? channelKnobs(k).map((x) => x.id) : [k.id]);
     const cabled = (k: string) => into.has(`${m.id}.${k}`);
     const opened = open.has(m.id);
     let room = modulator ? 0 : SHOWN;
     const shown = all.filter((k) => {
-      if (opened || cabled(k.id)) return true;
+      // Opened out, a polyphonic knob's channels show whole.
+      if (opened || outOf.has(k.id) || ids(k).some(cabled)) return true;
       return room-- > 0;
     });
+    const atOf = (k: Knob, value: number) => (k.max > k.min ? clamp01((value - k.min) / (k.max - k.min)) : 0);
     // Shown in the type's order, cabled or not.
     const knobs: KnobView[] = shown.map((k) => {
-      const value = m.knobs[k.id] ?? k.default;
-      const at = k.max > k.min ? clamp01((value - k.min) / (k.max - k.min)) : 0;
-      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at, ring: ringOf(at, (into.get(`${m.id}.${k.id}`) ?? []).filter((c) => !muted(c))) };
+      const ring = (at: number) => ringOf(at, ids(k).flatMap((id) => into.get(`${m.id}.${id}`) ?? []).filter((c) => !muted(c)));
+      if (!k.channels) {
+        const value = m.knobs[k.id] ?? k.default;
+        return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)) };
+      }
+      const channels = channelKnobs(k).map((x) => {
+        const value = m.knobs[x.id] ?? x.default;
+        return { id: x.id, value, at: atOf(k, value) };
+      });
+      const value = channels.reduce((a, c) => a + c.value, 0) / channels.length;
+      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), channels };
     });
     gives.set(m.id, declared.out.find((p) => p.type === 'picture' || p.type === 'light')?.type ?? 'picture');
     const outs = modulator ? declared.out : [];
@@ -330,7 +359,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
       hidden: all.length - shown.length,
       ports: declared.in
         .filter((p) => !own.has(p.id) && p.type !== 'picture' && p.type !== 'light')
-        .map((p) => ({ id: p.id, label: p.label, type: p.type, ...(p.channels ? { channels: p.channels } : {}), cabled: cabled(p.id), ...(p.normal ? { normal: p.normal } : {}) })),
+        .map((p) => ({ id: p.id, label: p.label, type: p.type, ...(p.channels ? { channels: p.channels } : {}), cabled: cabled(p.id), ...(p.normal ? { normal: p.normal } : {}), ...(p.polymorphic ? { polymorphic: true } : {}) })),
       gives: outs[0] ? (modulator ? portOf({ modulator: m.id }) : { type: outs[0].type }) : null,
       outs: outs.length > 1 ? outs.map((o, i) => ({ id: o.id, label: o.label, type: o.type, handle: i ? outHandle(o.id) : MOD_OUT })) : [],
       face: kind ? { kind, knobs: Object.fromEntries(t.knobs.map((k) => [k.id, m.knobs[k.id] ?? k.default])), lanes: kind === 'adsr' ? lanesInto(m.id, 'gate') : 1 } : null,
@@ -532,10 +561,12 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     const source = 'modulator' in c.from ? c.from.modulator : signalKey(c.from);
     const target = modules.get(c.to.module);
     if (!ids.has(source) || !target) continue;
-    if (!target.knobs.some((k) => k.id === c.to.knob) && !target.ports.some((p) => p.id === c.to.knob)) continue;
+    // Into a channel of a polyphonic knob drawn as one: onto that knob.
+    const knob = target.knobs.find((k) => k.id === c.to.knob) ?? target.knobs.find((k) => k.channels?.some((x) => x.id === c.to.knob));
+    if (!knob && !target.ports.some((p) => p.id === c.to.knob)) continue;
     const from = portOf(c.from);
     const data: CableData = { amount: amountLabel(c.value, c.mode), wire: from.type, ...(from.channels ? { channels: from.channels } : {}), ...(muted(c) ? { muted: true as const } : {}) };
-    edges.push({ id: c.id, source, target: c.to.module, sourceHandle: MOD_OUT, targetHandle: knobHandle(c.to.knob), type: 'cable', class: 'cable', style: wireStyle(from.type, muted(c)), deletable: true, selectable: true, data });
+    edges.push({ id: c.id, source, target: c.to.module, sourceHandle: MOD_OUT, targetHandle: knobHandle(knob?.id ?? c.to.knob), type: 'cable', class: 'cable', style: wireStyle(from.type, muted(c)), deletable: true, selectable: true, data });
   }
   for (const n of normals) {
     if (!ids.has(n.from) || !ids.has(n.to)) continue;
@@ -561,8 +592,8 @@ export function cableOf(
   if (!from) return null;
   const to = { module: dst.module, knob: c.targetHandle.slice(2) };
   const given = src.kind === 'signal' ? src.type : src.kind === 'module' ? (src.gives?.type ?? 'value') : 'value';
-  const taken = dst.ports.find((p) => p.id === to.knob)?.type ?? 'value';
-  if (given === 'audio' || !fits(given, taken)) return null;
+  const port = dst.ports.find((p) => p.id === to.knob);
+  if (given === 'audio' || !fits(given, port?.type ?? 'value', port?.polymorphic)) return null;
   const same = (f: Cable['from']) => ('modulator' in f && 'modulator' in from ? f.modulator === from.modulator : !('modulator' in f) && !('modulator' in from) && signalKey(f) === signalKey(from));
   if (cables.some((x) => x.to.module === to.module && x.to.knob === to.knob && same(x.from))) return null;
   return { from, to };
@@ -591,6 +622,16 @@ export function pictureFits(
   };
   const PICTURE: ModuleType & { ports: Ports } = { type: 'picture', label: '', place: 'module', knobs: [], ports: { in: [], out: [{ id: 'picture', label: '', type: 'picture' }] } };
   return cyclesClosed(p, (type) => (type === FEEDBACK.type ? FEEDBACK : PICTURE));
+}
+
+/** A polyphonic knob drawn as one, turned to `value`: each channel moved as far, so they keep their differences
+ *  (each clamped to the range). */
+export function polyTurned(k: Pick<KnobView, 'value' | 'min' | 'max' | 'kind' | 'channels'>, value: number): { id: string; value: number }[] {
+  const d = value - k.value;
+  return (k.channels ?? []).map((c) => {
+    const v = Math.min(k.max, Math.max(k.min, c.value + d));
+    return { id: c.id, value: k.kind === 'step' ? Math.round(v) : v };
+  });
 }
 
 /** A knob's value after a drag of `dy` pixels up (a whole range over `span`), a step's whole. */
