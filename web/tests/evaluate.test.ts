@@ -273,3 +273,23 @@ test('today’s pipeline is left to aspects.ts', () => {
   const out = evaluate(p, TYPES, none, newEvalState(), 1 / 60, OPTS);
   assert.deepEqual(Object.keys(out.knobs), ['m']);
 });
+
+test('beats into a port count exactly from the frame’s beat index: a weak beat still counts', () => {
+  const p = patchOf([mod('m')], [mod('count', { length: 8, amount: 1 }, 'counter')], [cable({ signal: 'beat' }, 'count', 'in', 1)]);
+  // Six beats of half a second at 60 frames a second; the third one weak, its normalised pulse under the count’s half.
+  const strength = [1.5, 1.5, 0.3, 1.5, 1.5, 1.5];
+  const run = (exact: boolean) => {
+    const st = newEvalState();
+    let out = 0;
+    // A quarter second before the first beat, none known.
+    for (let i = -15; i < 6 * 30; i++) {
+      const b = Math.floor(i / 30);
+      const pulse = i >= 0 && i % 30 < 3 ? strength[b] : 0;
+      const frame = { beat: i < 0 ? null : { index: 10 + b, since: (i % 30) / 60, length: 0.5, strength: strength[b] } };
+      out = evaluate(p, TYPES, held({ beat: pulse }), st, 1 / 60, exact ? { ...OPTS, frame } : OPTS).outputs.count;
+    }
+    return out;
+  };
+  assert.equal(run(true), 6 / 8, 'every beat');
+  assert.equal(run(false), 5 / 8, 'the normalised pulse misses the weak one');
+});

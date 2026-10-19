@@ -15,6 +15,10 @@
 // - A modulator's port sums its cables on its source's own scale (a signal's 1 = typical, a modulator's output as it
 //   comes in), not scaled by the envelope: a gate's Above 1 is "above typical". A straight cable passes its signal
 //   times its amount; a curved one, its curve's height at x times 2 for a signal (back on the signal's scale).
+// - Beats into a port are counted exactly: given the frame (`opts.frame`), a cable from 'beat' carries 1 on the frame
+//   its `beat.index` moves on (not on the first frame seen), 0 otherwise, in place of the normalised pulse, which can
+//   miss a weak beat. FrameInfo has no bar index yet, so 'downbeat' stays the pulse. A gate fed it needs Above under 1.
+// - The 'track' signal is aspects.ts's own (Music leaves it at 0): nothing here gives it.
 // - Macros and modulators go in the order their cables need; in a cycle the first left reads last frame's value.
 // - A macro is a knob (`{module: macro.id, knob: 'value'}`, 0..1): its value sets each target's base to
 //   lerp(from, to, value) before the cables act (macros in order, the last one's where two reach one knob; not steps).
@@ -24,7 +28,7 @@
 import { curveFrom, heightAt, isStraight, tableOf, type Curve, type RouteValue } from './curves';
 import { seedOf } from './flame';
 import { BANDS, MODULATORS, type ModulatorType } from './modulators/modulators';
-import { modulesOf, type Cable, type Knob, type Macro, type Module, type ModuleType, type Modulator, type Patch, type SignalRef } from './patch';
+import { modulesOf, type Cable, type FrameInfo, type Knob, type Macro, type Module, type ModuleType, type Modulator, type Patch, type SignalRef } from './patch';
 
 /** Today's pipeline's module types (patch.ts's Cratarr chain), which aspects.ts moves. */
 export const TODAYS_TYPES: ReadonlySet<string> = new Set(['frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'kaleidoscope-engine', 'eyedo-engine', 'hydra-engine']);
@@ -38,6 +42,8 @@ export type EvalState = {
   values: Record<string, number>;
   macros: Record<string, number>;
   moments: Record<string, { armed: boolean; since: number }>;
+  /** The beat index last seen (undefined: none yet; null: none playing). */
+  beat?: number | null;
 };
 
 export const newEvalState = (): EvalState => ({ modulators: {}, values: {}, macros: {}, moments: {} });
@@ -51,6 +57,8 @@ export type EvalOptions = {
   bands?: number;
   /** The modules left to aspects.ts (by default today's pipeline's). */
   skip?: (m: Module) => boolean;
+  /** The frame's beat (patch.ts FrameInfo), so beats into a port count exactly; without it, the normalised pulse. */
+  frame?: Pick<FrameInfo, 'beat'>;
 };
 
 /** A step that asks to move on: morph.ts dips its module through neutral to take it. */
@@ -110,6 +118,9 @@ export function evaluate(patch: Patch, types: Record<string, ModuleType>, signal
   const step = Number.isFinite(dt) ? Math.max(0, dt) : 0;
   const envelope = clamp(finite(opts.envelope, 1), 0, 1);
   const mods = modulesOf(patch);
+  const index = opts.frame ? (opts.frame.beat?.index ?? null) : undefined;
+  const onBeat = index !== undefined && index !== null && state.beat !== undefined && index !== state.beat ? 1 : 0;
+  if (index !== undefined) state.beat = index;
 
   // The modulators running: one each, anew where its type changed, none for those gone.
   const live = new Set(patch.modulators.map((m) => m.id));
@@ -223,7 +234,8 @@ export function evaluate(patch: Patch, types: Record<string, ModuleType>, signal
         const x = xOf(c);
         if (x !== null) sum += heightOf(s, x) * w;
       } else {
-        const raw = finite(signals(c.from));
+        const exact = index !== undefined && c.from.signal === 'beat' && c.from.band === undefined;
+        const raw = exact ? onBeat : finite(signals(c.from));
         sum += (s.table ? 2 * heightAt(s.table, clamp(raw / 2, 0, 1)) : s.end * raw) * w;
       }
     }
