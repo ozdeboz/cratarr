@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 
 use super::sessions::{Sessions, hex};
 use super::signin::{COOKIE, path_of, session_of};
+use super::who::{Scope, Who, acting_as, current};
 use super::{Serve, now};
 
 /// How long a signed link works.
@@ -165,24 +166,72 @@ pub fn admitted(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, qu
     matches!(method, "GET" | "HEAD") && query.is_some_and(|q| q.contains("sig=")) && serve.sessions.link_secret().is_ok_and(|s| link_ok(&s, path, query, now()))
 }
 
-/// The requirement, around every route (`main`): a request without a way in is refused.
+/// Who a request admitted is for (decision 0051): its session's account, its key's (the owner for a key from before
+/// keys had one), within the key's scope; a signed link's, none (it reads what it names). `None`: not admitted.
+fn who_of(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, query: Option<&str>) -> Option<Option<Who>> {
+    let account = |name: &str, scope: Scope| serve.users.get(name).filter(|u| u.active).map(|u| Who { user: u.name, admin: u.admin, scope });
+    if let Some(session) = session_of(serve, headers) {
+        return Some(account(&session.user, Scope::Full)).filter(Option::is_some);
+    }
+    if let Some(key) = key_of(headers) {
+        let key = serve.sessions.check_key(key, now())?;
+        let owner = key.owner.clone().or_else(|| serve.users.owner())?;
+        return Some(account(&owner, if key.scope == "read" { Scope::Read } else { Scope::Control })).filter(Option::is_some);
+    }
+    if public(path) || admitted(serve, method, headers, path, query) {
+        return Some(None);
+    }
+    None
+}
+
+/// The requirement, around every route (`main`): a request without a way in is refused; one let in runs as whoever it
+/// is for (`who`).
 pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Next) -> Response {
     if !serve.sign_in_required() {
         // Off, a key still counts as used: before the switch, Settings shows that a client sends its key.
         if let Some(key) = key_of(request.headers()) {
             let _ = serve.sessions.check_key(key, now());
         }
-        return next.run(request).await;
+        // One user: the owner's, as an administrator.
+        let owner = serve.users.owner().map(|user| Who { user, admin: true, scope: Scope::Full });
+        return match owner {
+            Some(who) => acting_as(who, next.run(request)).await,
+            None => next.run(request).await,
+        };
     }
     let (method, uri) = (request.method().as_str().to_string(), request.uri().clone());
-    if admitted(&serve, &method, request.headers(), uri.path(), uri.query()) {
-        return next.run(request).await;
+    match who_of(&serve, &method, request.headers(), uri.path(), uri.query()) {
+        // A key that only reads changes nothing.
+        Some(Some(who)) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") => {
+            return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This key only reads." }))).into_response();
+        }
+        Some(Some(who)) => return acting_as(who, next.run(request)).await,
+        Some(None) => return next.run(request).await,
+        None => {}
     }
     let shown = uri.path_and_query().map_or("/", |p| p.as_str()).to_string();
     let r = refuse(&method, request.headers(), &shown);
     let peer = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
     note_refused(&r, request.headers(), peer, uri.path(), uri.query(), "cratarr");
     r
+}
+
+/// Whether the running request is an administrator's (decision 0051): signed in as one, not through a key (a key acts
+/// for one of them, but changes nothing of the server's). No one: only while signing in is off (one user, an
+/// administrator); an open route or a signed link is no one's.
+pub fn administering() -> bool {
+    match current() {
+        Some(w) => w.admin && w.scope == Scope::Full,
+        None => !super::instance().is_some_and(|s| s.sign_in_required()),
+    }
+}
+
+/// The administrators' routes.
+pub async fn admin(request: Request, next: Next) -> Response {
+    if administering() {
+        return next.run(request).await;
+    }
+    (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This is for administrators." }))).into_response()
 }
 
 // --- Settings, Authentication: the requirement and the API keys ---
@@ -192,6 +241,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/auth/required", get(required).put(set_required))
         .route("/api/auth/keys", get(keys).post(new_key))
         .route("/api/auth/keys/{id}", delete(revoke_key))
+        .layer(axum::middleware::from_fn(admin))
         .with_state(serve)
 }
 
@@ -253,6 +303,12 @@ async fn keys(State(serve): State<Arc<Serve>>) -> Response {
 struct NewKey {
     name: String,
     password: String,
+    /// The account it acts for (decision 0051); none: the one making it.
+    #[serde(default)]
+    owner: Option<String>,
+    /// `read` or `control` (the default).
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 /// A new API key: shown in this answer once, never again.
@@ -264,7 +320,13 @@ async fn new_key(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json
     if let Err(r) = reauthenticate(&serve, &headers, &k.password).await {
         return r;
     }
-    match serve.sessions.new_key(name, now()) {
+    let owner = k.owner.filter(|o| !o.trim().is_empty()).or_else(|| current().map(|w| w.user));
+    if let Some(o) = &owner {
+        if serve.users.get(o).is_none_or(|u| !u.active) {
+            return (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": "No such user." }))).into_response();
+        }
+    }
+    match serve.sessions.new_key(name, owner.as_deref(), k.scope.as_deref().unwrap_or("control"), now()) {
         Ok((key, made)) => {
             tracing::info!(target: "signin", name = %made.name, "API key made");
             let mut r = axum::Json(json!({ "key": key, "id": made.id, "name": made.name })).into_response();
@@ -299,7 +361,7 @@ fn mint_to_file(data_dir: &std::path::Path, name: &str, out: &std::path::Path) -
     use anyhow::Context;
     use std::io::Write;
     let sessions = Sessions::open(Some(&data_dir.join("sessions.sqlite")))?;
-    let (key, _) = sessions.new_key(name, now())?;
+    let (key, _) = sessions.new_key(name, None, "control", now())?;
     if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
         #[cfg(unix)]
@@ -399,11 +461,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_account_goes_as_far_as_it_may_and_a_key_no_further_than_its_scope() {
+        let s = served(true);
+        s.users.from_directory("ann", false).unwrap();
+        let signed_in = |user: &str, uri: &str| {
+            let (token, _) = s.sessions.create(user, "d", now()).unwrap();
+            HttpRequest::get(uri).header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap()
+        };
+        for admins in ["/api/auth/keys", "/api/subsonic/import/sources", "/api/subsonic/accounts", "/api/users"] {
+            assert_eq!(status(&s, signed_in("me", admins)).await.0, StatusCode::OK, "{admins}");
+            assert_eq!(status(&s, signed_in("ann", admins)).await.0, StatusCode::FORBIDDEN, "{admins}");
+        }
+        let me = app(&s).oneshot(signed_in("ann", "/api/me")).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(me.into_body(), 1 << 16).await.unwrap()).unwrap();
+        assert_eq!((body["name"].as_str(), body["admin"].as_bool()), (Some("ann"), Some(false)));
+
+        let keyed = |key: &str, method: &str, uri: &str| HttpRequest::builder().method(method).uri(uri).header("authorization", format!("Bearer {key}")).body(Body::empty()).unwrap();
+        let (reads, _) = s.sessions.new_key("Dashboard", Some("me"), "read", now()).unwrap();
+        assert_eq!(status(&s, keyed(&reads, "GET", "/api/library")).await.0, StatusCode::OK);
+        assert_eq!(status(&s, keyed(&reads, "POST", "/api/library")).await.0, StatusCode::FORBIDDEN, "it only reads");
+        let (controls, _) = s.sessions.new_key("Home Assistant", Some("me"), "control", now()).unwrap();
+        assert_eq!(status(&s, keyed(&controls, "GET", "/api/auth/keys")).await.0, StatusCode::FORBIDDEN, "an administrator's key is no administrator");
+        // One who left the directory's group is no one.
+        s.users.deactivate("ann").unwrap();
+        assert_eq!(status(&s, signed_in("ann", "/api/library")).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn while_it_is_off_or_there_is_no_account_everything_passes() {
         let s = served(false);
         assert_eq!(status(&s, get_("/api/library")).await.0, StatusCode::OK);
         // A key sent while it is off still shows as used: the check before switching on.
-        let (key, made) = s.sessions.new_key("Home Assistant", now()).unwrap();
+        let (key, made) = s.sessions.new_key("Home Assistant", None, "control", now()).unwrap();
         let keyed = HttpRequest::get("/api/library").header("authorization", format!("Bearer {key}")).body(Body::empty()).unwrap();
         assert_eq!(status(&s, keyed).await.0, StatusCode::OK);
         assert!(s.sessions.keys().unwrap().iter().find(|k| k.id == made.id).unwrap().last_used.is_some());
@@ -426,7 +515,7 @@ mod tests {
         let with_session = HttpRequest::get("/api/library").header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap();
         assert_eq!(status(&s, with_session).await.0, StatusCode::OK);
 
-        let (key, made) = s.sessions.new_key("Home Assistant", now()).unwrap();
+        let (key, made) = s.sessions.new_key("Home Assistant", None, "control", now()).unwrap();
         let with_key = |k: &str| HttpRequest::get("/api/library").header("authorization", format!("Bearer {k}")).body(Body::empty()).unwrap();
         assert_eq!(status(&s, with_key(&key)).await.0, StatusCode::OK);
         assert_eq!(status(&s, with_key("cratarr_0000")).await.0, StatusCode::UNAUTHORIZED);

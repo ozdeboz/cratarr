@@ -227,6 +227,8 @@ async fn main() -> Result<()> {
     // (above), so the built-in Cratarr source can answer while the app starts (decision 0032).
     served.attach_catalogue(app.library.catalogue());
     served.set_playlists(app.playlists.clone());
+    // Who is still in the directory's group, every hour (decision 0051).
+    serve::accounts::watch_directory(served.clone());
     served.set_incoming(app.incoming.clone());
     served.follow();
     // Imports of plays and favourites read the sources in use (decision 0030, amended 2026-10-15).

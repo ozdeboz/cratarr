@@ -76,14 +76,21 @@ pub(super) fn not_found(what: &str) -> Failed {
 pub fn router(serve: Arc<Serve>) -> Router {
     Router::new()
         .route("/rest/{method}", get(rest).post(rest))
-        .route("/api/subsonic/accounts", get(accounts).post(create_account))
         .route("/api/subsonic/password", axum::routing::post(change_password))
-        .route("/api/subsonic/import", get(super::import::status).post(super::import::start))
-        .route("/api/subsonic/import/sources", get(super::import::sources))
+        // The administrators' (decision 0051): the accounts, and the import, which reads another server's users'
+        // listening into an account.
+        .merge(
+            Router::new()
+                .route("/api/subsonic/accounts", get(accounts).post(create_account))
+                .route("/api/subsonic/import", get(super::import::status).post(super::import::start))
+                .route("/api/subsonic/import/sources", get(super::import::sources))
+                .layer(axum::middleware::from_fn(super::access::admin)),
+        )
         .with_state(serve.clone())
         .merge(super::auth_check::router(serve.clone()))
         .merge(super::signin::router(serve.clone()))
         .merge(super::access::router(serve.clone()))
+        .merge(super::accounts::router(serve.clone()))
         .merge(super::ldap::router(serve.clone()))
         .merge(super::library_api::router(serve))
 }
@@ -113,7 +120,11 @@ struct NewPassword {
     password: String,
 }
 
+/// One's own account's (an administrator's: any, knowing its password).
 async fn change_password(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json(p): axum::Json<NewPassword>) -> Response {
+    if !super::access::administering() && serve.current_user().as_deref() != Some(p.username.as_str()) {
+        return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "Only your own account's." }))).into_response();
+    }
     match serve.users.change_password(&p.username, &p.current, &p.password) {
         Ok(()) => {
             // The account's other signed-in devices sign in again with the new password (decision 0039).
@@ -137,12 +148,24 @@ async fn rest(
 ) -> Response {
     let params = Params::parse(query.as_deref(), if is_form(&headers) { &body } else { &[] });
     let method = method.strip_suffix(".view").unwrap_or(&method).to_string();
+    // Repeated wrong passwords hold the account and the client back a while (decision 0051), as the sign-in page does.
+    let client = super::signin::client(&headers, peer.map(|p| p.0.0));
+    let keys = [format!("client {client}"), format!("account {}", params.get("u").unwrap_or(""))];
+    if let Some(wait) = serve.throttle.wait(&keys, super::now()) {
+        let message = format!("Too many tries. Try again in {} min.", (wait + 59) / 60);
+        return json_response(api::error(40, &message));
+    }
     let user = match serve.users.check(params.get("u"), params.get("t"), params.get("s"), params.get("p")) {
-        Ok(u) => u,
+        Ok(u) => {
+            serve.throttle.succeeded(&keys);
+            u
+        }
         Err(refused) => {
             // A Subsonic app with a wrong or missing login (decision 0045): the app's own name (`c`), never what it sent.
-            let client = super::signin::client(&headers, peer.map(|p| p.0.0));
             let (user, app) = (params.get("u").unwrap_or(""), params.get("c").unwrap_or(""));
+            if refused == super::users::Refused::Wrong {
+                serve.throttle.failed(&keys, super::now());
+            }
             tracing::warn!(target: "subsonic", client, path = %format!("/rest/{method}"), user, app, code = refused.code(), reason = refused.message(), "login refused");
             return json_response(api::error(refused.code(), refused.message()));
         }

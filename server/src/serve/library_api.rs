@@ -105,7 +105,7 @@ async fn resume(State(serve): State<Arc<Serve>>, Path(album): Path<String>) -> R
         Ok(s) => s,
         Err(r) => return r,
     };
-    let Some(owner) = serve.users.owner() else { return axum::Json(json!({ "track": null })).into_response() };
+    let Some(owner) = serve.current_user() else { return axum::Json(json!({ "track": null })).into_response() };
     match serve.userdata.bookmarks(&owner) {
         // Newest first: the first of this album's is where it was left.
         Ok(marks) => match marks.into_iter().find(|b| songs.contains(&b.item)) {
@@ -122,7 +122,7 @@ async fn forget_resume(State(serve): State<Arc<Serve>>, Path(album): Path<String
         Ok(s) => s,
         Err(r) => return r,
     };
-    let Some(owner) = serve.users.owner() else { return StatusCode::NO_CONTENT.into_response() };
+    let Some(owner) = serve.current_user() else { return StatusCode::NO_CONTENT.into_response() };
     for song in &songs {
         if let Err(e) = serve.userdata.delete_bookmark(&owner, song) {
             return failed(e);
@@ -206,7 +206,7 @@ async fn tagged(State(serve): State<Arc<Serve>>, Path(tag): Path<String>) -> Res
 }
 
 async fn set_favourite(serve: Arc<Serve>, track: String, on: bool) -> Response {
-    let Some(owner) = serve.users.owner() else { return fail(StatusCode::CONFLICT, "there is no account yet") };
+    let Some(owner) = serve.current_user() else { return fail(StatusCode::CONFLICT, "there is no account yet") };
     let s = serve.clone();
     let id = track.clone();
     match blocking(move || Ok(!s.library.songs_by_id(std::slice::from_ref(&id))?.is_empty())).await {
@@ -220,12 +220,14 @@ async fn set_favourite(serve: Arc<Serve>, track: String, on: bool) -> Response {
 }
 
 /// A track's facts, for a caller that names what plays ("what year is this?"): title, artists, album, year, genres,
-/// and whether it is a favourite of the owner's.
+/// and whether it is a favourite of the caller's.
 async fn track(State(serve): State<Arc<Serve>>, Path(track): Path<String>) -> Response {
     let s = serve.clone();
+    // Read here: the blocking task does not carry the request's account.
+    let me = serve.current_user();
     let found = blocking(move || {
         let Some(song) = s.library.songs_by_id(std::slice::from_ref(&track))?.pop() else { return Ok(None) };
-        let favourite = match s.users.owner() {
+        let favourite = match me {
             Some(owner) => s.userdata.get(&owner, Kind::Song, std::slice::from_ref(&song.id))?.get(&song.id).is_some_and(|a| a.starred_at.is_some()),
             None => false,
         };

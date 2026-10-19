@@ -1789,12 +1789,14 @@ async fn own_tracks(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleEr
     }
     let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
     let from = from.clone();
+    // Read here: the blocking task does not carry the request's account.
+    let me = served.user_or_owner();
     let songs = tokio::task::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
         if let Some(album) = &from.album {
             return Ok(served.library.album(album)?.and_then(|a| a.song).unwrap_or_default());
         }
         if from.favourites {
-            let owner = served.users.owner().context("there is no Subsonic account yet: make one in Settings")?;
+            let owner = me.context("there is no Subsonic account yet: make one in Settings")?;
             let ids = served.userdata.starred(&owner, crate::userdata::Kind::Song)?;
             return served.library.songs_by_id(&ids);
         }

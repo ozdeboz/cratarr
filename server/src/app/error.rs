@@ -24,6 +24,9 @@ pub enum ToggleError {
     /// An action that cannot be done as asked (the album moved, the trash is gone…); shown as is.
     #[error("{0}")]
     Refused(String),
+    /// Not this account's to do (decision 0051): an administrator's, or another user's.
+    #[error("{0}")]
+    Forbidden(String),
     #[error("no Music library is set")]
     NoMusicFolder,
     #[error("settings cannot be saved: CRATARR_DATA_DIR is not set")]

@@ -413,10 +413,13 @@ async fn this_session(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Re
 /// `GET /api/auth/sessions`: the signed-in devices (Settings → Authentication), this one marked.
 async fn sessions(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {
     let current = session_of(&serve, &headers).map(|s| s.id);
+    // An administrator sees every account's sign-ins; a user, their own (decision 0051).
+    let mine = |user: &str| serve.current_is_admin() || serve.current_user().as_deref() == Some(user);
     match serve.sessions.list(now()) {
         Ok(list) => {
             let list: Vec<_> = list
                 .into_iter()
+                .filter(|s| mine(&s.user))
                 .map(|s| {
                     json!({ "id": s.id, "user": s.user, "device": s.device, "created": s.created, "last_used": s.last_used,
                         "current": current.as_deref() == Some(s.id.as_str()) })
@@ -430,6 +433,13 @@ async fn sessions(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Respon
 
 /// `DELETE /api/auth/sessions/{id}`: signs that device out.
 async fn sign_out_device(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Response {
+    // An administrator ends anyone's sign-in; a user, their own (decision 0051).
+    if !serve.current_is_admin() {
+        let theirs = serve.sessions.list(now()).ok().and_then(|l| l.into_iter().find(|s| s.id == id)).map(|s| s.user);
+        if theirs.is_some() && theirs != serve.current_user() {
+            return (StatusCode::NOT_FOUND, axum::Json(json!({ "error": "No such session." }))).into_response();
+        }
+    }
     match serve.sessions.revoke(&id) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, axum::Json(json!({ "error": "No such session." }))).into_response(),

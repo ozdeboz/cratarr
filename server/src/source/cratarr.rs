@@ -158,9 +158,9 @@ fn server() -> Result<Arc<Serve>> {
     crate::serve::instance().context("Cratarr's library is still starting")
 }
 
-/// The owner account: whose favourites, plays and ratings these are.
+/// The account whose favourites, plays and ratings these are: the request's (decision 0051).
 fn owner(s: &Serve) -> Result<String> {
-    s.users.owner().context("there is no Subsonic account yet: make one in Settings")
+    s.user_or_owner().context("there is no Subsonic account yet: make one in Settings")
 }
 
 /// The catalogue folder a library (by its id, the folder's path) is, as the library was last built.

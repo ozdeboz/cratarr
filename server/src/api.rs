@@ -34,10 +34,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/visuals/thumbs", get(visual_thumbs).post(add_visual_thumb))
         .route("/api/visuals/limits", get(visual_limits).put(put_visual_limits).delete(forget_visual_limits))
         .route("/api/players/{name}/log", get(player_log_last).post(player_log_add))
-        .route("/api/diagnostics", get(diagnostics_rows))
-        .route("/api/diagnostics/download", get(diagnostics_download))
-        .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
-        .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
         .route("/api/players/{name}", get(player))
         .route("/api/players/{name}/command", post(player_command))
         .route("/api/players/{name}/state", axum::routing::put(player_state))
@@ -54,7 +50,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/waveform", get(track_waveform))
         .route("/api/track/{source}/{id}/beats", get(track_beats))
         .route("/api/track/{source}/{id}/bands", get(track_bands))
-        .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
         .route("/api/track/{source}/{id}/favorite", post(track_favorite))
         .route("/api/track/{source}/{id}/played", post(track_played))
@@ -95,8 +90,6 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists", post(create_playlist))
         .route("/api/playlists/{id}", delete(delete_playlist))
         .route("/api/playlists/{id}/rename", post(rename_playlist))
-        .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
-        .route("/api/sync/targets", get(sync_targets))
         .route("/api/playlists/by-name", get(playlist_by_name))
         .route("/api/playlists/{id}/spoken", put(set_spoken))
         .route("/api/album-uses/{source}", get(album_uses))
@@ -110,29 +103,49 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}/rating", get(album_rating).post(set_album_rating))
         .route("/api/collection", get(collection))
         .route("/api/albums", get(albums))
-        .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
-        .route("/api/albums/{source}/{album}/delete", post(delete_album))
-        .route("/api/albums/duplicates", get(album_duplicates))
+        .route("/api/status", get(status))
+        .route("/api/incoming", get(incoming))
+        .route("/api/insights", get(insights))
+        // A playlist's repairs, as its edits: everyone's while playlists are (decision 0051's third stage gives them
+        // owners). The undo: a playlist's or crate's for everyone, the library's for the administrators (`undo`).
         .route("/api/repairs", get(repairs))
         .route("/api/repairs/apply", post(apply_repairs))
         .route("/api/undo", post(undo))
-        .route("/api/status", get(status))
-        .route("/api/incoming", get(incoming))
-        .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
-        .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
-        .route("/api/incoming/replace/{source}/{album}", get(replace_preview).post(replace_incoming))
-        .route("/api/incoming/jobs", get(incoming_jobs))
-        .route("/api/incoming/jobs/{id}/cancel", post(cancel_job))
-        .route("/api/settings", get(get_settings).put(save_settings))
-        .route("/api/settings/preview", post(preview))
-        .route("/api/insights", get(insights))
-        .route("/api/settings/lidarr", post(preview_lidarr))
-        .route("/api/settings/naming", get(naming))
-        .route("/api/catalogue", get(catalogue_status))
-        .route("/api/folders", get(browse_folders))
-        .route("/api/folders/status", get(folder_status))
-        .route("/api/folders/suggested", get(suggested_folders))
-        .route("/api/catalogue/problems", get(catalogue_problems))
+
+        // For everyone: the version and when it started (About), the servers and their libraries (the filter): what
+        // the server's settings showed every page, without the rest of them (decision 0051).
+        .route("/api/about", get(about))
+        .route("/api/libraries", get(libraries))
+        // The administrators' (decision 0051): the server's settings, what comes in, the library's changes and its
+        // health, the folders, the diagnostics.
+        .merge(
+            Router::new()
+            .route("/api/diagnostics", get(diagnostics_rows))
+            .route("/api/diagnostics/download", get(diagnostics_download))
+            .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
+            .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
+            .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
+            .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
+            .route("/api/sync/targets", get(sync_targets))
+            .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
+            .route("/api/albums/{source}/{album}/delete", post(delete_album))
+            .route("/api/albums/duplicates", get(album_duplicates))
+            .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
+            .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
+            .route("/api/incoming/replace/{source}/{album}", get(replace_preview).post(replace_incoming))
+            .route("/api/incoming/jobs", get(incoming_jobs))
+            .route("/api/incoming/jobs/{id}/cancel", post(cancel_job))
+            .route("/api/settings", get(get_settings).put(save_settings))
+            .route("/api/settings/preview", post(preview))
+            .route("/api/settings/lidarr", post(preview_lidarr))
+            .route("/api/settings/naming", get(naming))
+            .route("/api/catalogue", get(catalogue_status))
+            .route("/api/folders", get(browse_folders))
+            .route("/api/folders/status", get(folder_status))
+            .route("/api/folders/suggested", get(suggested_folders))
+            .route("/api/catalogue/problems", get(catalogue_problems))
+                .layer(axum::middleware::from_fn(crate::serve::access::admin)),
+        )
         .fallback(crate::web::serve)
         .with_state(app)
 }
@@ -395,7 +408,7 @@ async fn put_group_visuals(State(app): State<Arc<App>>, Path(group): Path<String
 /// Whose snapshots Cratarr's own calls keep: the first administrator's (as its other calls act on).
 fn snapshot_keeper() -> Result<(Arc<crate::serve::Serve>, String), Response> {
     let Some(served) = crate::serve::instance() else { return Err(refused(StatusCode::NOT_FOUND, "Cratarr's own library is not served here.")) };
-    let Some(me) = served.users.owner() else { return Err(refused(StatusCode::CONFLICT, "There is no account yet: make one in Settings.")) };
+    let Some(me) = served.current_user() else { return Err(refused(StatusCode::CONFLICT, "There is no account yet: make one in Settings.")) };
     Ok((served, me))
 }
 
@@ -1850,8 +1863,11 @@ struct UndoRequest {
 /// The one undo (decision 0026): every token an action returned, undone newest first. Playlist and crate changes
 /// answer with their redo tokens, in the order they were made: undone newest first in turn, the redo does the action
 /// again in its own order (an edit before the rename that followed it). Incoming's tokens (its event ids) answer with
-/// the albums' titles.
+/// the albums' titles, and are the administrators' to undo, as their changes are (decision 0051).
 async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    if req.tokens.iter().any(|t| !t.starts_with('c')) && !crate::serve::access::administering() {
+        return Err(ToggleError::Forbidden("This is for administrators.".into()).into());
+    }
     let (mut redo, mut restored) = (Vec::new(), Vec::new());
     for token in req.tokens.iter().rev() {
         if token.starts_with('c') {
@@ -1883,6 +1899,23 @@ struct NamingQuery {
 /// A naming template measured against Music: the one typed (`?template=`), else the one in use.
 async fn naming(State(app): State<Arc<App>>, Query(q): Query<NamingQuery>) -> Result<Json<crate::app::NamingView>, ApiError> {
     Ok(Json(app.settings.naming(q.template.as_deref()).await?))
+}
+
+/// The version and when this run started, for everyone (About).
+async fn about(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let v = app.settings.view().await.map_err(ToggleError::from)?;
+    Ok(Json(json!({ "version": v.version, "started": v.started })))
+}
+
+/// The servers and their music libraries, each with its use, for everyone (the filter): no secrets, values or folders.
+async fn libraries(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let v = app.settings.view().await.map_err(ToggleError::from)?;
+    let sources: Vec<serde_json::Value> = v
+        .sources
+        .iter()
+        .map(|s| json!({ "id": s.id, "label": s.label, "status": { "server_name": s.status.server_name }, "server_libraries": s.server_libraries, "libraries": s.libraries }))
+        .collect();
+    Ok(Json(json!({ "sources": sources })))
 }
 
 async fn get_settings(State(app): State<Arc<App>>) -> Result<Json<SettingsView>, ApiError> {
@@ -2135,6 +2168,7 @@ impl IntoResponse for ApiError {
             ToggleError::BadName | ToggleError::BadSettings(_) => StatusCode::BAD_REQUEST,
             ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::Refused(_) | ToggleError::NoMusicFolder => StatusCode::CONFLICT,
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
+            ToggleError::Forbidden(_) => StatusCode::FORBIDDEN,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };
         if matches!(self.0, ToggleError::Upstream(_)) {

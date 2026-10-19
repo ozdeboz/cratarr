@@ -57,6 +57,9 @@ pub struct Config {
     pub user_attribute: String,
     /// A group's DN the user must be a member of (`memberOf`); empty: any user under the base.
     pub group: String,
+    /// A group's DN whose members are Cratarr's administrators (decision 0051: `media_admin`); empty: the directory makes
+    /// no one an administrator.
+    pub admin_group: String,
     /// The read-only service account the lookup binds as.
     pub bind_dn: String,
     /// The file holding the service account's password.
@@ -146,8 +149,8 @@ fn acceptable(name: &str, password: &str) -> bool {
 /// The directory's answer to a name and password.
 #[derive(Debug, PartialEq, Eq)]
 enum Answer {
-    /// Signed in as this directory name (as the directory spells it).
-    Yes(String),
+    /// Signed in as this directory name (as the directory spells it), and whether it is in the administrators' group.
+    Yes(String, bool),
     /// Refused: no such user (in the group), or the wrong password.
     No,
     /// Not reachable: no connection, or no answer in time. A recent sign-in's kept hash may stand in.
@@ -251,19 +254,18 @@ impl Directory {
     }
 
     /// The Cratarr account a name and password sign in as through the directory; `None` when it is off, refuses them,
-    /// or cannot be reached and has no recent sign-in of theirs. `exists`: whether a Cratarr account has that name.
-    pub async fn sign_in(&self, name: &str, password: &str, exists: &(dyn Fn(&str) -> bool + Sync), now: i64) -> Option<String> {
+    /// or cannot be reached and has no recent sign-in of theirs. `account`: the Cratarr account for a name (the one
+    /// `accounts` maps it to, else the same), given whether the directory says it is an administrator (`None`: not asked,
+    /// it was unreachable); made or brought back where the directory signed it in (decision 0051), only found otherwise.
+    pub async fn sign_in(&self, name: &str, password: &str, account: &(dyn Fn(&str, Option<bool>) -> Option<String> + Sync), now: i64) -> Option<String> {
         let config = self.config();
         if !config.enabled || !acceptable(name, password) {
             return None;
         }
-        let account = |directory_name: &str| {
-            let a = config.accounts.get(directory_name).cloned().unwrap_or_else(|| directory_name.to_string());
-            exists(&a).then_some(a)
-        };
+        let mapped = |directory_name: &str| config.accounts.get(directory_name).cloned().unwrap_or_else(|| directory_name.to_string());
         match ask(&config, name, password).await {
-            Answer::Yes(directory_name) => {
-                let account = account(&directory_name)?;
+            Answer::Yes(directory_name, admin) => {
+                let account = account(&mapped(&directory_name), Some(admin))?;
                 self.remember(&directory_name, password, now).await;
                 Some(account)
             }
@@ -273,10 +275,40 @@ impl Directory {
             }
             Answer::Unreachable => {
                 tracing::warn!(target: "signin", user = %name, reason = "directory unreachable", "directory sign-in: a recent one tried");
-                self.recalls(name, password, now).await.and_then(|spelled| account(&spelled))
+                self.recalls(name, password, now).await.and_then(|spelled| account(&mapped(&spelled), None))
             }
             Answer::Misconfigured => None,
         }
+    }
+
+    /// The directory's members now (decision 0051's hourly check): the Cratarr accounts of the sign-in group's members,
+    /// and of the administrators' group's; `None` when it is off, unreachable or refusing (then no one is let go).
+    pub async fn census(&self) -> Option<(Vec<String>, Vec<String>)> {
+        let config = self.config();
+        if !config.enabled {
+            return None;
+        }
+        let exchange = async {
+            let (mut ldap, _) = connect(&config).await.ok()?;
+            let members = members(&mut ldap, &config, &config.group).await;
+            let admins = if config.admin_group.trim().is_empty() { Ok(Vec::new()) } else { members_of_admins(&mut ldap, &config).await };
+            let _ = ldap.unbind().await;
+            let mapped = |names: Vec<String>| names.into_iter().map(|n| config.accounts.get(&n).cloned().unwrap_or(n)).collect::<Vec<_>>();
+            match (members, admins) {
+                (Ok(m), Ok(a)) => Some((mapped(m), mapped(a))),
+                (m, a) => {
+                    let why = m.err().or(a.err()).map(|f| f.why().to_string()).unwrap_or_default();
+                    tracing::warn!(target: "signin", reason = %why, "directory census not taken");
+                    None
+                }
+            }
+        };
+        tokio::time::timeout(TIMEOUT * 4, exchange).await.ok().flatten()
+    }
+
+    /// Forgets a name's kept sign-in (one who left: the directory down must not let them in).
+    pub fn forget_account(&self, name: &str) {
+        self.forget(name);
     }
 
     async fn remember(&self, name: &str, password: &str, now: i64) {
@@ -355,6 +387,49 @@ async fn find(ldap: &mut ldap3::Ldap, config: &Config, name: &str) -> std::resul
     Ok(Some((entry.dn, spelled.unwrap_or_else(|| name.to_string()))))
 }
 
+/// Whether `name` is a member of `group` (none set: no one is), asked on a connection bound as the service account.
+async fn member(ldap: &mut ldap3::Ldap, config: &Config, name: &str, group: &str) -> std::result::Result<bool, Failure> {
+    if group.trim().is_empty() {
+        return Ok(false);
+    }
+    let attribute = config.attribute();
+    let found = ldap
+        .with_timeout(TIMEOUT)
+        .search(&config.base_dn, ldap3::Scope::Subtree, &filter(attribute, name, group), vec![attribute])
+        .await
+        .map_err(|_| Failure::Unreachable("The directory did not answer the search.".into()))?
+        .success()
+        .map_err(|e| Failure::Misconfigured(format!("The search was refused: {e}")))?
+        .0;
+    Ok(found.len() == 1)
+}
+
+/// The names of `group`'s members (any user under the base when none is set), as the directory spells them, asked on a
+/// connection bound as the service account.
+async fn members(ldap: &mut ldap3::Ldap, config: &Config, group: &str) -> std::result::Result<Vec<String>, Failure> {
+    let attribute = config.attribute();
+    let filter = if group.trim().is_empty() { format!("({attribute}=*)") } else { format!("(&({attribute}=*)(memberOf={}))", escape(group.trim())) };
+    let found = ldap
+        .with_timeout(TIMEOUT)
+        .search(&config.base_dn, ldap3::Scope::Subtree, &filter, vec![attribute])
+        .await
+        .map_err(|_| Failure::Unreachable("The directory did not answer the search.".into()))?
+        .success()
+        .map_err(|e| Failure::Misconfigured(format!("The search was refused: {e}")))?
+        .0;
+    Ok(found
+        .into_iter()
+        .filter_map(|e| {
+            let entry = ldap3::SearchEntry::construct(e);
+            entry.attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(attribute)).and_then(|(_, v)| v.first().cloned())
+        })
+        .collect())
+}
+
+async fn members_of_admins(ldap: &mut ldap3::Ldap, config: &Config) -> std::result::Result<Vec<String>, Failure> {
+    members(ldap, config, &config.admin_group).await
+}
+
 async fn ask(config: &Config, name: &str, password: &str) -> Answer {
     let exchange = async {
         let (mut ldap, _) = match connect(config).await {
@@ -370,12 +445,24 @@ async fn ask(config: &Config, name: &str, password: &str) -> Answer {
                 why.answer()
             }
             Ok(None) => Answer::No,
-            Ok(Some((dn, spelled))) => match ldap.with_timeout(TIMEOUT).simple_bind(&dn, password).await {
-                Ok(r) if r.rc == 0 => Answer::Yes(spelled),
-                // 49: invalidCredentials.
-                Ok(r) if r.rc == 49 => Answer::No,
-                _ => Answer::Unreachable,
-            },
+            Ok(Some((dn, spelled))) => {
+                // Whether an administrator, asked as the service account, before binding as the user (who may not
+                // search).
+                let admin = match member(&mut ldap, config, name, &config.admin_group).await {
+                    Ok(admin) => admin,
+                    Err(why) => {
+                        tracing::warn!(target: "signin", reason = %why.why(), "directory not usable");
+                        let _ = ldap.unbind().await;
+                        return why.answer();
+                    }
+                };
+                match ldap.with_timeout(TIMEOUT).simple_bind(&dn, password).await {
+                    Ok(r) if r.rc == 0 => Answer::Yes(spelled, admin),
+                    // 49: invalidCredentials.
+                    Ok(r) if r.rc == 49 => Answer::No,
+                    _ => Answer::Unreachable,
+                }
+            }
         };
         let _ = ldap.unbind().await;
         answer
@@ -421,7 +508,7 @@ fn write_private(path: &Path, text: &str) -> Result<()> {
 
 /// Read-only: the page shows the directory settings, never sets them (see `Directory::open`).
 pub fn router(serve: Arc<Serve>) -> Router {
-    Router::new().route("/api/auth/ldap", get(settings)).with_state(serve)
+    Router::new().route("/api/auth/ldap", get(settings)).layer(axum::middleware::from_fn(super::access::admin)).with_state(serve)
 }
 
 /// The settings, and whether the service account's password file can be read (never its contents).
@@ -504,7 +591,7 @@ mod tests {
         let dir = Directory::open(Some(&d)).unwrap();
         // Nothing listens on port 1: the directory cannot be reached.
         dir.set_config(Config { url: "ldap://127.0.0.1:1".into(), bind_password_file: pw.display().to_string(), ..config() }).unwrap();
-        let exists = |a: &str| a == "oskar";
+        let exists = |a: &str, _admin: Option<bool>| (a == "oskar").then(|| a.to_string());
         assert_eq!(dir.sign_in("oskar", "secret", &exists, 1_000).await, None, "nothing kept yet");
         // As if the directory had accepted it at time 1000.
         dir.remember("oskar", "secret", 1_000).await;
@@ -526,31 +613,31 @@ mod tests {
         let mut mapped = again.config();
         mapped.accounts.insert("oskar".into(), "owner".into());
         again.set_config(mapped).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await.as_deref(), Some("owner"));
-        assert_eq!(again.sign_in("oskar", "secret", &|_: &str| false, 3_000).await, None);
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
+        assert_eq!(again.sign_in("oskar", "secret", &|_: &str, _: Option<bool>| None, 3_000).await, None);
         // A refusal for the name in another case deletes it (directories match names regardless of case), and the
         // name typed in another case finds the directory's spelling for the mapping.
-        assert_eq!(again.sign_in("OSKAR", "secret", &|a: &str| a == "owner", 3_000).await.as_deref(), Some("owner"));
+        assert_eq!(again.sign_in("OSKAR", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"));
         again.forget("OSKAR");
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await, None, "gone after a refusal");
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "gone after a refusal");
         again.remember("oskar", "secret", 1_000).await;
         // A misconfiguration (the service account's password file unreadable) fails closed: no kept hash stands in,
         // and none is deleted.
         let mut broken = again.config();
         broken.bind_password_file = d.join("missing").display().to_string();
         again.set_config(broken.clone()).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await, None, "fails closed");
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "fails closed");
         broken.bind_password_file = pw.display().to_string();
         again.set_config(broken).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await.as_deref(), Some("owner"), "kept, not deleted");
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await.as_deref(), Some("owner"), "kept, not deleted");
         // After 30 days it is gone.
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 1_000 + KEEP_SECS + 1).await, None);
-        assert_eq!(again.sign_in("oskar", "secret", &|a: &str| a == "owner", 3_000).await, None, "and stays gone");
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 1_000 + KEEP_SECS + 1).await, None);
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| (a == "owner").then(|| a.to_string()), 3_000).await, None, "and stays gone");
         // Switched off, the directory is not asked at all.
         let mut off = again.config();
         off.enabled = false;
         again.set_config(off).unwrap();
-        assert_eq!(again.sign_in("oskar", "secret", &|_: &str| true, 3_000).await, None);
+        assert_eq!(again.sign_in("oskar", "secret", &|a: &str, _: Option<bool>| Some(a.to_string()), 3_000).await, None);
         std::fs::remove_dir_all(&d).ok();
     }
 

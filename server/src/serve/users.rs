@@ -17,9 +17,39 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     pub name: String,
+    /// The OpenSubsonic password; empty: none yet (an account from the directory, before its user sets one).
     pub password: String,
     #[serde(default)]
     pub admin: bool,
+    /// Whether it may sign in at all (decision 0051): one who left the directory's group is kept, not deleted.
+    #[serde(default = "yes")]
+    pub active: bool,
+    /// Made from the directory (decision 0051), which says whether it is an administrator and whether it stays.
+    #[serde(default)]
+    pub directory: bool,
+    #[serde(default)]
+    pub permissions: Permissions,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// What a user may do beyond playing (decision 0051, the Users panel): keep tracks to play offline, make playlists,
+/// share them with the others, and make public share links (OpenSubsonic's `createShare`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Permissions {
+    pub offline: bool,
+    pub playlists: bool,
+    pub share: bool,
+    pub links: bool,
+}
+
+impl Default for Permissions {
+    fn default() -> Self {
+        Self { offline: true, playlists: true, share: true, links: false }
+    }
 }
 
 /// Why a login failed, as Subsonic's error codes.
@@ -44,6 +74,13 @@ impl Refused {
             Refused::Missing => "Required parameter is missing: u, and p or t and s",
             Refused::Wrong => "Wrong username or password",
         }
+    }
+}
+
+impl User {
+    /// A new, active account of this name: no password yet, not an administrator, the usual permissions.
+    pub fn named(name: &str) -> Self {
+        Self { name: name.to_string(), password: String::new(), admin: false, active: true, directory: false, permissions: Permissions::default() }
     }
 }
 
@@ -93,7 +130,7 @@ impl Users {
             Some(u) => u.password = password.to_string(),
             None => {
                 let admin = users.is_empty();
-                users.push(User { name: name.to_string(), password: password.to_string(), admin });
+                users.push(User { password: password.to_string(), admin, ..User::named(name) });
             }
         }
         self.save(&users)
@@ -113,6 +150,89 @@ impl Users {
         names.into_iter().map(|(_, n)| n).collect()
     }
 
+    /// An account by its name.
+    pub fn get(&self, name: &str) -> Option<User> {
+        self.users.read().unwrap_or_else(|p| p.into_inner()).iter().find(|u| u.name == name).cloned()
+    }
+
+    /// Every account, the administrators first.
+    pub fn all(&self) -> Vec<User> {
+        let mut users = self.users.read().unwrap_or_else(|p| p.into_inner()).clone();
+        users.sort_by(|a, b| (!a.admin, &a.name).cmp(&(!b.admin, &b.name)));
+        users
+    }
+
+    /// The account the directory signs `name` in as (decision 0051): made at its first sign-in, active again if it had
+    /// left, an administrator as the directory says. Cratarr's own accounts (not from the directory) are left as they
+    /// are: one of the same name is that account.
+    pub fn from_directory(&self, name: &str, admin: bool) -> Result<User> {
+        let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
+        let before = users.clone();
+        match users.iter_mut().find(|u| u.name == name) {
+            Some(u) if !u.directory => return Ok(u.clone()),
+            Some(u) => {
+                if (u.admin, u.active) == (admin, true) {
+                    return Ok(u.clone());
+                }
+                u.admin = admin;
+                u.active = true;
+            }
+            None => users.push(User { admin, directory: true, ..User::named(name) }),
+        }
+        if let Err(e) = self.save(&users) {
+            *users = before;
+            return Err(e);
+        }
+        Ok(users.iter().find(|u| u.name == name).cloned().expect("just kept"))
+    }
+
+    /// An account from the directory that left its group (decision 0051): it may no longer sign in, its data kept.
+    /// Returns whether it was active.
+    pub fn deactivate(&self, name: &str) -> Result<bool> {
+        let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
+        let Some(u) = users.iter_mut().find(|u| u.name == name && u.directory && u.active) else { return Ok(false) };
+        u.active = false;
+        let saved = self.save(&users);
+        if saved.is_err() {
+            if let Some(u) = users.iter_mut().find(|u| u.name == name) {
+                u.active = true;
+            }
+        }
+        saved.map(|()| true)
+    }
+
+    /// A user's permissions, set in the Users panel.
+    pub fn set_permissions(&self, name: &str, permissions: Permissions) -> Result<bool> {
+        let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
+        let Some(u) = users.iter_mut().find(|u| u.name == name) else { return Ok(false) };
+        let old = std::mem::replace(&mut u.permissions, permissions);
+        let saved = self.save(&users);
+        if saved.is_err() {
+            if let Some(u) = users.iter_mut().find(|u| u.name == name) {
+                u.permissions = old;
+            }
+        }
+        saved.map(|()| true)
+    }
+
+    /// A user's own OpenSubsonic password, set by themselves (an account from the directory has none until then).
+    pub fn set_app_password(&self, name: &str, password: &str) -> Result<(), &'static str> {
+        if password.is_empty() {
+            return Err("Choose a password.");
+        }
+        let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
+        let Some(u) = users.iter_mut().find(|u| u.name == name) else { return Err("There is no such account.") };
+        let old = std::mem::replace(&mut u.password, password.to_string());
+        if let Err(e) = self.save(&users) {
+            tracing::warn!("subsonic: could not save the app password: {e:#}");
+            if let Some(u) = users.iter_mut().find(|u| u.name == name) {
+                u.password = old;
+            }
+            return Err("The password could not be saved.");
+        }
+        Ok(())
+    }
+
     /// The first account, from the Settings page (as Navidrome's first-run "create admin"): refused once any exists.
     pub fn create_first(&self, name: &str, password: &str) -> Result<(), &'static str> {
         let name = name.trim();
@@ -126,7 +246,7 @@ impl Users {
         if !users.is_empty() {
             return Err("There is an account already.");
         }
-        users.push(User { name: name.to_string(), password: password.to_string(), admin: true });
+        users.push(User { password: password.to_string(), admin: true, ..User::named(name) });
         self.save(&users).map_err(|e| {
             tracing::warn!("subsonic: could not save the account: {e:#}");
             users.clear();
@@ -184,7 +304,7 @@ impl Users {
         let kept = Sha256::digest(known.map_or("", |x| x.password.as_str()).as_bytes());
         let typed = Sha256::digest(password.as_bytes());
         let ok = kept.iter().zip(typed.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0;
-        known.filter(|u| ok && !u.password.is_empty()).cloned()
+        known.filter(|u| ok && !u.password.is_empty() && u.active).cloned()
     }
 
     /// The user a request logs in as: `u` with `t` and `s`, or with `p`.
@@ -200,7 +320,7 @@ impl Users {
             _ => return Err(Refused::Missing),
         };
         match known {
-            Some(user) if ok && !password.is_empty() => Ok(user.clone()),
+            Some(user) if ok && !password.is_empty() && user.active => Ok(user.clone()),
             _ => Err(Refused::Wrong),
         }
     }

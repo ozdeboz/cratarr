@@ -2,6 +2,7 @@
 //! `/rest` endpoints. Copied and translated code keeps a notice naming where it came from.
 
 pub mod access;
+pub mod accounts;
 pub mod api;
 pub mod art;
 pub mod auth_check;
@@ -19,6 +20,7 @@ pub mod routes;
 pub mod sessions;
 pub mod signin;
 pub mod users;
+pub mod who;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -149,12 +151,49 @@ impl Serve {
     /// is checked: the directory (LDAP), when one is set, is asked first (decision 0040), Cratarr's own accounts staying
     /// the fallback.
     pub async fn sign_in(&self, name: &str, password: &str) -> Option<String> {
-        let names = self.users.names();
-        let exists = |a: &str| names.iter().any(|n| n == a);
-        if let Some(account) = self.directory.sign_in(name, password, &exists, now()).await {
+        // The directory's members are Cratarr's users (decision 0051): an account made at the first sign-in, brought back
+        // if it had left, an administrator as the directory says; asked only of an active one when the directory was
+        // unreachable. Cratarr's own account of the same name (not from the directory) is that account.
+        let account = |a: &str, admin: Option<bool>| match admin {
+            Some(admin) => match self.users.from_directory(a, admin) {
+                Ok(u) => u.active.then_some(u.name),
+                Err(e) => {
+                    tracing::warn!(target: "signin", user = %a, "the account from the directory could not be kept: {e:#}");
+                    None
+                }
+            },
+            None => self.users.get(a).filter(|u| u.active).map(|u| u.name),
+        };
+        if let Some(account) = self.directory.sign_in(name, password, &account, now()).await {
             return Some(account);
         }
         self.users.sign_in(name, password).map(|u| u.name)
+    }
+
+    /// The account the running request acts for (decision 0051): the one signed in, or, while signing in is not required
+    /// (one user, decision 0043 off), the owner. `None` outside a request when signing in is required: work of its own
+    /// must say whose it is.
+    pub fn current_user(&self) -> Option<String> {
+        match who::current() {
+            Some(w) => Some(w.user),
+            None if !self.sign_in_required() => self.users.owner(),
+            None => None,
+        }
+    }
+
+    /// The account work acts for that is not yet tied to one of its own (decision 0051's first stage): the running
+    /// request's, else the owner, as all of it did before several users. Each use is to name its account in the second
+    /// stage (a player's work, its owner's).
+    pub fn user_or_owner(&self) -> Option<String> {
+        self.current_user().or_else(|| self.users.owner())
+    }
+
+    /// Whether the running request is an administrator's (as `current_user`: the owner while signing in is off).
+    pub fn current_is_admin(&self) -> bool {
+        match who::current() {
+            Some(w) => w.admin,
+            None => !self.sign_in_required(),
+        }
     }
 
     /// Whether every request needs a sign-in now (decision 0043): when switched on, and once there is an account to

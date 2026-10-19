@@ -86,6 +86,13 @@ impl Sessions {
                 value TEXT NOT NULL
             )",
         )?;
+        // Keys made before they had an owner and a scope (decision 0051): the owner's, controlling, as they were.
+        for (column, ddl) in [("owner", "ALTER TABLE api_keys ADD COLUMN owner TEXT"), ("scope", "ALTER TABLE api_keys ADD COLUMN scope TEXT NOT NULL DEFAULT 'control'")] {
+            let has: bool = db.prepare("SELECT 1 FROM pragma_table_info('api_keys') WHERE name = ?1")?.exists(params![column])?;
+            if !has {
+                db.execute_batch(ddl)?;
+            }
+        }
         let required = db
             .query_row("SELECT value FROM settings WHERE name = 'sign_in_required'", [], |r| r.get::<_, String>(0))
             .optional()?
@@ -159,13 +166,15 @@ impl Sessions {
         Ok(self.db().execute("DELETE FROM sessions WHERE user = ?1 AND id IS NOT ?2", params![user, keep])?)
     }
 
-    /// A new API key named `name` (decision 0043): the key (shown once, never kept) and its entry.
-    pub fn new_key(&self, name: &str, now: i64) -> Result<(String, ApiKey)> {
+    /// A new API key named `name` (decision 0043) for `owner`, reading or controlling (`scope`, decision 0051): the key
+    /// (shown once, never kept) and its entry.
+    pub fn new_key(&self, name: &str, owner: Option<&str>, scope: &str, now: i64) -> Result<(String, ApiKey)> {
         let key = format!("{KEY_PREFIX}{}", random_hex(32));
-        let k = ApiKey { id: random_hex(8), name: name.trim().to_string(), created: now, last_used: None };
+        let scope = if scope == "read" { "read" } else { "control" };
+        let k = ApiKey { id: random_hex(8), name: name.trim().to_string(), created: now, last_used: None, owner: owner.map(str::to_string), scope: scope.into() };
         self.db().execute(
-            "INSERT INTO api_keys (id, name, key_hash, created) VALUES (?1, ?2, ?3, ?4)",
-            params![k.id, k.name, hash(&key), now],
+            "INSERT INTO api_keys (id, name, key_hash, created, owner, scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![k.id, k.name, hash(&key), now, k.owner, k.scope],
         )?;
         Ok((key, k))
     }
@@ -177,7 +186,7 @@ impl Sessions {
         }
         let db = self.db();
         let found = db
-            .query_row("SELECT id, name, created, last_used FROM api_keys WHERE key_hash = ?1", params![hash(key)], api_key)
+            .query_row(&format!("SELECT {KEY_COLUMNS} FROM api_keys WHERE key_hash = ?1"), params![hash(key)], api_key)
             .optional()
             .unwrap_or_else(|e| {
                 tracing::warn!("sessions: cannot read the keys: {e}");
@@ -192,7 +201,7 @@ impl Sessions {
     /// The API keys, the newest first.
     pub fn keys(&self) -> Result<Vec<ApiKey>> {
         let db = self.db();
-        let mut q = db.prepare("SELECT id, name, created, last_used FROM api_keys ORDER BY created DESC")?;
+        let mut q = db.prepare(&format!("SELECT {KEY_COLUMNS} FROM api_keys ORDER BY created DESC"))?;
         Ok(q.query_map([], api_key)?.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -243,10 +252,17 @@ pub struct ApiKey {
     pub name: String,
     pub created: i64,
     pub last_used: Option<i64>,
+    /// The account it acts for (decision 0051); `None`: the owner (a key made before keys had one, as Home
+    /// Assistant's).
+    pub owner: Option<String>,
+    /// `read`, or `control` (reading and the players).
+    pub scope: String,
 }
 
+const KEY_COLUMNS: &str = "id, name, created, last_used, owner, scope";
+
 fn api_key(r: &rusqlite::Row) -> rusqlite::Result<ApiKey> {
-    Ok(ApiKey { id: r.get(0)?, name: r.get(1)?, created: r.get(2)?, last_used: r.get(3)? })
+    Ok(ApiKey { id: r.get(0)?, name: r.get(1)?, created: r.get(2)?, last_used: r.get(3)?, owner: r.get(4)?, scope: r.get(5)? })
 }
 
 #[cfg(test)]
@@ -309,10 +325,10 @@ mod tests {
     #[test]
     fn an_api_key_is_kept_as_its_hash_used_and_revoked_alone() {
         let s = Sessions::open(None).unwrap();
-        let (key, made) = s.new_key(" Home Assistant ", NOW).unwrap();
+        let (key, made) = s.new_key(" Home Assistant ", None, "control", NOW).unwrap();
         assert!(key.starts_with(KEY_PREFIX) && key.len() == KEY_PREFIX.len() + 64);
         assert_eq!(made.name, "Home Assistant");
-        let (other, _) = s.new_key("scripts", NOW).unwrap();
+        let (other, _) = s.new_key("scripts", None, "control", NOW).unwrap();
         assert_eq!(s.check_key(&key, NOW + 5).map(|k| k.id), Some(made.id.clone()));
         assert_eq!(s.keys().unwrap().iter().find(|k| k.id == made.id).unwrap().last_used, Some(NOW + 5));
         assert!(s.check_key("cratarr_nothing", NOW).is_none());

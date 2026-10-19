@@ -636,8 +636,9 @@ impl PlaylistService {
         let Some(serve) = crate::serve::instance() else { return Ok(Default::default()) };
         let stamps: String = lists.iter().map(|(id, changed, lines)| format!("{id}:{changed}:{};", lines.len())).collect();
         let s = serve.clone();
+        // Read here: the blocking task does not carry the request's account.
+        let me = serve.user_or_owner();
         let key_and_owner = tokio::task::spawn_blocking(move || {
-            let me = s.users.owner();
             let plays = me.as_ref().and_then(|me| s.userdata.plays_print(me).ok());
             (format!("{stamps}|{}|{plays:?}", s.built_at()), me)
         })
@@ -926,8 +927,9 @@ impl PlaylistService {
         // The user's plays of each track and when each entry came, as the user data keeps them (the panel's orders).
         if let Some(serve) = crate::serve::instance() {
             let (id, rs) = (id.to_string(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
+            let me = serve.user_or_owner();
             let facts = tokio::task::spawn_blocking(move || {
-                let plays = match serve.users.owner() {
+                let plays = match me {
                     Some(me) => serve.userdata.play_stats(&me, &rs).unwrap_or_default(),
                     None => Default::default(),
                 };
@@ -1038,13 +1040,16 @@ impl PlaylistService {
         };
         // The cards' facts: the songs of the Music folder, and what the owner has played.
         let songs_played = match crate::serve::instance() {
-            Some(serve) => tokio::task::spawn_blocking(move || {
+            Some(serve) => {
+                let me = serve.user_or_owner();
+                tokio::task::spawn_blocking(move || {
                 let songs = serve.library.songs_by_rel(0).unwrap_or_default();
-                let played = serve.users.owner().and_then(|me| serve.userdata.played(&me).ok());
+                let played = me.and_then(|me| serve.userdata.played(&me).ok());
                 (songs, played)
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+            }
             None => (HashMap::new(), None),
         };
         let (songs, played) = songs_played;
