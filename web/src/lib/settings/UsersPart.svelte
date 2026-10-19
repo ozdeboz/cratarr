@@ -3,7 +3,7 @@
   // too"): every account, its name and role from the directory (read-only: they are set there), whether it is active
   // (one who left the directory's music group is deactivated, their data kept), what it may do beyond listening, and its
   // devices and sign-ins, each to end. Its administrators' only. Acts at once.
-  import { endSession, getUsers, removeDevice, setPermissions, type OwnDevice, type Permissions, type User, type UserSession } from '../api';
+  import { endSession, getUsers, removable, removeDevice, setPermissions, type OwnDevice, type Permissions, type User, type UserSession } from '../api';
   import MoreInfo from '../MoreInfo.svelte';
   import PageLoading from '../PageLoading.svelte';
   import Switch from '../Switch.svelte';
@@ -85,8 +85,8 @@
             {#each u.devices as d (d.id)}
               <li>
                 <span class="what">{d.name}<small>{d.kind}</small></span>
-                {#if d.last_seen}<span class="when">{when(d.last_seen)}</span>{/if}
-                <button onclick={() => remove(u, d)}>Remove</button>
+                {#if d.online}<span class="when">Online</span>{:else if d.last_seen}<span class="when">{when(d.last_seen)}</span>{/if}
+                {#if removable(d)}<button onclick={() => remove(u, d)}>Remove</button>{/if}
               </li>
             {/each}
           </ul>

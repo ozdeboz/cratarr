@@ -740,8 +740,11 @@ export const newApiKey = (name: string, password: string, owner?: string, scope?
 /** What a user may do beyond listening (decision 0051), in Cratarr and in OpenSubsonic apps alike: keep tracks to play
  *  offline, make playlists, share them with the other users, make public share links. */
 export type Permissions = { offline: boolean; playlists: boolean; share: boolean; links: boolean };
-/** A device that belongs to an account (it plays only on its own, decision 0051). */
-export type OwnDevice = { id: string; name: string; kind: string; last_seen: number | null };
+/** A device that belongs to an account (it plays only on its own, decision 0051): uid=197609(Oskar) gid=197121 groups=197121 its player's name. One that is
+ *  connected, or a Kodi (removed under Players), is not taken away. */
+export type OwnDevice = { id: string; name: string; kind: string; online?: boolean; last_seen: number | null };
+/** Whether a device can be taken away now. */
+export const removable = (d: OwnDevice) => !d.online && d.kind !== 'kodi';
 /** One of an account's sign-ins; `current`: the one this page runs on (one's own only). */
 export type UserSession = { id: string; device: string; created: number; last_used: number; current?: boolean };
 /** Whoever is signed in (decision 0051): their name (from the directory), whether they administer this server, what they

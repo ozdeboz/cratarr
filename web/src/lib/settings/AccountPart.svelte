@@ -2,7 +2,7 @@
   // Account (decision 0051, several users): who is signed in and their role, both from the directory and read-only;
   // their own password for OpenSubsonic apps (whose sign-in needs the password itself, which a directory never gives);
   // their devices (each plays only on its own) and their sign-ins, each to end. Acts at once.
-  import { endMySession, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
+  import { endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
   import { loadMe, me } from '../me.svelte';
   import MoreInfo from '../MoreInfo.svelte';
   import { toast } from '../toast.svelte';
@@ -79,8 +79,8 @@
       {#each me.devices as d (d.id)}
         <li>
           <span class="what">{d.name}<small>{d.kind}</small></span>
-          {#if d.last_seen}<span class="when">{when(d.last_seen)}</span>{/if}
-          <button onclick={() => remove(d)}>Remove</button>
+          {#if d.online}<span class="when">Online</span>{:else if d.last_seen}<span class="when">{when(d.last_seen)}</span>{/if}
+          {#if removable(d)}<button onclick={() => remove(d)}>Remove</button>{/if}
         </li>
       {/each}
     </ul>
