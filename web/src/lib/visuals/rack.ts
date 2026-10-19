@@ -10,9 +10,11 @@ export type Lanes = Record<Lane, Module[]>;
 
 const PICTURE = new Set(['picture', 'light']);
 
-/** Where a module stands, by its ports: a source gives a picture and takes none; a picture module takes and gives one;
- *  the output takes one and gives none; the rest move knobs (control). */
-export function laneOf(ports: Ports): Lane {
+/** Where a module stands, by its ports: a source gives a picture and takes none (the flame takes only its own last
+ *  light: `source`); a picture module takes and gives one; the output takes one and gives none; the rest move knobs
+ *  (control). */
+export function laneOf(ports: Ports, source = false): Lane {
+  if (source) return 'sources';
   const takes = ports.in.some((p) => PICTURE.has(p.type));
   const gives = ports.out.some((p) => PICTURE.has(p.type));
   if (gives && !takes) return 'sources';
@@ -23,11 +25,11 @@ export function laneOf(ports: Ports): Lane {
 
 /** A patch's modules by lane; the picture lane in the order pictures flow (a module after what feeds it), ties and
  *  unwired ones as the patch has them. `portsFor`: a module's ports (a device's from what it exposes). */
-export function lanesOf(p: PatchV2, portsFor: (m: Module) => Ports | null): Lanes {
+export function lanesOf(p: PatchV2, portsFor: (m: Module) => Ports | null, isSource: (m: Module) => boolean = () => false): Lanes {
   const lanes: Lanes = { sources: [], picture: [], control: [], output: [] };
   for (const m of p.modules) {
     const ports = portsFor(m);
-    if (ports) lanes[laneOf(ports)].push(m);
+    if (ports) lanes[laneOf(ports, isSource(m))].push(m);
   }
   // The picture lane in flow order: each module after the picture modules feeding it (Kahn's order; a Feedback's
   // input, its last frame, does not count).
