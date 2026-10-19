@@ -221,7 +221,7 @@ test('a modulator’s seed is its id’s hash: the same id walks alike, another 
   const p = patchOf([mod('m')], [mod('drift-a', k, 'drift'), mod('drift-b', k, 'drift')], []);
   const one = newEvalState();
   const two = newEvalState();
-  const own = MODULATORS.drift.create(seedOf('drift-a'));
+  const own = MODULATORS.random.create(seedOf('drift-a'));
   let apart = 0;
   for (let i = 0; i < 120; i++) {
     const x = evaluate(p, TYPES, none, one, 1 / 30, OPTS).outputs;

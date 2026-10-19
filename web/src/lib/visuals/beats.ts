@@ -60,7 +60,7 @@ export function beatsOf(source: string, id: string): Beats | null | undefined {
 }
 
 /** Five bytes a beat: its time in milliseconds (u32, little-endian), then its strength (0..=255). None: no tempo. */
-function decode(b: ArrayBuffer): Beats | null {
+export function decode(b: ArrayBuffer): Beats | null {
   const n = Math.floor(b.byteLength / 5);
   if (!n) return null;
   const v = new DataView(b);

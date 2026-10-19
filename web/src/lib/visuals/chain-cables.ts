@@ -13,7 +13,7 @@
 // times and the frame's behaviour as the aspects take them. The device's (Quality, FPS, Brightness) are not cabled.
 
 import { heightOf, letThrough, moveKnob, shapeOf } from './evaluate';
-import { MODULATORS, type ModulatorType } from './modulators/modulators';
+import { modulatorOf, type ModulatorType } from './modulators/modulators';
 import { ASPECT_KNOB, SETTING_KNOB, type Cable, type Module, type ModuleType, type SignalRef } from './patch';
 import { A, ASPECTS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, type Aspect, type Given } from './routes';
 
@@ -55,7 +55,7 @@ export function cableX(c: Cable, src: CableSources): number | null {
     const id = c.from.modulator;
     const m = src.modulators.find((x) => x.id === id);
     if (!m || !(id in src.outputs)) return null;
-    const t = (src.types?.[m.type] as Partial<ModulatorType> | undefined) ?? MODULATORS[m.type];
+    const t = (src.types?.[m.type] as Partial<ModulatorType> | undefined) ?? modulatorOf(m.type);
     const v = finite(src.outputs[id]);
     return clamp(t?.range === 'bipolar' ? (v + 1) / 2 : v, 0, 1);
   }
