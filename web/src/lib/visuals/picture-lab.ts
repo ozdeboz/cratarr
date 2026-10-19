@@ -9,20 +9,25 @@
 // window.pictureLab holds the recording or the result; web/scripts/check-picture.mjs drives both.
 import { EXAMPLES } from './chains';
 import { randomFrom } from './flame';
+import type { Compositor } from './compose';
 import type { Tiles } from './meters';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { emptyExtra } from './patch';
 import { flameOf, lookOf, signalKey, type RecordedCompose, type Recording, type RecordRequest } from './recorder';
+import type { FlameRenderer, RendererOptions } from './render';
 import type { VisualSettings } from './settings.svelte';
 import { ID } from './signal-ids';
 
-/** The pipelines a replay can run: today's renderer and compositor, and the frozen copies they are compared with. */
+/** The pipelines a replay can run: today's renderer and compositor (`current`), and the frozen copies every step is
+ *  compared with (`legacy`: render-legacy.ts, compose-legacy.ts). */
+type Renderer = Pick<FlameRenderer, 'setPoints' | 'setFlame' | 'resize' | 'frame' | 'measure' | 'tiles' | 'dispose' | 'pointCount' | 'precision' | 'context' | 'compose'>;
 type Pipeline = {
-  Renderer: typeof import('./render').FlameRenderer;
-  Compositor: typeof import('./compose').Compositor;
+  Renderer: new (canvas: HTMLCanvasElement, points: number, power: WebGLPowerPreference, options: RendererOptions) => Renderer;
+  Compositor: new (gl: WebGL2RenderingContext) => Pick<Compositor, 'run' | 'prune' | 'dispose'>;
 };
 const PIPELINES: Record<string, () => Promise<Pipeline>> = {
   current: async () => ({ Renderer: (await import('./render')).FlameRenderer, Compositor: (await import('./compose')).Compositor }),
+  legacy: async () => ({ Renderer: (await import('./render-legacy')).FlameRenderer, Compositor: (await import('./compose-legacy')).Compositor }),
 };
 
 // ---- Scenes: the settings a recording is made in (the look's own pinned, so the track's preset leaves them) ----
@@ -182,7 +187,7 @@ async function load(name: string): Promise<Recording> {
 const SEED = 20261020;
 
 /** `digest`: every frame's pixels hashed (FNV-1a), to tell two runs of the lab apart. */
-type Side = { name: string; canvas: HTMLCanvasElement; renderer: InstanceType<Pipeline['Renderer']>; compositor: InstanceType<Pipeline['Compositor']>; tiles: Tiles[]; pixels: Uint8Array; digest: number };
+type Side = { name: string; canvas: HTMLCanvasElement; renderer: Renderer; compositor: InstanceType<Pipeline['Compositor']>; tiles: Tiles[]; pixels: Uint8Array; digest: number };
 
 function frameOf(c: RecordedCompose): FrameInfo {
   return { dt: c.frame.dt, time: c.frame.time, beat: c.frame.beat, signals: (ref) => c.frame.signals[signalKey(ref)] ?? 0, waveform: c.frame.waveform ? Float32Array.from(c.frame.waveform) : null };
