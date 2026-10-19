@@ -113,6 +113,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** The page's visuals want the sound as it is heard (LiveSound): while the page is in view. */
+    private var liveWanted = false
+
+    private fun live() {
+        LiveSound.listener = if (liveWanted && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) { m -> page?.postMessage(m) } else null
+    }
+
+    override fun onStart() {
+        super.onStart()
+        live()
+    }
+
+    override fun onStop() {
+        LiveSound.listener = null
+        super.onStop()
+    }
+
     /** The mode changed (here, or by a play from Cratarr): the page hears it. */
     private val modeChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == Prefs.MODE) runOnUiThread { page?.postMessage(appMessage()) }
@@ -230,6 +247,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        LiveSound.listener = null
         outputs?.stop()
         contentResolver.unregisterContentObserver(deviceMusicChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
@@ -313,12 +331,20 @@ class MainActivity : AppCompatActivity() {
         when (message.optString("type")) {
             "hello" -> {
                 page = reply
+                // A new page asks for the sound itself when its visuals open.
+                liveWanted = false
+                live()
                 reply.postMessage(appMessage())
                 player?.report(withQueue = true)
                 followSession()
             }
             "player" -> player?.handle(message) ?: waiting.add(message)
             "device" -> reply.postMessage(appMessage())
+            // The visuals' sound as it is heard (decision 0046, amended 2026-10-19), on or off.
+            "live" -> {
+                liveWanted = message.optBoolean("on")
+                live()
+            }
             // Local mode (decision 0052): the switch (Android's permission asked for first), and the device's music.
             "device-music" -> when (message.optString("op")) {
                 // Into local mode only with a folder turned on (the switch shows only then).
