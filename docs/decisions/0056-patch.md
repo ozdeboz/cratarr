@@ -176,7 +176,17 @@ pure TypeScript, testable in Node; continuous knobs only; output 0 at its neutra
    modulators (claude-632, merged).
    The app's live sound sends a short waveform for the Waves source (claude-5f: about 512 mono samples a tick, as
    `wave` in its 'live' message).
-6. Morphing: the neutral rule, chain changes, chains as presets, evolve. (claude-a5)
+6. Morphing: the neutral rule, chain changes, chains as presets, evolve. (claude-632's morph.ts, claude-a5's
+   chain-morph.ts and the frame loop)
+   - Every change to the extras is morphed to: a knob moved on this device over 0.15 s; anything else over 1.5 s, as
+     a look blends in (a module added or removed, a recall, the dice, an undo, the group's changes).
+   - A module that leaves fades to neutral and is drawn where it stood until then. A whole layer leaves the same way.
+   - Steps change only at their module's neutral, whether they were set or moved on by the evaluator's moments.
+   - A snapshot is a chain plus its state. A recall sets the chain whole; one saved before 70 has no extras.
+   - A full roll of the dice evolves within the chain: every look knob of the extras gets a new value, and the
+     modules, cables and modulators stay as they are.
+   - Cables into today's chain: chain-cables.ts (claude-5f) gives the extras' cables into the routes' columns the way
+     a route gives them.
 
 ## Consequences
 
