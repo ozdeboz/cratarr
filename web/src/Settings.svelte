@@ -22,11 +22,11 @@
   // Read again after each save in the panel; the server's settings only for its administrators.
   $effect(() => {
     void settingsSaved.n;
+    if (!me.admin) return;
     getImport().then(
       (r) => (lastImport = r.job),
       () => {},
     );
-    if (!me.admin) return;
     getSettings().then(
       (v) => (settingsRead.s = v),
       () => {},
