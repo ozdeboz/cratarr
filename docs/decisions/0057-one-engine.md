@@ -368,6 +368,18 @@ The owner: "since I won't be sync grouping in the upcoming version, spend no tim
 the very end, after this version. Until then a v2 patch is not shared in a group, and the group features stay off for
 the new visuals.
 
+### 7d. One morph
+
+One morph moves every knob of the patch, devices' included; today's separate look blend goes. How long a change
+glides depends on what caused it (the owner agreed):
+
+- a knob you turn: 0.15 s;
+- a preset, Randomize or "Another look": 1.5 s;
+- a new track, and Reset to seed: 6 s.
+
+The more directly you cause it, the faster it follows. Rewired picture paths crossfade over the same time. A change
+mid-glide starts from where the picture is. Steps change only at neutral. Undo jumps.
+
 ### 8. Seeing it work
 
 - Every picture node shows a live thumbnail.
