@@ -108,3 +108,40 @@ measured against it first; and the interim Tempo fade now.
   https://www.audiolabs-erlangen.com/resources/aps-w23/papers/2010_FitzGerald_HarmonicPercussiveSep_DAFx.pdf
 - Ellis, Beat Tracking by Dynamic Programming, 2007:
   https://hajim.rochester.edu/ece/sites/zduan/teaching/ece472/reading/Ellis_2007.pdf
+
+## Amendment (2026-10-19, later): where it runs, measured
+
+Measured that evening on a real track (one 30 s chunk, the model's input): Beat this! through tract (pure Rust, what
+Cratarr's static binary can hold) gives PyTorch's output to 1e-4 but needs 6.6 s a chunk for the small model and
+11.3 s for the full one on one core of the NAS (Intel N95); ONNX Runtime on the PC about 0.27 s and 0.47 s. The library
+is 2,426 hours of music (30,821 tracks): about 22 days of one NAS core for the small model, about 22 hours on the PC.
+
+The owner chose: **the library on the PC, new music on the NAS; the small model** (`small0`, MIT, 8 MB). The PC runs
+the official `beat_this` package over the library and sends its beats to Cratarr in files over SSH, as AudioMuse's
+(decision 0054); Cratarr then analyses new music itself with the same spectrogram and model in Rust, checked against
+the PC's results on the same tracks. The visuals' Beat, Downbeat and Tempo come from these beats where a track has
+them, from 0035's grid until then.
+
+## As built (2026-10-19, for 70)
+
+- **Kept by file**: `beat_this` in the catalogue holds each file's beats and downbeats (milliseconds) as it was heard
+  (its size and mtime); a changed file is heard again.
+- **The PC's part** (`tools/beat_this_pass.py`): Cratarr writes the files still without them to
+  `<data>/beats/wanted.jsonl` (every five minutes, when the list changed). The script reads that list and each file over
+  SSH, decodes with ffmpeg to 22,050 Hz and has the official package (`Audio2Beats`, `small0`, no DBN) hear it; every
+  100 files it puts a JSON-lines file in `<data>/beats/in/` (in one move), which Cratarr takes in and removes. What it
+  sent is noted beside it, so a run started again goes on where it stopped.
+- **The NAS's part** (`app::beat_this`): when the analysis' pass has nothing to do, it hears new music, a file at a
+  time and resting three times as long as each took, as the pass does: what was first seen or changed after Cratarr
+  first looked (that moment noted; what was there before is the PC's). The same spectrogram as the package's
+  (torchaudio's mel spectrogram, rebuilt in Rust), the same model (`small0` exported to ONNX with its time axis free,
+  10.5 MB, in the binary; `server/models/`) through tract, the same pieces and post-processing.
+- **Into the visuals**: where Beat this! has heard a file, its beats replace the analysis' grid when the visuals next
+  ask (one decode, as before): each beat's strength is still the onsets' at it, and section 16 (each beat's place in
+  its bar) comes from its downbeats, sure (255), instead of being guessed. The beats and signals are sent with an ETag
+  that says whose beats they are, and the page asks under a new address (`?b=2`) so no browser keeps the grid's: kept
+  a month once they are Beat this!'s, asked again each time until then.
+- **Gaps**: Beat this! gives beats only where it hears a pulse, so a break or an ambient passage has none, where the
+  grid ran on (on ten library tracks: 0 to 3 gaps of 1 to 3 s in grooves, 19 in an ambient track, 42 in a Chopin
+  nocturne). The page counts an interval over twice the beats' typical one round it as a gap: the beat ends after
+  1.5 typical intervals and the tempo keeps the typical one, so the turning goes on through it (a5, `beats.ts`).
