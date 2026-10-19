@@ -14,7 +14,8 @@ export class Finish {
   private gl: WebGL2RenderingContext;
   /** The chains' programs by their effects. */
   private fxPrograms = new Map<string, WebGLProgram | null>();
-  private fx: FxTargets | null = null;
+  /** The targets by run (each a fused run of effects: one, or several where a live Echo ends one, decision 0057). */
+  private fxs: (FxTargets | null)[] = [];
   /** When a chain's program was last made (making it makes a frame or two late). */
   madeAt = -Infinity;
   private empty: WebGLVertexArrayObject;
@@ -48,11 +49,12 @@ export class Finish {
     return this.fxPrograms.get(key) ?? null;
   }
 
-  /** The stage's targets at the buffer's size (`width` x `height`): two finished pictures (one written, one the last) and the picture. */
-  targets(width: number, height: number): FxTargets {
+  /** A run's targets at the buffer's size (`width` x `height`): two finished pictures (one written, one the last) and
+   *  the picture (the first run's). */
+  targets(width: number, height: number, run = 0): FxTargets {
     const gl = this.gl;
-    if (this.fx && (this.fx.w !== width || this.fx.h !== height)) this.freeFx();
-    if (!this.fx) {
+    if (this.fxs[run] && (this.fxs[run]!.w !== width || this.fxs[run]!.h !== height)) this.freeFx();
+    if (!this.fxs[run]) {
       const tex: WebGLTexture[] = [];
       const fbo: WebGLFramebuffer[] = [];
       for (let i = 0; i < 3; i++) {
@@ -71,23 +73,26 @@ export class Finish {
         fbo.push(f);
       }
       gl.bindTexture(gl.TEXTURE_2D, null);
-      this.fx = { tex, fbo, w: width, h: height, cur: 0, last: 0 };
+      this.fxs[run] = { tex, fbo, w: width, h: height, cur: 0, last: 0 };
     }
-    this.fx.last = this.now();
-    return this.fx;
+    const fx = this.fxs[run]!;
+    fx.last = this.now();
+    return fx;
   }
 
   freeFx() {
     const gl = this.gl;
-    if (!this.fx) return;
-    for (const t of this.fx.tex) gl.deleteTexture(t);
-    for (const f of this.fx.fbo) gl.deleteFramebuffer(f);
-    this.fx = null;
+    for (const fx of this.fxs) {
+      if (!fx) continue;
+      for (const t of fx.tex) gl.deleteTexture(t);
+      for (const f of fx.fbo) gl.deleteFramebuffer(f);
+    }
+    this.fxs = [];
   }
 
   /** Lets go of the targets ten seconds after a chain last asked for them. */
   idle() {
-    if (this.fx && this.now() - this.fx.last > 10_000) this.freeFx();
+    if (this.fxs[0] && this.now() - this.fxs[0].last > 10_000) this.freeFx();
   }
 
   /** The picture slot after the show pass: the chain's pass from the picture (and the last finished one, for echoes,

@@ -13,7 +13,7 @@
 import type { ChainNow } from './chain-params';
 import { Compositor } from './compose';
 import type { FrameInfo, Module, PatchExtra } from './patch';
-import { compile, STAGES, stagesOf, type Stage, type TypeOf } from './picture-graph';
+import { compile, effectRuns, STAGES, stagesOf, type Stage, type TypeOf } from './picture-graph';
 import type { PatchV2 } from './ports';
 import type { Flame } from './flame';
 import type { Flow, Force, Loop } from './fluid';
@@ -97,6 +97,8 @@ export class FlameRenderer {
   /** The patch's picture side as drawn (picture-graph.ts): the stages it needs, in this version each fused as before;
    *  every one until a patch is given. Why any of it is not drawn. */
   private stages = new Set<Stage>(STAGES);
+  /** The effects' slots in the order the graph draws them (one module each: fx1 → 0). */
+  private fxOrder: number[] = [0, 1, 2];
   errors: string[] = [];
   /** The context, for what draws beside the flame (the compositor). */
   get context(): WebGL2RenderingContext {
@@ -164,7 +166,10 @@ export class FlameRenderer {
     const stages = stagesOf(c);
     this.errors = stages ? c.errors : [...c.errors, 'This version draws the picture in its own order only.'];
     this.stages = new Set(stages ?? STAGES);
+    const fx = c.order.filter((n) => /^fx\d$/.test(n.id)).map((n) => Number(n.id.slice(2)) - 1);
+    this.fxOrder = stages && fx.length ? fx : [0, 1, 2];
   }
+
 
   /** Lets go of what layers no longer in the extras held. */
   prune(extra: PatchExtra) {
@@ -246,16 +251,24 @@ export class FlameRenderer {
 
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where a
     // chain of effects is set, into the picture at the buffer's size, for the chain's pass to finish.
-    const chain = this.stages.has('effects') ? this.fin.chainFor(now.effects, this.clocks) : null;
+    const fx = now.effects;
+    const chain = this.stages.has('effects') && fx ? effectRuns(this.fxOrder, fx.ids, fx.amounts).flatMap((ids) => {
+      const p = this.fin.chainFor({ ...fx, ids }, this.clocks);
+      return p ? [{ p, ids }] : [];
+    }) : [];
     const compose = this.stages.has('compose') && extras && this.compositor && Compositor.active(extras.extra, extras.knobsOf, extras.flame) ? this.compositor : null;
     const composing = !!compose;
-    const into = chain || composing ? this.fin.targets(light.width, light.height) : null;
+    const into = chain.length || composing ? this.fin.targets(light.width, light.height) : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
     if (into) viewWidth = light.width, viewHeight = light.height;
     this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
     const picture = into && compose ? compose.run(into.tex[2], into.w, into.h, extras!.extra, extras!.knobsOf, extras!.frame, extras!.flame) : into ? into.tex[2] : null;
-    if (chain && into && picture) this.screen.toScreen(this.fin.finish(chain, now.effects!, into, picture, this.clocks, this.fxFrames, this.carry.fluid), screenWidth, screenHeight);
-    else if (into && picture) this.screen.toScreen(picture, screenWidth, screenHeight);
+    if (chain.length && into && picture) {
+      // Each run from the last one's picture; the first into the picture's own targets, as before.
+      let shown = picture;
+      chain.forEach(({ p, ids }, i) => (shown = this.fin.finish(p, { ...fx!, ids }, i ? this.fin.targets(light.width, light.height, i) : into, shown, this.clocks, this.fxFrames, this.carry.fluid)));
+      this.screen.toScreen(shown, screenWidth, screenHeight);
+    } else if (into && picture) this.screen.toScreen(picture, screenWidth, screenHeight);
     else this.fin.idle();
   }
 

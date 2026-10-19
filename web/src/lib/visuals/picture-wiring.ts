@@ -3,6 +3,8 @@
 // Tunnel → the Loop effect → Dive → the points), Show's device, the layers mixed over the flame, the picture's own
 // loop (a Feedback → its modules → a Mix keeping the brighter, with the new picture), the effects, the Screen.
 import type { Layer, Module, Patch } from './patch';
+import { effectOf, engineEffect } from './effects';
+import { engineOf } from './engine-module';
 import { MIX_MODES, type CableV2 } from './ports';
 import { setPictureWiring } from './v2';
 
@@ -20,6 +22,18 @@ const CARRY_ORDER = ['trails', 'fluid', 'tunnel', 'loop-effect', 'dive'];
 
 /** A layer's blend as a Mix input's mode (Mix's list holds the layers' blends and Lighten). */
 export const mixMode = (b: Layer['blend']['mode']) => MIX_MODES.indexOf(b as (typeof MIX_MODES)[number]);
+
+/** The effects as modules in a line drawing what today's one pass draws (effects.ts pictureShader: every shape in slot
+ *  order, then the colours and echoes at the coordinates they give): the colours and echoes first in slot order, then
+ *  the shapes in reverse (a shape reads its input where it moves, so the last one moves first). */
+export function effectsInOrder(finish: Module[]): Module[] {
+  const kind = (m: Module) => {
+    const engine = engineOf(m.type);
+    return effectOf(engine ? engineEffect(engine, m.knobs.effect ?? 1) : 0)?.kind;
+  };
+  const shapes = finish.filter((m) => kind(m) === 'shape');
+  return [...finish.filter((m) => kind(m) !== 'shape'), ...shapes.reverse()];
+}
 
 /** The modules and cables `p`'s pictures need beside its own modules. */
 export function pictureWiring(p: Patch): { modules: Module[]; cables: CableV2[] } {
@@ -67,7 +81,7 @@ export function pictureWiring(p: Patch): { modules: Module[]; cables: CableV2[] 
     cables.push(cable(kept, ['loop-mix', 'in1']), cable(at, ['loop-mix', 'in2']), cable(['loop-mix', 'picture'], ['loop-feedback', 'picture']));
     at = ['loop-mix', 'picture'];
   }
-  for (const m of p.finish) {
+  for (const m of effectsInOrder(p.finish)) {
     if (at) cables.push(cable(at, [m.id, 'picture']));
     at = [m.id, 'picture'];
   }

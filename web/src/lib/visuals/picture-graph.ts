@@ -12,6 +12,7 @@
 // Devices are opened first (v2.ts `flatten`): they cost nothing. A polymorphic port takes light or a picture, its
 // module's output the type of what comes in. A module's picture outputs are one picture.
 import { ENGINE_MODULES, GRAPH_MODULES, LIGHT_CARRIERS, MIX_MODES, portsOf, showPartTypes, SHOW_PARTS, type Port, type PatchV2, type PortRef, type Ports, type PortType } from './ports';
+import { effectOf } from './effects';
 import type { ModuleType } from './patch';
 import { EXTRA_TYPES } from './registry';
 import { flatten } from './v2';
@@ -76,6 +77,26 @@ export function stagesOf(c: Compiled): Stage[] | null {
     if (out.at(-1) !== s) out.push(s);
   }
   return out;
+}
+
+/** The effects (today's slots, `order` as the graph draws them) as fused runs this frame: each its slots' `ids` (the
+ *  others none), drawn in one pass. A run ends at an Echo that shows, so its trail is its own, not what the shapes
+ *  after it make of it. */
+export function effectRuns(order: readonly number[], ids: readonly number[], amounts: readonly number[]): number[][] {
+  const runs: number[][] = [];
+  let run = ids.map(() => 0);
+  let any = false;
+  for (const k of order) {
+    run[k] = ids[k] ?? 0;
+    any = true;
+    if (effectOf(run[k])?.kind === 'echo' && (amounts[k] ?? 0) > 0) {
+      runs.push(run);
+      run = ids.map(() => 0);
+      any = false;
+    }
+  }
+  if (any) runs.push(run);
+  return runs;
 }
 
 /** An output's key: `module.port`. */
