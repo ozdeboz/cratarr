@@ -61,11 +61,23 @@ export function polyKnobs(t: ModuleType): ModuleType {
 
 const knobPortOf = (k: Knob): Port => ({ ...knobPort(k), ...(k.channels ? { channels: k.channels } : {}) });
 
+/** Trigger inputs a type takes beside its own (0057 §4b): the LFO, clocked (its rate in beats while its clock is
+ *  plugged in) and reset on the bar. */
+const TRIGGER_INPUTS: Record<string, Port[]> = {
+  lfo: [
+    { id: 'clock', label: 'Clock', type: 'trigger' },
+    { id: 'reset', label: 'Reset', type: 'trigger', normal: { module: 'clock', port: 'bar' } },
+  ],
+};
+
 /** A module type's ports, from what it declares (its own `ports` where it has them: the modules below). */
 export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   if (t.ports) return t.ports;
   const knobs = polyKnobs(t).knobs.filter((k) => !k.device).map(knobPortOf);
-  const inputs = (t.inputs ?? []).map((id): Port => ({ id, label: id === 'in' ? 'Input' : id[0].toUpperCase() + id.slice(1), type: id === 'trigger' ? 'trigger' : 'value' }));
+  const inputs = [
+    ...(t.inputs ?? []).map((id): Port => ({ id, label: id === 'in' ? 'Input' : id[0].toUpperCase() + id.slice(1), type: id === 'trigger' ? 'trigger' : 'value' })),
+    ...(TRIGGER_INPUTS[t.type] ?? []),
+  ];
   if (t.place === 'modulator') return { in: [...inputs, ...knobs], out: [VALUE_OUT] };
   if (t.place === 'frame') return { in: knobs, out: [] };
   return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT] };
@@ -87,13 +99,16 @@ type Declared = ModuleType & { ports: Ports };
 
 /** Today's hidden behaviours as modules (0057 §3). Their knobs are what the old settings held; their ports normalled
  *  to where the behaviour reaches today. claude-5f's engine steps them; the views draw them as any other. */
+const MUSIC_KNOBS: Knob[] = [{ ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 }];
+
 export const MUSIC: Declared = {
   type: 'music',
   label: 'Music',
   place: 'modulator',
-  knobs: [],
+  // A band's envelope's fall (s): its hold, what today's lighting times gave the envelope (claude-5f).
+  knobs: MUSIC_KNOBS,
   ports: {
-    in: [],
+    in: MUSIC_KNOBS.map(knobPortOf),
     out: [
       out('audio', 'Sound', 'audio'),
       ...TRACK_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value')),
@@ -144,7 +159,6 @@ export const FLASH = declared(
   [VALUE_OUT],
 );
 
-export const WALK = declared('walk', 'Walk', 'modulator', [knob('amount', 'Amount', 0, 1, 0, 'level'), knob('rate', 'Rate', 0, 1, 0.1)], [{ id: 'trigger', label: 'Jump', type: 'trigger' }], [VALUE_OUT]);
 
 const BUSY_LABEL: Record<(typeof BUSY)[number], string> = { motion: 'Motion', shape: 'Shape churn', colour: 'Colour churn', zoom: 'Zoom pumping', looks: 'New looks' };
 
@@ -178,7 +192,13 @@ export const ADSR = declared(
   'adsr',
   'ADSR',
   'modulator',
-  [knob('attack', 'Attack', 0, 2, 0.01), knob('decay', 'Decay', 0, 4, 0.2), knob('sustain', 'Sustain', 0, 1, 0, 'level'), knob('release', 'Release', 0, 8, 0.2), knob('amount', 'Amount', 0, 1, 1, 'level')],
+  [
+    ...[knob('attack', 'Attack', 0, 2, 0.04), knob('decay', 'Decay', 0, 4, 0), knob('sustain', 'Sustain', 0, 1, 0, 'level'), knob('release', 'Release', 0.02, 8, 0.2)].map((k) => ({ ...k, channels: 6 })),
+    // How a hit that comes while one rings starts: from the higher of the two (0, as today's lights), or from where it
+    // is (1, the textbook's).
+    knob('retrigger', 'Retrigger', 0, 1, 0, 'step'),
+    knob('amount', 'Amount', 0, 1, 1, 'level'),
+  ],
   [{ id: 'gate', label: 'Gate', type: 'trigger', channels: 6 }],
   [out('out', 'Out', 'value', 6)],
 );
@@ -282,7 +302,18 @@ export const INSTANCE = declared(
   [PICTURE_OUT],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE];
+/** Filter bank (0057 §4b): the sound split into six bands by a crossover (Linkwitz–Riley), a band a channel. Its five
+ *  split points (Hz) movable. */
+export const FILTER_BANK = declared(
+  'filterbank',
+  'Filter bank',
+  'modulator',
+  [60, 250, 500, 2000, 6000].map((hz, i) => knob(`split${i + 1}`, `Split ${i + 1}`, 20, 16000, hz)),
+  [{ id: 'audio', label: 'Sound', type: 'audio', normal: { module: 'music', port: 'audio' } }],
+  [out('bands', 'Bands', 'audio', 6), out('level', 'Level', 'value', 6)],
+);
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
@@ -318,8 +349,8 @@ export const MIX = declared(
 );
 
 /** Feedback: the picture its input had last frame (TouchDesigner's Feedback; VCV Rack's one-step cable): the only
- *  way round a picture cycle. */
-export const FEEDBACK = declared('feedback', 'Feedback', 'module', [], [PICTURE_IN], [PICTURE_OUT]);
+ *  way round a picture cycle. Light or a picture (the flame's own loop runs on light). */
+export const FEEDBACK = declared('feedback', 'Feedback', 'module', [], [{ ...PICTURE_IN, polymorphic: true }], [{ ...PICTURE_OUT, polymorphic: true }]);
 
 /** The screen: what reaches it is drawn, through its flash guard (three flashes a second over the area the owner chose:
  *  fixed, never learned, never removed; `guard` how far it is holding now). */
