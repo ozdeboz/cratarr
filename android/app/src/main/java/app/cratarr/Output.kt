@@ -33,6 +33,37 @@ object Output {
         return JSONObject().put("type", type).put("name", name ?: JSONObject.NULL)
     }
 
+    /** Every output there is now, as `{id, type, name}` (the id `type:name`, or `type` alone without a name), each once:
+     *  the device sheet's choice (decision 0033, amended 2026-10-19). */
+    fun all(context: Context): List<JSONObject> {
+        val audio = context.getSystemService(AudioManager::class.java) ?: return emptyList()
+        return audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .filter(::choosable)
+            .map { d -> Triple(idOf(d), typeOf(d.type), nameOf(d)) }
+            .distinctBy { it.first }
+            .sortedByDescending { rank(it.second) }
+            .map { (id, type, name) -> JSONObject().put("id", id).put("type", type).put("name", name ?: JSONObject.NULL) }
+    }
+
+    /** The output an id names, among those there are now; null when it is gone. */
+    fun find(context: Context, id: String): AudioDeviceInfo? {
+        val audio = context.getSystemService(AudioManager::class.java) ?: return null
+        return audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter(::choosable).firstOrNull { idOf(it) == id }
+    }
+
+    /** An output music can be sent to: not a call's (a Bluetooth device's call channel, the earpiece), nor the speaker's
+     *  "safe" twin, nor something unknown. */
+    private fun choosable(d: AudioDeviceInfo): Boolean = typeOf(d.type) !in setOf("other", "remote") &&
+        d.type !in setOf(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE, AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE, AudioDeviceInfo.TYPE_BLUETOOTH_SCO)
+
+    /** Which outputs there are, as one text: a choice lasts until it changes. */
+    fun set(context: Context): String = all(context).joinToString("|") { it.getString("id") }
+
+    private fun nameOf(d: AudioDeviceInfo): String? =
+        d.productName?.toString()?.trim()?.takeIf { it.isNotEmpty() && typeOf(d.type) != "speaker" }
+
+    private fun idOf(d: AudioDeviceInfo): String = typeOf(d.type).let { t -> nameOf(d)?.let { "$t:$it" } ?: t }
+
     private fun typeOf(t: Int): String = when (t) {
         AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET,
         AudioDeviceInfo.TYPE_BLE_SPEAKER, AudioDeviceInfo.TYPE_BLE_BROADCAST, AudioDeviceInfo.TYPE_HEARING_AID -> "bluetooth"

@@ -146,6 +146,19 @@ class Prefs(context: Context) {
             p.edit().putString(QUEUE_NAME, value).apply()
         }
 
+    /** This device's output as chosen in its sheet (decision 0033, amended 2026-10-19): an output's id, or empty for
+     *  Automatic; and which outputs there were when it was chosen (it lasts until they change). */
+    var outputChoice: String
+        get() = p.getString(OUTPUT_CHOICE, null).orEmpty()
+        set(value) {
+            p.edit().putString(OUTPUT_CHOICE, value).apply()
+        }
+    var outputChoiceSet: String
+        get() = p.getString(OUTPUT_CHOICE_SET, null).orEmpty()
+        set(value) {
+            p.edit().putString(OUTPUT_CHOICE_SET, value).apply()
+        }
+
     /** A new queue starts: its own id, and its name (empty: Cratarr names it after its album, artist or first track). */
     fun newQueue(name: String) {
         p.edit().putString(QUEUE_ID, java.util.UUID.randomUUID().toString()).putString(QUEUE_NAME, name).apply()
@@ -261,6 +274,8 @@ class Prefs(context: Context) {
         const val REPEAT = "repeat"
         const val SHUFFLED = "shuffled"
         const val QUEUE_ID = "queue_id"
+        const val OUTPUT_CHOICE = "output_choice"
+        const val OUTPUT_CHOICE_SET = "output_choice_set"
         const val QUEUE_NAME = "queue_name"
         /** The public address (the app's only one before it had two). */
         const val SERVER_URL = "server_url"

@@ -80,6 +80,8 @@ pub struct CrateView {
     pub favourites: crates::Favourites,
     /// Its favourite albums toggle's setting (decision 0024, amended 2026-10-19); `counts` are counted with it.
     pub favourite_albums: crates::Favourites,
+    /// How many of its tracks were left out by hand (decision 0024, amended 2026-10-19); `counts` leave them out.
+    pub left_out: usize,
     /// How many tracks it has with each setting of the toggle (the page shows the one it is set to, and the next at
     /// once on a tap); `None` where the favourites are not known (no server connected).
     pub counts: CrateCounts,
@@ -929,6 +931,14 @@ impl PlaylistService {
                 }
                 Ok(Change::Crate { before: after, after: before })
             }
+            Change::LeftOut { crate_id, before, after } => {
+                let crates = self.crate_stores.of(account)?;
+                if crates.left_out(&crate_id).await? != after {
+                    return Err(changed());
+                }
+                crates.set_left_out(&crate_id, before.clone()).await?;
+                Ok(Change::LeftOut { crate_id, before: after, after: before })
+            }
         }
     }
 
@@ -1284,6 +1294,9 @@ impl PlaylistService {
         let set = self.own_crates()?.all_favourites().await?;
         let albums_set = self.own_crates()?.all_favourite_albums().await?;
         let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
+        let left_set = self.own_crates()?.all_left_out().await?;
+        let none: Vec<String> = Vec::new();
+        let left_of = |id: &str| left_set.get(id).unwrap_or(&none);
         // The favourites are asked for only when a crate shows by them (its conditions, or its toggle): asking the
         // media server for every favourite is slow, and a list of crates that need none must not wait for it. The
         // other settings' counts are then unknown (null) until it is asked.
@@ -1316,10 +1329,11 @@ impl PlaylistService {
             .map(|(permanent, c)| {
                 let favourites = set.get(&c.id).copied().unwrap_or(crates::Favourites::None);
                 let favourite_albums = albums_of(&c.id);
-                let shown = crates::shown(&c.conditions, favourites, favourite_albums);
+                let left = left_of(&c.id);
+                let shown = crates::leaving_out(left, &crates::shown(&c.conditions, favourites, favourite_albums));
                 let stats = lib.knows(&shown).then(|| crate_stats(&lib.select(&shown), &facts, &songs, played.as_ref(), now));
-                // Per setting of the favourites toggle, the albums toggle as it is set.
-                let counted = |tracks: crates::Favourites| count(crates::shown(&c.conditions, tracks, favourite_albums));
+                // Per setting of the favourites toggle, the albums toggle as it is set and the left-out list.
+                let counted = |tracks: crates::Favourites| count(crates::leaving_out(left, &crates::shown(&c.conditions, tracks, favourite_albums)));
                 CrateView {
                     counts: CrateCounts {
                         all: counted(crates::Favourites::All),
@@ -1328,6 +1342,7 @@ impl PlaylistService {
                     },
                     favourites,
                     favourite_albums,
+                    left_out: left.len(),
                     stats,
                     image: images.as_ref().is_some_and(|d| d.join(image_file(&c.id)).is_file()),
                     id: c.id,
@@ -1451,7 +1466,42 @@ impl PlaylistService {
             Some(a) => a,
             None => self.own_crates()?.favourite_albums(id).await?,
         };
-        Ok(crates::shown(&def.conditions, fav, albums))
+        let left = self.own_crates()?.left_out(id).await?;
+        Ok(crates::leaving_out(&left, &crates::shown(&def.conditions, fav, albums)))
+    }
+
+    /// Tracks taken out of a crate by hand, or put back (`out` false), by their ids on a server (decision 0024, amended
+    /// 2026-10-19): kept as their lines in the crate's left-out list. Returns how many it holds now and the undo token.
+    pub async fn crate_leave_out(&self, id: &str, want: Option<&str>, ids: &[String], out: bool) -> Result<(usize, Option<String>), ToggleError> {
+        self.crate_def(id).await?;
+        let (sid, _) = self.source_of(want)?;
+        let (c, s, ids) = (self.lib.catalogue(), sid.clone(), ids.to_vec());
+        let lines = tokio::task::spawn_blocking(move || c.rels_of(&s, 0, &ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let store = self.own_crates()?;
+        let before = store.left_out(id).await?;
+        let mut after = before.clone();
+        if out {
+            let mut new: Vec<String> = lines.into_iter().filter(|l| !before.contains(l)).collect();
+            new.sort();
+            after.extend(new);
+        } else {
+            after.retain(|l| !lines.contains(l));
+        }
+        if after == before {
+            return Ok((after.len(), None));
+        }
+        store.set_left_out(id, after.clone()).await?;
+        let undo = self.keep(Change::LeftOut { crate_id: id.to_string(), before, after: after.clone() });
+        Ok((after.len(), undo))
+    }
+
+    /// A crate's tracks left out by hand, as rows on a server, for its editor to put back.
+    pub async fn crate_left_out(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<PlaylistRow>), ToggleError> {
+        self.crate_def(id).await?;
+        let (sid, _) = self.source_of(want)?;
+        let lines = self.own_crates()?.left_out(id).await?;
+        let rows = self.rows_of(lines, &sid).await?;
+        Ok((sid, rows))
     }
 
     /// A crate's tempo spread (decision 0041), its tracks chosen as its rows are (the favourites toggle `fav`, else as

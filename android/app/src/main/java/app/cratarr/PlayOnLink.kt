@@ -91,7 +91,10 @@ class PlayOnLink(
     fun start() {
         if (running) return
         running = true
-        outputs = Output.Watch(service) { soon() }
+        outputs = Output.Watch(service) {
+            service.outputsChanged()
+            soon()
+        }
         volume = player.volume
         player.addListener(this)
         thread = Thread(::listen, "cratarr-play-on").apply { isDaemon = true; start() }

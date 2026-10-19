@@ -259,3 +259,13 @@ The owner asked to "play the car queue again", and yes to the app saying where i
   that name (the car's, say) instead of "Library", "Favourites" or its tracks'. Renamed as any other.
 - `queue {played_on: "<text>"}` takes up the newest queue heard on an output or player whose name holds the text: this
   player's list first, then the same account's other players' lists. It plays from where it stood.
+
+## Amendment (2026-10-19): this device's output, chosen
+
+The owner: "hardware audio device selection in case of local playback, even in a group" (release 69). The app tells
+the page its outputs (`outputs: [{id, type, name}]`, music's only: not a call's channel, not the earpiece) and the one
+chosen (`output`, null for Automatic), again whenever one comes or goes; `device-set {output}` chooses. The choice is
+the app player's preferred device, alone or leading a group. A choice lasts until the outputs there are change, then it
+is Automatic again (the speaker picked in the car is not picked the next time). Following a group, Snapcast's own
+player plays (the Snapdroid 0.29 build has no choice of output), so Android routes it as before: choosing there would
+need our own build of its player. The report's `output` stays what actually plays.
