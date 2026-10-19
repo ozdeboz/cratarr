@@ -115,7 +115,7 @@
   import { on } from './events.svelte';
   import { swipe } from './swipe';
   import SwipeBehind from './SwipeBehind.svelte';
-  import LeftOutSheet from './LeftOutSheet.svelte';
+  import ExcludedSheet from './ExcludedSheet.svelte';
   import { toast } from './toast.svelte';
   import { me } from './me.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
@@ -655,8 +655,8 @@
   let menuOpen = $state(false);
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
   let menuStart = $state<'menu' | 'delete'>('menu');
-  /** `out`: its list's Remove from (a crate's, one's own playlist's), as a swipe left there. */
-  let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists'; out?: { label: string; icon: IconName; run: () => void } | null } | null>(null);
+  /** `outs`: its list's Remove from (one's own playlist) or Exclude from (a crate: the track, its album). */
+  let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists'; outs?: { label: string; icon: IconName; run: () => void }[] } | null>(null);
   const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null });
 
   // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
@@ -919,11 +919,11 @@
   }
 
   // Swipes on a list's rows (the owner, 2026-10-19: "on any library content list in the panel, swiping to the left should
-  // remove it from that list"): right plays the track next on every list; left takes it out of the crate (its left-out
-  // list, decision 0024 amended) or out of the playlist file (one's own), at once, with Undo. An album's or an artist's
+  // remove it from that list"): right plays the track next on every list; left excludes it from the crate (decision
+  // 0024 amended: "exclude, not remove") or takes it out of the playlist file (one's own), at once, with Undo. An album's or an artist's
   // tracks are no list of one's own: no left. What each does shows in the strip the row uncovers (lib/SwipeBehind).
   const PLAY_NEXT = { icon: 'playNext', label: 'Play next' } as const;
-  const OUT_OF_CRATE = { icon: 'crateOut', label: 'Remove', danger: true } as const;
+  const OUT_OF_CRATE = { icon: 'crateOut', label: 'Exclude', danger: true } as const;
   const OUT_OF_PLAYLIST = { icon: 'listRemove', label: 'Remove', danger: true } as const;
   /** A swipe left on a row of `list` (a playlist's id; the crate viewed): null where it takes nothing out. */
   function outOf(r: PlaylistRow, list: string): (() => 'away') | null {
@@ -934,12 +934,21 @@
     if (!pl || pl.mine === false || (multi ? !(list in sections) : list !== id)) return null;
     return () => outOfPlaylist(list, r);
   }
-  /** How many tracks the crate viewed leaves out by hand, and their sheet. */
+  /** How many tracks and albums the crate viewed excludes, and their sheet. */
   const leftOut = $derived(crate && !crateEditing ? (crates.list?.find((x) => x.id === crate)?.left_out ?? 0) : 0);
   let leftOutOpen = $state(false);
-  /** A row's menu: Remove from the list, doing what its swipe left does. */
-  const menuOut = (out: (() => 'away') | null, list: string) =>
-    out ? { label: `Remove from ${crate ? crateName(crate) : list}`, icon: (crate ? 'crateOut' : 'listRemove') as IconName, run: () => void out() } : null;
+  /** A row's menu: what its swipe left does (Exclude from the crate, Remove from the playlist), and in a crate its
+   *  album's Exclude too. */
+  function menuOuts(out: (() => 'away') | null, list: string, r: PlaylistRow) {
+    if (!out) return [];
+    const c = crate;
+    if (!c) return [{ label: `Remove from ${list}`, icon: 'listRemove' as IconName, run: () => void out() }];
+    const name = crateName(c);
+    return [
+      { label: `Exclude from ${name}`, icon: 'crateOut' as IconName, run: () => void out() },
+      ...(r.album_id ? [{ label: `Exclude album from ${name}`, icon: 'crateOut' as IconName, run: () => albumOutOfCrate(c, r) }] : []),
+    ];
+  }
   /** The row leaves the list as it slides out (the list is keyed by place, so the next takes its row). */
   function dropShown(list: string, r: PlaylistRow) {
     setTimeout(() => {
@@ -950,11 +959,21 @@
   }
   function outOfCrate(c: string, r: PlaylistRow) {
     dropShown(id, r);
-    leaveOut(c, source, [r.id!]).catch((e) => {
-      toast.fail(e, "It wasn't taken out");
+    leaveOut(c, source, { ids: [r.id!] }).catch((e) => {
+      toast.fail(e, "It wasn't excluded");
       saved++;
     });
     return 'away' as const;
+  }
+  /** The row's whole album out of the crate (the owner: "exclude album from crate"): its rows leave the list. */
+  function albumOutOfCrate(c: string, r: PlaylistRow) {
+    const a = r.album_id;
+    if (!a) return;
+    for (const x of rows?.filter((x) => x.album_id === a) ?? []) dropShown(id, x);
+    leaveOut(c, source, { albums: [a] }).catch((e) => {
+      toast.fail(e, "It wasn't excluded");
+      saved++;
+    });
   }
   // A playlist's line out of its file. Swipes in a row wait for each other: each save names the lines as the one before
   // left them (the server refuses a save over lines that changed), and the list is read again once they are all done.
@@ -1482,8 +1501,8 @@
           <!-- A genre opens in the panel (its own crate). -->
           {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
           {#if p?.dead || chosenDead}<p class="details dead missing">{p?.dead || chosenDead} missing</p>{/if}
-          <!-- A crate's tracks taken out by hand (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
-          {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} left out</span></button>{/if}
+          <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
+          {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
         </div>
         {#if headTempo}
           <div class="head-spread">
@@ -1724,7 +1743,7 @@
       attach={fromAction(swipe, () => ({ enabled: !selecting, right: ok ? () => playNext(r, src) : null, left: out }))}
       attachMain={fromAction(longpress, () => () => {
         if (!ok) return;
-        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu', out: menuOut(out, name) };
+        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, name, r) };
         else if (selecting) selectSheet = true;
         else startSelect(i);
       })}
@@ -1745,7 +1764,7 @@
       ><Icon name={selecting.has(i) ? 'circleCheck' : 'circle'} size={24} /></button
     >
   {:else}
-    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu', out: menuOut(out, list) })}
+    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, list, r) })}
       ><Icon name="moreVert" size={22} /></button
     >
   {/if}
@@ -1798,10 +1817,10 @@
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
 {#if trackMenu}
-  <TrackMenu track={trackMenu.track} start={trackMenu.start} out={trackMenu.out} onclose={() => (trackMenu = null)} />
+  <TrackMenu track={trackMenu.track} start={trackMenu.start} outs={trackMenu.outs} onclose={() => (trackMenu = null)} />
 {/if}
 {#if leftOutOpen && crate}
-  <LeftOutSheet crate={crate} onchange={() => saved++} onclose={() => (leftOutOpen = false)} />
+  <ExcludedSheet {crate} onchange={() => saved++} onclose={() => (leftOutOpen = false)} />
 {/if}
 {#if artistMenuOpen && artist}
   <ArtistMenu

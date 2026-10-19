@@ -36,6 +36,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     the track is analysed (decision 0035) the bar is its **waveform**: its loudness along it as bars (against its own
     loudest), what has played in the accent; the handle shows only while held. Elsewhere the thin line. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
     cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere (over the page and beside it): swipe up opens the queue, swipe down closes.
+    A long press on the heart (2026-10-19) opens a sheet: Favourite (its switch), Exclude from the crate the queue came
+    from and Exclude album from it (its own tracks), and Exclude globally (decision 0024, amended).
   - **Where it shows:** with room for it (a content area of 800 × 500 px or more) the full player sits beside the page
     by itself while something plays, resizable at its edge (handle in the middle), the width remembered; its chevron
     folds it to the mini-player until that is tapped. Otherwise the mini-player shows, and opens the full player
@@ -58,10 +60,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     artist and the album, not the album the queue plays, Radio's or Autoplay's mark before them; length, heart, ⋮). A tap plays
     a row; a row's cover held plays its track from a third of the way in until the finger lifts, over what plays,
     which then goes on where it was (decided 2026-10-16; this browser's own stream for now). Playing on this device a row's handle reorders and a swipe left past 65 % removes it,
-    with no undo, as Finamp; the server's player takes neither command. In a queue a crate started, its own tracks
-    (not added by hand, by Radio or by Autoplay) can be taken out of the crate: the crate-with-a-cross beside the
-    playing card's heart (the next track plays), and "Remove from <crate>" in a row's menu (decision 0024, amended
-    2026-10-19); Undo follows. A long-press or right-click opens a menu, the
+    with no undo, as Finamp; the server's player takes neither command. Excluding from a crate is not offered here
+    (the owner, 2026-10-19: "It makes no sense to have the button there"). A long-press or right-click opens a menu, the
     same everywhere in the sheet: on the playing track's card (it has no ⋯) the playing track's own menu; on a row a
     menu about its place in the queue: Play now and Play next (moving it there on this device; "Play again next", a
     copy, on the server's player), then Add to playlist, the favourite and Remove from queue (this device).
@@ -77,8 +77,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`,
   `lib/remote.svelte.ts`).
 - **Swipes on rows** (`lib/swipe.ts`, the owner 2026-10-19): the row follows the finger; past 65 % of its width the
-  action runs, else it springs back. Left takes it out of the list it is in (the queue, a crate, one's own
-  playlist), with Undo except in the queue; right plays it next (an album's, an artist's, a crate's and a playlist's
+  action runs, else it springs back. Left takes it out of the list it is in: Remove from the queue or one's own
+  playlist, Exclude from a crate (decision 0024, amended), with Undo except in the queue; right plays it next (an album's, an artist's, a crate's and a playlist's
   tracks). A way with no action does not move. What it does shows in the strip the row uncovers, growing from the
   edge with the move (`lib/SwipeBehind.svelte`): the action's icon and word, red for removing, the accent for Play
   next, on a light tint of the same colour.

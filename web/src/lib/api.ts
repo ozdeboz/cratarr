@@ -427,18 +427,33 @@ export const setCrateFavouriteAlbums = (id: string, favourite_albums: CrateFavou
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ favourite_albums }),
   });
-/** A crate's tracks taken out by hand (decision 0024, amended 2026-10-19): it leaves them out whatever its conditions
- *  and toggles say. Out and back in again are journaled (Undo); ids the library does not know are passed over. */
-export const leaveOutOfCrate = (id: string, source: string, ids: string[]) =>
-  post<{ left_out: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/left-out`, { source, ids });
-export const putBackInCrate = (id: string, source: string, ids: string[]) =>
+/** What is excluded (decision 0024, amended 2026-10-19): tracks (`ids`) and, from a crate, whole albums (`albums`,
+ *  their tracks now and later). */
+export type Excluding = { ids?: string[]; albums?: string[] };
+/** A crate's exclusions: it leaves them out whatever its conditions and toggles say. Out and back in again are
+ *  journaled (Undo); ids the library does not know are passed over. */
+export const leaveOutOfCrate = (id: string, source: string, what: Excluding) =>
+  post<{ left_out: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/left-out`, { source, ...what });
+export const putBackInCrate = (id: string, source: string, what: Excluding) =>
   request<{ left_out: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/left-out`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, ...what }),
+  });
+/** An excluded album, as a crate's list shows it; no title for one the library no longer has. */
+export type ExcludedAlbum = { id: string; title: string | null; artist: string | null };
+export const crateLeftOut = (id: string, source?: string) =>
+  quietly<{ source: string; rows: PlaylistRow[]; albums?: ExcludedAlbum[] }>(`/api/crates/${encodeURIComponent(id)}/left-out${follow(source)}`);
+/** Global exclusions (the owner: "every automatic pick"): out of every crate, and never picked by Radio, Autoplay or a
+ *  shuffle of the library or the favourites; still played when chosen. Journaled as a crate's are. */
+export const excludeTracks = (source: string, ids: string[]) => post<{ excluded: number } & Undo>('/api/excluded', { source, ids });
+export const includeTracks = (source: string, ids: string[]) =>
+  request<{ excluded: number } & Undo>('/api/excluded', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ source, ids }),
   });
-export const crateLeftOut = (id: string, source?: string) =>
-  quietly<{ source: string; rows: PlaylistRow[] }>(`/api/crates/${encodeURIComponent(id)}/left-out${follow(source)}`);
+export const excludedRows = (source?: string) => quietly<{ source: string; excluded: number; rows: PlaylistRow[] }>(`/api/excluded${follow(source)}`);
 export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
 /** `ids`: the queue to make it from (the local player's); without, the server's player's queue. `repeats`: a track
  *  the queue plays twice is in it twice (the page asked), else once (decision 0025, amended 2026-10-16). */

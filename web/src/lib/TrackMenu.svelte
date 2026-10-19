@@ -49,7 +49,7 @@
     start = 'menu',
     queue: place = null,
     onplaylists = null,
-    out = null,
+    outs = [],
   }: {
     onclose: () => void;
     track?: MenuTrack | null;
@@ -57,9 +57,9 @@
     queue?: QueuePlace | null;
     /** Opened from a component over the whole page (the full player): its playlists' step offers the Playlists page. */
     onplaylists?: (() => void) | null;
-    /** Opened on a list one can take it out of (a crate, a playlist; a queue a crate started): Remove from it, as a
-     *  swipe left does there (the owner, 2026-10-19). */
-    out?: { label: string; icon: IconName; run: () => void } | null;
+    /** Opened on a list one can take it out of: Remove from a playlist, Exclude from a crate (the track, its album), as
+     *  a swipe left does there (the owner, 2026-10-19). */
+    outs?: { label: string; icon: IconName; run: () => void }[];
   } = $props();
 
   const np = $derived(playing());
@@ -355,8 +355,7 @@
         {#if movesHere && !forPlaying}
           <MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />
         {/if}
-        {#if out}
-          {@const o = out}
+        {#each outs as o (o.label)}
           <MenuEntry
             icon={o.icon}
             label={o.label}
@@ -366,7 +365,7 @@
               o.run();
             }}
           />
-        {/if}
+        {/each}
       </div>
     {:else if step === 'lists'}
       <PlaylistToggles title="Add to / remove from playlists" {playlists} ticked={(p) => p.member}>
