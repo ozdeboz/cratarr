@@ -45,3 +45,19 @@ Cratarr's player in the car, on an iPhone.
   - Android Auto, the counterpart on Android, was taken out of the app with the rest of Jellyfin's extras (0031).
     Android Auto browses through a media library service (Media3), the kind of service the app's player already runs
     in, so Android would come before iOS.
+
+## A chosen output while following a group
+
+This device's chosen output (0033, amended 2026-10-19) applies when it plays alone or leads a group, not when it follows
+one: then Snapcast's own player makes the sound, and the Snapdroid build Cratarr ships (v0.29.0.2) opens its Oboe stream
+without a device. The owner (2026-10-19): "for later, if ever".
+
+- What it would take, as looked at then:
+  - The change is small: snapcast's `client/player/oboe_player.cpp` (v0.29.0) builds its stream with no `setDeviceId`;
+    passing the `--soundcard` option's index there (and the app giving it the chosen output's id, restarting the player
+    when the choice changes, as it does for a group change) is about ten lines.
+  - The work is building snapclient ourselves instead of taking Snapdroid's: its build is Gradle with CMake 3.22.1 and
+    NDK 27.2, snapcast as a submodule, and eight prebuilt dependency AARs from badaix/snapcast-deps v0.29.0 (boost,
+    flac, oboe, ogg, opus, soxr, tremor, vorbis). Building arm64-v8a only would do for the tablet and the phone.
+- Catches: GPL-3.0, so the patch stays in the repo with the source offer; our own build to keep up with Snapcast (or the
+  patch offered upstream); a test by ear on a device following a group.
