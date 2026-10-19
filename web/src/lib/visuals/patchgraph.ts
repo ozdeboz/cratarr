@@ -15,7 +15,7 @@ import type { Cable, Knob, Module, ModuleType, Patch, Place, SignalRef } from '.
 import { SIGNAL_LABEL, type Signal } from './routes';
 import { ENGINES } from './effects';
 import { cyclesClosed, FEEDBACK, fits, isDevice, MUSIC, polyKnobs, portsOf, type CableV2, type Device, type ExposedPort, type PatchV2, type Port, type PortRef, type PortType, type Ports } from './ports';
-import { lanesOf } from './rack';
+import { byCategory, CATEGORIES, CATEGORY_LABEL, categoryOf, type Category } from './rack';
 import { FACES, type FaceKind } from './faces';
 import { freeCableId, newCable, type Cables } from './cable-actions';
 
@@ -36,6 +36,8 @@ export type KnobView = {
   /** A polyphonic knob drawn as one (0057 §4b: a band's six): each channel's knob id, value and place in the range; the
    *  knob's own `value` and `at` their mean. */
   channels?: { id: string; value: number; at: number }[];
+  /** A step knob's `<id>:next` trigger (0057 §7e), drawn as a small diamond beside it. */
+  next?: boolean;
 };
 
 export type ModuleData = {
@@ -82,7 +84,9 @@ export type BoxData = { kind: 'box'; label: string; add?: string; device?: true 
 export type OffData = { kind: 'off'; layer: string; label: string };
 /** "+ Add layer" at the picture lane's end, "+ Add modulator" by the modulators. */
 export type AddData = { kind: 'add'; to: 'layer' | 'modulator'; label: string };
-export type NodeData = ModuleData | SignalData | MarkData | BoxData | OffData | AddData;
+/** A category's lane's header (v2): its name, whether the whole category is pinned, the devices it is inside. */
+export type LaneData = { kind: 'lane'; category: Category; label: string; pinned: boolean; scope: string[] };
+export type NodeData = ModuleData | SignalData | MarkData | BoxData | OffData | AddData | LaneData;
 
 export type GraphNode = {
   id: string;
@@ -147,7 +151,7 @@ export const WIRES: Readonly<Record<PortType, { dash: string | null; width: numb
 };
 /** A muted cable's dash, whatever its type. */
 export const MUTED_DASH = '2 8';
-/** A wire's look as CSS variables for its path (`--wire-w`, `--wire-dash`). */
+/** A wire's style as CSS variables for its path (`--wire-w`, `--wire-dash`). */
 export function wireStyle(type: PortType, muted = false): string {
   const w = WIRES[type];
   return `--wire-w: ${w.width}px; --wire-dash: ${muted ? MUTED_DASH : (w.dash ?? 'none')}`;
@@ -194,8 +198,10 @@ export function signalLabel(r: SignalRef): string {
 /** A module's name as the panel gives it: an engine module by its engine (Kaleidoscope, EYEDO, Hydra), not its slot. */
 export function labelOf(t: Pick<ModuleType, 'type' | 'label'>): string {
   const key = t.type.replace(/-engine$/, '');
-  return (t.type.endsWith('-engine') && ENGINES.find((e) => e.key === key)?.label) || t.label;
+  return (t.type.endsWith('-engine') && ENGINES.find((e) => e.key === key)?.label) || RENAMED[t.type] || t.label;
 }
+/** Names the graph gives ahead of their types (0057 §7e: the course-and-swing filter is Accent; "flash" is the Screen's). */
+const RENAMED: Record<string, string> = { flash: 'Accent' };
 
 /** A cable's amount as its label shows it: a swing signed, a level as a share. */
 export function amountLabel(value: RouteValue, mode: Cable['mode']): string {
@@ -239,8 +245,13 @@ export const LANE_H = 11;
 export function faceHeight(f: ModuleData['face']): number {
   if (!f || f.kind === 'clock') return 0;
   if (f.kind === 'random') return 26;
+  if (f.kind === 'vca' || f.kind === 'merge') return 18;
   return f.kind === 'adsr' && f.lanes > 1 ? f.lanes * LANE_H : 26;
 }
+
+/** A step knob's trigger port (ports.ts: `<knob>:next`), and whether a port id is one. */
+export const nextPort = (knob: string) => `${knob}:next`;
+const isNext = (port: string) => port.endsWith(':next');
 
 /** A module's knobs as drawn (shared by the v1 and v2 graphs): a band's knobs (`lighting.0` … `.5`) as one polyphonic
  *  knob (0057 §4b; ports.ts polyKnobs), its channels kept as `<id>.<channel>`, opened out (`<module>.<knob>` in `open`)
@@ -262,7 +273,8 @@ export function knobViews(
     for (const x of each) outOf.add(x.id);
     return each;
   });
-  const ids = (k: Knob) => (k.channels ? channelKnobs(k).map((x) => x.id) : [k.id]);
+  const hasNext = (k: Knob) => k.kind === 'step' && k.randomize !== false;
+  const ids = (k: Knob) => [...(k.channels ? channelKnobs(k).map((x) => x.id) : [k.id]), ...(hasNext(k) ? [nextPort(k.id)] : [])];
   const opened = o.open.has(m.id);
   let room = o.room;
   const shown = all.filter((k) => {
@@ -276,7 +288,7 @@ export function knobViews(
     const ring = (at: number) => ringOf(at, ids(k).flatMap(o.cablesInto));
     if (!k.channels) {
       const value = m.knobs[k.id] ?? k.default;
-      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)) };
+      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...(hasNext(k) ? { next: true } : {}) };
     }
     const channels = channelKnobs(k).map((x) => {
       const value = m.knobs[x.id] ?? m.knobs[k.id] ?? x.default;
@@ -295,6 +307,7 @@ export const faceKnobs = (m: Module, t: ModuleType): Record<string, number> => (
 export function sizeOf(d: NodeData): Size {
   if (d.kind === 'off') return { width: 200, height: 36 };
   if (d.kind === 'add') return { width: 130, height: 32 };
+  if (d.kind === 'lane') return { width: 220, height: 26 };
   if (d.kind !== 'module') return d.kind === 'box' ? { width: 0, height: 0 } : { width: d.kind === 'signal' ? 150 : d.kind === 'blend' ? 84 : 120, height: 36 };
   const shown = d.knobs.length + (d.hidden ? 1 : 0);
   const rows = Math.ceil(shown / KNOBS_ACROSS);
@@ -386,7 +399,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
       knobs,
       hidden,
       ports: declared.in
-        .filter((p) => !own.has(p.id) && p.type !== 'picture' && p.type !== 'light')
+        .filter((p) => !own.has(p.id) && !isNext(p.id) && p.type !== 'picture' && p.type !== 'light')
         .map((p) => ({ id: p.id, label: p.label, type: p.type, ...(p.channels ? { channels: p.channels } : {}), cabled: cabled(p.id), ...(p.normal ? { normal: p.normal } : {}), ...(p.polymorphic ? { polymorphic: true } : {}) })),
       gives: outs[0] ? (modulator ? portOf({ modulator: m.id }) : { type: outs[0].type }) : null,
       outs: outs.length > 1 ? outs.map((o, i) => ({ id: o.id, label: o.label, type: o.type, handle: i ? outHandle(o.id) : MOD_OUT })) : [],
@@ -591,10 +604,11 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     if (!ids.has(source) || !target) continue;
     // Into a channel of a polyphonic knob drawn as one: onto that knob.
     const knob = target.knobs.find((k) => k.id === c.to.knob) ?? target.knobs.find((k) => k.channels?.some((x) => x.id === c.to.knob));
-    if (!knob && !target.ports.some((p) => p.id === c.to.knob)) continue;
+    const next = target.knobs.some((k) => k.next && nextPort(k.id) === c.to.knob);
+    if (!knob && !next && !target.ports.some((p) => p.id === c.to.knob)) continue;
     const from = portOf(c.from);
     const data: CableData = { amount: amountLabel(c.value, c.mode), wire: from.type, ...(from.channels ? { channels: from.channels } : {}), ...(muted(c) ? { muted: true as const } : {}) };
-    edges.push({ id: c.id, source, target: c.to.module, sourceHandle: MOD_OUT, targetHandle: knobHandle(knob?.id ?? c.to.knob), type: 'cable', class: 'cable', style: wireStyle(from.type, muted(c)), deletable: true, selectable: true, data });
+    edges.push({ id: c.id, source, target: c.to.module, sourceHandle: MOD_OUT, targetHandle: knobHandle(next ? c.to.knob : (knob?.id ?? c.to.knob)), type: 'cable', class: 'cable', style: wireStyle(from.type, muted(c)), deletable: true, selectable: true, data });
   }
   for (const n of normals) {
     if (!ids.has(n.from) || !ids.has(n.to)) continue;
@@ -621,7 +635,7 @@ export function cableOf(
   const to = { module: dst.module, knob: c.targetHandle.slice(2) };
   const given = src.kind === 'signal' ? src.type : src.kind === 'module' ? (src.gives?.type ?? 'value') : 'value';
   const port = dst.ports.find((p) => p.id === to.knob);
-  if (given === 'audio' || !fits(given, port?.type ?? 'value', port?.polymorphic)) return null;
+  if (given === 'audio' || !fits(given, port?.type ?? (isNext(to.knob) ? 'trigger' : 'value'), port?.polymorphic)) return null;
   const same = (f: Cable['from']) => ('modulator' in f && 'modulator' in from ? f.modulator === from.modulator : !('modulator' in f) && !('modulator' in from) && signalKey(f) === signalKey(from));
   if (cables.some((x) => x.to.module === to.module && x.to.knob === to.knob && same(x.from))) return null;
   return { from, to };
@@ -826,8 +840,12 @@ function knobBehind(d: Device, as: string, types: Record<string, ModuleType>): {
 }
 
 const PICTURE_TYPES: ReadonlySet<PortType> = new Set<PortType>(['picture', 'light']);
-/** How far across the picture's row runs before it turns. */
-const PICTURE_ACROSS = 1400;
+/** How far across a lane's row runs before it turns; a lane's header's height. */
+const LANE_ACROSS = 1400;
+const LANE_HEAD = 34;
+/** A lane's header's node id, and the pin that holds a whole category (0057 §3b). */
+export const laneId = (c: Category) => `@lane:${c}`;
+export const categoryPin = (c: Category) => `category:${c}`;
 /** A macro's knob on its device. */
 export const macroKnob = (id: string) => `macro:${id}`;
 
@@ -844,7 +862,7 @@ export function handleOf(d: ModuleData, dir: 'in' | 'out', port: string): string
  *  that knob's); null where it has none (a knob its type does not declare). */
 export function handleAt(d: ModuleData, dir: 'in' | 'out', port: string): string | null {
   if (dir === 'out') return d.v2?.pout === port || d.v2?.mod === port || d.outs.some((o) => o.id === port) ? handleOf(d, 'out', port) : null;
-  if (d.v2?.pin === port || d.ports.some((x) => x.id === port) || d.knobs.some((k) => k.id === port)) return handleOf(d, 'in', port);
+  if (d.v2?.pin === port || d.ports.some((x) => x.id === port) || d.knobs.some((k) => k.id === port || (k.next && nextPort(k.id) === port))) return handleOf(d, 'in', port);
   const poly = d.knobs.find((k) => k.channels?.some((c) => c.id === port));
   return poly ? knobHandle(poly.id) : null;
 }
@@ -923,7 +941,7 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
       knobs,
       hidden,
       ports: ports.in
-        .filter((x) => !knobIds.has(x.id) && x !== pinPort)
+        .filter((x) => !knobIds.has(x.id) && !isNext(x.id) && x !== pinPort)
         .map((x) => ({ id: x.id, label: x.label, type: x.type, ...(x.channels ? { channels: x.channels } : {}), cabled: cabled(x.id), ...(x.normal ? { normal: x.normal } : {}), ...(x.polymorphic ? { polymorphic: true } : {}) })),
       gives: modulator && values[0] ? { type: values[0].type, ...(values[0].channels ? { channels: values[0].channels } : {}) } : null,
       outs: (modulator ? (values.length > 1 ? values : []) : values).map((o, i) => ({ id: o.id, label: o.label, type: o.type, handle: modulator && i === 0 ? MOD_OUT : outHandle(o.id), connectable: true })),
@@ -963,61 +981,51 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
       nodes.push(node);
       items.set(m.id, { id, node, size: sizes[id] ?? sizeOf(d) });
     }
-    // By lane: the sources down the left, the picture in its order across, the output after it, the control in rows
-    // under them.
-    const lanes = lanesOf(
-      p,
-      (m) => portsFor(m) ?? { in: [], out: [] },
-      (m) => types[m.type]?.place === 'source',
-    );
+    // By category (0057 §3b; rack.ts byCategory): a lane each, its header first (its name, a pin for the whole of it,
+    // a "+" for a module of it; none inside a device's frame, which carries the device's name), its modules in a row under it (the effects in the order pictures flow) that turns into
+    // another past LANE_ACROSS.
+    const lanes = byCategory(p, types);
+    const placed = new Set(CATEGORIES.flatMap((c) => lanes[c].map((m) => m.id)));
+    lanes.io.push(...p.modules.filter((m) => !placed.has(m.id)));
     const put = (it: Placed, x: number, y: number) => (it.node.position = positions[it.id] ?? { x: origin.x + x, y: origin.y + y });
+    const scope = prefix.split('/').filter(Boolean);
     let w = 0;
-    let h = 0;
     let y = 0;
-    let col = 0;
-    for (const m of lanes.sources) {
-      const it = items.get(m.id)!;
-      put(it, 0, y);
-      y += it.size.height + 28;
-      col = Math.max(col, it.size.width);
-    }
-    h = Math.max(h, y - 28);
-    // The picture's row turns into another under it past PICTURE_ACROSS, as text does.
-    const left = lanes.sources.length ? col + GAP_X : 0;
-    let x = left;
-    let py = 0;
-    let rowH = 0;
-    for (const m of [...lanes.picture, ...lanes.output]) {
-      const it = items.get(m.id)!;
-      if (x > left && x + it.size.width > PICTURE_ACROSS) {
-        x = left;
-        py += rowH + 60;
-        rowH = 0;
+    for (const cat of CATEGORIES) {
+      const ms = lanes[cat].map((m) => items.get(m.id)).filter((it): it is Placed => !!it);
+      if (!ms.length) continue;
+      if (!parent) {
+        const hid = `${prefix}${laneId(cat)}`;
+        const head: GraphNode = {
+          id: hid,
+          type: 'patch',
+          position: { x: origin.x, y: origin.y + y },
+          data: { kind: 'lane', category: cat, label: CATEGORY_LABEL[cat], pinned: p.pins.includes(categoryPin(cat)), scope },
+          deletable: false,
+          selectable: false,
+          connectable: false,
+          draggable: false,
+        };
+        nodes.push(head);
+        y += LANE_HEAD;
       }
-      put(it, x, py);
-      x += it.size.width + GAP_X;
-      rowH = Math.max(rowH, it.size.height);
-      w = Math.max(w, x - GAP_X);
-      h = Math.max(h, py + rowH);
-    }
-    w = Math.max(w, col);
-    const across = Math.max(w, 900);
-    let cx = 0;
-    let cy = lanes.control.length ? h + (h ? 100 : 0) : h;
-    let row = 0;
-    for (const m of lanes.control) {
-      const it = items.get(m.id)!;
-      if (cx > 0 && cx + it.size.width > across) {
-        cx = 0;
-        cy += row + 28;
-        row = 0;
+      const gap = cat === 'effects' ? GAP_X : 24;
+      let x = 0;
+      let rowH = 0;
+      for (const it of ms) {
+        if (x > 0 && x + it.size.width > LANE_ACROSS) {
+          x = 0;
+          y += rowH + 40;
+          rowH = 0;
+        }
+        put(it, x, y);
+        x += it.size.width + gap;
+        rowH = Math.max(rowH, it.size.height);
+        w = Math.max(w, x - gap);
       }
-      put(it, cx, cy);
-      cx += it.size.width + 24;
-      row = Math.max(row, it.size.height);
-      w = Math.max(w, cx - 24);
+      y += rowH + 56;
     }
-    if (lanes.control.length) h = cy + row;
+    const h = Math.max(0, y - 56);
 
     // The cables at this level, each end led into a device opened in place to the module behind its port.
     const end = (r: PortRef, dir: 'in' | 'out', q: PatchV2 = p, pre = prefix): { node: string; port: string } | null => {
@@ -1081,7 +1089,9 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
 export type V2Edit =
   | { kind: 'knob'; module: string[]; knob: string; value: number }
   | { kind: 'connect'; scope: string[]; from: PortRef; to: PortRef }
-  | { kind: 'remove'; scope: string[]; cables: string[] };
+  | { kind: 'remove'; scope: string[]; cables: string[] }
+  | { kind: 'pin'; scope: string[]; category: Category; on: boolean }
+  | { kind: 'add'; scope: string[]; type: string };
 
 /** The store's key for an edit: a knob's turns one step. */
 export const editKey = (e: V2Edit) => (e.kind === 'knob' ? `knob:${e.module.join('/')}.${e.knob}` : null);
@@ -1106,6 +1116,19 @@ export function applyV2(p: PatchV2, e: V2Edit): PatchV2 {
   }
   const inside = patchAt(p, e.scope);
   if (!inside) return p;
+  if (e.kind === 'pin') {
+    const pin = categoryPin(e.category);
+    inside.pins = inside.pins.filter((x) => x !== pin);
+    if (e.on) inside.pins.push(pin);
+    return p;
+  }
+  if (e.kind === 'add') {
+    const taken = new Set(inside.modules.map((m) => m.id));
+    let n = 1;
+    while (taken.has(`${e.type}-${n}`)) n++;
+    inside.modules.push({ id: `${e.type}-${n}`, type: e.type, knobs: {} });
+    return p;
+  }
   if (e.kind === 'remove') {
     const gone = new Set(e.cables);
     inside.cables = inside.cables.filter((c) => !gone.has(c.id));
@@ -1117,6 +1140,12 @@ export function applyV2(p: PatchV2, e: V2Edit): PatchV2 {
   inside.cables.push({ id: `cable-${n}`, from: e.from, to: e.to, value: 1, mode: 'swing' });
   return p;
 }
+
+/** The types a category's "+" offers (v2), by name. */
+export const typesOf = (cat: Category, types: Record<string, ModuleType>): ModuleType[] =>
+  Object.values(types)
+    .filter((t) => categoryOf(t) === cat && t.place !== 'frame' && t.type !== 'music' && t.type !== 'screen')
+    .sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
 
 /** What a connection drawn in the v2 graph makes, where it may: both ends at one level (the scope: the devices both
  *  are inside), an output into an input of a type that fits it, not one already there, a picture cycle only through a
@@ -1151,6 +1180,9 @@ export function connectionV2(
   return { kind: 'connect', scope: [...at, ...scope(c.source)], from, to };
 }
 
+/** Where a "+" adds: a layer, a modulator, a module into a box (v1); a module of a category at a level (v2). */
+export type AddTo = 'layer' | 'modulator' | { box: string } | { category: Category; scope: string[] };
+
 /** What PatchGraph hands its nodes and cables (Svelte context, under `GRAPH`). */
 export type GraphActions = {
   knob(module: string, knob: string, value: number): void;
@@ -1165,8 +1197,10 @@ export type GraphActions = {
   /** Whether a node can be removed, and its long press (its menu: Delete). */
   removable(id: string): boolean;
   menu(id: string): void;
-  /** A "+" tapped: the types to add there (a layer, a modulator, or a module into a box: its `add`). */
-  adding(to: 'layer' | 'modulator' | { box: string }): void;
+  /** A "+" tapped: the types to add there (a layer, a modulator, a module into a box: its `add`; v2, a category's). */
+  adding(to: AddTo): void;
+  /** A whole category pinned, or let go (v2: `category:<name>` in the pins of the patch at `scope`). */
+  pinCategory(scope: string[], category: Category, on: boolean): void;
   /** A layer that is off, brought back. */
   bringBack(layer: string): void;
   /** A cable tapped (its amount, too): its configuration; its long press at a point (the window's), its menu. */

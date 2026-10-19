@@ -10,8 +10,9 @@
   import { longpress } from '../longpress';
   import PatchKnob from './PatchKnob.svelte';
   import PatchFace from './PatchFace.svelte';
+  import Icon from '../Icon.svelte';
   import { clockLights } from './faces';
-  import { GRAPH, knobHandle, MOD_OUT, polyTurned, type GraphActions, type KnobView, type NodeData, type Side } from './patchgraph';
+  import { GRAPH, knobHandle, MOD_OUT, nextPort, polyTurned, type GraphActions, type KnobView, type NodeData, type Side } from './patchgraph';
 
   let { id, data, selected }: { id: string; data: NodeData; selected?: boolean } = $props();
   const graph = getContext<GraphActions>(GRAPH);
@@ -52,6 +53,15 @@
         ><button class="plus nodrag" aria-label="Into {data.label}" title="Into" onclick={() => graph.enter(id)}>›</button>{/if}</span
     >
   </div>
+{:else if data.kind === 'lane'}
+  {@const lane = data}
+  <div class="lane">
+    <span>{lane.label}</span>
+    <button class="pin nodrag" class:on={lane.pinned} aria-pressed={lane.pinned} aria-label="Pin {lane.label}" title="Pin" onclick={() => graph.pinCategory(lane.scope, lane.category, !lane.pinned)}
+      ><Icon name="pin" size={14} /></button
+    >
+    <button class="plus nodrag" aria-label="Add to {lane.label}" title="Add" onclick={() => graph.adding({ category: lane.category, scope: lane.scope })}>+</button>
+  </div>
 {:else if data.kind === 'off'}
   {@const layer = data.layer}
   <div class="node off"><span class="t">{data.label} · off</span><button class="back nodrag" onclick={() => graph.bringBack(layer)}>+ bring back</button></div>
@@ -61,6 +71,7 @@
 {:else if data.kind === 'signal'}
   <div class="node mod" class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
     <span class="t">{data.label}</span>
+    <span class="sum only">{data.label}</span>
     <Handle type="source" id={MOD_OUT} position={Position.Top} class="out t-{data.type}" />
   </div>
 {:else if data.kind === 'module'}
@@ -69,6 +80,7 @@
       <button class="t nodrag" onclick={() => graph.open(id)}>{data.label}<span class="chev">›</span></button>
       {#if data.device}<button class="plus nodrag" aria-label="Open {data.label} here" title="Open here" onclick={() => graph.toggle(id)}>+</button>{/if}
     </span>
+    <button class="sum nodrag" tabindex="-1" onclick={() => graph.open(id)}><b>{data.label}</b> · {data.knobs.filter((k) => k.ring).length + data.ports.filter((p) => p.cabled).length} cabled</button>
     {#if data.ports.length}
       <div class="ports">
         {#each data.ports as p (p.id)}
@@ -85,6 +97,7 @@
           <div class="kw">
             <PatchKnob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.channels ? `${k.id}.0` : k.id)} />
             <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="in-mod t-value" style="top: 17.5px; bottom: auto" />
+            {#if k.next}<Handle type="target" id={knobHandle(nextPort(k.id))} position={Position.Left} class="in-mod t-trigger next" style="top: 6px; left: 2px" />{/if}
             {#if k.channels}
               <button class="poly nodrag" aria-label="{k.label}: each band" title="Each band" onclick={() => graph.toggle(pair(k))}>{k.channels.length}</button>
             {:else if polyOf(k) && graph.opened(pair(k)) && k.id.endsWith('.0')}
@@ -121,6 +134,7 @@
 {:else}
   <div class="node mark" class:sel={selected}>
     <span class="t">{data.label}</span>
+    <span class="sum only">{data.label}</span>
     <Handle type="target" id="in" position={SIDE[data.in]} isConnectable={false} class="pic" />
     {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={false} class="pic" />{/if}
   </div>
@@ -151,7 +165,7 @@
     padding: 0 6px;
     background: var(--patch-bg);
     color: var(--muted);
-    font-size: 12px;
+    font-size: max(12px, calc(11px / var(--z, 1)));
   }
   .node {
     position: relative;
@@ -267,7 +281,7 @@
     border-radius: 7px;
     background: var(--surface);
     color: var(--muted);
-    font-size: 9.5px;
+    font-size: 11px;
     line-height: 14px;
   }
   .poly:hover {
@@ -351,7 +365,7 @@
     min-width: 26px;
     max-width: 44px;
     padding-top: 6px;
-    font-size: 10.5px;
+    font-size: 11px;
     color: var(--muted);
   }
   .jl {
@@ -369,6 +383,105 @@
   .light.t-trigger {
     background: color-mix(in srgb, var(--wire-trigger) calc(18% + 82% * var(--lit, 0)), transparent);
     box-shadow: 0 0 calc(6px * var(--lit, 0)) var(--wire-trigger);
+  }
+  /* Text that would be under 11 px on screen is not drawn (PatchGraph's .small: zoomed under 1). Far out (.far: so far
+     that a title would be), a node is its name and how much of it is cabled, over it at 11 px or more. */
+  :global(.small) .node .port,
+  :global(.small) .node .jl,
+  :global(.small) .node .poly,
+  :global(.small) .node .more,
+  :global(.small) .node :global(.knob span) {
+    visibility: hidden;
+  }
+  .sum {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    padding: 4px 8px;
+    border-radius: inherit;
+    background: inherit;
+    color: var(--muted);
+    font-size: calc(11px / var(--z, 1));
+    line-height: 1.15;
+    text-align: left;
+    overflow: hidden;
+  }
+  .sum b {
+    color: var(--text);
+  }
+  :global(.far) .node .sum {
+    display: flex;
+    align-items: center;
+    white-space: pre;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sum.only {
+    color: var(--text);
+    font-weight: 600;
+  }
+  /* Far out the boxes' names give way to the chips; a row's or a mark's own text to its one line. */
+  :global(.far) .bl,
+  :global(.far) .node.add,
+  :global(.far) .node.off .back {
+    visibility: hidden;
+  }
+  /* A category's lane's header (v2): its name, its pin, its "+". */
+  .lane {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    /* Its size fixed (the layout's), its name growing past it as the view zooms out, never under 11 px. */
+    width: 220px;
+    height: 26px;
+    overflow: visible;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: max(12.5px, calc(11px / var(--z, 1)));
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .pin {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 12px;
+    color: var(--muted);
+    opacity: 0.6;
+  }
+  .pin.on {
+    color: var(--accent);
+    opacity: 1;
+  }
+  .pin:hover {
+    opacity: 1;
+  }
+  .title,
+  .t {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* A finger's handles: 24 px and more to hit; a knob's under it, clear of the dial. */
+  @media (pointer: coarse) {
+    .node :global(.svelte-flow__handle)::after {
+      content: '';
+      position: absolute;
+      inset: -9px;
+      border-radius: 50%;
+    }
+    .kw :global(.svelte-flow__handle.in-mod) {
+      top: auto !important;
+      bottom: -6px !important;
+    }
+  }
+  /* A step knob's next: a small diamond at its dial's upper left. */
+  .node :global(.svelte-flow__handle.next) {
+    width: 8px;
+    height: 8px;
   }
   .node :global(.svelte-flow__handle.fb) {
     opacity: 0;

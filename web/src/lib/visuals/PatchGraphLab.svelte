@@ -6,7 +6,7 @@
   // beat stood in for here until claude-5f's engine gives them), and "New ▸ LFO / ADSR" from a knob dragged into the
   // empty. ?v2: today's settings as a v2 patch (v2.ts toV2), held in the patch store (patch-store.ts) as the truth,
   // drawn by the v2 graph: Show a device (open it here, or go into it), every edit a step, Ctrl+Z and Ctrl+Shift+Z;
-  // &open=show starts with Show open here.
+  // &open=show starts with Show open here. ?sheet: a sheet over the bottom 40 %, as the page's (the graph fits clear of it).
   import { onMount } from 'svelte';
   import PatchGraph from './PatchGraph.svelte';
   import { cratarrPatch, cratarrTypes, type Cable, type Knob, type Module, type ModuleType, type Patch } from './patch';
@@ -45,14 +45,14 @@
       ],
       loop: [mod('fluid', 'fluid', { stir: 0.5, flow: 0.4 }), mod('tunnel', 'tunnel', { tunnel: 0.3 }), mod('keep', 'keep')],
       finish: [mod('colour', 'colour')],
-      modulators: [mod('beats', 'counter'), mod('bass', 'fast'), mod('drift', 'random')],
+      modulators: [mod('beats', 'counter'), mod('bass', 'fast'), mod('random', 'random')],
       cables: [
         cable('c1', { signal: 'beat' }, 'beats', 'in', 1),
         cable('c2', { signal: 'level', band: 0 }, 'bass', 'in', 1),
         cable('c3', { modulator: 'beats' }, 'kaleido', 'turn', 0.4),
         cable('c4', { modulator: 'bass' }, 'tunnel', 'tunnel', 0.35, 'level'),
         cable('c5', { modulator: 'bass' }, 'fluid', 'stir', 0.3),
-        { ...cable('c6', { modulator: 'drift' }, 'colour', 'hue', 0.15), off: true } as Cable,
+        { ...cable('c6', { modulator: 'random' }, 'colour', 'hue', 0.15), off: true } as Cable,
         cable('c7', { signal: 'loudness', speed: 'slow' }, 'flame', 'hue', -0.2),
       ],
     };
@@ -124,6 +124,9 @@
     store = e.shiftKey ? redo(store) : undo(store);
     last = `${e.shiftKey ? 'redo' : 'undo'} · ${store.past.length} back, ${store.future.length} on`;
   }
+
+  let screenH = $state(typeof innerHeight === 'number' ? innerHeight : 800);
+  const sheetH = $derived(query.has('sheet') ? Math.round(screenH * 0.4) : 0);
 
   const first = query.has('cratarr') ? cratarrPatch(DEFAULTS) : query.has('wires') ? wires() : sample();
   if (query.has('off')) first.layers[0] = { ...first.layers[0], blend: { ...first.layers[0].blend, amount: 0 } };
@@ -263,14 +266,15 @@
   });
 </script>
 
-<svelte:window onkeydown={keys} />
-<div class="lab">
+<svelte:window onkeydown={keys} bind:innerHeight={screenH} />
+<div class="lab" style:--sheet-h="{sheetH}px">
   <PatchGraph
     patch={v2mode ? undefined : patch}
     {v2}
     types={v2mode ? v2types : types}
     positions={v2mode ? here : positions}
     openAtStart={query.get('open')?.split(',') ?? []}
+    sheetHeight={sheetH}
     {onconnect}
     {ondisconnect}
     {onknob}
@@ -295,6 +299,7 @@
     <aside><span>{openCable}</span><button aria-label="Close" onclick={() => (openCable = null)}>×</button></aside>
   {/if}
   <pre>{last}</pre>
+  {#if sheetH}<div class="sheet" style:height="{sheetH}px"></div>{/if}
 </div>
 
 <style>
@@ -325,6 +330,15 @@
     color: inherit;
     font-size: 16px;
     cursor: pointer;
+  }
+  .sheet {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
+    background: var(--surface);
   }
   pre {
     position: absolute;

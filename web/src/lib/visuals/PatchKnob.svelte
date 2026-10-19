@@ -134,7 +134,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 10.5px;
+    font-size: 11px;
     line-height: 1.2;
     color: var(--muted);
     font-variant-numeric: tabular-nums;

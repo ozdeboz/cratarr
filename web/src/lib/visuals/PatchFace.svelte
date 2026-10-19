@@ -1,10 +1,11 @@
 <script lang="ts">
   // A control source's live face on its graph node (faces.ts; VCV Rack's lights, their behaviour only): an ADSR's shape
   // with the stage it is in lit and a dot where its output is, a lane a channel (each with its channel's knobs); an LFO's
-  // wave with a dot at its phase; a Random's recent output, a line or (stepped) steps.
+  // wave with a dot at its phase; a Random's recent output, a line or (stepped) steps; a VCA's gain, a bar; a Merge's
+  // channels as ticks feeding its bar.
   // Fed by the graph's live frame (at most ~30 a second); a few SVG paths, nothing more.
   import { getContext } from 'svelte';
-  import { adsrDot, adsrPath, adsrStagePath, adsrStep, laneKnobs, lfoDot, lfoPath, lfoStep, newAdsrMemo, newLfoMemo, outputOf, randomPath, randomStep, type AdsrMemo, type LfoKnobs, type LfoMemo } from './faces';
+  import { adsrDot, adsrPath, adsrStagePath, adsrStep, laneKnobs, lfoDot, lfoPath, lfoStep, newAdsrMemo, newLfoMemo, outputOf, mergeOf, randomPath, randomStep, vcaGain, type AdsrMemo, type LfoKnobs, type LfoMemo } from './faces';
   import { FACE_W, faceHeight, GRAPH, LANE_H, type GraphActions, type ModuleData } from './patchgraph';
 
   let { id, face }: { id: string; face: NonNullable<ModuleData['face']> } = $props();
@@ -36,6 +37,8 @@
     wave = lfoStep(wave, f ? outputOf(f.outputs, id) : null);
     return lfoDot(wave, k, FACE_W, H);
   });
+  const gain = $derived(face.kind === 'vca' ? vcaGain(graph.live()?.outputs ?? null, id, face.knobs) : 0);
+  const merged = $derived(face.kind === 'merge' ? mergeOf(graph.live()?.outputs ?? null, id) : null);
   const laneH = $derived(face.lanes > 1 ? LANE_H : H);
 </script>
 
@@ -55,6 +58,16 @@
     {:else if face.kind === 'lfo'}
       <path d={lfoPath(k.shape, FACE_W, H)} class="shape" />
       {#if lfo && k.amount > 0}<circle cx={lfo.x} cy={lfo.y} r="2.4" class="dot" />{/if}
+    {:else if face.kind === 'vca'}
+      <rect x="0" y={H / 2 - 3} width={FACE_W} height="6" rx="3" class="well" />
+      <rect x="0" y={H / 2 - 3} width={FACE_W * gain} height="6" rx="3" class="bar" />
+    {:else if face.kind === 'merge' && merged}
+      {#each merged.ins as v, c (c)}
+        <line x1={c * 9 + 2} x2={c * 9 + 2} y1={H - 2} y2={H - 2 - (v ?? 0) * (H - 4)} class="tick" class:none={v === null} />
+      {/each}
+      <path d="M{6 * 9 + 2},{H / 2} H{6 * 9 + 12}" class="shape" />
+      <rect x={6 * 9 + 14} y={H / 2 - 3} width={FACE_W - 6 * 9 - 14} height="6" rx="3" class="well" />
+      <rect x={6 * 9 + 14} y={H / 2 - 3} width={(FACE_W - 6 * 9 - 14) * merged.out} height="6" rx="3" class="bar" />
     {:else if face.kind === 'random'}
       <path d="M0,{H / 2} H{FACE_W}" class="shape" />
       <path d={random} class="lit" />
@@ -83,5 +96,19 @@
   }
   .dot {
     fill: var(--text);
+  }
+  .well {
+    fill: color-mix(in srgb, var(--patch-mod) 18%, transparent);
+  }
+  .bar {
+    fill: var(--patch-mod);
+  }
+  .tick {
+    stroke: var(--patch-mod);
+    stroke-width: 3;
+    stroke-linecap: round;
+  }
+  .tick.none {
+    stroke: color-mix(in srgb, var(--patch-mod) 30%, transparent);
   }
 </style>

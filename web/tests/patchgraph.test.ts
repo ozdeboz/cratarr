@@ -536,6 +536,7 @@ test("a band's knobs are one polyphonic knob, its six as ticks, opened out to si
 
 // ---- A v2 patch drawn: devices as nodes, opened in place, entered; edits for the store (0057 §6, §7) ------------------
 
+const await_graph = await import('../src/lib/visuals/patchgraph.ts');
 const { graphOfV2, applyV2, editKey, connectionV2, patchAt, crumbsOf, portsOfModule, handleOf, macroKnob } = await import('../src/lib/visuals/patchgraph.ts');
 const { toV2 } = await import('../src/lib/visuals/v2.ts');
 const { newStore, change, undo, redo } = await import('../src/lib/visuals/patch-store.ts');
@@ -565,9 +566,13 @@ test('v2: Show is one device node, its exposed light in, picture out and knobs; 
   assert.ok(!g.nodes.some((n) => n.id.startsWith('show/')), 'its modules not drawn while it is closed');
   const wire = g.edges.find((e) => e.id === 'lab-1')!;
   assert.deepEqual([wire.source, wire.sourceHandle, wire.target, wire.targetHandle, wire.data?.wire], ['flame', 'out', 'show', 'in', 'light']);
-  // Lanes: the flame a source left of Show; the control (Music, the ADSRs …) under them, in rows.
+  // Lanes by category (rack.ts byCategory), each under its header: the flame in Sources, Show in Effects, the
+  // modulators under them, In / Out last.
   const at = (id: string) => g.nodes.find((n) => n.id === id)!.position;
-  assert.ok(at('flame').x < at('show').x);
+  const heads = g.nodes.filter((n) => n.data.kind === 'lane').map((n) => n.id);
+  assert.deepEqual(heads, ['@lane:sources', '@lane:effects', '@lane:modulators', '@lane:io']);
+  assert.ok(at('@lane:sources').y < at('flame').y && at('flame').y < at('@lane:effects').y && at('@lane:effects').y < at('show').y);
+  assert.ok(at('show').y < at('@lane:modulators').y && at('music').y > at('@lane:io').y);
   const control = g.nodes.filter((n) => (n.data as ModuleData).modulator);
   assert.ok(control.length > 3 && control.every((n) => n.position.y > at('show').y));
   const adsrs = g.nodes.filter((n) => (n.data as ModuleData).type === 'adsr');
@@ -587,8 +592,9 @@ test('v2: a device opened in place is a frame round its modules and cables; a ca
   const box = g.nodes.find((n) => n.id === 'show')!;
   assert.equal(box.type, 'box');
   assert.equal((box.data as { device?: true }).device, true);
-  const inner = g.nodes.filter((n) => n.parentId === 'show').map((n) => n.id);
+  const inner = g.nodes.filter((n) => n.parentId === 'show' && n.data.kind === 'module').map((n) => n.id);
   assert.deepEqual(inner, SHOW_PARTS.map((x) => `show/${x.type}`));
+  assert.ok(!g.nodes.some((n) => n.parentId === 'show' && n.data.kind === 'lane'), 'no lane headers inside a frame');
   assert.ok(g.nodes.indexOf(box) < g.nodes.findIndex((n) => n.parentId === 'show'), 'the frame before its modules');
   for (const n of g.nodes.filter((x) => x.parentId === 'show')) assert.ok(n.position.x >= 0 && n.position.y >= 0);
   assert.deepEqual(g.edges.filter((e) => e.id.startsWith('show/')).length, SHOW_PARTS.length - 1);
@@ -601,7 +607,7 @@ test('v2: a device opened in place is a frame round its modules and cables; a ca
 test('v2: entered, the device is the level shown, with its name in the breadcrumb; devices nest', () => {
   const p = v2patch();
   const g = graphOfV2({ patch: p, types: v2types, at: ['show'] });
-  assert.deepEqual(g.nodes.map((n) => n.id), SHOW_PARTS.map((x) => x.type));
+  assert.deepEqual(g.nodes.filter((n) => n.data.kind === 'module').map((n) => n.id), SHOW_PARTS.map((x) => x.type));
   assert.deepEqual(crumbsOf(p, ['show']), ['Show']);
   assert.equal(patchAt(p, ['nothing']), null);
   // A device inside Show, opened in place inside Show opened in place.
@@ -693,4 +699,55 @@ test('v2: a cable into a knob its module does not declare is not drawn; one into
   assert.equal(g.edges.find((e) => e.id === 'z'), undefined);
   const adsr = g.nodes.find((n) => (n.data as ModuleData).type === 'adsr');
   if (adsr) assert.equal(g.edges.find((e) => e.id === 'r')?.targetHandle, adsr.id === 'adsr' ? 'k:release' : undefined);
+});
+
+test('v2 categories: a whole one pinned through the store, a module added by its lane’s "+"', () => {
+  const { typesOf, categoryPin } = await_graph;
+  let st = newStore(v2patch());
+  st = change(st, (p: PatchV2) => applyV2(p, { kind: 'pin', scope: [], category: 'effects', on: true }), null, 1);
+  assert.ok(st.now.pins.includes(categoryPin('effects')));
+  const g = graphOfV2({ patch: st.now, types: v2types });
+  assert.equal((g.nodes.find((n) => n.id === '@lane:effects')!.data as { pinned: boolean }).pinned, true);
+  assert.equal((g.nodes.find((n) => n.id === '@lane:sources')!.data as { pinned: boolean }).pinned, false);
+  st = change(st, (p: PatchV2) => applyV2(p, { kind: 'pin', scope: [], category: 'effects', on: false }), null, 2);
+  assert.ok(!st.now.pins.includes(categoryPin('effects')));
+  st = undo(st);
+  assert.ok(st.now.pins.includes(categoryPin('effects')), 'undone, pinned again');
+  // Pinned inside a device: that device's patch's pins.
+  st = change(st, (p: PatchV2) => applyV2(p, { kind: 'pin', scope: ['show'], category: 'effects', on: true }), null, 3);
+  assert.ok(patchAt(st.now, ['show'])!.pins.includes(categoryPin('effects')));
+  // "+": the category's types; a new one with a free id.
+  const effects = typesOf('effects', v2types).map((t: ModuleType) => t.type);
+  assert.ok(effects.includes('fold') && !effects.includes('lfo') && !effects.includes('flame'));
+  assert.ok(typesOf('modulators', v2types).some((t: ModuleType) => t.type === 'adsr'));
+  st = change(st, (p: PatchV2) => applyV2(p, { kind: 'add', scope: [], type: 'fold' }), null, 4);
+  st = change(st, (p: PatchV2) => applyV2(p, { kind: 'add', scope: [], type: 'fold' }), null, 5);
+  assert.deepEqual(st.now.modules.filter((m) => m.type === 'fold').map((m) => m.id), ['fold-1', 'fold-2']);
+});
+
+test("a step knob's next is a trigger beside it: a trigger cabled into it, a value not; no port row of its own", () => {
+  const { nextPort } = await_graph;
+  const t = { ...types, fx: { ...types.fx, knobs: [...types.fx.knobs, { id: 'mode', label: 'Mode', min: 1, max: 4, neutral: 1, default: 1, kind: 'step' as const }] } };
+  const p: Patch = { ...sample(), cables: [{ id: 'n', from: { signal: 'beat' }, to: { module: 'k1', knob: nextPort('mode') }, value: 1, mode: 'swing' }] };
+  const g = graphOf({ patch: p, types: t, signals: [{ signal: 'level' }] });
+  const d = g.nodes.find((n) => n.id === 'k1')!.data as ModuleData;
+  assert.equal(d.knobs.find((k) => k.id === 'mode')?.next, true, 'shown, cabled');
+  assert.ok(!d.ports.some((x) => x.id.endsWith(':next')));
+  assert.equal(g.edges.find((e) => e.id === 'n')?.targetHandle, 'k:mode:next');
+  const level = signalKey({ signal: 'level' });
+  assert.equal(cableOf({ source: level, target: 'k1', sourceHandle: 'mod', targetHandle: 'k:mode:next' }, g.nodes, []), null, 'a value into a next: no');
+  assert.ok(cableOf({ source: signalKey({ signal: 'beat' }), target: 'k1', sourceHandle: 'mod', targetHandle: 'k:turn' }, g.nodes, []));
+});
+
+test('faces: a VCA its gain as a bar; a Merge its channels as ticks into one bar; Flash is named Accent', () => {
+  assert.equal(faces.vcaGain({ 'v.gain': 1 }, 'v', { gain: 2 }), 0.5);
+  assert.equal(faces.vcaGain(null, 'v', { gain: 2 }), 1);
+  assert.equal(faces.vcaGain({}, 'v', {}), 0);
+  const m = faces.mergeOf({ 'm.in.0': 0.5, 'm.in.3': 2, m: 0.4 }, 'm');
+  assert.deepEqual(m.ins, [0.5, null, null, 1, null, null]);
+  assert.equal(m.out, 0.4);
+  assert.deepEqual(faces.mergeOf(null, 'm').ins, Array(6).fill(null));
+  assert.equal(faces.FACES.vca, 'vca');
+  assert.equal(faces.FACES.merge, 'merge');
+  assert.equal(labelOf({ type: 'flash', label: 'Flash' }), 'Accent');
 });

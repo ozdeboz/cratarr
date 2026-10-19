@@ -30,8 +30,14 @@
   // `v2` in place of `patch`: a v2 patch drawn (patchgraph.ts graphOfV2, 0057 §6), the level `v2.at` leads to; a device
   // a node (its exposed ports, its macros), opened in place to a frame round its modules, or entered (`v2.onenter`,
   // with a breadcrumb back); every edit out as a V2Edit (`v2.onedit`) for the store.
+  //
+  // One finger, any screen (0057 §7b): Svelte Flow's own pinch, pan, touch connections (a wider connection radius,
+  // a tap on one handle then another) and reconnection; a node moves only past a few pixels, so a long press stays one;
+  // labels never under 11 px (they grow as the view zooms out), and far out a node shows its name and how many of its
+  // knobs are cabled; jump chips to the picture's parts; `sheetHeight` (an open sheet over the bottom) keeps the
+  // fitted view clear of it.
   import { setContext, untrack } from 'svelte';
-  import { SvelteFlow, Panel, type Connection, type Edge, type Node } from '@xyflow/svelte';
+  import { SvelteFlow, Panel, type Connection, type Edge, type FitViewOptions, type Node } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/base.css';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
@@ -40,9 +46,11 @@
   import PatchCable from './PatchCable.svelte';
   import PatchConnection from './PatchConnection.svelte';
   import PatchFit from './PatchFit.svelte';
+  import PatchChips from './PatchChips.svelte';
   import type { Cable, ModuleType, Patch, Place, SignalRef } from './patch';
   import type { PatchV2, PortType } from './ports';
   import type { LiveFaces } from './faces.svelte';
+  import { CATEGORY_LABEL } from './rack';
   import {
     CABLE_OPACITIES,
     cableOf,
@@ -51,6 +59,8 @@
     graphOfV2,
     knobHandle,
     patchAt,
+    typesOf,
+    type AddTo,
     type V2Edit,
     pictureFits,
     wireStyle,
@@ -92,6 +102,7 @@
     onpick,
     live,
     openAtStart = [],
+    sheetHeight = 0,
   }: {
     patch?: Patch;
     /** A v2 patch drawn instead (the lab's, until a5's step brings the app over). */
@@ -123,13 +134,34 @@
     live?: LiveFaces;
     /** Nodes (devices) open from the start. */
     openAtStart?: string[];
+    /** How much of the graph's bottom an open sheet covers (px): the fitted view keeps clear of it. */
+    sheetHeight?: number;
   } = $props();
+
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  // The view's zoom: no text under 11 px on screen. Under 1 the small labels (11 px) are not drawn; under FAR a title
+  // (13.5 px) would be under 11 too, and nodes show their name and how much is cabled.
+  const FAR = 0.82;
+  let zoom = $state(1);
+  // What the view fits round: clear of the legend and crumbs above, the chips and an open sheet below.
+  const padding = $derived<FitViewOptions['padding']>({ top: '56px', left: '16px', right: '16px', bottom: `${Math.round(sheetHeight) + 60}px` as `${number}px` });
 
   const nodeTypes = { patch: PatchNode, box: PatchNode };
   const edgeTypes = { cable: PatchCable };
 
   let nodes = $state.raw<Node[]>([]);
   let edges = $state.raw<Edge[]>([]);
+  // The picture lane's parts, for the chips: a layer, the loop, a device opened here, a module of the picture's own.
+  const parts = $derived(
+    nodes
+      .filter((n) => !n.parentId)
+      .flatMap((n) => {
+        const d = n.data as NodeData;
+        if (d.kind === 'box') return [{ id: n.id, label: d.label }];
+        if (d.kind === 'module' && (d.in || d.out) && !d.modulator) return [{ id: n.id, label: d.label }];
+        return [];
+      }),
+  );
   let opened = $state.raw<ReadonlySet<string>>(new Set(untrack(() => openAtStart)));
   let moved = $state.raw<Record<string, XY>>({});
   const placed = $derived(positions ?? moved);
@@ -138,7 +170,7 @@
   /** The cable last tapped: its configuration is what the parent shows. */
   let openCable = $state<string | null>(null);
   /** A long press's menu: a cable's, a module's; or the types to add somewhere. */
-  type Menu = { kind: 'cable'; id: string; at: XY } | { kind: 'node'; id: string } | { kind: 'add'; to: 'layer' | 'modulator' | { box: string } };
+  type Menu = { kind: 'cable'; id: string; at: XY } | { kind: 'node'; id: string } | { kind: 'add'; to: AddTo };
   let menu = $state<Menu | null>(null);
   let reroute = $state<{ id: string; at: XY } | null>(null);
   /** Until the viewer pans, zooms or moves something, the graph keeps all of the patch in view. */
@@ -301,6 +333,7 @@
       menu = { kind: 'node', id };
     },
     adding: (to) => (menu = { kind: 'add', to }),
+    pinCategory: (scope, category, on) => v2?.onedit({ kind: 'pin', scope: [...v2.at, ...scope], category, on }),
     bringBack: (layer) => onaddlayer?.(layer),
     openCable: openIt,
     cableMenu(id, at) {
@@ -392,22 +425,25 @@
     return `${nodeName(e.source)} → ${nodeName(e.target)} · ${k}`;
   }
   // What a "+" offers: the types of its place.
-  function offered(to: 'layer' | 'modulator' | { box: string }): ModuleType[] {
+  function offered(to: AddTo): ModuleType[] {
+    if (typeof to === 'object' && 'category' in to) return typesOf(to.category, types);
     const place: Place = to === 'layer' ? 'source' : to === 'modulator' ? 'modulator' : to.box === 'loop' ? 'loop' : 'module';
     return (addTypes ?? Object.values(types)).filter((t) => t.place === place);
   }
-  function add(to: 'layer' | 'modulator' | { box: string }, type: string) {
+  function add(to: AddTo, type: string) {
     menu = null;
+    if (typeof to === 'object' && 'category' in to) return v2?.onedit({ kind: 'add', scope: [...v2.at, ...to.scope], type });
     if (to === 'layer') onaddlayer?.(type);
     else if (to === 'modulator') onaddmodulator?.(type);
     else onaddmodule?.(to.box, type);
   }
-  const addTitle = (to: 'layer' | 'modulator' | { box: string }) => (to === 'layer' ? 'Add layer' : to === 'modulator' ? 'Add modulator' : `Add to ${nodeName(to.box === 'loop' ? '@loop' : `layer:${to.box}`)}`);
+  const addTitle = (to: AddTo) =>
+    to === 'layer' ? 'Add layer' : to === 'modulator' ? 'Add modulator' : 'category' in to ? `Add · ${CATEGORY_LABEL[to.category]}` : `Add to ${nodeName(to.box === 'loop' ? '@loop' : `layer:${to.box}`)}`;
 </script>
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && reroute && !menu && (reroute = null)} />
 
-<div class="patch-graph" style:--cable-alpha={drawnOpacity(opacity)} bind:clientWidth={width} bind:clientHeight={height}>
+<div class="patch-graph" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--cable-alpha={drawnOpacity(opacity)} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -418,6 +454,9 @@
     minZoom={0.2}
     maxZoom={2}
     zoomOnDoubleClick={false}
+    connectionRadius={coarse ? 36 : 20}
+    clickConnect
+    nodeDragThreshold={coarse ? 10 : 1}
     deleteKey={['Backspace', 'Delete']}
     connectionLineComponent={PatchConnection}
     isValidConnection={valid}
@@ -438,7 +477,13 @@
     onedgeclick={({ edge }) => edge.type === 'cable' && openIt(edge.id)}
     onpaneclick={() => (reroute = null)}
   >
-    <PatchFit {layout} active={!touched} />
+    <PatchFit {layout} active={!touched} {padding} onzoom={(z) => (zoom = z)} />
+    <Panel position="bottom-left" class="chips-panel">
+      <div class="bottom">
+        <PatchChips {parts} {padding} onjump={() => (touched = true)} />
+        <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
+      </div>
+    </Panel>
     {#if v2?.at.length}
       <Panel position="top-left">
         <nav class="crumbs" aria-label="Devices">
@@ -456,7 +501,6 @@
             >{name}</span
           >
         {/each}
-        <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
       </div>
     </Panel>
   </SvelteFlow>
@@ -669,7 +713,30 @@
   .crumbs button.here {
     color: var(--text);
   }
+  /* Over the bottom: the chips and the opacity button, above an open sheet and the safe area. */
+  .patch-graph :global(.chips-panel) {
+    margin: 0 16px calc(var(--sheet-h, 0px) + 12px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
+  }
+  .bottom {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .patch-graph :global(.svelte-flow__panel.top-left),
+  .patch-graph :global(.svelte-flow__panel.top-right) {
+    margin-top: calc(15px + env(safe-area-inset-top));
+  }
+  /* On a narrow screen the legend gives way. */
+  .narrow .legend {
+    display: none;
+  }
+  /* Labels never under 11 px: each grows as the view zooms out (--z, the zoom). */
+  .patch-graph.small :global(.svelte-flow__edge-label:not(.svelte-flow__edgeupdater)) {
+    visibility: hidden;
+  }
   .opacity {
+    min-height: 32px;
+    flex: none;
     min-width: 44px;
     padding: 2px 6px;
     border: 1px solid var(--border);

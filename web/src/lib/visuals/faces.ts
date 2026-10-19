@@ -5,6 +5,7 @@
 // - LFO: its wave from its knobs, a dot at its phase (worked out from its output and which way it is going).
 // - Clock: Beat, Bar and Phrase blink, from the frame's beat (bars of 4, phrases of 8 bars) until the Clock gives them.
 // - Random: its recent output as a wandering line, in steps (sample and hold) as its Shape goes stepped.
+// - VCA: its gain now, a bar. Merge: its channels in as ticks, the one they make as a bar.
 // Pure; the caller keeps each face's memory from sample to sample.
 
 import type { FrameInfo } from './patch';
@@ -18,9 +19,9 @@ export type LiveFrame = {
   outputs: Readonly<Record<string, number>>;
 };
 
-export type FaceKind = 'adsr' | 'lfo' | 'clock' | 'random';
-/** Which module types have a face (Drift's is Random's until claude-5f's rename lands). */
-export const FACES: Readonly<Record<string, FaceKind>> = { adsr: 'adsr', lfo: 'lfo', clock: 'clock', random: 'random', drift: 'random' };
+export type FaceKind = 'adsr' | 'lfo' | 'clock' | 'random' | 'vca' | 'merge';
+/** Which module types have a face. */
+export const FACES: Readonly<Record<string, FaceKind>> = { adsr: 'adsr', lfo: 'lfo', clock: 'clock', random: 'random', vca: 'vca', merge: 'merge' };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -217,4 +218,23 @@ export function randomPath(seen: readonly number[], shape: number, w: number, h:
   let d = `M${x(at)},${y(seen[0])}`;
   for (let i = 1; i < seen.length; i++) d += shape >= 0.5 ? ` H${x(at + i)} V${y(seen[i])}` : ` L${x(at + i)},${y(seen[i])}`;
   return d;
+}
+
+// ---- VCA, Merge --------------------------------------------------------------------------------------------------------
+
+/** A VCA's gain now as a share of its most (its Gain knob runs to 2): its `gain` output where the engine gives one,
+ *  else its Gain knob as set. */
+export function vcaGain(outputs: Readonly<Record<string, number>> | null, module: string, knobs: Readonly<Record<string, number>>, most = 2): number {
+  const v = (outputs && outputOf(outputs, module, 'gain')) ?? knobs.gain ?? 0;
+  return Math.min(1, Math.max(0, v / most));
+}
+
+/** A Merge's channels in (each 0..1; the engine's `module.in.<n>`, else none) and the one they make (its out). */
+export function mergeOf(outputs: Readonly<Record<string, number>> | null, module: string, channels = 6): { ins: (number | null)[]; out: number } {
+  const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+  const ins = Array.from({ length: channels }, (_, c) => {
+    const v = outputs?.[`${module}.in.${c}`];
+    return typeof v === 'number' && Number.isFinite(v) ? clamp01(v) : null;
+  });
+  return { ins, out: clamp01((outputs && outputOf(outputs, module)) ?? 0) };
 }
