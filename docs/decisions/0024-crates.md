@@ -118,7 +118,8 @@ albums"; of one toggle covering both or a second one, "a second toggle."
 - **The two combine.** A track shows when both allow it: "No favourites" with "Only favourite albums" is the tracks
   of favourite albums that are not favourites themselves.
 - **The Crates page.** A crate's sizes are counted with its albums toggle as it is set, and its chip shows a small
-  disc for it beside the heart, only when it is not All albums.
+  disc for it beside the heart, as on the toggle (the owner: "the crate card also has an icon representing the
+  state").
 - **The crate builder** has the matching condition, "Favourite album" (yes or no), as it has "Favourite".
 
 ## Amendment (2026-10-19): a crate's card shuffles it

@@ -3,7 +3,7 @@
   // else a mosaic of its albums' covers), its name, how many tracks and how long, its top genres, how many of its
   // tracks were never played and how many came this week, and along its foot how much of it was played (explored).
   // Its favourites setting shows as the small heart after the count, as on the panel's toggle; its favourite albums
-  // setting as a small disc beside it, only when it is not All albums (decision 0024, amended 2026-10-19). A tap views it;
+  // setting as the small disc beside it, as on its toggle (decision 0024, amended 2026-10-19). A tap views it;
   // its picture shuffles it (the owner, 2026-10-19: "a play button on the crates, which automatically plays it with
   // shuffle"): wherever a cover plays, its icon is in the cover's lower right corner (decided 2026-10-16), here
   // Shuffle's, which is what it does.
@@ -18,7 +18,7 @@
 
   const art = $derived(crateArt(c.id));
   const fav = $derived(FAVOURITES[favouritesOf(c.id)]);
-  const albums = $derived(favouriteAlbumsOf(c.id) === 'all' ? null : FAVOURITE_ALBUMS[favouriteAlbumsOf(c.id)]);
+  const albums = $derived(FAVOURITE_ALBUMS[favouriteAlbumsOf(c.id)]);
   const st = $derived(c.stats);
   const tracks = $derived(st?.tracks ?? c.counts[favouritesOf(c.id)]);
   const line = $derived(
@@ -51,7 +51,7 @@
     <span class="line">
       {line}
       <span class="heart" class:filled={fav.filled} title={fav.label} aria-label={fav.label}><Icon name={fav.icon} size={12} /></span>
-      {#if albums}<span class="heart" class:filled={albums.filled} title={albums.label} aria-label={albums.label}><Icon name={albums.icon} size={12} /></span>{/if}
+      <span class="heart" class:filled={albums.filled} title={albums.label} aria-label={albums.label}><Icon name={albums.icon} size={12} /></span>
     </span>
     {#if st?.genres.length}<span class="genres">{st.genres.join(' • ')}</span>{/if}
     {#if st?.unplayed || st?.new_week}
