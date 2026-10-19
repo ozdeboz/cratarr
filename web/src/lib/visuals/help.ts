@@ -154,6 +154,9 @@ export const HELP: Record<string, string> = {
   continuity:
     'How this band’s part of the flame turns and changes. At 0 only in steps, one on each hit in this band; at 100% only smoothly; in between, some of each.',
 
+  // What moves a knob (decision 0056): its routes, from the knob's own page.
+  moves:
+    'What moves this: the things measured in the music that are routed to it, each with its curve. Open it to see them, change one, or add another.',
   // The routes.
   routes:
     'Routes connect the music to the picture. Each row is something measured in the music, each column something in the picture, and each square a curve: how that row moves that column, as the row goes from nothing to full. Tap a square to shape it. The top rows measure the whole track and act on every part of the flame. The rows below measure one band each, picked above them, and act on that band’s part; in the columns for the whole picture, the bands count together. Each square shows its curve, scaled to fit, and fills from the bottom as far as its route gives right now, green the one way, pink the other. A solid outline means pinned (the dice leave it), a dashed one the square you picked, and a border of long dashes on the move a route that walks with Behaviour.',
