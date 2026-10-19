@@ -53,11 +53,19 @@ struct CrateLibrary {
     files: Arc<Vec<crates::Facts>>,
     membership: HashMap<String, Vec<String>>,
     favourites: Option<HashSet<String>>,
+    /// The lines of the viewer's favourite albums (decision 0024, amended 2026-10-19), when asked for.
+    favourite_albums: Option<HashSet<String>>,
 }
 
 impl CrateLibrary {
+    /// Whether these conditions can be worked out: what they need of the favourites is known.
+    fn knows(&self, conditions: &[crates::Condition]) -> bool {
+        (!crates::needs_favourites(conditions) || self.favourites.is_some())
+            && (!crates::needs_favourite_albums(conditions) || self.favourite_albums.is_some())
+    }
+
     fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
-        let w = crates::World { membership: &self.membership, favourites: self.favourites.as_ref() };
+        let w = crates::World { membership: &self.membership, favourites: self.favourites.as_ref(), favourite_albums: self.favourite_albums.as_ref() };
         crates::select(&self.files, conditions, &w).into_iter().map(str::to_string).collect()
     }
 }
@@ -70,6 +78,8 @@ pub struct CrateView {
     pub name: String,
     /// Its favourites toggle's setting (decision 0024, amended).
     pub favourites: crates::Favourites,
+    /// Its favourite albums toggle's setting (decision 0024, amended 2026-10-19); `counts` are counted with it.
+    pub favourite_albums: crates::Favourites,
     /// How many tracks it has with each setting of the toggle (the page shows the one it is set to, and the next at
     /// once on a tap); `None` where the favourites are not known (no server connected).
     pub counts: CrateCounts,
@@ -526,6 +536,25 @@ pub struct PlaylistService {
 /// The account the running request is for, whose favourites the crates show.
 fn asking_user() -> Option<String> {
     crate::serve::instance().and_then(|s| s.current_user())
+}
+
+/// The lines whose album has the asking account's heart on (decision 0024, amended 2026-10-19): the Library's album
+/// favourites, the viewer's own whoever's crate it is, and Cratarr's own library telling each line's album, whatever
+/// server the crate is shown for. `None` when they cannot be read (no library, no account).
+async fn favourite_album_lines() -> Option<HashSet<String>> {
+    let serve = crate::serve::instance()?;
+    let me = serve.current_user()?;
+    tokio::task::spawn_blocking(move || {
+        let albums: HashSet<String> = serve.userdata.starred(&me, crate::userdata::Kind::Album).ok()?.into_iter().collect();
+        if albums.is_empty() {
+            return Some(HashSet::new());
+        }
+        let songs = serve.library.songs_by_rel(0).ok()?;
+        Some(songs.into_iter().filter(|(_, s)| albums.contains(&s.album)).map(|(rel, _)| rel).collect())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// The account whose playlists and crates the running request's are (decision 0051): another account's, or `None` for
@@ -1253,16 +1282,17 @@ impl PlaylistService {
         let own = self.own_crates()?.list().await?;
         let all: Vec<(bool, CrateDef)> = crates::permanent().into_iter().map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
         let set = self.own_crates()?.all_favourites().await?;
+        let albums_set = self.own_crates()?.all_favourite_albums().await?;
+        let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
         // The favourites are asked for only when a crate shows by them (its conditions, or its toggle): asking the
         // media server for every favourite is slow, and a list of crates that need none must not wait for it. The
         // other settings' counts are then unknown (null) until it is asked.
         let needed = all.iter().any(|(_, c)| {
             crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::None) != crates::Favourites::All
         });
-        let lib = self.crate_library(want, needed).await?;
-        let count = |conditions: Vec<crates::Condition>| {
-            (!crates::needs_favourites(&conditions) || lib.favourites.is_some()).then(|| lib.select(&conditions).len())
-        };
+        let needed_albums = all.iter().any(|(_, c)| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
+        let lib = self.crate_library(want, needed, needed_albums).await?;
+        let count = |conditions: Vec<crates::Condition>| lib.knows(&conditions).then(|| lib.select(&conditions).len());
         // The cards' facts: the songs of the Music folder, and what the account asking has played.
         let songs_played = match crate::serve::instance() {
             Some(serve) => {
@@ -1285,16 +1315,19 @@ impl PlaylistService {
             .into_iter()
             .map(|(permanent, c)| {
                 let favourites = set.get(&c.id).copied().unwrap_or(crates::Favourites::None);
-                let shown = favourites.with(&c.conditions);
-                let stats = (!crates::needs_favourites(&shown) || lib.favourites.is_some())
-                    .then(|| crate_stats(&lib.select(&shown), &facts, &songs, played.as_ref(), now));
+                let favourite_albums = albums_of(&c.id);
+                let shown = crates::shown(&c.conditions, favourites, favourite_albums);
+                let stats = lib.knows(&shown).then(|| crate_stats(&lib.select(&shown), &facts, &songs, played.as_ref(), now));
+                // Per setting of the favourites toggle, the albums toggle as it is set.
+                let counted = |tracks: crates::Favourites| count(crates::shown(&c.conditions, tracks, favourite_albums));
                 CrateView {
                     counts: CrateCounts {
-                        all: count(crates::Favourites::All.with(&c.conditions)),
-                        only: count(crates::Favourites::Only.with(&c.conditions)),
-                        none: count(crates::Favourites::None.with(&c.conditions)),
+                        all: counted(crates::Favourites::All),
+                        only: counted(crates::Favourites::Only),
+                        none: counted(crates::Favourites::None),
                     },
                     favourites,
+                    favourite_albums,
                     stats,
                     image: images.as_ref().is_some_and(|d| d.join(image_file(&c.id)).is_file()),
                     id: c.id,
@@ -1381,17 +1414,19 @@ impl PlaylistService {
 
     /// The library a crate is worked out from, and its lines.
     async fn crate_selection(&self, conditions: &[crates::Condition], want: Option<&str>) -> Result<(CrateLibrary, Vec<String>), ToggleError> {
-        let lib = self.crate_library(want, crates::needs_favourites(conditions)).await?;
+        let lib = self.crate_library(want, crates::needs_favourites(conditions), crates::needs_favourite_albums(conditions)).await?;
         if crates::needs_favourites(conditions) && lib.favourites.is_none() {
             return Err(ToggleError::CannotPlay("The server's favourites could not be read.".into()));
+        }
+        if crates::needs_favourite_albums(conditions) && lib.favourite_albums.is_none() {
+            return Err(ToggleError::CannotPlay("The favourite albums could not be read.".into()));
         }
         let lines = lib.select(conditions);
         Ok((lib, lines))
     }
 
-    /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size.
-    /// With the panel's favourites toggle (`fav`).
-    /// A page of a crate's rows, as its favourites toggle is set (`fav`, else as saved).
+    /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size, as its
+    /// two toggles are set (`fav` and `albums`, else as saved).
     pub async fn crate_rows(
         &self,
         id: &str,
@@ -1399,24 +1434,37 @@ impl PlaylistService {
         offset: usize,
         limit: usize,
         fav: Option<crates::Favourites>,
+        albums: Option<crates::Favourites>,
     ) -> Result<CratePage, ToggleError> {
+        let shown = self.crate_shown(id, fav, albums).await?;
+        self.crate_page(&shown, want, offset, limit).await
+    }
+
+    /// A crate's conditions as its toggles show it: as given, else as saved.
+    async fn crate_shown(&self, id: &str, fav: Option<crates::Favourites>, albums: Option<crates::Favourites>) -> Result<Vec<crates::Condition>, ToggleError> {
         let def = self.crate_def(id).await?;
         let fav = match fav {
             Some(f) => f,
             None => self.crate_favourites(id).await?,
         };
-        self.crate_page(&fav.with(&def.conditions), want, offset, limit).await
+        let albums = match albums {
+            Some(a) => a,
+            None => self.own_crates()?.favourite_albums(id).await?,
+        };
+        Ok(crates::shown(&def.conditions, fav, albums))
     }
 
     /// A crate's tempo spread (decision 0041), its tracks chosen as its rows are (the favourites toggle `fav`, else as
     /// saved): counted here, so a genre of thousands of tracks does not send them all to be counted.
-    pub async fn crate_tempo(&self, id: &str, want: Option<&str>, fav: Option<crates::Favourites>) -> Result<crates::TempoBands, ToggleError> {
-        let def = self.crate_def(id).await?;
-        let fav = match fav {
-            Some(f) => f,
-            None => self.crate_favourites(id).await?,
-        };
-        let (lib, lines) = self.crate_selection(&fav.with(&def.conditions), want).await?;
+    pub async fn crate_tempo(
+        &self,
+        id: &str,
+        want: Option<&str>,
+        fav: Option<crates::Favourites>,
+        albums: Option<crates::Favourites>,
+    ) -> Result<crates::TempoBands, ToggleError> {
+        let shown = self.crate_shown(id, fav, albums).await?;
+        let (lib, lines) = self.crate_selection(&shown, want).await?;
         let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
         Ok(crates::tempo_bands(lib.files.iter().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.bpm)))
     }
@@ -1435,6 +1483,12 @@ impl PlaylistService {
     pub async fn set_crate_favourites(&self, id: &str, fav: crates::Favourites) -> Result<(), ToggleError> {
         self.crate_def(id).await?;
         Ok(self.own_crates()?.set_favourites(id, fav).await?)
+    }
+
+    /// Sets a crate's favourite albums toggle (decision 0024, amended 2026-10-19), as the favourites toggle is set.
+    pub async fn set_crate_favourite_albums(&self, id: &str, albums: crates::Favourites) -> Result<(), ToggleError> {
+        self.crate_def(id).await?;
+        Ok(self.own_crates()?.set_favourite_albums(id, albums).await?)
     }
 
     /// The builder's live preview: an unsaved crate's size and first rows (decision 0024, issue 6).
@@ -1457,9 +1511,8 @@ impl PlaylistService {
     /// Make playlist: the crate's tracks now, as a new, ordinary playlist (a snapshot; decision 0024).
     /// The crate as its favourites toggle is set. Returns how many tracks it got, and the undo token.
     pub async fn crate_to_playlist(&self, id: &str, want: Option<&str>, name: &str) -> Result<(usize, Option<String>), ToggleError> {
-        let def = self.crate_def(id).await?;
-        let fav = self.crate_favourites(id).await?;
-        let (_, lines) = self.crate_lines_of(&fav.with(&def.conditions), want).await?;
+        let shown = self.crate_shown(id, None, None).await?;
+        let (_, lines) = self.crate_lines_of(&shown, want).await?;
         if lines.is_empty() {
             return Err(ToggleError::Refused("That crate is empty.".into()));
         }
@@ -1501,17 +1554,18 @@ impl PlaylistService {
 
     /// The axes and their domains in this library, for the builder (decision 0024, issue 4).
     pub async fn crate_axes(&self, want: Option<&str>) -> Result<Vec<crates::AxisView>, ToggleError> {
-        let lib = self.crate_library(want, false).await?;
+        let lib = self.crate_library(want, false, false).await?;
         let playlists: Vec<String> = self.own_store()?.snapshot().await?.into_iter().map(|(name, _, _)| name).collect();
         Ok(crates::axes(&lib.files, &playlists))
     }
 
     /// What a crate is worked out on: Music's files newest first with their facts, which playlists hold each line, and
     /// (when needed) the favourites, kept for a minute (decision 0024, issue 5).
-    async fn crate_library(&self, want: Option<&str>, favourites: bool) -> Result<CrateLibrary, ToggleError> {
+    async fn crate_library(&self, want: Option<&str>, favourites: bool, albums: bool) -> Result<CrateLibrary, ToggleError> {
         let (sid, source) = self.source_of(want)?;
         // First, so a request waiting for them holds nothing large meanwhile.
         let favourites = if favourites { self.favourite_lines(&sid, &source).await } else { None };
+        let favourite_albums = if albums { favourite_album_lines().await } else { None };
         let c = self.lib.catalogue();
         let files = tokio::task::spawn_blocking(move || c.crate_facts(0)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let mut membership: HashMap<String, Vec<String>> = HashMap::new();
@@ -1520,7 +1574,7 @@ impl PlaylistService {
                 membership.entry(line).or_default().push(name.clone());
             }
         }
-        Ok(CrateLibrary { source: sid, files, membership, favourites })
+        Ok(CrateLibrary { source: sid, files, membership, favourites, favourite_albums })
     }
 
     /// The favourite tracks' lines, from the media server. What was heard last is answered at once, with Cratarr's own

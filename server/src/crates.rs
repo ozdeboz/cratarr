@@ -81,12 +81,27 @@ pub enum Favourites {
 impl Favourites {
     /// The crate's conditions with the toggle's.
     pub fn with(self, conditions: &[Condition]) -> Vec<Condition> {
+        self.on("favourite", conditions)
+    }
+
+    /// The crate's conditions with the favourite albums toggle's, set as this (decision 0024, amended 2026-10-19: a
+    /// second toggle, the same three settings, all a crate's tracks until set).
+    pub fn with_albums(self, conditions: &[Condition]) -> Vec<Condition> {
+        self.on("favourite_album", conditions)
+    }
+
+    fn on(self, axis: &str, conditions: &[Condition]) -> Vec<Condition> {
         let mut all = conditions.to_vec();
         if self != Favourites::All {
-            all.push(Condition { axis: "favourite".into(), not: self == Favourites::None, value: Value::Yes });
+            all.push(Condition { axis: axis.into(), not: self == Favourites::None, value: Value::Yes });
         }
         all
     }
+}
+
+/// A crate's conditions as its two toggles show it: favourite tracks (`tracks`), and favourite albums (`albums`).
+pub fn shown(conditions: &[Condition], tracks: Favourites, albums: Favourites) -> Vec<Condition> {
+    albums.with_albums(&tracks.with(conditions))
 }
 
 pub fn is_permanent(id: &str) -> bool {
@@ -165,10 +180,13 @@ pub struct World<'a> {
     pub membership: &'a HashMap<String, Vec<String>>,
     /// `None`: the favourites are not known (the media server could not be asked).
     pub favourites: Option<&'a HashSet<String>>,
+    /// The lines whose album has the viewer's heart on (the Library's album favourites); `None`: not known.
+    pub favourite_albums: Option<&'a HashSet<String>>,
 }
 
-const AXES: [(&str, &str, Kind); 5] = [
+const AXES: [(&str, &str, Kind); 6] = [
     ("favourite", "Favourite", Kind::YesNo),
+    ("favourite_album", "Favourite album", Kind::YesNo),
     ("playlist", "In playlist", Kind::Membership),
     ("genre", "Genre", Kind::Values),
     ("year", "Year", Kind::Range),
@@ -221,6 +239,7 @@ fn holds(c: &Condition, f: &Facts, w: &World) -> bool {
     };
     let yes = match (c.axis.as_str(), &c.value) {
         ("favourite", Value::Yes) => w.favourites.is_some_and(|s| s.contains(&f.rel)),
+        ("favourite_album", Value::Yes) => w.favourite_albums.is_some_and(|s| s.contains(&f.rel)),
         ("playlist", Value::AnyOf { values }) => match w.membership.get(&f.rel) {
             None => false,
             Some(lists) if values.is_empty() => !lists.is_empty(),
@@ -242,6 +261,11 @@ pub fn select<'a>(files: &'a [Facts], conditions: &[Condition], w: &World) -> Ve
 /// Whether working the conditions out needs the media server's favourites.
 pub fn needs_favourites(conditions: &[Condition]) -> bool {
     conditions.iter().any(|c| c.axis == "favourite")
+}
+
+/// Whether working the conditions out needs the favourite albums (the Library's hearts).
+pub fn needs_favourite_albums(conditions: &[Condition]) -> bool {
+    conditions.iter().any(|c| c.axis == "favourite_album")
 }
 
 // --- Freshness of the media server's favourites (decision 0024, issue 5) ---
@@ -286,6 +310,9 @@ struct Stored {
     /// Each crate's favourites setting (permanent ones too), by id; a crate not in it shows none.
     #[serde(default)]
     favourites: BTreeMap<String, Favourites>,
+    /// Each crate's favourite albums setting (decision 0024, amended 2026-10-19), by id; a crate not in it shows all.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    favourite_albums: BTreeMap<String, Favourites>,
 }
 
 /// One's own crates (decision 0024, issue 2): one file in Cratarr's data folder, the version before each change kept
@@ -331,6 +358,22 @@ impl CrateStore {
     pub async fn set_favourites(&self, id: &str, favourites: Favourites) -> Result<()> {
         let mut s = self.stored().await?;
         s.favourites.insert(id.to_string(), favourites);
+        self.write_stored(s).await
+    }
+
+    /// A crate's favourite albums setting (all until set).
+    pub async fn favourite_albums(&self, id: &str) -> Result<Favourites> {
+        Ok(self.stored().await?.favourite_albums.get(id).copied().unwrap_or(Favourites::All))
+    }
+
+    /// Every crate's favourite albums setting that was set.
+    pub async fn all_favourite_albums(&self) -> Result<BTreeMap<String, Favourites>> {
+        Ok(self.stored().await?.favourite_albums)
+    }
+
+    pub async fn set_favourite_albums(&self, id: &str, albums: Favourites) -> Result<()> {
+        let mut s = self.stored().await?;
+        s.favourite_albums.insert(id.to_string(), albums);
         self.write_stored(s).await
     }
 
@@ -497,7 +540,7 @@ mod tests {
     #[test]
     fn the_permanent_crate_is_conditions_like_any_other_and_the_favourites_toggle_adds_one() {
         let (files, membership, favourites) = library();
-        let w = World { membership: &membership, favourites: Some(&favourites) };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
         assert_eq!(permanent().iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["unlisted"]);
         let unlisted = &permanent()[0].conditions;
         assert_eq!(select(&files, unlisted, &w), vec!["b", "d"]);
@@ -505,14 +548,34 @@ mod tests {
         assert_eq!(select(&files, &Favourites::Only.with(unlisted), &w), vec!["b"], "only its favourites");
         assert_eq!(select(&files, &Favourites::None.with(unlisted), &w), vec!["d"], "none of them");
         assert_eq!(select(&files, &Favourites::Only.with(&[]), &w), vec!["a", "b"], "the whole library's favourites");
-        let unknown = World { membership: &membership, favourites: None };
+        let unknown = World { membership: &membership, favourites: None, favourite_albums: None };
         assert!(select(&files, &Favourites::Only.with(unlisted), &unknown).is_empty(), "favourites not known: nothing, not everything");
+    }
+
+    #[test]
+    fn the_favourite_albums_toggle_adds_its_own_condition_beside_the_favourites_one() {
+        let (files, membership, favourites) = library();
+        // "a" and "c" are on a favourite album; "a" and "b" are favourite tracks.
+        let albums = HashSet::from(["a".to_string(), "c".to_string()]);
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: Some(&albums) };
+        let all = select(&files, &shown(&[], Favourites::All, Favourites::All), &w);
+        let on: Vec<&str> = all.iter().copied().filter(|r| albums.contains(*r)).collect();
+        let off: Vec<&str> = all.iter().copied().filter(|r| !albums.contains(*r)).collect();
+        assert_eq!(select(&files, &shown(&[], Favourites::All, Favourites::Only), &w), on);
+        assert_eq!(select(&files, &shown(&[], Favourites::All, Favourites::None), &w), off);
+        assert_eq!(select(&files, &shown(&[], Favourites::Only, Favourites::None), &w), vec!["b"], "a favourite track not on a favourite album");
+        assert!(needs_favourite_albums(&shown(&[], Favourites::All, Favourites::Only)));
+        assert!(!needs_favourite_albums(&shown(&[], Favourites::Only, Favourites::All)));
+        assert!(is_axis("favourite_album"));
+        // Not known: nothing is shown on that ground.
+        let unknown = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
+        assert!(select(&files, &shown(&[], Favourites::All, Favourites::Only), &unknown).is_empty());
     }
 
     #[test]
     fn conditions_combine_with_and_take_several_values_or_a_range_and_can_be_negated() {
         let (files, membership, favourites) = library();
-        let w = World { membership: &membership, favourites: Some(&favourites) };
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
         let c = |axis: &str, not: bool, value: Value| Condition { axis: axis.into(), not, value };
         let rock_or_jazz = c("genre", false, Value::AnyOf { values: vec!["ROCK".into(), "jazz".into()] });
         assert_eq!(select(&files, &[rock_or_jazz.clone()], &w), vec!["a", "b", "c"], "any of, case ignored");
@@ -564,6 +627,11 @@ mod tests {
         assert_eq!(again.favourites("unlisted").await.unwrap(), Favourites::All, "a permanent crate's as well");
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
         assert_eq!(again.favourites(&id).await.unwrap(), Favourites::Only, "a change to the crate keeps it");
+        // The favourite albums toggle (decision 0024, amended 2026-10-19): all until set, kept the same way.
+        assert_eq!(again.favourite_albums(&id).await.unwrap(), Favourites::All, "all until set");
+        again.set_favourite_albums(&id, Favourites::None).await.unwrap();
+        again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
+        assert_eq!(CrateStore::new(dir.to_str()).favourite_albums(&id).await.unwrap(), Favourites::None, "kept, and through a change");
         assert!(dir.join("crates.json.bak").exists(), "the version before kept");
         assert!(again.delete(&id).await.unwrap());
         assert!(again.list().await.unwrap().is_empty());

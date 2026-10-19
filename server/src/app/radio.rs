@@ -604,7 +604,7 @@ pub async fn next(req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
 async fn crate_songs(index: &Index, crate_id: &str) -> Result<Vec<usize>, ToggleError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let playlists = served.playlists().ok_or_else(|| ToggleError::Refused("Crates are not ready yet.".into()))?.clone();
-    let page = playlists.crate_rows(crate_id, Some(crate::source::cratarr::KIND.id), 0, usize::MAX, None).await?;
+    let page = playlists.crate_rows(crate_id, Some(crate::source::cratarr::KIND.id), 0, usize::MAX, None, None).await?;
     let ids: Vec<String> = page.rows.into_iter().filter_map(|r| r.id).collect();
     Ok(index.find(&ids))
 }

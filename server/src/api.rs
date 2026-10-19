@@ -74,6 +74,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/stats", get(playlist_stats))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
         .route("/api/crates/{id}/favourites", put(crate_favourites))
+        .route("/api/crates/{id}/favourite-albums", put(crate_favourite_albums))
         .route(
             "/api/crates/{id}/image",
             get(crate_image).put(crate_image_set).delete(crate_image_remove).layer(axum::extract::DefaultBodyLimit::max(32 << 20)),
@@ -1218,16 +1219,18 @@ struct Page {
     limit: Option<usize>,
     /// The favourites toggle's setting the page shows (it may be on its way to the server); the saved one without.
     favourites: Option<crate::crates::Favourites>,
+    /// The favourite albums toggle's, likewise (decision 0024, amended 2026-10-19).
+    favourite_albums: Option<crate::crates::Favourites>,
 }
 
 async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(200).clamp(1, 500);
-    Ok(Json(app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, q.favourites).await?).into_response())
+    Ok(Json(app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, q.favourites, q.favourite_albums).await?).into_response())
 }
 
 /// A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, counted on the server.
 async fn crate_tempo(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Json<crate::crates::TempoBands>, ApiError> {
-    Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), q.favourites).await?))
+    Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), q.favourites, q.favourite_albums).await?))
 }
 
 /// Every playlist's facts for the Playlists page's table (decision 0042), by id.
@@ -1322,6 +1325,22 @@ async fn crate_favourites(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     app.playlists.set_crate_favourites(&id, req.favourites).await?;
     Ok(Json(json!({ "crate": id, "favourites": req.favourites })))
+}
+
+#[derive(Deserialize)]
+struct CrateFavouriteAlbumsRequest {
+    favourite_albums: crate::crates::Favourites,
+}
+
+/// A crate's favourite albums toggle (decision 0024, amended 2026-10-19): `all`, `only` or `none`, kept for every
+/// device, as the favourites toggle is.
+async fn crate_favourite_albums(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    Json(req): Json<CrateFavouriteAlbumsRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    app.playlists.set_crate_favourite_albums(&id, req.favourite_albums).await?;
+    Ok(Json(json!({ "crate": id, "favourite_albums": req.favourite_albums })))
 }
 
 async fn crate_playlist(
