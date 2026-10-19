@@ -203,6 +203,42 @@ pure TypeScript, testable in Node; continuous knobs only; output 0 at its neutra
 - Which sources beyond the flame, shapes and waves (noise and cells, oscillators, the cover, the title)?
 - The layer cap, once measured.
 
+## Amendment (2026-10-20): after 70, fewer lines and no matrix
+
+The owner, with 70 live: "I'm pretty impressed, but there are a few things we should most definitely address to make it
+more usable." In their words, then as decided:
+
+- **Start from scratch**: "we need to be able to reset everything. Not just reset to a unknown to me default, but reset
+  entirely to allow the user to build from scratch." Asked what is left: **nothing at all**, an empty patch, black
+  until a source is added. The flame is a layer that can be off (`flameLayer`, 0..1, its layer's amount: it morphs).
+- **A few sensible chains**: "some sensible presets, but nothing extreme the way we now have. Currently we have way too
+  many lines." Asked which: **Calm, Pulse and Flow** (web/src/lib/visuals/chains.ts), each a handful of cables (at most
+  eight, mostly the whole track's signals; the Cratarr chain had 54, seven a band) and the settings that make it, never
+  the look. A chain is applied whole (its routes, with every default it leaves out kept at 0, since the settings keep
+  routes over the defaults: `chainRoutes`; its extras; its settings over the rest), morphing over 1.5 s. The dice evolve
+  within the chain: they move the cables there are, never add lines.
+- **A line opened**: "each line is clickable, removable … when a line is clicked normally … see a panel with
+  configuration." A tap on a cable, in the graph or the rack, opens it (`CableSheet`): its two ends (each tapped to move
+  it), how its signal is read (this track, lately, as it is; fast or slow), swing or level, its curve, Remove.
+- **A line held**: "No, not long press for multi-select. That's not what I mean. What I mean is long press to get the
+  option to delete or reroute." A long press opens the app's own menu (`CableMenu`, lib/MenuSheet) with Reroute and
+  Delete; Reroute moves one end (`SourcePicker`: a signal, a band, a modulator, or a knob found by name). No select mode
+  for cables, and no Mute (never asked for).
+- **No matrix**: "I thought that this whole new graphical way of hooking things up would replace our matrix. We would
+  also be able to create new shapes that the matrix did not yet allow for", and "Removing the matrix should simplify
+  things while empowering the user through our new graphical interface." The route grid goes: the graph (wide screens)
+  and the rack (phones) are the only ways to cable; today's routes stay in the data, as cables. Every knob shows what
+  moves it (`KnobCables`), "+ Add" picks a source.
+- **Reuse**, the owner's standing rule for the team: "reuse as much as possible like this, because we don't like
+  reinventing the wheel". The cable pieces stand on the app's own (MenuSheet and MenuEntry, lib/longpress, the
+  panel's CurveEditor); a library already in use comes first, then compatible open source (MIT, BSD, Apache-2, GPL-3,
+  AGPL-3), ported with its notice.
+
+Who built what ("Split the work evenly among the sessions"): claude-a5 the panel without the matrix, the rack's rows, the
+chain picker and scratch, `flameLayer`; claude-632 the graph's lines (tap, long press, drag into the empty to add);
+claude-5f the chains and the shared pieces (CableSheet, CableMenu, KnobCables, SourcePicker, cable-actions.ts: removing a
+route sets it to 0, a route read as a cable, a new cable a route where it can be one, reroute).
+
 ## Sources
 
 - Butterchurn: https://github.com/jberg/butterchurn (renderer.js takes `audioLevels`; audioLevels.js: the ratios to
