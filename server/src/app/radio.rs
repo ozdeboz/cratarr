@@ -223,6 +223,8 @@ pub(crate) struct Song {
     pub tags: Vec<u32>,
     /// Hearted by the listener (`ready`).
     pub favourite: bool,
+    /// Excluded by the listener from every automatic pick (`ready`; decision 0024, amended 2026-10-19).
+    pub excluded: bool,
 }
 
 /// The library, ready to choose from.
@@ -383,6 +385,8 @@ pub(crate) fn choose(index: &Index, req: &NextRequest, recent: &HashMap<String, 
     if req.skip_favourites {
         all.retain(|&i| !index.songs[i].favourite);
     }
+    // Never what the listener excluded (decision 0024, amended 2026-10-19: global exclusions).
+    all.retain(|&i| !index.songs[i].excluded);
     // Not in the queue; the recently played only when there is not enough else.
     let fresh: Vec<usize> = all.iter().copied().filter(|i| !out.contains(i) && !recent.contains_key(&index.songs[*i].id)).collect();
     // Not enough else: as many of the recently played as are missing come back, those played longest ago first.
@@ -572,7 +576,7 @@ fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>
     albums.sort_by(|a, b| b.1.total_cmp(&a.1));
     albums.truncate(10);
     let Some(&(album, _)) = albums.get(if albums.is_empty() { 0 } else { rng.below(albums.len().min(3)) }) else { return Vec::new() };
-    index.albums.get(&album).map(|songs| songs.iter().copied().filter(|i| !out.contains(i)).collect()).unwrap_or_default()
+    index.albums.get(&album).map(|songs| songs.iter().copied().filter(|i| !out.contains(i) && !index.songs[*i].excluded).collect()).unwrap_or_default()
 }
 
 // --- the index, from the library's and the user data's own files ---
@@ -773,6 +777,7 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
         let t: Vec<u32> = tags_of.get(&album_id).map(|v| v.iter().map(|x| tags.of(x)).collect()).unwrap_or_default();
         songs.push(Song {
             favourite: starred.contains(&id),
+            excluded: false,
             playlists: member.get(&id).cloned().unwrap_or_default(),
             album_n: albums.of(&album_id),
             artists: a,
@@ -822,25 +827,33 @@ pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, 
     Ok(ranked.into_iter().take(count).map(|(a, _)| index.artist_ids[a as usize].clone()).collect())
 }
 
-/// The index with the listener's favourites marked, and their recent plays, for a choice made here: the running
-/// request's account's, whose player asks (decision 0051).
+/// The index with the listener's favourites and exclusions marked, and their recent plays, for a choice made here: the
+/// running request's account's, whose player asks (decision 0051).
 async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let dir = served.data_dir.clone().ok_or_else(|| ToggleError::Refused("Radio needs Cratarr's data folder.".into()))?;
     let index = index(&served, &dir).await?;
-    let Some(user) = served.current_user() else { return Ok((index, HashMap::new())) };
-    let (recent, starred) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let userdata = dir.join("userdata.sqlite");
-        Ok((recent_plays(&userdata, &user)?, starred_songs(&userdata, &user)?))
-    })
-    .await
-    .map_err(|e| anyhow::anyhow!("{e}"))??;
-    if starred.is_empty() {
+    let user = served.current_user();
+    let excluded = match served.playlists() {
+        Some(p) => p.excluded_songs_of(user.as_deref()).await?,
+        None => HashSet::new(),
+    };
+    let (recent, starred) = match user {
+        Some(user) => tokio::task::spawn_blocking(move || -> Result<_> {
+            let userdata = dir.join("userdata.sqlite");
+            Ok((recent_plays(&userdata, &user)?, starred_songs(&userdata, &user)?))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??,
+        None => (HashMap::new(), HashSet::new()),
+    };
+    if starred.is_empty() && excluded.is_empty() {
         return Ok((index, recent));
     }
     let mut theirs = Index::clone(&index);
     for s in &mut theirs.songs {
         s.favourite = starred.contains(&s.id);
+        s.excluded = excluded.contains(&s.id);
     }
     Ok((Arc::new(theirs), recent))
 }
@@ -1173,6 +1186,34 @@ mod tests {
         let picked = ids(&index, &choose(&index, &ask(true), &HashMap::new(), None, &mut Rng::seeded(3)));
         assert!(picked.len() == 3 && picked.iter().all(|p| ["t5", "t6", "t7"].contains(&p.as_str())), "{picked:?}");
         assert_eq!(choose(&index, &ask(false), &HashMap::new(), None, &mut Rng::seeded(3)).len(), 5);
+    }
+
+    #[test]
+    fn excluded_tracks_are_never_picked_not_even_in_a_whole_album() {
+        let mut s: Vec<Song> = (0..8).map(|n| song(&format!("t{n}"), 1 + n, 10 + n, 1, 2000, &[])).collect();
+        for x in &mut s[1..5] {
+            x.excluded = true;
+        }
+        let index = Index::new(s);
+        let ask = NextRequest {
+            mode: Mode::Similar,
+            seed: vec!["t0".into()],
+            exclude: vec!["t0".into()],
+            last: Some("t0".into()),
+            count: Some(5),
+            within: None,
+            albums: false,
+            by: RadioBy::Track,
+            skip_favourites: false,
+        };
+        let picked = ids(&index, &choose(&index, &ask, &HashMap::new(), None, &mut Rng::seeded(3)));
+        assert!(picked.len() == 3 && picked.iter().all(|p| ["t5", "t6", "t7"].contains(&p.as_str())), "{picked:?}");
+        // A whole album: its excluded track stays out.
+        let mut a = vec![song("s1", 1, 1, 1, 2000, &[]), song("s2", 1, 1, 1, 2000, &[]), song("e1", 2, 2, 9, 1996, &[]), song("e2", 2, 2, 9, 1996, &[])];
+        a[3].excluded = true;
+        let index = Index::new(a);
+        let whole = NextRequest { seed: vec!["s1".into(), "s2".into()], exclude: vec!["s1".into(), "s2".into()], last: Some("s2".into()), albums: true, ..ask };
+        assert_eq!(ids(&index, &choose(&index, &whole, &HashMap::new(), None, &mut Rng::seeded(2))), ["e1"]);
     }
 
     #[test]

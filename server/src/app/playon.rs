@@ -2396,12 +2396,18 @@ fn valid_name(name: &str) -> Result<(), ToggleError> {
 }
 
 /// Tracks of Cratarr's own library (decision 0032) for `play`: an album in its order, the favourites of the player's
-/// `owner`, or tracks from the whole library at random. `None` when none of those is asked for.
+/// `owner`, or tracks from the whole library at random. `None` when none of those is asked for. The favourites and the
+/// library leave out what the owner excluded from automatic picks (decision 0024, amended 2026-10-19); an album plays
+/// whole.
 async fn own_tracks(from: &PlayFrom, owner: Option<String>) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
     if from.album.is_none() && !from.favourites && !from.library {
         return Ok(None);
     }
     let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+    let excluded = match (&from.album, served.playlists()) {
+        (None, Some(p)) => p.excluded_songs_of(owner.as_deref()).await?,
+        _ => std::collections::HashSet::new(),
+    };
     let from = from.clone();
     let songs = tokio::task::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
         if let Some(album) = &from.album {
@@ -2409,10 +2415,15 @@ async fn own_tracks(from: &PlayFrom, owner: Option<String>) -> Result<Option<Vec
         }
         if from.favourites {
             let owner = owner.context("there is no account yet: make one in Settings")?;
-            let ids = served.userdata.starred(&owner, crate::userdata::Kind::Song)?;
+            let mut ids = served.userdata.starred(&owner, crate::userdata::Kind::Song)?;
+            ids.retain(|id| !excluded.contains(id));
             return served.library.songs_by_id(&ids);
         }
-        served.library.random_songs(from.limit.unwrap_or(LIBRARY_PICK), None, (None, None), None)
+        let want = from.limit.unwrap_or(LIBRARY_PICK);
+        let mut songs = served.library.random_songs(want + excluded.len(), None, (None, None), None)?;
+        songs.retain(|s| !excluded.contains(&s.id));
+        songs.truncate(want);
+        Ok(songs)
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))??;

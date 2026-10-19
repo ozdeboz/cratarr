@@ -559,6 +559,63 @@ async fn favourite_album_lines() -> Option<HashSet<String>> {
     .flatten()
 }
 
+/// The lines of albums' tracks as the library has them now, by album: a crate's albums left out by hand (decision 0024,
+/// amended 2026-10-19), a rule, so a track the album gets later is out too.
+async fn album_lines(albums: HashSet<String>) -> HashMap<String, Vec<String>> {
+    if albums.is_empty() {
+        return HashMap::new();
+    }
+    let Some(serve) = crate::serve::instance() else { return HashMap::new() };
+    tokio::task::spawn_blocking(move || {
+        let mut lines: HashMap<String, Vec<String>> = HashMap::new();
+        for (rel, s) in serve.library.songs_by_rel(0).unwrap_or_default() {
+            if albums.contains(&s.album) {
+                lines.entry(s.album).or_default().push(rel);
+            }
+        }
+        lines
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// A crate's lines to leave out: its own tracks left out, its albums' tracks now, and the tracks excluded everywhere.
+fn left_lines(left: &crates::LeftOut, album_tracks: &HashMap<String, Vec<String>>, excluded: &[String]) -> Vec<String> {
+    let of_albums = left.albums.iter().filter_map(|a| album_tracks.get(a)).flatten();
+    left.lines.iter().chain(of_albums).chain(excluded).cloned().collect()
+}
+
+/// A list with `items` added (the new ones at its end, sorted) or, `add` false, taken out.
+fn edited(before: &[String], items: impl IntoIterator<Item = String>, add: bool) -> Vec<String> {
+    let items: HashSet<String> = items.into_iter().collect();
+    let mut after = before.to_vec();
+    if add {
+        let mut new: Vec<String> = items.into_iter().filter(|i| !before.contains(i)).collect();
+        new.sort();
+        after.extend(new);
+    } else {
+        after.retain(|i| !items.contains(i));
+    }
+    after
+}
+
+/// Albums of Cratarr's own library by id (those it has).
+async fn library_albums(ids: Vec<String>) -> Result<Vec<crate::serve::api::Album>, ToggleError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    Ok(tokio::task::spawn_blocking(move || serve.library.albums_by_id(&ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
+}
+
+/// An album left out of a crate, for its editor's list: its title and artist none once it is gone from the library.
+#[derive(Debug, Clone, Serialize)]
+pub struct LeftOutAlbum {
+    pub id: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+}
+
 /// The account whose playlists and crates the running request's are (decision 0051): another account's, or `None` for
 /// the first administrator's (theirs are the ones from before accounts), as for Cratarr's own work.
 pub(crate) fn asking_account() -> Option<String> {
@@ -939,6 +996,14 @@ impl PlaylistService {
                 crates.set_left_out(&crate_id, before.clone()).await?;
                 Ok(Change::LeftOut { crate_id, before: after, after: before })
             }
+            Change::Excluded { before, after } => {
+                let crates = self.crate_stores.of(account)?;
+                if crates.excluded().await? != after {
+                    return Err(changed());
+                }
+                crates.set_excluded(before.clone()).await?;
+                Ok(Change::Excluded { before: after, after: before })
+            }
         }
     }
 
@@ -1295,7 +1360,10 @@ impl PlaylistService {
         let albums_set = self.own_crates()?.all_favourite_albums().await?;
         let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
         let left_set = self.own_crates()?.all_left_out().await?;
-        let none: Vec<String> = Vec::new();
+        let album_tracks = album_lines(left_set.values().flat_map(|l| l.albums.iter().cloned()).collect()).await;
+        // Out of every crate too (decision 0024, amended 2026-10-19): the tracks excluded everywhere.
+        let excluded = self.own_crates()?.excluded().await?;
+        let none = crates::LeftOut::default();
         let left_of = |id: &str| left_set.get(id).unwrap_or(&none);
         // The favourites are asked for only when a crate shows by them (its conditions, or its toggle): asking the
         // media server for every favourite is slow, and a list of crates that need none must not wait for it. The
@@ -1330,10 +1398,11 @@ impl PlaylistService {
                 let favourites = set.get(&c.id).copied().unwrap_or(crates::Favourites::None);
                 let favourite_albums = albums_of(&c.id);
                 let left = left_of(&c.id);
-                let shown = crates::leaving_out(left, &crates::shown(&c.conditions, favourites, favourite_albums));
+                let gone = left_lines(left, &album_tracks, &excluded);
+                let shown = crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites, favourite_albums));
                 let stats = lib.knows(&shown).then(|| crate_stats(&lib.select(&shown), &facts, &songs, played.as_ref(), now));
                 // Per setting of the favourites toggle, the albums toggle as it is set and the left-out list.
-                let counted = |tracks: crates::Favourites| count(crates::leaving_out(left, &crates::shown(&c.conditions, tracks, favourite_albums)));
+                let counted = |tracks: crates::Favourites| count(crates::leaving_out(&gone, &crates::shown(&c.conditions, tracks, favourite_albums)));
                 CrateView {
                     counts: CrateCounts {
                         all: counted(crates::Favourites::All),
@@ -1467,26 +1536,22 @@ impl PlaylistService {
             None => self.own_crates()?.favourite_albums(id).await?,
         };
         let left = self.own_crates()?.left_out(id).await?;
-        Ok(crates::leaving_out(&left, &crates::shown(&def.conditions, fav, albums)))
+        let album_tracks = album_lines(left.albums.iter().cloned().collect()).await;
+        let excluded = self.own_crates()?.excluded().await?;
+        Ok(crates::leaving_out(&left_lines(&left, &album_tracks, &excluded), &crates::shown(&def.conditions, fav, albums)))
     }
 
-    /// Tracks taken out of a crate by hand, or put back (`out` false), by their ids on a server (decision 0024, amended
-    /// 2026-10-19): kept as their lines in the crate's left-out list. Returns how many it holds now and the undo token.
-    pub async fn crate_leave_out(&self, id: &str, want: Option<&str>, ids: &[String], out: bool) -> Result<(usize, Option<String>), ToggleError> {
+    /// Tracks taken out of a crate by hand, or put back (`out` false), by their ids on a server, and whole albums by
+    /// their ids (decision 0024, amended 2026-10-19): kept in the crate's left-out list, the tracks as their lines, an
+    /// album as a rule. Returns how many it holds now (tracks and albums) and the undo token.
+    pub async fn crate_leave_out(&self, id: &str, want: Option<&str>, ids: &[String], albums: &[String], out: bool) -> Result<(usize, Option<String>), ToggleError> {
         self.crate_def(id).await?;
-        let (sid, _) = self.source_of(want)?;
-        let (c, s, ids) = (self.lib.catalogue(), sid.clone(), ids.to_vec());
-        let lines = tokio::task::spawn_blocking(move || c.rels_of(&s, 0, &ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let lines = self.lines_of(want, ids).await?;
+        // Only albums the library has go in; any comes back out.
+        let albums: Vec<String> = if out { library_albums(albums.to_vec()).await?.into_iter().map(|a| a.id).collect() } else { albums.to_vec() };
         let store = self.own_crates()?;
         let before = store.left_out(id).await?;
-        let mut after = before.clone();
-        if out {
-            let mut new: Vec<String> = lines.into_iter().filter(|l| !before.contains(l)).collect();
-            new.sort();
-            after.extend(new);
-        } else {
-            after.retain(|l| !lines.contains(l));
-        }
+        let after = crates::LeftOut { lines: edited(&before.lines, lines, out), albums: edited(&before.albums, albums, out) };
         if after == before {
             return Ok((after.len(), None));
         }
@@ -1495,13 +1560,71 @@ impl PlaylistService {
         Ok((after.len(), undo))
     }
 
-    /// A crate's tracks left out by hand, as rows on a server, for its editor to put back.
-    pub async fn crate_left_out(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<PlaylistRow>), ToggleError> {
+    /// A crate's tracks left out by hand, as rows on a server, and its albums left out, for its editor to put back.
+    pub async fn crate_left_out(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<PlaylistRow>, Vec<LeftOutAlbum>), ToggleError> {
         self.crate_def(id).await?;
         let (sid, _) = self.source_of(want)?;
-        let lines = self.own_crates()?.left_out(id).await?;
-        let rows = self.rows_of(lines, &sid).await?;
-        Ok((sid, rows))
+        let left = self.own_crates()?.left_out(id).await?;
+        let found = library_albums(left.albums.clone()).await?;
+        let albums = left
+            .albums
+            .iter()
+            .map(|a| {
+                let f = found.iter().find(|x| &x.id == a);
+                LeftOutAlbum { id: a.clone(), title: f.map(|x| x.name.clone()), artist: f.map(|x| x.artist.clone()) }
+            })
+            .collect();
+        let rows = self.rows_of(left.lines, &sid).await?;
+        Ok((sid, rows, albums))
+    }
+
+    /// Tracks' lines (relative to Music) by their ids on a server.
+    async fn lines_of(&self, want: Option<&str>, ids: &[String]) -> Result<HashSet<String>, ToggleError> {
+        if ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let (sid, _) = self.source_of(want)?;
+        let (c, ids) = (self.lib.catalogue(), ids.to_vec());
+        Ok(tokio::task::spawn_blocking(move || c.rels_of(&sid, 0, &ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
+    }
+
+    /// Tracks excluded from every automatic pick, or put back (`out` false), by their ids on a server (decision 0024,
+    /// amended 2026-10-19: global exclusions), the asking account's: out of every crate as a crate's left-out tracks
+    /// are, and never picked by Radio, Autoplay, or a shuffle of the library or the favourites; played by hand, they
+    /// play. Returns how many there are now and the undo token.
+    pub async fn exclude(&self, want: Option<&str>, ids: &[String], out: bool) -> Result<(usize, Option<String>), ToggleError> {
+        let lines = self.lines_of(want, ids).await?;
+        let store = self.own_crates()?;
+        let before = store.excluded().await?;
+        let after = edited(&before, lines, out);
+        if after == before {
+            return Ok((after.len(), None));
+        }
+        store.set_excluded(after.clone()).await?;
+        let undo = self.keep(Change::Excluded { before, after: after.clone() });
+        Ok((after.len(), undo))
+    }
+
+    /// The tracks excluded everywhere, how many and as rows on a server, for the Library's list to put back.
+    pub async fn excluded_rows(&self, want: Option<&str>) -> Result<(String, usize, Vec<PlaylistRow>), ToggleError> {
+        let (sid, _) = self.source_of(want)?;
+        let lines = self.own_crates()?.excluded().await?;
+        let n = lines.len();
+        Ok((sid.clone(), n, self.rows_of(lines, &sid).await?))
+    }
+
+    /// The Cratarr song ids of the tracks `user` excluded everywhere (`None`: the first administrator), for the picks
+    /// that leave them out: Radio's and Autoplay's, the shuffles of the library and the favourites, Subsonic's random songs.
+    pub async fn excluded_songs_of(&self, user: Option<&str>) -> Result<HashSet<String>, ToggleError> {
+        let account = user.and_then(account_of);
+        let lines = self.crate_stores.of(account.as_deref())?.excluded().await?;
+        if lines.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let cat = self.lib.catalogue();
+        Ok(tokio::task::spawn_blocking(move || lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(&cat, l)).collect())
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?)
     }
 
     /// A crate's tempo spread (decision 0041), its tracks chosen as its rows are (the favourites toggle `fav`, else as
@@ -1993,5 +2116,25 @@ mod favourites_tests {
         assert!(k.at.elapsed() >= FAVOURITES_KEEP, "due to be asked again");
         assert!(next.kept("other").is_none(), "only for the server it came from");
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod left_out_tests {
+    use super::*;
+
+    #[test]
+    fn a_crates_lines_left_out_are_its_tracks_its_albums_tracks_now_and_those_excluded_everywhere() {
+        let left = crates::LeftOut { lines: vec!["a.flac".into()], albums: vec!["al-1".into(), "al-gone".into()] };
+        let album_tracks: HashMap<String, Vec<String>> = [("al-1".to_string(), vec!["x/1.flac".to_string(), "x/2.flac".to_string()])].into();
+        assert_eq!(left_lines(&left, &album_tracks, &["e.flac".to_string()]), ["a.flac", "x/1.flac", "x/2.flac", "e.flac"]);
+        assert!(left_lines(&crates::LeftOut::default(), &HashMap::new(), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_list_takes_new_items_at_its_end_sorted_and_gives_items_back() {
+        let before = vec!["b".to_string(), "a".to_string()];
+        assert_eq!(edited(&before, ["d".to_string(), "a".to_string(), "c".to_string()], true), ["b", "a", "c", "d"], "a stays where it was");
+        assert_eq!(edited(&before, ["b".to_string(), "z".to_string()], false), ["a"]);
     }
 }

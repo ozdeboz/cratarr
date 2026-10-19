@@ -76,6 +76,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/favourites", put(crate_favourites))
         .route("/api/crates/{id}/favourite-albums", put(crate_favourite_albums))
         .route("/api/crates/{id}/left-out", get(crate_left_out).post(crate_leave_out).delete(crate_put_back))
+        .route("/api/excluded", get(excluded).post(exclude).delete(include_again))
         .route(
             "/api/crates/{id}/image",
             get(crate_image).put(crate_image_set).delete(crate_image_remove).layer(axum::extract::DefaultBodyLimit::max(32 << 20)),
@@ -1328,29 +1329,58 @@ async fn crate_favourites(
     Ok(Json(json!({ "crate": id, "favourites": req.favourites })))
 }
 
-/// Tracks of a crate, by their ids on a server (its default when not said).
+/// Tracks of a crate, by their ids on a server (its default when not said), and albums of Cratarr's own library by id.
 #[derive(Deserialize)]
 struct LeftOutRequest {
+    source: Option<String>,
+    #[serde(default)]
+    ids: Vec<String>,
+    #[serde(default)]
+    albums: Vec<String>,
+}
+
+/// Takes tracks or whole albums out of a crate by hand (decision 0024, amended 2026-10-19): they stay out over its
+/// conditions and toggles, an album's tracks now and later.
+async fn crate_leave_out(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<LeftOutRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (n, undo) = app.playlists.crate_leave_out(&id, req.source.as_deref(), &req.ids, &req.albums, true).await?;
+    Ok(Json(json!({ "left_out": n, "undo": undo })))
+}
+
+/// Puts tracks or albums left out of a crate back.
+async fn crate_put_back(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<LeftOutRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (n, undo) = app.playlists.crate_leave_out(&id, req.source.as_deref(), &req.ids, &req.albums, false).await?;
+    Ok(Json(json!({ "left_out": n, "undo": undo })))
+}
+
+/// A crate's tracks left out by hand, as rows, and its albums left out, for its editor.
+async fn crate_left_out(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (source, rows, albums) = app.playlists.crate_left_out(&id, f.source.as_deref()).await?;
+    Ok(Json(json!({ "source": source, "rows": rows, "albums": albums })))
+}
+
+/// Tracks, by their ids on a server (its default when not said).
+#[derive(Deserialize)]
+struct ExcludeRequest {
     source: Option<String>,
     ids: Vec<String>,
 }
 
-/// Takes tracks out of a crate by hand (decision 0024, amended 2026-10-19): they stay out over its conditions and toggles.
-async fn crate_leave_out(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<LeftOutRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (n, undo) = app.playlists.crate_leave_out(&id, req.source.as_deref(), &req.ids, true).await?;
-    Ok(Json(json!({ "left_out": n, "undo": undo })))
+/// Excludes tracks from every automatic pick (decision 0024, amended 2026-10-19: global exclusions).
+async fn exclude(State(app): State<Arc<App>>, Json(req): Json<ExcludeRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (n, undo) = app.playlists.exclude(req.source.as_deref(), &req.ids, true).await?;
+    Ok(Json(json!({ "excluded": n, "undo": undo })))
 }
 
-/// Puts tracks left out of a crate back.
-async fn crate_put_back(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<LeftOutRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (n, undo) = app.playlists.crate_leave_out(&id, req.source.as_deref(), &req.ids, false).await?;
-    Ok(Json(json!({ "left_out": n, "undo": undo })))
+/// Puts excluded tracks back.
+async fn include_again(State(app): State<Arc<App>>, Json(req): Json<ExcludeRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (n, undo) = app.playlists.exclude(req.source.as_deref(), &req.ids, false).await?;
+    Ok(Json(json!({ "excluded": n, "undo": undo })))
 }
 
-/// A crate's tracks left out by hand, as rows, for its editor.
-async fn crate_left_out(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Follow>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (source, rows) = app.playlists.crate_left_out(&id, f.source.as_deref()).await?;
-    Ok(Json(json!({ "source": source, "rows": rows })))
+/// The tracks excluded everywhere: how many, and as rows, for the Library's list.
+async fn excluded(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (source, n, rows) = app.playlists.excluded_rows(f.source.as_deref()).await?;
+    Ok(Json(json!({ "source": source, "excluded": n, "rows": rows })))
 }
 
 #[derive(Deserialize)]
