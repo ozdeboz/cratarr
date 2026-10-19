@@ -159,7 +159,6 @@ export const FLASH = declared(
   [VALUE_OUT],
 );
 
-export const WALK = declared('walk', 'Walk', 'modulator', [knob('amount', 'Amount', 0, 1, 0, 'level'), knob('rate', 'Rate', 0, 1, 0.1)], [{ id: 'trigger', label: 'Jump', type: 'trigger' }], [VALUE_OUT]);
 
 const BUSY_LABEL: Record<(typeof BUSY)[number], string> = { motion: 'Motion', shape: 'Shape churn', colour: 'Colour churn', zoom: 'Zoom pumping', looks: 'New looks' };
 
@@ -314,7 +313,7 @@ export const FILTER_BANK = declared(
   [out('bands', 'Bands', 'audio', 6), out('level', 'Level', 'value', 6)],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 

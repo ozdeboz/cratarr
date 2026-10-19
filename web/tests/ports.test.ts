@@ -22,7 +22,7 @@ test('every module type has typed ports: a knob is a value input, a picture modu
 });
 
 test("today's hidden behaviours are modules; the beats and hits are triggers, a band's signals six channels", () => {
-  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'track', 'envelope', 'clock', 'flash', 'walk', 'meter', 'compressor', 'adsr', 'sequencer', 'looper', 'grid', 'fold', 'instance', 'filterbank']);
+  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'track', 'envelope', 'clock', 'flash', 'meter', 'compressor', 'adsr', 'sequencer', 'looper', 'grid', 'fold', 'instance', 'filterbank']);
   const music = portsOf(ENGINE_MODULES[0]);
   assert.equal(music.out.find((x) => x.id === 'beat')?.type, 'trigger');
   assert.equal(music.out.find((x) => x.id === 'hits')?.channels, 6);
