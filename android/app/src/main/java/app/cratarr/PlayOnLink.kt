@@ -1,10 +1,16 @@
 package app.cratarr
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.Player
@@ -65,6 +71,19 @@ class PlayOnLink(
     @Volatile private var closing: String? = null
     /** Whether the last report got through: a change either way is written down, not every report. */
     @Volatile private var reportsThrough = true
+
+    // A start Android refuses (decision 0031, amended 2026-10-19): an app gets the sound only on the screen or with a
+    // foreground service, and the player pauses at once without it.
+    /** When Cratarr last asked it to play (elapsed ms): a pause for want of the sound right after is a refusal. */
+    private var askedAt = 0L
+    /** Asked again already, after the first refusal. */
+    private var retried = false
+    /** The play asked for again once it is in the foreground; cancelled by a pause or a stop. */
+    private var again: Runnable? = null
+    /** Why it does not play what it was told to (Android would not let it), and since when (elapsed ms); null: nothing
+     *  holds it back. Reported to Cratarr; the music starts as the app comes to the front, or by the notification. */
+    private var heldBack: String? = null
+    private var heldAt = 0L
 
     fun start() {
         if (running) return
@@ -188,6 +207,8 @@ class PlayOnLink(
                 if (code != 200) throw java.io.IOException("HTTP $code")
                 opened = true
                 LinkLog.add(service, "info", "playon", "connected", "address" to address, "conn" to id, "failed_before" to failed.takeIf { it > 0 })
+                // Ready for what Cratarr sends: in the foreground (Stay ready), where Android lets the music start.
+                if (prefs.stayReady) Ready.ensure(service, "connected")
                 connectedSince = System.currentTimeMillis()
                 failed = 0
                 lastError = null
@@ -325,7 +346,11 @@ class PlayOnLink(
                 Autoplay.newPlay(service, m.optJSONArray("tracks"))
                 Prefs(service).shuffled = m.optBoolean("shuffle")
                 // A queue given back after the app came back without one waits for a play.
-                if (m.optBoolean("paused")) p.pause() else p.play()
+                release()
+                if (m.optBoolean("paused")) p.pause() else {
+                    asked()
+                    p.play()
+                }
             }
             // Edits name entries (decision 0033); by place only when the entry is not found here.
             "add" -> {
@@ -359,10 +384,14 @@ class PlayOnLink(
                 p.seekTo(it, 0)
                 play()
             }
-            "pause" -> p.pause()
+            "pause" -> {
+                release()
+                p.pause()
+            }
             "resume" -> play()
             "toggle" -> if (p.playWhenReady && p.playbackState != Player.STATE_ENDED) p.pause() else play()
             "stop" -> {
+                release()
                 p.stop()
                 p.clearMediaItems()
             }
@@ -444,11 +473,106 @@ class PlayOnLink(
     private fun placed(m: JSONObject, entry: String, place: String): Int =
         m.optString(entry, null)?.let { placeOf(player, it) }?.takeIf { it >= 0 } ?: m.optInt(place, -1)
 
-    private fun play() {
+    private fun play(again: Boolean = false) {
         val p = player
         if (p.playbackState == Player.STATE_IDLE) p.prepare()
         if (p.playbackState == Player.STATE_ENDED) p.seekTo(p.currentMediaItemIndex, 0)
+        asked(again)
         p.play()
+    }
+
+    // --- a start Android refuses ---
+
+    /** Cratarr asked it to play, now; [again]: the same ask once more, after a refusal. */
+    private fun asked(again: Boolean = false) {
+        askedAt = SystemClock.elapsedRealtime()
+        if (!again) retried = false
+    }
+
+    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        // Refused: the player paused itself for want of the sound (Media3 says so for a refused request too), right
+        // after Cratarr asked it to play. A loss later on is another app taking the sound, as ever.
+        if (playWhenReady || reason != Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS) return
+        if (SystemClock.elapsedRealtime() - askedAt > REFUSED_WITHIN_MS) return
+        refused()
+    }
+
+    /**
+     * Android would not let the music start. The first time: into the foreground (the Ready service; for a moment only
+     * without Stay ready, as an update or a restart can leave a ready device out of it) and the play asked for again.
+     * Again refused: held back, Cratarr told, and a notification to start it; it starts as the app comes to the front.
+     */
+    private fun refused() {
+        val inFront = Ready.foreground(service)
+        LinkLog.add(service, "warn", "playon", "play refused", "in_front" to inFront, "again" to !retried)
+        if (retried) return hold()
+        retried = true
+        Ready.ensure(service, "play refused", briefly = !prefs.stayReady)
+        val until = SystemClock.elapsedRealtime() + FRONT_WAIT_MS
+        val retry = object : Runnable {
+            override fun run() {
+                if (player.mediaItemCount == 0 || player.playWhenReady) return
+                // Asked again once it is in the foreground; not there in time (Android refused that too): asked anyway,
+                // and a second refusal holds it.
+                if (!Ready.foreground(service) && SystemClock.elapsedRealtime() < until) {
+                    main.postDelayed(this, 250)
+                    return
+                }
+                again = null
+                play(again = true)
+            }
+        }
+        again = retry
+        main.postDelayed(retry, 250)
+    }
+
+    private fun hold() {
+        heldBack = HELD_REFUSED
+        heldAt = SystemClock.elapsedRealtime()
+        askToPlay()
+        soon()
+    }
+
+    /** Nothing held back any more: it plays, or it was paused or stopped, or another play came. */
+    private fun release() {
+        again?.let(main::removeCallbacks)
+        again = null
+        if (heldBack == null) return
+        heldBack = null
+        service.getSystemService(NotificationManager::class.java)?.cancel(HELD_NOTIFICATION)
+        soon()
+    }
+
+    /** The app came to the front, where Android lets it start music: what it held back plays now. */
+    fun playHeld() {
+        if (heldBack == null) return
+        if (SystemClock.elapsedRealtime() - heldAt > HELD_MS || player.mediaItemCount == 0) return release()
+        LinkLog.add(service, "info", "playon", "playing what was held back")
+        play(again = true)
+    }
+
+    /** A notification to start the music held back: it opens the app, which starts it (above). */
+    private fun askToPlay() {
+        val notes = service.getSystemService(NotificationManager::class.java) ?: return
+        notes.createNotificationChannel(NotificationChannel(HELD_CHANNEL, service.getString(R.string.tap_to_play), NotificationManager.IMPORTANCE_LOW))
+        val open = PendingIntent.getActivity(
+            service,
+            0,
+            Intent(service, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val note = Notification.Builder(service, HELD_CHANNEL)
+            .setSmallIcon(R.drawable.media3_notification_small_icon)
+            .setContentTitle(service.getString(R.string.tap_to_play))
+            .setContentText(player.currentMediaItem?.mediaMetadata?.title ?: prefs.playerName)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        try {
+            notes.notify(HELD_NOTIFICATION, note)
+        } catch (e: SecurityException) {
+            // Notifications not allowed: Cratarr is told all the same.
+        }
     }
 
     // --- the reports ---
@@ -458,6 +582,10 @@ class PlayOnLink(
 
     private val heartbeat = object : Runnable {
         override fun run() {
+            // Ready, and found out of the foreground (Media3 let its service go, say): back in it.
+            if (prefs.stayReady && !Ready.foreground(service)) Ready.ensure(service, "out of the foreground")
+            // Held back too long ago: no longer what is wanted.
+            if (heldBack != null && SystemClock.elapsedRealtime() - heldAt > HELD_MS) release()
             report()
             main.postDelayed(this, HEARTBEAT_MS)
         }
@@ -473,6 +601,7 @@ class PlayOnLink(
 
     override fun onEvents(player: Player, events: Player.Events) {
         if (events.contains(Player.EVENT_TIMELINE_CHANGED)) queueSent = false
+        if (events.contains(Player.EVENT_IS_PLAYING_CHANGED) && player.isPlaying) release()
         // Another track (or the queue around it): its levelling.
         if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_TIMELINE_CHANGED)) {
             Levelling.follow(service, player, prefs.serverUrl, ::applyVolume)
@@ -518,6 +647,7 @@ class PlayOnLink(
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
             .put("volume", (volume * 100).toInt())
             .put("ducked", ducked)
+            .put("held", heldBack ?: JSONObject.NULL)
             .put("link", linkJson())
         val withQueue = !queueSent
         if (withQueue) out.put("queue", queueOf(p))
@@ -558,5 +688,15 @@ class PlayOnLink(
         const val HEARTBEAT_MS = 30_000L
         /** A ducked player plays at this part of its volume. */
         const val DUCKED = 0.25f
+        /** A pause for want of the sound this soon after Cratarr asked it to play is Android refusing the start. */
+        const val REFUSED_WITHIN_MS = 3_000L
+        /** How long a refused start waits for the foreground before it is asked again all the same. */
+        const val FRONT_WAIT_MS = 3_000L
+        /** Music held back still starts as the app comes to the front this long after; later it is let go. */
+        const val HELD_MS = 10 * 60_000L
+        /** What Cratarr is told while a start is held back (its `held`). */
+        const val HELD_REFUSED = "Android would not let it play"
+        const val HELD_CHANNEL = "held"
+        const val HELD_NOTIFICATION = 10
     }
 }

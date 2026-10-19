@@ -61,8 +61,9 @@ object Downloads {
         SimpleCache(dir, NoOpCacheEvictor(), database(app)).also { cache = it }
     }
 
-    /** Cratarr over HTTP, on the address in use: what was queued or asked for on the other one is read from this one. */
-    private fun http(context: Context): DataSource.Factory {
+    /** Cratarr over HTTP, on the address in use: what was queued or asked for on the other one is read from this one.
+     *  The player's covers come through it too. */
+    fun http(context: Context): DataSource.Factory {
         val app = context.applicationContext
         val http = DefaultHttpDataSource.Factory()
             .setConnectTimeoutMs(15_000)

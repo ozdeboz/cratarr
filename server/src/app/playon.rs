@@ -106,6 +106,10 @@ pub struct Report {
     /// Its own view of its link to Cratarr (decision 0045); apps from before it leave it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<ReportedLink>,
+    /// Why it does not play what it was told to: the device would not let it (decision 0031, amended 2026-10-19). Left
+    /// out or null: nothing holds it back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<String>,
 }
 
 /// A player's link as the player sees it (decision 0045): what Cratarr cannot see while the player's reports still get
@@ -405,6 +409,8 @@ pub struct PlayerView {
     pub duration_ms: Option<u64>,
     pub volume: u8,
     pub ducked: bool,
+    /// Why it does not play what it was told to, as it says (its device would not let it); none: nothing holds it.
+    pub held: Option<String>,
     pub queue_length: usize,
     /// Off, one or all (decision 0033, amended).
     pub repeat: Repeat,
@@ -629,6 +635,7 @@ impl Entry {
             duration_ms: r.duration_ms,
             volume: r.volume,
             ducked: r.ducked,
+            held: r.held.clone(),
             queue_length: self.queue.tracks.len(),
             repeat: self.queue.repeat,
             shuffled: shuffled_order(&self.queue.tracks, index),
@@ -704,6 +711,7 @@ fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Op
             seen: own.seen,
             volume: own.volume,
             ducked: own.ducked,
+            held: own.held,
             // What the device is (a Kodi stays one, so it is never made a leader).
             kind: own.kind,
             ..le.view(l, with_queue)
@@ -2031,6 +2039,18 @@ mod tests {
         // One that fired, reported empty, is no timer.
         e.report.sleep = Some(Sleep::default());
         assert_eq!(e.view("p", false).sleep, None);
+    }
+
+    #[test]
+    fn a_player_its_device_holds_back_says_why() {
+        let mut e = Entry::new();
+        assert_eq!(e.view("p", false).held, None);
+        // As the app reports it (decision 0031, amended 2026-10-19); an app from before it says nothing.
+        let r: Report = serde_json::from_str(r#"{"index":0,"position_ms":0,"playing":false,"held":"Android would not let it play"}"#).unwrap();
+        e.report = r;
+        assert_eq!(e.view("p", false).held.as_deref(), Some("Android would not let it play"));
+        e.report = serde_json::from_str(r#"{"index":0,"position_ms":0,"playing":true,"held":null}"#).unwrap();
+        assert_eq!(e.view("p", false).held, None);
     }
 
     #[test]

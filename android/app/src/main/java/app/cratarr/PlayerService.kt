@@ -3,8 +3,9 @@
  * showed the page's playback on the lock screen. Here the app plays itself (decision 0031, amended): Media3's player in
  * a media session service, which brings the lock screen, the notification, headphone buttons, audio focus, pausing
  * when the audio would become noisy, and the wake and Wi-Fi locks while it plays. It also holds this player's Play On
- * connection to Cratarr (PlayOnLink), and with Stay ready stays in the foreground with nothing queued too. Tracks are
- * read through the device's store (Downloads): a downloaded one, or one of the next few, plays without a connection.
+ * connection to Cratarr (PlayOnLink); with Stay ready the app stays in the foreground by a service of its own (Ready).
+ * Tracks are read through the device's store (Downloads): a downloaded one, or one of the next few, plays without a
+ * connection.
  */
 package app.cratarr
 
@@ -21,7 +22,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.annotation.OptIn
-import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
@@ -29,9 +29,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSourceBitmapLoader
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -54,7 +57,10 @@ class PlayerService : MediaSessionService() {
         when (key) {
             Prefs.IN_USE -> link?.reconnect("address changed")
             Prefs.PLAYER_NAME -> link?.reconnect("name changed")
-            Prefs.STAY_READY -> link?.reconnect("stay ready changed")
+            Prefs.STAY_READY -> {
+                link?.reconnect("stay ready changed")
+                Ready.ensure(this, "stay ready changed")
+            }
             Prefs.SESSION_MARK -> link?.reconnect("session changed")
         }
         // An address set: which of the two answers.
@@ -120,8 +126,12 @@ class PlayerService : MediaSessionService() {
         session = MediaSession.Builder(this, sessionPlayer)
             .setSessionActivity(open)
             .setCallback(Callback())
+            // Covers (the notification's, the lock screen's, a car's) through the app's own requests, with its session:
+            // away from home the proxy refused Media3's own without it (2026-10-19).
+            .setBitmapLoader(CacheBitmapLoader(DataSourceBitmapLoader.Builder(this).setDataSourceFactory(DefaultDataSource.Factory(this, Downloads.http(this))).build()))
             .build()
         link = PlayOnLink(this, player, prefs, sync).also { it.start() }
+        Ready.ensure(this, "service started")
         Reach.watch(this)
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(prefsChanged)
     }
@@ -130,22 +140,19 @@ class PlayerService : MediaSessionService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_READY) {
-            val idle = session?.player?.mediaItemCount == 0
-            if (prefs.stayReady && idle) showReady()
-            // Not ready (any more), nothing queued: nothing keeps it.
-            if (!prefs.stayReady && idle) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                notifications.cancel(READY_NOTIFICATION)
-                stopSelf()
-            }
+            // The app in front: ready (again), and what Android held back plays now.
+            Ready.ensure(this, "app opened")
+            link?.playHeld()
+            // Not ready, nothing queued: nothing keeps it.
+            if (!prefs.stayReady && session?.player?.mediaItemCount == 0) stopSelf()
             return START_STICKY
         }
         return super.onStartCommand(intent, flags, startId)
     }
 
     /**
-     * Stay ready: in the foreground also while paused, and with nothing queued its own "Ready" notification, so Android
-     * does not put the app to sleep and Play On still reaches it.
+     * Stay ready: a paused queue's notification in the foreground too; with nothing queued, the Ready service's own
+     * notification is the one there is.
      */
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
         // Following a group: its own notification, which keeps the app (and Snapcast's player in it) running.
@@ -155,37 +162,7 @@ class PlayerService : MediaSessionService() {
             return
         }
         notifications.cancel(GROUP_NOTIFICATION)
-        val stay = prefs.stayReady
-        if (stay && session.player.mediaItemCount == 0) {
-            showReady()
-            notifications.cancel(DefaultMediaNotificationProvider.DEFAULT_NOTIFICATION_ID)
-            return
-        }
-        notifications.cancel(READY_NOTIFICATION)
-        super.onUpdateNotification(session, startInForegroundRequired || stay)
-    }
-
-    private fun showReady() {
-        notifications.createNotificationChannel(NotificationChannel(READY_CHANNEL, getString(R.string.ready), NotificationManager.IMPORTANCE_MIN))
-        val open = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        val ready = Notification.Builder(this, READY_CHANNEL)
-            .setSmallIcon(R.drawable.media3_notification_small_icon)
-            .setContentTitle(getString(R.string.ready))
-            .setContentText(prefs.playerName)
-            .setContentIntent(open)
-            .setOngoing(true)
-            .build()
-        try {
-            startForeground(READY_NOTIFICATION, ready, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        } catch (e: IllegalStateException) {
-            // Android refuses a foreground start from the background; the next start from the app shows it.
-            Log.w(TAG, "cannot stay ready from the background: ${e.message}")
-        }
+        super.onUpdateNotification(session, startInForegroundRequired || (prefs.stayReady && session.player.mediaItemCount > 0))
     }
 
     /** Following a group began or ended. */
@@ -209,7 +186,6 @@ class PlayerService : MediaSessionService() {
             .setOngoing(true)
             .build()
         try {
-            notifications.cancel(READY_NOTIFICATION)
             startForeground(GROUP_NOTIFICATION, grouped, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } catch (e: IllegalStateException) {
             Log.w(TAG, "cannot stay in front while grouped: ${e.message}")
@@ -372,18 +348,17 @@ class PlayerService : MediaSessionService() {
         /** How often the playing track is looked at for counting. */
         private const val COUNT_EVERY_MS = 5_000L
         private const val READY_CHANNEL = "ready"
-        private const val READY_NOTIFICATION = 7
         private const val GROUP_NOTIFICATION = 8
         private const val ACTION_READY = "cratarr.READY"
 
-        /** Started (or let go) as Stay ready says. Called while the app is in front, where a foreground start is allowed. */
+        /** Started, and ready (or let go) as Stay ready says. Called while the app is in front, where both are allowed. */
         fun ready(context: Context) {
-            val intent = Intent(context, PlayerService::class.java).setAction(ACTION_READY)
             try {
-                if (Prefs(context).stayReady) ContextCompat.startForegroundService(context, intent) else context.startService(intent)
+                context.startService(Intent(context, PlayerService::class.java).setAction(ACTION_READY))
             } catch (e: IllegalStateException) {
-                Log.w(TAG, "cannot start staying ready: ${e.message}")
+                Log.w(TAG, "cannot start: ${e.message}")
             }
+            Ready.ensure(context, "app opened")
         }
     }
 }

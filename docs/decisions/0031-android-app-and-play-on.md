@@ -158,3 +158,23 @@ every change of a player; each carries `position_ms` with `position_at` (epoch m
 while `playing`. It is for clients that stay connected for good, Home Assistant's integration first: unlike the pages'
 `/api/events` it does not keep the servers' players watched. Signed in as any other API call (decision 0043: an API
 key). Not under `/api/players/`, where a player could be called `events`.
+
+## Amendment (2026-10-19): ready in a service of its own, and a start the device refuses
+
+The salon tablet, set to Stay ready and idle, took a handover from the phone at 12:17 and paused 0.4 s later:
+Android (16; from 15 on) lets an app start sound only while it is on the screen or holds a foreground service, and
+ignores its request otherwise (`dumpsys audio`: "AudioHardening focus request … ignored … level: partial", that is,
+no foreground service at all). The player's own service held Stay ready's foreground, and Media3 takes that service in
+and out of the foreground as the music plays and stops, at times on an update of its own the app does not see; an
+update of the app left it out too, until someone opened it.
+
+- **Ready is a service of its own** (`ReadyService`, the "Ready" notification), apart from the player's, which Media3
+  keeps as it does. It is asked for whenever the app starts, comes to the front, connects, or finds it gone (every
+  30 s), and by itself after an update of the app or a restart of the device. Its failures go to the link log.
+- **A start the device refuses**, the player pausing for want of the sound within 3 s of Cratarr asking it to play, is
+  asked again once the app is in the foreground (the Ready service; for a minute only without Stay ready). Refused a
+  second time, it is **held back**: the player reports `held` (why, as text; null otherwise), shown in its view
+  (`GET /api/players`), a notification asks to tap to play, and the music starts as the app comes to the front, for
+  10 minutes. A pause, a stop or another play lets it go.
+- Covers (the notification's, the lock screen's, a car's) are read through the app's own requests, with its session:
+  away from home the proxy refused Media3's own.
