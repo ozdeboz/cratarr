@@ -528,7 +528,7 @@
   }
     // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show
   // behaves, then the look (the preset: pinned where moved).
-  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes' | 'pins' | 'extra'>;
+  type One = Exclude<keyof VisualSettings, 'lighting' | 'evolution' | 'continuity' | 'routes' | 'pins' | 'muted' | 'extra'>;
   const MIRROR = ['Off', 'On'];
   // The Colours (65: Family folded in, the owner: "YES Family into Colours"): the look's four families, which a track's
   // look or the dice draw, then the cover's and a fire's, which only a hand chooses (and so pins).
