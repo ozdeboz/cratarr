@@ -2,19 +2,14 @@
   // An album in a panel's page (an album's More from, an artist's Albums and Appears on; as Symfonium's): its cover,
   // title and year. A tap views it over the page (back returns).
   import { albumCoverUrl, type ListedAlbum } from './api';
-  import Icon from './Icon.svelte';
+  import Cover from './Cover.svelte';
   import { albumSubject, viewOver } from './panel.svelte';
 
   let { source, album }: { source: string; album: Pick<ListedAlbum, 'id' | 'title' | 'year'> } = $props();
-  let noCover = $state(false);
 </script>
 
 <button class="card" onclick={() => viewOver(albumSubject(source, album.id))} aria-label="View {album.title}">
-  {#if noCover}
-    <span class="cover none"><Icon name="albums" size={40} /></span>
-  {:else}
-    <img class="cover" src={albumCoverUrl(source, album.id)} alt="" loading="lazy" decoding="async" onerror={() => (noCover = true)} />
-  {/if}
+  <span class="cover"><Cover src={albumCoverUrl(source, album.id)} /></span>
   <span class="title">{album.title}</span>
   {#if album.year}<span class="year">{album.year}</span>{/if}
 </button>
@@ -36,18 +31,11 @@
   }
 
   .cover {
+    display: block;
     width: 100%;
     aspect-ratio: 1;
     margin-bottom: 6px;
     border-radius: 8px;
-    object-fit: cover;
-  }
-
-  .none {
-    display: grid;
-    place-items: center;
-    background: color-mix(in srgb, var(--text) 9%, transparent);
-    color: var(--muted);
   }
 
   .title,

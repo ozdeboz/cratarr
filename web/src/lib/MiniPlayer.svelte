@@ -16,7 +16,8 @@
   import { player } from './live.svelte';
   import { panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, send, toggleFavorite } from './remote.svelte';
+  import Cover from './Cover.svelte';
+  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, send, toggleFavorite } from './remote.svelte';
 
   const np = $derived(playing());
   const src = $derived(shownCover());
@@ -114,8 +115,9 @@
     onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), openPlayer())}
   >
     <div class="cover-wrap">
-      {#if src}
-        {#key src}<img class="cover" {src} alt="" draggable="false" onerror={() => coverFailed(src)} />{/key}
+      <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
+      {#if src || !coverSrc()}
+        {#key src}<Cover {src} lazy={false} onfail={coverFailed} />{/key}
       {/if}
       <button class="own play" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
         ><Icon name={paused() ? 'play' : 'pause'} size={32} /></button
@@ -197,14 +199,6 @@
     flex: none;
     width: 64px;
     height: 64px;
-  }
-
-  .cover {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    background: var(--surface);
   }
 
   /* Play/pause on the cover: a white icon with a dark shadow. */

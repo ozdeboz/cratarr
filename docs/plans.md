@@ -46,8 +46,9 @@ Cratarr's player in the car, on an iPhone.
     pages can't be its face in the car: the browsing would be native.
   - An audio app on CarPlay needs Apple's CarPlay entitlement for it, asked for and granted per app.
   - Android Auto, the counterpart on Android, was taken out of the app with the rest of Jellyfin's extras (0031).
-    Android Auto browses through a media library service (Media3), the kind of service the app's player already runs
-    in, so Android would come before iOS.
+    It is designed again and waits for a car or head unit that runs it (0055: the owner's tabs, voice and start; the
+    car's JVC unit does not), and would come before iOS: Android Auto browses through a media library service
+    (Media3), the kind of service the app's player already runs in.
 
 ## A chosen output while following a group
 

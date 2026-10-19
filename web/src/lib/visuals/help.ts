@@ -253,7 +253,7 @@ export const HELP: Record<string, string> = {
   'signal:loudness': 'How loud the music sounds right now, as you hear it.',
   'signal:beat': 'A pulse on every beat, strongest on the strong beats.',
   'signal:downbeat': 'A pulse on the first beat of every bar.',
-  'signal:tempo': 'How fast the track is: half at 60 beats a minute, full at 120, and further past full for faster tracks.',
+  'signal:tempo': 'How fast the track is: half at 60 beats a minute, full at 120, and further past full for faster tracks. It fades where the beat does, in a break or a track without one.',
   'signal:section': 'A pulse where a new part of the track starts, such as a verse, a chorus or a drop.',
   'signal:harmony': 'Rises when the chords change, and stays low while they hold.',
   'signal:centroid': 'How bright the sound is: low for dark, muffled sounds, high for bright, sharp ones.',

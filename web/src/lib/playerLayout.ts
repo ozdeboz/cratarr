@@ -6,7 +6,7 @@
 /** What gives way when the player runs out of height, first to last (Finamp's `verticalHideOrder`, without its bottom
  *  actions row): Cratarr's own row (menu, favourite, queue), the output pill (the only way to the output), the title,
  *  the artist line and previous / play / next never give way. Step n is dropped at level n + 1. */
-export const STEPS = ['gapsBig', 'buttons', 'gapsSmall', 'chips', 'title', 'progress'] as const;
+export const STEPS = ['gapsBig', 'buttons', 'gapsSmall', 'facts', 'title', 'progress'] as const;
 export type Step = (typeof STEPS)[number];
 
 /** Finamp's `maxShrink`: how far (percent of the cover's size, per side, times the cover priority) the cover may shrink
@@ -15,7 +15,7 @@ const MAX_SHRINK: Record<Step, number> = {
   gapsBig: 1,
   buttons: 1,
   gapsSmall: 2,
-  chips: 3,
+  facts: 3,
   title: 3,
   progress: 4,
 };

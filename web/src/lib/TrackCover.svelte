@@ -1,13 +1,13 @@
 <script lang="ts">
-  // A track's cover in front of its large row (lib/Row.svelte): 60 px, corners 8 (Finamp's track tile), an empty tile
-  // without one, and Finamp's mini visualiser over a dark veil while it plays (still while paused).
+  // A track's cover in front of its large row (lib/Row.svelte): 60 px, corners 8 (Finamp's track tile), the stand-in
+  // without one (lib/Cover), and Finamp's mini visualiser over a dark veil while it plays (still while paused).
+  import Cover from './Cover.svelte';
+
   let { src, playing = false, paused = false }: { src: string | null; playing?: boolean; paused?: boolean } = $props();
-  // A track without a cover (the server says so): the empty tile, not the browser's broken image.
-  let failed = $state<string | null>(null);
 </script>
 
 <span class="cover">
-  {#if src && failed !== src}<img {src} alt="" loading="lazy" onerror={() => (failed = src)} />{:else}<span class="noimg"></span>{/if}
+  <Cover {src} />
   {#if playing}<span class="eq" class:still={paused} aria-hidden="true"><i></i><i></i><i></i></span>{/if}
 </span>
 
@@ -17,16 +17,7 @@
     flex: none;
     width: 60px;
     height: 60px;
-  }
-
-  .cover img,
-  .noimg {
-    display: block;
-    width: 100%;
-    height: 100%;
     border-radius: 8px;
-    object-fit: cover;
-    background: var(--bg);
   }
 
   .eq {

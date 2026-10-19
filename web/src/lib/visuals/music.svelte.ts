@@ -12,7 +12,7 @@ import { audioTap, positionNow } from '../localPlayer.svelte';
 import { isLocal } from '../output.svelte';
 import { paused, playing } from '../remote.svelte';
 import { loadWaveform, waveformOf } from '../waveforms.svelte';
-import { beatAt, beatsOf, type Beat, type Beats } from './beats';
+import { beatAt, beatsOf, tempoAt, type Beat, type Beats } from './beats';
 import { followEnvelopes } from './envelope';
 import { startAppLive, startLive, type LiveNow } from './live';
 import { B, BAND_SIGNALS, T, TRACK_SIGNALS } from './routes';
@@ -182,7 +182,7 @@ export function musicNow(at: number, lighting: readonly number[] = visualSetting
     return musicOf(signals, beats ?? null, pos, on, { state: own, at, key, lighting, gainDb: levelDb(np.source, np.id), bpm, energy: energy() });
   }
   const beat = beats ? beatAt(beats, pos) : null;
-  const bps = beat ? 1 / beat.length : (bpm ?? 90) / 60;
+  const bps = beats ? 1 / tempoAt(beats, pos) : (bpm ?? 90) / 60;
   let heard: number | null = null;
   let from: Music['from'] = null;
   const now = listen();
@@ -202,10 +202,43 @@ function intensityOf(heard: number | null, gainDb: number, energy: number | null
   return heard !== null ? Math.min(1, Math.max(0, (heard + gainDb - QUIET) / (LOUD - QUIET))) : 0.25 + 0.6 * (energy ?? 0.6);
 }
 
+/** The Tempo row follows the beat (decision 0049's interim; the owner, 2026-10-19: "now"): the track's tempo, faded by
+ *  how strongly its last bar's beats fell, so it goes quiet where nothing beats. A beat grid runs on through a break at
+ *  weak beats (a trip-hop break: 33 beats under 0.15, 0049), and a track without one has none at all (0). A bar's
+ *  mean strength of PULSE_NONE or less gives none of it, PULSE_FULL or more all of it. PROVISIONAL, measured on 12
+ *  tracks of the Test crate (2026-10-19): a steady bar's mean is 0.3 to 0.85 (its median per track 0.32 to 0.84), a
+ *  break's under 0.15; at 0.35 the grooves are at all of it 69 to 95 % of the time, the sparse ones about half. The
+ *  turning's own clock keeps the grid's tempo (aspects.ts, from `bps`), so the flame does
+ *  not stand still in ambient passages. */
+const BAR = 4;
+const PULSE_NONE = 0.15;
+const PULSE_FULL = 0.35;
+
+/** The mean strength of the bar's beats ending at beat `i`. */
+function barStrength(b: Beats, i: number): number {
+  const from = Math.max(0, i - BAR + 1);
+  let sum = 0;
+  for (let k = from; k <= i; k++) sum += b.strength[k];
+  return sum / (i - from + 1);
+}
+
+/** How much of the tempo the Tempo row gives now (0..1): from the bar before this beat to the bar ending at it, across
+ *  the beat, so it never jumps; and where no next beat comes (a gap, the end), going out over the half beat before
+ *  the beat is gone (beatAt). */
+function pulseShare(beats: Beats | null, beat: Beat | null): number {
+  if (!beats || !beat) return 0;
+  const was = barStrength(beats, Math.max(0, beat.index - 1));
+  const now = barStrength(beats, beat.index);
+  const mean = was + (now - was) * (beat.length > 0 ? Math.min(1, beat.since / beat.length) : 1);
+  const x = Math.min(1, Math.max(0, (mean - PULSE_NONE) / (PULSE_FULL - PULSE_NONE)));
+  const out = beat.length > 0 ? Math.min(1, Math.max(0, (beat.since - beat.length) / (0.5 * beat.length))) : 0;
+  return x * x * (3 - 2 * x) * (1 - out * out * (3 - 2 * out));
+}
+
 /** The whole track's signals every source gives: the loudness, the tempo, the beat, the key. */
 function finish(st: MusicState, intensity: number, bps: number, beats: Beats | null, beat: Beat | null, pos: number) {
   st.track[T.loudness] = intensity;
-  st.track[T.tempo] = bps / 2;
+  st.track[T.tempo] = (bps / 2) * pulseShare(beats, beat);
   if (beats) st.track[T.beat] = pulseAt(beats, beat, pos, 0.2, 0.35, () => 1);
   st.track[T.key] = Math.atan2(st.fifths.y, st.fifths.x) / (2 * Math.PI) + (st.fifths.y < 0 ? 1 : 0);
 }
@@ -226,7 +259,7 @@ export function musicOf(
   const st = opts.state ?? newMusicState();
   st.track.fill(0);
   const beat = beats ? beatAt(beats, position) : null;
-  const bps = beat ? 1 / beat.length : (opts.bpm ?? 90) / 60;
+  const bps = beats ? 1 / tempoAt(beats, position) : (opts.bpm ?? 90) / 60;
   fromServer(st, signals, position, beats, beat, opts.at ?? position * 1000, opts.lighting ?? visualSettings.lighting);
   const intensity = intensityOf(lufsAt(signals, position), opts.gainDb ?? 0, opts.energy ?? null);
   finish(st, intensity, bps, beats, beat, position);

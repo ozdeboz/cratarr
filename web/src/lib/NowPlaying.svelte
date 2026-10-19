@@ -15,18 +15,23 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
-  import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import Waveform from './Waveform.svelte';
+  import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import { localMode } from './deviceMusic.svelte';
   import HeartSheet from './HeartSheet.svelte';
+  import { isCircle } from './circle';
+  import Cover from './Cover.svelte';
+  import CoverOverview from './CoverOverview.svelte';
+  import { detailsOf, factsOf } from './trackFacts.svelte';
   import { longpress } from './longpress';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { visuals } from './visuals/shown.svelte';
-  import { keepViewed, panel } from './panel.svelte';
+  import { albumSubject, keepViewed, panel, SETTINGS, viewOver } from './panel.svelte';
   import { goToArtist, mainArtist } from './albums.svelte';
   import { artistFavorite } from './api';
   import { toast } from './toast.svelte';
@@ -88,12 +93,19 @@
     const r = el.getBoundingClientRect();
     return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (dur ?? 0);
   };
+  // The waveform lens (the owner, 2026-10-19; lib/WaveLens): while the bar is held over a waveform, where it is, and
+  // the room it has (the player's edges).
+  let lens = $state<{ width: number; middle: number; waveHeight: number; min: number; max: number } | null>(null);
   function seekDown(e: PointerEvent) {
     if (!canSeek) return;
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     clearTimeout(heldTimer);
     held = at(e, el);
+    const r = el.getBoundingClientRect();
+    const room = head?.getBoundingClientRect() ?? r;
+    const w = el.querySelector('.wave')?.getBoundingClientRect();
+    lens = wave && w ? { width: r.width, middle: r.height / 2, waveHeight: w.height, min: room.left - r.left + 75, max: room.right - r.left - 75 } : null;
   }
   function seekMove(e: PointerEvent) {
     if (held === null || !(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
@@ -101,6 +113,7 @@
   }
   function seekUp(e: PointerEvent) {
     const el = e.currentTarget as HTMLElement;
+    lens = null;
     if (held === null || !el.hasPointerCapture(e.pointerId)) return;
     release(at(e, el));
   }
@@ -119,23 +132,6 @@
     e.preventDefault();
     release(Math.min(dur, Math.max(0, to)));
   }
-
-  // Info chips (decision 0019): what the server knows about the file and its plays, read-only.
-  const chips = $derived.by(() => {
-    const i = np?.info;
-    if (!i) return [];
-    const out: string[] = [];
-    if (i.explicit) out.push('Explicit');
-    if (i.play_count !== null) out.push(`${i.play_count} ${i.play_count === 1 ? 'play' : 'plays'}`);
-    if (i.bpm) out.push(`${i.bpm} BPM`);
-    const codec = [i.codec?.toUpperCase(), i.bitrate_kbps ? `${i.bitrate_kbps} kbps` : null].filter(Boolean).join(' @ ');
-    if (codec) out.push(codec);
-    const format = [i.bit_depth ? `${i.bit_depth}-bit` : null, i.sample_rate_hz ? `${+(i.sample_rate_hz / 1000).toFixed(1)} kHz` : null]
-      .filter(Boolean)
-      .join(' · ');
-    if (format) out.push(format);
-    return out;
-  });
 
   // The track menu (the menu button, or a right-click on the cover) and the queue (decision 0019).
   let menuAt = $state<DOMRect | null>(null);
@@ -216,23 +212,57 @@
   }
 
   // Gestures, over the page and beside it. Anywhere: swipe down closes, swipe up opens the queue. On the cover: swipe left or right skips, a
-  // tap plays or pauses, a double-tap toggles the favourite. A swipe never also counts as a tap.
+  // tap plays or pauses, a double-tap toggles the favourite, a circle shows the overview (lib/CoverOverview; the owner,
+  // 2026-10-19: the cover blurred, what is known about the track over it; a tap or another circle brings the cover back;
+  // not for the device's own music). A swipe or a circle never also counts as a tap.
   let head = $state<HTMLElement>();
   let swiped = false;
+  let overview = $state(false);
+  // The row's facts, short, in the user's order; those not known for this track are left out (lib/trackFacts).
+  const rowFacts = $derived.by(() => {
+    if (!np || !prefs.playerRow || !prefs.playerFacts.length || np.source === 'device') return [];
+    const known = factsOf(detailsOf(np.source, np.id), np.info ?? null);
+    return prefs.playerFacts.flatMap((id) => (known[id] ? [{ id, short: known[id].short }] : []));
+  });
+  /** The row's Add: Settings → Display, where the row's facts are chosen; the player over the page gives way. */
+  function toRowSettings() {
+    player.full = false;
+    location.hash = `#/settings?view=${encodeURIComponent(SETTINGS + 'display')}`;
+  }
+  /** The album's name: the album in the panel, as the artist's chip opens the artist. */
+  function toAlbum() {
+    const t = np;
+    if (!t?.album_id) return;
+    player.full = false;
+    viewOver(albumSubject(t.source, t.album_id));
+  }
+  // A new track shows its cover (its id: the player's state is a new object on every report).
+  const trackId = $derived(np ? `${np.source}/${np.id}` : null);
+  $effect(() => {
+    void trackId;
+    overview = false;
+  });
   $effect(() => {
     if (!head) return;
-    let from: { x: number; y: number; cover: boolean } | null = null;
+    let from: { x: number; y: number; cover: boolean; path: { x: number; y: number }[] } | null = null;
     const down = (e: PointerEvent) => {
       // The seek bar's drags are its own.
       if ((e.target as Element).closest?.('.seek')) return;
-      from = { x: e.clientX, y: e.clientY, cover: !!(e.target as Element).closest?.('.cover-btn') };
+      from = { x: e.clientX, y: e.clientY, cover: !!(e.target as Element).closest?.('.cover-btn'), path: [{ x: e.clientX, y: e.clientY }] };
+    };
+    const move = (e: PointerEvent) => {
+      if (from?.cover && e.buttons) from.path.push({ x: e.clientX, y: e.clientY });
     };
     const up = (e: PointerEvent) => {
       if (!from) return;
       const [dx, dy] = [e.clientX - from.x, e.clientY - from.y];
       const onCover = from.cover;
+      const path = from.path;
       from = null;
-      if (onCover && Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
+      if (onCover && isCircle(path)) {
+        swiped = true;
+        overview = !overview && np?.source !== 'device';
+      } else if (onCover && Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
         swiped = true;
         send(dx < 0 ? 'next' : 'previous');
       } else if (dy > 80 && dy > 2 * Math.abs(dx)) {
@@ -245,9 +275,11 @@
     };
     const el = head;
     el.addEventListener('pointerdown', down);
+    el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
     return () => {
       el.removeEventListener('pointerdown', down);
+      el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
     };
   });
@@ -258,6 +290,11 @@
   function coverTap() {
     if (swiped) {
       swiped = false;
+      return;
+    }
+    // A tap on the overview brings the cover back.
+    if (overview) {
+      overview = false;
       return;
     }
     if (tapTimer) {
@@ -311,7 +348,7 @@
   });
   // What is shown changes the controls' height (a long title, a progress bar or none). As one value: `np` is
   // new at every report, and laying out again at each would be many times a second.
-  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.showProgress, chips.length]));
+  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.showProgress, prefs.playerRow, rowFacts.length]));
   $effect(() => {
     void shown;
     untrack(() => requestAnimationFrame(relayout));
@@ -330,7 +367,7 @@
     class:drop-gapsBig={dropped('gapsBig')}
     class:drop-buttons={dropped('buttons')}
     class:drop-gapsSmall={dropped('gapsSmall')}
-    class:drop-chips={dropped('chips')}
+    class:drop-facts={dropped('facts')}
     class:drop-title={dropped('title')}
     class:drop-progress={dropped('progress')}
     bind:this={head}
@@ -371,10 +408,12 @@
     <!-- Finamp's layout: the cover's region, then the controls' box with three groups spread in it (track name,
          controls, actions); in landscape side by side. Sizes from lib/playerLayout.ts. -->
     <div class="album" style:width={layout ? `${layout.album.width}px` : null} style:height={layout ? `${layout.album.height}px` : null}>
-      {#if np && src}
+      <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
+      {#if np && (src || !coverSrc())}
         {#key src}
           <button
             class="cover-btn"
+            class:blurred={overview}
             style:width={layout ? `${layout.cover}px` : null}
             style:height={layout ? `${layout.cover}px` : null}
             aria-label="Play or pause"
@@ -382,7 +421,8 @@
             onclick={coverTap}
             oncontextmenu={(e) => (e.preventDefault(), openMenu(e))}
           >
-            <img class="cover" {src} alt="" draggable="false" onerror={() => coverFailed(src)} />
+            <Cover {src} lazy={false} onfail={coverFailed} />
+            {#if overview}<CoverOverview track={np} />{/if}
           </button>
         {/key}
       {/if}
@@ -400,7 +440,8 @@
           <div class="sub">
             {#if np.artist}<button class="artist" disabled={!by} onclick={() => by && goToArtist(np.source, by)}
                 ><span>{np.artist}</span>{#if byFavorite}<i class="liked" role="img" aria-label="Favourite"><Icon name="heart" size={14} /></i>{/if}</button
-              >{/if}{#if np.artist && np.album}{' · '}{/if}{np.album ?? ''}
+              >{/if}{#if np.artist && np.album}{' · '}{/if}{#if np.album && np.album_id}<button class="album-name" onclick={toAlbum}>{np.album}</button
+              >{:else}{np.album ?? ''}{/if}
           </div>
         {:else}
           <div class="title idle">Nothing is playing</div>
@@ -409,9 +450,16 @@
       {#if np}
         <i class="sp b"></i>
         <div class="area">
-          {#if chips.length}
-            <div class="chips" aria-label="About this track">
-              {#each chips as c, i (i)}<span>{c}</span>{/each}
+          <!-- The row under the title (the owner, 2026-10-19): the info button (the cover's overview, as a circle on the
+               cover) and the facts the user picked in Settings → Display, in short; with none picked, Add leads there.
+               Hidden in Settings; none for the device's own music (local mode: nothing known of it). -->
+          {#if prefs.playerRow && np.source !== 'device'}
+            <div class="facts">
+              <button class="info" class:on={overview} aria-label="About this track" aria-pressed={overview} title="About this track" onclick={() => (overview = !overview)}
+                ><Icon name="info" size={18} /></button
+              >
+              {#each rowFacts as f (f.id)}<span class="fact">{f.short}</span>{/each}
+              {#if !prefs.playerFacts.length}<button class="fact add" onclick={toRowSettings}><Icon name="plus" size={14} /><span>Add</span></button>{/if}
             </div>
           {/if}
           {#if np.progress && prefs.showProgress}
@@ -441,7 +489,7 @@
                 onpointerdown={seekDown}
                 onpointermove={seekMove}
                 onpointerup={seekUp}
-                onpointercancel={() => (held = null)}
+                onpointercancel={() => ((held = null), (lens = null))}
                 onkeydown={seekKey}
               >
                 {#if wave}
@@ -449,8 +497,11 @@
                 {:else}
                   <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
                 {/if}
-                <!-- Over a waveform the handle shows only while held (where it is going). -->
-                {#if canSeek && (!wave || held !== null)}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
+                <!-- The plain bar's handle; over a waveform, while held, the lens instead (where it is going). -->
+                {#if canSeek && !wave}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
+                {#if wave && lens && held !== null && dur}
+                  <WaveLens bins={wave} point={held / dur} {...lens} time={clockText(held)} paused={np.progress.paused} />
+                {/if}
               </div>
               <span class="t">{dur ? clockText(dur) : '–:––'}</span>
             </div>
@@ -601,8 +652,8 @@
   /* Finamp's player layout (lib/playerLayout.ts): portrait = the cover's region (the cover centred in it) over the
      controls' box; landscape = the cover's region on the left, the controls' box centred in the rest. Inside the box
      its three groups are spread evenly (Finamp's spaceEvenly; in landscape its spacers 4 / 4 / 10 / 4). What gives
-     way (drop-*): the large gaps, the large play button, the small gaps, the info chips, the title's
-     second line, the progress bar. */
+     way (drop-*): the large gaps, the large play button, the small gaps, the title's second line, the progress bar.
+     (The info chips are gone: the cover's overview tells about the track, the owner 2026-10-19.) */
   header {
     box-sizing: border-box;
     position: relative;
@@ -715,6 +766,8 @@
   }
 
   .cover-btn {
+    position: relative;
+    container-type: inline-size;
     display: block;
     width: min(78vw, 440px);
     height: min(78vw, 440px);
@@ -725,16 +778,88 @@
     touch-action: none;
   }
 
-  /* As Finamp's: radius 8, a soft shadow under it. */
-  .cover {
-    display: block;
-    width: 100%;
-    height: 100%;
+  /* The cover (lib/Cover), as Finamp's: radius 8, a soft shadow under it. */
+  .cover-btn {
     border-radius: 8px;
-    object-fit: cover;
-    background: var(--surface);
     box-shadow: 0 4px 24px rgb(0 0 0 / 0.3);
+  }
+
+  .cover-btn > :global(.cover) {
     user-select: none;
+    transition: filter 220ms ease-out;
+  }
+
+  /* The row under the title: the info button, then the chosen facts as small read-only pills (as the info chips were),
+     scrolling sideways when they do not fit. */
+  .facts {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .facts .info {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .facts .info.on {
+    background: var(--art-accent, var(--accent));
+    color: var(--accent-text);
+  }
+
+  .fact {
+    flex: none;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .fact.add {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    border: 0;
+    font: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+
+  header.drop-facts .facts {
+    display: none;
+  }
+
+  /* The album's name opens the album, looking as the text it was. */
+  .album-name {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-align: inherit;
+    cursor: pointer;
+  }
+
+  /* Under the overview. */
+  .cover-btn.blurred > :global(.cover) {
+    filter: blur(14px) saturate(1.2);
   }
 
   .title {
@@ -939,25 +1064,7 @@
     cursor: pointer;
   }
 
-  /* Info chips: small read-only pills in one row, scrolling sideways when they do not fit. */
-  .chips {
-    display: flex;
-    justify-content: center;
-    gap: 6px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
 
-  .chips span {
-    flex: none;
-    padding: 2px 9px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--text) 10%, transparent);
-    color: var(--muted);
-    font-size: 0.75rem;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
 
   .fav {
     display: grid;
@@ -1062,9 +1169,7 @@
     gap: 4px;
   }
 
-  header.drop-chips .chips {
-    display: none;
-  }
+
 
   header.drop-title .title {
     display: block;

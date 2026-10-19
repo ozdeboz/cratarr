@@ -12,6 +12,7 @@
   import type { Snippet } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { decelerate, SHEET_IN, SHEET_OUT } from './motion';
+  import Cover, { coverBroke, coverBroken, mosaicOf } from './Cover.svelte';
   import Icon from './Icon.svelte';
   import { accentOf } from './remote.svelte';
   import { sheetArea } from './SheetArea.svelte';
@@ -154,7 +155,7 @@
   in:fly|global={{ y: top ? -400 : 400, duration: SHEET_IN, easing: decelerate }}
   out:fly|global={{ y: top ? -400 : 400, duration: SHEET_OUT, easing: decelerate }}
 >
-  {#if images?.[0]}<img class="blur" src={images[0]} alt="" aria-hidden="true" />{/if}
+  {#if images?.[0] && !coverBroken(images[0])}<img class="blur" src={images[0]} alt="" aria-hidden="true" onerror={() => coverBroke(images?.[0])} />{/if}
   <div class="veil"></div>
   <div class="handle" aria-hidden="true"></div>
 
@@ -162,10 +163,11 @@
     {#if images === null}
       <!-- no image: the title and chips alone, the icon before them when there is one -->
       {#if icon}<span class="lead"><Icon name={icon} size={24} /></span>{/if}
-    {:else if images.length >= 4}
-      <div class="art mosaic">{#each images.slice(0, 4) as src, i (i)}<img {src} alt="" />{/each}</div>
-    {:else if images[0]}
-      <img class="art" src={images[0]} alt="" />
+    {:else if mosaicOf(images).length >= 4}
+      <div class="art mosaic">{#each mosaicOf(images) as src, i (i)}<Cover {src} />{/each}</div>
+    {:else}
+      <!-- no cover, or one that fails: the stand-in (lib/Cover) -->
+      <span class="art"><Cover src={mosaicOf(images)[0]} /></span>
     {/if}
     <div class="info">
       <div class="title">{title}</div>
@@ -314,22 +316,17 @@
 
   .art {
     flex: none;
+    display: block;
     width: 64px;
     height: 64px;
+    overflow: hidden;
     border-radius: 6px;
-    object-fit: cover;
   }
 
   .mosaic {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template: 1fr 1fr / 1fr 1fr;
     overflow: hidden;
-  }
-
-  .mosaic img {
-    width: 32px;
-    height: 32px;
-    object-fit: cover;
   }
 
   .info {

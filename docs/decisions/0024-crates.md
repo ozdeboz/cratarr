@@ -161,8 +161,12 @@ icon is the crate with a cross where its handle is (the owner chose it from thre
   in the queue.
 - **Undo** follows in a toast ("Excluded from Test.", "Excluded globally."), the one notice of its kind.
 - **Putting back**: "N excluded" under a crate's name in its panel (any crate, which the editor is not: Unlisted and a
-  genre's have none) and at the top of the Library page (the global ones) open their list (lib/ExcludedSheet): each put
-  back, or Put all back, with Undo again.
+  genre's have none) opens its list (lib/ExcludedSheet), and so does, for the global ones, "Excluded (N)" in the
+  Library's filter sheet while there are any (lib/FilterSheet, under its switches; the list opens as a sheet of its own
+  over it). Each put back, or Put all back, with Undo again. The global ones were first a line at the top of the
+  Library page; the owner moved them (2026-10-19, for 70: "It takes up a lot of real estate"; "the filter sheet is a
+  pretty good idea, actually"; "it would open its own exclusion sheet from the filter sheet"), not into Settings →
+  Account, claude-5f's recommendation.
 
 ## Amendment (2026-10-19): excluded from a crate, and everywhere (the server's part)
 

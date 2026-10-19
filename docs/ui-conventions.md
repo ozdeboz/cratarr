@@ -38,12 +38,17 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     black; a tap shows the close button and the track for a few seconds) and beside / over the page at the right,
     icons only. It lays itself out
     for its space (`lib/playerLayout.ts`, a port of Finamp's layout): portrait or landscape, whichever gives the
-    larger cover; spare room spreads its three groups (track name; chips, progress and buttons; the actions row);
-    when short of height the large gaps, the large play button, the small gaps, the info chips, the
-    title's second line and the progress bar give way, in that order. Playing on this device the progress bar is a
+    larger cover; spare room spreads its three groups (track name; progress and buttons; the actions row);
+    when short of height the large gaps, the large play button, the small gaps, the
+    title's second line and the progress bar give way, in that order (the row of facts with the small gaps). Under
+    the title, the artist's chip and the album's name, which opens the album (decision 0019, amended); then the row:
+    the info button and the facts the user picked (Settings → Display → Player row; an Add chip while none are), and a
+    circle drawn on the cover, or the info button, shows the cover's overview over the blurred cover. Playing on this device the progress bar is a
     slider (Finamp's): drag the handle and the time follows, the player seeks on release; arrow keys move 5 s. Where
     the track is analysed (decision 0035) the bar is its **waveform**: its loudness along it as bars (against its own
-    loudest), what has played in the accent; the handle shows only while held. Elsewhere the thin line. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
+    loudest), what has played in the accent; held, a round lens over it instead of a handle (the owner's, 2026-10-19,
+    `lib/WaveLens.svelte`): the waveform under the finger three times as finely, lifted clear of the finger, a stem and
+    a line at the point, the time where it will land above it. Elsewhere the thin line. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
     cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere (over the page and beside it): swipe up opens the queue, swipe down closes.
     A long press on any heart (2026-10-19: the full and the mini player's, the queue's playing card's, every track
     row's) opens the same sheet (`lib/HeartSheet.svelte`): Favourite (its switch), the crate's Excludes where they
@@ -81,7 +86,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     heart, count, output, queue) opens a "Play on" sheet: This device, and the server's player by its name, the
     current one checked. Choosing the other one moves the music there (the queue and the position) and stops the side
     that played; nothing asks first, the player simply carries on there. The choice is remembered by the browser.
-    Whichever side plays, the player looks and works the same; playlists, the heart and the info chips act on the
+    Whichever side plays, the player looks and works the same; playlists and the heart act on the
     track that plays there. A track this device cannot play is skipped with one error line naming it. In the app,
     under This device while it plays (alone or in a group), its audio output: the one it sounds on by its icon and
     name; a tap opens a step with Automatic and each output, the chosen one ticked (2026-10-19). Automatic is Android's
@@ -170,6 +175,13 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **Share** (track, album, one playlist): the item in words ("Artist – Title") and its link here, through the
   phone's share sheet (the app's in the app), else copied.
 - **A favourite album's cover** carries a small heart in its upper right corner, in the Library's rows and tiles.
+- **A missing cover** (the owner, 2026-10-19 for 70: "if they don't exist, we need a better way to show up than a broken
+  component"; stand-in A from claude-5f's mock) is the same everywhere: our record mark, faint (the text colour at
+  28 %, 45 % of the tile), on a tile a step lighter than the page (`--tile`), with the corners of the cover it stands
+  in for. No other icon, also where a crate, playlist, artist or snapshot used to show its own. Every cover is
+  `lib/Cover.svelte`, which shows it when there is no address or the image fails to load; a failed address is
+  remembered, so the same album shows the stand-in at once everywhere. The players and the queue's card show it only
+  when there is no cover to load, not while one loads. Blurred backdrops simply leave out a cover that fails.
 - **Downloads** (in the app) is the Library's list of what is on this device (decided 2026-10-16: "a special case of
   the library page"): the same rows or covers, order, size, search and select, each album as the Library lists it
   (else as its download says), the count with the space they take ("3 albums · 225 MB"). A cover plays what is on the
@@ -230,6 +242,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   would upgrade one in Music), Not played yet and 4 stars and up (decided 2026-10-16, by your plays and ratings)
   (each off again on leaving the page), the panel's Hide missing tracks (off again when
   the panel shows something else), and any still to come (a tag, a genre). While any is on, the funnel is lit too.
+  Under the Library's switches, while there are any, **Excluded (N)**: Cratarr's global exclusions, a row that opens
+  their own sheet to put them back (decision 0024; the owner moved it there from the top of the page, 2026-10-19).
 - **Icon buttons carry no text**, on any width (decided 2026-10-16): no label that shows only when there is room. A
   long-press (touch) or right-click (desktop) on one shows its label in a small tip beside it (`lib/labels.svelte.ts`,
   one listener for the whole page: any button or link whose only content is an icon, named by its title or

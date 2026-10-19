@@ -8,6 +8,7 @@
   // shuffle"): wherever a cover plays, its icon is in the cover's lower right corner (decided 2026-10-16), here
   // Shuffle's, which is what it does.
   import type { Crate } from './api';
+  import Cover, { mosaicOf } from './Cover.svelte';
   import { crateArt, FAVOURITE_ALBUMS, FAVOURITES, favouriteAlbumsOf, favouritesOf, shuffleCrate } from './crates.svelte';
   import { toast } from './toast.svelte';
   import Icon from './Icon.svelte';
@@ -16,7 +17,7 @@
 
   let { crate: c, active, onclick }: { crate: Crate; active: boolean; onclick: () => void } = $props();
 
-  const art = $derived(crateArt(c.id));
+  const art = $derived(mosaicOf(crateArt(c.id)));
   const fav = $derived(FAVOURITES[favouritesOf(c.id)]);
   const albums = $derived(FAVOURITE_ALBUMS[favouriteAlbumsOf(c.id)]);
   const st = $derived(c.stats);
@@ -42,7 +43,7 @@
 
 <div class="card" class:active>
   <button class="art" class:mosaic={art.length === 4} aria-label="Shuffle {c.name}" title="Shuffle" disabled={starting} aria-busy={starting} onclick={shuffle}>
-    {#each art as src, i (i)}<img {src} alt="" loading="lazy" decoding="async" />{:else}<span class="noart"><Icon name="crates" size={40} /></span>{/each}
+    {#each art as src, i (i)}<Cover {src} />{:else}<Cover src={null} />{/each}
     <span class="corner" aria-hidden="true"><Icon name="shuffle" size={14} /></span>
   </button>
   <button class="view" {onclick} aria-label="View {c.name}">
@@ -146,21 +147,9 @@
   }
 
   .art.mosaic {
-    grid-template-columns: 1fr 1fr;
+    grid-template: 1fr 1fr / 1fr 1fr;
   }
 
-  .art img {
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    object-fit: cover;
-  }
-
-  .noart {
-    display: grid;
-    place-items: center;
-    color: var(--muted);
-  }
 
   .text {
     display: flex;

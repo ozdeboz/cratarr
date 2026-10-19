@@ -1,7 +1,7 @@
 <script lang="ts">
   // What is excluded (decision 0024, amended 2026-10-19): a crate's (from the "N excluded" line under its name in the
   // panel, any crate's: one's own, Unlisted, a genre's), its tracks and whole albums; or Cratarr's global ones (`crate`
-  // null, from the Library page's line). Each can be put back, or all at once, with Undo as excluding has. No notice
+  // null, from the Library's filter sheet, "Excluded (N)"). Each can be put back, or all at once, with Undo as excluding has. No notice
   // besides; an error in one line.
   import { albumCoverUrl, coverUrl, crateLeftOut, excludedRows, includeTracks, putBackInCrate, type ExcludedAlbum, type Excluding, type PlaylistRow } from './api';
   import { crateName, loadCrates } from './crates.svelte';

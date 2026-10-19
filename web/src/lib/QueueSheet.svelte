@@ -16,6 +16,7 @@
   import { linear } from 'svelte/easing';
   import { fade, fly } from 'svelte/transition';
   import { albumCoverUrl } from './api';
+  import Cover, { coverBroke, coverBroken } from './Cover.svelte';
   import { loadFavorites } from './favourites.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
@@ -37,7 +38,7 @@
   import { player } from './live.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { isLocal, shownPlaylists } from './output.svelte';
-  import { clockText, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
+  import { clockText, coverSrc, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
   import { toast } from './toast.svelte';
 
   let { src, onclose }: { src: string | null; onclose: () => void } = $props();
@@ -183,7 +184,7 @@
     class:hearing={preview.id === t.id}
     use:hold={{ start: () => startPreview(t), end: endPreview, enabled: canPreview() }}
   >
-    {#if t.album_id}<img src={albumCoverUrl(t.source, t.album_id)} alt="" loading="lazy" draggable="false" />{:else}<span class="noimg"></span>{/if}
+    <Cover src={t.album_id ? albumCoverUrl(t.source, t.album_id) : null} />
   </span>
 {/snippet}
 
@@ -216,7 +217,7 @@
     in:fly={{ y: 600, duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
     out:fly={{ y: 600, duration: reducedMotion() ? 0 : SHEET_OUT, easing: decelerate }}
   >
-    {#if src}<img class="blur" {src} alt="" aria-hidden="true" />{/if}
+    {#if src && !coverBroken(src)}<img class="blur" {src} alt="" aria-hidden="true" onerror={() => coverBroke(src)} />{/if}
     <div class="veil"></div>
 
     <div class="qhead">
@@ -278,7 +279,8 @@
       <div class="now" style:--done={dur ? Math.min(1, pos / dur) : 0} use:longpress={() => rowMenu(asTrack(np, np.source), null)}>
         <span class="done" aria-hidden="true"></span>
         <button class="ncover" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}>
-          {#if src}<img {src} alt="" />{:else}<span class="noimg"></span>{/if}
+          <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
+          {#if src || !coverSrc()}<Cover {src} lazy={false} />{/if}
           <span class="pp"><Icon name={paused() ? 'play' : 'pause'} size={32} /></span>
         </button>
         <div class="ntext">
@@ -681,14 +683,6 @@
     cursor: pointer;
   }
 
-  .ncover img,
-  .ncover .noimg {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    border-radius: 0;
-  }
-
   .pp {
     position: absolute;
     inset: 0;
@@ -876,16 +870,6 @@
 
   .cover.hearing {
     box-shadow: 0 0 0 3px var(--art-accent);
-  }
-
-  .row img,
-  .noimg {
-    flex: none;
-    width: 60px;
-    height: 60px;
-    border-radius: 8px;
-    object-fit: cover;
-    background: var(--bg);
   }
 
   .row div {

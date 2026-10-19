@@ -58,3 +58,31 @@ The owner chose (2026-10-14):
 With the local player (decision 0022) Cratarr plays music itself, so seeking by dragging moved out of "later": playing
 on this device the progress bar is Finamp's slider (the handle and the time follow the finger, the player seeks on
 release). Seeking the server's player waits until it has been tried on the real player, as jumping in the queue does.
+
+## Amendment (2026-10-19): the cover's overview, and a row the user fills
+
+The owner: "Currently, the play count, BPM, and sound quality are also mentioned on the player itself. That's not
+good"; "a circular gesture on the album cover ... blur the album cover and show the genres and the mood", "and also
+the release date"; then "we should let users choose what to display on that extra bar"; "there should be an info
+button on the left side"; "They should also be able to hide the bar from the settings page. And when there is nothing
+in the bar, there should be a chip to go to the settings page to add one"; "for long content options, we'd need short
+format versions. So make a list that is exhaustive"; "make the album of the song clickable while not making its style
+any different".
+
+- **The cover's overview** (lib/CoverOverview): a circle drawn on the full player's cover, or the row's info button,
+  blurs the cover and shows over it every fact known about the track, in full: the genres as chips, then mood, release
+  date, tempo, key, plays, last played, quality, label, catalogue number, when added, energy and danceability (bars),
+  composer, track (and disc), explicit. A tap on the cover or another circle brings the cover back; a new track does
+  too. Read from the file's details (its tags, tempo, genres, quality) and the plays; mood, energy and danceability
+  from AudioMuse once the server imports them. None for the device's own music.
+- **The info chips go.** In their place a row: the info button at its start, then the facts the user picks, short
+  ("2021", "Am", "FLAC 24/96", "Richter"), in the order the user drags them (Settings → Display → Player row, each
+  with a switch). None picked: an Add chip leads there. The row can be hidden there. It gives way when the player is
+  short of height, as the chips did.
+- **The album's name** under the title opens the album in the panel, as the artist's chip opens the artist; it looks
+  as before.
+- **The waveform lens** (the owner's idea: "It's awesome. We build it like this."): holding the seek bar over a
+  waveform shows a 130 px round lens instead of the dot (the plain bar keeps its dot), its bottom edge 36 px above the
+  waveform's middle, a stem from the point and a white line across the waveform there. Inside, the waveform under it
+  three times as finely (the same 512 bins, a bar per 3 px), played in the accent left of the point, and a line at
+  the point; its centre keeps 10 px inside the player. The time where it will land sits above it. Release seeks.
