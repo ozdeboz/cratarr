@@ -10,6 +10,9 @@
   // while the bar is there (lib/TopPill).
   import Icon from './Icon.svelte';
   import OutputSheet from './OutputSheet.svelte';
+  import { playingCrateOuts } from './crates.svelte';
+  import HeartSheet from './HeartSheet.svelte';
+  import { longpress } from './longpress';
   import { player } from './live.svelte';
   import { panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
@@ -17,6 +20,8 @@
 
   const np = $derived(playing());
   const src = $derived(shownCover());
+  // A long press on the heart: the full player's sheet (lib/HeartSheet), its crate Excludes included.
+  let heartMenu = $state(false);
   const pos = $derived(position());
   const dur = $derived(duration());
   const share = $derived(dur ? Math.min(1, pos / dur) : 0);
@@ -131,8 +136,14 @@
       >
       <!-- No heart for the device's own music (local mode, decision 0052). -->
       {#if np.favorite !== null && np.source !== 'device'}
-        <button class="own fav" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
-          ><Icon name="heart" size={28} /></button
+        <button
+          class="own fav"
+          class:on={favorite()}
+          disabled={pending()}
+          aria-label={favorite() ? 'Favourite' : 'Not a favourite'}
+          aria-pressed={favorite()}
+          onclick={toggleFavorite}
+          use:longpress={() => (heartMenu = true)}><Icon name="heart" size={28} /></button
         >
       {/if}
     </div>
@@ -140,6 +151,15 @@
 {/if}
 {#if outputOpen}
   <OutputSheet onclose={() => (outputOpen = false)} />
+{/if}
+{#if heartMenu && np}
+  <HeartSheet
+    track={np}
+    cover={src}
+    favourite={{ on: favorite(), disabled: pending() || np.favorite === null, flip: toggleFavorite }}
+    outs={playingCrateOuts()}
+    onclose={() => (heartMenu = false)}
+  />
 {/if}
 
 <style>

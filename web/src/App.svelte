@@ -395,6 +395,8 @@
   // have (Settings).
   $effect(() => {
     const local = localMode();
+    // No visuals in local mode (the owner: "In local mode, the visuals feature is not supported").
+    if (local) untrack(() => (visuals.open = false));
     const p = untrack(() => page);
     if (p === 'settings') return;
     if (local && !p.startsWith('local-')) location.hash = LOCAL_ALBUMS.href;

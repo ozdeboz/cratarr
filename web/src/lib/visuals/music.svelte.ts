@@ -14,7 +14,7 @@ import { paused, playing } from '../remote.svelte';
 import { loadWaveform, waveformOf } from '../waveforms.svelte';
 import { beatAt, beatsOf, type Beat, type Beats } from './beats';
 import { followEnvelopes } from './envelope';
-import { startLive, type LiveNow } from './live';
+import { startAppLive, startLive, type LiveNow } from './live';
 import { B, BAND_SIGNALS, T, TRACK_SIGNALS } from './routes';
 import { ID, lastOf, lufsAt, seriesAt, signalsOf, type Events, type Signals } from './signals';
 import { BANDS, visualSettings } from './settings.svelte';
@@ -296,16 +296,20 @@ let live: { now(): LiveNow; stop(): void } | null = null;
 let liveNode: AudioNode | null = null;
 const heardHits = Array.from({ length: BANDS }, () => ({ count: 0, at: 0, strength: 0, mean: 0.6, since: 0, first: 0 }));
 
-/** What has been heard lately, where the page plays the music; null elsewhere. */
+/** In the app, its player's sound (the app hears it: startAppLive), as the node it is known by. */
+const APP_EAR = {} as AudioNode;
+
+/** What has been heard lately, where the page plays the music (this browser, or the app it runs in, which hears its own
+ *  player); null elsewhere. */
 function listen(): LiveNow | null {
-  const tap = isLocal() ? audioTap() : null;
+  const tap = inApp ? (prefs.output === 'local' ? { node: APP_EAR, context: null } : null) : isLocal() ? audioTap() : null;
   if (!tap) {
     stopLive();
     return null;
   }
   if (!live || liveNode !== tap.node) {
     stopLive();
-    live = startLive(tap.node, tap.context);
+    live = tap.context ? startLive(tap.node, tap.context) : startAppLive();
     liveNode = tap.node;
     const now = performance.now();
     for (const h of heardHits) Object.assign(h, { count: 0, at: 0, strength: 0, since: now, first: 0 });

@@ -227,6 +227,24 @@ export async function shuffleCrate(id: string, name: string) {
   await playPlaylistFrom(name, first.source, shuffled(tracks), 0);
 }
 
+/** An Exclude in the heart's sheet (lib/HeartSheet). */
+export type ExcludeEntry = { label: string; icon: 'crateOut'; run: () => void };
+
+/** The playing track's crate Excludes, for the players' hearts (the full player's and the mini player's; not the Queue
+ *  sheet's): from the crate the queue came from, the track or its album, for the crate's own tracks. */
+export function playingCrateOuts(): ExcludeEntry[] {
+  const c = queueCrate();
+  const t = local.queue[local.index];
+  if (!c || !t || t.lane) return [];
+  const name = crateName(c);
+  const fail = (e: unknown) => toast.fail(e, "It wasn't excluded");
+  const album = t.album_id;
+  return [
+    { label: `Exclude from ${name}`, icon: 'crateOut', run: () => void leaveOut(c, t.source, { ids: [t.id] }).catch(fail) },
+    ...(album ? [{ label: `Exclude album from ${name}`, icon: 'crateOut' as const, run: () => void leaveOut(c, t.source, { albums: [album] }).catch(fail) }] : []),
+  ];
+}
+
 /** The crate the queue playing here came from, by the queue's name (a playlist of the same name wins): the Queue
  *  sheet's chip, and Remove from it in the full player's menu. */
 export function queueCrate(from: string | null = isLocal() ? local.from : null): string | null {

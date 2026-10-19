@@ -150,9 +150,12 @@ icon is the crate with a cross where its handle is (the owner chose it from thre
 - **Global exclusions** (`/api/excluded`, the same three calls with `ids`): out of every crate, and never picked by
   Radio, Autoplay or a shuffle of the library or the favourites; a track still plays when chosen (its album, a
   playlist, a track tapped, a queue taken up).
-- **Where**: in a crate's panel, a swipe left on a track (Exclude) or its menu's "Exclude from <crate>" and "Exclude
-  album from <crate>"; in the full player, the track's menu (the same two, while a queue the crate started plays its
-  own track) and a long press on the heart: Favourite, those two, and "Exclude globally". Not in the Queue sheet.
+- **Where**: in a crate's panel, a swipe left on a track (Exclude); and a long press on any heart opens the heart's
+  sheet (the owner, 2026-10-19: every track
+  row's, the full and the mini player's, the queue's playing card's): Favourite, the crate's two where they apply (a
+  crate's rows; in the players while a queue the crate started plays its own track; never in the Queue sheet), and
+  "Exclude globally". The crate's Excludes are in the sheet only, not in the track menus (one thing in one place:
+  "Heart sheet only").
 - **The queue**: what is excluded leaves what plays here too (a crate's: the queue it started, its own tracks; global:
   any but those added by hand); the playing one gives way to the next. Undo puts it back in the crate or the list, not
   in the queue.

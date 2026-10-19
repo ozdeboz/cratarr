@@ -20,12 +20,10 @@
   import { loadWaveform, waveformOf } from './waveforms.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
-  import { crateName, leaveOut, queueCrate } from './crates.svelte';
+  import { playingCrateOuts } from './crates.svelte';
   import { localMode } from './deviceMusic.svelte';
-  import { excludeGlobally } from './exclusions.svelte';
+  import HeartSheet from './HeartSheet.svelte';
   import { longpress } from './longpress';
-  import MenuEntry from './MenuEntry.svelte';
-  import MenuSheet from './MenuSheet.svelte';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { visuals } from './visuals/shown.svelte';
   import { keepViewed, panel } from './panel.svelte';
@@ -143,29 +141,11 @@
   let menuAt = $state<DOMRect | null>(null);
   // The menu's entries, or straight to its playlists (the top bar's playlists button).
   let menuStart = $state<'menu' | 'lists'>('menu');
-  // Exclusions (decision 0024, amended 2026-10-19; the owner: the crate's panel and the full player, not the Queue
-  // sheet). From the crate the queue came from, the playing track or its album, for the crate's own tracks: in the
-  // track's menu and the heart's. They then leave the queue too, and the next plays.
-  const crateOuts = $derived.by(() => {
-    const c = queueCrate();
-    const t = local.queue[local.index];
-    if (!c || !t || t.lane) return [];
-    const name = crateName(c);
-    const fail = (e: unknown) => toast.fail(e, "It wasn't excluded");
-    const album = t.album_id;
-    return [
-      { label: `Exclude from ${name}`, icon: 'crateOut' as const, run: () => void leaveOut(c, t.source, { ids: [t.id] }).catch(fail) },
-      ...(album ? [{ label: `Exclude album from ${name}`, icon: 'crateOut' as const, run: () => void leaveOut(c, t.source, { albums: [album] }).catch(fail) }] : []),
-    ];
-  });
-  // A long press on the heart (the owner): Favourite, the crate's Excludes, and Exclude globally (out of every crate,
-  // never picked by Radio, Autoplay or a shuffle; still played when chosen).
+  // A long press on the heart (the owner): Favourite, the crate's Excludes (decision 0024, amended 2026-10-19: the
+  // track or its album, from the crate the queue came from, its own tracks; here only, not the track's menu: "Heart
+  // sheet only"), and Exclude globally (lib/HeartSheet).
   let heartMenu = $state(false);
-  function excludeEverywhere() {
-    const t = np;
-    heartMenu = false;
-    if (t) excludeGlobally(t.source, [t.id]).catch((e) => toast.fail(e, "It wasn't excluded"));
-  }
+
   // More music's sheet (Radio and Autoplay), from the radio button.
   let moreOpen = $state(false);
   let queueOpen = $state(false);
@@ -373,7 +353,8 @@
           onclick={() => (sleepOpen = true)}><Icon name="moon" size={22} /></button
         >
       {/if}
-      {#if np}
+      <!-- Not in local mode (decision 0052; the owner: "In local mode, the visuals feature is not supported"). -->
+      {#if np && !localMode()}
         <button class="corner" aria-label="Visuals" aria-haspopup="dialog" onclick={() => (visuals.open = true)}><Icon name="visuals" size={22} /></button>
       {/if}
       {#if place === 'side'}
@@ -557,26 +538,16 @@
 </div>
 
 {#if menuAt}
-  <TrackMenu start={menuStart} onplaylists={place === 'overlay' ? toPlaylistsPage : null} outs={crateOuts} onclose={() => (menuAt = null)} />
+  <TrackMenu start={menuStart} onplaylists={place === 'overlay' ? toPlaylistsPage : null} onclose={() => (menuAt = null)} />
 {/if}
 {#if heartMenu && np}
-  <MenuSheet label="Favourite and exclude" title={np.name} images={src ? [src] : []} chips={np.artist ? [np.artist] : []} onclose={() => (heartMenu = false)}>
-    <div role="menu">
-      <MenuEntry icon="heart" label="Favourite" switched={favorite()} disabled={pending() || np.favorite === null} onclick={toggleFavorite} />
-      {#each crateOuts as o (o.label)}
-        <MenuEntry
-          icon={o.icon}
-          label={o.label}
-          danger
-          onclick={() => {
-            heartMenu = false;
-            o.run();
-          }}
-        />
-      {/each}
-      <MenuEntry icon="ban" label="Exclude globally" danger onclick={excludeEverywhere} />
-    </div>
-  </MenuSheet>
+  <HeartSheet
+    track={np}
+    cover={src}
+    favourite={{ on: favorite(), disabled: pending() || np.favorite === null, flip: toggleFavorite }}
+    outs={playingCrateOuts()}
+    onclose={() => (heartMenu = false)}
+  />
 {/if}
 {#if outputOpen}
   <OutputSheet onclose={() => (outputOpen = false)} />

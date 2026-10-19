@@ -33,6 +33,7 @@
   import { hold } from './hold';
   import { albumSubject, viewPlaylist } from './panel.svelte';
   import { CRATE, queueCrate } from './crates.svelte';
+  import HeartSheet from './HeartSheet.svelte';
   import { player } from './live.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { isLocal, shownPlaylists } from './output.svelte';
@@ -166,6 +167,9 @@
   // Swipe left removes (this device; lib/swipe.ts): the row slides out, then the track leaves the queue. Remove shows
   // in the strip it uncovers (lib/SwipeBehind).
   const REMOVE = { icon: 'trash', label: 'Remove', danger: true } as const;
+  // A long press on the playing card's heart: Favourite and Exclude globally (lib/HeartSheet; no crate Excludes in the
+  // Queue sheet, the owner).
+  let heartMenu = $state(false);
   const removeSwiped = (i: number) => {
     setTimeout(() => removeUpcoming(i), reducedMotion() ? 0 : 200);
     return 'away' as const;
@@ -196,7 +200,7 @@
 <!-- Finamp's row heart (lib/RowHeart.svelte): a tap opens its playlists, a long-press makes it a favourite or not. -->
 {#snippet rowHeart(t: MenuTrack)}
   <!-- None for the device's own music (local mode, decision 0052). -->
-  {#if t.source !== 'device'}<RowHeart source={t.source} id={t.id} name={t.name} onopen={() => showMenu({ track: t, start: 'lists', queue: null })} />{/if}
+  {#if t.source !== 'device'}<RowHeart source={t.source} id={t.id} name={t.name} artist={t.artist} cover={t.album_id ? albumCoverUrl(t.source, t.album_id) : null} onopen={() => showMenu({ track: t, start: 'lists', queue: null })} />{/if}
 {/snippet}
 
 {#if np}
@@ -283,8 +287,14 @@
         </div>
         <span class="ntime">{clockText(pos)}{dur ? ` / ${clockText(dur)}` : ''}</span>
         {#if np.favorite !== null && np.source !== 'device'}
-          <button class="nbtn" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
-            ><Icon name="heart" size={28} /></button
+          <button
+            class="nbtn"
+            class:on={favorite()}
+            disabled={pending()}
+            aria-label={favorite() ? 'Favourite' : 'Not a favourite'}
+            aria-pressed={favorite()}
+            onclick={toggleFavorite}
+            use:longpress={() => (heartMenu = true)}><Icon name="heart" size={28} /></button
           >
         {/if}
       </div>
@@ -369,6 +379,9 @@
 {/if}
 {#if saving}
   <QueuePlaylistSheet onclose={() => (saving = false)} />
+{/if}
+{#if heartMenu && np}
+  <HeartSheet track={np} cover={src} favourite={{ on: favorite(), disabled: pending() || np.favorite === null, flip: toggleFavorite }} onclose={() => (heartMenu = false)} />
 {/if}
 {#if switching}
   <QueuesSheet onclose={() => (switching = false)} />

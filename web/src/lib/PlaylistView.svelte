@@ -72,6 +72,8 @@
     type CrateDraft,
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
+  import RowHeart from './RowHeart.svelte';
+  import type { ExcludeEntry } from './crates.svelte';
   import CrateEditor from './CrateEditor.svelte';
   import SelectSheet from './SelectSheet.svelte';
   import { Reorder } from './reorder.svelte';
@@ -941,16 +943,19 @@
   /** How many tracks and albums the crate viewed excludes, and their sheet. */
   const leftOut = $derived(crate && !crateEditing ? (crates.list?.find((x) => x.id === crate)?.left_out ?? 0) : 0);
   let leftOutOpen = $state(false);
-  /** A row's menu: what its swipe left does (Exclude from the crate, Remove from the playlist), and in a crate its
-   *  album's Exclude too. */
-  function menuOuts(out: (() => 'away') | null, list: string, r: PlaylistRow) {
-    if (!out) return [];
+  /** A row's menu: Remove from one's own playlist, as its swipe left does. A crate's Excludes are its heart's (one
+   *  thing in one place, as the full player's: the owner, "Heart sheet only"). */
+  function menuOuts(out: (() => 'away') | null, list: string) {
+    return out && !crate ? [{ label: `Remove from ${list}`, icon: 'listRemove' as IconName, run: () => void out() }] : [];
+  }
+  /** A row's heart's sheet (lib/HeartSheet) in a crate: Exclude the track (as its swipe left), or its album. */
+  function crateExcludes(out: (() => 'away') | null, r: PlaylistRow): ExcludeEntry[] {
     const c = crate;
-    if (!c) return [{ label: `Remove from ${list}`, icon: 'listRemove' as IconName, run: () => void out() }];
+    if (!c || !out) return [];
     const name = crateName(c);
     return [
-      { label: `Exclude from ${name}`, icon: 'crateOut' as IconName, run: () => void out() },
-      ...(r.album_id ? [{ label: `Exclude album from ${name}`, icon: 'crateOut' as IconName, run: () => albumOutOfCrate(c, r) }] : []),
+      { label: `Exclude from ${name}`, icon: 'crateOut', run: () => void out() },
+      ...(r.album_id ? [{ label: `Exclude album from ${name}`, icon: 'crateOut' as const, run: () => albumOutOfCrate(c, r) }] : []),
     ];
   }
   /** The row leaves the list as it slides out (the list is keyed by place, so the next takes its row). */
@@ -1749,7 +1754,7 @@
       attach={fromAction(swipe, () => ({ enabled: !selecting, right: ok ? () => playNext(r, src) : null, left: out }))}
       attachMain={fromAction(longpress, () => () => {
         if (!ok || onDevice) return;
-        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, name, r) };
+        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, name) };
         else if (selecting) selectSheet = true;
         else startSelect(i);
       })}
@@ -1763,14 +1768,24 @@
   </li>
 {/snippet}
 
-<!-- A track's row ends in ⋮ (its menu, Symfonium's), or in select mode in its tick. -->
+<!-- A track's row ends in its heart (as the queue's rows: a tap its playlists, a long press its sheet, lib/HeartSheet;
+     not for the device's own music) and ⋮ (its menu, Symfonium's), or in select mode in its tick. -->
 {#snippet rowEnd(r: PlaylistRow, src: string, i: number | null, out: (() => 'away') | null = null, list = '')}
   {#if selecting && i !== null}
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
       ><Icon name={selecting.has(i) ? 'circleCheck' : 'circle'} size={24} /></button
     >
   {:else if !onDevice}
-    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, list, r) })}
+    <RowHeart
+      source={src}
+      id={r.id!}
+      name={r.name ?? r.file}
+      artist={r.artist}
+      cover={coverUrl({ source: src, id: r.id!, album_id: r.album_id })}
+      outs={crateExcludes(out, r)}
+      onopen={() => (trackMenu = { track: asTrack(r, src), start: 'lists' })}
+    />
+    <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, list) })}
       ><Icon name="moreVert" size={22} /></button
     >
   {/if}

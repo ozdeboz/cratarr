@@ -45,8 +45,11 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     the track is analysed (decision 0035) the bar is its **waveform**: its loudness along it as bars (against its own
     loudest), what has played in the accent; the handle shows only while held. Elsewhere the thin line. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
     cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere (over the page and beside it): swipe up opens the queue, swipe down closes.
-    A long press on the heart (2026-10-19) opens a sheet: Favourite (its switch), Exclude from the crate the queue came
-    from and Exclude album from it (its own tracks), and Exclude globally (decision 0024, amended).
+    A long press on any heart (2026-10-19: the full and the mini player's, the queue's playing card's, every track
+    row's) opens the same sheet (`lib/HeartSheet.svelte`): Favourite (its switch), the crate's Excludes where they
+    apply (the players: the crate the queue came from, its own tracks; a crate's rows: that crate; none in the Queue
+    sheet), and Exclude globally (decision 0024, amended). Track rows end in a heart before ⋮ everywhere (the panel's
+    lists too): a tap its playlists, a long press the sheet. The device's own music (local mode) has no hearts.
   - **Where it shows:** with room for it (a content area of 800 × 500 px or more) the full player sits beside the page
     by itself while something plays, resizable at its edge (handle in the middle), the width remembered; its chevron
     folds it to the mini-player until that is tapped. Otherwise the mini-player shows, and opens the full player
