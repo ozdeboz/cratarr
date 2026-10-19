@@ -38,9 +38,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     black; a tap shows the close button and the track for a few seconds) and beside / over the page at the right,
     icons only. It lays itself out
     for its space (`lib/playerLayout.ts`, a port of Finamp's layout): portrait or landscape, whichever gives the
-    larger cover; spare room spreads its three groups (track name; chips, progress and buttons; the actions row);
-    when short of height the large gaps, the large play button, the small gaps, the info chips, the
-    title's second line and the progress bar give way, in that order. Playing on this device the progress bar is a
+    larger cover; spare room spreads its three groups (track name; progress and buttons; the actions row);
+    when short of height the large gaps, the large play button, the small gaps, the
+    title's second line and the progress bar give way, in that order (the row of facts with the small gaps). Under
+    the title, the artist's chip and the album's name, which opens the album (decision 0019, amended); then the row:
+    the info button and the facts the user picked (Settings → Display → Player row; an Add chip while none are), and a
+    circle drawn on the cover, or the info button, shows the cover's overview over the blurred cover. Playing on this device the progress bar is a
     slider (Finamp's): drag the handle and the time follows, the player seeks on release; arrow keys move 5 s. Where
     the track is analysed (decision 0035) the bar is its **waveform**: its loudness along it as bars (against its own
     loudest), what has played in the accent; the handle shows only while held. Elsewhere the thin line. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
@@ -81,7 +84,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     heart, count, output, queue) opens a "Play on" sheet: This device, and the server's player by its name, the
     current one checked. Choosing the other one moves the music there (the queue and the position) and stops the side
     that played; nothing asks first, the player simply carries on there. The choice is remembered by the browser.
-    Whichever side plays, the player looks and works the same; playlists, the heart and the info chips act on the
+    Whichever side plays, the player looks and works the same; playlists and the heart act on the
     track that plays there. A track this device cannot play is skipped with one error line naming it. In the app,
     under This device while it plays (alone or in a group), its audio output: the one it sounds on by its icon and
     name; a tap opens a step with Automatic and each output, the chosen one ticked (2026-10-19). Automatic is Android's

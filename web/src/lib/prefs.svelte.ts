@@ -3,6 +3,7 @@
 
 import { inApp, toApp } from './app.svelte';
 import { LIST_WIDTHS } from './pageView.svelte';
+import { FACTS, type FactId } from './facts';
 
 export type Theme = 'auto' | 'light' | 'dark';
 
@@ -17,6 +18,10 @@ export type Prefs = {
   listDown: boolean;
   /** Playlists the track is in come first. */
   showProgress: boolean;
+  /** The full player's row under the title (the owner, 2026-10-19): shown at all, and the facts it shows beside its info
+   *  button, in the user's order (lib/trackFacts; none at first). */
+  playerRow: boolean;
+  playerFacts: FactId[];
   /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
   browserName: string;
@@ -83,6 +88,8 @@ export const DEFAULTS: Prefs = {
   listOrder: 'playing',
   listDown: false,
   showProgress: true,
+  playerRow: true,
+  playerFacts: [],
   levelling: true,
   browserName: '',
   relativeDates: false,
@@ -140,6 +147,8 @@ function read(): Prefs {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
+      if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
+      if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
       if (typeof saved.browserName === 'string') p.browserName = saved.browserName;
       if (typeof saved.relativeDates === 'boolean') p.relativeDates = saved.relativeDates;
