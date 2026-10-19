@@ -29,7 +29,7 @@
 {:else if data.kind === 'signal'}
   <div class="node mod" class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
     <span class="t">{data.label}</span>
-    <Handle type="source" id={MOD_OUT} position={Position.Top} class="out" style="left: auto; right: -5px; top: 50%" />
+    <Handle type="source" id={MOD_OUT} position={Position.Top} class="out" />
   </div>
 {:else if data.kind === 'module'}
   <div class="node" class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
@@ -49,7 +49,7 @@
         {#each data.knobs as k (k.id)}
           <div class="kw">
             <PatchKnob knob={k} onturn={(v) => graph.knob(id, k.id, v)} />
-            <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="in-mod" style="top: 26px; bottom: auto" />
+            <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="in-mod" style="top: 17.5px; bottom: auto" />
           </div>
         {/each}
         {#if data.hidden}
@@ -62,8 +62,9 @@
     {#if data.in}<Handle type="target" id="in" position={SIDE[data.in]} isConnectable={false} class="pic" style={at(data.in)} />{/if}
     {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={false} class="pic" style={at(data.out)} />{/if}
     {#if data.feedback}<Handle type="source" id="fb" position={Position.Bottom} isConnectable={false} class="fb" />{/if}
+    {#if data.feedbackIn}<Handle type="target" id="fbin" position={Position.Bottom} isConnectable={false} class="fb" />{/if}
     {#if data.modulator}
-      <Handle type="source" id={MOD_OUT} position={Position.Top} class="out" style="left: auto; right: -5px; top: 19px" />
+      <Handle type="source" id={MOD_OUT} position={Position.Top} class="out" />
     {/if}
   </div>
 {:else}

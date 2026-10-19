@@ -17,6 +17,7 @@
   import '@xyflow/svelte/dist/base.css';
   import PatchNode from './PatchNode.svelte';
   import PatchCable from './PatchCable.svelte';
+  import PatchFit from './PatchFit.svelte';
   import type { Cable, ModuleType, Patch, SignalRef } from './patch';
   import { cableOf, graphOf, GRAPH, type GraphActions, type NodeData, type Size, type XY } from './patchgraph';
 
@@ -52,6 +53,12 @@
   let opened = $state.raw<ReadonlySet<string>>(new Set());
   let moved = $state.raw<Record<string, XY>>({});
   const placed = $derived(positions ?? moved);
+  let hovered = $state<string | null>(null);
+  let hoveredCable = $state<string | null>(null);
+  /** Until the viewer pans, zooms or moves something, the graph keeps all of the patch in view. */
+  let touched = $state(false);
+  let width = $state(0);
+  let height = $state(0);
 
   // The nodes' measured sizes, as a key, so a measure that changes nothing lays nothing out again.
   const sizeKey = $derived(
@@ -61,6 +68,28 @@
       .join(';'),
   );
 
+  // In focus: the nodes selected or under the pointer (a box, its modules too), and the cables selected or under it.
+  // Their cables are lit and show their amounts; while anything is in focus, every other cable dims.
+  const focusKey = $derived.by(() => {
+    const on = new Set(nodes.filter((n) => n.selected).map((n) => n.id));
+    if (hovered) on.add(hovered);
+    for (const n of nodes) if (n.parentId && on.has(n.parentId)) on.add(n.id);
+    const lit = edges.filter((e) => e.selected).map((e) => e.id);
+    if (hoveredCable) lit.push(hoveredCable);
+    return [...on].sort().join('\n') + '\t' + lit.sort().join('\n');
+  });
+  function dress(list: Edge[], key: string): Edge[] {
+    const [a, b] = key.split('\t');
+    const on = new Set(a ? a.split('\n') : []);
+    const lit = new Set(b ? b.split('\n') : []);
+    const any = on.size + lit.size > 0;
+    return list.map((e) => {
+      if (e.type !== 'cable') return e;
+      const shown = lit.has(e.id) || on.has(e.source) || on.has(e.target);
+      const cls = shown ? 'cable lit' : any ? 'cable dim' : 'cable';
+      return e.class === cls ? e : { ...e, class: cls, data: { ...e.data, lit: shown } };
+    });
+  }
   $effect.pre(() => {
     const sizes: Record<string, Size> = {};
     for (const s of sizeKey ? sizeKey.split(';') : []) {
@@ -77,9 +106,26 @@
         return { ...n, measured: b?.measured, selected: b?.selected, ...(b?.dragging ? { position: b.position, dragging: true } : {}) } as Node;
       });
       const chosen = new Set(edges.filter((e) => e.selected).map((e) => e.id));
-      edges = g.edges.map((e) => ({ ...e, selected: chosen.has(e.id) }) as Edge);
+      edges = dress(
+        g.edges.map((e) => ({ ...e, selected: chosen.has(e.id) }) as Edge),
+        focusKey,
+      );
     });
   });
+
+  $effect(() => {
+    const key = focusKey;
+    untrack(() => (edges = dress(edges, key)));
+  });
+
+  // What the view fits to: the top-level nodes' places and sizes, and the graph's own size.
+  const layout = $derived(
+    `${width}x${height};${sizeKey};` +
+      nodes
+        .filter((n) => !n.parentId)
+        .map((n) => `${n.id}@${Math.round(n.position.x)},${Math.round(n.position.y)}`)
+        .join(';'),
+  );
 
   setContext<GraphActions>(GRAPH, {
     knob: (module, knob, value) => onknob(module, knob, value),
@@ -88,6 +134,7 @@
       const next = new Set(opened);
       if (!next.delete(id)) next.add(id);
       opened = next;
+      touched = true;
     },
     opened: (id) => opened.has(id),
     disconnect: (cable) => ondisconnect(cable),
@@ -114,7 +161,7 @@
   }
 </script>
 
-<div class="patch-graph">
+<div class="patch-graph" bind:clientWidth={width} bind:clientHeight={height}>
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -129,8 +176,17 @@
     isValidConnection={valid}
     onbeforeconnect={connect}
     onbeforedelete={unplug}
+    onnodedragstart={() => (touched = true)}
     onnodedragstop={dropped}
+    onmovestart={(event) => {
+      if (event) touched = true;
+    }}
+    onnodepointerenter={({ node }) => (hovered = node.id)}
+    onnodepointerleave={() => (hovered = null)}
+    onedgepointerenter={({ edge }) => (hoveredCable = edge.id)}
+    onedgepointerleave={() => (hoveredCable = null)}
   >
+    <PatchFit {layout} active={!touched} />
     <Panel position="top-right">
       <div class="legend"><span><i></i>Picture</span><span><i class="m"></i>Modulation</span></div>
     </Panel>
@@ -167,10 +223,18 @@
   }
   .patch-graph :global(.svelte-flow__edge.cable .svelte-flow__edge-path) {
     stroke: var(--patch-mod);
-    stroke-width: 2;
+    stroke-width: 1.5;
     stroke-dasharray: 6 5;
     fill: none;
-    opacity: 0.9;
+    opacity: 0.45;
+    transition: opacity 0.15s;
+  }
+  .patch-graph :global(.svelte-flow__edge.cable.lit .svelte-flow__edge-path) {
+    stroke-width: 2;
+    opacity: 1;
+  }
+  .patch-graph :global(.svelte-flow__edge.cable.dim .svelte-flow__edge-path) {
+    opacity: 0.1;
   }
   .patch-graph :global(.svelte-flow__edge.cable.selected .svelte-flow__edge-path) {
     stroke-width: 3;
