@@ -211,11 +211,27 @@ export type PlayOnPlayer = {
   queues?: QueueItem[];
   /** Goes up when that list changes: read the player by name for the new one. */
   queues_version?: number;
+  /** Where its device sounds now, as its app says (decision 0033, amended 2026-10-19); null for a page or Kodi. */
+  output?: AudioOutput | null;
 };
 
+/** A device's audio output: `name` the device's own (a car's Bluetooth: "JVC KW-M560BT"); null for its speaker or
+ *  when not known. */
+export type AudioOutput = { type: 'bluetooth' | 'speaker' | 'wired' | 'usb' | 'hdmi' | 'remote' | 'other'; name: string | null };
+
 /** A queue in a player's list (decision 0033, amended): `tracks` how many, `from` what it was started from
- *  (`playlist`, `album`, `favourites`, `library`, `tracks`, `player`), `updated` when it was left (epoch s). */
-export type QueueItem = { id: string; name: string; tracks: number; from: string | null; updated: number; playing: boolean };
+ *  (`playlist`, `album`, `favourites`, `library`, `tracks`, `player`), `updated` when it was left (epoch s);
+ *  `played_on` where it was heard, oldest first, up to four (amended 2026-10-19). */
+export type QueueItem = {
+  id: string;
+  name: string;
+  tracks: number;
+  from: string | null;
+  updated: number;
+  playing: boolean;
+  /** Kodi's has no `type`. */
+  played_on?: { player: string; type: AudioOutput['type'] | null; name: string | null }[];
+};
 
 /** A player's link as Cratarr knows it, and as the player last told (decision 0045); times epoch seconds, the
  *  player's own epoch ms. */

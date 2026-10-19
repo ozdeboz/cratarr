@@ -4,13 +4,14 @@
   // when it was left. A tap takes it up where it was left (playing if it played); a long-press or its ⋮ is its menu:
   // Rename, and Delete but not the one that plays. Whose queues these are lib/queueHistory decides (this browser's own,
   // the player it drives, or the app's). Reached from the queue's head (lib/QueueSheet). No notice on success; an error
-  // in one line.
+  // in one line. After when, where it was heard (amended 2026-10-19): Play On's icon and the outputs' own names (the
+  // car's Bluetooth), else the players'.
   import type { QueueItem } from './api';
   import Icon, { type IconName } from './Icon.svelte';
   import { longpress } from './longpress';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { deleteQueue, loadQueues, queues, queuesVersion, renameQueue, switchQueue } from './queueHistory.svelte';
+  import { deleteQueue, loadQueues, queues, queuesPlayer, queuesVersion, renameQueue, switchQueue } from './queueHistory.svelte';
   import Row from './Row.svelte';
   import { when } from './settings/when';
 
@@ -25,6 +26,11 @@
   const FROM: Record<string, IconName> = { playlist: 'playlists', album: 'albums', favourites: 'heart', library: 'library', tracks: 'music', player: 'speaker' };
   const line = (q: QueueItem) =>
     [q.playing ? 'Playing' : null, `${q.tracks} ${q.tracks === 1 ? 'track' : 'tracks'}`, q.playing ? null : when(q.updated)].filter(Boolean).join(' · ');
+  /** Where it was heard: an output's own name, else its player's; not this list's own player on its own speaker. */
+  const playedOn = (q: QueueItem) => {
+    const own = queuesPlayer();
+    return [...new Set((q.played_on ?? []).flatMap((o) => (o.name ? [o.name] : o.player === own ? [] : [o.player])))].join(', ');
+  };
 
   // A queue's menu (a step of this sheet), and its new name (a sheet of its own, from the top: the keyboard).
   let menuFor = $state<QueueItem | null>(null);
@@ -84,7 +90,8 @@
       <ol class="queues" aria-busy={busy}>
         {#each queues.list as q (q.id)}
           <li>
-            <Row size="medium" title={q.name} sub={line(q)} strong={q.playing} onclick={() => take(q)} label={q.playing ? q.name : `Take up ${q.name}`} attach={pressing(q)}>
+            <Row size="medium" title={q.name} strong={q.playing} onclick={() => take(q)} label={q.playing ? q.name : `Take up ${q.name}`} attach={pressing(q)}>
+              {#snippet sub()}{@const on = playedOn(q)}{line(q)}{#if on}<span class="on">{' · '}<Icon name="speaker" size={12} />{' '}{on}</span>{/if}{/snippet}
               {#snippet lead()}<span class="from"><Icon name={FROM[q.from ?? ''] ?? 'music'} size={22} /></span>{/snippet}
               {#snippet action()}<button class="more" aria-label={`Menu of ${q.name}`} title="Menu" onclick={() => (menuFor = q)}><Icon name="moreVert" size={22} /></button>{/snippet}
             </Row>
@@ -109,6 +116,8 @@
 <style>
   .queues {
     display: grid;
+    /* A long line ends in an ellipsis rather than widening the list. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
     margin: 0;
     padding: 0 12px 8px;
@@ -124,6 +133,10 @@
     border-radius: 8px;
     background: color-mix(in srgb, var(--text) 8%, transparent);
     color: var(--muted);
+  }
+
+  .on :global(svg) {
+    vertical-align: -1px;
   }
 
   .more {

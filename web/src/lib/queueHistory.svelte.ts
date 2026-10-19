@@ -14,6 +14,7 @@ export const queues = $state({ list: [] as QueueItem[], error: null as string | 
 function player(): string | null {
   return drivenName() ?? (inApp ? appInfo.player : null);
 }
+export const queuesPlayer = player;
 
 /** The list's version as Cratarr says it with each player, and this browser's: a change means read it again. */
 export function queuesVersion(): string {
