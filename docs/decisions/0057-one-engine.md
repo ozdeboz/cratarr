@@ -87,7 +87,7 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 | **Loudness** (type `envelope`) | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); normalled into every cable's depth |
 | **Clock** | modulator | the tempo's turning clock (once round in 32 beats at Speed); its phase feeds whatever turns |
 | **Flash** | modulator, one per target | the course-and-swing filter (a slow course, Flash's share of the swing about it) |
-| **Drift** (the walks) | modulator, the control generator we have | drift.ts's Look and Behaviour walks: no module of their own (the owner: "we already have walks … we have control generators"); a Drift cabled where the walk acts |
+| **Random** (the walks) | modulator | drift.ts's Look and Behaviour walks: no module of their own (the owner: "we already have walks … we have control generators"); a Random cabled where the walk acts. Drift is renamed Random, as VCV, Vital and Bitwig name it, with a Shape knob from smooth (Drift as it was) to stepped (a random sample-and-hold) |
 | **Flame** | picture source | the fractal flame; its parts' evolution (per band), continuity and steps on hits as its own knobs and `trigger` inputs, normalled from Music's hits |
 | **Show**, split (below) | Tone map, Curve, Saturate, Blur, Scale, Bend | size, glow, saturation, smoothing, haze, waves |
 | **Fluid**, **Tunnel**, **Dive**, **Trails**, **Loop effect** | picture modules in the flame's own loop | as today |
