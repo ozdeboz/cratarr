@@ -129,7 +129,8 @@ function adsrModule(id: string, lighting: number[]): Module {
 /** Today's settings (with their extras) as a v2 patch. */
 export function toV2(s: VisualSettings): PatchV2 {
   const p = cratarrPatch(s);
-  const modules: Module[] = [...modulesOf(p).values()].map((m) => ({ ...m, knobs: { ...m.knobs } }));
+  // Drift is Random now (its smooth end: Shape 0), as VCV, Vital and Bitwig name it (the owner).
+  const modules: Module[] = [...modulesOf(p).values()].map((m) => (m.type === 'drift' ? { ...m, type: 'random', knobs: { ...m.knobs, shape: 0 } } : { ...m, knobs: { ...m.knobs } }));
   const frame = modules.find((m) => m.id === 'frame');
   const engine = new Map<string, Module>([
     ['music', { id: 'music', type: 'music', knobs: {} }],
@@ -157,12 +158,21 @@ export function toV2(s: VisualSettings): PatchV2 {
     engine.get('music')!.knobs[`hold.${b}`] = lighting[b];
     if (flame) delete flame.knobs[`lighting.${b}`];
   }
-  const adsrs = new Map<string, Module>();
-  // A cable from the hits comes from their ADSR (the band's channel, or all of them).
+  // A cable from the hits comes from their ADSR (the band's channel, or all of them). How the hits are read (their
+  // reference and speed: a route's as it is, an extra cable's against the track's typical by default) goes on the
+  // ADSR's gate cable, so a reading of its own gets an ADSR of its own (`adsr`, `adsr-track`, `adsr-drums-lately` …).
+  const adsrs = new Map<string, { module: Module; gate: CableV2 }>();
   const viaAdsr = (from: CableV2['from']): CableV2['from'] => {
-    const id = from.module === 'music' ? ADSR_OF[from.port] : undefined;
-    if (!id) return from;
-    if (!adsrs.has(id)) adsrs.set(id, adsrModule(id, lighting));
+    const base = from.module === 'music' ? ADSR_OF[from.port] : undefined;
+    if (!base) return from;
+    const reference = from.reference ?? 'track';
+    const speed = from.speed;
+    const id = [base, reference === 'absolute' ? null : reference, speed ?? null].filter(Boolean).join('-');
+    if (!adsrs.has(id))
+      adsrs.set(id, {
+        module: adsrModule(id, lighting),
+        gate: { id: `${id}-gate`, from: { module: 'music', port: from.port, reference, ...(speed ? { speed } : {}) }, to: { module: id, port: 'gate' }, value: 1, mode: 'swing' },
+      });
     return { module: id, port: 'out', ...(from.channel !== undefined ? { channel: from.channel } : {}) };
   };
   const extraIds = new Set((s.extra?.cables ?? []).map((c) => c.id));
@@ -176,8 +186,7 @@ export function toV2(s: VisualSettings): PatchV2 {
       cables.push({ id: c.id, ...r, from: viaAdsr(r.from), to, value: c.value, mode: c.mode });
     } else cables.push({ id: c.id, from: viaAdsr(extraFrom(c)), to, value: c.value, mode: c.mode });
   }
-  for (const [signal, id] of Object.entries(ADSR_OF))
-    if (adsrs.has(id)) cables.push({ id: `${id}-gate`, from: { module: 'music', port: signal }, to: { module: id, port: 'gate' }, value: 1, mode: 'swing' });
+  for (const a of adsrs.values()) cables.push(a.gate);
   cables.push(...pictureCables(p));
-  return { v: 2, modules: [...engine.values(), ...adsrs.values(), ...modules], cables, macros: p.macros, pins: p.pins };
+  return { v: 2, modules: [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules], cables, macros: p.macros, pins: p.pins };
 }

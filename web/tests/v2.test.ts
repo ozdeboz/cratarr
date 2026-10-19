@@ -84,6 +84,26 @@ test("the bands' Linger: Music's hold and the hits' ADSR release; a hits route f
   assert.ok(!m['adsr-drums'], 'no ADSR where no cable needs one');
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by[routeKey('hits', 2, 'lights')].from, { module: 'adsr', port: 'out', channel: 2 });
-  assert.deepEqual(by['adsr-gate'].from, { module: 'music', port: 'hits' });
+  assert.deepEqual(by['adsr-gate'].from, { module: 'music', port: 'hits', reference: 'absolute' });
   assert.deepEqual(by[routeKey('level', 1, 'hue')].from, { module: 'music', port: 'level', channel: 1, reference: 'absolute' });
+});
+
+test("an extra cable from the hits keeps its reading: its own ADSR, the gate reading against the track's typical", () => {
+  const s = copy(DEFAULTS);
+  const pulse = CHAINS.find((c) => c.id === 'pulse')!;
+  s.extra = JSON.parse(JSON.stringify(pulse.extra));
+  s.routes = { [routeKey('hits', 0, 'lights')]: 1 };
+  const v = toV2(s);
+  const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
+  assert.deepEqual(by['pulse-kick-in'].from, { module: 'adsr-track', port: 'out', channel: 1 });
+  assert.deepEqual(by['adsr-track-gate'].from, { module: 'music', port: 'hits', reference: 'track' });
+  assert.deepEqual(by[routeKey('hits', 0, 'lights')].from, { module: 'adsr', port: 'out', channel: 0 }, 'the route through the absolute one');
+});
+
+test('a Drift converts to a Random at its smooth end', () => {
+  const s = copy(DEFAULTS);
+  s.extra = JSON.parse(JSON.stringify(CHAINS.find((c) => c.id === 'calm')!.extra));
+  const wander = toV2(s).modules.find((m) => m.id === 'wander')!;
+  assert.equal(wander.type, 'random');
+  assert.equal(wander.knobs.shape, 0);
 });
