@@ -4,7 +4,7 @@
 // modulator's `inputs` are value inputs, a picture module takes and gives a picture, a modulator gives a value. The
 // modules that hold today's hidden behaviours are declared here, so every one of them shows.
 import type { RouteValue } from './curves';
-import type { Knob, Macro, Module, ModuleType, Place } from './patch';
+import { BUSY, type Knob, type Macro, type Module, type ModuleType, type Place } from './patch';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
 /** `light`: the flame's accumulated light (its RGBA and its bands' shares) before Show turns it into a picture; the
@@ -117,10 +117,31 @@ export const FLASH = declared(
 
 export const WALK = declared('walk', 'Walk', 'modulator', [knob('amount', 'Amount', 0, 1, 0, 'level'), knob('rate', 'Rate', 0, 1, 0.1)], [{ id: 'trigger', label: 'Jump', type: 'trigger' }], [VALUE_OUT]);
 
-/** The flash meter and the governor: fixed, last before the screen, never removed; Wild sets its limits. */
-export const SAFETY = declared('safety', 'Safety', 'finish', [knob('wild', 'Wild', 0, 1, 0.5)], [PICTURE_IN], [PICTURE_OUT, out('holding', 'Holding back')]);
+const BUSY_LABEL: Record<(typeof BUSY)[number], string> = { motion: 'Motion', shape: 'Shape churn', colour: 'Colour churn', zoom: 'Zoom pumping', looks: 'New looks' };
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, SAFETY];
+/** A Governor (0057): a sidechain compressor over the picture it watches, one per kind of busyness (detector: that
+ *  meter; threshold: its limit, from Taste unless set; ratio, knee, attack, release); its levers (the gain reduction:
+ *  1 within the limit, less over it) normalled into the depth of the cables into knobs of their kind. As many as
+ *  wanted. */
+export const GOVERNOR = declared(
+  'governor',
+  'Governor',
+  'modulator',
+  [
+    knob('wild', 'Wild', 0, 1, 0.5),
+    knob('ratio', 'Ratio', 1, 20, 4),
+    knob('knee', 'Knee', 0, 1, 0.2),
+    knob('attack', 'Attack', 0.01, 2, 0.25),
+    knob('release', 'Release', 0.05, 10, 2),
+  ],
+  [PICTURE_IN, ...BUSY.map((b): Port => ({ id: `limit.${b}`, label: `${BUSY_LABEL[b]} limit`, type: 'value', normal: { module: 'taste', port: b } }))],
+  BUSY.map((b) => out(b, BUSY_LABEL[b])),
+);
+
+/** Taste (0057): the user's learned limits, one per kind (learning.ts; the thumbs teach it), into every Governor. */
+export const TASTE = declared('taste', 'Taste', 'modulator', [], [], BUSY.map((b) => out(b, BUSY_LABEL[b])));
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, GOVERNOR, TASTE];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
@@ -159,8 +180,9 @@ export const MIX = declared(
  *  way round a picture cycle. */
 export const FEEDBACK = declared('feedback', 'Feedback', 'module', [], [PICTURE_IN], [PICTURE_OUT]);
 
-/** The screen: what reaches it is drawn (after Safety). */
-export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], []);
+/** The screen: what reaches it is drawn, through its flash guard (three flashes a second over the area the owner chose:
+ *  fixed, never learned, never removed; `guard` how far it is holding now). */
+export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], [out('guard', 'Flash guard')]);
 
 export const GRAPH_MODULES: readonly Declared[] = [MIX, FEEDBACK, SCREEN];
 

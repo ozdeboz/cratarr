@@ -19,10 +19,18 @@ export type Knob = {
   default: number;
   kind: 'level' | 'swing' | 'step';
   device?: boolean;
+  /** The kind of busyness it makes (0057): a Governor's lever of that kind is normalled into the depth of the cables
+   *  into it. */
+  busy?: Busy;
 };
 
 /** Where a module can sit: a layer's source, a module on a layer (or after the blend), a loop (a layer's own, or the
  *  picture's), finish, the whole frame, or a modulator (no picture). */
+/** The kinds of busyness a Governor watches and holds back (governor.ts's budgets but the flashes, which the Screen's
+ *  guard holds). */
+export const BUSY = ['motion', 'shape', 'colour', 'zoom', 'looks'] as const;
+export type Busy = (typeof BUSY)[number];
+
 export type Place = 'source' | 'module' | 'loop' | 'finish' | 'frame' | 'modulator';
 
 /** A module's type. A modulator's `inputs` are its ports (`in`, `trigger`): cables into one (to `{module, knob: port}`)
