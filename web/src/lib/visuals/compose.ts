@@ -38,8 +38,9 @@ uniform sampler2D uBase;
 uniform sampler2D uLayer;
 uniform int uMode;
 uniform float uAmount;
+uniform float uBaseGain;
 void main() {
-  vec4 a = texture(uBase, vUv);
+  vec4 a = texture(uBase, vUv) * uBaseGain;
   vec4 b = texture(uLayer, vUv) * uAmount;
   vec3 c;
   if (uMode == 1) c = a.rgb + b.rgb - a.rgb * b.rgb;
@@ -109,23 +110,24 @@ export class Compositor {
     this.half = !!gl.getExtension('EXT_color_buffer_float') || !!gl.getExtension('EXT_color_buffer_half_float');
   }
 
-  /** Whether there is anything to compose: a layer past the flame with something of it, or the picture's loop. */
-  static active(extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>): boolean {
-    return extra.layers.some((l) => l.blend.amount > 0) || extra.loop.some((m) => (knobsOf(m).amount ?? 0) > 0);
+  /** Whether there is anything to compose: the flame layer less than whole, a layer past the flame with something of
+   *  it, or the picture's loop. */
+  static active(extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>, flame = 1): boolean {
+    return flame < 1 || extra.layers.some((l) => l.blend.amount > 0) || extra.loop.some((m) => (knobsOf(m).amount ?? 0) > 0);
   }
 
-  /** The picture composed from `picture` (the flame's, `width` × `height`): the texture finish is to read next. */
-  run(picture: WebGLTexture, width: number, height: number, extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>, frame: FrameInfo): WebGLTexture {
+  /** The picture composed from `picture` (the flame's, `width` × `height`; `flame` of it shown): the texture finish
+   *  is to read next. */
+  run(picture: WebGLTexture, width: number, height: number, extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>, frame: FrameInfo, flame = 1): WebGLTexture {
     const gl = this.gl;
     this.sized(width, height);
     this.time += frame.dt;
-    // The layers, each drawn alone, then over what there is so far.
+    // The layers, each drawn alone, then over what there is so far; the flame's share taken with the first (or alone,
+    // where no other layer draws).
     let base: WebGLTexture = picture;
+    let gain = Math.min(1, Math.max(0, flame));
     let into = 0;
-    for (const layer of extra.layers) {
-      if (layer.blend.amount <= 0) continue;
-      const drawn = this.drawLayer(layer, knobsOf, frame);
-      if (!drawn) continue;
+    const over = (drawn: WebGLTexture, mode: Layer['blend']['mode'], amount: number) => {
       const t = this.mix[into];
       gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
       gl.viewport(0, 0, this.w, this.h);
@@ -133,12 +135,20 @@ export class Compositor {
       gl.useProgram(this.blend);
       this.bind(0, base, 'uBase', this.blend);
       this.bind(1, drawn, 'uLayer', this.blend);
-      gl.uniform1i(gl.getUniformLocation(this.blend, 'uMode'), ['add', 'screen', 'over', 'multiply'].indexOf(layer.blend.mode));
-      gl.uniform1f(gl.getUniformLocation(this.blend, 'uAmount'), layer.blend.amount);
+      gl.uniform1i(gl.getUniformLocation(this.blend, 'uMode'), ['add', 'screen', 'over', 'multiply'].indexOf(mode));
+      gl.uniform1f(gl.getUniformLocation(this.blend, 'uAmount'), amount);
+      gl.uniform1f(gl.getUniformLocation(this.blend, 'uBaseGain'), gain);
       this.full();
       base = t.tex;
+      gain = 1;
       into = 1 - into;
+    };
+    for (const layer of extra.layers) {
+      if (layer.blend.amount <= 0) continue;
+      const drawn = this.drawLayer(layer, knobsOf, frame);
+      if (drawn) over(drawn, layer.blend.mode, layer.blend.amount);
     }
+    if (gain < 1) over(picture, 'add', 0);
     // The picture's own loop: its Warps summed, its Keeps multiplied (each by its Amount).
     const warps = extra.loop.filter((m) => m.type === 'warp');
     const keeps = extra.loop.filter((m) => m.type === 'keep');

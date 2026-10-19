@@ -14,7 +14,8 @@ const copy = (s: VisualSettings): VisualSettings => JSON.parse(JSON.stringify(s)
 
 test('every setting and every route column has a knob', () => {
   for (const [k, v] of Object.entries(DEFAULTS)) {
-    if (typeof v === 'number') assert.ok(SETTING_KNOB[k], `setting ${k} has no knob`);
+    // The flame layer's share is that layer's blend amount, not a module's knob.
+    if (typeof v === 'number' && k !== 'flameLayer') assert.ok(SETTING_KNOB[k], `setting ${k} has no knob`);
   }
   for (const a of ASPECTS) assert.ok(ASPECT_KNOB[a], `column ${a} has no knob`);
 });

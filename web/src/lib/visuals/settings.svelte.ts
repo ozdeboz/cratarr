@@ -63,6 +63,9 @@ export type VisualSettings = Preset & {
   tunnel: number;
   /** The most of the look's effects (0..1, 65): the Effects column's routes are its conditions, as Fluid's. */
   effects: number;
+  /** How much of the flame layer shows (0..1, 70): the flame is a layer like the others, and at 0 it is gone, as it
+   *  is after Start from scratch (the owner: "nothing at all"). The flame layer's blend amount in the patch. */
+  flameLayer: number;
   /** A double tap's roll stands (1): the group governs at Wild's most, up to twice the limits, till the next roll, an
    *  undo, Reset or a recall (65; the owner: "sync the group properly"). Not a slider: the dice set it. */
   loose: number;
@@ -117,6 +120,7 @@ export const DEFAULTS: VisualSettings = {
   fluid: 0,
   tunnel: 0,
   effects: 1,
+  flameLayer: 1,
   loose: 0,
   dive: 0,
   presence: 1,
@@ -235,6 +239,7 @@ export const RANGES: Record<Ranged, [number, number]> = {
   facets: [0, 1],
   lattice: [0, 1],
   effects: [0, 1],
+  flameLayer: [0, 1],
   loose: [0, 1],
   lighting: [0.02, 1],
   evolution: [0.02, 2],

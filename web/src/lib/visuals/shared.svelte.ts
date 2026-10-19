@@ -36,6 +36,7 @@ export const SHARED_KEYS = [
   'tunnel',
   'loose',
   'effects',
+  'flameLayer',
   'dive',
   ...SCALE_KEYS,
   'routes',

@@ -414,7 +414,7 @@ export function cratarrPatch(s: VisualSettings): Patch {
     v: 1,
     frame: m('frame'),
     layers: [
-      { id: 'flame', source: m('flame'), modules: [m('show')], loop: [m('fluid'), m('tunnel'), m('dive'), m('trails'), m('loop-effect')], blend: { mode: 'add', amount: 1 } },
+      { id: 'flame', source: m('flame'), modules: [m('show')], loop: [m('fluid'), m('tunnel'), m('dive'), m('trails'), m('loop-effect')], blend: { mode: 'add', amount: s.flameLayer ?? 1 } },
       ...extra.layers,
     ],
     loop: extra.loop,
@@ -459,6 +459,8 @@ export function settingsOf(p: Patch, base: VisualSettings): VisualSettings {
     if (key && isRoute(key, BANDS) && key === c.id) out.routes[key] = c.value;
     else extraCables.push(c);
   }
+  const flame = p.layers.find((l) => l.id === 'flame');
+  if (flame) out.flameLayer = flame.blend.amount;
   out.extra = { layers: p.layers.filter((l) => l.id !== 'flame'), loop: p.loop, modulators: p.modulators, cables: extraCables, macros: p.macros };
   out.pins = p.pins.map(pinFrom).filter((x): x is string => x !== null);
   return out;

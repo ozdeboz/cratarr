@@ -490,6 +490,8 @@
     for (const k of ['fx1', 'fx1Amount', 'fx2', 'fx2Amount', 'fx3', 'fx3Amount', 'fxLoop', 'fxLoopAmount', 'facets', 'lattice'] as const) if (!(k in settings)) settings[k] = 0;
     for (const k of ['fx1K1','fx1K2','fx2K1','fx2K2','fx3K1','fx3K2','fxLoopK1','fxLoopK2'] as const) if (!(k in settings)) settings[k] = 0.5;
     if (!('effects' in settings)) settings.effects = 1;
+    // One saved before the flame could be off (70): it showed.
+    if (!('flameLayer' in settings)) settings.flameLayer = 1;
     // One saved before the patch (70): the chain as it was then, today's alone. A recall sets the chain whole.
     if (!('extra' in settings)) settings.extra = emptyExtra();
     delete settings.v;
@@ -1316,6 +1318,8 @@
     let morphedTo = extraNow;
     let drawnExtra = extraNow;
     let goingBefore = 0;
+    // The flame layer's share as shown: to its setting over a chain's morph (1.5 s whole), never a cut.
+    let flameShown = s.flameLayer ?? 1;
     let shownKnobs: Record<string, Record<string, number>> = {};
     const knobsOf = (m: Module) => evaluated?.knobs[m.id] ?? shownKnobs[m.id] ?? m.knobs;
 
@@ -1830,12 +1834,15 @@
         evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat }, walk: cableWalk }) : null;
         // A step its cables move on: taken at its module's next neutral.
         for (const r of evaluated?.moments ?? []) askStep(morph, r.module, r.knob, GRAPH_TYPES);
-        const active = Compositor.active(extra, knobsOf);
+        const flameTo = s.flameLayer ?? 1;
+        flameShown = flameTo > flameShown ? Math.min(flameTo, flameShown + dt / (ANOTHER_MS / 1000)) : Math.max(flameTo, flameShown - dt / (ANOTHER_MS / 1000));
+        const flame = flameShown;
+        const active = Compositor.active(extra, knobsOf, flame);
         renderer.compose = active
           ? {
               active,
               run: (picture, width, height) =>
-                compositor!.run(picture, width, height, extra, knobsOf, { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }),
+                compositor!.run(picture, width, height, extra, knobsOf, { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame),
             }
           : null;
       }
@@ -2269,7 +2276,7 @@
             </div>
             <div class="rows">
               <h3>Layers</h3>
-              {@render goRow('Flame', 'Its look, its show, its own loop', 'layer:flame')}
+              {#if s.flameLayer > 0}{@render goRow('Flame', 'Its look, its show, its own loop', 'layer:flame')}{/if}
               {#each s.extra.layers as l (l.id)}{@render goRow(moduleName(l.source), `${BLEND_NAMES[l.blend.mode]} ${percent(l.blend.amount)}${l.modules.length ? ` · ${l.modules.map(moduleName).join(', ')}` : ''}`, `xlayer:${l.id}`)}{/each}
               <button class="go add" onclick={() => go('newlayer')}><span class="name">+ Add layer</span></button>
             </div>
@@ -2306,6 +2313,16 @@
               <h3>Its own loop</h3>
               {#each FLAME_LOOP as m (m)}{@render goRow(MODULE_LABEL[m], moduleLine(m), `module:${m}`)}{/each}
             </div>
+            <div class="rows">
+              <h3>Blend</h3>
+              <label class="row pinnable">
+                <span>Amount</span>
+                <span class="slider"><input type="range" min="0" max="1" step="0.01" value={s.flameLayer} oninput={(e) => set('flameLayer', Number(e.currentTarget.value))} /></span>
+                <output>{percent(s.flameLayer)}</output>
+                <span></span>
+              </label>
+            </div>
+            <div class="rows"><button class="go danger" onclick={() => (set('flameLayer', 0), (path = []))}><span class="name">Remove this layer</span></button></div>
           {:else if here.startsWith('module:')}
             {@const m = here.slice('module:'.length)}
             {#each GROUPS[m] ?? [] as g, i (i)}
@@ -2409,6 +2426,7 @@
           {:else if here === 'newlayer' || here === 'newloop' || here === 'newmodulator' || here.startsWith('newmodule:')}
             <div class="rows">
               {#if here === 'newlayer'}
+                {#if s.flameLayer <= 0}<button class="go" onclick={() => (set('flameLayer', 1), (path = ['layer:flame']))}><span class="name">Flame</span></button>{/if}
                 {#each SOURCE_TYPES as t (t.type)}<button class="go" onclick={() => addLayer(t.type)}><span class="name">{t.label}</span></button>{/each}
               {:else if here === 'newloop'}
                 {#each PICTURE_LOOP_TYPES as t (t.type)}<button class="go" onclick={() => addTo('loop', t.type)}><span class="name">{t.label}</span></button>{/each}
