@@ -42,9 +42,14 @@
 
 {#if data.kind === 'box'}
   {@const add = data.add}
-  <div class="box" ondblclick={() => graph.open(id)} role="presentation">
+  <div class="box" class:dev={data.device} ondblclick={() => graph.open(id)} role="presentation">
     <span class="bl"
-      >{data.label}{#if add}<button class="plus nodrag" aria-label="Add to {data.label}" title="Add to {data.label}" onclick={() => graph.adding({ box: add })}>+</button>{/if}</span
+      >{data.label}{#if add}<button class="plus nodrag" aria-label="Add to {data.label}" title="Add to {data.label}" onclick={() => graph.adding({ box: add })}>+</button>{/if}{#if data.device}<button
+          class="plus nodrag"
+          aria-label="Close {data.label}"
+          title="Close"
+          onclick={() => graph.toggle(id)}>−</button
+        ><button class="plus nodrag" aria-label="Into {data.label}" title="Into" onclick={() => graph.enter(id)}>›</button>{/if}</span
     >
   </div>
 {:else if data.kind === 'off'}
@@ -60,7 +65,10 @@
   </div>
 {:else if data.kind === 'module'}
   <div class="node" class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation" use:longpress={() => graph.removable(id) && graph.menu(id)}>
-    <button class="t nodrag" onclick={() => graph.open(id)}>{data.label}<span class="chev">›</span></button>
+    <span class="title">
+      <button class="t nodrag" onclick={() => graph.open(id)}>{data.label}<span class="chev">›</span></button>
+      {#if data.device}<button class="plus nodrag" aria-label="Open {data.label} here" title="Open here" onclick={() => graph.toggle(id)}>+</button>{/if}
+    </span>
     {#if data.ports.length}
       <div class="ports">
         {#each data.ports as p (p.id)}
@@ -95,15 +103,15 @@
       <div class="outs">
         {#each data.outs as o (o.id)}
           <div class="jack">
-            <i class="light t-{o.type}" style:--lit={lights?.[o.id] ?? 0}></i>{o.label}
-            <Handle type="source" id={o.handle} position={Position.Top} isConnectable={o.handle === MOD_OUT} class="out t-{o.type}" />
+            <i class="light t-{o.type}" style:--lit={lights?.[o.id] ?? 0}></i><span class="jl">{o.label}</span>
+            <Handle type="source" id={o.handle} position={Position.Top} isConnectable={o.connectable || o.handle === MOD_OUT} class="out t-{o.type}" />
           </div>
         {/each}
       </div>
     {/if}
     {#if data.face && data.face.kind !== 'clock'}<PatchFace {id} face={data.face} />{/if}
-    {#if data.in}<Handle type="target" id="in" position={SIDE[data.in]} isConnectable={false} class="pic t-picture" style={at(data.in)} />{/if}
-    {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={false} class="pic" style={at(data.out)} />{/if}
+    {#if data.in}<Handle type="target" id="in" position={SIDE[data.in]} isConnectable={!!data.v2} class="pic t-picture" style={at(data.in)} />{/if}
+    {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={!!data.v2} class="pic" style={at(data.out)} />{/if}
     {#if data.feedback}<Handle type="source" id="fb" position={Position.Bottom} isConnectable={false} class="fb" />{/if}
     {#if data.feedbackIn}<Handle type="target" id="fbin" position={Position.Bottom} isConnectable={false} class="fb" />{/if}
     {#if data.modulator && !data.outs.length}
@@ -124,6 +132,17 @@
     height: 100%;
     border: 1px dashed color-mix(in srgb, var(--text) 16%, transparent);
     border-radius: 14px;
+  }
+  /* A device opened in place: its frame, a little firmer than a layer's. */
+  .box.dev {
+    border-style: solid;
+    border-color: color-mix(in srgb, var(--text) 22%, transparent);
+    background: color-mix(in srgb, var(--text) 3%, transparent);
+  }
+  .title {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
   }
   .bl {
     position: absolute;
@@ -319,7 +338,9 @@
   }
   .outs {
     display: flex;
-    gap: 2px;
+    flex-wrap: wrap;
+    gap: 6px 2px;
+    max-width: calc(6 * 44px);
     margin-top: 10px;
   }
   .jack {
@@ -328,9 +349,16 @@
     justify-items: center;
     gap: 2px;
     min-width: 26px;
+    max-width: 44px;
     padding-top: 6px;
     font-size: 10.5px;
     color: var(--muted);
+  }
+  .jl {
+    max-width: 44px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .light {
     width: 6px;

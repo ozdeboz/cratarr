@@ -26,6 +26,10 @@
   //
   // Wires and handles by type (0057 §1, patchgraph.ts WIRES); a connection only where its types fit (ports.ts `fits`)
   // and a picture one only where its cycle passes a Feedback (`cyclesClosed`). `live` feeds the control sources' faces.
+  //
+  // `v2` in place of `patch`: a v2 patch drawn (patchgraph.ts graphOfV2, 0057 §6), the level `v2.at` leads to; a device
+  // a node (its exposed ports, its macros), opened in place to a frame round its modules, or entered (`v2.onenter`,
+  // with a breadcrumb back); every edit out as a V2Edit (`v2.onedit`) for the store.
   import { setContext, untrack } from 'svelte';
   import { SvelteFlow, Panel, type Connection, type Edge, type Node } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/base.css';
@@ -37,12 +41,17 @@
   import PatchConnection from './PatchConnection.svelte';
   import PatchFit from './PatchFit.svelte';
   import type { Cable, ModuleType, Patch, Place, SignalRef } from './patch';
-  import type { PortType } from './ports';
+  import type { PatchV2, PortType } from './ports';
   import type { LiveFaces } from './faces.svelte';
   import {
     CABLE_OPACITIES,
     cableOf,
+    connectionV2,
+    crumbsOf,
+    graphOfV2,
     knobHandle,
+    patchAt,
+    type V2Edit,
     pictureFits,
     wireStyle,
     type CableData,
@@ -61,6 +70,7 @@
 
   let {
     patch,
+    v2,
     types,
     positions,
     signals = [],
@@ -81,8 +91,11 @@
     onaddmodulator,
     onpick,
     live,
+    openAtStart = [],
   }: {
-    patch: Patch;
+    patch?: Patch;
+    /** A v2 patch drawn instead (the lab's, until a5's step brings the app over). */
+    v2?: { patch: PatchV2; at: string[]; onedit: (e: V2Edit) => void; onenter: (at: string[]) => void };
     /** Module types by their type id. */
     types: Record<string, ModuleType>;
     positions?: Record<string, XY>;
@@ -94,11 +107,11 @@
     removable?: (id: string) => boolean;
     /** Whether a box (a layer's id, or `loop`) takes modules from its "+". */
     canAddTo?: (where: string) => boolean;
-    onconnect: (from: Cable['from'], to: Cable['to']) => void;
-    ondisconnect: (cableId: string) => void;
-    onknob: (moduleId: string, knobId: string, value: number) => void;
+    onconnect?: (from: Cable['from'], to: Cable['to']) => void;
+    ondisconnect?: (cableId: string) => void;
+    onknob?: (moduleId: string, knobId: string, value: number) => void;
     onmove: (id: string, x: number, y: number) => void;
-    onopen: (id: string) => void;
+    onopen?: (id: string) => void;
     onopencable?: (cableId: string) => void;
     onopenknob?: (moduleId: string, knobId: string) => void;
     onremove?: (ids: string[]) => void;
@@ -108,6 +121,8 @@
     onaddmodulator?: (type: string) => void;
     onpick?: (request: PickRequest, at: XY) => void;
     live?: LiveFaces;
+    /** Nodes (devices) open from the start. */
+    openAtStart?: string[];
   } = $props();
 
   const nodeTypes = { patch: PatchNode, box: PatchNode };
@@ -115,7 +130,7 @@
 
   let nodes = $state.raw<Node[]>([]);
   let edges = $state.raw<Edge[]>([]);
-  let opened = $state.raw<ReadonlySet<string>>(new Set());
+  let opened = $state.raw<ReadonlySet<string>>(new Set(untrack(() => openAtStart)));
   let moved = $state.raw<Record<string, XY>>({});
   const placed = $derived(positions ?? moved);
   let hovered = $state<string | null>(null);
@@ -153,6 +168,11 @@
   }
 
   const adds = $derived(!!onaddlayer && !!onaddmodulator);
+  // Into another level (v2): the view fits it again.
+  $effect(() => {
+    void v2?.at.join('/');
+    untrack(() => (touched = false));
+  });
 
   // The nodes' measured sizes, as a key, so a measure that changes nothing lays nothing out again.
   const sizeKey = $derived(
@@ -195,7 +215,11 @@
       const [width, height] = wh.split('x').map(Number);
       sizes[id] = { width, height };
     }
-    const g = graphOf({ patch, types, positions: placed, signals, open: opened, sizes, adds, addTo: (w) => !!onaddmodule && canAddTo(w) });
+    const g = v2
+      ? graphOfV2({ patch: v2.patch, types, at: v2.at, open: opened, positions: placed, sizes })
+      : patch
+        ? graphOf({ patch, types, positions: placed, signals, open: opened, sizes, adds, addTo: (w) => !!onaddmodule && canAddTo(w) })
+        : { nodes: [], edges: [] };
     untrack(() => {
       // What Svelte Flow knows of each node (its size, selection, a drag under way) carries over.
       const before = new Map(nodes.map((n) => [n.id, n]));
@@ -251,8 +275,18 @@
   }
 
   setContext<GraphActions>(GRAPH, {
-    knob: (module, knob, value) => onknob(module, knob, value),
-    open: (id) => onopen(id),
+    knob(module, knob, value) {
+      if (v2) v2.onedit({ kind: 'knob', module: [...v2.at, ...module.split('/')], knob, value });
+      else onknob?.(module, knob, value);
+    },
+    open(id) {
+      // A device's title: into it.
+      if (v2) {
+        const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
+        if (d?.kind === 'module' && d.device) v2.onenter([...v2.at, ...id.split('/')]);
+      } else onopen?.(id);
+    },
+    enter: (id) => v2?.onenter([...v2.at, ...id.split('/')]),
     toggle(id) {
       const next = new Set(opened);
       if (!next.delete(id)) next.add(id);
@@ -261,7 +295,7 @@
     },
     opened: (id) => opened.has(id),
     openKnob: (module, knob) => onopenknob?.(module, knob),
-    removable: (id) => !!onremove && removable(id) && nodes.some((n) => n.id === id && (n.data as NodeData).kind === 'module'),
+    removable: (id) => !v2 && !!onremove && removable(id) && nodes.some((n) => n.id === id && (n.data as NodeData).kind === 'module'),
     menu(id) {
       holdStill();
       menu = { kind: 'node', id };
@@ -270,7 +304,7 @@
     bringBack: (layer) => onaddlayer?.(layer),
     openCable: openIt,
     cableMenu(id, at) {
-      if (!onremove && !onreroute) return;
+      if (v2 || (!onremove && !onreroute)) return;
       holdStill();
       reroute = null;
       menu = { kind: 'cable', id, at };
@@ -280,7 +314,14 @@
   });
 
   const ends = () => nodes as unknown as { id: string; data: NodeData }[];
-  const valid = (c: Connection | Edge) => (c.sourceHandle === 'out' ? pictureFits(c, ends(), edges) : cableOf(c, ends(), patch.cables) !== null);
+  const levelNow = () => (v2 ? patchAt(v2.patch, v2.at) : null);
+  const valid = (c: Connection | Edge) => {
+    if (v2) {
+      const top = levelNow();
+      return !!top && connectionV2(c, ends(), top, v2.at, types) !== null;
+    }
+    return c.sourceHandle === 'out' ? pictureFits(c, ends(), edges) : cableOf(c, ends(), patch?.cables ?? []) !== null;
+  };
   // A cable dragged from a knob and let go on nothing: a source for the knob to be picked.
   function connectEnd(_: MouseEvent | TouchEvent, state: { fromHandle?: { id?: string | null; nodeId: string; type: string } | null; toHandle?: unknown; to?: XY | null }) {
     const h = state.fromHandle;
@@ -300,20 +341,32 @@
   ];
   const wires = $derived(new Set(edges.map((e) => (e.data as CableData | undefined)?.wire ?? (String(e.class).startsWith('light') ? 'light' : 'picture'))));
   function connect(c: Connection) {
-    const cable = cableOf(c, ends(), patch.cables);
-    if (cable) onconnect(cable.from, cable.to);
+    if (v2) {
+      const top = levelNow();
+      const made = top ? connectionV2(c, ends(), top, v2.at, types) : null;
+      if (made) v2.onedit(made);
+      return null;
+    }
+    const cable = cableOf(c, ends(), patch?.cables ?? []);
+    if (cable) onconnect?.(cable.from, cable.to);
     return null;
   }
   // A rerouted end let go on a knob, a port or an output: to the parent, which hands the patch back changed.
   function reconnect(now: Edge, was: Edge) {
-    const cable = patch.cables.find((c) => c.id === was.id);
-    const r = cable ? rerouted(cable, now, ends(), patch.cables) : null;
+    const cable = patch?.cables.find((c) => c.id === was.id);
+    const r = cable ? rerouted(cable, now, ends(), patch?.cables ?? []) : null;
     reroute = null;
     if (r) onreroute?.(was.id, r.end, r.next);
     return null;
   }
   async function unplug({ edges: gone }: { nodes: Node[]; edges: Edge[] }) {
-    for (const e of gone) if (e.type === 'cable') ondisconnect(e.id);
+    for (const e of gone) {
+      if (v2 && e.deletable !== false) {
+        // A cable at its level: the devices its id is inside, then its own id.
+        const at = e.id.lastIndexOf('/');
+        v2.onedit({ kind: 'remove', scope: [...v2.at, ...(at < 0 ? [] : e.id.slice(0, at).split('/'))], cables: [at < 0 ? e.id : e.id.slice(at + 1)] });
+      } else if (e.type === 'cable') ondisconnect?.(e.id);
+    }
     return false;
   }
   function dropped({ nodes: released }: { nodes: Node[] }) {
@@ -386,6 +439,14 @@
     onpaneclick={() => (reroute = null)}
   >
     <PatchFit {layout} active={!touched} />
+    {#if v2?.at.length}
+      <Panel position="top-left">
+        <nav class="crumbs" aria-label="Devices">
+          <button onclick={() => v2.onenter([])}>Patch</button>
+          {#each crumbsOf(v2.patch, v2.at) as name, i (i)}<span>›</span><button class:here={i === v2.at.length - 1} onclick={() => v2.onenter(v2.at.slice(0, i + 1))}>{name}</button>{/each}
+        </nav>
+      </Panel>
+    {/if}
     <Panel position="top-right">
       <div class="legend">
         {#each LEGEND.filter(([t]) => wires.has(t)) as [t, name] (t)}
@@ -588,6 +649,25 @@
     stroke: var(--patch-bg);
     stroke-width: 1.6px;
     stroke-dasharray: none;
+  }
+  .crumbs {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .crumbs button {
+    padding: 2px 4px;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+  }
+  .crumbs button:hover,
+  .crumbs button.here {
+    color: var(--text);
   }
   .opacity {
     min-width: 44px;

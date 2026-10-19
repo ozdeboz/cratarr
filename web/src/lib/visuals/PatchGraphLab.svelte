@@ -4,15 +4,20 @@
   // with the flame layer off (blended at nothing). A tapped cable shows a stand-in for its configuration. ?wires: every
   // wire type, the normals and the control sources' live faces (an LFO run as the engine runs it; the ADSRs and the
   // beat stood in for here until claude-5f's engine gives them), and "New ▸ LFO / ADSR" from a knob dragged into the
-  // empty.
+  // empty. ?v2: today's settings as a v2 patch (v2.ts toV2), held in the patch store (patch-store.ts) as the truth,
+  // drawn by the v2 graph: Show a device (open it here, or go into it), every edit a step, Ctrl+Z and Ctrl+Shift+Z;
+  // &open=show starts with Show open here.
   import { onMount } from 'svelte';
   import PatchGraph from './PatchGraph.svelte';
   import { cratarrPatch, cratarrTypes, type Cable, type Knob, type Module, type ModuleType, type Patch } from './patch';
   import { MODULATORS } from './modulators/modulators';
-  import { ADSR, CLOCK, ENVELOPE, SEQUENCER, type Ports } from './ports';
+  import { ADSR, CLOCK, ENGINE_MODULES, ENVELOPE, GRAPH_MODULES, SEQUENCER, showPartTypes, type PatchV2 } from './ports';
+  import { EXTRA_TYPES } from './registry';
+  import { toV2 } from './v2';
+  import { change, newStore, redo, undo } from './patch-store';
   import { WAVES } from './sources/waves';
   import { DEFAULTS, RANGES } from './settings.svelte';
-  import { withModulator, type PickRequest, type XY } from './patchgraph';
+  import { applyV2, editKey, withModulator, type PickRequest, type V2Edit, type XY } from './patchgraph';
   import { LiveFaces } from './faces.svelte';
   import type { FrameInfo } from './patch';
 
@@ -27,8 +32,6 @@
   const types: Record<string, ModuleType> = Object.fromEntries(
     [...cratarrTypes(RANGES as Record<string, [number, number]>, DEFAULTS), ...extra, ...Object.values(MODULATORS), WAVES, CLOCK, ADSR, ENVELOPE, SEQUENCER].map((t) => [t.type, t]),
   );
-  // The flame gives its light, which only Show makes a picture of (0057 §1): drawn so with ?wires, where Show follows it.
-  if (new URLSearchParams(location.search).has('wires')) types.flame = { ...types.flame, ports: { in: [], out: [{ id: 'light', label: 'Light', type: 'light' }] } } as ModuleType & { ports: Ports };
   const mod = (id: string, type: string, knobs: Record<string, number> = {}): Module => ({ id, type, knobs: { ...Object.fromEntries(types[type].knobs.map((x) => [x.id, x.default])), ...knobs } });
   const cable = (id: string, from: Cable['from'], module: string, knob: string, value: number, mode: Cable['mode'] = 'swing'): Cable => ({ id, from, to: { module, knob }, value, mode });
 
@@ -87,6 +90,41 @@
   }
 
   const query = new URLSearchParams(location.search);
+
+  // ---- ?v2: the store's patch ---------------------------------------------------------------------------------------
+  const v2mode = query.has('v2');
+  const chain = cratarrTypes(RANGES as Record<string, [number, number]>, DEFAULTS);
+  const v2types: Record<string, ModuleType> = Object.fromEntries(
+    [...chain, ...EXTRA_TYPES, ...ENGINE_MODULES, ...GRAPH_MODULES, ...showPartTypes(chain.find((t) => t.type === 'show')!)].map((t) => [t.type, t]),
+  );
+  // Today's settings as a v2 patch; the picture's wiring a stand-in here (the flame's light into Show, Show's picture
+  // through the effects) until claude-632's pictureWiring gives it.
+  function labV2(): PatchV2 {
+    const p = toV2(DEFAULTS);
+    const has = (id: string) => p.modules.some((m) => m.id === id);
+    const chainOf = [['flame', 'light', 'show', 'light'], ['show', 'picture', 'fx1', 'picture'], ['fx1', 'picture', 'fx2', 'picture'], ['fx2', 'picture', 'fx3', 'picture']];
+    chainOf.forEach(([a, ap, b, bp], i) => {
+      if (has(a) && has(b)) p.cables.push({ id: `lab-${i + 1}`, from: { module: a, port: ap }, to: { module: b, port: bp }, value: 1, mode: 'swing' });
+    });
+    return p;
+  }
+  let store = $state.raw(newStore(v2mode ? labV2() : { v: 2, modules: [], cables: [], macros: [], pins: [] }));
+  let at = $state<string[]>([]);
+  let v2positions = $state.raw<Record<string, XY>>({});
+  const level = $derived(at.join('/'));
+  const here = $derived(Object.fromEntries(Object.entries(v2positions).flatMap(([k, v]) => (k.startsWith(`${level}|`) ? [[k.slice(level.length + 1), v]] : []))));
+  function onedit(e: V2Edit) {
+    store = change(store, (p) => applyV2(p, e), editKey(e));
+    last = `${e.kind} ${JSON.stringify(e).slice(0, 120)} · ${store.past.length} back`;
+  }
+  const v2 = $derived(v2mode ? { patch: store.now, at, onedit, onenter: (next: string[]) => (at = next) } : undefined);
+  function keys(e: KeyboardEvent) {
+    if (!v2mode || !(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return;
+    e.preventDefault();
+    store = e.shiftKey ? redo(store) : undo(store);
+    last = `${e.shiftKey ? 'redo' : 'undo'} · ${store.past.length} back, ${store.future.length} on`;
+  }
+
   const first = query.has('cratarr') ? cratarrPatch(DEFAULTS) : query.has('wires') ? wires() : sample();
   if (query.has('off')) first.layers[0] = { ...first.layers[0], blend: { ...first.layers[0].blend, amount: 0 } };
   let patch = $state.raw<Patch>(first);
@@ -119,7 +157,8 @@
     last = `disconnect ${id}`;
   }
   function onmove(id: string, x: number, y: number) {
-    positions = { ...positions, [id]: { x, y } };
+    if (v2mode) v2positions = { ...v2positions, [`${level}|${id}`]: { x, y } };
+    else positions = { ...positions, [id]: { x, y } };
     last = `move ${id} ${x},${y}`;
   }
   const onopen = (id: string) => (last = `open ${id}`);
@@ -224,11 +263,14 @@
   });
 </script>
 
+<svelte:window onkeydown={keys} />
 <div class="lab">
   <PatchGraph
-    {patch}
-    {types}
-    {positions}
+    patch={v2mode ? undefined : patch}
+    {v2}
+    types={v2mode ? v2types : types}
+    positions={v2mode ? here : positions}
+    openAtStart={query.get('open')?.split(',') ?? []}
     {onconnect}
     {ondisconnect}
     {onknob}

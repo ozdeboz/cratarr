@@ -4,6 +4,7 @@
 // - ADSR: its shape from its knobs, the stage it is in lit, a dot where its output is on that shape; a lane a channel.
 // - LFO: its wave from its knobs, a dot at its phase (worked out from its output and which way it is going).
 // - Clock: Beat, Bar and Phrase blink, from the frame's beat (bars of 4, phrases of 8 bars) until the Clock gives them.
+// - Random: its recent output as a wandering line, in steps (sample and hold) as its Shape goes stepped.
 // Pure; the caller keeps each face's memory from sample to sample.
 
 import type { FrameInfo } from './patch';
@@ -17,9 +18,9 @@ export type LiveFrame = {
   outputs: Readonly<Record<string, number>>;
 };
 
-export type FaceKind = 'adsr' | 'lfo' | 'clock';
-/** Which module types have a face. */
-export const FACES: Readonly<Record<string, FaceKind>> = { adsr: 'adsr', lfo: 'lfo', clock: 'clock' };
+export type FaceKind = 'adsr' | 'lfo' | 'clock' | 'random';
+/** Which module types have a face (Drift's is Random's until claude-5f's rename lands). */
+export const FACES: Readonly<Record<string, FaceKind>> = { adsr: 'adsr', lfo: 'lfo', clock: 'clock', random: 'random', drift: 'random' };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -39,6 +40,12 @@ export type AdsrKnobs = { attack: number; decay: number; sustain: number; releas
 /** One channel's memory: its stage, its envelope last (0..1), where its release began. */
 export type AdsrMemo = { stage: Stage; level: number; from: number };
 export const newAdsrMemo = (): AdsrMemo => ({ stage: 'idle', level: 0, from: 0 });
+
+/** A channel's knobs (a polyphonic knob's `<id>.<channel>`, else its one value). */
+export function laneKnobs(knobs: Readonly<Record<string, number>>, channel: number): AdsrKnobs {
+  const k = (id: string, or: number) => knobs[`${id}.${channel}`] ?? knobs[id] ?? or;
+  return { attack: k('attack', 0.04), decay: k('decay', 0), sustain: k('sustain', 0), release: k('release', 0.2), amount: k('amount', 1) };
+}
 
 /** The shape across `w`: where each stage starts and ends (attack, decay, the sustain's plateau, release), each its
  *  time's share with a least share so a short one still shows; the plateau a third of the times'. */
@@ -186,4 +193,28 @@ export function clockLights(beat: FrameInfo['beat']): { beat: number; bar: numbe
   const on = Math.exp(-Math.max(0, beat.since) / BLINK);
   const bar = beat.index % BAR_BEATS === 0 ? on : 0;
   return { beat: on, bar, phrase: beat.index % (BAR_BEATS * PHRASE_BARS) === 0 ? on : 0 };
+}
+
+// ---- Random ----------------------------------------------------------------------------------------------------------
+
+/** How many samples of its output a Random's face keeps. */
+export const RANDOM_SAMPLES = 48;
+
+/** Its recent outputs, the newest last (−1..1, Amount taken out). */
+export function randomStep(seen: readonly number[], out: number | null, amount = 1): number[] {
+  const v = out === null || !(amount > 0) ? 0 : Math.min(1, Math.max(-1, out / amount));
+  return [...seen.slice(-(RANDOM_SAMPLES - 1)), v];
+}
+
+/** The line across `w` × `h`: straight from sample to sample while Shape is smooth (under a half), in steps (across,
+ *  then up or down) once it is stepped. */
+export function randomPath(seen: readonly number[], shape: number, w: number, h: number): string {
+  if (!seen.length) return '';
+  const mid = h / 2;
+  const x = (i: number) => f1((i / (RANDOM_SAMPLES - 1)) * w);
+  const y = (v: number) => f1(mid - v * mid * 0.85);
+  const at = RANDOM_SAMPLES - seen.length;
+  let d = `M${x(at)},${y(seen[0])}`;
+  for (let i = 1; i < seen.length; i++) d += shape >= 0.5 ? ` H${x(at + i)} V${y(seen[i])}` : ` L${x(at + i)},${y(seen[i])}`;
+  return d;
 }
