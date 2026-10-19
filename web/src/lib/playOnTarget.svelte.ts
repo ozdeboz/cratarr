@@ -6,6 +6,7 @@
 // "Tap to play". Behind a locked screen a paused page is frozen after a minute or so, and shows offline until it is
 // looked at again; playing, it stays. No sync play in a browser: it joins no group.
 import { getPlayers } from './api';
+import { me } from './me.svelte';
 import { inApp } from './app.svelte';
 import { canPlayHere, local, pageVolume, playOnCommand } from './localPlayer.svelte';
 import { playOn, drivenName } from './playOn.svelte';
@@ -34,6 +35,27 @@ function freeName(base: string, players: { name: string }[]): string {
   let name = base;
   for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
   return name;
+}
+
+/** Whether a player name is another user's (the server refuses it with 409 and says so). The connect is asked again
+ *  only for its answer's head: one that would connect is let go at once. */
+async function anotherUsers(n: string): Promise<boolean> {
+  const ctl = new AbortController();
+  try {
+    const res = await fetch(`/api/players/${encodeURIComponent(n)}/connect?kind=browser&page=${PAGE}`, { signal: ctl.signal });
+    if (res.status !== 409) return false;
+    const body = await res.json().catch(() => ({}));
+    return typeof body?.error === 'string' && body.error.includes("another user's player");
+  } catch {
+    return false;
+  } finally {
+    ctl.abort();
+  }
+}
+
+/** In place of another user's player's name: this user's own added, else the next number. */
+function ownName(n: string): string {
+  return me.name && !n.endsWith(` (${me.name})`) ? `${n} (${me.name})` : freeName(n, [{ name: n }]);
 }
 
 /** A name no other player has (a second Chrome on Android is "Chrome on Android 2"), kept from then on. */
@@ -241,9 +263,12 @@ function connect() {
         retry = Math.min(retry * 2, 60_000);
       };
       // Its name held by another page (another tab, another browser) or the app: the next free one ("… 2"), at once.
-      getPlayers().then((list) => {
+      // Held by another user's player (several users, decision 0051; another user's players are not listed, so the
+      // refusal is asked for its reason): one's own name added ("Chrome on Android (anna)"), at once.
+      getPlayers().then(async (list) => {
         const players = list?.players ?? [];
         if (source === es && name && players.some((p) => p.name === name && p.online)) prefs.browserName = freeName(name, players);
+        else if (source === es && name && (await anotherUsers(name))) prefs.browserName = ownName(name);
         else later();
       }, later);
     }
