@@ -61,11 +61,23 @@ export function polyKnobs(t: ModuleType): ModuleType {
 
 const knobPortOf = (k: Knob): Port => ({ ...knobPort(k), ...(k.channels ? { channels: k.channels } : {}) });
 
+/** Trigger inputs a type takes beside its own (0057 §4b): the LFO, clocked (its rate in beats while its clock is
+ *  plugged in) and reset on the bar. */
+const TRIGGER_INPUTS: Record<string, Port[]> = {
+  lfo: [
+    { id: 'clock', label: 'Clock', type: 'trigger' },
+    { id: 'reset', label: 'Reset', type: 'trigger', normal: { module: 'clock', port: 'bar' } },
+  ],
+};
+
 /** A module type's ports, from what it declares (its own `ports` where it has them: the modules below). */
 export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   if (t.ports) return t.ports;
   const knobs = polyKnobs(t).knobs.filter((k) => !k.device).map(knobPortOf);
-  const inputs = (t.inputs ?? []).map((id): Port => ({ id, label: id === 'in' ? 'Input' : id[0].toUpperCase() + id.slice(1), type: id === 'trigger' ? 'trigger' : 'value' }));
+  const inputs = [
+    ...(t.inputs ?? []).map((id): Port => ({ id, label: id === 'in' ? 'Input' : id[0].toUpperCase() + id.slice(1), type: id === 'trigger' ? 'trigger' : 'value' })),
+    ...(TRIGGER_INPUTS[t.type] ?? []),
+  ];
   if (t.place === 'modulator') return { in: [...inputs, ...knobs], out: [VALUE_OUT] };
   if (t.place === 'frame') return { in: knobs, out: [] };
   return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT] };
@@ -147,7 +159,6 @@ export const FLASH = declared(
   [VALUE_OUT],
 );
 
-export const WALK = declared('walk', 'Walk', 'modulator', [knob('amount', 'Amount', 0, 1, 0, 'level'), knob('rate', 'Rate', 0, 1, 0.1)], [{ id: 'trigger', label: 'Jump', type: 'trigger' }], [VALUE_OUT]);
 
 const BUSY_LABEL: Record<(typeof BUSY)[number], string> = { motion: 'Motion', shape: 'Shape churn', colour: 'Colour churn', zoom: 'Zoom pumping', looks: 'New looks' };
 
@@ -291,7 +302,18 @@ export const INSTANCE = declared(
   [PICTURE_OUT],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE];
+/** Filter bank (0057 §4b): the sound split into six bands by a crossover (Linkwitz–Riley), a band a channel. Its five
+ *  split points (Hz) movable. */
+export const FILTER_BANK = declared(
+  'filterbank',
+  'Filter bank',
+  'modulator',
+  [60, 250, 500, 2000, 6000].map((hz, i) => knob(`split${i + 1}`, `Split ${i + 1}`, 20, 16000, hz)),
+  [{ id: 'audio', label: 'Sound', type: 'audio', normal: { module: 'music', port: 'audio' } }],
+  [out('bands', 'Bands', 'audio', 6), out('level', 'Level', 'value', 6)],
+);
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
