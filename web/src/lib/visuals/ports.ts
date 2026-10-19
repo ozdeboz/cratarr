@@ -80,8 +80,16 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   ];
   if (t.place === 'modulator') return { in: [...inputs, ...knobs], out: [VALUE_OUT] };
   if (t.place === 'frame') return { in: knobs, out: [] };
+  // The flame and its own loop work on light (claude-632, step 3): the flame takes last frame's light and gives its
+  // light; Trails, Fluid, Tunnel, the Loop effect and Dive carry light on.
+  if (t.type === 'flame') return { in: [LIGHT('light', 'Last light'), ...knobs], out: [LIGHT('light', 'Light')] };
+  if (LIGHT_CARRIERS.has(t.type)) return { in: [LIGHT('light', 'Light'), ...knobs], out: [LIGHT('light', 'Light')] };
   return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT] };
 }
+
+const LIGHT = (id: string, label: string): Port => ({ id, label, type: 'light' });
+/** The flame's own loop, on its light (Dive last: a pass-through whose rate the points' camera reads). */
+export const LIGHT_CARRIERS: ReadonlySet<string> = new Set(['trails', 'fluid', 'tunnel', 'loop-effect', 'dive']);
 
 const knob = (id: string, label: string, min: number, max: number, def: number, kind: Knob['kind'] = 'swing', neutral = kind === 'level' ? min : def): Knob => ({
   id,
@@ -122,7 +130,7 @@ export const TRACK: Declared = {
   label: 'Track',
   place: 'modulator',
   knobs: [],
-  ports: { in: [], out: [out('pulse', 'New track'), out('look', 'Its look', 'trigger')] },
+  ports: { in: [], out: [out('pulse', 'New track'), out('seed', 'Seed')] },
 };
 
 /** A module declared by its knobs (each a value input), its other inputs before them, and its outputs. */

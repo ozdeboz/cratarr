@@ -15,8 +15,10 @@ test('every module type has typed ports: a knob is a value input, a picture modu
     const ids = p.in.map((x) => x.id);
     assert.equal(new Set(ids).size, ids.length, `${t.type}: an input twice`);
     for (const k of polyKnobs(t).knobs.filter((k) => !k.device)) assert.equal(p.in.find((x) => x.id === k.id)?.type, 'value', `${t.type}.${k.id}`);
-    if (t.place === 'module' || t.place === 'loop') assert.ok(p.in.some((x) => x.type === 'picture') && p.out.some((x) => x.type === 'picture'), t.type);
-    if (t.place === 'source') assert.ok(!p.in.some((x) => x.type === 'picture') && p.out.some((x) => x.type === 'picture'), t.type);
+    const pic = (x: { type: string }) => x.type === 'picture' || x.type === 'light';
+    if (t.place === 'module' || t.place === 'loop') assert.ok(p.in.some(pic) && p.out.some(pic), t.type);
+    // A source gives a picture (or the flame its light), and takes none but its own last light.
+    if (t.place === 'source') assert.ok(!p.in.some((x) => x.type === 'picture') && p.out.some(pic), t.type);
     if (t.place === 'modulator') assert.ok(p.out.length > 0 && p.out.every((x) => x.type !== 'picture'), t.type);
   }
 });
@@ -57,4 +59,12 @@ test("the bands' knobs are polyphonic: one knob, six channels, in the Flame's po
     assert.equal(p.in.find((x) => x.id === id)?.channels, 6, id);
     assert.ok(!p.in.some((x) => x.id === `${id}.0`), `${id}.0`);
   }
+});
+
+test("the flame and its own loop carry light; Show's device takes light and gives a picture", () => {
+  const chain = cratarrTypes(RANGES, DEFAULTS);
+  const t = (id: string) => portsOf(chain.find((x) => x.type === id)!);
+  assert.equal(t('flame').out[0].type, 'light');
+  assert.equal(t('flame').in[0].type, 'light');
+  for (const id of ['trails', 'fluid', 'tunnel', 'loop-effect', 'dive']) assert.ok(t(id).in[0].type === 'light' && t(id).out[0].type === 'light', id);
 });

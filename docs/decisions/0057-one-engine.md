@@ -78,12 +78,12 @@ Six kinds of signal, each with its own wire in the graph:
 
 ### 3. The Cratarr chain as modules
 
-Each of today's hidden behaviours becomes a module with ports, in the graph and the rack:
+Each of today's hidden behaviours becomes a module with ports, in the graph:
 
 | Module | Kind | What it is today |
 |---|---|---|
 | **Music** | source of values and triggers | the analysis: the whole track's signals, each band's level, hits and envelope; reference and speed per cable (0056) |
-| **Track** | source | a new track's pulse, and the track's own look (its preset) as outputs into the flame's look knobs |
+| **Track** | source | a new track's pulse and its seed: a new track is a seeded Randomize of the patch (§4e) |
 | **Loudness** (type `envelope`) | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); normalled into every cable's depth |
 | **Clock** | modulator | the tempo's turning clock (once round in 32 beats at Speed); its phase feeds whatever turns |
 | **Flash** | modulator, one per target | the course-and-swing filter (a slow course, Flash's share of the swing about it) |
@@ -148,6 +148,25 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
   Plugging another cable into such a port breaks the normal, as in Eurorack.
 - **Macros.** The whole frame's Intensity, Flash, Speed and Wild become the top patch's macros, with visible cables into
   what they move.
+
+### 3b. Five categories, no look and behaviour
+
+The owner: "we should make no distinction between look and behavior"; then agreed to five categories by what a module
+does with signals, as modular synths and video synthesizers group them (LZX, TouchDesigner):
+
+| Category | Does | Ours |
+|---|---|---|
+| **Sources** | make a picture | Flame, Shapes, Waves; later Plasma, Gradient, Cells, Cover |
+| **Effects** | a picture in, a picture out | Fold, Bend, Blur, Tone map, Curve, Saturate, Warp, Keep, Glow, Tint, Displace, the flame's own loop |
+| **Mixers** | several pictures into one | Mix, Mask, Feedback |
+| **Modulators** | the signals that move knobs | LFO, Random, ADSR, Clock, Compressor, Grid; later Sequencer, Looper |
+| **In / Out** | where signals enter and leave | Music, Filter bank, Meter; Screen |
+
+- Each module type has its category (rack.ts `categoryOf`); a device's follows from what it exposes.
+- The graph's lanes, the module picker and Randomize's scopes follow the categories.
+- Look and Behaviour go everywhere: settings, pins, walks, scopes.
+- **A whole category can be pinned** (the owner): Randomize then leaves every module in it as it is, a new track's
+  too. It is saved with a preset like any pin (`category:<name>`).
 
 ### 4. Freely routable pictures
 
@@ -248,6 +267,49 @@ Later, with the Sequencer and the Looper:
 - **Sample:** a picture read at each point, giving one value a point. The picture becomes a controller.
 - **A grid sequencer** (the monome's): the Clock stepping through the cells.
 
+### 4d. The dice: Randomize, an action
+
+The owner: "the dice become a randomized action". As VCV Rack's Randomize: not a module but an action on one module,
+or on the whole patch, giving its knobs new values within their ranges. Pins are kept, the structure (modules,
+cables) is never touched, and the patch store makes it undoable. "Another look" reseeds the Track's look. Wild sets
+how far it goes. The double tap's "loose" (twice the governor's limits) goes with the governor.
+
+- **Its scopes** (the owner: "randomize everything, randomize effects, randomize generators … when long pressing the
+  randomize button, … a drop down with the various different options"):
+  - Everything;
+  - Sources, Effects, Mixers, Modulators: the five categories' knobs (§3b; In / Out has none to roll);
+  - Cables: the amounts of the cables there are.
+  - The scopes are the categories, so a new module falls into one by itself.
+- **The button:** a tap randomizes everything. A long press opens the app's menu (MenuSheet, as every long-press menu)
+  with the scopes. The double tap's movement-only roll goes.
+- **A module's own menu** has Randomize too, for that module alone (VCV's per-module Randomize).
+- **Pins keep knobs still against randomizing** (the owner): a pinned knob is left as it is by Randomize, by its
+  scopes, by "Another look" and by a new track's seeded Randomize. Cables still move it: a cable is a choice, not a
+  roll. A pin can be on one knob, one channel of a polyphonic knob, a cable's amount, or a whole module or device. It
+  shows as a pin mark on the knob's ring.
+- **A preset keeps its pins** (the owner: "when loading a preset, its pinned knobs stay pinned"). A saved preset, a
+  snapshot and a device all save their pins with them, as the v2 patch's `pins` does. Loading one sets the pins to
+  its own; nothing pinned before carries over into it. Undo brings back the pins with the rest.
+
+### 4e. A track's look: its seed
+
+Today a track draws its own look from a seed of its own (the same track, the same look): the flame's shape and
+colours, and which effects are on. The owner: "the seed is used to control whatever's in the current synthesizer?
+That's clean". So:
+
+- A new track is a **seeded Randomize** (§4d) of the patch as it is, scope **Everything** (the owner chose it: motion
+  and generators too, not only the look): the track's seed gives every knob that is not pinned a value in its range,
+  morphed in over a track's time. Pins keep what should stay. The same track gives the same look while the patch is
+  the same.
+- It never touches the structure: no module or cable is added, removed or switched. Effects you placed stay.
+- **Track** gives its `seed` (and its pulse); which knobs a track moves is set where Randomize's reach is set (the
+  pins, and Wild for how far).
+- "Another look" is the same Randomize with a new seed.
+- **Reset to seed** (the owner, beside resetting the whole synthesizer): the playing track's own seeded Randomize again,
+  as when the track began. Whatever the dice, "Another look" or the knobs changed since is put back to the track's own
+  values, pins kept, structure untouched, undoable, morphed in. Resetting the whole synthesizer stays what it is: back
+  to an empty patch (Start from scratch). Both are in the Reset menu.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
@@ -288,6 +350,24 @@ set of components, modules of which some are inserted as devices, but they are i
 - One store (`patch.svelte.ts`) holds every edit, with undo and redo. Both views read and write only through it.
 - Old settings and snapshots (v1) are converted once through 0056's lossless `cratarrPatch`.
 
+### 7b. One interface on every screen
+
+The owner: "Phones get what everybody gets, no difference." The graph is the interface everywhere, phones included.
+There is no separate phone rack. The panel's pages (a module's knobs, a cable's sheet, the pickers) open beside the
+graph where there is room and as sheets over it where there is not. On a phone that means:
+
+- touch throughout: pinch to zoom, drag to pan and to cable, tap to open, long press for the menu;
+- semantic zoom so labels stay readable;
+- the jump chips to reach a part quickly.
+
+The graph is built for touch from the start, not adapted to it later.
+
+### 7c. Sync groups: not in this version
+
+The owner: "since I won't be sync grouping in the upcoming version, spend no time on this." Sync groups are handled at
+the very end, after this version. Until then a v2 patch is not shared in a group, and the group features stay off for
+the new visuals.
+
 ### 8. Seeing it work
 
 - Every picture node shows a live thumbnail.
@@ -305,7 +385,7 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
 | 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash modules (the walks as Drifts) and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); the Grid's points and channels (§4c); the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
 | 3 | **Picture graph:** the compositor over typed picture ports, lazy; Fold (one module for the grid's symmetries) and Instance (§4c); the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
-| 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
+| 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo; the graph on every screen, phones included, touch first (§7b) (graph: claude-632; its pages and sheets: claude-a5) | claude-632, claude-a5 |
 | 5 | **Devices and macros:** the device type (a module holding a patch, its exposed ports and macros), flattening for the engine and compositor, Show as a device, open/collapse in the rack (graph: claude-632), the whole frame's macros | claude-a5 |
 | 6 | **Retire:** aspects.ts, the routes' matrix, chain-cables.ts, the old settings keys | whoever's step frees it |
 

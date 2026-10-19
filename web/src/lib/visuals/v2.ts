@@ -15,8 +15,8 @@
 //    `show.<knob>` keeps its address (`flatten` leads it to the module behind); Show's Size is the Flame's `zoom`.
 // 7. The extras' modules come as they are; their cables from Music's or a modulator's port.
 //
-// The picture side's wiring (which picture goes into which) is claude-632's (step 3): `pictureCables`, empty until
-// theirs lands.
+// The picture side's wiring (which picture goes into which, and the modules it needs: the Screen, the Feedbacks, the
+// Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
 
 import { isRoute } from './routes';
 import { cratarrPatch, modulesOf, type Cable, type Module, type Patch } from './patch';
@@ -50,9 +50,10 @@ function extraFrom(c: Cable): CableV2['from'] {
 }
 
 /** The picture side's cables for a patch (claude-632's, step 3); none until theirs is in. */
-export let pictureCables: (p: Patch) => CableV2[] = () => [];
-export function setPictureCables(f: (p: Patch) => CableV2[]) {
-  pictureCables = f;
+export type Wiring = { modules: Module[]; cables: CableV2[] };
+export let pictureWiring: (p: Patch) => Wiring = () => ({ modules: [], cables: [] });
+export function setPictureWiring(f: (p: Patch) => Wiring) {
+  pictureWiring = f;
 }
 
 /** The Show device: Bend, Blur, Tone map, Curve and Saturate in a row, light in and a picture out, each knob of Show's
@@ -187,6 +188,7 @@ export function toV2(s: VisualSettings): PatchV2 {
     } else cables.push({ id: c.id, from: viaAdsr(extraFrom(c)), to, value: c.value, mode: c.mode });
   }
   for (const a of adsrs.values()) cables.push(a.gate);
-  cables.push(...pictureCables(p));
-  return { v: 2, modules: [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules], cables, macros: p.macros, pins: p.pins };
+  const wiring = pictureWiring(p);
+  cables.push(...wiring.cables);
+  return { v: 2, modules: [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules, ...wiring.modules], cables, macros: p.macros, pins: p.pins };
 }
