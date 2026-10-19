@@ -88,10 +88,20 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 | **Flame** | picture source | the fractal flame; its parts' evolution (per band), continuity and steps on hits as its own knobs and `trigger` inputs, normalled from Music's hits |
 | **Show** | picture module | size, glow, saturation, smoothing, haze, waves |
 | **Fluid**, **Tunnel**, **Dive**, **Trails**, **Loop effect** | picture modules in the flame's own loop | as today |
-| **Effects 1–3** | picture modules in the finish | as today |
+| **Effects** | picture modules, one per effect | today three fixed slots (Kaleidoscope, EYEDO, Hydra), each choosing one sub-effect by a step knob; see below |
 | **Moments** | trigger outputs of the module that has them | another symmetry, lens or form at a step's neutral (morph.ts) |
 | **Safety** | fixed picture module before the screen | the flash meter and the governor: always on, always last, never removable. Its levers show as it holds back, on the knobs it slows (their rings dim). Wild sets its limits. |
 
+- **Effects, each its own module.** The owner asked: "And effects would also become modules, correct?" Yes.
+  - Every effect is a module of its own: Kaleid, Repeat, Pixelate, Posterize, Rotate, Scroll, Magnify, Ripple,
+    Stream, Echo, Colorama, Hue, Saturate, Rings, Interference, Pulse, Burst, Halo.
+  - Each can stand anywhere a picture module can: on a layer, in a layer's own loop, in the picture's loop, or in the
+    finish, as many as wanted, in any order.
+  - The three engines stop being slots. Kaleidoscope, EYEDO and Hydra become groups in the module picker.
+  - The finish becomes a free chain, like the loop.
+  - The Effects setting becomes a macro.
+  - The Loop effect is the same effect modules in the flame's own loop.
+  - Old patches convert: a slot with its sub-effect becomes that one module, at the slot's place.
 - **Normalled cables.** The connections every chain has by default are shown faint and can be unplugged: Envelope into
   each cable's depth, Music's hits into the flame's steps, the Clock into the turning, Track's look into the flame's look.
   Plugging another cable into such a port breaks the normal, as in Eurorack.
