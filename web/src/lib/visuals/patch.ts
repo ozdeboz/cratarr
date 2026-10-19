@@ -25,7 +25,9 @@ export type Knob = {
  *  picture's), finish, the whole frame, or a modulator (no picture). */
 export type Place = 'source' | 'module' | 'loop' | 'finish' | 'frame' | 'modulator';
 
-export type ModuleType = { type: string; label: string; place: Place; knobs: Knob[] };
+/** A module's type. A modulator's `inputs` are its ports (`in`, `trigger`): cables into one (to `{module, knob: port}`)
+ *  add up, and the engine hands each port's value to its step as `knobs[port]`, so modulators chain. */
+export type ModuleType = { type: string; label: string; place: Place; knobs: Knob[]; inputs?: string[] };
 
 /** A module in a patch: its type and its knobs' values (the state). */
 export type Module = { id: string; type: string; knobs: Record<string, number> };
