@@ -52,6 +52,8 @@ features is weird"; and, asked whether a local queue goes away: no, each mode ke
   - `{type: 'device-music', op: 'library'}` is answered with `{type: 'device-library', tracks}` (newest first), or
     `{type: 'device-library', denied: true}`. A track: `{source: 'device', id, name, artist, album, album_id, track,
     disc, year, duration_secs, added}`; `track` is its number on the album (not `n`, a track's place in what plays).
+  - `{type: 'device-library-changed'}` comes, unasked, when Android's index of the device's music changes (a couple of
+    seconds after the last change): the page asks for the library again when it shows it.
   - Covers: `/__device/cover/{album_id}` on the page's own origin, a JPEG from Android or a 404.
   - Playing uses the `player` calls as ever. Their reports carry `mode`. A `queue` call with the other mode's tracks
     switches to that mode first; tracks of the other mode in `queue`, `add` or `upcoming` are left out. `radio`,

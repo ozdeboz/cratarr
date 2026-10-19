@@ -13,11 +13,15 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
+import android.database.ContentObserver
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
+import android.provider.MediaStore
 import android.provider.Settings
 import android.text.InputType
 import android.util.Log
@@ -89,6 +93,17 @@ class MainActivity : AppCompatActivity() {
     private val deviceMusicAsk = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         prefs.deviceMusicAsked = true
         if (granted) switchMode(Prefs.MODE_DEVICE) else page?.postMessage(appMessage())
+    }
+
+    /** Android's index of the device's music changed: the page is told once things settle (a copy is many changes). */
+    private val deviceMusicChanged = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        private val tell = Runnable { page?.postMessage(JSONObject().put("type", "device-library-changed").toString()) }
+
+        override fun onChange(selfChange: Boolean) {
+            if (!DeviceMusic.granted(this@MainActivity)) return
+            frame.removeCallbacks(tell)
+            frame.postDelayed(tell, 2_000)
+        }
     }
 
     /** The mode changed (here, or by a play from Cratarr): the page hears it. */
@@ -174,6 +189,8 @@ class MainActivity : AppCompatActivity() {
         Reach.watch(this)
         // An output coming or going: the page's device sheet shows the outputs there are now.
         outputs = Output.Watch(this) { page?.postMessage(appMessage()) }
+        // The device's music changed (decision 0052): the page asks for it again when it shows it.
+        contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, deviceMusicChanged)
     }
 
     /** Watches the outputs while the page is shown (decision 0033, amended 2026-10-19). */
@@ -207,6 +224,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         outputs?.stop()
+        contentResolver.unregisterContentObserver(deviceMusicChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(modeChanged)
         Downloads.manager(this).removeListener(downloadsChanged)
