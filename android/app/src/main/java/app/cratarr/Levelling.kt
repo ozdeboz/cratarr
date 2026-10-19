@@ -39,7 +39,8 @@ object Levelling {
     fun follow(context: Context, player: Player, server: String?, apply: () -> Unit) {
         val item = player.currentMediaItem
         val track = item?.let(::trackOf)
-        if (!on(context) || track == null) {
+        // The device's own music (decision 0052) has no gain from Cratarr.
+        if (!on(context) || track == null || track.optString("source") == DeviceMusic.SOURCE) {
             following = null
             if (factor != 1f) {
                 factor = 1f

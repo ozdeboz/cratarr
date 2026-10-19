@@ -5,7 +5,8 @@
  * when the audio would become noisy, and the wake and Wi-Fi locks while it plays. It also holds this player's Play On
  * connection to Cratarr (PlayOnLink); with Stay ready the app stays in the foreground by a service of its own (Ready).
  * Tracks are read through the device's store (Downloads): a downloaded one, or one of the next few, plays without a
- * connection.
+ * connection. In local mode (decision 0052) the same player plays the device's own music (DeviceMusic), with a queue of
+ * its own.
  */
 package app.cratarr
 
@@ -18,6 +19,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -38,8 +40,12 @@ import androidx.media3.session.CacheBitmapLoader
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import org.json.JSONException
+import org.json.JSONObject
 
 @OptIn(UnstableApi::class)
 class PlayerService : MediaSessionService() {
@@ -68,7 +74,7 @@ class PlayerService : MediaSessionService() {
         // Another server or name: Cratarr says the group again once connected.
         if ((key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, null, 0, sync.bufferMs, "")
         if (key == Prefs.LEVELLING) link?.levellingChanged()
-        if (key == Prefs.OUTPUT_CHOICE) applyOutput()
+        if (key == Prefs.OUTPUT_CHOICE || key == Prefs.OUTPUT_ORDERED || key == Prefs.OUTPUT_KNOWN) applyOutput()
         if (key == Prefs.SLEEP) {
             keepSleep()
             link?.sleepChanged()
@@ -128,9 +134,18 @@ class PlayerService : MediaSessionService() {
             .setSessionActivity(open)
             .setCallback(Callback())
             // Covers (the notification's, the lock screen's, a car's) through the app's own requests, with its session:
-            // away from home the proxy refused Media3's own without it (2026-10-19).
-            .setBitmapLoader(CacheBitmapLoader(DataSourceBitmapLoader.Builder(this).setDataSourceFactory(DefaultDataSource.Factory(this, Downloads.http(this))).build()))
+            // away from home the proxy refused Media3's own without it (2026-10-19). The device's own albums' from Android.
+            .setBitmapLoader(
+                CacheBitmapLoader(
+                    DeviceMusic.Covers(this, DataSourceBitmapLoader.Builder(this).setDataSourceFactory(DefaultDataSource.Factory(this, Downloads.http(this))).build()),
+                ),
+            )
             .build()
+        // Local mode (decision 0052) as it was: its queue again, paused; without Android's permission or a folder turned
+        // on any more, Cratarr's.
+        if (prefs.mode == Prefs.MODE_DEVICE) {
+            if (DeviceMusic.on(this)) restore(prefs.savedQueue(Prefs.MODE_DEVICE)) else prefs.mode = Prefs.MODE_CRATARR
+        }
         link = PlayOnLink(this, player, prefs, sync).also { it.start() }
         Ready.ensure(this, "service started")
         applyOutput()
@@ -195,6 +210,56 @@ class PlayerService : MediaSessionService() {
     }
 
     /**
+     * Local mode (decision 0052): Cratarr's music or the device's own, never mixed. Each keeps its queue: the one left
+     * (its tracks, the one that plays and where, shuffle and repeat) is put by, and the other one taken up where it was,
+     * paused. Entering local mode leaves a group. True when the mode changed.
+     */
+    fun switchMode(to: String, why: String): Boolean {
+        val mode = if (to == Prefs.MODE_DEVICE) Prefs.MODE_DEVICE else Prefs.MODE_CRATARR
+        val was = prefs.mode
+        if (was == mode || (mode == Prefs.MODE_DEVICE && !DeviceMusic.on(this))) return false
+        LinkLog.add(this, "info", "playon", "mode", "to" to mode, "why" to why)
+        if (mode == Prefs.MODE_DEVICE && sync.leader != null) sync.leave()
+        player.pause()
+        prefs.saveQueue(was, snapshot().toString())
+        prefs.mode = mode
+        restore(prefs.savedQueue(mode))
+        link?.modeChanged()
+        return true
+    }
+
+    /** The queue as it is now, for [restore]. */
+    private fun snapshot(): JSONObject = JSONObject()
+        .put("tracks", queueOf(player))
+        .put("index", player.currentMediaItemIndex)
+        .put("position_ms", player.currentPosition)
+        .put("repeat", prefs.repeat)
+        .put("shuffled", prefs.shuffled)
+
+    /** A queue put by ([snapshot]) in the player, paused; none (empty): nothing queued. */
+    private fun restore(saved: String) {
+        val s = try {
+            JSONObject(saved)
+        } catch (e: JSONException) {
+            JSONObject()
+        }
+        prefs.repeat = s.optString("repeat", Repeat.OFF)
+        prefs.shuffled = s.optBoolean("shuffled")
+        Repeat.apply(this, player)
+        val items = mediaItems(s.optJSONArray("tracks")).map(::located)
+        if (items.isEmpty()) {
+            player.stop()
+            player.clearMediaItems()
+            return
+        }
+        player.setMediaItems(items, s.optInt("index").coerceIn(0, items.size - 1), s.optLong("position_ms").coerceAtLeast(0))
+        player.prepare()
+    }
+
+    /** Local mode's queue kept as it goes, for a restart (changes close together as one). */
+    private val saveDevice = Runnable { if (prefs.mode == Prefs.MODE_DEVICE) prefs.saveQueue(Prefs.MODE_DEVICE, snapshot().toString()) }
+
+    /**
      * This device's output as chosen in its sheet (decision 0033, amended 2026-10-19): the player's sound goes there,
      * alone or leading a group (Snapcast's own player, following one, takes none: Android routes it). A choice lasts
      * until the outputs there are change (a Bluetooth device comes or goes): then it is Automatic again, so the speaker
@@ -208,9 +273,10 @@ class PlayerService : MediaSessionService() {
         applyOutput()
     }
 
+    /** The chosen output, else the first of the owner's order that is there ([Output.preferred]); picked again as
+     *  outputs come and go. */
     private fun applyOutput() {
-        val chosen = prefs.outputChoice.takeIf { it.isNotEmpty() }?.let { Output.find(this, it) }
-        player.setPreferredAudioDevice(chosen)
+        player.setPreferredAudioDevice(Output.preferred(this))
     }
 
     /** The sleep timer as set: the end of the track by the player itself, the time by a wait. */
@@ -246,6 +312,8 @@ class PlayerService : MediaSessionService() {
      */
     private inner class Keeper(private val player: ExoPlayer) : Player.Listener {
         private val keep = Runnable {
+            // Local mode's tracks are on the device already.
+            if (prefs.mode == Prefs.MODE_DEVICE) return@Runnable
             val items = (0 until player.mediaItemCount).map(player::getMediaItemAt)
             Downloads.keepAhead(this@PlayerService, items, player.currentMediaItemIndex)
         }
@@ -257,7 +325,8 @@ class PlayerService : MediaSessionService() {
                 val d = player.duration
                 if (!counted && d > 0 && player.currentPosition >= d * Plays.PLAYED_AT) {
                     counted = true
-                    player.currentMediaItem?.let(::trackOf)?.let { Plays.played(this@PlayerService, it) }
+                    // The device's own music is not counted (decision 0052).
+                    player.currentMediaItem?.takeUnless(DeviceMusic::owns)?.let(::trackOf)?.let { Plays.played(this@PlayerService, it) }
                 }
                 if (player.isPlaying) main.postDelayed(this, COUNT_EVERY_MS)
             }
@@ -273,6 +342,16 @@ class PlayerService : MediaSessionService() {
                 // Radio: the playing own track's inserts; Autoplay: fewer than three ahead, the next ones (decision 0036).
                 Radio.insert(this@PlayerService, player, prefs.serverUrl, ::located)
                 Autoplay.fill(this@PlayerService, player, prefs.serverUrl, ::located)
+            }
+            if (prefs.mode == Prefs.MODE_DEVICE && events.containsAny(
+                    Player.EVENT_TIMELINE_CHANGED,
+                    Player.EVENT_MEDIA_ITEM_TRANSITION,
+                    Player.EVENT_PLAY_WHEN_READY_CHANGED,
+                    Player.EVENT_POSITION_DISCONTINUITY,
+                )
+            ) {
+                main.removeCallbacks(saveDevice)
+                main.postDelayed(saveDevice, 1_000)
             }
             // Each time a track is reached it can count again (a repeat, a jump back).
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) counted = false
@@ -307,6 +386,8 @@ class PlayerService : MediaSessionService() {
             // Otherwise, as a player does: what cannot play (gone, or out of reach offline) is skipped, unless it was
             // the last.
             val action = when {
+                // The device's music, no longer allowed: every track would fail.
+                player.currentMediaItem?.let(DeviceMusic::owns) == true && !DeviceMusic.granted(this@PlayerService) -> "stop"
                 Patience.refused(cause) -> "wait for sign-in"
                 Patience.waitFor(cause) -> "again"
                 player.hasNextMediaItem() -> "skip"
@@ -330,6 +411,7 @@ class PlayerService : MediaSessionService() {
     override fun onDestroy() {
         LinkLog.add(this, "info", "playon", "service stopped")
         main.removeCallbacksAndMessages(null)
+        saveDevice.run()
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(prefsChanged)
         sync.release()
         link?.stop()
@@ -342,8 +424,30 @@ class PlayerService : MediaSessionService() {
         super.onDestroy()
     }
 
-    /** Tracks arrive by their id only; the file and the cover come from the server. */
+    /** Tracks arrive by their id only; the file and the cover come from the server. The app's own page may switch the
+     *  mode ([COMMAND_MODE], `mode`). */
     private inner class Callback : MediaSession.Callback {
+        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
+            val given = super.onConnect(session, controller)
+            if (controller.packageName != packageName || !given.isAccepted) return given
+            val commands = given.availableSessionCommands.buildUpon().add(SessionCommand(COMMAND_MODE, Bundle.EMPTY)).build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
+                .setAvailableSessionCommands(commands)
+                .setAvailablePlayerCommands(given.availablePlayerCommands)
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction != COMMAND_MODE) return super.onCustomCommand(session, controller, customCommand, args)
+            switchMode(args.getString("mode").orEmpty(), "page")
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -351,8 +455,10 @@ class PlayerService : MediaSessionService() {
         ): ListenableFuture<MutableList<MediaItem>> = Futures.immediateFuture(mediaItems.map(::located).toMutableList())
     }
 
-    /** A track's item with its file (a download's, else `/api/file/{source}/{id}`) and its cover from the server. */
+    /** A track's item with its file (a download's, else `/api/file/{source}/{id}`) and its cover from the server; the
+     *  device's own from Android. */
     fun located(item: MediaItem): MediaItem {
+        DeviceMusic.located(item)?.let { return it }
         val server = prefs.serverUrl?.trimEnd('/')
         val found = Downloads.locate(this, item, server)
         server ?: return found
@@ -371,6 +477,8 @@ class PlayerService : MediaSessionService() {
         private const val READY_CHANNEL = "ready"
         private const val GROUP_NOTIFICATION = 8
         private const val ACTION_READY = "cratarr.READY"
+        /** The page's mode switch (decision 0052): `mode`, cratarr or device. */
+        const val COMMAND_MODE = "cratarr.MODE"
 
         /** Started, and ready (or let go) as Stay ready says. Called while the app is in front, where both are allowed. */
         fun ready(context: Context) {

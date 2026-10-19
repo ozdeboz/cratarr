@@ -343,6 +343,24 @@ class PlayOnLink(
         // Sync play's measurement (decision 0037, step 1): what plays this moment, in Cratarr's time, at once.
         if (m.optString("command") == "sample") return sample(m.optLong("id"))
         m.optLong("version", -1L).takeIf { it >= 0 }?.let { version = it }
+        // Local mode (decision 0052): steered from outside, its queue not edited (Cratarr refuses such commands; one from
+        // a moment before is let go). A play is Cratarr's music again; a stop pauses, so that queue stays.
+        if (prefs.mode == Prefs.MODE_DEVICE) {
+            when (m.optString("command")) {
+                "play" -> service.switchMode(Prefs.MODE_CRATARR, "play from Cratarr")
+                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck" -> {}
+                "group" -> if (!m.isNull("leader")) return report()
+                "stop" -> {
+                    release()
+                    p.pause()
+                    return report()
+                }
+                else -> {
+                    LinkLog.add(service, "info", "playon", "command not for local mode", "command" to m.optString("command"))
+                    return report()
+                }
+            }
+        }
         when (m.optString("command")) {
             "play" -> {
                 val items = mediaItems(m.optJSONArray("tracks") ?: JSONArray()).map(service::located)
@@ -596,6 +614,12 @@ class PlayOnLink(
     /** The sleep timer changed (set here, by the page, or done): Cratarr is told. */
     fun sleepChanged() = soon()
 
+    /** Local mode began or ended (decision 0052): Cratarr is told, Cratarr's queue again with the report after it. */
+    fun modeChanged() {
+        queueSent = false
+        soon()
+    }
+
     private val heartbeat = object : Runnable {
         override fun run() {
             // Ready, and found out of the foreground (Media3 let its service go, say): back in it.
@@ -646,6 +670,7 @@ class PlayOnLink(
     private fun report() {
         val base = base() ?: return
         val p = player
+        if (prefs.mode == Prefs.MODE_DEVICE) return reportDevice(base)
         val out = JSONObject()
             .put("index", if (p.mediaItemCount == 0) -1 else p.currentMediaItemIndex)
             .put("entry", p.currentMediaItem?.let(::entryOf) ?: JSONObject.NULL)
@@ -676,6 +701,30 @@ class PlayOnLink(
             val sent = put("$base/state", body)
             if (withQueue && sent) main.post { queueSent = true }
         }
+    }
+
+    /** In local mode (decision 0052): what plays of the device's own music, nothing of Cratarr's queue. */
+    private fun reportDevice(base: String) {
+        val p = player
+        val track = p.currentMediaItem?.mediaMetadata?.let { d ->
+            fun text(s: CharSequence?) = s?.toString()?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL
+            JSONObject().put("name", d.title?.toString().orEmpty()).put("artist", text(d.artist)).put("album", text(d.albumTitle))
+        }
+        val body = JSONObject()
+            .put("mode", Prefs.MODE_DEVICE)
+            .put("index", -1)
+            .put("device_track", track ?: JSONObject.NULL)
+            .put("position_ms", p.currentPosition.coerceAtLeast(0))
+            .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
+            .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
+            .put("volume", (volume * 100).toInt())
+            .put("ducked", ducked)
+            .put("held", heldBack ?: JSONObject.NULL)
+            .put("output", Output.now(service) ?: JSONObject.NULL)
+            .put("link", linkJson())
+            .toString()
+        if (reports.isShutdown) return
+        reports.execute { put("$base/state", body) }
     }
 
     private fun put(url: String, body: String): Boolean {

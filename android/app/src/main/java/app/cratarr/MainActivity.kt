@@ -13,11 +13,15 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
+import android.database.ContentObserver
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
+import android.provider.MediaStore
 import android.provider.Settings
 import android.text.InputType
 import android.util.Log
@@ -84,6 +88,35 @@ class MainActivity : AppCompatActivity() {
     private var player: PagePlayer? = null
     private val waiting = mutableListOf<JSONObject>()
     private var dialog: AlertDialog? = null
+
+    /** Local mode (decision 0052): Android's permission for the device's music, asked for as it is first opened. */
+    private val deviceMusicAsk = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        prefs.deviceMusicAsked = true
+        // The folder whose switch asked for it goes on with it.
+        folderAsked?.takeIf { granted }?.let { prefs.localFolders = prefs.localFolders + it }
+        folderAsked = null
+        page?.postMessage(appMessage())
+        page?.let(::tellFolders)
+    }
+
+    /** The folder turned on before Android's permission was there: on once it is given. */
+    private var folderAsked: String? = null
+
+    /** Android's index of the device's music changed: the page is told once things settle (a copy is many changes). */
+    private val deviceMusicChanged = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        private val tell = Runnable { page?.postMessage(JSONObject().put("type", "device-library-changed").toString()) }
+
+        override fun onChange(selfChange: Boolean) {
+            if (!DeviceMusic.granted(this@MainActivity)) return
+            frame.removeCallbacks(tell)
+            frame.postDelayed(tell, 2_000)
+        }
+    }
+
+    /** The mode changed (here, or by a play from Cratarr): the page hears it. */
+    private val modeChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == Prefs.MODE) runOnUiThread { page?.postMessage(appMessage()) }
+    }
 
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private val fileChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -159,9 +192,12 @@ class MainActivity : AppCompatActivity() {
         Kept.schedule(this)
         Kept.sync(this)
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(inUseChanged)
+        Prefs.shared(this).registerOnSharedPreferenceChangeListener(modeChanged)
         Reach.watch(this)
         // An output coming or going: the page's device sheet shows the outputs there are now.
         outputs = Output.Watch(this) { page?.postMessage(appMessage()) }
+        // The device's music changed (decision 0052): the page asks for it again when it shows it.
+        contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, deviceMusicChanged)
     }
 
     /** Watches the outputs while the page is shown (decision 0033, amended 2026-10-19). */
@@ -195,7 +231,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         outputs?.stop()
+        contentResolver.unregisterContentObserver(deviceMusicChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
+        Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(modeChanged)
         Downloads.manager(this).removeListener(downloadsChanged)
         webView?.let {
             frame.removeView(it)
@@ -231,7 +269,13 @@ class MainActivity : AppCompatActivity() {
         }
         // The page keeps its priority when not in view: it is the player.
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
-        view.webViewClient = CratarrWebViewClient(origins, onError = { cannotReach(url, it) }, onGone = { show(url) })
+        val app = applicationContext
+        view.webViewClient = CratarrWebViewClient(
+            origins,
+            onError = { cannotReach(url, it) },
+            onGone = { show(url) },
+            deviceCover = { DeviceMusic.cover(app, it) },
+        )
         view.webChromeClient = CratarrWebChromeClient { intent, callback ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
@@ -275,6 +319,44 @@ class MainActivity : AppCompatActivity() {
             }
             "player" -> player?.handle(message) ?: waiting.add(message)
             "device" -> reply.postMessage(appMessage())
+            // Local mode (decision 0052): the switch (Android's permission asked for first), and the device's music.
+            "device-music" -> when (message.optString("op")) {
+                // Into local mode only with a folder turned on (the switch shows only then).
+                "mode" -> {
+                    val to = message.optString("mode")
+                    if (to == Prefs.MODE_DEVICE && !DeviceMusic.on(this)) reply.postMessage(appMessage()) else switchMode(to)
+                }
+                // Settings: Android's permission, the folders it found music in, and one turned on or off.
+                "allow" -> if (DeviceMusic.granted(this)) reply.postMessage(appMessage()) else deviceMusicAsk.launch(DeviceMusic.permission)
+                "folders" -> tellFolders(reply)
+                "folder" -> {
+                    val path = message.optString("path")
+                    val on = message.optBoolean("on")
+                    when {
+                        path.isEmpty() -> Unit
+                        on && !DeviceMusic.granted(this) -> {
+                            folderAsked = path
+                            deviceMusicAsk.launch(DeviceMusic.permission)
+                        }
+                        else -> {
+                            prefs.localFolders = if (on) prefs.localFolders + path else prefs.localFolders - path
+                            // The last one off: local mode is gone, and Cratarr's music is back.
+                            if (!DeviceMusic.on(this) && prefs.mode == Prefs.MODE_DEVICE) switchMode(Prefs.MODE_CRATARR)
+                            reply.postMessage(appMessage())
+                            tellFolders(reply)
+                        }
+                    }
+                }
+                "library" -> lifecycleScope.launch {
+                    val out = JSONObject().put("type", "device-library")
+                    if (DeviceMusic.granted(this@MainActivity)) {
+                        out.put("tracks", withContext(Dispatchers.IO) { DeviceMusic.tracks(this@MainActivity) })
+                    } else {
+                        out.put("denied", true)
+                    }
+                    reply.postMessage(out.toString())
+                }
+            }
             // Settings' "Test both connections".
             "network-test" -> lifecycleScope.launch {
                 val (hasLocal, local, public) = withContext(Dispatchers.IO) { Reach.test(this@MainActivity) }
@@ -300,6 +382,10 @@ class MainActivity : AppCompatActivity() {
                     prefs.outputChoice = if (message.isNull("output")) "" else message.optString("output")
                     prefs.outputChoiceSet = Output.set(this)
                 }
+                // Automatic by the owner's order: on or off, the order after a drag, an output not there forgotten.
+                if (message.has("ordered")) prefs.outputOrdered = message.optBoolean("ordered")
+                message.optJSONArray("order")?.let { a -> Output.order(this, (0 until a.length()).map(a::optString)) }
+                message.optString("forget").takeIf { it.isNotEmpty() }?.let { Output.forget(this, it) }
                 if (message.has("stayReady")) {
                     prefs.stayReady = message.optBoolean("stayReady")
                     PlayerService.ready(this)
@@ -398,7 +484,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** This device's settings, for the page's "This device" section. */
+    /** The folders Android found music in, read off the main thread, to the page (or that it may not read them). */
+    private fun tellFolders(reply: JavaScriptReplyProxy) {
+        lifecycleScope.launch {
+            val out = JSONObject().put("type", "device-folders")
+            if (DeviceMusic.granted(this@MainActivity)) {
+                out.put("folders", withContext(Dispatchers.IO) { DeviceMusic.folders(this@MainActivity) })
+            } else {
+                out.put("denied", true)
+            }
+            reply.postMessage(out.toString())
+        }
+    }
+
+    /** Local mode on or off (decision 0052), by the player, once it is connected. */
+    private fun switchMode(to: String) {
+        val m = JSONObject().put("type", "player").put("op", "mode").put("mode", to)
+        player?.handle(m) ?: waiting.add(m)
+    }
+
     /** The app's settings for the page; with [refused], an address typed there where Cratarr does not answer. */
     private fun appMessage(refused: String? = null): String = JSONObject()
         .put("type", "app")
@@ -408,6 +512,9 @@ class MainActivity : AppCompatActivity() {
         // Its outputs, and the one chosen (null: Automatic); `output` in Play On's reports is the one that plays.
         .put("outputs", org.json.JSONArray(Output.all(this)))
         .put("output", prefs.outputChoice.ifEmpty { null } ?: org.json.JSONObject.NULL)
+        // Automatic by the owner's order, and every output seen here in that order (`outputs`: those there now).
+        .put("ordered", prefs.outputOrdered)
+        .put("known", org.json.JSONArray(Output.known(this)))
         .put("stayReady", prefs.stayReady)
         // `server`: the public address, for pages from before there were two.
         .put("server", prefs.publicAddress ?: "")
@@ -421,6 +528,11 @@ class MainActivity : AppCompatActivity() {
         .put("syncBudgetGb", prefs.syncBudgetGb)
         .put("syncOnlyCharging", prefs.syncOnlyCharging)
         .put("levelling", prefs.levelling)
+        // Local mode (decision 0052): which music plays, and whether Android lets the app read the device's.
+        .put("mode", prefs.mode)
+        .put("deviceMusic", DeviceMusic.state(this))
+        // Local mode is there (a folder on, Android's permission given): the switch shows.
+        .put("local", DeviceMusic.on(this))
         .toString()
 
     /** The kept items' progress (decision 0038), read off the main thread, to the page; changes close together go as one. */

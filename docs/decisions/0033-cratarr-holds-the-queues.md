@@ -269,3 +269,14 @@ the app player's preferred device, alone or leading a group. A choice lasts unti
 is Automatic again (the speaker picked in the car is not picked the next time). Following a group, Snapcast's own
 player plays (the Snapdroid 0.29 build has no choice of output), so Android routes it as before: choosing there would
 need our own build of its player. The report's `output` stays what actually plays.
+
+## Amendment (2026-10-19): Automatic in the owner's order
+
+The owner (relayed by a5): Automatic should follow an order the user drags, "but we need a toggle where we can also
+turn off the override. When override is turned off the Android order comes back and the drag bars remove." The app
+keeps every output it has seen, there or not, in the owner's order (new ones at the end), and tells the page with
+`known: [{id, type, name}]` beside `outputs` (those there now) and `ordered` (the toggle, off by default).
+`device-set {ordered}` turns it on or off, `device-set {order: [ids]}` gives the whole order after a drag, and
+`device-set {forget: id}` takes an output that is not there off the list. With the order on and nothing chosen, the
+player's preferred output is the first of the order that is there, picked again whenever one comes or goes; off, it is
+Android's own choice. A direct choice still wins until the outputs change, and following a group, none applies.

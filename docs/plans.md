@@ -26,6 +26,9 @@ kind of adapters Cratarr's own sources use (0005).
 
 The phone's own music files, played in Cratarr's app beside the server's.
 
+- Taken up (2026-10-19) as [0052](decisions/0052-local-library.md): a local mode of the app, never mixed with Cratarr's
+  music. What follows is the plan as it stood.
+
 - Waits for: the thin-client model, as above.
 - Catches:
   - Reading the phone's files needs Android's media permission and an index of its own on the phone.

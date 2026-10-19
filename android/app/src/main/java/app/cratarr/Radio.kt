@@ -146,7 +146,8 @@ object Radio {
     /** With radio on, the playing track one of the queue's own: tracks like it after it and its hand-added run, unless
      *  they are there already (a seek, a replay, a report). Called on the main thread. */
     fun insert(context: Context, player: Player, server: String?, locate: (MediaItem) -> MediaItem) {
-        if (!on(context)) return
+        // Not for the device's own music (decision 0052).
+        if (!on(context) || Prefs(context).mode == Prefs.MODE_DEVICE) return
         val c = player.currentMediaItemIndex
         val count = player.mediaItemCount
         if (c < 0 || c >= count) return
@@ -255,6 +256,7 @@ object Autoplay {
      *  played), else the next ones by its mode, appended. Called on the main thread. */
     fun fill(context: Context, player: Player, server: String?, locate: (MediaItem) -> MediaItem) {
         val a = get(context) ?: return
+        if (Prefs(context).mode == Prefs.MODE_DEVICE) return
         val count = player.mediaItemCount
         val c = player.currentMediaItemIndex
         if (filling || count == 0 || count - c - 1 >= LOW) return
