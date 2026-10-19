@@ -380,6 +380,31 @@ glides depends on what caused it (the owner agreed):
 The more directly you cause it, the faster it follows. Rewired picture paths crossfade over the same time. A change
 mid-glide starts from where the picture is. Steps change only at neutral. Undo jumps.
 
+### 7e. The old architecture's oddities, set straight
+
+The owner asked what quirks of the old architecture were left, and agreed to all nine ("make it so"). Each becomes
+what a modular system does:
+
+1. **Cables only add.** The "level" mode (a cable secretly multiplying its knob) goes. Multiplying is a visible
+   **VCA** (a module: in × gain), as in every modular synth. Today's level cables convert to VCAs, exactly.
+2. **A knob is only its value.** The column scales (a knob that also scaled every cable into it) fold into each
+   cable's own amount, curves included.
+3. **Steps take a visible trigger.** The comparator hidden in each step (above ½, ready again under ⅓, at most every
+   2 s) becomes a **Gate** (our comparator) into the step's `next` trigger input.
+4. **Bands are merged in sight.** A six-channel cable into a one-channel knob goes through a **Merge** (sum, mean or
+   max: VCV's poly to mono), no longer silently averaged.
+5. **No curve walks by itself.** A walking cable becomes a **Random** into that cable's depth.
+6. **Pausing dims in sight.** Music gives `playing`. The dimming while paused is a cable from it (through a VCA) into
+   Tone map's brightness, which can be unplugged.
+7. **One knob, one meaning.** Haze splits into Curve's **gamma** and **black level**, the standard pair.
+8. **One way of reading the hits.** After the switch, every cable that reads the hits raw ('absolute', as converted
+   routes do) changes in one visible step to "against this track's typical", as new cables read them.
+9. **Accent, not Flash.** The course-and-swing filter is renamed Accent, so "flash" means only the Screen's flash
+   guard.
+
+Kept on purpose, documented: reduced motion (the system's accessibility setting, as the flash guard is safety), and
+each module's own inner maths (the flame's parts and light ranges).
+
 ### 8. Seeing it work
 
 - Every picture node shows a live thumbnail.
