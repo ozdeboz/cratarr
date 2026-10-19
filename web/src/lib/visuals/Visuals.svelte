@@ -865,7 +865,7 @@
       : `${SIGNAL_LABEL[c.from.signal as Signal] ?? c.from.signal}${c.from.band !== undefined ? ` · ${BAND_ROWS[c.from.band]}` : ''}`;
   // A knob of any module, the extras' or today's chain's (claude-5f's chain-cables.ts moves those by the extras' cables).
   const anyKnob = (mid: string, kid: string): Knob | undefined =>
-    GRAPH_TYPES[extraModule(mid)?.type ?? modulesOf(patchNow).find((m) => m.id === mid)?.type ?? '']?.knobs.find((k) => k.id === kid);
+    GRAPH_TYPES[extraModule(mid)?.type ?? modulesOf(patchNow).get(mid)?.type ?? '']?.knobs.find((k) => k.id === kid);
   // `module.knob` (a band's knob has its own dot: `flame.lighting.2`).
   const splitKnob = (mk: string): [string, string] => [mk.slice(0, mk.indexOf('.')), mk.slice(mk.indexOf('.') + 1)];
   const cableable = (mk: string) => {
