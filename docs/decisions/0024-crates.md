@@ -99,3 +99,36 @@ holds nothing large meanwhile: those waiting with the library's facts in hand we
 
 What was heard is also kept in `favourites.json` in the data folder (2026-10-15), so after a restart the crates answer
 at once from it while the server is asked again in the background; the file is only a head start, never the truth.
+
+## Amendment (2026-10-19): a favourite albums toggle beside the favourites one
+
+The owner: "We currently have a way to filter out favorited tracks, but I also want a way to filter out favorited
+albums"; of one toggle covering both or a second one, "a second toggle."
+
+- **A second toggle, for albums.** Beside the favourites toggle, in a crate's panel, a button cycles **No favourite
+  albums → Only favourite albums → All albums**.
+  - A favourite album is one with its heart on (the Library's). "No favourite albums" leaves out every track on
+    one; "Only favourite albums" keeps only those.
+  - Its icon is the album's disc: crossed out, filled, or outline.
+  - A crate not set yet shows **All albums**, so nothing changes until it is tapped.
+- **It works as the favourites toggle does.** It is a view remembered per crate on the server (`favourite_albums` in
+  `crates.json`, set with `PUT /api/crates/{id}/favourite-albums`), not part of the crate, and not journaled. The
+  server adds its condition when the crate is looked at, so the list, its size, the tempo spread, Play, Shuffle, Make
+  playlist and Play as radio all follow both toggles.
+- **The two combine.** A track shows when both allow it: "No favourites" with "Only favourite albums" is the tracks
+  of favourite albums that are not favourites themselves.
+- **The Crates page.** A crate's sizes are counted with its albums toggle as it is set, and its chip shows a small
+  disc for it beside the heart, only when it is not All albums.
+- **The crate builder** has the matching condition, "Favourite album" (yes or no), as it has "Favourite".
+
+## Amendment (2026-10-19): a crate's card shuffles it
+
+The owner: "a play button on the crates, which automatically plays it with shuffle."
+
+- **A crate's picture on the Crates page is its play button.** A tap shuffles the crate as a new queue under its
+  name; the rest of the card views it, as before. The button follows the rule of a cover that plays (decided
+  2026-10-16): its icon sits in the picture's lower right corner. Here it is Shuffle's icon, since that is what it
+  does.
+- **Both toggles apply.** The tracks are the ones the crate's two toggles let through, as it shows them.
+- **A big crate is sampled.** A crate comes 500 tracks at a time, so the queue takes up to three stretches of 500 from
+  anywhere in it, shuffled together. A crate of up to 1,500 tracks plays whole.

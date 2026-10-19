@@ -10,6 +10,11 @@
     incoming:
       '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
     albums: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2"/>',
+    // The album's disc as one ring with its hole (evenodd): outlined it is the albums icon, filled a solid disc with its
+    // centre showing (a crate's Only favourite albums, as a filled heart is its Only favourites).
+    disc: '<path fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20zm0 5.5a4.5 4.5 0 1 1 0 9a4.5 4.5 0 1 1 0-9z"/>',
+    // The album's disc crossed out (a crate's No favourite albums, as heartOff is its No favourites).
+    albumsOff: '<path d="M4.93 4.93A10 10 0 0 0 19.07 19.07"/><path d="M8.5 2.6A10 10 0 0 1 21.4 15.5"/><circle cx="12" cy="12" r="2"/><path d="m2 2 20 20"/>',
     insights: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
     settings:
       '<path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/>',

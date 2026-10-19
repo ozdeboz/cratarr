@@ -51,9 +51,12 @@
     crateName,
     crateOf,
     crates,
+    cycleFavouriteAlbums,
     cycleFavourites,
     EDIT_CRATE,
+    FAVOURITE_ALBUMS,
     FAVOURITES,
+    favouriteAlbumsOf,
     favouritesOf,
     favouritesSaved,
     forgetDraft,
@@ -277,7 +280,8 @@
     // As the toggle shows it (the server's saved setting until the crates are known).
     const shownFav = () => (c && crates.list ? favouritesOf(c) : undefined);
     const fav = shownFav();
-    const key = `${want}\n${fav}`;
+    const alb = c && crates.list ? favouriteAlbumsOf(c) : undefined;
+    const key = `${want}\n${fav}\n${alb}`;
     if (key !== shownFor) {
       rows = null;
       error = null;
@@ -287,7 +291,7 @@
     }
     // A crate keeps the pages it has (at least the first) when it is asked for again.
     const asked = c
-      ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav)
+      ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav, alb)
       : a
         ? albumView(a.source, a.id).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
@@ -566,7 +570,8 @@
     crateBands = null;
     if (!c || crateEditing) return;
     const fav = untrack(() => (crates.list ? favouritesOf(c) : undefined));
-    crateTempo(c, prefs.source || undefined, fav).then(
+    const alb = untrack(() => (crates.list ? favouriteAlbumsOf(c) : undefined));
+    crateTempo(c, prefs.source || undefined, fav, alb).then(
       (t) => {
         if (crate === c) crateBands = t;
       },
@@ -669,8 +674,10 @@
     }
     return list;
   });
-  // A genre shows all its tracks: no favourites toggle.
+  // A genre shows all its tracks: no favourites toggles.
   const favState = $derived(crate && genreOf(crate) === null ? FAVOURITES[favouritesOf(crate)] : null);
+  // Beside it, its favourite albums toggle (decision 0024, amended 2026-10-19).
+  const albState = $derived(crate && genreOf(crate) === null ? FAVOURITE_ALBUMS[favouriteAlbumsOf(crate)] : null);
   const closeLabel = $derived(
     crate ? 'Close the crate' : album ? 'Close the album' : artist ? 'Close the artist' : multi ? 'Close the playlists' : 'Close the playlist',
   );
@@ -763,7 +770,7 @@
       if (!e.isIntersecting || loadingMore || !rows || rows.length >= total) return;
       loadingMore = true;
       try {
-        const r = await crateRows(c, rows.length, PAGE, prefs.source || undefined, favouritesOf(c));
+        const r = await crateRows(c, rows.length, PAGE, prefs.source || undefined, favouritesOf(c), favouriteAlbumsOf(c));
         if (crate === c && rows) {
           rows = [...rows, ...r.rows];
           loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
@@ -1255,6 +1262,12 @@
             ><Icon name={favState.icon} size={24} /></button
           >
         {/if}
+        {#if albState && crate}
+          {@const c = crate}
+          <button class="icon" class:fav={albState.filled} aria-label={`Showing: ${albState.label}. Tap for the next`} title={albState.label} onclick={() => cycleFavouriteAlbums(c)}
+            ><Icon name={albState.icon} size={24} /></button
+          >
+        {/if}
         <button class="icon save" aria-label="Save" title="Save" onclick={saveCrate} disabled={crateSaving || !crateDraft?.name.trim()} aria-busy={crateSaving}
           ><Icon name="arrowDownToLine" size={24} /></button
         >
@@ -1278,6 +1291,11 @@
           {#if favState}
             <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
               ><Icon name={favState.icon} size={24} /></button
+            >
+          {/if}
+          {#if albState}
+            <button class="icon" class:fav={albState.filled} aria-label={`Showing: ${albState.label}. Tap for the next`} title={albState.label} onclick={() => crate && cycleFavouriteAlbums(crate)}
+              ><Icon name={albState.icon} size={24} /></button
             >
           {/if}
           {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => viewPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
