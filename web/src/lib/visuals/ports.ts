@@ -9,7 +9,8 @@ import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
 /** `light`: the flame's accumulated light (its RGBA and its bands' shares) before Show turns it into a picture; the
  *  flame's own loop works on it (claude-632, step 3). Only Show converts light into a picture. */
-export type PortType = 'picture' | 'light' | 'value' | 'trigger';
+/** `audio`: the sound itself, its recent samples (Music gives it; the Waves source draws it). */
+export type PortType = 'picture' | 'light' | 'audio' | 'value' | 'trigger';
 
 /** A port: its id on its module, its name, its type; `channels`: a band's six at once (VCV's polyphonic cable; a
  *  cable may take one of them); `normal`: what it is wired to unless a cable is plugged in (Eurorack's normalled
@@ -67,6 +68,7 @@ export const MUSIC: Declared = {
   ports: {
     in: [],
     out: [
+      out('audio', 'Sound', 'audio'),
       ...TRACK_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value')),
       ...BAND_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value', 6)),
     ],

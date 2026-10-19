@@ -46,12 +46,13 @@ and the rack. The Cratarr look is a chain built from those modules, nothing spec
 
 ### 1. Typed ports
 
-Four kinds of signal, each with its own wire in the graph:
+Five kinds of signal, each with its own wire in the graph:
 
 | Type | Carries | Wire |
 |---|---|---|
 | `picture` | a texture each frame | solid |
 | `light` | the flame's accumulated light before Show displays it (its RGBA and its bands' shares); the flame's own loop works on it, and only Show turns it into a picture (claude-632) | solid, thick |
+| `audio` | the sound itself: its recent samples each frame (the page's own player, or the app's `wave`); Music gives it, the Waves source takes it (the owner: "is video and audio essentially the same?": no) | double line |
 | `value` | a number each frame (a signal on 1 = typical; a modulator's own range; a knob's) | dashed |
 | `trigger` | events (a beat, a band's hit, a gate opening), each with its strength | dotted |
 
