@@ -78,7 +78,7 @@
   import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
   import PatchGraph from './PatchGraph.svelte';
-  import { cratarrPatch, cratarrTypes, type ModuleType } from './patch';
+  import { cratarrPatch, cratarrTypes, modulesOf, type ModuleType } from './patch';
   import { SOURCE_TYPES } from './sources/index';
   import { MODULATORS } from './modulators/modulators';
   import { DIVE_MOST, TUNNEL_MOST } from './zoom';
@@ -863,8 +863,17 @@
           return m ? moduleName(m) : 'A modulator';
         })()
       : `${SIGNAL_LABEL[c.from.signal as Signal] ?? c.from.signal}${c.from.band !== undefined ? ` · ${BAND_ROWS[c.from.band]}` : ''}`;
+  // A knob of any module, the extras' or today's chain's (claude-5f's chain-cables.ts moves those by the extras' cables).
+  const anyKnob = (mid: string, kid: string): Knob | undefined =>
+    GRAPH_TYPES[extraModule(mid)?.type ?? modulesOf(patchNow).get(mid)?.type ?? '']?.knobs.find((k) => k.id === kid);
+  // `module.knob` (a band's knob has its own dot: `flame.lighting.2`).
+  const splitKnob = (mk: string): [string, string] => [mk.slice(0, mk.indexOf('.')), mk.slice(mk.indexOf('.') + 1)];
+  const cableable = (mk: string) => {
+    const k = anyKnob(...splitKnob(mk));
+    return !!k && k.kind !== 'step' && !k.device;
+  };
   function addExtraCable(mid: string, kid: string, from: Cable['from'], to: number) {
-    const kind = extraType(extraModule(mid)?.type ?? '')?.knobs.find((k) => k.id === kid)?.kind;
+    const kind = anyKnob(mid, kid)?.kind;
     const id = newCableId();
     changeExtra((e) => e.cables.push({ id, from, to: { module: mid, knob: kid }, value: 0.5, mode: kind === 'level' ? 'level' : 'swing' }));
     path = path.slice(0, to);
@@ -989,9 +998,9 @@
       return m ? moduleName(m) : a;
     }
     if (kind === 'xcables') {
-      const [mid, kid] = a.split('.');
+      const [mid, kid] = splitKnob(a);
       const m = extraModule(mid);
-      return extraType(m?.type ?? '')?.knobs.find((k) => k.id === kid)?.label ?? (extraType(m?.type ?? '')?.inputs?.includes(kid) ? 'Input' : kid);
+      return (m ? undefined : ROW_OF.get(SETTING_OF.get(a) as One)?.label) ?? anyKnob(mid, kid)?.label ?? (extraType(m?.type ?? '')?.inputs?.includes(kid) ? 'Input' : kid);
     }
     if (kind === 'xaddband') return SIGNAL_LABEL[a as Signal] ?? b;
     if (kind === 'addband') return SIGNAL_LABEL[a as Signal] ?? b;
@@ -1381,6 +1390,9 @@
     // What the patch's cables make of today's settings that are no column (chain-cables.ts), as last worked out: the
     // look's as the flame is made, Purity as drawn, the bands' times and the behaviour as the aspects take them.
     let cabled: Cabled = { settings: {}, bands: {} };
+    // The settings cables moved when the flame was last made: one let go of (a trial starting, a cable taken out) returns
+    // to its setting, not a change from outside.
+    let cabledBefore = new Set<string>();
     const lookOf = (k: string) => ((cabled.settings as Record<string, number | undefined>)[k] ?? s[k as keyof VisualSettings]) as number;
     // The walking routes' factors (`Matrix.walks` order) and the matrix they are for (a route changed: none till the
     // next step).
@@ -1585,7 +1597,7 @@
         const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
         const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
         // A cable's move is the patch's own, not from outside.
-        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k) && !(k in cabled.settings));
+        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k) && !(k in cabled.settings) && !cabledBefore.has(k));
         if (outside) looksOutside++;
         if (blend && shown) {
           from = shown;
@@ -1594,6 +1606,7 @@
           blendOutside = outside;
         }
         made = Object.fromEntries(SHAPING.map((k) => [k, lookOf(k)]));
+        cabledBefore = new Set(Object.keys(cabled.settings));
         madeColours = colours;
         to = coloured(base!, mode, covered);
         if (!from) shown = to;
@@ -1626,7 +1639,7 @@
           m.track[T.track] = trackNow[T.track];
           read = signalsFor(normal, m, now);
           const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
-          if (extraCables.length) giveCables(got, extraCables, src, envelope, cableWalk, BANDS);
+          if (extraCables.length && !trial.settings) giveCables(got, extraCables, src, envelope, cableWalk, BANDS);
           cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
         },
       });
@@ -2075,6 +2088,13 @@
         <button class="moves" class:on={n > 0} aria-label="What moves {row.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`cables:${mk}`)}
           >{#if n}<span>{n}</span>{/if}<Icon name="chevronRight" size={16} /></button
         >
+      {:else if cables && cableable(mk)}
+        <!-- A knob no column reaches: the extras' cables into it (as a module's past the chain). -->
+        {@const [mid, kid] = splitKnob(mk)}
+        {@const n = cablesTo(mid, kid).length}
+        <button class="moves" class:on={n > 0} aria-label="What moves {row.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`xcables:${mk}`)}
+          >{#if n}<span>{n}</span>{/if}<Icon name="chevronRight" size={16} /></button
+        >
       {:else if cables}
         <span class="moves-gap" aria-hidden="true"></span>
       {/if}
@@ -2444,7 +2464,7 @@
               {/if}
             {/if}
           {:else if here.startsWith('xcables:')}
-            {@const [mid, kid] = here.slice('xcables:'.length).split('.')}
+            {@const [mid, kid] = splitKnob(here.slice('xcables:'.length))}
             <div class="rows">
               <h3 use:held={'moves'}>Moved by</h3>
               {#each cablesTo(mid, kid) as c (c.id)}
@@ -2461,7 +2481,7 @@
               <button class="go add" onclick={() => go(`xadd:${mid}.${kid}`)}><span class="name">+ Add</span></button>
             </div>
           {:else if here.startsWith('xadd:')}
-            {@const [mid, kid] = here.slice('xadd:'.length).split('.')}
+            {@const [mid, kid] = splitKnob(here.slice('xadd:'.length))}
             {#if s.extra.modulators.some((x) => x.id !== mid)}
               <div class="rows">
                 <h3>Modulators</h3>
@@ -2480,7 +2500,7 @@
             </div>
           {:else if here.startsWith('xaddband:')}
             {@const [, signal, target] = here.split(':')}
-            {@const [mid, kid] = target.split('.')}
+            {@const [mid, kid] = splitKnob(target)}
             <div class="rows">
               <button class="go" onclick={() => addExtraCable(mid, kid, { signal }, path.length - 2)}><span class="name">Every band</span></button>
               {#each BAND_ROWS as band, b (band)}

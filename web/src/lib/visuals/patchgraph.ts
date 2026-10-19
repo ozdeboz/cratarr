@@ -7,6 +7,7 @@
 import { endOf, type RouteValue } from './curves';
 import type { Cable, Knob, Module, ModuleType, Patch, Place, SignalRef } from './patch';
 import { SIGNAL_LABEL, type Signal } from './routes';
+import { ENGINES } from './effects';
 
 export type Side = 'left' | 'right' | 'top' | 'bottom';
 export type XY = { x: number; y: number };
@@ -109,6 +110,12 @@ export function signalLabel(r: SignalRef): string {
   return parts.join(' · ');
 }
 
+/** A module's name as the panel gives it: an engine module by its engine (Kaleidoscope, EYEDO, Hydra), not its slot. */
+export function labelOf(t: Pick<ModuleType, 'type' | 'label'>): string {
+  const key = t.type.replace(/-engine$/, '');
+  return (t.type.endsWith('-engine') && ENGINES.find((e) => e.key === key)?.label) || t.label;
+}
+
 /** A cable's amount as its label shows it: a swing signed, a level as a share. */
 export function amountLabel(value: RouteValue, mode: Cable['mode']): string {
   const pc = Math.round(endOf(value) * 100);
@@ -202,7 +209,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     return {
       kind: 'module',
       module: m.id,
-      label: t.label,
+      label: labelOf(t),
       place: t.place,
       knobs,
       hidden: all.length - shown.length,

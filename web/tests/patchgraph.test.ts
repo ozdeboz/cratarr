@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts');
 const { cratarrPatch, cratarrTypes } = await import('../src/lib/visuals/patch.ts');
 const { MODULATORS } = await import('../src/lib/visuals/modulators/modulators.ts');
-const { BLEND, SCREEN, LOOP, amountLabel, cableOf, graphOf, layerBox, ringOf, signalKey, turned } = await import('../src/lib/visuals/patchgraph.ts');
+const { BLEND, SCREEN, LOOP, amountLabel, cableOf, graphOf, labelOf, layerBox, ringOf, signalKey, turned } = await import('../src/lib/visuals/patchgraph.ts');
 type Patch = import('../src/lib/visuals/patch.ts').Patch;
 type ModuleType = import('../src/lib/visuals/patch.ts').ModuleType;
 type Module = import('../src/lib/visuals/patch.ts').Module;
@@ -52,6 +52,13 @@ function freeze<T>(o: T): T {
   }
   return o;
 }
+
+test('engine modules are named by their engine, as the panel names them; others by their type', () => {
+  assert.equal(labelOf({ type: 'kaleidoscope-engine', label: 'Effect 1' }), 'Kaleidoscope');
+  assert.equal(labelOf({ type: 'eyedo-engine', label: 'Effect 2' }), 'EYEDO');
+  assert.equal(labelOf({ type: 'hydra-engine', label: 'Effect 3' }), 'Hydra');
+  assert.equal(labelOf({ type: 'shapes', label: 'Shapes' }), 'Shapes');
+});
 
 test('rings: none uncabled, a swing above, a level its share under the setting, clamped', () => {
   assert.equal(ringOf(0.5, []), null);

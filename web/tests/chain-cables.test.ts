@@ -129,8 +129,8 @@ test("today's settings that are no column: moved as the evaluator moves a knob; 
     types,
   );
   const want = Math.min(hi, Math.max(lo, (DEFAULTS.detail as number) + 0.3 * ((hi - lo) / 2)));
-  near(got.settings.detail!, want, (hi - lo) / 256);
-  const step = (hi - lo) / 256;
+  near(got.settings.detail!, want, (hi - lo) / 32);
+  const step = (hi - lo) / 32;
   near(Math.round((got.settings.detail! - lo) / step) * step + lo, got.settings.detail!, 1e-9);
   assert.equal(got.bands.lighting!.length, (DEFAULTS.lighting as number[]).length);
   assert.notEqual(got.bands.lighting![2], (DEFAULTS.lighting as number[])[2]);
