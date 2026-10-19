@@ -1,10 +1,11 @@
 <script lang="ts">
   // A knob on a patch graph's node (decision 0056): its value as an arc over its range, and as a ring outside it the
   // stretch its cables move it over (purple). Turned by dragging up or down (a whole range over 160 px), the wheel or
-  // the arrow keys; a step knob by whole steps. Drawn at true size; the cable handle is the node's, under it.
+  // the arrow keys; a step knob by whole steps. Tapped without turning, `ontap` (what moves it). Drawn at true size; the
+  // cable handle is the node's, under it.
   import { turned, type KnobView } from './patchgraph';
 
-  let { knob, size = 26, onturn }: { knob: KnobView; size?: number; onturn: (value: number) => void } = $props();
+  let { knob, size = 26, onturn, ontap }: { knob: KnobView; size?: number; onturn: (value: number) => void; ontap?: () => void } = $props();
 
   const A0 = 0.75 * Math.PI;
   const SWEEP = 1.5 * Math.PI;
@@ -17,21 +18,26 @@
     return `M${x1.toFixed(2)},${y1.toFixed(2)} A${rad},${rad} 0 ${SWEEP * (to - from) > Math.PI ? 1 : 0} 1 ${x2.toFixed(2)},${y2.toFixed(2)}`;
   }
 
-  let drag: { y: number; value: number } | null = $state(null);
+  let drag: { y: number; value: number; moved: boolean } | null = $state(null);
   const shown = $derived(knob.kind === 'step' ? String(Math.round(knob.value)) : Math.abs(knob.value) >= 10 ? knob.value.toFixed(0) : knob.value.toFixed(2));
 
   function down(e: PointerEvent) {
     if (e.button !== 0) return;
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag = { y: e.clientY, value: knob.value };
+    drag = { y: e.clientY, value: knob.value, moved: false };
   }
   function move(e: PointerEvent) {
     if (!drag) return;
+    if (Math.abs(drag.y - e.clientY) > 4) drag.moved = true;
     const v = turned(knob, drag.value, drag.y - e.clientY);
     if (v !== knob.value) onturn(v);
   }
-  const up = () => (drag = null);
+  function up(e: PointerEvent) {
+    const tap = drag && !drag.moved && e.type === 'pointerup';
+    drag = null;
+    if (tap) ontap?.();
+  }
   const nudge = (dir: number) => {
     const v = turned(knob, knob.value, 0) + (knob.kind === 'step' ? dir : (dir * (knob.max - knob.min)) / 100);
     const next = Math.min(knob.max, Math.max(knob.min, v));

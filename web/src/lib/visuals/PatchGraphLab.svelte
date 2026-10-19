@@ -1,6 +1,7 @@
 <script lang="ts">
   // Development only (graph-lab.html): PatchGraph alone on a sample patch held here, every callback applied, so the
-  // graph can be edited as the panel would. ?cratarr shows the Cratarr chain (today's pipeline) instead.
+  // graph can be edited as the panel would. ?cratarr shows the Cratarr chain (today's pipeline) instead; ?off starts
+  // with the flame layer off (blended at nothing). A tapped cable shows a stand-in for its configuration.
   import PatchGraph from './PatchGraph.svelte';
   import { cratarrPatch, cratarrTypes, type Cable, type Knob, type Module, type ModuleType, type Patch } from './patch';
   import { MODULATORS } from './modulators/modulators';
@@ -38,13 +39,17 @@
         cable('c3', { modulator: 'beats' }, 'kaleido', 'turn', 0.4),
         cable('c4', { modulator: 'bass' }, 'tunnel', 'tunnel', 0.35, 'level'),
         cable('c5', { modulator: 'bass' }, 'fluid', 'stir', 0.3),
-        cable('c6', { modulator: 'drift' }, 'colour', 'hue', 0.15),
+        { ...cable('c6', { modulator: 'drift' }, 'colour', 'hue', 0.15), off: true } as Cable,
         cable('c7', { signal: 'loudness', speed: 'slow' }, 'flame', 'hue', -0.2),
       ],
     };
   }
 
-  let patch = $state.raw<Patch>(new URLSearchParams(location.search).has('cratarr') ? cratarrPatch(DEFAULTS) : sample());
+  const query = new URLSearchParams(location.search);
+  const first = query.has('cratarr') ? cratarrPatch(DEFAULTS) : sample();
+  if (query.has('off')) first.layers[0] = { ...first.layers[0], blend: { ...first.layers[0].blend, amount: 0 } };
+  let patch = $state.raw<Patch>(first);
+  let openCable = $state<string | null>(null);
   let positions = $state.raw<Record<string, XY>>({});
   let last = $state('');
   let n = 0;
@@ -77,10 +82,71 @@
     last = `move ${id} ${x},${y}`;
   }
   const onopen = (id: string) => (last = `open ${id}`);
+  function onopencable(id: string) {
+    openCable = id;
+    last = `open cable ${id}`;
+  }
+  const onopenknob = (id: string, knob: string) => (last = `open knob ${id}.${knob}`);
+  // Cables and modules removed; a module with every cable to or from it.
+  function onremove(ids: string[]) {
+    const gone = new Set(ids);
+    const keep = (m: Module) => !gone.has(m.id);
+    patch = {
+      ...patch,
+      layers: patch.layers.filter((l) => !gone.has(l.source.id)).map((l) => ({ ...l, modules: l.modules.filter(keep), loop: l.loop.filter(keep) })),
+      loop: patch.loop.filter(keep),
+      finish: patch.finish.filter(keep),
+      modulators: patch.modulators.filter(keep),
+      cables: patch.cables.filter((c) => !gone.has(c.id) && !gone.has(c.to.module) && !('modulator' in c.from && gone.has(c.from.modulator))),
+    };
+    if (openCable && gone.has(openCable)) openCable = null;
+    last = `remove ${ids.join(', ')}`;
+  }
+  function onreroute(id: string, end: 'from' | 'to', next: Cable['from'] | Cable['to']) {
+    patch = { ...patch, cables: patch.cables.map((c) => (c.id === id ? { ...c, [end]: next } : c)) };
+    last = `reroute ${id} ${end} → ${JSON.stringify(next)}`;
+  }
+  function onaddlayer(type: string) {
+    const off = patch.layers.find((l) => l.id === type && l.blend.amount <= 0);
+    if (off) patch = { ...patch, layers: patch.layers.map((l) => (l === off ? { ...l, blend: { ...l.blend, amount: 1 } } : l)) };
+    else {
+      const id = `${type}${++n}`;
+      patch = { ...patch, layers: [...patch.layers, { id, source: mod(`${id}-source`, type), modules: [], loop: [], blend: { mode: 'add', amount: 1 } }] };
+    }
+    last = `add layer ${type}`;
+  }
+  function onaddmodule(where: string, type: string) {
+    const m = mod(`${type}${++n}`, type);
+    patch = where === 'loop' ? { ...patch, loop: [...patch.loop, m] } : { ...patch, layers: patch.layers.map((l) => (l.id === where ? { ...l, modules: [...l.modules, m] } : l)) };
+    last = `add ${type} to ${where}`;
+  }
+  function onaddmodulator(type: string) {
+    patch = { ...patch, modulators: [...patch.modulators, mod(`${type}${++n}`, type)] };
+    last = `add modulator ${type}`;
+  }
 </script>
 
 <div class="lab">
-  <PatchGraph {patch} {types} {positions} {onconnect} {ondisconnect} {onknob} {onmove} {onopen} />
+  <PatchGraph
+    {patch}
+    {types}
+    {positions}
+    {onconnect}
+    {ondisconnect}
+    {onknob}
+    {onmove}
+    {onopen}
+    {onopencable}
+    {onopenknob}
+    {onremove}
+    {onreroute}
+    {onaddlayer}
+    {onaddmodule}
+    {onaddmodulator}
+  />
+  {#if openCable}
+    <aside><span>{openCable}</span><button aria-label="Close" onclick={() => (openCable = null)}>×</button></aside>
+  {/if}
   <pre>{last}</pre>
 </div>
 
@@ -91,6 +157,27 @@
     border: 1px solid var(--border);
     border-radius: 20px;
     overflow: hidden;
+  }
+  aside {
+    position: absolute;
+    top: 48px;
+    right: 16px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 16px;
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 13px;
+  }
+  aside button {
+    border: 0;
+    background: none;
+    color: inherit;
+    font-size: 16px;
+    cursor: pointer;
   }
   pre {
     position: absolute;

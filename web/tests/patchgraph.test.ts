@@ -1,5 +1,6 @@
 // The graph builder's mapping (decision 0056 step 3, patchgraph.ts): a patch as nodes and edges, picture cables in the
-// patch's order, every cable an edge onto its knob, the knobs shown and their rings, connections checked: npm test.
+// patch's order, every cable an edge onto its knob, the knobs shown and their rings, connections checked; a layer that is
+// off, muted cables, the adds, a cable's end rerouted, the cables' sag (after VCV Rack's): npm test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -7,7 +8,7 @@ import assert from 'node:assert/strict';
 const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts');
 const { cratarrPatch, cratarrTypes } = await import('../src/lib/visuals/patch.ts');
 const { MODULATORS } = await import('../src/lib/visuals/modulators/modulators.ts');
-const { BLEND, SCREEN, LOOP, amountLabel, cableOf, graphOf, labelOf, layerBox, ringOf, signalKey, turned } = await import('../src/lib/visuals/patchgraph.ts');
+const { ADD_LAYER, ADD_MODULATOR, BLEND, SCREEN, LOOP, amountLabel, cableOf, drawnOpacity, graphOf, labelOf, layerBox, nearestEnd, nextOpacity, rerouted, ringOf, saggingPath, signalKey, slumpOf, turned } = await import('../src/lib/visuals/patchgraph.ts');
 type Patch = import('../src/lib/visuals/patch.ts').Patch;
 type ModuleType = import('../src/lib/visuals/patch.ts').ModuleType;
 type Module = import('../src/lib/visuals/patch.ts').Module;
@@ -189,4 +190,78 @@ test('the Cratarr chain draws whole: every cable onto a knob, no node twice', ()
   assert.equal(g.nodes.length, new Set(g.nodes.map((n) => n.id)).size);
   const pic = g.edges.filter((e) => e.class === 'picture').map((e) => e.target);
   assert.deepEqual(pic.slice(-4), ['fx1', 'fx2', 'fx3', SCREEN]);
+});
+
+test('a layer blended at nothing is one row, "off": none of its modules, no picture into the blend, no cables into it', () => {
+  const p = sample();
+  p.layers[0] = { ...p.layers[0], blend: { ...p.layers[0].blend, amount: 0 } };
+  const { nodes, edges } = graphOf({ patch: p, types });
+  const row = nodes.find((n) => n.id === layerBox('one'))!;
+  assert.deepEqual(row.data, { kind: 'off', layer: 'one', label: 'Source' });
+  assert.ok(!nodes.some((n) => n.id === 's1' || n.id === 'k1'));
+  assert.ok(!edges.some((e) => e.target === BLEND && e.source === 'k1'));
+  assert.deepEqual(edges.filter((e) => e.target === BLEND).map((e) => e.source), ['m2']);
+  // c1 (into k1) and c3 (into s1) have nothing to go into.
+  assert.deepEqual(edges.filter((e) => e.class === 'cable').map((e) => e.id), ['c2']);
+});
+
+test('a muted cable is drawn as one, and moves no ring', () => {
+  const p = sample();
+  p.cables = p.cables.map((c) => (c.id === 'c3' ? { ...c, off: true } : c));
+  const g = graphOf({ patch: p, types });
+  assert.equal(g.edges.find((e) => e.id === 'c3')!.data!.muted, true);
+  assert.equal(g.edges.find((e) => e.id === 'c1')!.data!.muted, undefined);
+  const e = (g.nodes.find((n) => n.id === 's1')!.data as ModuleData).knobs.find((k) => k.id === 'e')!;
+  assert.equal(e.ring, null);
+});
+
+test('adds: "+ Add layer" under the layers, "+ Add modulator" by the modulators, a box’s "+" where it takes one', () => {
+  assert.ok(!graphOf({ patch: sample(), types }).nodes.some((n) => n.data.kind === 'add'));
+  const g = graphOf({ patch: sample(), types, adds: true, addTo: (w) => w !== 'two' });
+  const by = new Map(g.nodes.map((n) => [n.id, n]));
+  assert.equal(by.get(ADD_LAYER)!.data.kind, 'add');
+  assert.ok(by.get(ADD_LAYER)!.position.y > by.get(layerBox('two'))!.position.y);
+  assert.ok(by.get(ADD_MODULATOR)!.position.y > by.get('lfo')!.position.y);
+  assert.equal((by.get(layerBox('one'))!.data as { add?: string }).add, 'one');
+  assert.equal((by.get(layerBox('two'))!.data as { add?: string }).add, undefined);
+  assert.equal((by.get(LOOP)!.data as { add?: string }).add, 'loop');
+});
+
+test('rerouting: the nearer end; the knob end onto another knob, the source end onto another output; checked', () => {
+  assert.equal(nearestEnd({ x: 10, y: 10 }, { x: 0, y: 0 }, { x: 100, y: 100 }), 'from');
+  assert.equal(nearestEnd({ x: 90, y: 80 }, { x: 0, y: 0 }, { x: 100, y: 100 }), 'to');
+  const p = sample();
+  const { nodes } = graphOf({ patch: p, types });
+  const c1 = p.cables[0]; // lfo → k1.turn
+  const now = (source: string, target: string, targetHandle: string) => rerouted(c1, { source, sourceHandle: 'mod', target, targetHandle }, nodes, p.cables);
+  assert.deepEqual(now('lfo', 'f1', 'k:amount'), { end: 'to', next: { module: 'f1', knob: 'amount' } });
+  assert.deepEqual(now('fol', 'k1', 'k:turn'), { end: 'from', next: { modulator: 'fol' } });
+  assert.deepEqual(now(signalKey({ signal: 'beat' }), 'k1', 'k:turn'), { end: 'from', next: { signal: 'beat' } });
+  // Back where it was, onto a picture handle, or both ends at once: nothing.
+  assert.equal(now('lfo', 'k1', 'k:turn'), null);
+  assert.equal(now('lfo', 'f1', 'in'), null);
+  assert.equal(now('fol', 'f1', 'k:amount'), null);
+  // Not onto a knob already cabled from the same source.
+  const more = [...p.cables, { id: 'c5', from: { modulator: 'lfo' }, to: { module: 'f1', knob: 'amount' }, value: 0.2, mode: 'level' as const }];
+  assert.equal(rerouted(c1, { source: 'lfo', sourceHandle: 'mod', target: 'f1', targetHandle: 'k:amount' }, nodes, more), null);
+});
+
+test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tension)(150 + length)', () => {
+  assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 1), { x: 50, y: 0 });
+  assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5), { x: 50, y: 125 });
+  const short = slumpOf({ x: 0, y: 0 }, { x: 10, y: 0 }).y;
+  const long = slumpOf({ x: 0, y: 0 }, { x: 400, y: 0 }).y;
+  assert.ok(long > short && short > 0);
+  const [path, mid] = saggingPath({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5);
+  assert.equal(path, 'M0,0 Q50,125 100,0');
+  assert.deepEqual(mid, { x: 50, y: 62.5 });
+});
+
+test('cable opacity: 100, 50, 20 % in turn, drawn as Rack draws it (to the power 1.5)', () => {
+  assert.equal(nextOpacity(1), 0.5);
+  assert.equal(nextOpacity(0.5), 0.2);
+  assert.equal(nextOpacity(0.2), 1);
+  assert.equal(nextOpacity(0.7), 0.5);
+  assert.equal(drawnOpacity(1), 1);
+  assert.ok(Math.abs(drawnOpacity(0.25) - 0.125) < 1e-9);
 });
