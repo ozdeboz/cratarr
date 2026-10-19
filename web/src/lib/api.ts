@@ -294,7 +294,10 @@ export const playerCommand = (name: string, command: Record<string, unknown>) =>
     body: JSON.stringify(command),
   });
 
-export const coverUrl = (np: { source: string; id: string }) => `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
+/** A track's cover. The device's own music (local mode, decision 0052) has its album's, which the app serves on the
+ *  page's own address. */
+export const coverUrl = (np: { source: string; id: string; album_id?: string | null }) =>
+  np.source === 'device' ? `/__device/cover/${encodeURIComponent(np.album_id ?? '')}` : `/api/cover/${encodeURIComponent(np.source)}/${encodeURIComponent(np.id)}`;
 
 /** play: in file order · shuffle: random order · next: after the current track · last: at the end of the queue. */
 export type PlayMode = 'play' | 'shuffle' | 'next' | 'last';
@@ -1039,7 +1042,8 @@ export const playAlbum = (source: string, album: string) =>
 export const setAlbumFavorite = (source: string, album: string, on: boolean) =>
   request<{ favorite: boolean }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/favorite?on=${on}`, { method: 'POST' });
 /** The album's cover as the server has it (no picture chosen on this device, no reading again). */
-export const serverCoverUrl = (source: string, album: string) => `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
+export const serverCoverUrl = (source: string, album: string) =>
+  source === 'device' ? `/__device/cover/${encodeURIComponent(album)}` : `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
 /** The album's cover as this device shows it: a picture chosen here, else the server's (read again: a new address). */
 export const albumCoverUrl = (source: string, album: string) => {
   const key = coverKey(source, album);

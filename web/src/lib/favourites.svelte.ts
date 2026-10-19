@@ -33,6 +33,8 @@ const albumAsks: Record<string, Promise<boolean>> = {};
 /** Asks for a server's favourite albums (one request at a time per server); `ids`: albums to say about either way.
  *  False when the server cannot tell; the hearts stay as they were. */
 export function loadAlbumFavorites(source: string, ids: string[] = []): Promise<boolean> {
+  // The device's own music (local mode, decision 0052) has no hearts.
+  if (source === 'device') return Promise.resolve(false);
   albumAsks[source] ??= getFavoriteAlbums(source)
     .then((list) => {
       const now = new Set(list);

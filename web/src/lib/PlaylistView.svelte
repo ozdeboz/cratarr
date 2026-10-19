@@ -71,6 +71,7 @@
     viewGenre,
     type CrateDraft,
   } from './crates.svelte';
+  import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
   import CrateEditor from './CrateEditor.svelte';
   import SelectSheet from './SelectSheet.svelte';
   import { Reorder } from './reorder.svelte';
@@ -248,6 +249,9 @@
 
   // The album's heart: shows the change at once, back as it was when the server refuses.
   const albumFav = $derived(album ? isFavorite(album.source, album.id) : false);
+  /** An album or artist of the device's own music (local mode, decision 0052): played and played next, nothing of
+   *  Cratarr's (hearts, menus, About, radio, select). */
+  const onDevice = $derived((album?.source ?? artist?.source) === DEVICE);
   async function toggleAlbumFavorite() {
     if (!album) return;
     const { source: s, id: a } = album;
@@ -297,14 +301,14 @@
     const asked = c
       ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav, alb)
       : a
-        ? albumView(a.source, a.id).then((r) => {
+        ? (a.source === DEVICE ? Promise.resolve(deviceAlbumView(a.id)) : albumView(a.source, a.id)).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id)
               albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays };
             return { ...r, total: r.rows.length };
           })
         : ar
-          ? artistView(ar.source, ar.name).then((r) => {
+          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : artistView(ar.source, ar.name)).then((r) => {
               if (want === id) {
                 artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite };
                 // Their picture: their newest album's cover (Symfonium's, without an artist's photo).
@@ -323,7 +327,7 @@
         source = r.source;
         total = r.total;
         listGenres = r.genres;
-        loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
+        if (r.source !== DEVICE) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
       },
       (e) => {
         if (want === id) error = e instanceof Error ? e.message : 'Unexpected error';
@@ -667,7 +671,7 @@
   const barActions = $derived.by((): BarAction[] => {
     const play = (key: PlayMode, icon: IconName, label: string): BarAction => ({ key, icon, label, run: () => act(key), disabled: !canPlay });
     const list = [play('play', 'play', 'Play')];
-    if (album) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
+    if (album && !onDevice) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
     list.push(play('shuffle', 'shuffle', 'Shuffle'));
     if (!crate) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
     // An artist as the radio's input (decision 0036), as a crate is: their tracks, and like them from anywhere.
@@ -1406,6 +1410,8 @@
           {:else}
             <button class="icon" aria-label="Make playlist" title="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
           {/if}
+        {:else if onDevice}
+          <!-- The device's own music (local mode, decision 0052): no heart, no Cratarr menu. -->
         {:else if artist}
           {#if artistHead?.favorite !== undefined}
             <button class="icon" class:fav={artistHead.favorite} aria-pressed={artistHead.favorite} aria-label="Favourite" onclick={toggleArtistFavorite}
@@ -1635,7 +1641,7 @@
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
       </ol>
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
-      {#if album && albumHead}
+      {#if album && albumHead && !onDevice}
         <!-- As Symfonium's album: the artist's other albums, then About. -->
         {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
         {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
@@ -1742,7 +1748,7 @@
       onclick={() => (selecting && i !== null ? tick(i) : playFrom(name, src, list, r))}
       attach={fromAction(swipe, () => ({ enabled: !selecting, right: ok ? () => playNext(r, src) : null, left: out }))}
       attachMain={fromAction(longpress, () => () => {
-        if (!ok) return;
+        if (!ok || onDevice) return;
         if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, name, r) };
         else if (selecting) selectSheet = true;
         else startSelect(i);
@@ -1763,7 +1769,7 @@
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
       ><Icon name={selecting.has(i) ? 'circleCheck' : 'circle'} size={24} /></button
     >
-  {:else}
+  {:else if !onDevice}
     <button class="tool" aria-label={`Menu of ${r.name ?? r.file}`} onclick={() => (trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, list, r) })}
       ><Icon name="moreVert" size={22} /></button
     >
@@ -1786,7 +1792,7 @@
       disabled={!ok}
       onclick={() => (selecting ? tick(i) : playFrom(title, source, list, r))}
       attach={fromAction(swipe, () => ({ enabled: ok && !selecting, right: () => playNext(r, source) }))}
-      attachMain={fromAction(longpress, () => () => ok && (selecting ? (selectSheet = true) : startSelect(i)))}
+      attachMain={fromAction(longpress, () => () => ok && !onDevice && (selecting ? (selectSheet = true) : startSelect(i)))}
     >
       {#snippet lead()}
         <span class="num">{#if here}<span class="dots" class:still={paused()} aria-label="Playing"><i></i><i></i><i></i><i></i></span>{:else}{i + 1}{/if}</span>
@@ -1797,7 +1803,7 @@
 {/snippet}
 
 {#snippet cover(r: PlaylistRow, src: string, here = false)}
-  <TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id }) : null} playing={here} paused={paused()} />
+  <TrackCover src={r.id && !r.missing ? coverUrl({ source: src, id: r.id, album_id: r.album_id }) : null} playing={here} paused={paused()} />
 {/snippet}
 
 {#if menuOpen && selected.length}

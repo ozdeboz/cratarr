@@ -10,10 +10,16 @@
   // playback, even in a group"): under This device while it plays, alone or in a group, the output it sounds on; a tap
   // lists the app's outputs, Automatic (Android's own choice) first. A choice holds until an output comes or goes.
   // Following a group, the group's player (Snapcast) makes the sound and takes no choice (the owner: "for later, if
-  // ever"): the row shows greyed.
+  // ever"): the row shows greyed. Automatic can follow the user's order (the owner, 2026-10-19: "Automatic follows it but
+  // we need a toggle where we can also turn off the override. When override is turned off the Android order comes back
+  // and the drag bars remove"): "My order" on, every output seen is listed in that order with its handle, those not
+  // connected greyed (a swipe left forgets one); off, the connected ones only, as Android picks.
   import { appInfo, inApp, setDevice } from './app.svelte';
   import { coverUrl, type AudioOutput, type PlayOnPlayer } from './api';
-  import type { IconName } from './Icon.svelte';
+  import Icon, { type IconName } from './Icon.svelte';
+  import { Reorder } from './reorder.svelte';
+  import { swipe } from './swipe';
+  import SwipeBehind from './SwipeBehind.svelte';
   import GroupVolume from './GroupVolume.svelte';
   import { hold } from './hold';
   import { live } from './live.svelte';
@@ -67,6 +73,33 @@
     setDevice({ output: id });
     choosingOutput = false;
   }
+  // My order: shown at once, told to the app (it answers with all its settings).
+  function setOrdered(on: boolean) {
+    navigator.vibrate?.(8);
+    appInfo.ordered = on;
+    setDevice({ ordered: on });
+  }
+  let orderList = $state<HTMLElement>();
+  const reorder = new Reorder(
+    () => orderList,
+    () => appInfo.known.length,
+    (from, to) => {
+      const k = [...appInfo.known];
+      const [o] = k.splice(from, 1);
+      k.splice(to, 0, o);
+      appInfo.known = k;
+      setDevice({ order: k.map((x) => x.id) });
+    },
+  );
+  const connected = (id: string) => appInfo.outputs.some((o) => o.id === id);
+  const FORGET = { icon: 'trash', label: 'Forget', danger: true } as const;
+  function forget(id: string) {
+    setTimeout(() => {
+      appInfo.known = appInfo.known.filter((o) => o.id !== id);
+      setDevice({ forget: id });
+    }, 200);
+    return 'away' as const;
+  }
 
   function pick(output: typeof prefs.output) {
     if (group.length > 1) {
@@ -116,9 +149,35 @@
     {:else if choosingOutput}
       <!-- One choice: the chosen one ticked, the others plain (no group's +). -->
       <MenuEntry label="Automatic" checked={appInfo.output === null ? true : null} onclick={() => chooseOutput(null)} />
-      {#each appInfo.outputs as o (o.id)}
-        <MenuEntry icon={OUT_ICON[o.type]} label={outName(o)} checked={appInfo.output === o.id ? true : null} onclick={() => chooseOutput(o.id)} />
-      {/each}
+      <MenuEntry icon="order" label="My order" switched={appInfo.ordered} onclick={() => setOrdered(!appInfo.ordered)} />
+      {#if appInfo.ordered}
+        <ol class="order" class:dragging={!!reorder.drag} bind:this={orderList}>
+          {#each appInfo.known as o, i (o.id)}
+            {@const on = connected(o.id)}
+            <li class:lifted={reorder.drag?.from === i} style:transform={reorder.drag ? `translateY(${reorder.offset(i)}px)` : null}>
+              {#if !on}<SwipeBehind left={FORGET} />{/if}
+              <div class="out" use:swipe={{ enabled: !on && !reorder.drag, left: () => forget(o.id) }}>
+                <button class="pick" class:chosen={appInfo.output === o.id} disabled={!on} onclick={() => chooseOutput(o.id)}
+                  ><Icon name={OUT_ICON[o.type]} size={24} /><span>{outName(o)}</span>{#if appInfo.output === o.id}<Icon name="check" size={20} />{/if}</button
+                >
+                <button
+                  class="grip"
+                  aria-label={`Drag ${outName(o)} to reorder`}
+                  data-sheet-drag="off"
+                  onpointerdown={(e) => reorder.down(e, i)}
+                  onpointermove={reorder.move}
+                  onpointerup={reorder.end}
+                  onpointercancel={reorder.end}><Icon name="order" size={24} /></button
+                >
+              </div>
+            </li>
+          {/each}
+        </ol>
+      {:else}
+        {#each appInfo.outputs as o (o.id)}
+          <MenuEntry icon={OUT_ICON[o.type]} label={outName(o)} checked={appInfo.output === o.id ? true : null} onclick={() => chooseOutput(o.id)} />
+        {/each}
+      {/if}
     {:else}
       {#if canPlayHere}
         <div use:hold={{ start: () => me && held(me), end: () => {}, enabled: groupable(me), ms: HOLD_MS }}>
@@ -162,3 +221,89 @@
     {/if}
   </div>
 </MenuSheet>
+
+<style>
+  /* My order's rows: a menu entry's look (56 px, the icon in the accent), the handle at the end, as the queue's. */
+  .order {
+    position: relative;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .order li {
+    position: relative;
+  }
+
+  .order.dragging li {
+    transition: transform 200ms ease;
+  }
+
+  .order.dragging li.lifted {
+    z-index: 1;
+    transition: none;
+  }
+
+  .out {
+    display: flex;
+    align-items: center;
+    background: var(--surface);
+  }
+
+  .pick {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-height: 56px;
+    padding: 0 8px 0 24px;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 16px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .pick span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pick :global(svg) {
+    flex: none;
+    color: var(--art-accent, var(--accent));
+  }
+
+  .pick.chosen {
+    font-weight: 600;
+  }
+
+  .pick:disabled {
+    color: color-mix(in srgb, var(--text) 38%, transparent);
+    cursor: default;
+  }
+
+  .pick:disabled :global(svg) {
+    opacity: 0.5;
+  }
+
+  .grip {
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 56px;
+    margin-right: 12px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    touch-action: none;
+    cursor: grab;
+  }
+</style>

@@ -129,7 +129,8 @@
         aria-label={np.player ? `Playing on ${np.player}; play on` : 'Where it plays'} onclick={() => (outputOpen = true)}
         ><Icon name="speaker" size={24} /></button
       >
-      {#if np.favorite !== null}
+      <!-- No heart for the device's own music (local mode, decision 0052). -->
+      {#if np.favorite !== null && np.source !== 'device'}
         <button class="own fav" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
           ><Icon name="heart" size={28} /></button
         >

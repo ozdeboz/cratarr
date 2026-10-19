@@ -67,10 +67,13 @@
   const forPlaying = $derived(!place && (!track || (!!np && np.source === track.source && np.id === track.id)));
   const t = $derived<MenuTrack | null>(forPlaying ? np : track);
 
+  /** One of the device's own (local mode, decision 0052): none of Cratarr's (hearts, playlists, downloads, share,
+   *  details); Play next, Add to queue, its album and artist, the web search. */
+  const onDevice = $derived(t?.source === 'device');
   // Another track's playlists and heart, asked for when its menu opens.
   let other = $state<TrackState | null>(null);
   $effect(() => {
-    if (forPlaying || !track) return;
+    if (forPlaying || !track || track.source === 'device') return;
     const { source, id } = track;
     trackState(source, id).then(
       (v) => (other = v),
@@ -338,7 +341,7 @@
         {#if addable}
           <MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />
         {/if}
-        {#if inApp && t}
+        {#if inApp && t && !onDevice}
           {@const one = t}
           <MenuEntry
             icon="arrowDownToLine"
@@ -349,8 +352,10 @@
             }}
           />
         {/if}
-        <MenuEntry icon="share" label="Share" onclick={shareIt} />
-        <MenuEntry icon="info" label="Details" onclick={showDetails} />
+        {#if !onDevice}
+          <MenuEntry icon="share" label="Share" onclick={shareIt} />
+          <MenuEntry icon="info" label="Details" onclick={showDetails} />
+        {/if}
         <MenuEntry icon="search" label="Web search" onclick={webSearch} />
         {#if movesHere && !forPlaying}
           <MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />

@@ -21,6 +21,7 @@
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
   import { crateName, leaveOut, queueCrate } from './crates.svelte';
+  import { localMode } from './deviceMusic.svelte';
   import { excludeGlobally } from './exclusions.svelte';
   import { longpress } from './longpress';
   import MenuEntry from './MenuEntry.svelte';
@@ -512,7 +513,9 @@
             onclick={() => (outputOpen = true)}
             ><Icon name="speaker" size={24} />{#if !playsHere() && np.player}<small>{np.player}</small>{/if}</button
           >
-          <!-- In the middle (the owner). Always there; until the server says whether it is a favourite, not to be pressed. -->
+          <!-- In the middle (the owner). Always there; until the server says whether it is a favourite, not to be pressed.
+               Not in local mode (decision 0052: no hearts for the device's own music). -->
+          {#if !localMode()}
           <button
             class="fav"
             class:on={favorite()}
@@ -522,9 +525,10 @@
             onclick={toggleFavorite}
             use:longpress={() => (heartMenu = true)}><Icon name="heart" size={26} /></button
           >
+          {/if}
           <!-- More music (Radio and Autoplay, decision 0036, amended), where the device button was; only where the page holds the queue.
                A tap opens its sheet; lit while either is on. -->
-          {#if isLocal()}
+          {#if isLocal() && !localMode()}
             <button
               class="act radio more"
               class:on={local.radio || local.autoplay !== null}

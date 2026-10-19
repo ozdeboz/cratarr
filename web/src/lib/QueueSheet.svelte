@@ -195,7 +195,8 @@
 
 <!-- Finamp's row heart (lib/RowHeart.svelte): a tap opens its playlists, a long-press makes it a favourite or not. -->
 {#snippet rowHeart(t: MenuTrack)}
-  <RowHeart source={t.source} id={t.id} name={t.name} onopen={() => showMenu({ track: t, start: 'lists', queue: null })} />
+  <!-- None for the device's own music (local mode, decision 0052). -->
+  {#if t.source !== 'device'}<RowHeart source={t.source} id={t.id} name={t.name} onopen={() => showMenu({ track: t, start: 'lists', queue: null })} />{/if}
 {/snippet}
 
 {#if np}
@@ -281,7 +282,7 @@
           <span>{np.artist ?? ''}</span>
         </div>
         <span class="ntime">{clockText(pos)}{dur ? ` / ${clockText(dur)}` : ''}</span>
-        {#if np.favorite !== null}
+        {#if np.favorite !== null && np.source !== 'device'}
           <button class="nbtn" class:on={favorite()} disabled={pending()} aria-label={favorite() ? 'Favourite' : 'Not a favourite'} aria-pressed={favorite()} onclick={toggleFavorite}
             ><Icon name="heart" size={28} /></button
           >

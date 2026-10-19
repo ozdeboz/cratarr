@@ -12,6 +12,15 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **No page titles.** The navigation shows where you are. A page starts with its toolbar, then its content.
 - **Navigation:** from 1024 px a sidebar on the left; below it a bar of pages fixed along the **top** (icon and label,
   up to five, the rest under More).
+- **Cratarr | Local** (decision 0052, the owner's picks): in the app, once a local folder is on (Settings → This device
+  → Local music), the sidebar's top is the mode switcher (`lib/ModeSwitcher.svelte`, mock B): a bordered button, the
+  mark on its 38 px tile, the mode over "● Connected" or this device's name, the up-down chevrons; a tap opens the two
+  modes, the current one lit, no icons. On a phone the same in a slim row (34 px) over the tabs (mock C). Without a
+  local folder, and in a browser, the top is as it was. While Local plays, a note before the device's name. A switch is
+  the whole app: what plays pauses and is put by, the other mode's queue comes back paused, and the page goes to the
+  mode's first page. Local's menu: Albums, Artists, Tracks, Settings; its pages as the Library's (search, no filter),
+  its albums and artists in the panel as Cratarr's, with nothing of Cratarr's: no hearts, playlists, crates, radio,
+  Insights, track menus beyond Play next, Add to queue, its album and artist.
 - **The player is part of the app shell** (decision 0018, after Finamp), on every page: since Cratarr plays music
   itself (decision 0022) it is a player, not only a remote for adding what plays. Which server a browser follows is
   chosen in the filter sheet (the funnel in the floating pill: a card per server), not on the pages; no choice is
@@ -72,8 +81,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     Whichever side plays, the player looks and works the same; playlists, the heart and the info chips act on the
     track that plays there. A track this device cannot play is skipped with one error line naming it. In the app,
     under This device while it plays (alone or in a group), its audio output: the one it sounds on by its icon and
-    name; a tap opens a step with Automatic (Android's own choice) and each output, the chosen one ticked (2026-10-19).
-    Following a group the row is greyed: the group's player makes the sound.
+    name; a tap opens a step with Automatic and each output, the chosen one ticked (2026-10-19). Automatic is Android's
+    own choice, or with "My order" on the first connected output in the user's order: every output seen, dragged by
+    its handle, those not connected greyed (a swipe left forgets one); off, the handles go. Following a group the row
+    is greyed: the group's player makes the sound.
   Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`,
   `lib/remote.svelte.ts`).
 - **Swipes on rows** (`lib/swipe.ts`, the owner 2026-10-19): the row follows the finger; past 65 % of its width the
