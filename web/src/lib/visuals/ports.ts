@@ -90,7 +90,9 @@ export const ENVELOPE = declared(
   'modulator',
   [knob('intensity', 'Intensity', 0, 1, 0.5, 'level', 0), knob('time', 'Time', 0.02, 2, 0.2)],
   [{ id: 'in', label: 'Input', type: 'value', normal: { module: 'music', port: 'loudness' } }],
-  [VALUE_OUT],
+  // `level`: the loudness as Intensity lets it count (what a loudness cable reads); `out`: that while playing, else 0
+  // (every other cable's depth is normalled to it).
+  [out('level', 'Level'), VALUE_OUT],
 );
 
 export const CLOCK = declared(
