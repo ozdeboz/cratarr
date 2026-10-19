@@ -1,9 +1,12 @@
 // The visuals' modulators (decision 0056): modules with no picture, whose outputs feed cables as the music's signals do.
 // The set is what curated MilkDrop presets build by hand before they drive anything: summed volume, fast and slow
-// followers, moving averages, peak and mean trackers, "above typical" beat gates, beat and bar counters, LFOs and
-// drift, sample-and-hold.
+// followers, moving averages, peak and mean trackers, "above typical" beat gates, counters, LFOs and drift,
+// sample-and-hold.
 //
-// - Each reads its input through `signals` (1 = typical) and gives 0..1 (`range: 'unipolar'`) or −1..1 ('bipolar').
+// - Inputs are cables, as in a modular: the engine sums the cables into each port (`inputs`) and passes the sum as that
+//   knob (`knobs.in`; 0 where nothing is cabled), so they chain: a follower into a gate into a counter. Volume alone
+//   reads the bands' signals itself.
+// - Each gives 0..1 (`range: 'unipolar'`) or −1..1 ('bipolar'). A signal straight from the music is 1 = typical.
 // - Every knob is continuous, and with every knob at its neutral the output is 0 (Amount at 0, the rest at "does
 //   nothing"), so a chain change fades a modulator in from its neutral or out to it.
 // - Times are seconds and smoothing is exponential over dt, so 30 and 120 frames a second give the same.
@@ -15,13 +18,12 @@ import type { Knob, Modulator, ModuleType, SignalRef } from '../patch';
 /** The music's signals now, 1 = typical. */
 export type Signals = (ref: SignalRef) => number;
 
-/** A modulator's module type: what it gives (0..1 or −1..1), the signal it reads unless the chain names another, and a
- *  new running one. `seed` sets the way the wandering ones (drift) walk, so the devices of a sync group walk alike. */
+/** A modulator's module type: what it gives (0..1 or −1..1), its input ports, and a new running one. */
 export type ModulatorType = ModuleType & {
   place: 'modulator';
   range: 'unipolar' | 'bipolar';
-  input?: SignalRef;
-  create(input?: SignalRef, seed?: number): Modulator;
+  inputs?: string[];
+  create(seed?: number): Modulator;
 };
 
 /** The bands a track's signals have (signals.ts). */
@@ -31,12 +33,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 /** What is left of a gap after `dt` of an exponential approach with time constant `tau` (nothing at 0). */
 const keep = (dt: number, tau: number) => (tau > 0 ? Math.exp(-dt / tau) : 0);
 const frac = (u: number) => u - Math.floor(u);
-
-/** A signal as read: never negative, 0 where there is none. */
-function read(signals: Signals, ref: SignalRef): number {
-  const v = signals(ref);
-  return Number.isFinite(v) ? Math.max(0, v) : 0;
-}
+const finite = (v: number | undefined) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 
 const knob = (id: string, label: string, min: number, max: number, neutral: number, def: number, kind: Knob['kind'] = 'swing'): Knob => ({
   id,
@@ -48,16 +45,18 @@ const knob = (id: string, label: string, min: number, max: number, neutral: numb
   kind,
 });
 const AMOUNT = knob('amount', 'Amount', 0, 1, 0, 1, 'level');
-/** The signal that reads as 1 (at 2, typical is half way). */
+/** The input that reads as 1 (at 2, a typical signal is half way). */
 const FULL = knob('full', 'Full at', 0.25, 4, 1, 2);
 const unit = (x: number, full: number) => clamp(x / full, 0, 1);
+const IN = ['in'];
 
-/** Each knob as set, within its range; its default where it is not set. */
-function settled(knobs: Knob[], set: Record<string, number>, into: Record<string, number>) {
+/** Each knob as set, within its range, its default where it is not set; each port's sum as it came (0 uncabled). */
+function settled(knobs: Knob[], ports: string[], set: Record<string, number>, into: Record<string, number>) {
   for (const k of knobs) {
     const v = set[k.id];
     into[k.id] = Number.isFinite(v) ? clamp(v, k.min, k.max) : k.default;
   }
+  for (const p of ports) into[p] = finite(set[p]);
   return into;
 }
 
@@ -68,8 +67,8 @@ function define(
   label: string,
   range: ModulatorType['range'],
   knobs: Knob[],
-  input: SignalRef | undefined,
-  make: (input: SignalRef, seed: number) => Step,
+  inputs: string[] | undefined,
+  make: (seed: number) => Step,
 ): ModulatorType {
   const [lo, hi] = range === 'bipolar' ? [-1, 1] : [0, 1];
   return {
@@ -78,21 +77,19 @@ function define(
     place: 'modulator',
     range,
     knobs,
-    input,
-    create(from = input ?? { signal: 'level' }, seed = 0): Modulator {
-      const step = make(from, seed);
+    ...(inputs ? { inputs } : {}),
+    create(seed = 0): Modulator {
+      const step = make(seed);
       const k: Record<string, number> = {};
       return {
         step(dt, signals, set) {
-          const v = step(Number.isFinite(dt) ? Math.max(0, dt) : 0, signals, settled(knobs, set, k));
+          const v = step(Number.isFinite(dt) ? Math.max(0, dt) : 0, signals, settled(knobs, inputs ?? [], set, k));
           return Number.isFinite(v) ? clamp(v, lo, hi) : 0;
         },
       };
     },
   };
 }
-
-const BASS: SignalRef = { signal: 'level', band: 0 };
 
 // MilkDrop's vol: the bands' levels together, each by its weight (their mean once the weights reach 1, so all six at 1
 // read as typical at 1).
@@ -101,16 +98,16 @@ const volume = define(
   'Volume',
   'unipolar',
   [...Array.from({ length: BANDS }, (_, b) => knob(`band${b + 1}`, `Band ${b + 1}`, 0, 1, 0, 1, 'level')), FULL, AMOUNT],
-  { signal: 'level' },
-  (input) => {
-    const refs = Array.from({ length: BANDS }, (_, band) => ({ ...input, band }));
+  undefined,
+  () => {
+    const refs: SignalRef[] = Array.from({ length: BANDS }, (_, band) => ({ signal: 'level', band }));
     return (_dt, signals, k) => {
       let sum = 0;
       let weight = 0;
       for (let b = 0; b < BANDS; b++) {
         const w = k[`band${b + 1}`];
         if (w > 0) {
-          sum += w * read(signals, refs[b]);
+          sum += w * Math.max(0, finite(signals(refs[b])));
           weight += w;
         }
       }
@@ -121,11 +118,10 @@ const volume = define(
 
 // A follower: rises with the attack's time constant, falls with the release's.
 const follower = (type: string, label: string, attack: number, release: number) =>
-  define(type, label, 'unipolar', [knob('attack', 'Attack', 0, 2, 0, attack), knob('release', 'Release', 0, 5, 0, release), FULL, AMOUNT], BASS, (input) => {
+  define(type, label, 'unipolar', [knob('attack', 'Attack', 0, 2, 0, attack), knob('release', 'Release', 0, 5, 0, release), FULL, AMOUNT], IN, () => {
     let y = 0;
-    return (dt, signals, k) => {
-      const x = read(signals, input);
-      y = x + (y - x) * keep(dt, x > y ? k.attack : k.release);
+    return (dt, _signals, k) => {
+      y = k.in + (y - k.in) * keep(dt, k.in > y ? k.attack : k.release);
       return k.amount * unit(y, k.full);
     };
   });
@@ -133,41 +129,39 @@ const fast = follower('fast', 'Fast follower', 0.01, 0.15);
 const slow = follower('slow', 'Slow follower', 0.4, 1.5);
 
 // A moving average over about its window, from silence.
-const average = define('average', 'Average', 'unipolar', [knob('window', 'Window', 0, 8, 0, 1), FULL, AMOUNT], BASS, (input) => {
+const average = define('average', 'Average', 'unipolar', [knob('window', 'Window', 0, 8, 0, 1), FULL, AMOUNT], IN, () => {
   let y = 0;
-  return (dt, signals, k) => {
-    const x = read(signals, input);
-    y = x + (y - x) * keep(dt, k.window);
+  return (dt, _signals, k) => {
+    y = k.in + (y - k.in) * keep(dt, k.window);
     return k.amount * unit(y, k.full);
   };
 });
 
 // The peak: the highest lately, falling toward 0 with its time constant and caught again by anything above it.
-const peak = define('peak', 'Peak', 'unipolar', [knob('fall', 'Fall', 0, 8, 0, 1.5), FULL, AMOUNT], BASS, (input) => {
+const peak = define('peak', 'Peak', 'unipolar', [knob('fall', 'Fall', 0, 8, 0, 1.5), FULL, AMOUNT], IN, () => {
   let y = 0;
-  return (dt, signals, k) => {
-    y = Math.max(read(signals, input), y * keep(dt, k.fall));
+  return (dt, _signals, k) => {
+    y = Math.max(k.in, y * keep(dt, k.fall));
     return k.amount * unit(y, k.full);
   };
 });
 
-// The mean of what has been heard, forgetting what is older than about its horizon. Unlike Average it starts from the
+// The mean of what has come in, forgetting what is older than about its horizon. Unlike Average it starts from the
 // first values, not from silence (the weight heard so far divides it out).
-const mean = define('mean', 'Mean', 'unipolar', [knob('horizon', 'Horizon', 0, 60, 0, 10), FULL, AMOUNT], BASS, (input) => {
+const mean = define('mean', 'Mean', 'unipolar', [knob('horizon', 'Horizon', 0, 60, 0, 10), FULL, AMOUNT], IN, () => {
   let m = 0;
   let w = 0;
-  return (dt, signals, k) => {
-    const x = read(signals, input);
+  return (dt, _signals, k) => {
     const left = keep(dt, k.horizon);
-    m = x + (m - x) * left;
+    m = k.in + (m - k.in) * left;
     w = 1 + (w - 1) * left;
-    return k.amount * unit(w > 0 ? m / w : x, k.full);
+    return k.amount * unit(w > 0 ? m / w : k.in, k.full);
   };
 });
 
-// The beat gate: opens when the signal goes above typical times Above (MilkDrop's beat tests sit at 1), closes below
-// that less its Hysteresis share. Each opening lifts the next one's threshold by Lift, which fades over Recover, as
-// presets' adaptive thresholds do. Open it gives 1; closed it falls over Release.
+// The beat gate: opens when its input goes above Above (1: above typical, where MilkDrop's beat tests sit), closes
+// below that less its Hysteresis share. Each opening lifts the next one's threshold by Lift, which fades over Recover,
+// as presets' adaptive thresholds do. Open it gives 1; shut it falls over Release.
 const gate = define(
   'gate',
   'Beat gate',
@@ -180,49 +174,42 @@ const gate = define(
     knob('release', 'Release', 0, 2, 0, 0.1),
     AMOUNT,
   ],
-  BASS,
-  (input) => {
+  IN,
+  () => {
     let open = false;
     let lifted = 0;
     let y = 0;
-    return (dt, signals, k) => {
-      const x = read(signals, input);
+    return (dt, _signals, k) => {
       lifted *= keep(dt, k.recover);
-      if (!open && x > k.above + lifted) {
+      if (!open && k.in > k.above + lifted) {
         open = true;
         lifted += k.lift;
-      } else if (open && x < k.above * (1 - k.hysteresis)) open = false;
+      } else if (open && k.in < k.above * (1 - k.hysteresis)) open = false;
       y = open ? 1 : y * keep(dt, k.release);
       return k.amount * y;
     };
   },
 );
 
-// A counter: each time its signal rises above Above it moves on by 1/Length and wraps at 1 (0, ¼, ½, ¾, 0 … at 4).
-// Length moves the step, not the count, so it morphs without a jump; at 1 the count stays at 0.
-const counter = (type: string, label: string, signal: string) =>
-  define(
-    type,
-    label,
-    'unipolar',
-    [knob('length', 'Length', 1, 16, 1, 4), knob('above', 'Above', 0.25, 3, 1, 1), AMOUNT],
-    { signal },
-    (input) => {
-      let high = false;
-      let phase = 0;
-      return (_dt, signals, k) => {
-        const x = read(signals, input);
-        if (!high && x > k.above) {
-          high = true;
-          phase = frac(phase + 1 / k.length);
-          if (1 - phase < 1e-9) phase = 0;
-        } else if (high && x < k.above * 0.8) high = false;
-        return k.amount * phase;
-      };
-    },
-  );
-const beats = counter('beats', 'Beat counter', 'beat');
-const bars = counter('bars', 'Bar counter', 'downbeat');
+/** A counter's input counts as it rises above this, and again once it has fallen below `RESET`. */
+const RISE = 0.5;
+const RESET = 0.4;
+
+// A counter: each time its input rises above ½ (a gate's opening, a beat) it moves on by 1/Length and wraps at 1 (0, ¼,
+// ½, ¾, 0 … at 4): beats into it count a bar, downbeats a phrase. Length moves the step, not the count, so it morphs
+// without a jump; at 1 the count stays at 0.
+const counter = define('counter', 'Counter', 'unipolar', [knob('length', 'Length', 1, 16, 1, 4), AMOUNT], IN, () => {
+  let high = false;
+  let phase = 0;
+  return (_dt, _signals, k) => {
+    if (!high && k.in > RISE) {
+      high = true;
+      phase = frac(phase + 1 / k.length);
+      if (1 - phase < 1e-9) phase = 0;
+    } else if (high && k.in < RESET) high = false;
+    return k.amount * phase;
+  };
+});
 
 // An LFO: Rate cycles a second, from a sine (Shape 0) to a triangle (1), started Offset of a cycle in.
 const lfo = define(
@@ -253,8 +240,8 @@ function point(seed: number, i: number): number {
 }
 
 // Drift: a smooth wander through −1..1, Rate new points a second, eased between them (smootherstep, so it never
-// jerks). The same seed walks the same way.
-const drift = define('drift', 'Drift', 'bipolar', [knob('rate', 'Rate', 0, 2, 0, 0.1), AMOUNT], undefined, (_input, seed) => {
+// jerks). The seed is a hash of the module's id (the caller's), so two drifts differ and a sync group's devices agree.
+const drift = define('drift', 'Drift', 'bipolar', [knob('rate', 'Rate', 0, 2, 0, 0.1), AMOUNT], undefined, (seed) => {
   let u = 0;
   return (dt, _signals, k) => {
     u += k.rate * dt;
@@ -266,23 +253,23 @@ const drift = define('drift', 'Drift', 'bipolar', [knob('rate', 'Rate', 0, 2, 0,
   };
 });
 
-// Sample-and-hold: takes the signal Rate times a second and holds it, gliding to each new value over Glide.
+// Sample-and-hold: takes its input Rate times a second and holds it, gliding to each new value over Glide.
 const hold = define(
   'hold',
   'Sample and hold',
   'unipolar',
   [knob('rate', 'Rate', 0, 16, 0, 2), knob('glide', 'Glide', 0, 2, 0, 0), FULL, AMOUNT],
-  BASS,
-  (input) => {
+  IN,
+  () => {
     let phase = 0;
     let held = 0;
     let y = 0;
-    return (dt, signals, k) => {
+    return (dt, _signals, k) => {
       // A hair under 1 counts: sums of rate × dt fall just short of a whole sample.
       phase += k.rate * dt;
       if (phase >= 1 - 1e-9) {
         phase = Math.max(0, phase - Math.floor(phase + 1e-9));
-        held = read(signals, input);
+        held = k.in;
       }
       y = held + (y - held) * keep(dt, k.glide);
       return k.amount * unit(y, k.full);
@@ -292,7 +279,7 @@ const hold = define(
 
 /** Every modulator, by its type. */
 export const MODULATORS: Record<string, ModulatorType> = Object.fromEntries(
-  [volume, fast, slow, average, peak, mean, gate, beats, bars, lfo, drift, hold].map((t) => [t.type, t]),
+  [volume, fast, slow, average, peak, mean, gate, counter, lfo, drift, hold].map((t) => [t.type, t]),
 );
 
 /** Each knob at its neutral, where the modulator gives 0. */
