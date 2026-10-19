@@ -163,7 +163,8 @@ The owner: "freely routable". The picture side is a free graph, as the value sid
 ### 4b. Control sources, after VCV
 
 The owner asked how looping and envelopes fit, keeping it modular. VCV Rack's own answer is small modules that make
-control signals; we take its set as it is, in the order the owner agreed:
+control signals; we take its set as it is, in the order the owner agreed. **1 and 2 ship with this version; 3 and 4
+come later** (the owner):
 
 1. **ADSR** (an envelope: attack, decay, sustain, release on each gate or trigger), **polyphonic**: fed Music's hits
    (six channels, one a band) it runs six envelopes, one into each part of the flame. It is the visible form of
@@ -225,7 +226,7 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | Step | What | Owner |
 |---|---|---|
 | 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
-| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; the control sources of §4b (ADSR, the Clock's outputs and clocked LFO, Sequencer, Looper, in that order); Taste once redesigned; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
+| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); Taste once redesigned; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
 | 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
 | 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
 | 5 | **Nesting and macros:** chains as modules, the whole frame's macros | claude-a5 |
