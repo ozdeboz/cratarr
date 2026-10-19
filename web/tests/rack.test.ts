@@ -14,7 +14,7 @@ const chain = cratarrTypes(RANGES, DEFAULTS);
 const types = Object.fromEntries([...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...showPartTypes(chain.find((t) => t.type === 'show')!)].map((t) => [t.type, t]));
 
 test('today\u2019s chain by lane: the flame a source, Show a picture device, the engine modules control', () => {
-  const lanes = lanesOf(toV2(JSON.parse(JSON.stringify(DEFAULTS))), portsFrom(types));
+  const lanes = lanesOf(toV2(JSON.parse(JSON.stringify(DEFAULTS))), portsFrom(types), (m) => types[m.type]?.place === 'source');
   const ids = (l: keyof typeof lanes) => lanes[l].map((m) => m.id);
   assert.ok(ids('sources').includes('flame'), JSON.stringify(ids('sources')));
   assert.ok(ids('picture').includes('show'), JSON.stringify(ids('picture')));

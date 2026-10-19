@@ -83,7 +83,7 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 | Module | Kind | What it is today |
 |---|---|---|
 | **Music** | source of values and triggers | the analysis: the whole track's signals, each band's level, hits and envelope; reference and speed per cable (0056) |
-| **Track** | source | a new track's pulse, and the track's own look (its preset) as outputs into the flame's look knobs |
+| **Track** | source | a new track's pulse and its seed: a new track is a seeded Randomize of the patch (§4e) |
 | **Loudness** (type `envelope`) | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); normalled into every cable's depth |
 | **Clock** | modulator | the tempo's turning clock (once round in 32 beats at Speed); its phase feeds whatever turns |
 | **Flash** | modulator, one per target | the course-and-swing filter (a slow course, Flash's share of the swing about it) |
@@ -254,6 +254,20 @@ The owner: "the dice become a randomized action". As VCV Rack's Randomize: not a
 or on the whole patch, giving its knobs new values within their ranges. Pins are kept, the structure (modules,
 cables) is never touched, and the patch store makes it undoable. "Another look" reseeds the Track's look. Wild sets
 how far it goes. The double tap's "loose" (twice the governor's limits) goes with the governor.
+
+### 4e. A track's look: its seed
+
+Today a track draws its own look from a seed of its own (the same track, the same look): the flame's shape and
+colours, and which effects are on. The owner: "the seed is used to control whatever's in the current synthesizer?
+That's clean". So:
+
+- A new track is a **seeded Randomize** (§4d) of the patch as it is: the track's seed gives every knob that is not
+  pinned a value in its range, morphed in over a track's time. The same track gives the same look while the patch is
+  the same.
+- It never touches the structure: no module or cable is added, removed or switched. Effects you placed stay.
+- **Track** gives its `seed` (and its pulse); which knobs a track moves is set where Randomize's reach is set (the
+  pins, and Wild for how far).
+- "Another look" is the same Randomize with a new seed.
 
 ### 5. Pictures as inputs
 
