@@ -71,7 +71,24 @@ CREATE TABLE IF NOT EXISTS analysis_shape (
 -- AudioMuse's analysis (decision 0054), by track: taken in whole from the PC where AudioMuse runs.
 CREATE TABLE IF NOT EXISTS audiomuse (
   track INTEGER PRIMARY KEY, energy REAL, key TEXT, style TEXT, moods TEXT, embedding BLOB);
+-- Beat this!'s beats and downbeats (decision 0049, amended), by file as it was heard (its size and mtime): from the PC's
+-- pass over the library or the NAS's over new music. Milliseconds, four bytes each, little-endian.
+CREATE TABLE IF NOT EXISTS beat_this (
+  folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
+  beats BLOB NOT NULL, downbeats BLOB NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 ";
+
+/// A file's beats and downbeats by Beat this! (decision 0049, amended), as heard: milliseconds from the start.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BeatThisRow {
+    pub folder: i64,
+    pub rel: String,
+    pub size: u64,
+    pub mtime: i64,
+    pub beats: Vec<u32>,
+    pub downbeats: Vec<u32>,
+}
 
 /// A track's AudioMuse analysis as kept (decision 0054): AudioMuse's own words for it (`app::audiomuse` reads them).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -109,7 +126,7 @@ const GENERATION: &str = "generation";
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 8] = [
+const ADDED_COLUMNS: [(&str, &str); 9] = [
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
@@ -123,6 +140,8 @@ const ADDED_COLUMNS: [(&str, &str); 8] = [
     // Decision 0046, amended: the sound's signals for the visuals (`analysis::signals::Signals`; the column kept its first
     // name), kept only once the visuals asked for them.
     ("analysis_shape", "bands BLOB"),
+    // Decision 0049, amended: whose the kept beats are (NULL: the analysis' own grid; 1: Beat this!'s).
+    ("analysis_shape", "beats_by INTEGER"),
 ];
 
 /// File states.
@@ -1486,8 +1505,91 @@ impl Catalogue {
     /// Keeps a file's beats beside its analysis, which stays as it is, when that analysis is of the file as it was
     /// (`size`, `mtime`) when the beats were worked out; an analysis without a shape row gets one holding only them.
     /// Whether they were kept. Blocking.
-    pub fn store_beats(&self, folder: i64, rel: &str, size: u64, mtime: i64, beats: &crate::analysis::Beats) -> Result<bool> {
-        self.store_shape_blob(folder, rel, size, mtime, "beats", &beats.0)
+    /// `by_beat_this`: they are Beat this!'s (decision 0049, amended), not the analysis' own grid.
+    pub fn store_beats(&self, folder: i64, rel: &str, size: u64, mtime: i64, beats: &crate::analysis::Beats, by_beat_this: bool) -> Result<bool> {
+        let kept = self.store_shape_blob(folder, rel, size, mtime, "beats", &beats.0)?;
+        if kept {
+            self.db().execute(
+                "UPDATE analysis_shape SET beats_by = ?3 WHERE folder = ?1 AND rel = ?2",
+                params![folder, rel, by_beat_this.then_some(1)],
+            )?;
+        }
+        Ok(kept)
+    }
+
+    /// Whether a file's kept beats are Beat this!'s (decision 0049, amended). Blocking.
+    pub fn beats_are_beat_this(&self, folder: i64, rel: &str) -> bool {
+        self.db()
+            .query_row("SELECT beats_by FROM analysis_shape WHERE folder = ?1 AND rel = ?2", params![folder, rel], |r| r.get::<_, Option<i64>>(0))
+            .optional()
+            .ok()
+            .flatten()
+            .flatten()
+            == Some(1)
+    }
+
+    /// Beat this!'s beats and downbeats (decision 0049, amended), in one transaction: each replaces what its file had.
+    /// Blocking.
+    pub fn store_beat_this(&self, rows: &[BeatThisRow]) -> Result<()> {
+        let millis = |v: &[u32]| v.iter().flat_map(|m| m.to_le_bytes()).collect::<Vec<u8>>();
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let now = now_secs();
+        {
+            let mut st = tx.prepare(
+                "INSERT OR REPLACE INTO beat_this (folder, rel, size, mtime, beats, downbeats, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for r in rows {
+                st.execute(params![r.folder, r.rel, r.size as i64, r.mtime, millis(&r.beats), millis(&r.downbeats), now])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A file's beats and downbeats by Beat this! (seconds), while the file is as it was heard. Blocking.
+    pub fn beat_this_of(&self, folder: i64, rel: &str) -> Option<(Vec<f64>, Vec<f64>)> {
+        let seconds = |b: Vec<u8>| b.chunks_exact(4).map(|c| f64::from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])) / 1000.0).collect::<Vec<f64>>();
+        self.db()
+            .query_row(
+                &format!(
+                    "SELECT b.beats, b.downbeats FROM beat_this b JOIN files f ON f.folder = b.folder AND f.rel = b.rel
+                     WHERE b.folder = ?1 AND b.rel = ?2 AND b.size = f.size AND b.mtime = f.mtime AND {PRESENT_F}"
+                ),
+                params![folder, rel],
+                |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .map(|(b, d)| (seconds(b), seconds(d)))
+    }
+
+    /// Present audio files without Beat this!'s beats for them as they are, newest first (by when the track was first
+    /// seen), at most `limit`: all of them (`since` none: the PC's list), or those first seen or changed since `since`
+    /// (seconds; the NAS's own, new music). (folder, rel, path, size, mtime). Blocking.
+    pub fn without_beat_this(&self, since: Option<i64>, limit: usize) -> Result<Vec<(i64, String, PathBuf, u64, i64)>> {
+        let folders = self.folders();
+        let db = self.db();
+        let mut st = db.prepare(&format!(
+            "SELECT f.folder, f.rel, f.size, f.mtime FROM files f
+               LEFT JOIN beat_this b ON b.folder = f.folder AND b.rel = f.rel AND b.size = f.size AND b.mtime = f.mtime
+               LEFT JOIN tracks t ON t.id = f.track
+             WHERE {PRESENT_F} AND f.state = ?1 AND b.rel IS NULL AND (?2 IS NULL OR t.born >= ?2 OR f.mtime >= ?2)
+             ORDER BY t.born DESC, f.mtime DESC, f.rel LIMIT ?3"
+        ))?;
+        let rows = st.query_map(params![READ, since, i64::try_from(limit).unwrap_or(i64::MAX)], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?.max(0) as u64, r.get::<_, i64>(3)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (folder, rel, size, mtime) = row?;
+            if let Some(root) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) {
+                let path = root.join(&rel);
+                out.push((folder, rel, path, size, mtime));
+            }
+        }
+        Ok(out)
     }
 
     /// A file's signals (decision 0046, amended), as `beats_of`: `Some(None)` until the visuals first asked.
@@ -2185,9 +2287,9 @@ mod tests {
         assert_eq!(cat.beats_of(folder, &one), Some(None));
         // Not for the file as it was before: nothing kept.
         let b = crate::analysis::Beats(vec![244, 1, 0, 0, 255, 232, 3, 0, 0, 128]);
-        assert!(!cat.store_beats(folder, &one, size + 1, mtime, &b).unwrap());
+        assert!(!cat.store_beats(folder, &one, size + 1, mtime, &b, false).unwrap());
         assert_eq!(cat.beats_of(folder, &one), Some(None));
-        assert!(cat.store_beats(folder, &one, size, mtime, &b).unwrap());
+        assert!(cat.store_beats(folder, &one, size, mtime, &b, false).unwrap());
         assert_eq!(cat.beats_of(folder, &one), Some(Some(b.clone())));
         assert_eq!(b.each().collect::<Vec<_>>(), vec![(0.5, 255), (1.0, 128)]);
         // The rest of the analysis is as it was; its reads leave the beats out.
@@ -2200,8 +2302,11 @@ mod tests {
         // An analysis without a shape row (none is written so; an older build's might be) gets one for its beats.
         cat.db().execute("DELETE FROM analysis_shape WHERE folder = ?1 AND rel = ?2", params![folder, one]).unwrap();
         assert_eq!(cat.beats_of(folder, &one), Some(None));
-        assert!(!cat.store_beats(folder, &one, size, mtime + 1, &b).unwrap(), "still only for the file as analysed");
-        assert!(cat.store_beats(folder, &one, size, mtime, &b).unwrap());
+        assert!(!cat.store_beats(folder, &one, size, mtime + 1, &b, false).unwrap(), "still only for the file as analysed");
+        assert!(cat.store_beats(folder, &one, size, mtime, &b, true).unwrap());
+        assert!(cat.beats_are_beat_this(folder, &one));
+        assert!(cat.store_beats(folder, &one, size, mtime, &b, false).unwrap());
+        assert!(!cat.beats_are_beat_this(folder, &one), "the analysis' own again");
         assert_eq!(cat.beats_of(folder, &one), Some(Some(b.clone())));
         // A file changed since has none.
         std::fs::write(d.join(&one), b"changed").unwrap();

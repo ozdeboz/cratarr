@@ -811,8 +811,9 @@ async fn track_waveform(State(app): State<Arc<App>>, Path((source, id)): Path<(S
 /// A track's beats (decision 0046): five bytes a beat, its time in milliseconds from the start (u32, little-endian), then
 /// its strength (0..=255); none for a track without a tempo. Worked out when first asked for, where its analysis has
 /// none yet (about a second; `app::analysis_pass::beats`). 404 for a track Cratarr does not keep the file of; 503 when
-/// they cannot be worked out now. It changes only with a new analysis: an ETag of when that was made, and kept a long
-/// time.
+/// they cannot be worked out now. It changes with a new analysis, and once when Beat this!'s beats replace the
+/// analysis' own (decision 0049, amended): an ETag of when the analysis was made and whose beats they are; kept a long
+/// time once they are Beat this!'s, asked again each time until then.
 async fn track_beats(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
     for_visuals(app, source, id, headers, false).await
 }
@@ -857,17 +858,22 @@ async fn for_visuals(app: Arc<App>, source: String, id: String, headers: HeaderM
         crate::app::analysis_pass::beats(cat.clone(), folder, rel.clone()).await.map(|b| b.0)
     };
     let Some(bytes) = got else { return StatusCode::SERVICE_UNAVAILABLE.into_response() };
-    let stamp = tokio::task::spawn_blocking(move || cat.analysis_stamp(folder, &rel)).await.ok().flatten();
-    // The bands' form in theirs: a copy kept from another form never answers for this one.
+    let (stamp, final_beats) =
+        tokio::task::spawn_blocking(move || (cat.analysis_stamp(folder, &rel), cat.beats_are_beat_this(folder, &rel))).await.unwrap_or_default();
+    // The bands' form in theirs: a copy kept from another form never answers for this one; nor one from before Beat
+    // this!'s beats (decision 0049, amended).
     let kind = if bands { format!("s{}", crate::analysis::signals::FORMAT) } else { "b".to_string() };
-    let etag = stamp.map(|(at, version)| format!("\"{kind}-{version}-{at}\""));
+    let by = if final_beats { "-bt" } else { "" };
+    let etag = stamp.map(|(at, version)| format!("\"{kind}-{version}-{at}{by}\""));
     if etag.is_some() && headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == etag.as_deref() {
         return StatusCode::NOT_MODIFIED.into_response();
     }
     let mut res = ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response();
     let h = res.headers_mut();
     if let Some(v) = etag.and_then(|e| HeaderValue::from_str(&e).ok()) {
-        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=2592000"));
+        // The analysis' own beats may yet give way to Beat this!'s: asked again each time (a 304 while they stay).
+        let keep = if final_beats { "private, max-age=2592000" } else { "private, no-cache" };
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static(keep));
         h.insert(header::ETAG, v);
     }
     res

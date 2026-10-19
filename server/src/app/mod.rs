@@ -13,6 +13,7 @@
 
 mod albums;
 pub mod audiomuse;
+pub mod beat_this;
 pub mod analysis_pass;
 pub mod analysis_import;
 mod collection;
@@ -208,6 +209,31 @@ impl App {
         }
     }
 
+    /// Beat this!'s beats from the PC taken in, and the list of files still without them written for it, when it
+    /// changed (decision 0049, amended); a note in the log of what came.
+    async fn beat_this(&self) {
+        let Some(dir) = self.library.data_dir() else { return };
+        let (cat, dir) = (self.library.catalogue(), std::path::Path::new(&dir).to_path_buf());
+        let done = tokio::task::spawn_blocking(move || {
+            let counts = beat_this::import_waiting(&cat, &dir)?;
+            let wanted = beat_this::write_wanted(&cat, &dir)?;
+            anyhow::Ok((counts, wanted))
+        })
+        .await;
+        match done {
+            Ok(Ok((counts, wanted))) => {
+                if let Some(c) = counts {
+                    tracing::info!("beats: {} files from the PC: {} tracks taken in, {} changed since, {} not in the library, {} unreadable lines", c.files, c.stored, c.stale, c.unknown, c.bad);
+                }
+                if let Some(n) = wanted {
+                    tracing::info!("beats: {n} files listed for the PC");
+                }
+            }
+            Ok(Err(e)) => tracing::warn!("beats: {e:#}"),
+            Err(e) => tracing::warn!("beats: {e}"),
+        }
+    }
+
     /// The one background pass that keeps Cratarr in step with its sources and the library, run every
     /// `SYNC_SECS`. Sources offer no reliable change notifications (webhooks are optional plugins), so it looks:
     /// incoming lists every pass; dead playlist entries and sources still missing their libraries every other pass;
@@ -234,6 +260,10 @@ impl App {
         // AudioMuse's analysis from the PC (decision 0054), when its file changed: every five minutes.
         if pass % 10 == 0 {
             self.audiomuse().await;
+        }
+        // Beat this!'s, from the PC and for it (decision 0049, amended): as often, a pass apart.
+        if pass % 10 == 5 {
+            self.beat_this().await;
         }
     }
 }

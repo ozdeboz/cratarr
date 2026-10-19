@@ -43,7 +43,9 @@ export function beatsOf(source: string, id: string): Beats | null | undefined {
   const tries = (was?.tries ?? 0) + 1;
   asking.set(key, { at: now, tries, busy: true });
   const done = () => asking.set(key, { at: performance.now(), tries, busy: false });
-  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/beats`)
+  // `b`: Beat this!'s beats may replace the analysis' own (decision 0049, amended); a browser keeps the older ones,
+  // kept a month, under the older address.
+  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/beats?b=2`)
     .then(async (r) => {
       if (asksSignIn(r)) toSignIn();
       if (r.ok) kept.set(key, decode(await r.arrayBuffer()));

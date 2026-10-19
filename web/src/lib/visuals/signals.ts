@@ -76,8 +76,9 @@ export function signalsOf(source: string, id: string): Signals | null | undefine
   const tries = (was?.tries ?? 0) + 1;
   asking.set(key, { at: now, tries, busy: true });
   const done = () => asking.set(key, { at: performance.now(), tries, busy: false });
-  // `v`: the form read here; a browser keeps an older one under another address.
-  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/bands?v=3`)
+  // `v`: the form read here; `b`: Beat this!'s beats, which the signals follow (decision 0049, amended). A browser
+  // keeps older ones under another address.
+  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/bands?v=3&b=2`)
     .then(async (r) => {
       if (asksSignIn(r)) toSignIn();
       if (r.ok) kept.set(key, decode(await r.arrayBuffer()));

@@ -545,8 +545,9 @@ impl SignalEar {
     }
 
     /// The signals, with `moments`: the momentary loudness (LUFS) of each 400 ms window ending every 100 ms from the
-    /// fourth on; and `beats`: the track's beats (s), as the analysis keeps them.
-    pub fn finish(mut self, moments: &[f32], beats: &[f64]) -> Signals {
+    /// fourth on; `beats`: the track's beats (s), as the analysis keeps them; and `downbeats`, where Beat this! heard
+    /// them (decision 0049, amended), each at one of the beats.
+    pub fn finish(mut self, moments: &[f32], beats: &[f64], downbeats: Option<&[f64]>) -> Signals {
         while self.separated < self.frames.len() {
             self.separate(self.separated);
             self.separated += 1;
@@ -744,8 +745,11 @@ impl SignalEar {
             peaks(&novelty, KERNEL, 0.4 * largest).into_iter().map(|i| ((units[i] * 1000.0).round() as u32, against(novelty[i], top))).collect();
         out.marks(id::BOUNDARIES, &marks);
 
-        // 16: each beat's place in its bar, by where the low bands' starts fall hardest.
-        if beats.len() >= BAR_BEATS {
+        // 16: each beat's place in its bar: from Beat this!'s downbeats where it heard some (sure), else by where the
+        // low bands' starts fall hardest.
+        if let Some(downbeats) = downbeats.filter(|d| !d.is_empty() && !beats.is_empty()) {
+            out.series(id::BAR, 0, 1, 255, &places(beats, downbeats));
+        } else if beats.len() >= BAR_BEATS {
             let low: Vec<f32> = self.frames.iter().map(|f| f.flux[0] + f.flux[1]).collect();
             let at_beat: Vec<f32> = beats
                 .iter()
@@ -1245,6 +1249,30 @@ fn novelty(units: &[f64], duration: f64, chroma: &[[f32; 12]], mfcc: &[[f32; MFC
         .collect()
 }
 
+/// Each beat's place in its bar from the downbeats (each at a beat): 0 at a downbeat, counting up to the next. Before
+/// the first, counted back from it by the bar most often heard (four when there is no whole bar).
+fn places(beats: &[f64], downbeats: &[f64]) -> Vec<u8> {
+    let down: Vec<bool> = beats.iter().map(|b| downbeats.iter().any(|d| (d - b).abs() < 0.015)).collect();
+    let at: Vec<usize> = down.iter().enumerate().filter(|(_, d)| **d).map(|(i, _)| i).collect();
+    let mut lengths: BTreeMap<usize, usize> = BTreeMap::new();
+    for w in at.windows(2) {
+        *lengths.entry(w[1] - w[0]).or_default() += 1;
+    }
+    let meter = lengths.iter().max_by_key(|(len, n)| (**n, std::cmp::Reverse(**len))).map_or(4, |(len, _)| *len).max(1);
+    let first = at.first().copied().unwrap_or(0);
+    let mut out = Vec::with_capacity(beats.len());
+    let mut place = 0usize;
+    for (i, d) in down.iter().enumerate() {
+        if i < first {
+            out.push(((meter - (first - i) % meter) % meter).min(255) as u8);
+            continue;
+        }
+        place = if *d { 0 } else { place + 1 };
+        out.push(place.min(255) as u8);
+    }
+    out
+}
+
 /// Each beat's place in its bar: of three and four beats a bar, and each first beat among them, the one whose first
 /// beats carry the most of the low bands' starts against all beats. Returns the meter, the phase (the first downbeat)
 /// and how sure (0..1: how far the best phase stands above the next of its meter).
@@ -1280,7 +1308,7 @@ mod tests {
             let (m, s) = f(i as f64 / f64::from(rate));
             ear.hear(m as f32, s as f32);
         }
-        ear.finish(&[], beats).read().expect("reads back")
+        ear.finish(&[], beats, None).read().expect("reads back")
     }
 
     fn frames(s: &BTreeMap<u8, Section>, id: u8) -> Vec<Vec<u8>> {
@@ -1485,6 +1513,22 @@ mod tests {
         assert_eq!(bar(&at).0, 3);
         // Nothing stands out: unsure.
         assert!(bar(&[1.0; 32]).2 < 0.05);
+    }
+
+    #[test]
+    fn beat_this_downbeats_give_each_beat_its_place() {
+        // Bars of four, the first downbeat at the third beat; a bar of three in the middle.
+        let beats: Vec<f64> = (0..14).map(|k| 0.5 * f64::from(k)).collect();
+        let downbeats = [1.0, 3.0, 4.5, 6.5];
+        assert_eq!(places(&beats, &downbeats), vec![2, 3, 0, 1, 2, 3, 0, 1, 2, 0, 1, 2, 3, 0]);
+        // Sure, in the section's scale byte.
+        let mut ear = SignalEar::new(22_050);
+        for _ in 0..22_050 * 7 {
+            ear.hear(0.0, 0.0);
+        }
+        let s = ear.finish(&[], &beats, Some(&downbeats)).read().unwrap();
+        assert_eq!(s[&id::BAR].scale, 255);
+        assert_eq!(frames(&s, id::BAR).concat(), places(&beats, &downbeats));
     }
 
     #[test]

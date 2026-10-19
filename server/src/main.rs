@@ -96,13 +96,29 @@ async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--signals") {
         for path in std::env::args().skip(2) {
             let started = std::time::Instant::now();
-            match analysis::analyse_with_signals(std::path::Path::new(&path), &[]) {
+            match analysis::analyse_with_signals(std::path::Path::new(&path), &[], None) {
                 Ok((a, s)) => {
                     let sections = s.read().map(|m| m.keys().map(u8::to_string).collect::<Vec<_>>().join(",")).unwrap_or_default();
                     println!("{path}: {:.0} s of sound, {:.2} s, {} bytes ({:.1} KB a minute), sections {sections}", a.duration_secs, started.elapsed().as_secs_f64(), s.0.len(), s.0.len() as f64 / 1024.0 / (a.duration_secs / 60.0).max(1e-9));
                 }
                 Err(e) => println!("{path}: {e:#}"),
             }
+        }
+        return Ok(());
+    }
+    // Beat this! as the NAS hears new music (decision 0049, amended), for checking it against the PC's: a JSON line a
+    // file, its beats and downbeats in milliseconds and the seconds it took.
+    if std::env::args().nth(1).as_deref() == Some("--beats") {
+        for path in std::env::args().skip(2) {
+            let started = std::time::Instant::now();
+            let line = match app::beat_this::hear_timed(std::path::Path::new(&path)) {
+                Ok((h, spect, model)) => {
+                    let ms = |v: &[f64]| v.iter().map(|t| (t * 1000.0).round() as u32).collect::<Vec<u32>>();
+                    serde_json::json!({ "file": path, "beats": ms(&h.beats), "downbeats": ms(&h.downbeats), "secs": started.elapsed().as_secs_f64(), "spectrogram_secs": spect, "model_secs": model })
+                }
+                Err(e) => serde_json::json!({ "file": path, "error": format!("{e:#}") }),
+            };
+            println!("{line}");
         }
         return Ok(());
     }

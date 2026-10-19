@@ -40,6 +40,8 @@ ebur128 = "0.1"
 taktus = "=0.1.0"
 # Decision 0046, amended: the visuals' signals, a short-time Fourier transform (already in the tree, through rubato).
 realfft = "3.5"
+# Decision 0049, amended: Beat this!'s small model on the NAS, pure Rust (the image is a static binary).
+tract-onnx = "=0.21.19"
 # Decision 0046: a track's beats in an analysis' JSON line (already in the tree, through reqwest).
 base64 = "0.22"
 thiserror = "2"
@@ -67,3 +69,9 @@ panic = "abort"
 inherits = "release"
 lto = false
 codegen-units = 16
+
+# Beat this! on the NAS (decision 0049, amended): the dependencies' arithmetic (tract's, the spectrogram's) at full
+# speed; built for size, the model took three times as long (22-27 s a 30 s piece on the PC, against 7 s). Cratarr's
+# own code stays built for size.
+[profile.release.package."*"]
+opt-level = 3

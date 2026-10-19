@@ -127,6 +127,14 @@ impl<'de> Deserialize<'de> for Beats {
     }
 }
 
+/// Beats heard by Beat this! (decision 0049, amended): each beat's time and the downbeats' (seconds), kept by the
+/// analysis in place of its own grid's; each beat's strength is still the onsets' at it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Heard {
+    pub beats: Vec<f64>,
+    pub downbeats: Vec<f64>,
+}
+
 /// The share of the walked stream the decoded sound must cover to count as complete. Below 1 for what decoders
 /// rightly drop: an encoder's delay and padding.
 const COMPLETE: f64 = 0.97;
@@ -314,16 +322,17 @@ fn tempo(beat: Option<(f64, f64, f64)>, genres: &[String]) -> (Option<f32>, f32)
 
 /// One track's analysis from its file. `genres`: its genre tags (for the slow count).
 pub fn analyse(path: &Path, genres: &[String]) -> Result<Analysis> {
-    Ok(analyse_inner(path, genres, false)?.0)
+    Ok(analyse_inner(path, genres, false, None)?.0)
 }
 
 /// The analysis and the sound's signals (decision 0046, amended), from one decode: what the visuals ask for.
-pub fn analyse_with_signals(path: &Path, genres: &[String]) -> Result<(Analysis, signals::Signals)> {
-    let (a, b) = analyse_inner(path, genres, true)?;
+/// With `heard`, Beat this!'s beats and downbeats are the analysis' and the signals' (decision 0049, amended).
+pub fn analyse_with_signals(path: &Path, genres: &[String], heard: Option<&Heard>) -> Result<(Analysis, signals::Signals)> {
+    let (a, b) = analyse_inner(path, genres, true, heard)?;
     Ok((a, b.unwrap_or_default()))
 }
 
-fn analyse_inner(path: &Path, genres: &[String], with_signals: bool) -> Result<(Analysis, Option<signals::Signals>)> {
+fn analyse_inner(path: &Path, genres: &[String], with_signals: bool, heard: Option<&Heard>) -> Result<(Analysis, Option<signals::Signals>)> {
     let mut o = open(path)?;
     let ch = o.channels;
     let mut r128 = ebur128::EbuR128::new(ch as u32, o.rate, ebur128::Mode::I | ebur128::Mode::M | ebur128::Mode::SAMPLE_PEAK)
@@ -444,7 +453,10 @@ fn analyse_inner(path: &Path, genres: &[String], with_signals: bool) -> Result<(
     let waveform = bin_waveform(&squares);
     let beat = taktus::tempo_of(&onsets).map(|b| (b.bpm(), b.sure, b.catch));
     let (bpm, bpm_confidence) = tempo(beat, genres);
-    let beats = beats_of(&onsets, bpm);
+    let beats = match heard {
+        Some(h) => Beats::of(&h.beats, &strengths_at(&onsets, &h.beats)),
+        None => beats_of(&onsets, bpm),
+    };
     let beat_times: Vec<f64> = beats.each().map(|(t, _)| t).collect();
     let analysis = Analysis {
         version: VERSION,
@@ -459,17 +471,22 @@ fn analyse_inner(path: &Path, genres: &[String], with_signals: bool) -> Result<(
         complete: covered(frames, walked, o.time_base, o.rate),
         beats: Some(beats),
     };
-    Ok((analysis, in_signals.map(|s| s.finish(&moments, &beat_times))))
+    Ok((analysis, in_signals.map(|s| s.finish(&moments, &beat_times, heard.map(|h| h.downbeats.as_slice())))))
 }
 
 /// The beats of a track at the tempo kept (none without one, so a slow-counted track's are the slow ones): taktus's
-/// beat tracker over its onsets, each beat with the strongest onset at it, against the track's strong beats (the tenth
-/// strongest of them and up are 255).
+/// beat tracker over its onsets, each beat with its strength (`strengths_at`).
 fn beats_of(onsets: &[f32], bpm: Option<f32>) -> Beats {
     let Some(bpm) = bpm.filter(|b| *b > 0.0) else { return Beats::default() };
     let times = taktus::beats_of(onsets, 60.0 / f64::from(bpm));
-    // The onset a beat was found at: taktus's time is its onset's index from LEAD on, less the ear's lateness (22 ms,
-    // two onsets); the strongest within two onsets of that.
+    Beats::of(&times, &strengths_at(onsets, &times))
+}
+
+/// Each beat's strength: the strongest onset at it, against the track's strong beats (the tenth strongest of them and
+/// up are 255).
+fn strengths_at(onsets: &[f32], times: &[f64]) -> Vec<u8> {
+    // The onset at a time: taktus's time is its onset's index from LEAD on, less the ear's lateness (22 ms, two
+    // onsets); the strongest within two onsets of that.
     let raw: Vec<f32> = times
         .iter()
         .map(|t| {
@@ -480,9 +497,51 @@ fn beats_of(onsets: &[f32], bpm: Option<f32>) -> Beats {
     let mut sorted: Vec<f32> = raw.iter().copied().filter(|v| v.is_finite()).collect();
     sorted.sort_by(f32::total_cmp);
     let strong = sorted.get(sorted.len() * 9 / 10).copied().unwrap_or(0.0);
-    let strengths: Vec<u8> =
-        raw.iter().map(|v| if strong > 0.0 { (v / strong * 255.0).clamp(0.0, 255.0).round() as u8 } else { 255 }).collect();
-    Beats::of(&times, &strengths)
+    raw.iter().map(|v| if strong > 0.0 { (v / strong * 255.0).clamp(0.0, 255.0).round() as u8 } else { 255 }).collect()
+}
+
+/// A file's sound in mono, a packet at a time (Beat this!'s spectrogram, `app::beat_this`).
+pub(crate) struct Mono {
+    o: Opened,
+    scratch: Vec<Vec<f32>>,
+}
+
+impl Mono {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
+        Ok(Mono { o: open(path)?, scratch: Vec::new() })
+    }
+
+    pub(crate) fn rate(&self) -> u32 {
+        self.o.rate
+    }
+
+    /// The next packet's frames appended to `out`, the channels' mean; false at the end.
+    pub(crate) fn read(&mut self, out: &mut Vec<f32>) -> Result<bool> {
+        loop {
+            let packet = match self.o.reader.next_packet() {
+                Ok(Some(p)) => p,
+                Ok(None) => return Ok(false),
+                Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(false),
+                Err(e) => return Err(anyhow!("reading: {e}")),
+            };
+            if packet.track_id != self.o.track {
+                continue;
+            }
+            let decoded = match self.o.decoder.decode(&packet) {
+                Ok(d) => d,
+                Err(SymphoniaError::DecodeError(_)) => continue,
+                Err(e) => return Err(anyhow!("decoding: {e}")),
+            };
+            let n = decoded.frames();
+            if n == 0 {
+                continue;
+            }
+            decoded.copy_to_vecs_planar::<f32>(&mut self.scratch);
+            let ch = self.scratch.len().max(1);
+            out.extend((0..n).map(|i| self.scratch.iter().map(|p| p.get(i).copied().unwrap_or(0.0)).sum::<f32>() / ch as f32));
+            return Ok(true);
+        }
+    }
 }
 
 /// The hundredths' mean squares in `WAVEFORM_BINS` bins, each its RMS, as 0..=255 of the loudest bin's. RMS, not the
@@ -663,7 +722,7 @@ pub(crate) mod tests {
     fn the_loudness_as_heard_follows_the_sound_every_tenth_of_a_second() {
         // 3 s of a 1 kHz sine at 0.1 (about -20 LUFS, as above), then 3 s at 0.01 (20 dB down).
         let path = wav("moments", 6.0, |t| if t < 3.0 { 0.1 } else { 0.01 } * (2.0 * std::f64::consts::PI * 1000.0 * t).sin() as f32);
-        let (a, signals) = analyse_with_signals(&path, &[]).unwrap();
+        let (a, signals) = analyse_with_signals(&path, &[], None).unwrap();
         std::fs::remove_file(&path).ok();
         let moments = signals.loudness().expect("reads back");
         assert!(moments.len().abs_diff(60) <= 1, "ten a second: {}", moments.len());

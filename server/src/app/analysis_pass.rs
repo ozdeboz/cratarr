@@ -3,6 +3,9 @@
 //! new album, a replaced file, a newer analysis version), one file at a time, resting three times as long as each
 //! took: about a quarter of one core, so Cratarr answers as fast as ever meanwhile.
 //!
+//! When it has nothing to analyse, it hears new music's beats with Beat this! (decision 0049, amended; `beat_this`), a
+//! file at a time, resting as long again.
+//!
 //! `CRATARR_ANALYSIS`: `keep` (the default: waits until most of the library has an analysis, as after the ThinkBook's
 //! import, then keeps up), `all` (does the first pass itself, when no ThinkBook is at hand), `off`.
 
@@ -48,8 +51,10 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
     }
     tokio::spawn(async move {
         tokio::time::sleep(FIRST_LOOK).await;
-        // Files that could not be analysed, as they were: not tried again until Cratarr starts again.
+        // Files that could not be analysed, or their beats heard, as they were: not tried again until Cratarr starts
+        // again.
         let mut failed: HashSet<(i64, String, u64, i64)> = HashSet::new();
+        let mut unheard: HashSet<(i64, String, u64, i64)> = HashSet::new();
         let mut waiting_said = false;
         loop {
             let c = cat.clone();
@@ -67,7 +72,34 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
             let batch = tokio::task::spawn_blocking(move || c.unanalysed(50)).await.ok().and_then(|r| r.ok()).unwrap_or_default();
             let batch: Vec<_> = batch.into_iter().filter(|(f, r, _, s, m)| !failed.contains(&(*f, r.clone(), *s, *m))).collect();
             if batch.is_empty() {
-                tokio::time::sleep(IDLE).await;
+                // Nothing to analyse: new music's beats, one file, then a look again.
+                let (c, limit) = (cat.clone(), 1 + unheard.len());
+                let next = tokio::task::spawn_blocking(move || crate::app::beat_this::new_music(&c, limit))
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|(f, r, _, s, m)| !unheard.contains(&(*f, r.clone(), *s, *m)));
+                let Some((folder, rel, path, size, mtime)) = next else {
+                    tokio::time::sleep(IDLE).await;
+                    continue;
+                };
+                let started = Instant::now();
+                let c = cat.clone();
+                let r = rel.clone();
+                match tokio::task::spawn_blocking(move || crate::app::beat_this::hear_and_keep(&c, folder, &r, &path, size, mtime)).await {
+                    Ok(Ok(n)) => tracing::info!("beats: {rel}: {n} heard in {:.1} s", started.elapsed().as_secs_f64()),
+                    Ok(Err(e)) => {
+                        tracing::warn!("beats: {rel}: {e:#}");
+                        unheard.insert((folder, rel, size, mtime));
+                    }
+                    Err(e) => {
+                        tracing::warn!("beats: {rel}: {e}");
+                        unheard.insert((folder, rel, size, mtime));
+                    }
+                }
+                tokio::time::sleep(started.elapsed() * REST).await;
                 continue;
             }
             for (folder, rel, path, size, mtime) in batch {
@@ -118,15 +150,20 @@ pub async fn signals(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Si
     visual(cat, folder, rel, true).await.map(|(_, signals)| signals)
 }
 
-/// What is kept of a file's beats and signals, as the file is now. Signals of an older form count as not worked out.
+/// What is kept of a file's beats and signals, as the file is now. Signals of an older form count as not worked out;
+/// so do both while Beat this! has heard the file and the beats kept are not its (decision 0049, amended).
 fn kept(cat: &Catalogue, folder: i64, rel: &str) -> (Option<Beats>, Option<Signals>) {
+    if !cat.beats_are_beat_this(folder, rel) && cat.beat_this_of(folder, rel).is_some() {
+        return (None, None);
+    }
     let signals = cat.signals_of(folder, rel).flatten().filter(|b| b.0.first().is_none_or(|f| *f == crate::analysis::signals::FORMAT));
     (cat.beats_of(folder, rel).flatten(), signals)
 }
 
 /// A file's beats and, when `with_signals`, its signals: as kept, or worked out now and kept. The page asks for both at
 /// once for a new track: whichever comes first decodes the file once for all that is missing (beats, signals or both)
-/// and keeps it, and the other finds it kept once it has its turn. What was kept stays as it was (byte for byte). A file
+/// and keeps it, and the other finds it kept once it has its turn. What was kept stays as it was (byte for byte), until
+/// Beat this! has heard the file: then its beats and downbeats replace the analysis' own, and the signals follow them. A file
 /// without an analysis of it as it is now gets the whole analysis kept, as the pass would. A decode that does not cover
 /// the whole file gives no beats and no signals, kept as none, so it is not decoded again at every request.
 async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_signals: bool) -> Option<(Beats, Signals)> {
@@ -166,7 +203,8 @@ fn work_out(cat: &Catalogue, folder: i64, rel: &str, with_signals: bool) -> anyh
     }
     let (path, size, mtime) = cat.file_to_analyse(folder, &rel).ok_or_else(|| anyhow::anyhow!("not in the library"))?;
     let started = Instant::now();
-    let (a, signals) = crate::analysis::analyse_with_signals(&path, &cat.genres_of_file(folder, &rel))?;
+    let heard = cat.beat_this_of(folder, rel).map(|(beats, downbeats)| crate::analysis::Heard { beats, downbeats });
+    let (a, signals) = crate::analysis::analyse_with_signals(&path, &cat.genres_of_file(folder, &rel), heard.as_ref())?;
     #[cfg(test)]
     DECODED.lock().unwrap().push(path.clone());
     let whole = a.complete != Some(false);
@@ -176,9 +214,8 @@ fn work_out(cat: &Catalogue, folder: i64, rel: &str, with_signals: bool) -> anyh
             let beats = if whole { a.beats.clone().unwrap_or_default() } else { Beats::default() };
             if cat.analysis_of(folder, &rel).is_none() {
                 cat.store_analysis(folder, &rel, size, mtime, &crate::analysis::Analysis { beats: Some(beats.clone()), ..a })?;
-            } else {
-                cat.store_beats(folder, &rel, size, mtime, &beats)?;
             }
+            cat.store_beats(folder, &rel, size, mtime, &beats, heard.is_some())?;
             beats
         }
     };
