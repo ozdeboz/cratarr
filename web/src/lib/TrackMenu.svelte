@@ -25,6 +25,7 @@
     type TrackFile,
     type TrackState,
   } from './api';
+  import type { IconName } from './Icon.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
@@ -48,6 +49,7 @@
     start = 'menu',
     queue: place = null,
     onplaylists = null,
+    out = null,
   }: {
     onclose: () => void;
     track?: MenuTrack | null;
@@ -55,6 +57,9 @@
     queue?: QueuePlace | null;
     /** Opened from a component over the whole page (the full player): its playlists' step offers the Playlists page. */
     onplaylists?: (() => void) | null;
+    /** Opened on a list one can take it out of (a crate, a playlist; a queue a crate started): Remove from it, as a
+     *  swipe left does there (the owner, 2026-10-19). */
+    out?: { label: string; icon: IconName; run: () => void } | null;
   } = $props();
 
   const np = $derived(playing());
@@ -349,6 +354,18 @@
         <MenuEntry icon="search" label="Web search" onclick={webSearch} />
         {#if movesHere && !forPlaying}
           <MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />
+        {/if}
+        {#if out}
+          {@const o = out}
+          <MenuEntry
+            icon={o.icon}
+            label={o.label}
+            danger
+            onclick={() => {
+              onclose();
+              o.run();
+            }}
+          />
         {/if}
       </div>
     {:else if step === 'lists'}

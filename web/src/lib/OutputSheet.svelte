@@ -6,8 +6,14 @@
   // Sync play (decision 0037): while one of Cratarr's players is played on, another's + adds it to its group and its
   // tick takes it out (a long press on it too); the group's players show ticked, its leader crowned, and their volumes
   // below. A tap on a name plays on that one player alone: the group ends.
-  import { appInfo, inApp } from './app.svelte';
-  import { coverUrl, type PlayOnPlayer } from './api';
+  // This device's sound (decision 0033, amended 2026-10-19; the owner: "hardware audio device selection in case of local
+  // playback, even in a group"): under This device while it plays, alone or in a group, the output it sounds on; a tap
+  // lists the app's outputs, Automatic (Android's own choice) first. A choice holds until an output comes or goes.
+  // Following a group, the group's player (Snapcast) makes the sound and takes no choice (the owner: "for later, if
+  // ever"): the row shows greyed.
+  import { appInfo, inApp, setDevice } from './app.svelte';
+  import { coverUrl, type AudioOutput, type PlayOnPlayer } from './api';
+  import type { IconName } from './Icon.svelte';
   import GroupVolume from './GroupVolume.svelte';
   import { hold } from './hold';
   import { live } from './live.svelte';
@@ -47,6 +53,21 @@
   // A player that plays already, while music plays here too: whether to take it over.
   let asking = $state<PlayOnPlayer | null>(null);
 
+  const me = $derived(inApp ? appInfo.player : null);
+  const sounding = $derived(inApp && appInfo.outputs.length > 0 && (here || (me !== null && group.includes(me))));
+  const following = $derived(me !== null && group.length > 1 && group.includes(me) && group[0] !== me);
+  /** Where it sounds: the output chosen, else the one Android chose, as the app reports it. */
+  const sounds = $derived<AudioOutput | null>(appInfo.outputs.find((o) => o.id === appInfo.output) ?? playOn.players.find((p) => p.name === me)?.output ?? null);
+  const OUT_ICON: Record<AudioOutput['type'], IconName> = { bluetooth: 'bluetooth', speaker: 'smartphone', wired: 'headphones', usb: 'usb', hdmi: 'tv', remote: 'cast', other: 'speaker' };
+  const OUT_NAME: Record<AudioOutput['type'], string> = { bluetooth: 'Bluetooth', speaker: 'Speaker', wired: 'Headphones', usb: 'USB', hdmi: 'HDMI', remote: 'Cast', other: 'Other' };
+  const outName = (o: AudioOutput) => o.name ?? OUT_NAME[o.type];
+  let choosingOutput = $state(false);
+  function chooseOutput(id: string | null) {
+    navigator.vibrate?.(8);
+    setDevice({ output: id });
+    choosingOutput = false;
+  }
+
   function pick(output: typeof prefs.output) {
     if (group.length > 1) {
       onclose();
@@ -80,11 +101,11 @@
 
 <MenuSheet
   label="Play on"
-  title={asking ? asking.name : 'Play on'}
+  title={asking ? asking.name : choosingOutput ? 'This device' : 'Play on'}
   images={asking ? (asking.track ? [coverUrl(asking.track)] : []) : src ? [src] : []}
-  chips={asking ? (asking.track ? [asking.track.name] : []) : [shown]}
-  step={asking ? 'ask' : 'menu'}
-  onback={asking ? () => (asking = null) : null}
+  chips={asking ? (asking.track ? [asking.track.name] : []) : choosingOutput ? [] : [shown]}
+  step={asking ? 'ask' : choosingOutput ? 'outputs' : 'menu'}
+  onback={asking ? () => (asking = null) : choosingOutput ? () => (choosingOutput = false) : null}
   {onclose}
 >
   <div role="menu">
@@ -92,9 +113,14 @@
       {@const name = asking.name}
       <MenuEntry label="Take over" onclick={() => choose(`player:${name}`, moveTo)} />
       <MenuEntry label="Don't take over" onclick={() => choose(`player:${name}`, joinTo)} />
+    {:else if choosingOutput}
+      <!-- One choice: the chosen one ticked, the others plain (no group's +). -->
+      <MenuEntry label="Automatic" checked={appInfo.output === null ? true : null} onclick={() => chooseOutput(null)} />
+      {#each appInfo.outputs as o (o.id)}
+        <MenuEntry icon={OUT_ICON[o.type]} label={outName(o)} checked={appInfo.output === o.id ? true : null} onclick={() => chooseOutput(o.id)} />
+      {/each}
     {:else}
       {#if canPlayHere}
-        {@const me = inApp ? appInfo.player : null}
         <div use:hold={{ start: () => me && held(me), end: () => {}, enabled: groupable(me), ms: HOLD_MS }}>
           <MenuEntry
             label="This device"
@@ -106,6 +132,14 @@
             onclick={() => pick('local')}
           />
         </div>
+        {#if sounding}
+          <MenuEntry
+            icon={sounds ? OUT_ICON[sounds.type] : 'speaker'}
+            label={sounds ? outName(sounds) : 'Automatic'}
+            disabled={following}
+            onclick={() => (choosingOutput = true)}
+          />
+        {/if}
       {/if}
       {#each players as name (name)}
         <div use:hold={{ start: () => held(name), end: () => {}, enabled: groupable(name), ms: HOLD_MS }}>

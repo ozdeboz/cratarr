@@ -1196,6 +1196,27 @@ export function remove(index: number) {
 /** As `remove`, counted in what comes next. */
 export const removeUpcoming = (i: number) => remove(local.index + 1 + i);
 
+/** Takes the playing track out of the queue (it was taken out of its crate, decision 0024 amended 2026-10-19): the next
+ *  plays in its place from its start; after the last, the queue ends there, paused. The app's player is told `remove`
+ *  with the playing entry, which it treats the same way. */
+export function removePlaying() {
+  const i = local.index;
+  if (i < 0 || i >= local.queue.length) return;
+  const entry = local.queue[i].entry;
+  local.queue = local.queue.filter((_, j) => j !== i);
+  const last = i >= local.queue.length;
+  if (handed()) {
+    Object.assign(local, { position: 0, paused: last, index: last ? local.queue.length - 1 : i });
+    return hand('remove', { index: i, ...(entry ? { entry } : {}) });
+  }
+  if (last) {
+    local.index = local.queue.length - 1;
+    audio?.pause();
+    return;
+  }
+  fresh(i, 0, true);
+}
+
 /** As `move`, counted in what comes next (0 = the track after the playing one), as the queue sheet lists it. */
 export const moveUpcoming = (from: number, to: number) => move(local.index + 1 + from, local.index + 1 + to);
 

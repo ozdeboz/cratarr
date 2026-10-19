@@ -58,7 +58,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     artist and the album, not the album the queue plays, Radio's or Autoplay's mark before them; length, heart, ⋮). A tap plays
     a row; a row's cover held plays its track from a third of the way in until the finger lifts, over what plays,
     which then goes on where it was (decided 2026-10-16; this browser's own stream for now). Playing on this device a row's handle reorders and a swipe left past 65 % removes it,
-    with no undo, as Finamp; the server's player takes neither command. A long-press or right-click opens a menu, the
+    with no undo, as Finamp; the server's player takes neither command. In a queue a crate started, its own tracks
+    (not added by hand, by Radio or by Autoplay) can be taken out of the crate: the crate-with-a-cross beside the
+    playing card's heart (the next track plays), and "Remove from <crate>" in a row's menu (decision 0024, amended
+    2026-10-19); Undo follows. A long-press or right-click opens a menu, the
     same everywhere in the sheet: on the playing track's card (it has no ⋯) the playing track's own menu; on a row a
     menu about its place in the queue: Play now and Play next (moving it there on this device; "Play again next", a
     copy, on the server's player), then Add to playlist, the favourite and Remove from queue (this device).
@@ -67,9 +70,18 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     current one checked. Choosing the other one moves the music there (the queue and the position) and stops the side
     that played; nothing asks first, the player simply carries on there. The choice is remembered by the browser.
     Whichever side plays, the player looks and works the same; playlists, the heart and the info chips act on the
-    track that plays there. A track this device cannot play is skipped with one error line naming it.
+    track that plays there. A track this device cannot play is skipped with one error line naming it. In the app,
+    under This device while it plays (alone or in a group), its audio output: the one it sounds on by its icon and
+    name; a tap opens a step with Automatic (Android's own choice) and each output, the chosen one ticked (2026-10-19).
+    Following a group the row is greyed: the group's player makes the sound.
   Pages never show their own now-playing; they read the shell's shared state (`lib/live.svelte.ts`,
   `lib/remote.svelte.ts`).
+- **Swipes on rows** (`lib/swipe.ts`, the owner 2026-10-19): the row follows the finger; past 65 % of its width the
+  action runs, else it springs back. Left takes it out of the list it is in (the queue, a crate, one's own
+  playlist), with Undo except in the queue; right plays it next (an album's, an artist's, a crate's and a playlist's
+  tracks). A way with no action does not move. What it does shows in the strip the row uncovers, growing from the
+  edge with the move (`lib/SwipeBehind.svelte`): the action's icon and word, red for removing, the accent for Play
+  next, on a light tint of the same colour.
 - **Widths:** grids (the playlist chips) use the full width; lists and forms stop at 900 px, left-aligned.
 - **A viewed playlist** (decision 0023, `lib/PlaylistView.svelte`): in the panel beside the page, or on a phone a
   full-height layer with the mini-player floating over its end. It shows the tracks; the selection's (one playlist, or

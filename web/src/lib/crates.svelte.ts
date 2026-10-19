@@ -1,11 +1,12 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
-import { albumCoverUrl, crateImageUrl, crateRows, getCrates, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites, type PlaylistRow } from './api';
+import { albumCoverUrl, crateImageUrl, crateRows, getCrates, leaveOutOfCrate, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites, type PlaylistRow } from './api';
 import type { LocalTrack } from './localPlayer.svelte';
 import { playPlaylistFrom } from './output.svelte';
 import { prefs } from './prefs.svelte';
 import { viewPlaylist } from './panel.svelte';
 import { toast } from './toast.svelte';
+import { withUndo } from './undo.svelte';
 
 export const crates = $state<{ list: Crate[] | null; error: string | null }>({ list: null, error: null });
 
@@ -224,4 +225,14 @@ export async function shuffleCrate(id: string, name: string) {
     .map((r: PlaylistRow) => ({ source: first.source, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
   if (!tracks.length) throw new Error('Nothing in this crate to play');
   await playPlaylistFrom(name, first.source, shuffled(tracks), 0);
+}
+
+// Tracks taken out of a crate by hand (decision 0024, amended 2026-10-19): from its panel (a swipe left, a track's menu)
+// or from a queue it started (the playing card's button, a track's menu). It leaves them out whatever its conditions and
+// toggles say; Undo puts them back (the owner: "Undo toast", the one notice of its kind). Its sizes are read again.
+export async function leaveOut(id: string, source: string, ids: string[]) {
+  const name = crateName(id);
+  const { undo } = await leaveOutOfCrate(id, source, ids);
+  withUndo(`Removed from ${name}.`, [undo], { after: () => loadCrates() });
+  await loadCrates();
 }

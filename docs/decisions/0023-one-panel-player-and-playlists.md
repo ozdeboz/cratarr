@@ -93,3 +93,19 @@ The owner decided (2026-10-14):
 - Insights loses its own panel, legend panel, their state, keys and address handling.
 - The server gains a batch of a playlist's rows with their details (and their file names for unmatched entries).
 - `docs/ui-conventions.md` describes the panel this way when stage 2 ships.
+
+## Amendment (2026-10-19): swipe right plays next, swipe left removes
+
+The owner: "on any library content list in the panel, swiping to the left should remove it from that list. So this goes
+for crates and for playlists. Also be sure to use the standard way of revealing the action during the swipe on the
+row." Of where Play next goes: swipe right, everywhere.
+
+- **Left removes** a track from the list it is in: one's own playlist (its line out of the `.m3u` at once, with Undo; in
+  the several-playlists view, out of its section's playlist) or a crate (its left-out list, decision 0024 amended).
+  An album's and an artist's tracks are no list of one's own: a swipe left does nothing there. Another user's shared
+  playlist is not one's own: nothing either. Edit mode keeps its swipe left (removed until Save).
+- **Right plays next**, on every list of tracks in the panel (it was a swipe left, Finamp's default, until now).
+- **What the swipe does shows as the row moves**: in the strip it uncovers, growing from the edge, the action's icon
+  and word (red Remove, the accent's Play next) on a light tint (`lib/SwipeBehind.svelte`). The queue's swipe left
+  shows its Remove the same way.
+- A row's menu says the same: "Remove from <list>" after Remove from queue's place.

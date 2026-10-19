@@ -328,6 +328,8 @@ export type Crate = {
   stats?: CrateStats;
   /** A picture of its own was set (crateImageUrl). */
   image: boolean;
+  /** How many tracks it leaves out by hand (decision 0024, amended 2026-10-19); a server from before: none. */
+  left_out?: number;
 };
 /** A crate's card (decided 2026-10-16): its size and length, how much was never played (null: no owner account to ask
  *  about), what came this week, its top three genres and up to four of its albums (most of its tracks first). */
@@ -425,6 +427,18 @@ export const setCrateFavouriteAlbums = (id: string, favourite_albums: CrateFavou
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ favourite_albums }),
   });
+/** A crate's tracks taken out by hand (decision 0024, amended 2026-10-19): it leaves them out whatever its conditions
+ *  and toggles say. Out and back in again are journaled (Undo); ids the library does not know are passed over. */
+export const leaveOutOfCrate = (id: string, source: string, ids: string[]) =>
+  post<{ left_out: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/left-out`, { source, ids });
+export const putBackInCrate = (id: string, source: string, ids: string[]) =>
+  request<{ left_out: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/left-out`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, ids }),
+  });
+export const crateLeftOut = (id: string, source?: string) =>
+  quietly<{ source: string; rows: PlaylistRow[] }>(`/api/crates/${encodeURIComponent(id)}/left-out${follow(source)}`);
 export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
 /** `ids`: the queue to make it from (the local player's); without, the server's player's queue. `repeats`: a track
  *  the queue plays twice is in it twice (the page asked), else once (decision 0025, amended 2026-10-16). */
