@@ -10,7 +10,7 @@
 // 4. Every other route comes from Music's port of its signal (a band's as that channel), read as the routes read it
 //    (`reference: 'absolute'`), its depth normalled to the Loudness's `out`.
 // 5. A route's cable keeps the route's key as its id, its value (an amount or a curve, walking or not) and its mode.
-// 6. Intensity, Flash and Speed move to the modules that do them: Loudness, Flash, Clock. Show is split into its
+// 6. Intensity, Flash and Speed move to the modules that do them: Loudness, Accent (Flash renamed, 0057 §7e), Clock. Show is split into its
 //    device's modules (ports.ts SHOW_PARTS), its knobs exposed under their old names, so a route into
 //    `show.<knob>` keeps its address (`flatten` leads it to the module behind); Show's Size is the Flame's `zoom`.
 // 7. The extras' modules come as they are; their cables from Music's or a modulator's port.
@@ -26,7 +26,7 @@ import type { VisualSettings } from './settings.svelte';
 const BANDS = 6;
 
 /** The settings that leave the frame for the module that does them (6). */
-const MOVED: Record<string, [string, string]> = { intensity: ['envelope', 'intensity'], flash: ['flash', 'flash'], speed: ['clock', 'speed'] };
+const MOVED: Record<string, [string, string]> = { intensity: ['envelope', 'intensity'], flash: ['accent', 'accent'], speed: ['clock', 'speed'] };
 
 /** Where a route's signal comes from (2–4). */
 function routeFrom(c: Cable): Pick<CableV2, 'from' | 'depth'> {
@@ -138,7 +138,7 @@ export function toV2(s: VisualSettings): PatchV2 {
     ['track', { id: 'track', type: 'track', knobs: {} }],
     ['envelope', { id: 'envelope', type: 'envelope', knobs: { time: 0.2 } }],
     ['clock', { id: 'clock', type: 'clock', knobs: { beats: 32 } }],
-    ['flash', { id: 'flash', type: 'flash', knobs: { course: 0.3 } }],
+    ['accent', { id: 'accent', type: 'accent', knobs: { course: 0.3 } }],
   ]);
   for (const [setting, [module, knob]] of Object.entries(MOVED)) {
     engine.get(module)!.knobs[knob] = (s as unknown as Record<string, number>)[setting];
