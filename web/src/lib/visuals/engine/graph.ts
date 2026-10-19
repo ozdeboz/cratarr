@@ -10,7 +10,7 @@ import type { AspectsNow } from '../aspects';
 import { MOMENT_GAP, heightOf, letThrough, shapeOf, type MomentRequest } from '../evaluate';
 import { seedOf } from '../flame';
 import type { Levers } from './sidechain';
-import { MODULATORS, type ModulatorType } from '../modulators/modulators';
+import { modulatorOf, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
 import { SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
@@ -137,7 +137,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   // The modulators running: one each, anew where its type changed, none for those gone.
   const modulatorType = (type: string): ModulatorType | null => {
     const t = types[type] as Partial<ModulatorType> | undefined;
-    return t && typeof t.create === 'function' ? (t as ModulatorType) : (MODULATORS[type] ?? null);
+    return t && typeof t.create === 'function' ? (t as ModulatorType) : (modulatorOf(type) ?? null);
   };
   const running = p.modules.filter((x) => modulatorType(x.type));
   const live = new Set(running.map((x) => x.id));

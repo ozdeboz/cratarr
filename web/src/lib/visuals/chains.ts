@@ -74,7 +74,7 @@ export const CHAINS: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
-      modulators: [mod('slow', 'breath', { attack: 0.8, release: 2.5 }), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      modulators: [mod('slow', 'breath', { attack: 0.8, release: 2.5 }), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('calm-in', { signal: 'loudness' }, 'breath', 'in', 1),
         cable('calm-size', { modulator: 'breath' }, 'show', 'size', 0.5),
@@ -107,7 +107,7 @@ export const CHAINS: readonly Chain[] = [
         },
       ],
       loop: [mod('warp', 'pulse-warp', { zoom: 0.04 }), mod('keep', 'pulse-keep', { amount: 0.5, trails: 0.4 })],
-      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.15, amount: 1 }), mod('drift', 'wander', { rate: 0.1, amount: 1 })],
+      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.15, amount: 1 }), mod('random', 'wander', { rate: 0.1, amount: 1 })],
       cables: [
         cable('pulse-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
         cable('pulse-size', { modulator: 'kick' }, 'show', 'size', 0.3),
@@ -133,7 +133,7 @@ export const CHAINS: readonly Chain[] = [
     extra: {
       ...emptyExtra(),
       loop: [mod('warp', 'flow-warp', { zoom: 0.05 }), mod('keep', 'flow-keep', { amount: 0.6, trails: 0.5 })],
-      modulators: [mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      modulators: [mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('flow-flow', { signal: 'loudness', speed: 'slow' }, 'fluid', 'flow', 1),
         cable('flow-zoom', { signal: 'hits', band: 1 }, 'flow-warp', 'zoom', 0.2),
@@ -153,7 +153,7 @@ export const CHAINS: readonly Chain[] = [
     extra: {
       ...emptyExtra(),
       loop: [mod('warp', 'tunnel-warp', { zoom: 0.15 }), mod('keep', 'tunnel-keep', { amount: 0.75, trails: 0.6 })],
-      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.2, amount: 1 }), mod('slow', 'breath'), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.2, amount: 1 }), mod('slow', 'breath'), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('tunnel-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
         cable('tunnel-zoom', { modulator: 'kick' }, 'tunnel-warp', 'zoom', 0.3),
@@ -175,7 +175,7 @@ export const CHAINS: readonly Chain[] = [
       ...emptyExtra(),
       layers: [{ id: 'scope', source: mod('waves', 'scope-source', { width: 0.01, opacity: 0.9, tint: 0.85, glow: 0.7 }), modules: [], loop: [], blend: { mode: 'screen', amount: 1 } }],
       loop: [mod('warp', 'scope-warp', { zoom: 0.05 }), mod('keep', 'scope-keep', { amount: 0.7, trails: 0.5 })],
-      modulators: [mod('fast', 'body'), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      modulators: [mod('fast', 'body'), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('scope-body-in', { signal: 'loudness' }, 'body', 'in', 1),
         cable('scope-height', { modulator: 'body' }, 'scope-source', 'amplitude', 0.4),
@@ -193,7 +193,7 @@ export const CHAINS: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
-      modulators: [mod('counter', 'bars', { length: 4, amount: 1 }), mod('slow', 'breath'), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      modulators: [mod('counter', 'bars', { length: 4, amount: 1 }), mod('slow', 'breath'), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('mosaic-bars-in', { signal: 'downbeat' }, 'bars', 'in', 1),
         cable('mosaic-tiles', { modulator: 'bars' }, 'fx1', 'k1', 0.6),
@@ -216,7 +216,7 @@ export const CHAINS: readonly Chain[] = [
       // A ring of the sound in the flame's colours, drawn into the spiral and carried in by it.
       layers: [{ id: 'fractal-ring', source: mod('waves', 'fractal-ring-source', { circle: 1, radius: 0.3, width: 0.006, opacity: 0.8, tint: 0.95, glow: 0.6 }), modules: [], loop: [], blend: { mode: 'screen', amount: 0.7 } }],
       loop: [mod('warp', 'fractal-warp', { zoom: 0.1, turn: 0.1 }), mod('keep', 'fractal-keep', { amount: 0.7, trails: 0.6 })],
-      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.3, amount: 1 }), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
+      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.3, amount: 1 }), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('fractal-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
         cable('fractal-dive', { modulator: 'kick' }, 'dive', 'dive', 0.3, 'level'),
@@ -302,7 +302,7 @@ export const EXAMPLES: readonly Chain[] = [
     label: 'Moved by time',
     line: 'A drift turns it; the music moves nothing.',
     routes: {},
-    extra: { ...emptyExtra(), modulators: [mod('drift', 'wander', { rate: 0.1, amount: 1 })], cables: [cable('example-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.5)] },
+    extra: { ...emptyExtra(), modulators: [mod('random', 'wander', { rate: 0.1, amount: 1 })], cables: [cable('example-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.5)] },
     settings: { ...QUIET },
   },
 ];

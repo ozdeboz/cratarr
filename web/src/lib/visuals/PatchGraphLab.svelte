@@ -31,7 +31,7 @@
       ],
       loop: [mod('fluid', 'fluid', { stir: 0.5, flow: 0.4 }), mod('tunnel', 'tunnel', { tunnel: 0.3 }), mod('keep', 'keep')],
       finish: [mod('colour', 'colour')],
-      modulators: [mod('beats', 'counter'), mod('bass', 'fast'), mod('drift', 'drift')],
+      modulators: [mod('beats', 'counter'), mod('bass', 'fast'), mod('drift', 'random')],
       cables: [
         cable('c1', { signal: 'beat' }, 'beats', 'in', 1),
         cable('c2', { signal: 'level', band: 0 }, 'bass', 'in', 1),
