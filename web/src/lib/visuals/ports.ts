@@ -204,7 +204,7 @@ export const ADSR = declared(
     ...[knob('attack', 'Attack', 0, 2, 0.04), knob('decay', 'Decay', 0, 4, 0), knob('sustain', 'Sustain', 0, 1, 0, 'level'), knob('release', 'Release', 0.02, 8, 0.2)].map((k) => ({ ...k, channels: 6 })),
     // How a hit that comes while one rings starts: from the higher of the two (0, as today's lights), or from where it
     // is (1, the textbook's).
-    knob('retrigger', 'Retrigger', 0, 1, 0, 'step'),
+    { ...knob('retrigger', 'Retrigger', 0, 1, 0, 'step'), randomize: false },
     knob('amount', 'Amount', 0, 1, 1, 'level'),
   ],
   [{ id: 'gate', label: 'Gate', type: 'trigger', channels: 6 }],
