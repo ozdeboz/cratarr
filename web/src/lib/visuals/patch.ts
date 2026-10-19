@@ -43,7 +43,9 @@ export type Module = { id: string; type: string; knobs: Record<string, number> }
 
 /** A signal as a cable takes it: the music's (a band's, or the whole track's), against which reference its 1 =
  *  typical is measured (0056; this track by default), fast or slow. */
-export type SignalRef = { signal: string; band?: number; reference?: 'track' | 'lately' | 'absolute'; speed?: 'fast' | 'slow' };
+/** A signal as a cable reads it. `value`: read that value as the signal's would be (an ADSR's strike, against the
+ *  hits' typical) instead of the signal now; its speed does not apply. */
+export type SignalRef = { signal: string; band?: number; reference?: 'track' | 'lately' | 'absolute'; speed?: 'fast' | 'slow'; value?: number };
 
 /** A cable: from a signal or a modulator to a knob, its value as a route's (an amount, or a curve). */
 export type Cable = {

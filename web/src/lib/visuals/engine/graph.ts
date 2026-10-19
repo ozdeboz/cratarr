@@ -116,9 +116,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const typeOf = new Map(p.modules.map((x) => [x.id, x.type]));
   const moduleOf = new Map(p.modules.map((x) => [x.id, x]));
   const outputs: Record<string, number> = {};
-  // Each ADSR's gate: the Music port it is keyed by.
-  const gateOf = new Map<string, string>();
-  for (const c of p.cables) if (typeOf.get(c.to.module) === 'adsr' && c.to.port === 'gate' && (typeOf.get(c.from.module) ?? c.from.module) === 'music') gateOf.set(c.to.module, c.from.port);
+  // Each ADSR's gate cable: the Music port it is keyed by, and how its strikes are read.
+  const gateOf = new Map<string, CableV2>();
+  for (const c of p.cables) if (typeOf.get(c.to.module) === 'adsr' && c.to.port === 'gate' && (typeOf.get(c.from.module) ?? c.from.module) === 'music') gateOf.set(c.to.module, c);
 
   // Music's raw signals, the Envelope, the Track's pulse.
   const env = stepEnvelope(st.envelope, m.intensity, m.playing, s.intensity, step);
@@ -160,10 +160,10 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const type = typeOf.get(f.module) ?? f.module;
     if (type === 'adsr') {
       const gate = gateOf.get(f.module);
-      // A module's output, read as it is (as a modulator's); all its channels at once, none (as a band's signal read
-      // raw without its band).
-      if (!gate || !STRIKES[gate] || f.channel === undefined) return 0;
-      return adsrOut(f.module, gate, f.channel);
+      // Its strikes read as its gate reads them: as they are (0..), or against the typical (1 = a typical one, halved
+      // into 0..1 as a signal read so is); all its channels at once, none (as a band's signal read raw without its band).
+      const out = adsrOut(f.module, f.channel);
+      return gate?.from.reference === 'absolute' ? out : clamp(out / 2, 0, 1);
     }
     if (type === 'music') {
       if (c.from.reference === 'absolute') {
@@ -183,11 +183,19 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
     return null;
   };
-  /** An ADSR's output on one channel now (its knobs `<stage>.<channel>`, `amount`). */
-  function adsrOut(id: string, gate: string, ch: number): number {
+  /** An ADSR's output on one channel now (its knobs `<stage>.<channel>`, `amount`): its gate's strikes, each one's
+   *  velocity read as the gate cable reads (`absolute`: its strength; else against the typical, as normal.ts reads
+   *  the signal). */
+  function adsrOut(id: string, ch: number | undefined): number {
+    const gate = gateOf.get(id);
+    const kind = gate && STRIKES[gate.from.port];
+    if (!gate || !kind || ch === undefined) return 0;
     const k = moduleOf.get(id)?.knobs ?? {};
-    const strike = m.strikes?.[ch]?.[STRIKES[gate]] ?? NO_STRIKE;
-    const v = adsrOf(strike, { attack: finite(k[`attack.${ch}`]), decay: finite(k[`decay.${ch}`]), sustain: finite(k[`sustain.${ch}`]), release: finite(k[`release.${ch}`], 0.15) });
+    const strike = m.strikes?.[ch]?.[kind] ?? NO_STRIKE;
+    const r = gate.from;
+    const velocity = (v: number) => (r.reference === 'absolute' ? v : finite(read({ signal: r.port, band: ch, reference: r.reference, value: v })));
+    const struck = { since: strike.since, velocity: velocity(strike.velocity), next: strike.next && { until: strike.next.until, velocity: velocity(strike.next.velocity) } };
+    const v = adsrOf(struck, { attack: finite(k[`attack.${ch}`]), decay: finite(k[`decay.${ch}`]), sustain: finite(k[`sustain.${ch}`]), release: finite(k[`release.${ch}`], 0.15) });
     return v * finite(k.amount, 1);
   }
   /** What scales a cable: its depth's value (null: nothing, 1; undefined: the Envelope's, normalled). */
@@ -222,7 +230,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
         continue;
       }
       if (type === 'music' || type === 'adsr') {
-        const v = c.from.reference === 'absolute' || type === 'adsr' ? (xOf(c) ?? 0) : finite(read({ signal: c.from.port, band: c.from.channel, reference: c.from.reference, speed: c.from.speed }));
+        const v = type === 'adsr' ? adsrOut(c.from.module, c.from.channel) : c.from.reference === 'absolute' ? (xOf(c) ?? 0) : finite(read({ signal: c.from.port, band: c.from.channel, reference: c.from.reference, speed: c.from.speed }));
         sum += (sh.table ? 2 * heightOf(sh, clamp(v / 2, 0, 1)) : sh.end * v) * w;
         continue;
       }

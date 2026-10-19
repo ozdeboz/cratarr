@@ -234,7 +234,8 @@ export function signalsFor(st: NormalState, music: MusicNow, at: number): (ref: 
     const f = band === null ? st.track[signal] : st.bands[band][signal];
     const moment = band === null ? MOMENT_TRACK.has(signal) : MOMENT_BAND.has(signal);
     const now = band === null ? music.track[signal] : (music.bands?.[band]?.[signal] ?? 0);
-    const raw = ref.speed === 'slow' ? f.slow : Number.isFinite(now) && now > 0 ? now : 0;
+    const given = ref.value;
+    const raw = given !== undefined ? (Number.isFinite(given) && given > 0 ? given : 0) : ref.speed === 'slow' ? f.slow : Number.isFinite(now) && now > 0 ? now : 0;
     const reference = ABSOLUTE_ONLY.has(signal) && band === null ? 'absolute' : (ref.reference ?? (band === null && ABSOLUTE_BY_DEFAULT.has(signal) ? 'absolute' : 'track'));
     if (reference === 'absolute') return raw;
     // This track's typical: the server's, else what has been heard, crossed with the value as it is while little has.

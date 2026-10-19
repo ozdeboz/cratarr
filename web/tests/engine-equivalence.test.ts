@@ -141,16 +141,27 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
     macros,
     pins: [],
   } as unknown as Patch;
+  // The hits through an ADSR at Linger, its gate reading them against the track's typical (an extra cable's default),
+  // as toV2 has them.
+  const adsr = { id: 'adsr-track', type: 'adsr', knobs: { retrigger: 0, amount: 1, ...Object.fromEntries(settings.lighting.flatMap((r: number, b: number) => [[`attack.${b}`, 0.04], [`decay.${b}`, 0], [`sustain.${b}`, 0], [`release.${b}`, r]])) } };
   const v2: PatchV2 = {
     v: 2,
-    modules: [...['music', 'track', 'envelope', 'clock'].map((id) => ({ id, type: id, knobs: {} })), ...modulators, shapes, kal],
-    cables: cables.map((c) => ({
-      id: c.id,
-      from: 'modulator' in c.from ? { module: c.from.modulator, port: 'out' } : { module: 'music', port: c.from.signal, channel: c.from.band, reference: c.from.reference, speed: c.from.speed },
-      to: { module: c.to.module, port: c.to.knob },
-      value: c.value,
-      mode: c.mode,
-    })),
+    modules: [...['music', 'track', 'envelope', 'clock'].map((id) => ({ id, type: id, knobs: {} })), adsr, ...modulators, shapes, kal],
+    cables: [
+      ...cables.map((c) => ({
+        id: c.id,
+        from:
+          'modulator' in c.from
+            ? { module: c.from.modulator, port: 'out' }
+            : c.from.signal === 'hits'
+              ? { module: 'adsr-track', port: 'out', channel: c.from.band }
+              : { module: 'music', port: c.from.signal, channel: c.from.band, reference: c.from.reference, speed: c.from.speed },
+        to: { module: c.to.module, port: c.to.knob },
+        value: c.value,
+        mode: c.mode,
+      })),
+      { id: 'adsr-track-gate', from: { module: 'music', port: 'hits', reference: 'track' }, to: { module: 'adsr-track', port: 'gate' }, value: 1, mode: 'swing' },
+    ],
     macros,
     pins: [],
   };
@@ -171,12 +182,13 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
     for (const [knob, v] of Object.entries(theirs.knobs['shapes-1'])) {
       const d = Math.abs(v - mine.knobs['shapes-1'][knob]);
       worst = Math.max(worst, d);
-      assert.ok(d <= 1e-9, `frame ${k}: shapes-1.${knob} ${mine.knobs['shapes-1'][knob]} against ${v}`);
+      // The hits through the ADSR: its strikes in doubles, today's Hits signal stored as 32-bit floats (adsr.test.ts).
+      assert.ok(d <= 1e-6, `frame ${k}: shapes-1.${knob} ${mine.knobs['shapes-1'][knob]} against ${v}`);
     }
     // An effect engine on a layer (its type also the chain's finish's) is moved by both (evaluate.ts by id since a5's
     // fix), and its Effect (a step) asks for its moments.
     assert.ok(mine.knobs.kal && mine.knobs.kal.effect === 1);
-    for (const [knob, v] of Object.entries(theirs.knobs.kal)) assert.ok(Math.abs(v - mine.knobs.kal[knob]) <= 1e-9, `frame ${k}: kal.${knob}`);
+    for (const [knob, v] of Object.entries(theirs.knobs.kal)) assert.ok(Math.abs(v - mine.knobs.kal[knob]) <= 1e-6, `frame ${k}: kal.${knob}`);
     for (const id of ['fol', 'osc']) assert.ok(Math.abs(theirs.outputs[id] - mine.outputs[id]) <= 1e-9, `frame ${k}: ${id}`);
     assert.ok(Math.abs(theirs.macros.mac - mine.macros.mac) <= 1e-9);
     assert.deepEqual(theirs.moments, mine.moments);
