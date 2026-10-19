@@ -34,12 +34,12 @@ test('Intensity, Flash and Speed move to the modules that do them; the column sc
   const v = toV2(s);
   const m = Object.fromEntries(v.modules.map((x) => [x.id, x]));
   assert.equal(m.envelope.knobs.intensity, 0.3);
-  assert.equal(m.flash.knobs.flash, 1.4);
+  assert.equal(m.accent.knobs.accent, 1.4);
   assert.equal(m.clock.knobs.speed, 0.7);
   for (const k of ['intensity', 'flash', 'speed']) assert.ok(!(k in m.frame.knobs), k);
   assert.equal(m.flame.knobs.zoom, 0.5, "Show's Size is the Flame's zoom");
   assert.equal(m.show.type, 'device');
-  for (const id of ['music', 'track', 'envelope', 'clock', 'flash', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
+  for (const id of ['music', 'track', 'envelope', 'clock', 'accent', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
 });
 
 test('the extras come as they are: their modules, and their cables from a modulator or from Music with their reference and speed', () => {

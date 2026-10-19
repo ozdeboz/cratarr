@@ -60,6 +60,8 @@ export function polyKnobs(t: ModuleType): ModuleType {
 }
 
 const knobPortOf = (k: Knob): Port => ({ ...knobPort(k), ...(k.channels ? { channels: k.channels } : {}) });
+/** A step knob's trigger (0057 §7e): it moves on to its next step at its module's neutral, as a Gate fires it. */
+const nextPortOf = (k: Knob): Port[] => (k.kind === 'step' && k.randomize !== false ? [{ id: `${k.id}:next`, label: `${k.label}: next`, type: 'trigger' }] : []);
 
 /** Trigger inputs a type takes beside its own (0057 §4b): the LFO, clocked (its rate in beats while its clock is
  *  plugged in) and reset on the bar. */
@@ -73,7 +75,8 @@ const TRIGGER_INPUTS: Record<string, Port[]> = {
 /** A module type's ports, from what it declares (its own `ports` where it has them: the modules below). */
 export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   if (t.ports) return t.ports;
-  const knobs = polyKnobs(t).knobs.filter((k) => !k.device).map(knobPortOf);
+  const declared = polyKnobs(t).knobs.filter((k) => !k.device);
+  const knobs = [...declared.map(knobPortOf), ...declared.flatMap(nextPortOf)];
   const inputs = [
     ...(t.inputs ?? []).map((id): Port => ({ id, label: id === 'in' ? 'Input' : id[0].toUpperCase() + id.slice(1), type: id === 'trigger' ? 'trigger' : 'value' })),
     ...(TRIGGER_INPUTS[t.type] ?? []),
@@ -119,6 +122,8 @@ export const MUSIC: Declared = {
     in: MUSIC_KNOBS.map(knobPortOf),
     out: [
       out('audio', 'Sound', 'audio'),
+      // 1 while the music plays, 0 paused (0057 §7e: the pause's dimming, cabled in sight).
+      out('playing', 'Playing'),
       ...TRACK_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value')),
       ...BAND_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value', 6)),
     ],
@@ -158,12 +163,31 @@ export const CLOCK = declared(
   [out('phase', 'Turn'), out('rate', 'Rate'), out('beat', 'Beat', 'trigger'), out('bar', 'Bar', 'trigger'), out('phrase', 'Phrase', 'trigger')],
 );
 
-export const FLASH = declared(
-  'flash',
-  'Flash',
+/** Accent (0057 §7e; was Flash, renamed so "flash" means only the Screen's guard): a slow course of its input, and
+ *  the accent's share of the swing about it. */
+export const ACCENT = declared(
+  'accent',
+  'Accent',
   'modulator',
-  [knob('flash', 'Flash', 0, 2, 1, 'level', 0), knob('course', 'Course', 0.05, 2, 0.3)],
+  [knob('accent', 'Accent', 0, 2, 1, 'level', 0), knob('course', 'Course', 0.05, 2, 0.3)],
   [{ id: 'in', label: 'Input', type: 'value' }],
+  [VALUE_OUT],
+);
+
+/** VCA (0057 §7e): its input times its gain, as in every modular synth; the one way a signal multiplies another. */
+export const VCA = declared('vca', 'VCA', 'modulator', [knob('gain', 'Gain', 0, 2, 1, 'level', 0)], [{ id: 'in', label: 'Input', type: 'value' }, { id: 'cv', label: 'Gain in', type: 'value' }], [VALUE_OUT]);
+
+/** The ways a Merge makes one channel of several. */
+export const MERGES = ['sum', 'mean', 'max', 'geometric'] as const;
+
+/** Merge (0057 §7e; VCV's poly to mono): a polyphonic cable's channels made one, by their sum, mean, largest or
+ *  geometric mean. */
+export const MERGE = declared(
+  'merge',
+  'Merge',
+  'modulator',
+  [{ ...knob('mode', 'Mode', 0, MERGES.length - 1, 1, 'step'), randomize: false }],
+  [{ id: 'in', label: 'Input', type: 'value', channels: 6 }],
   [VALUE_OUT],
 );
 
@@ -321,7 +345,7 @@ export const FILTER_BANK = declared(
   [out('bands', 'Bands', 'audio', 6), out('level', 'Level', 'value', 6)],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 

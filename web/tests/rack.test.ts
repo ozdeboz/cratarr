@@ -33,7 +33,7 @@ test("today's chain by category: the flame a source, Show an effect device, the 
   const ids = (c: keyof typeof by) => by[c].map((m) => m.id);
   assert.ok(ids('sources').includes('flame'));
   assert.ok(ids('effects').includes('show'), JSON.stringify(ids('effects')));
-  for (const id of ['envelope', 'clock', 'flash']) assert.ok(ids('modulators').includes(id), id);
+  for (const id of ['envelope', 'clock', 'accent']) assert.ok(ids('modulators').includes(id), id);
   assert.ok(ids('io').includes('music'));
 });
 
