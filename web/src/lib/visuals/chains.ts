@@ -33,8 +33,12 @@ export type ChainSettings = Partial<
     | 'facets'
     | 'fx1'
     | 'fx1K1'
+    | 'fx2'
     | 'fx3'
     | 'fx3K1'
+    | 'fx1K2'
+    | 'fxLoop'
+    | 'fxLoopK1'
     | 'fx1Amount'
     | 'fx2Amount'
     | 'fx3Amount'
@@ -45,7 +49,7 @@ export type ChainSettings = Partial<
 export type Chain = { id: string; label: string; line: string; routes: Record<string, RouteValue>; extra: PatchExtra; settings?: ChainSettings };
 
 /** None of the loop's and finish's own: what every chain starts from, so one chosen after another leaves none of it. */
-const QUIET: ChainSettings = { flameLayer: 1, fluid: 0, tunnel: 0, dive: 0, effects: 0, facets: 0, waves: 0, fx1Amount: 0, fx2Amount: 0, fx3Amount: 0, fxLoopAmount: 0 };
+const QUIET: ChainSettings = { flameLayer: 1, fx1: 0, fx2: 0, fx3: 0, fxLoop: 0, fluid: 0, tunnel: 0, dive: 0, effects: 0, facets: 0, waves: 0, fx1Amount: 0, fx2Amount: 0, fx3Amount: 0, fxLoopAmount: 0 };
 
 // What the preset study taught (9,109 of Cream of the Crop's presets, read for how they are made, none of them copied;
 // visuals-milkdrop-direction): a preset makes its own modulators first and drives through them, not the raw signals;
@@ -82,25 +86,35 @@ export const CHAINS: readonly Chain[] = [
     settings: { ...QUIET, flash: 0.3, speed: 0.6, smoothing: 0.6, trails: 1 },
   },
   {
-    // The bass's hits through a beat gate (at typical, lifting after each) push the size and the glow; a fast follower
-    // of the loudness the colour; the downbeats glow; the sub's hits light the flame's parts; the turning wanders.
+    // The bass's hits through a beat gate (at typical, lifting after each) push the flame's size and glow and the
+    // soft hexagons around it, which take the flame's colours and smear in a short trail; the sub's hits light the
+    // flame's parts; one drift turns the flame and the hexagons together.
     id: 'pulse',
     label: 'Pulse',
-    line: 'The beat and the bass: size and light on every hit, the low end lighting its parts.',
+    line: 'The beat and the bass: the flame and its hexagons pushed on every hit.',
     routes: {
-      [routeKey('downbeat', null, 'brightness')]: 0.3,
       [routeKey('hits', 0, 'lights')]: 1,
     },
     extra: {
       ...emptyExtra(),
-      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.15, amount: 1 }), mod('fast', 'body'), mod('drift', 'wander', { rate: 0.1, amount: 1 })],
+      layers: [
+        {
+          id: 'pulse-shapes',
+          source: mod('shapes', 'pulse-shapes-source', { count: 6, sides: 6, radius: 0.16, spread: 0.55, fill: 0.35, thickness: 0.008, opacity: 0.7, tint: 0.9, glow: 0.7, orbit: 0.02 }),
+          modules: [],
+          loop: [],
+          blend: { mode: 'screen', amount: 0.8 },
+        },
+      ],
+      loop: [mod('warp', 'pulse-warp', { zoom: 0.04 }), mod('keep', 'pulse-keep', { amount: 0.5, trails: 0.4 })],
+      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.15, amount: 1 }), mod('drift', 'wander', { rate: 0.1, amount: 1 })],
       cables: [
         cable('pulse-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
-        cable('pulse-body-in', { signal: 'loudness' }, 'body', 'in', 1),
         cable('pulse-size', { modulator: 'kick' }, 'show', 'size', 0.3),
         cable('pulse-glow', { modulator: 'kick' }, 'show', 'glow', 0.4),
-        cable('pulse-saturation', { modulator: 'body' }, 'show', 'saturation', 0.8),
+        cable('pulse-radius', { modulator: 'kick' }, 'pulse-shapes-source', 'radius', 0.25),
         cable('pulse-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
+        cable('pulse-spin', { modulator: 'wander' }, 'pulse-shapes-source', 'spin', 0.3),
       ],
     },
     settings: { ...QUIET, flash: 1, speed: 1 },
@@ -159,7 +173,7 @@ export const CHAINS: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
-      layers: [{ id: 'scope', source: mod('waves', 'scope-source', { width: 0.008, opacity: 1 }), modules: [], loop: [], blend: { mode: 'screen', amount: 1 } }],
+      layers: [{ id: 'scope', source: mod('waves', 'scope-source', { width: 0.01, opacity: 0.9, tint: 0.85, glow: 0.7 }), modules: [], loop: [], blend: { mode: 'screen', amount: 1 } }],
       loop: [mod('warp', 'scope-warp', { zoom: 0.05 }), mod('keep', 'scope-keep', { amount: 0.7, trails: 0.5 })],
       modulators: [mod('fast', 'body'), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
@@ -168,7 +182,7 @@ export const CHAINS: readonly Chain[] = [
         cable('scope-turn', { modulator: 'wander' }, 'scope-warp', 'turn', 0.3),
       ],
     },
-    settings: { ...QUIET, flameLayer: 0.35, flash: 0.3, speed: 0.6 },
+    settings: { ...QUIET, flameLayer: 0.7, flash: 0.3, speed: 0.6 },
   },
   {
     // Tiles: the Kaleidoscope engine's Repeat over the flame, how many stepping on with each bar (a counter of the
@@ -199,6 +213,8 @@ export const CHAINS: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
+      // A ring of the sound in the flame's colours, drawn into the spiral and carried in by it.
+      layers: [{ id: 'fractal-ring', source: mod('waves', 'fractal-ring-source', { circle: 1, radius: 0.3, width: 0.006, opacity: 0.8, tint: 0.95, glow: 0.6 }), modules: [], loop: [], blend: { mode: 'screen', amount: 0.7 } }],
       loop: [mod('warp', 'fractal-warp', { zoom: 0.1, turn: 0.1 }), mod('keep', 'fractal-keep', { amount: 0.7, trails: 0.6 })],
       modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.3, amount: 1 }), mod('drift', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
@@ -211,10 +227,102 @@ export const CHAINS: readonly Chain[] = [
   },
 ];
 
+/** The smallest patches that each show one idea (the owner: "minimal example patches for basic concepts like different
+ *  kaleidoscopic targets"). The study's first lesson about MilkDrop's pipeline: one effect means something else by where
+ *  it stands: on one layer, on the whole picture, or inside the loop that feeds the picture back into itself. */
+export const EXAMPLES: readonly Chain[] = [
+  {
+    // The Kaleidoscope engine's mirror on everything, last (the finish): the whole picture folded.
+    id: 'example-kaleido-all',
+    label: 'Kaleidoscope on everything',
+    line: 'In the finish: the whole picture folded, last.',
+    routes: {},
+    extra: emptyExtra(),
+    settings: { ...QUIET, effects: 1, fx1: 1, fx1K1: 0.4, fx1K2: 0.55, fx1Amount: 1 },
+  },
+  {
+    // The same mirror as a module on one layer: only the shapes are folded, the flame beside them as it is.
+    id: 'example-kaleido-layer',
+    label: 'Kaleidoscope on one layer',
+    line: 'On the shapes only: the flame behind them untouched.',
+    routes: {},
+    extra: {
+      ...emptyExtra(),
+      layers: [{ id: 'shapes', source: mod('shapes', 'shapes-source', { count: 6 }), modules: [mod('kaleidoscope-engine', 'shapes-kaleido', { effect: 1, amount: 1, k1: 0.4 })], loop: [], blend: { mode: 'screen', amount: 1 } }],
+    },
+    settings: { ...QUIET },
+  },
+  {
+    // The mirror inside the flame's own loop: what it folds is fed back and folded again, so it grows into itself.
+    id: 'example-kaleido-loop',
+    label: 'Kaleidoscope in the loop',
+    line: 'Fed back into itself: each fold folded again.',
+    routes: {},
+    extra: emptyExtra(),
+    settings: { ...QUIET, effects: 1, fxLoop: 1, fxLoopK1: 0.4, fxLoopAmount: 0.8, trails: 1 },
+  },
+  {
+    // The layer as a window: the flame seen only through the shapes, dimmed elsewhere.
+    id: 'example-window',
+    label: 'A window onto the flame',
+    line: 'The flame seen through the shapes, dark around them.',
+    routes: {},
+    extra: {
+      ...emptyExtra(),
+      layers: [{ id: 'window', source: mod('shapes', 'window-source', { count: 3, sides: 6, radius: 0.3, spread: 0.5, fill: 1, glow: 0.5, tint: 0, spin: 0.03 }), modules: [], loop: [], blend: { mode: 'window', amount: 0.85 } }],
+    },
+    settings: { ...QUIET },
+  },
+  {
+    // Feedback alone: the picture's own loop moves the last picture a little (Warp) and keeps some of it (Keep).
+    id: 'example-feedback',
+    label: 'Feedback',
+    line: 'The last picture moved a little and kept: trails that zoom and turn.',
+    routes: {},
+    extra: { ...emptyExtra(), loop: [mod('warp', 'example-warp', { zoom: 0.15, turn: 0.15 }), mod('keep', 'example-keep', { amount: 0.8, trails: 0.6 })] },
+    settings: { ...QUIET },
+  },
+  {
+    // A modulator between the music and a knob: the bass's hits through a beat gate (at typical) push the size. One
+    // cable in, one out.
+    id: 'example-gate',
+    label: 'A beat gate',
+    line: 'The bass through a gate into the size: a push on each hit.',
+    routes: {},
+    extra: {
+      ...emptyExtra(),
+      modulators: [mod('gate', 'kick', { above: 1, amount: 1 })],
+      cables: [cable('example-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1), cable('example-size', { modulator: 'kick' }, 'show', 'size', 0.4)],
+    },
+    settings: { ...QUIET },
+  },
+  {
+    // Time, not the music: a Drift wanders the turning; nothing of the sound moves anything.
+    id: 'example-drift',
+    label: 'Moved by time',
+    line: 'A drift turns it; the music moves nothing.',
+    routes: {},
+    extra: { ...emptyExtra(), modulators: [mod('drift', 'wander', { rate: 0.1, amount: 1 })], cables: [cable('example-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.5)] },
+    settings: { ...QUIET },
+  },
+];
+
 /** From scratch: nothing at all (the owner): no flame, no cables, no extras, the loop and finish off. */
 export const SCRATCH: Chain = { id: 'scratch', label: 'Start from scratch', line: 'Nothing: add a source', routes: {}, extra: emptyExtra(), settings: { ...QUIET, flameLayer: 0 } };
 
-export const chainOf = (id: string): Chain | undefined => (id === SCRATCH.id ? SCRATCH : CHAINS.find((c) => c.id === id));
+/** What a chain is besides its wiring (patch: its modules and cables): whether the flame is drawn, which effect stands
+ *  in each slot, and which of the loop's and finish's own are on; not how much (the dice and the knobs move that within
+ *  it). The panel names the chain the patch still is by these. */
+export function chainShape(x: Partial<Record<string, unknown>>): string {
+  const n = (k: string) => (typeof x[k] === 'number' ? (x[k] as number) : 0);
+  return [
+    n('flameLayer') > 0 ? 'flame' : '',
+    ...['fx1', 'fx2', 'fx3', 'fxLoop'].map((k) => `${k}=${n(`${k}Amount`) > 0 ? Math.round(n(k)) : 0}`),
+    ...['fluid', 'tunnel', 'dive'].map((k) => (n(k) > 0 ? k : '')),
+  ].join(',');
+}
+
+export const chainOf = (id: string): Chain | undefined => (id === SCRATCH.id ? SCRATCH : [...CHAINS, ...EXAMPLES].find((c) => c.id === id));
 
 /** A chain's routes as the settings keep them: every default route off (0) but those the chain sets. The settings keep
  *  their routes over the defaults (settings.svelte.ts `keptFrom`), so one left out would come back at the next load. */

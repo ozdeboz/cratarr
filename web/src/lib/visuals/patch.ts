@@ -45,7 +45,7 @@ export type Cable = {
   mode: 'level' | 'swing';
 };
 
-export type Layer = { id: string; source: Module; modules: Module[]; loop: Module[]; blend: { mode: 'add' | 'screen' | 'over' | 'multiply'; amount: number } };
+export type Layer = { id: string; source: Module; modules: Module[]; loop: Module[]; blend: { mode: (typeof BLENDS)[number]; amount: number } };
 
 export type Macro = { id: string; on: string; label: string; value: number; targets: { module: string; knob: string; from: number; to: number }[] };
 
@@ -292,7 +292,7 @@ const CHAIN_KNOBS = (() => {
   return out;
 })();
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
-const BLENDS = ['add', 'screen', 'over', 'multiply'] as const;
+export const BLENDS = ['add', 'screen', 'over', 'multiply', 'window'] as const;
 const clampTo = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const listOf = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);

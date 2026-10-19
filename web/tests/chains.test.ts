@@ -6,12 +6,12 @@ import assert from 'node:assert/strict';
 // settings.svelte.ts makes its state with Svelte's rune at load; outside Svelte it is the value itself.
 (globalThis as Record<string, unknown>).$state = <T>(v: T) => v;
 const { DEFAULTS, RANGES, keptFrom } = await import('../src/lib/visuals/settings.svelte.ts');
-const { CHAINS, SCRATCH, chainOf, chainRoutes } = await import('../src/lib/visuals/chains.ts');
+const { CHAINS, EXAMPLES, SCRATCH, chainOf, chainRoutes } = await import('../src/lib/visuals/chains.ts');
 const { ASPECTS, BAND_SIGNALS, TRACK_SIGNALS } = await import('../src/lib/visuals/routes.ts');
 const { extraFrom } = await import('../src/lib/visuals/patch.ts');
 const { extraType } = await import('../src/lib/visuals/registry.ts');
 
-const ALL = [...CHAINS, SCRATCH];
+const ALL = [...CHAINS, ...EXAMPLES, SCRATCH];
 
 test('Calm, Pulse, Flow, Tunnel, Scope, Mosaic and Fractal, and from scratch: lowercase ids, each found by its id', () => {
   assert.deepEqual(
@@ -69,4 +69,12 @@ test("the study's lessons: modulators first, the turning with time, the colour's
     for (const x of c.extra.cables) if (x.to.knob === 'hue' && 'signal' in x.from) assert.equal(x.from.speed, 'slow', `${c.id}: ${x.id}`);
   }
   assert.deepEqual(chainOf('flow')!.extra.loop.map((m) => m.type), ['warp', 'keep']);
+});
+
+test('the examples are minimal (at most two cables) and the three kaleidoscopes stand in three places', () => {
+  for (const c of EXAMPLES) assert.ok(Object.keys(c.routes).length + c.extra.cables.length <= 2, c.id);
+  const all = chainOf('example-kaleido-all')!, layer = chainOf('example-kaleido-layer')!, loop = chainOf('example-kaleido-loop')!;
+  assert.equal(all.settings?.fx1, 1);
+  assert.equal(layer.extra.layers[0].modules[0].type, 'kaleidoscope-engine');
+  assert.equal(loop.settings?.fxLoop, 1);
 });

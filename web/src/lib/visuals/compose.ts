@@ -5,7 +5,7 @@
 // with nothing beyond today's chain it is never called, and the picture is exactly as before.
 
 import { keptPerSecond } from './loopmods';
-import type { FrameInfo, Layer, Module, PatchExtra, PictureModule } from './patch';
+import { BLENDS, type FrameInfo, type Layer, type Module, type PatchExtra, type PictureModule } from './patch';
 import { createSource } from './sources/index';
 import { createFluidLoop, FLUID_LOOP } from './fluid-loop';
 import { createEngine } from './engine-module';
@@ -29,7 +29,11 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-// A layer over the picture so far (both premultiplied): added, screened, laid over, or multiplied, by `uAmount`.
+// A layer over the picture so far (both premultiplied): added, screened, laid over, multiplied, or the picture seen
+// through it (window: dimmed by `uAmount` where the layer is not), by `uAmount`. Before that, the layer meets the
+// picture: its glow (its light spread over a ring of taps, `uGlow`) and its colours the picture's around it (`uTint`:
+// the hue of a wider ring's mean, at the layer's own brightness; its own where the picture is dark). Taps one by one,
+// no arrays (Mali's float[] miscompiles).
 const BLEND = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -39,13 +43,33 @@ uniform sampler2D uLayer;
 uniform int uMode;
 uniform float uAmount;
 uniform float uBaseGain;
+uniform float uTint;
+uniform float uGlow;
+uniform vec2 uAspect;
+vec4 ring(sampler2D t, float r) {
+  vec2 d = uAspect * r;
+  float h = 0.7071;
+  return texture(t, vUv + vec2(d.x, 0.0)) + texture(t, vUv - vec2(d.x, 0.0)) + texture(t, vUv + vec2(0.0, d.y)) +
+    texture(t, vUv - vec2(0.0, d.y)) + texture(t, vUv + d * h) + texture(t, vUv - d * h) +
+    texture(t, vUv + vec2(d.x, -d.y) * h) + texture(t, vUv + vec2(-d.x, d.y) * h);
+}
 void main() {
   vec4 a = texture(uBase, vUv) * uBaseGain;
-  vec4 b = texture(uLayer, vUv) * uAmount;
+  vec4 b = texture(uLayer, vUv);
+  if (uGlow > 0.0) b += (ring(uLayer, 0.012) * 0.5 + ring(uLayer, 0.03) * 0.3) / 8.0 * 2.5 * uGlow;
+  if (uTint > 0.0) {
+    vec3 m = ring(uBase, 0.06).rgb / 8.0 * uBaseGain;
+    float top = max(max(m.r, m.g), m.b);
+    float lit = max(max(b.r, b.g), b.b);
+    b.rgb = mix(b.rgb, lit * m / max(top, 1e-3), uTint * smoothstep(0.01, 0.12, top));
+  }
+  float cover = clamp(max(max(b.r, b.g), max(b.b, b.a)) * 1.5, 0.0, 1.0);
+  b *= uAmount;
   vec3 c;
   if (uMode == 1) c = a.rgb + b.rgb - a.rgb * b.rgb;
   else if (uMode == 2) c = b.rgb + a.rgb * (1.0 - b.a);
   else if (uMode == 3) c = a.rgb * mix(vec3(1.0), b.rgb / max(b.a, 1e-4), b.a);
+  else if (uMode == 4) c = a.rgb * mix(1.0 - uAmount, 1.0, cover);
   else c = a.rgb + b.rgb;
   outColor = vec4(c, 1.0);
 }`;
@@ -127,7 +151,7 @@ export class Compositor {
     let base: WebGLTexture = picture;
     let gain = Math.min(1, Math.max(0, flame));
     let into = 0;
-    const over = (drawn: WebGLTexture, mode: Layer['blend']['mode'], amount: number) => {
+    const over = (drawn: WebGLTexture, mode: Layer['blend']['mode'], amount: number, tint = 0, glow = 0) => {
       const t = this.mix[into];
       gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
       gl.viewport(0, 0, this.w, this.h);
@@ -135,7 +159,10 @@ export class Compositor {
       gl.useProgram(this.blend);
       this.bind(0, base, 'uBase', this.blend);
       this.bind(1, drawn, 'uLayer', this.blend);
-      gl.uniform1i(gl.getUniformLocation(this.blend, 'uMode'), ['add', 'screen', 'over', 'multiply'].indexOf(mode));
+      gl.uniform1i(gl.getUniformLocation(this.blend, 'uMode'), BLENDS.indexOf(mode));
+      gl.uniform1f(gl.getUniformLocation(this.blend, 'uTint'), tint);
+      gl.uniform1f(gl.getUniformLocation(this.blend, 'uGlow'), glow);
+      gl.uniform2f(gl.getUniformLocation(this.blend, 'uAspect'), Math.min(1, this.h / this.w), Math.min(1, this.w / this.h));
       gl.uniform1f(gl.getUniformLocation(this.blend, 'uAmount'), amount);
       gl.uniform1f(gl.getUniformLocation(this.blend, 'uBaseGain'), gain);
       this.full();
@@ -146,7 +173,8 @@ export class Compositor {
     for (const layer of extra.layers) {
       if (layer.blend.amount <= 0) continue;
       const drawn = this.drawLayer(layer, knobsOf, frame);
-      if (drawn) over(drawn, layer.blend.mode, layer.blend.amount);
+      const k = knobsOf(layer.source);
+      if (drawn) over(drawn, layer.blend.mode, layer.blend.amount, k.tint ?? 0, k.glow ?? 0);
     }
     if (gain < 1) over(picture, 'add', 0);
     // The picture's own loop: its Warps summed, its Keeps multiplied (each by its Amount).

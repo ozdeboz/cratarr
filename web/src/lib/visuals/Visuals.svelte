@@ -74,7 +74,7 @@
   import { shapeOf } from './evaluate';
   import { evaluate, newEvalState, type Evaluated } from './evaluate';
   import { askStep, morphTo, newMorph, stepMorph } from './morph';
-  import { chainRoutes, CHAINS, SCRATCH, type Chain } from './chains';
+  import { chainRoutes, chainShape, CHAINS, EXAMPLES, SCRATCH, type Chain } from './chains';
   import { cableOf, freeCableId, isRouteId, knobLabel as cableKnobLabel, newCable, removeCables, reroute, sourceLabel, type Cables, type Source } from './cable-actions';
   import CableMenu from './CableMenu.svelte';
   import CableSheet from './CableSheet.svelte';
@@ -84,7 +84,7 @@
   import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
   import PatchGraph from './PatchGraph.svelte';
-  import { cratarrPatch, cratarrTypes, modulesOf, type ModuleType } from './patch';
+  import { BLENDS, cratarrPatch, cratarrTypes, modulesOf, type ModuleType } from './patch';
   import { SOURCE_TYPES } from './sources/index';
   import { MODULATORS } from './modulators/modulators';
   import { DIVE_MOST, TUNNEL_MOST } from './zoom';
@@ -571,7 +571,7 @@
     });
   });
   const chainNow = $derived(
-    [SCRATCH, ...CHAINS].find((c) => wiring(s.routes, s.extra) === wiring(c.routes, c.extra) && sameModules(s.extra, c.extra) && (c.settings?.flameLayer ?? 1) === s.flameLayer) ?? null,
+    [SCRATCH, ...CHAINS, ...EXAMPLES].find((c) => wiring(s.routes, s.extra) === wiring(c.routes, c.extra) && sameModules(s.extra, c.extra) && chainShape(s as never) === chainShape({ ...s, ...c.settings } as never)) ?? null,
   );
 
   // The settings' rows: the drawing's cost first (ceilings: the device's own pace may keep it lower), then how the show
@@ -883,7 +883,7 @@
     showChrome();
   }
   const knobText = (k: Knob, v: number) => (k.kind === 'step' ? `${Math.round(v)}` : k.min === 0 && k.max === 1 ? percent(v) : k.min === -1 && k.max === 1 ? signedPercent(v) : v.toFixed(2));
-  const BLEND_NAMES = { add: 'Add', screen: 'Screen', over: 'Over', multiply: 'Multiply' } as const;
+  const BLEND_NAMES = { add: 'Add', screen: 'Screen', over: 'Over', multiply: 'Multiply', window: 'Window' } as const;
   // The cables into one knob of the extras (or a modulator's port), and adding one: from a signal (the whole track's,
   // a band's, or every band's mean) or a modulator.
   const cablesTo = (mid: string, kid: string) => s.extra.cables.filter((c) => c.to.module === mid && c.to.knob === kid);
@@ -2404,6 +2404,10 @@
             <div class="rows">
               <button class="go" class:on={chainNow?.id === SCRATCH.id} onclick={() => applyChain(SCRATCH)}><span class="name">{SCRATCH.label}<small>{SCRATCH.line}</small></span></button>
             </div>
+            <div class="rows">
+              <h3>Examples</h3>
+              {#each EXAMPLES as c (c.id)}<button class="go" class:on={chainNow?.id === c.id} onclick={() => applyChain(c)}><span class="name">{c.label}<small>{c.line}</small></span></button>{/each}
+            </div>
           {:else if here === 'layer:flame'}
             <div class="rows">
               <h3>Source</h3>
@@ -2499,7 +2503,7 @@
                 <h3>Blend</h3>
                 <button
                   class="go"
-                  onclick={() => changeExtra(() => (l.blend.mode = (['add', 'screen', 'over', 'multiply'] as const)[(['add', 'screen', 'over', 'multiply'].indexOf(l.blend.mode) + 1) % 4]))}
+                  onclick={() => changeExtra(() => (l.blend.mode = BLENDS[(BLENDS.indexOf(l.blend.mode) + 1) % BLENDS.length]))}
                   ><span class="name">Mode</span><output>{BLEND_NAMES[l.blend.mode]}</output></button
                 >
                 <label class="row pinnable">
