@@ -1,6 +1,6 @@
 // The visuals' modulators (decision 0056): modules with no picture, whose outputs feed cables as the music's signals do.
 // The set is what curated MilkDrop presets build by hand before they drive anything: summed volume, fast and slow
-// followers, moving averages, peak and mean trackers, "above typical" beat gates, counters, LFOs and drift,
+// followers, moving averages, peak and mean trackers, "above typical" beat gates, counters, LFOs and random,
 // sample-and-hold.
 //
 // - Inputs are cables, as in a modular: the engine sums the cables into each port (`inputs`) and passes the sum as that
@@ -239,14 +239,18 @@ function point(seed: number, i: number): number {
   return ((h >>> 0) / 4294967295) * 2 - 1;
 }
 
-// Drift: a smooth wander through −1..1, Rate new points a second, eased between them (smootherstep, so it never
-// jerks). The seed is a hash of the module's id (the caller's), so two drifts differ and a sync group's devices agree.
-const drift = define('drift', 'Drift', 'bipolar', [knob('rate', 'Rate', 0, 2, 0, 0.1), AMOUNT], undefined, (seed) => {
+// Random (VCV's, Vital's and Bitwig's name; the owner, 2026-10-20: Drift renamed): Rate new random points a second
+// through −1..1, and Shape how it goes from one to the next: at 0 it glides the whole way (smootherstep, so it never
+// jerks: what Drift was), at 1 it jumps (stepped, a sample-and-hold of random values), in between it glides over the
+// first 1 − Shape of each step and holds (VCV's Random's blend). The seed is a hash of the module's id (the caller's),
+// so two differ and a sync group's devices agree.
+const random = define('random', 'Random', 'bipolar', [knob('rate', 'Rate', 0, 2, 0, 0.1), knob('shape', 'Shape', 0, 1, 0, 0), AMOUNT], undefined, (seed) => {
   let u = 0;
   return (dt, _signals, k) => {
     u += k.rate * dt;
     const i = Math.floor(u);
-    const t = u - i;
+    const glide = 1 - clamp(k.shape, 0, 1);
+    const t = glide > 0 ? Math.min(1, (u - i) / glide) : 1;
     const s = t * t * t * (t * (t * 6 - 15) + 10);
     const a = point(seed, i);
     return k.amount * (a + (point(seed, i + 1) - a) * s);
@@ -279,8 +283,13 @@ const hold = define(
 
 /** Every modulator, by its type. */
 export const MODULATORS: Record<string, ModulatorType> = Object.fromEntries(
-  [volume, fast, slow, average, peak, mean, gate, counter, lfo, drift, hold].map((t) => [t.type, t]),
+  [volume, fast, slow, average, peak, mean, gate, counter, lfo, random, hold].map((t) => [t.type, t]),
 );
+
+/** Types saved under an old name (v1 patches, until toV2 converts them): Drift is Random at Shape 0. */
+export const RENAMED: Readonly<Record<string, string>> = { drift: 'random' };
+/** A modulator by its type, or by a name it had. */
+export const modulatorOf = (type: string): ModulatorType | undefined => MODULATORS[type] ?? MODULATORS[RENAMED[type]];
 
 /** Each knob at its neutral, where the modulator gives 0. */
 export const neutralOf = (t: ModulatorType) => Object.fromEntries(t.knobs.map((k) => [k.id, k.neutral]));

@@ -27,7 +27,7 @@
 
 import { curveFrom, heightAt, isStraight, tableOf, type Curve, type RouteValue } from './curves';
 import { seedOf } from './flame';
-import { BANDS, MODULATORS, type ModulatorType } from './modulators/modulators';
+import { BANDS, modulatorOf, type ModulatorType } from './modulators/modulators';
 import { modulesOf, type Cable, type FrameInfo, type Knob, type Macro, type Module, type ModuleType, type Modulator, type Patch, type SignalRef } from './patch';
 
 /** Today's pipeline's module types (patch.ts's Cratarr chain), which aspects.ts moves. */
@@ -140,7 +140,7 @@ const at = (module: string, knob: string) => `${module}|${knob}`;
 function modulatorType(types: Record<string, ModuleType>, type: string): ModulatorType | null {
   const t = types[type] as Partial<ModulatorType> | undefined;
   if (t && typeof t.create === 'function') return t as ModulatorType;
-  return MODULATORS[type] ?? null;
+  return modulatorOf(type) ?? null;
 }
 
 /** One frame: each module's knobs as its macros and cables move them, the modulators stepped `dt` seconds on. */

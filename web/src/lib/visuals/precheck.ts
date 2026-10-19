@@ -6,13 +6,13 @@
 //
 // Done in slices (`prechecking`), so a slow tablet keeps its frames: a step is a few hundredths of a millisecond.
 
-import { newAspects, stepAspects, wavesMotion, zoomsMotion } from './aspects';
+import { newAspects, stepAspects, wavesMotion, zoomsMotion, type AspectsNow } from './aspects';
 import type { Beats } from './beats';
 import { BUDGETED, budgetOf } from './budget';
 import { settingsReport, type Report } from './effects';
 import { flameOf, PRESET_KEYS } from './flame';
 import { Meters, screenTile, type MeterValues } from './meters';
-import { musicOf, newMusicState } from './music.svelte';
+import { musicOf, newMusicState } from './music-core';
 import { settingsOf, type Recipe, type Scope } from './recipe';
 import { A } from './routes';
 import { FLUID_FULL, type VisualSettings } from './settings.svelte';
@@ -60,6 +60,31 @@ function diveTurnPerRate(settings: VisualSettings): number {
 /** A report with `motion` more (a second). */
 const withMotion = (r: Report, motion: number): Report => (motion > 0 ? { ...r, motion: (r.motion ?? 0) + motion } : r);
 
+/** A frame's mapping, measured as the visuals measure it, without a picture: the flashes from the brightness the whole
+ *  picture would pulse with (the glow, the parts' lights), one tile for the screen. The precheck's, and the one
+ *  engine's sidechaining's tests (decision 0057). `divePerRate`: the dive's turn a second at a rate of 1 (0: none). */
+export function measure(meters: Meters, a: AspectsNow, t: number, settings: VisualSettings, divePerRate = 0) {
+  const lights = a.hits.reduce((s, h) => s + Math.max(0, h), 0) / Math.max(1, a.hits.length);
+  const luminance = Math.min(1, BRIGHT * a.flash * (1 + 0.6 * lights));
+  meters.add({
+    t,
+    turnRates: divePerRate && a.dive ? a.rates.map((r) => r + DIVE_MOST * a.dive * divePerRate) : a.rates,
+    shape: a.shape,
+    weights: a.parts.map((p) => p.weight ?? 1),
+    hue: a.parts.map((p) => p.hue),
+    spread: a.parts.map((p) => p.spread ?? 1),
+    scale: a.scale,
+    saturation: a.saturation,
+    // A moment (another symmetry, lens, effect…) is a new look, as the visuals count it (65.1: it was never counted).
+    look: Object.values(a.moments).some(Boolean) ? 'moment' : null,
+    symmetry: a.moments.symmetry,
+    tiles: [screenTile(t, luminance)],
+    // What the look's effects add, the waves where nothing flows and the zooms' streaming out, as the visuals' meters
+    // take them (65): so a recipe's effects, waves and zooms are held to the limits.
+    extra: withMotion(settingsReport(settings, a.effects, undefined, false, a.routed), wavesMotion(a.given[A.waves], a.fluid) + zoomsMotion(a.tunnel, a.dive)),
+  });
+}
+
 /** The run, a slice at a time; its value the verdict. */
 export function* prechecking(
   recipe: Recipe,
@@ -87,25 +112,7 @@ export function* prechecking(
     const t = from + k * dt;
     const m = musicOf(signals, beats, t, true, { state, at: t * 1000, lighting: settings.lighting });
     const a = stepAspects(aspects, m, settings, dt, { still: false, now: t * 1000, fluidFull: FLUID_FULL });
-    const lights = a.hits.reduce((s, h) => s + Math.max(0, h), 0) / Math.max(1, a.hits.length);
-    const luminance = Math.min(1, BRIGHT * a.flash * (1 + 0.6 * lights));
-    meters.add({
-      t: k * dt,
-      turnRates: divePerRate && a.dive ? a.rates.map((r) => r + DIVE_MOST * a.dive * divePerRate) : a.rates,
-      shape: a.shape,
-      weights: a.parts.map((p) => p.weight ?? 1),
-      hue: a.parts.map((p) => p.hue),
-      spread: a.parts.map((p) => p.spread ?? 1),
-      scale: a.scale,
-      saturation: a.saturation,
-      // A moment (another symmetry, lens, effect…) is a new look, as the visuals count it (65.1: it was never counted).
-      look: Object.values(a.moments).some(Boolean) ? 'moment' : null,
-      symmetry: a.moments.symmetry,
-      tiles: [screenTile(k * dt, luminance)],
-      // What the look's effects add, the waves where nothing flows and the zooms' streaming out, as the visuals' meters
-      // take them (65): so a recipe's effects, waves and zooms are held to the limits.
-      extra: withMotion(settingsReport(settings, a.effects, undefined, false, a.routed), wavesMotion(a.given[A.waves], a.fluid) + zoomsMotion(a.tunnel, a.dive)),
-    });
+    measure(meters, a, k * dt, settings, divePerRate);
     if (k * dt < SETTLE_S) continue;
     // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the governor holds
     // them; so a limit means the same here as there, loud passage or quiet.

@@ -23,6 +23,8 @@ export type Knob = {
   busy?: Busy;
   /** A polyphonic knob (0057 §4b): one value a channel, kept as `<id>.<channel>` among its module's knobs. */
   channels?: number;
+  /** false: Randomize leaves it (VCV's randomizeEnabled), for a knob that is a choice of how, not a value. */
+  randomize?: false;
 };
 
 /** Where a module can sit: a layer's source, a module on a layer (or after the blend), a loop (a layer's own, or the
@@ -42,8 +44,9 @@ export type ModuleType = { type: string; label: string; place: Place; knobs: Kno
 export type Module = { id: string; type: string; knobs: Record<string, number> };
 
 /** A signal as a cable takes it: the music's (a band's, or the whole track's), against which reference its 1 =
- *  typical is measured (0056; this track by default), fast or slow. */
-export type SignalRef = { signal: string; band?: number; reference?: 'track' | 'lately' | 'absolute'; speed?: 'fast' | 'slow' };
+ *  typical is measured (0056; this track by default), fast or slow. `value`: read that value as the signal's would
+ *  be (an ADSR's strike, against the hits' typical) instead of the signal now; its speed does not apply. */
+export type SignalRef = { signal: string; band?: number; reference?: 'track' | 'lately' | 'absolute'; speed?: 'fast' | 'slow'; value?: number };
 
 /** A cable: from a signal or a modulator to a knob, its value as a route's (an amount, or a curve). */
 export type Cable = {

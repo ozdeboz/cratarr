@@ -77,7 +77,7 @@ test('the followers and the other smooth ones give the same at 30 and at 120 fra
     }
     return out;
   };
-  for (const type of ['volume', 'fast', 'slow', 'average', 'peak', 'mean', 'lfo', 'drift']) {
+  for (const type of ['volume', 'fast', 'slow', 'average', 'peak', 'mean', 'lfo', 'random']) {
     const t = MODULATORS[type];
     for (const knobs of [defaultsOf(t), { ...defaultsOf(t), attack: 0.3, release: 0.05, window: 0.2, fall: 0.3, horizon: 2, rate: 1.7, full: 1 }]) {
       const a = run(type, 30, knobs);
@@ -177,5 +177,26 @@ test('every knob is continuous, with its neutral and default in its range', () =
       assert.notEqual(k.kind, 'step', `${t.type}.${k.id}`);
       assert.ok(k.min < k.max && k.neutral >= k.min && k.neutral <= k.max && k.default >= k.min && k.default <= k.max, `${t.type}.${k.id}`);
     }
+  }
+});
+
+test("random: Shape 0 glides the whole step (Drift's), 1 jumps and holds, between glides then holds; Drift's name still loads", async () => {
+  const { modulatorOf } = await import('../src/lib/visuals/modulators/modulators.ts');
+  assert.equal(modulatorOf('drift'), MODULATORS.random);
+  const run = (shape: number) => {
+    const r = MODULATORS.random.create(7);
+    return Array.from({ length: 30 * 6 }, () => r.step(1 / 30, none as never, { rate: 1, shape, amount: 1 }));
+  };
+  const smooth = run(0);
+  const stepped = run(1);
+  const half = run(0.5);
+  for (let k = 1; k < smooth.length; k++) assert.ok(Math.abs(smooth[k] - smooth[k - 1]) < 0.2, `glides: frame ${k}`);
+  for (let step = 0; step < 5; step++) {
+    // Frames 30·step+1 … 30·step+29 lie inside one step (the 30th is the next's start, give or take a sum's last bit).
+    const inside = (a: number[]) => a.slice(30 * step + 1, 30 * step + 29);
+    assert.ok(inside(stepped).every((v) => v === inside(stepped)[0]), `stepped holds through step ${step}`);
+    // Where the glide ends, at the next point: the smooth one arrives there at the step's end.
+    assert.ok(Math.abs(stepped[30 * step + 1] - smooth[30 * step + 29]) < 0.05, `the same next point, step ${step}`);
+    assert.ok(half.slice(30 * step + 16, 30 * step + 29).every((v) => Math.abs(v - stepped[30 * step + 1]) < 1e-12), `half: holds the second half of step ${step}`);
   }
 });

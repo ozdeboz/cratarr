@@ -14,7 +14,7 @@
 
 import { BUDGETED, budgetOf, type Budgeted } from './budget';
 import type { MeterValues } from './meters';
-import { DEFAULT_LIMITS } from './precheck';
+import { DEFAULT_LIMITS } from './budget';
 
 export { BUDGETED, budgetOf, type Budgeted };
 

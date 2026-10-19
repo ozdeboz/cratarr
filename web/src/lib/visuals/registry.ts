@@ -5,7 +5,7 @@
 import { ENGINE_EFFECTS, ENGINES } from './effects';
 import { LOOP_TYPES } from './loopmods';
 import { FLUID_LOOP } from './fluid-loop';
-import { MODULATORS } from './modulators/modulators';
+import { MODULATORS, RENAMED } from './modulators/modulators';
 import type { Knob, ModuleType } from './patch';
 import { SOURCE_TYPES } from './sources/index';
 
@@ -31,4 +31,5 @@ export const PICTURE_LOOP_TYPES: ModuleType[] = [...LOOP_TYPES, FLUID_LOOP];
 export const EXTRA_TYPES: ModuleType[] = [...SOURCE_TYPES, ...ENGINE_TYPES, ...PICTURE_LOOP_TYPES, ...Object.values(MODULATORS)];
 
 const BY_TYPE = new Map(EXTRA_TYPES.map((t) => [t.type, t]));
+for (const [was, now] of Object.entries(RENAMED)) BY_TYPE.set(was, BY_TYPE.get(now)!);
 export const extraType = (type: string): ModuleType | undefined => BY_TYPE.get(type);
