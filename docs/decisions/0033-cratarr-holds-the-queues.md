@@ -240,3 +240,8 @@ app, updated, reported nothing queued before it connected, and Cratarr kept only
   along (unlike a new play, which keeps what was added by hand); its shuffle stays in its order.
 - **A browser** playing itself keeps its own list in that browser (`localStorage`), as decided; Cratarr keeps none for
   it. The app and the players driven from a page are Cratarr's to keep.
+- **For Home Assistant** (the owner, 2026-10-19: "proper Home Assistant integration"): `add` takes a playlist, an
+  album or the favourites by name as `play` does (`{command: "add", album: "al-…", how: "next"}`), and every view
+  carries `queues` (so the players stream and the webhook push the list). `play {radio: true}` starts a radio (decision
+  0036): Autoplay seeded from the playlist, album, favourites or tracks named, else from the track that plays, in the
+  player's Autoplay mode; its first five tracks play as a queue named "Radio: …", `from` `radio`.

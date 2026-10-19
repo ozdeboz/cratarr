@@ -216,6 +216,10 @@ pub struct PlayFrom {
     /// A queue taken up whole (one switched back to): nothing of the queue it leaves comes along. Cratarr's own.
     #[serde(skip)]
     pub whole: bool,
+    /// Start radio (decision 0036, amended; as the page's "Start radio"): Autoplay seeded from the playlist, album,
+    /// favourites or tracks given, else from what plays now, and its first tracks played, as a queue of their own.
+    #[serde(default, skip_serializing)]
+    pub radio: bool,
 }
 
 /// How many tracks `play {library}` picks when not told.
@@ -252,6 +256,10 @@ pub enum Command {
     /// Tracks into the queue after entry `after` ("" for first), else at place `at`, else at the end. A player is told
     /// both (decision 0033). With `how` (`next`, `last`) they are added by hand, placed as decision 0033's lanes say.
     Add {
+        /// What to add when not given tracks: a playlist, an album, the favourites (resolved here, as for `play`).
+        #[serde(flatten)]
+        from: PlayFrom,
+        #[serde(default)]
         tracks: Vec<QueueTrack>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         at: Option<usize>,
@@ -474,8 +482,8 @@ pub struct PlayerView {
     /// The whole queue, for one player asked for by name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<Vec<QueueTrack>>,
-    /// Its queues (decision 0033, amended: queue history), the one that plays marked, newest first; for one player
-    /// asked for by name.
+    /// Its queues (decision 0033, amended: queue history), the one that plays marked, newest first: in every view, so
+    /// what is pushed (the players stream, Home Assistant's webhook) carries them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queues: Option<Vec<QueueItem>>,
     /// Goes up whenever that list changes: ask for the player by name to see it.
@@ -745,7 +753,7 @@ impl Entry {
             kind: self.kind.name(),
             track,
             queue: with_queue.then(|| self.queue.tracks.clone()),
-            queues: with_queue.then(|| self.queues()),
+            queues: Some(self.queues()),
             queues_version: self.kept_version,
         }
     }
@@ -893,6 +901,8 @@ pub struct QueueItem {
 const QUEUES: usize = 20;
 /// A queue's name, at most this many characters.
 const QUEUE_NAME_MAX: usize = 100;
+/// How many tracks a radio started here plays first (as the page's Autoplay asks at a time).
+const RADIO_START: usize = 5;
 
 fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -1500,6 +1510,7 @@ impl PlayOn {
             Command::Queue { id } => return self.switch(name, &id).await,
             Command::QueueRename { id, name: new } => return self.rename_queue(name, &id, &new),
             Command::QueueDelete { id } => return self.delete_queue(name, &id),
+            Command::Play { from, tracks, .. } if from.radio => return self.start_radio(name, from, tracks).await,
             Command::Play { from, tracks, mut index, mut position_ms, shuffle, paused, queue_id, queue_name } => {
                 // A new queue (decision 0033, amended): what it was started from, kept with it; one taken up again (a
                 // handover, a switch) comes with its own id, and keeps what it had.
@@ -1512,10 +1523,7 @@ impl PlayOn {
                         _ => "tracks",
                     });
                 }
-                let picked = match &from.playlist {
-                    Some(p) => Some(self.playlist_tracks(p).await?),
-                    None => own_tracks(&from, self.owner_of(name)).await?,
-                };
+                let picked = self.picked(name, &from).await?;
                 let Some(mut tracks) = picked.or(tracks) else {
                     return Err(ToggleError::Refused("Play what? Give a playlist, an album, the favourites, the library or tracks.".into()));
                 };
@@ -1544,7 +1552,15 @@ impl PlayOn {
                 let from = PlayFrom { whole: from.whole, ..PlayFrom::default() };
                 Command::Play { from, tracks: Some(tracks), index, position_ms, shuffle, paused, queue_id, queue_name: Some(queue_name) }
             }
-            Command::Add { tracks, at, after, how } => Command::Add { tracks: self.named(tracks).await, at, after, how },
+            // By name too (a playlist, an album, the favourites), as `play` takes them: Home Assistant's "add this album".
+            Command::Add { from, tracks, at, after, how } => {
+                let picked = self.picked(name, &from).await?;
+                let tracks = picked.unwrap_or(tracks);
+                if tracks.is_empty() {
+                    return Err(ToggleError::Refused("Add what? Give tracks, a playlist, an album or the favourites.".into()));
+                }
+                Command::Add { from: PlayFrom::default(), tracks: self.named(tracks).await, at, after, how }
+            }
             Command::Seek { position_ms: None, percent: Some(p), .. } => {
                 let duration = self.entries().get(name).and_then(|e| e.report.duration_ms);
                 let Some(d) = duration else { return Err(ToggleError::Refused("The track's length is not known yet.".into())) };
@@ -1706,6 +1722,71 @@ impl PlayOn {
         {
             (e.queue.from, e.queue.renamed) = (queue.from.clone(), queue.renamed);
         }
+    }
+
+    /// The tracks a play or an add names: a playlist's, an album's, the favourites, the library; None when it names
+    /// none (it brings its tracks).
+    async fn picked(&self, name: &str, from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
+        match &from.playlist {
+            Some(p) => Ok(Some(self.playlist_tracks(p).await?)),
+            None => own_tracks(from, self.owner_of(name)).await,
+        }
+    }
+
+    /// Start radio (decision 0036, amended), as the page's "Start radio" does it: Autoplay on, seeded from what the play
+    /// names (a playlist, an album, the favourites, tracks) or else from the track that plays, in the player's own
+    /// Autoplay mode (Similar at first); its first tracks play as a queue named "Radio: …".
+    async fn start_radio(&self, name: &str, from: PlayFrom, tracks: Option<Vec<QueueTrack>>) -> Result<(), ToggleError> {
+        let seeds = match self.picked(name, &from).await?.or(tracks) {
+            Some(t) => t,
+            None => self.get(name).and_then(|v| v.track).into_iter().collect(),
+        };
+        let own = crate::source::cratarr::KIND.id;
+        let seed: Vec<String> = seeds.iter().filter(|t| t.source == own).map(|t| t.id.clone()).collect();
+        if seed.is_empty() {
+            return Err(ToggleError::Refused("Nothing to start a radio from: play something of the library, or name a playlist or an album.".into()));
+        }
+        let (mode, albums, skip_favourites) = {
+            let entries = self.entries();
+            let q = entries.get(name).map(|e| &e.queue);
+            let a = q.and_then(|q| q.autoplay.as_ref());
+            (a.map(|a| a.mode).unwrap_or_default(), a.is_some_and(|a| a.albums), q.is_some_and(|q| q.skip_favourites))
+        };
+        let ask = super::radio::NextRequest {
+            mode: super::radio::Mode::of(mode),
+            seed: seed.clone(),
+            exclude: seed.clone(),
+            last: None,
+            count: Some(RADIO_START),
+            within: None,
+            albums,
+            by: RadioBy::default(),
+            skip_favourites,
+        };
+        let first = super::radio::next(ask).await?;
+        if first.is_empty() {
+            return Err(ToggleError::Refused("Nothing like it was found.".into()));
+        }
+        let title = from.name.clone().or(from.playlist.clone()).unwrap_or_else(|| name_of(&seeds));
+        // Set before the play: a play of Autoplay's tracks only keeps its seed.
+        let auto = Command::Autoplay { mode: AutoplayMode::of(Some(mode)), albums: Some(albums), restart: Some(false), seed: Some(seed), within: Some(String::new()) };
+        Box::pin(self.command(name, auto)).await?;
+        let play = Command::Play {
+            from: PlayFrom { name: Some(format!("Radio: {title}")), ..PlayFrom::default() },
+            tracks: Some(first),
+            index: 0,
+            position_ms: 0,
+            shuffle: false,
+            paused: false,
+            queue_id: None,
+            queue_name: None,
+        };
+        Box::pin(self.command(name, play)).await?;
+        let target = self.leader_of(name).unwrap_or_else(|| name.to_string());
+        if let Some(e) = self.entries().get_mut(&target) {
+            e.queue.from = Some("radio".into());
+        }
+        Ok(())
     }
 
     /// Queue history (decision 0033, amended): the player takes up its queue `id` where it was left, playing if it
@@ -2629,6 +2710,32 @@ mod tests {
         p.command("Chrome on Android", Command::play(vec![t("tr-1")], 0, 0)).await.unwrap();
         p.command("Chrome on Android", Command::play(vec![t("tr-2")], 0, 0)).await.unwrap();
         assert_eq!(p.get("Chrome on Android").unwrap().queues.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn home_assistant_adds_by_name_starts_a_radio_and_has_the_queues_pushed() {
+        // Add by name, as play takes them; told to the player as tracks only.
+        let c: Command = serde_json::from_str(r#"{"command":"add","playlist":"Chill","how":"next"}"#).unwrap();
+        assert!(matches!(&c, Command::Add { from: PlayFrom { playlist: Some(p), .. }, tracks, .. } if p == "Chill" && tracks.is_empty()));
+        let c: Command = serde_json::from_str(r#"{"command":"play","radio":true,"album":"al-x"}"#).unwrap();
+        assert!(matches!(&c, Command::Play { from: PlayFrom { radio: true, album: Some(a), .. }, .. } if a == "al-x"));
+
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let _tablet = p.connect("tablet").unwrap();
+        let nothing: Command = serde_json::from_str(r#"{"command":"add","how":"last"}"#).unwrap();
+        assert!(matches!(p.command("tablet", nothing).await, Err(ToggleError::Refused(_))), "nothing named, nothing given");
+        // A radio from what plays: nothing plays.
+        let radio: Command = serde_json::from_str(r#"{"command":"play","radio":true}"#).unwrap();
+        assert!(matches!(p.command("tablet", radio).await, Err(ToggleError::Refused(m)) if m.starts_with("Nothing to start a radio from")));
+
+        // The list goes out with every player, as the stream and the webhook send them.
+        p.command("tablet", Command::play(vec![t("tr-1")], 0, 0)).await.unwrap();
+        p.command("tablet", Command::play(vec![t("tr-2")], 0, 0)).await.unwrap();
+        let all = p.list_for(None);
+        let tablet = all.iter().find(|v| v.name == "tablet").unwrap();
+        assert_eq!(tablet.queues.as_ref().map(Vec::len), Some(2));
+        assert!(tablet.queue.is_none(), "the tracks themselves only by name");
     }
 
     #[test]

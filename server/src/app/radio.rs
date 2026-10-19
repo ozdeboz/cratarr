@@ -50,6 +50,18 @@ pub enum Mode {
     Reshuffle,
 }
 
+impl Mode {
+    /// What Autoplay in `mode` asks for.
+    pub fn of(mode: AutoMode) -> Self {
+        match mode {
+            AutoMode::Similar => Mode::Similar,
+            AutoMode::Artist => Mode::Artist,
+            AutoMode::Era => Mode::Era,
+            AutoMode::Random => Mode::Random,
+        }
+    }
+}
+
 /// Autoplay's modes; off is its absence (`stop` in commands).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

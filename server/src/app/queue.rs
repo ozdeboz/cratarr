@@ -277,7 +277,7 @@ impl Queue {
                 }
                 Command::Play { from, tracks: Some(self.tracks.clone()), index, position_ms, shuffle, paused, queue_id, queue_name }
             }
-            Command::Add { tracks, at, after, how } => {
+            Command::Add { tracks, at, after, how, .. } => {
                 let mut tracks = with_entries(tracks);
                 let end = self.tracks.len();
                 // Added by hand: right after the playing track (`next`, the newest first), or after those added before
@@ -298,7 +298,7 @@ impl Queue {
                 };
                 let after = self.anchor(p);
                 self.tracks.splice(p..p, tracks.iter().cloned());
-                Command::Add { tracks, at: Some(p), after: Some(after), how: None }
+                Command::Add { from: Default::default(), tracks, at: Some(p), after: Some(after), how: None }
             }
             Command::Move { from, to, entry, after } => {
                 let from = self.place(entry.as_deref(), from)?;
@@ -523,14 +523,14 @@ mod tests {
     fn added_tracks_go_after_their_anchor_together() {
         let mut q = played(&["a", "b"]);
         let a = q.tracks[0].entry.clone();
-        let told = q.edit(Command::Add { tracks: vec![track("x"), track("y")], at: None, after: Some(a.clone()), how: None }).unwrap();
+        let told = q.edit(Command::Add { from: Default::default(), tracks: vec![track("x"), track("y")], at: None, after: Some(a.clone()), how: None }).unwrap();
         assert_eq!(ids(&q), "a x y b");
         let Command::Add { tracks, at, after, .. } = told else { panic!() };
         assert_eq!((at, after), (Some(1), Some(a)));
         assert!(tracks.iter().all(|t| !t.entry.is_empty()), "the player is told their entries");
-        q.edit(Command::Add { tracks: vec![track("z")], at: None, after: None, how: None }).unwrap();
+        q.edit(Command::Add { from: Default::default(), tracks: vec![track("z")], at: None, after: None, how: None }).unwrap();
         assert_eq!(ids(&q), "a x y b z", "at the end");
-        let Command::Add { after, .. } = q.edit(Command::Add { tracks: vec![track("w")], at: Some(0), after: None, how: None }).unwrap() else { panic!() };
+        let Command::Add { after, .. } = q.edit(Command::Add { from: Default::default(), tracks: vec![track("w")], at: Some(0), after: None, how: None }).unwrap() else { panic!() };
         assert_eq!((ids(&q).as_str(), after), ("w a x y b z", Some(String::new())));
     }
 
@@ -538,7 +538,7 @@ mod tests {
     fn tracks_added_by_hand_stay_ahead_of_the_album_and_outlive_a_new_one() {
         let mut q = played(&["a", "b", "c"]);
         let add = |q: &mut Queue, ids: &[&str], how: &str| {
-            q.edit_at(Command::Add { tracks: ids.iter().map(|i| track(i)).collect(), at: None, after: None, how: Some(how.into()) }, Some(0)).unwrap()
+            q.edit_at(Command::Add { from: Default::default(), tracks: ids.iter().map(|i| track(i)).collect(), at: None, after: None, how: Some(how.into()) }, Some(0)).unwrap()
         };
         // Playing a: "add to queue" goes after a, ahead of b and c; the next one after it; "play next" before both.
         add(&mut q, &["x"], "last");
@@ -556,7 +556,7 @@ mod tests {
         assert_eq!(ids(&q), "p n1 n2 x y q");
         // Nothing playing: added at the end.
         let mut empty = Queue::default();
-        empty.edit_at(Command::Add { tracks: vec![track("z")], at: None, after: None, how: Some("last".into()) }, None).unwrap();
+        empty.edit_at(Command::Add { from: Default::default(), tracks: vec![track("z")], at: None, after: None, how: Some("last".into()) }, None).unwrap();
         assert_eq!(ids(&empty), "z");
     }
 
@@ -566,7 +566,7 @@ mod tests {
         let mut q = Queue::default();
         q.edit(Command::play(tracks, 0, 0)).unwrap();
         // Playing t0, one added by hand ahead.
-        q.edit_at(Command::Add { tracks: vec![track("x")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![track("x")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
         let Command::Upcoming { tracks: told, shuffled } = q.edit_at(Command::Shuffle { on: true }, Some(0)).unwrap() else { panic!() };
         assert_eq!(shuffled, Some(true), "the player is told, for repeat all's next rounds");
         assert_eq!(told.len(), 12, "every track still there");
@@ -607,19 +607,19 @@ mod tests {
         );
         assert_eq!((q.repeat, q.version), (Repeat::Off, v), "on turns repeat all off; a setting, the version stays");
         // The player appended Autoplay's picks; playing b.
-        q.edit_at(Command::Add { tracks: vec![in_lane("p1", LANE_AUTOPLAY), in_lane("p2", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(1)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p1", LANE_AUTOPLAY), in_lane("p2", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(1)).unwrap();
         let v = q.version;
         q.edit_at(Command::Autoplay { mode: AutoplayMode::Similar, albums: None, restart: Some(true), seed: None, within: None }, Some(1)).unwrap();
         assert_eq!((ids(&q), q.version), ("a b p1 p2".to_string(), v), "restart alone keeps the picks");
         q.edit_at(auto(AutoplayMode::Era), Some(1)).unwrap();
         assert_eq!((ids(&q), q.version), ("a b".to_string(), v + 1), "another mode: its old picks make way");
         assert_eq!(q.autoplay.as_ref().map(|a| (a.mode, a.restart)), Some((super::super::radio::AutoMode::Era, true)), "what was not given stays");
-        q.edit_at(Command::Add { tracks: vec![in_lane("p3", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(1)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p3", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(1)).unwrap();
         q.edit_at(auto(AutoplayMode::Stop), Some(1)).unwrap();
         assert_eq!((ids(&q), q.autoplay.is_none()), ("a b".to_string(), true), "stop: its tracks to come go");
         // Repeat all stops Autoplay the same way.
         q.edit(auto(AutoplayMode::Random)).unwrap();
-        q.edit(Command::Add { tracks: vec![in_lane("p4", LANE_AUTOPLAY)], at: None, after: None, how: None }).unwrap();
+        q.edit(Command::Add { from: Default::default(), tracks: vec![in_lane("p4", LANE_AUTOPLAY)], at: None, after: None, how: None }).unwrap();
         q.edit_at(Command::Repeat { mode: Repeat::All }, Some(1)).unwrap();
         assert_eq!((ids(&q), q.autoplay.is_none()), ("a b".to_string(), true));
     }
@@ -631,8 +631,8 @@ mod tests {
         q.edit(auto(AutoplayMode::Similar)).unwrap();
         assert!(q.radio && q.autoplay.is_some(), "Radio lives with Autoplay");
         // Playing a: its inserts after it; Autoplay's tail at the end.
-        q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO), in_lane("r2", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
-        q.edit_at(Command::Add { tracks: vec![in_lane("p1", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("r1", LANE_RADIO), in_lane("r2", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p1", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
         assert_eq!(ids(&q), "a r1 r2 b c p1");
         q.edit_at(Command::Radio { on: false, mode: None, seed: None, within: None, by: None, count: None }, Some(0)).unwrap();
         assert_eq!((ids(&q), q.radio, q.autoplay.is_some()), ("a b c p1".to_string(), false, true), "off: its inserts out; Autoplay stays");
@@ -646,7 +646,7 @@ mod tests {
     fn radio_keeps_its_choice_and_count_and_another_while_on_takes_the_inserts_out() {
         let mut q = played(&["a", "b"]);
         assert_eq!(q.edit(radio(true, None, None)).unwrap(), radio(true, Some(RadioBy::Track), Some(5)), "told in full");
-        q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("r1", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
         let v = q.version;
         q.edit_at(radio(true, Some(RadioBy::Track), Some(5)), Some(0)).unwrap();
         assert_eq!((ids(&q), q.version), ("a r1 b".to_string(), v), "the same again: the inserts stay");
@@ -668,13 +668,13 @@ mod tests {
     #[test]
     fn skipping_favourites_takes_the_picks_to_come_out_once() {
         let mut q = played(&["a", "b"]);
-        q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
-        q.edit_at(Command::Add { tracks: vec![in_lane("p1", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("r1", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p1", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
         assert_eq!(ids(&q), "a r1 b p1");
         let v = q.version;
         assert_eq!(q.edit_at(Command::SkipFavourites { on: true }, Some(0)).unwrap(), Command::SkipFavourites { on: true });
         assert_eq!((ids(&q), q.version, q.skip_favourites), ("a b".to_string(), v + 1, true), "both lanes' picks to come go");
-        q.edit_at(Command::Add { tracks: vec![in_lane("r2", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("r2", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
         let v = q.version;
         q.edit_at(Command::SkipFavourites { on: true }, Some(0)).unwrap();
         assert_eq!((ids(&q), q.version), ("a r2 b".to_string(), v), "the same again: nothing changes");
@@ -708,9 +708,9 @@ mod tests {
         q.edit(Command::play(tracks, 0, 0)).unwrap();
         q.edit(Command::Radio { on: true, mode: None, seed: None, within: None, by: None, count: None }).unwrap();
         q.edit(Command::Autoplay { mode: AutoplayMode::Similar, albums: None, restart: None, seed: Some(vec!["s".into()]), within: Some("c1".into()) }).unwrap();
-        q.edit_at(Command::Add { tracks: vec![in_lane("x", "next")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
-        q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO), in_lane("r2", LANE_RADIO)], at: Some(2), after: None, how: None }, Some(0)).unwrap();
-        q.edit_at(Command::Add { tracks: vec![in_lane("p1", LANE_AUTOPLAY), in_lane("p2", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("x", "next")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("r1", LANE_RADIO), in_lane("r2", LANE_RADIO)], at: Some(2), after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p1", LANE_AUTOPLAY), in_lane("p2", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
         for on in [true, false] {
             let Command::Upcoming { tracks: told, .. } = q.edit_at(Command::Shuffle { on }, Some(0)).unwrap() else { panic!() };
             let order: Vec<&str> = told.iter().map(|t| t.id.as_str()).collect();
@@ -776,9 +776,9 @@ mod tests {
         assert!(q.started > 0, "a play starts it");
         q.started = 1;
         // Radio's and Autoplay's inserts, a track added by hand, a move, repeat, shuffle: none start anything.
-        q.edit_at(Command::Add { tracks: vec![in_lane("r1", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
-        q.edit_at(Command::Add { tracks: vec![in_lane("p1", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
-        q.edit_at(Command::Add { tracks: vec![in_lane("x", "next")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("r1", LANE_RADIO)], at: Some(1), after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p1", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("x", "next")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
         let b = q.tracks.iter().find(|t| t.id == "b").unwrap().entry.clone();
         q.edit(Command::Move { from: None, to: None, entry: Some(b), after: Some(String::new()) }).unwrap();
         assert_eq!(q.started, 1, "edits and inserts: {}", ids(&q));
