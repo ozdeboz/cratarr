@@ -598,6 +598,14 @@ export type Shown = {
 
 export class FlameRenderer {
   private gl: WebGL2RenderingContext;
+  /** The patch past the flame (decision 0056, compose.ts): when `active`, the flame's picture goes into a texture even
+   *  without effects, `run` composes the other layers and the picture's own loop over it, and finish (or the copy to
+   *  the screen) reads what it gives. Set by the visuals each frame; none, and nothing changes. */
+  compose: { active: boolean; run: (picture: WebGLTexture, width: number, height: number) => WebGLTexture } | null = null;
+  /** The context, for what draws beside the flame (the compositor). */
+  get context(): WebGL2RenderingContext {
+    return this.gl;
+  }
   // The flash meter (flashmeter.ts), made the first time the screen is measured; out where it cannot be made.
   private meter: FlashMeter | null = null;
   private meterOut = false;
@@ -1151,7 +1159,8 @@ export class FlameRenderer {
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where a
     // chain of effects is set, into the picture at the buffer's size, for the chain's pass to finish.
     const chain = this.chainFor(look.effects);
-    const into = chain ? this.fxTargets() : null;
+    const composing = !!this.compose?.active;
+    const into = chain || composing ? this.fxTargets() : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
     if (into) viewWidth = this.width, viewHeight = this.height;
     gl.viewport(0, 0, viewWidth, viewHeight);
@@ -1206,7 +1215,9 @@ export class FlameRenderer {
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
-    if (chain && into) this.finish(chain, look.effects!, into, screenWidth, screenHeight);
+    const picture = into && composing ? this.compose!.run(into.tex[2], into.w, into.h) : into ? into.tex[2] : null;
+    if (chain && into && picture) this.finish(chain, look.effects!, into, picture, screenWidth, screenHeight);
+    else if (into && picture) this.toScreen(picture, screenWidth, screenHeight);
     else if (this.fx && performance.now() - this.fx.last > 10_000) this.freeFx();
   }
 
@@ -1291,14 +1302,14 @@ export class FlameRenderer {
 
   /** The picture slot after the show pass: the chain's pass from the picture (and the last finished one, for echoes,
    *  and the flow, for what modulates by it) into the next finished one, then that one onto the screen. */
-  private finish(p: WebGLProgram, fx: NonNullable<Shown['effects']>, into: FxTargets, screenWidth: number, screenHeight: number) {
+  private finish(p: WebGLProgram, fx: NonNullable<Shown['effects']>, into: FxTargets, picture: WebGLTexture, screenWidth: number, screenHeight: number) {
     const gl = this.gl;
     const next = 1 - into.cur;
     gl.bindFramebuffer(gl.FRAMEBUFFER, into.fbo[next]);
     gl.viewport(0, 0, into.w, into.h);
     gl.useProgram(p);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, into.tex[2]);
+    gl.bindTexture(gl.TEXTURE_2D, picture);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, into.tex[into.cur]);
     const fluid = this.fluid;
@@ -1320,14 +1331,22 @@ export class FlameRenderer {
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     into.cur = next;
-    // Onto the screen, scaled up.
+    gl.bindVertexArray(null);
+    this.toScreen(into.tex[next], screenWidth, screenHeight);
+  }
+
+  /** A picture onto the screen, scaled up. */
+  private toScreen(picture: WebGLTexture, screenWidth: number, screenHeight: number) {
+    const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, screenWidth, screenHeight);
+    gl.disable(gl.BLEND);
     gl.useProgram(this.copying);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, into.tex[next]);
+    gl.bindTexture(gl.TEXTURE_2D, picture);
     gl.uniform1i(this.uniform(this.copying, 'uOut'), 0);
     gl.uniform2f(this.uniform(this.copying, 'uView'), screenWidth, screenHeight);
+    gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
   }

@@ -1,0 +1,271 @@
+// The patch's picture past the flame (decision 0056, step 4): the layers after the flame, each drawn by its source
+// into a picture of its own and blended over the flame's; then the picture's own loop, the last frame's picture moved
+// (Warp) and kept (Keep) under the new one: MilkDrop's feedback, as modules. The flame's own loop stays inside the
+// flame (render.ts). The renderer calls `run` between its show and finish when `active` says there is something to do;
+// with nothing beyond today's chain it is never called, and the picture is exactly as before.
+
+import { keptPerSecond } from './loopmods';
+import type { FrameInfo, Layer, Module, PatchExtra, PictureModule } from './patch';
+import { createSource } from './sources/index';
+import { done, program } from './sources/gl';
+
+const FULL = `#version 300 es
+out vec2 vUv;
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  vUv = p;
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+// A layer over the picture so far (both premultiplied): added, screened, laid over, or multiplied, by `uAmount`.
+const BLEND = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform sampler2D uBase;
+uniform sampler2D uLayer;
+uniform int uMode;
+uniform float uAmount;
+void main() {
+  vec4 a = texture(uBase, vUv);
+  vec4 b = texture(uLayer, vUv) * uAmount;
+  vec3 c;
+  if (uMode == 1) c = a.rgb + b.rgb - a.rgb * b.rgb;
+  else if (uMode == 2) c = b.rgb + a.rgb * (1.0 - b.a);
+  else if (uMode == 3) c = a.rgb * mix(vec3(1.0), b.rgb / max(b.a, 1e-4), b.a);
+  else c = a.rgb + b.rgb;
+  outColor = vec4(c, 1.0);
+}`;
+
+// The picture's own loop: the last picture read where the Warp moves it from (about the middle: zoomed, turned,
+// drifted, stretched, wobbled), kept by the Keep's share, and the new picture over it: the brighter of the two, so the
+// trails fade as they are kept and never build past the picture itself (our layers are whole pictures each frame,
+// not MilkDrop's few lines; added up they would run to white).
+const LOOP = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform sampler2D uNow;
+uniform sampler2D uLast;
+uniform float uAspect;
+uniform float uZoom;
+uniform float uTurn;
+uniform vec2 uDrift;
+uniform float uStretch;
+uniform vec3 uWobble;
+uniform float uKeep;
+void main() {
+  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
+  p /= uZoom;
+  float c = cos(uTurn), s = sin(uTurn);
+  p = vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+  p *= vec2(1.0 / uStretch, uStretch);
+  p += uWobble.x * vec2(sin(p.y * uWobble.y + uWobble.z), cos(p.x * uWobble.y - uWobble.z));
+  vec2 uv = p / vec2(uAspect, 1.0) + 0.5 - uDrift;
+  vec3 last = textureLod(uLast, uv, 0.0).rgb;
+  vec3 now = texture(uNow, vUv).rgb;
+  outColor = vec4(max(now, uKeep * last), 1.0);
+}`;
+
+type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
+
+export class Compositor {
+  private gl: WebGL2RenderingContext;
+  private blend: WebGLProgram;
+  private loop: WebGLProgram;
+  private empty: WebGLVertexArrayObject;
+  private half: boolean;
+  private w = 0;
+  private h = 0;
+  /** Each layer's source, running, by its source module's id and type. */
+  private sources = new Map<string, { type: string; module: PictureModule | null }>();
+  private layerTargets = new Map<string, Target>();
+  private mix: Target[] = [];
+  private feedback: Target[] = [];
+  private fed = 0;
+  private time = 0;
+
+  constructor(gl: WebGL2RenderingContext) {
+    this.gl = gl;
+    this.blend = program(gl, FULL, BLEND);
+    this.loop = program(gl, FULL, LOOP);
+    this.empty = gl.createVertexArray()!;
+    // Half floats where they can be drawn into (the loop's faint trails would band in 8 bits), else 8 bits.
+    this.half = !!gl.getExtension('EXT_color_buffer_float') || !!gl.getExtension('EXT_color_buffer_half_float');
+  }
+
+  /** Whether there is anything to compose: a layer past the flame with something of it, or the picture's loop. */
+  static active(extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>): boolean {
+    return extra.layers.some((l) => l.blend.amount > 0) || extra.loop.some((m) => (knobsOf(m).amount ?? 0) > 0);
+  }
+
+  /** The picture composed from `picture` (the flame's, `width` × `height`): the texture finish is to read next. */
+  run(picture: WebGLTexture, width: number, height: number, extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>, frame: FrameInfo): WebGLTexture {
+    const gl = this.gl;
+    this.sized(width, height);
+    this.time += frame.dt;
+    // The layers, each drawn alone, then over what there is so far.
+    let base: WebGLTexture = picture;
+    let into = 0;
+    for (const layer of extra.layers) {
+      if (layer.blend.amount <= 0) continue;
+      const drawn = this.drawLayer(layer, knobsOf, frame);
+      if (!drawn) continue;
+      const t = this.mix[into];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+      gl.viewport(0, 0, this.w, this.h);
+      gl.disable(gl.BLEND);
+      gl.useProgram(this.blend);
+      this.bind(0, base, 'uBase', this.blend);
+      this.bind(1, drawn, 'uLayer', this.blend);
+      gl.uniform1i(gl.getUniformLocation(this.blend, 'uMode'), ['add', 'screen', 'over', 'multiply'].indexOf(layer.blend.mode));
+      gl.uniform1f(gl.getUniformLocation(this.blend, 'uAmount'), layer.blend.amount);
+      this.full();
+      base = t.tex;
+      into = 1 - into;
+    }
+    // The picture's own loop: its Warps summed, its Keeps multiplied (each by its Amount).
+    const warps = extra.loop.filter((m) => m.type === 'warp');
+    const keeps = extra.loop.filter((m) => m.type === 'keep');
+    let keep = 1;
+    let kept = false;
+    for (const m of keeps) {
+      const k = knobsOf(m);
+      if ((k.amount ?? 0) <= 0) continue;
+      kept = true;
+      keep *= 1 - k.amount + k.amount * keptPerSecond(k.trails ?? 0.5) ** frame.dt;
+    }
+    if (!kept) {
+      this.fed = 0;
+      return base;
+    }
+    let zoom = 0, turn = 0, dx = 0, dy = 0, stretch = 0, wobble = 0, size = 0.5;
+    for (const m of warps) {
+      const k = knobsOf(m);
+      const a = k.amount ?? 0;
+      zoom += a * (k.zoom ?? 0);
+      turn += a * (k.turn ?? 0);
+      dx += a * (k.driftX ?? 0);
+      dy += a * (k.driftY ?? 0);
+      stretch += a * (k.stretch ?? 0);
+      wobble += a * (k.wobble ?? 0);
+      size = k.wobbleSize ?? size;
+    }
+    const dt = frame.dt;
+    const last = this.feedback[this.fed];
+    const next = this.feedback[1 - this.fed];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, next.fbo);
+    gl.viewport(0, 0, this.w, this.h);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.loop);
+    this.bind(0, base, 'uNow', this.loop);
+    this.bind(1, last.tex, 'uLast', this.loop);
+    const u = (n: string) => gl.getUniformLocation(this.loop, n);
+    gl.uniform1f(u('uAspect'), this.w / this.h);
+    // A second's worth at full: zoom half again (in or out), half a turn, a fifth of the picture across.
+    gl.uniform1f(u('uZoom'), Math.exp(0.4 * zoom * dt));
+    gl.uniform1f(u('uTurn'), Math.PI * turn * dt);
+    gl.uniform2f(u('uDrift'), 0.2 * dx * dt, 0.2 * dy * dt);
+    gl.uniform1f(u('uStretch'), Math.exp(0.2 * stretch * dt));
+    gl.uniform3f(u('uWobble'), 0.02 * wobble * Math.min(1, dt * 30), 4 + 20 * size, this.time * 1.7);
+    gl.uniform1f(u('uKeep'), keep);
+    this.full();
+    this.fed = 1 - this.fed;
+    done(gl);
+    return next.tex;
+  }
+
+  /** A layer's picture: its source drawn into its target (and, later, its modules after it). */
+  private drawLayer(layer: Layer, knobsOf: (m: Module) => Record<string, number>, frame: FrameInfo): WebGLTexture | null {
+    const gl = this.gl;
+    let s = this.sources.get(layer.source.id);
+    if (!s || s.type !== layer.source.type) {
+      s?.module?.dispose(gl);
+      let module: PictureModule | null = null;
+      try {
+        module = createSource(layer.source.type, gl);
+      } catch (e) {
+        console.warn('Visuals: a layer could not be made here', layer.source.type, e);
+      }
+      s = { type: layer.source.type, module };
+      this.sources.set(layer.source.id, s);
+    }
+    if (!s.module) return null;
+    let t = this.layerTargets.get(layer.id);
+    if (!t) {
+      t = this.target();
+      this.layerTargets.set(layer.id, t);
+    }
+    s.module.draw(gl, null, t.fbo, this.w, this.h, knobsOf(layer.source), frame);
+    done(gl);
+    return t.tex;
+  }
+
+  /** Lets go of what layers no longer in the patch held. */
+  prune(extra: PatchExtra) {
+    const sources = new Set(extra.layers.map((l) => l.source.id));
+    for (const [id, s] of this.sources) if (!sources.has(id)) (s.module?.dispose(this.gl), this.sources.delete(id));
+    const layers = new Set(extra.layers.map((l) => l.id));
+    for (const [id, t] of this.layerTargets) if (!layers.has(id)) (this.free(t), this.layerTargets.delete(id));
+  }
+
+  private sized(width: number, height: number) {
+    if (width === this.w && height === this.h && this.mix.length) return;
+    for (const t of [...this.mix, ...this.feedback, ...this.layerTargets.values()]) this.free(t);
+    this.layerTargets.clear();
+    this.w = width;
+    this.h = height;
+    this.mix = [this.target(), this.target()];
+    this.feedback = [this.target(), this.target()];
+    this.fed = 0;
+  }
+
+  private target(): Target {
+    const gl = this.gl;
+    const tex = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    if (this.half) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, this.w, this.h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.w, this.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    // Read past its edge (a warp reaching out), the picture is mirrored, not smeared.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+    const fbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    return { tex, fbo };
+  }
+
+  private free(t: Target) {
+    this.gl.deleteTexture(t.tex);
+    this.gl.deleteFramebuffer(t.fbo);
+  }
+
+  private bind(unit: number, tex: WebGLTexture, name: string, p: WebGLProgram) {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(gl.getUniformLocation(p, name), unit);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  private full() {
+    const gl = this.gl;
+    gl.bindVertexArray(this.empty);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+  }
+
+  dispose() {
+    const gl = this.gl;
+    for (const s of this.sources.values()) s.module?.dispose(gl);
+    for (const t of [...this.mix, ...this.feedback, ...this.layerTargets.values()]) this.free(t);
+    gl.deleteProgram(this.blend);
+    gl.deleteProgram(this.loop);
+    gl.deleteVertexArray(this.empty);
+  }
+}
