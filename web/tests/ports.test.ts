@@ -22,7 +22,7 @@ test('every module type has typed ports: a knob is a value input, a picture modu
 });
 
 test("today's hidden behaviours are modules; the beats and hits are triggers, a band's signals six channels", () => {
-  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'track', 'envelope', 'clock', 'flash', 'walk', 'safety']);
+  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'track', 'envelope', 'clock', 'flash', 'walk', 'meter', 'compressor', 'taste']);
   const music = portsOf(ENGINE_MODULES[0]);
   assert.equal(music.out.find((x) => x.id === 'beat')?.type, 'trigger');
   assert.equal(music.out.find((x) => x.id === 'hits')?.channels, 6);
@@ -31,8 +31,8 @@ test("today's hidden behaviours are modules; the beats and hits are triggers, a 
 });
 
 test('a cable fits by type: the same, or a trigger into a value', () => {
-  assert.ok(fits('picture', 'picture') && fits('value', 'value') && fits('trigger', 'trigger') && fits('trigger', 'value'));
-  assert.ok(!fits('value', 'picture') && !fits('picture', 'value') && !fits('value', 'trigger'));
+  assert.ok(fits('picture', 'picture') && fits('light', 'light') && fits('value', 'value') && fits('trigger', 'trigger') && fits('trigger', 'value'));
+  assert.ok(!fits('light', 'picture') && !fits('value', 'picture') && !fits('picture', 'value') && !fits('value', 'trigger'));
 });
 
 test('v2: a picture cycle must pass through a Feedback', async () => {

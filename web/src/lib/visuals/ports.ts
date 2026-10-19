@@ -4,10 +4,12 @@
 // modulator's `inputs` are value inputs, a picture module takes and gives a picture, a modulator gives a value. The
 // modules that hold today's hidden behaviours are declared here, so every one of them shows.
 import type { RouteValue } from './curves';
-import type { Knob, Macro, Module, ModuleType, Place } from './patch';
+import { BUSY, type Knob, type Macro, type Module, type ModuleType, type Place } from './patch';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
-export type PortType = 'picture' | 'value' | 'trigger';
+/** `light`: the flame's accumulated light (its RGBA and its bands' shares) before Show turns it into a picture; the
+ *  flame's own loop works on it (claude-632, step 3). Only Show converts light into a picture. */
+export type PortType = 'picture' | 'light' | 'value' | 'trigger';
 
 /** A port: its id on its module, its name, its type; `channels`: a band's six at once (VCV's polyphonic cable; a
  *  cable may take one of them); `normal`: what it is wired to unless a cable is plugged in (Eurorack's normalled
@@ -90,7 +92,9 @@ export const ENVELOPE = declared(
   'modulator',
   [knob('intensity', 'Intensity', 0, 1, 0.5, 'level', 0), knob('time', 'Time', 0.02, 2, 0.2)],
   [{ id: 'in', label: 'Input', type: 'value', normal: { module: 'music', port: 'loudness' } }],
-  [VALUE_OUT],
+  // `level`: the loudness as Intensity lets it count (what a loudness cable reads); `out`: that while playing, else 0
+  // (every other cable's depth is normalled to it).
+  [out('level', 'Level'), VALUE_OUT],
 );
 
 export const CLOCK = declared(
@@ -113,10 +117,37 @@ export const FLASH = declared(
 
 export const WALK = declared('walk', 'Walk', 'modulator', [knob('amount', 'Amount', 0, 1, 0, 'level'), knob('rate', 'Rate', 0, 1, 0.1)], [{ id: 'trigger', label: 'Jump', type: 'trigger' }], [VALUE_OUT]);
 
-/** The flash meter and the governor: fixed, last before the screen, never removed; Wild sets its limits. */
-export const SAFETY = declared('safety', 'Safety', 'finish', [knob('wild', 'Wild', 0, 1, 0.5)], [PICTURE_IN], [PICTURE_OUT, out('holding', 'Holding back')]);
+const BUSY_LABEL: Record<(typeof BUSY)[number], string> = { motion: 'Motion', shape: 'Shape churn', colour: 'Colour churn', zoom: 'Zoom pumping', looks: 'New looks' };
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, SAFETY];
+/** A Meter (0057): a detector; the picture it watches in, its busyness out (meters.ts's measures). */
+export const METER = declared('meter', 'Meter', 'modulator', [], [PICTURE_IN], BUSY.map((b) => out(b, BUSY_LABEL[b])));
+
+/** A Compressor (0057): a standard sidechain compressor on values (Giannoulis, Massberg, Reiss 2012): `in` compressed
+ *  by how far `key` stands over the threshold; `reduction` the gain reduction (1: none), for ducking anything else. */
+export const COMPRESSOR = declared(
+  'compressor',
+  'Compressor',
+  'modulator',
+  [
+    knob('threshold', 'Threshold', 0, 4, 1),
+    knob('ratio', 'Ratio', 1, 20, 4),
+    knob('knee', 'Knee', 0, 2, 0.2),
+    knob('attack', 'Attack', 0.001, 2, 0.25),
+    knob('release', 'Release', 0.01, 10, 2),
+    knob('makeup', 'Makeup', 0, 4, 1),
+  ],
+  [
+    { id: 'in', label: 'Input', type: 'value' },
+    { id: 'key', label: 'Sidechain', type: 'value' },
+  ],
+  [VALUE_OUT, out('reduction', 'Reduction')],
+);
+
+/** Taste (0057): the user's learned thresholds, one per kind (learning.ts; the thumbs teach it), normalled into the
+ *  Compressors keyed by that kind. To be redesigned with the owner. */
+export const TASTE = declared('taste', 'Taste', 'modulator', [], [], BUSY.map((b) => out(b, BUSY_LABEL[b])));
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, TASTE];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
@@ -134,7 +165,7 @@ export type CableV2 = {
 export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
 
 /** The blends a Mix input takes (0056's, as a step knob per input). */
-export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window'] as const;
+export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window', 'lighten'] as const;
 /** How many pictures a Mix takes. */
 export const MIX_INPUTS = 4;
 
@@ -155,8 +186,9 @@ export const MIX = declared(
  *  way round a picture cycle. */
 export const FEEDBACK = declared('feedback', 'Feedback', 'module', [], [PICTURE_IN], [PICTURE_OUT]);
 
-/** The screen: what reaches it is drawn (after Safety). */
-export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], []);
+/** The screen: what reaches it is drawn, through its flash guard (three flashes a second over the area the owner chose:
+ *  fixed, never learned, never removed; `guard` how far it is holding now). */
+export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], [out('guard', 'Flash guard')]);
 
 export const GRAPH_MODULES: readonly Declared[] = [MIX, FEEDBACK, SCREEN];
 

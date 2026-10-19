@@ -1,7 +1,9 @@
 // The picture as shown, read back by tiles for the flash meters (meters.ts): after each frame the screen is copied
 // small (a blit: the screen cannot be sampled), each tile's mean colour worked out in linear light (relative luminance,
-// CIE 1976 u'v', share of red), and read back a frame or two later without waiting for the GPU (a pixel buffer and a
-// fence), so measuring never stalls a frame.
+// CIE 1976 u'v', share of red), and read back two or more frames later without waiting for the GPU (a pixel buffer and
+// a fence), so measuring never stalls a frame. `poll` goes first in a frame, before its own drawing: Chromium's
+// getBufferSubData is always a round trip to the GPU process, so after the frame's draws it waits for that process to
+// take all of them (the tablet's 18 frames a second against 30, 2026-10-20).
 //
 // Written to the Mali rules (decision 0047): no array constructors, no bits picking an answer. Each `capture` changes
 // the framebuffers bound (read and draw), the viewport, the program, the vertex array and texture unit 0; the pixel
@@ -11,9 +13,12 @@ import type { Tiles } from './meters';
 
 /** Each tile is sampled 16 x 16 times, each sample (bilinear) the mean of four pixels of the small copy. */
 const SAMPLES = 16;
-/** Readings in flight at once (a browser may hold one back ten frames); with all of them pending, a frame goes
- *  unmeasured rather than waiting. */
-const RING = 8;
+/** Readings in flight at once to start with, and at most (a browser may hold one back ten frames): with all of them
+ *  pending, more are made, then the oldest reading is let go (counted in `dropped`) rather than waiting. */
+const RING = 4;
+const RING_MOST = 16;
+/** A reading is read this many frames (polls) after its frame at the soonest. */
+const AGE = 2;
 
 const VERTEX = `#version 300 es
 void main() {
@@ -48,7 +53,7 @@ void main() {
   o = vec4(l, uv / 0.65, s > 0.000001 ? c.r / s : 0.0);
 }`;
 
-type Pending = { buffer: WebGLBuffer; sync: WebGLSync | null; t: number; cols: number; rows: number };
+type Pending = { buffer: WebGLBuffer; sync: WebGLSync | null; t: number; frame: number; cols: number; rows: number };
 
 export class FlashMeter {
   private gl: WebGL2RenderingContext;
@@ -57,10 +62,13 @@ export class FlashMeter {
   private small: { texture: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number } | null = null;
   private tiles: { texture: WebGLTexture; fbo: WebGLFramebuffer } | null = null;
   private ring: Pending[] = [];
+  private frame = 0;
   private uTiles: WebGLUniformLocation | null;
   private uSmall: WebGLUniformLocation | null;
   readonly cols: number;
   rows = 0;
+  /** Readings let go unread, the ring full (to see whether it ever happens). */
+  dropped = 0;
 
   /** `cols` tiles across; as many down as keep them square. */
   constructor(gl: WebGL2RenderingContext, cols = 16) {
@@ -70,17 +78,21 @@ export class FlashMeter {
     this.uTiles = gl.getUniformLocation(this.program, 'uTiles');
     this.uSmall = gl.getUniformLocation(this.program, 'uSmall');
     this.empty = gl.createVertexArray()!;
-    this.ring = Array.from({ length: RING }, () => {
-      const buffer = gl.createBuffer()!;
-      return { buffer, sync: null, t: 0, cols: 0, rows: 0 };
-    });
+    for (let i = 0; i < RING; i++) this.ring.push(this.slot());
   }
 
-  /** The screen (`viewW` x `viewH`, just drawn) measured as of `t` seconds; read with `poll` a frame or two later. */
+  /** The screen (`viewW` x `viewH`, just drawn) measured as of `t` seconds; read with `poll` two or more frames later. */
   capture(viewW: number, viewH: number, t = performance.now() / 1000) {
     const gl = this.gl;
-    const slot = this.ring.find((p) => !p.sync);
-    if (!slot || viewW < 1 || viewH < 1) return;
+    if (viewW < 1 || viewH < 1) return;
+    let slot = this.ring.find((p) => !p.sync);
+    if (!slot && this.ring.length < RING_MOST) this.ring.push((slot = this.slot()));
+    if (!slot) {
+      slot = this.ring.reduce((a, b) => (b.frame < a.frame ? b : a));
+      gl.deleteSync(slot.sync);
+      slot.sync = null;
+      if (this.dropped++ === 0) console.warn(`Visuals: the flash meter let a reading go unread (${RING_MOST} in flight)`);
+    }
     const rows = Math.max(2, Math.min(32, Math.round((this.cols * viewH) / viewW)));
     this.ensure(rows);
     const small = this.small!;
@@ -105,14 +117,16 @@ export class FlashMeter {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     slot.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     gl.flush();
-    Object.assign(slot, { t, cols: this.cols, rows });
+    Object.assign(slot, { t, frame: this.frame, cols: this.cols, rows });
   }
 
-  /** The readings the GPU has finished, the oldest first (none: an empty list). */
+  /** The readings the GPU has finished, at least AGE frames old, the oldest first (none: an empty list). Once a frame,
+   *  before it draws anything. */
   poll(): Tiles[] {
     const gl = this.gl;
+    this.frame++;
     const ready = this.ring
-      .filter((p) => p.sync && gl.getSyncParameter(p.sync, gl.SYNC_STATUS) === gl.SIGNALED)
+      .filter((p) => p.sync && this.frame - p.frame >= AGE && gl.getSyncParameter(p.sync, gl.SYNC_STATUS) === gl.SIGNALED)
       .sort((a, b) => a.t - b.t);
     return ready.map((p) => {
       const n = p.cols * p.rows;
@@ -150,6 +164,10 @@ export class FlashMeter {
     this.freeTargets();
     gl.deleteProgram(this.program);
     gl.deleteVertexArray(this.empty);
+  }
+
+  private slot(): Pending {
+    return { buffer: this.gl.createBuffer()!, sync: null, t: 0, frame: 0, cols: 0, rows: 0 };
   }
 
   private ensure(rows: number) {

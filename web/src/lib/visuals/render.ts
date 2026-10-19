@@ -1224,7 +1224,8 @@ export class FlameRenderer {
   /** The fluid, where the Fluid setting asks for one (`amount` over 0) and this device can make it; let go after ten
    *  seconds unasked, so a passing 0 does not make it again and again. */
   /** The screen just shown (`viewWidth` x `viewHeight`) read into tiles for the flash meter (meters.ts), as of `t`
-   *  seconds; read back a frame or two later with `tiles`. None where this device cannot (it is then never tried again). */
+   *  seconds; read back two or more frames later with `tiles`. None where this device cannot (it is then never tried
+   *  again). */
   measure(viewWidth: number, viewHeight: number, t: number) {
     if (this.meterOut) return;
     try {
@@ -1238,9 +1239,15 @@ export class FlameRenderer {
     }
   }
 
-  /** The screen's readings the GPU has finished, the oldest first. */
+  /** The screen's readings the GPU has finished, the oldest first. Once a frame, before `frame` or anything else draws
+   *  (flashmeter.ts). */
   tiles(): Tiles[] {
     return this.meter?.poll() ?? [];
+  }
+
+  /** The flash meter's readings let go unread, its ring full. */
+  get meterDropped(): number {
+    return this.meter?.dropped ?? 0;
   }
 
   /** The picture chain's program for these effects, or null where none would show (none set, all at nothing, or one

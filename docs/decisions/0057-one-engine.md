@@ -46,11 +46,12 @@ and the rack. The Cratarr look is a chain built from those modules, nothing spec
 
 ### 1. Typed ports
 
-Three kinds of signal, each with its own wire in the graph:
+Four kinds of signal, each with its own wire in the graph:
 
 | Type | Carries | Wire |
 |---|---|---|
 | `picture` | a texture each frame | solid |
+| `light` | the flame's accumulated light before Show displays it (its RGBA and its bands' shares); the flame's own loop works on it, and only Show turns it into a picture (claude-632) | solid, thick |
 | `value` | a number each frame (a signal on 1 = typical; a modulator's own range; a knob's) | dashed |
 | `trigger` | events (a beat, a band's hit, a gate opening), each with its strength | dotted |
 
@@ -90,7 +91,10 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 | **Fluid**, **Tunnel**, **Dive**, **Trails**, **Loop effect** | picture modules in the flame's own loop | as today |
 | **Effects** | picture modules, one per effect | today three fixed slots (Kaleidoscope, EYEDO, Hydra), each choosing one sub-effect by a step knob; see below |
 | **Moments** | trigger outputs of the module that has them | another symmetry, lens or form at a step's neutral (morph.ts) |
-| **Safety** | fixed picture module before the screen | the flash meter and the governor: always on, always last, never removable. Its levers show as it holds back, on the knobs it slows (their rings dim). Wild sets its limits. |
+| **Meter** | detector: picture in, busyness values out | the governor's meters |
+| **Compressor** | standard sidechain compressor on values | the governor's holding back, as normalled wiring |
+| **Taste** | source, one per user | the learned limits (the thumbs), as the Compressors' thresholds |
+| **Screen** (with its flash guard) | the output | the flash rule: fixed, always on, last |
 
 - **Effects, each its own module.** The owner asked: "And effects would also become modules, correct?" Yes.
   - Every effect is a module of its own: Kaleid, Repeat, Pixelate, Posterize, Rotate, Scroll, Magnify, Ripple,
@@ -100,6 +104,26 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
   - The Effects setting becomes a macro.
   - The Loop effect is the same effect modules in the flame's own loop.
   - Old patches convert: a slot with its sub-effect becomes that one module, at the slot's place.
+- **No governor: sidechaining, done the standard way** (the owner: "We shouldn't call it the governor. We should
+  remove the governor and implement sidechaining as it is supposed to be done … we shouldn't reinvent it"). The
+  governor goes. Its job is done by standard parts, wired as any sidechain is:
+  - **Meter: a detector.** Picture in, `value` outs: motion, shape churn, colour churn, zoom pumping, new looks a
+    minute (meters.ts's measures). It is like an envelope follower on audio. As many as wanted, on any picture.
+  - **Compressor: a sidechain compressor on values.** Inputs: `in` (the signal it compresses, e.g. a cable's
+    modulation) and `key` (the sidechain, e.g. a Meter's motion). Knobs: threshold, ratio, knee, attack, release,
+    makeup. Outputs: `out` (the compressed signal) and `reduction` (the gain reduction, to drive anything else, as a
+    ducker does). The gain computer and its ballistics follow the textbook design (Giannoulis, Massberg and Reiss,
+    "Digital Dynamic Range Compressor Design", JAES 2012); nothing of our own.
+  - **The default wiring is normalled:** a Meter on the screen's picture, and a Compressor per kind keyed by it,
+    through which the cables into knobs of that kind run (each knob declares its kind, `busy`). Today's behaviour is
+    that wiring with today's limits as the thresholds. Everything in it can be seen, re-keyed, re-patched or removed.
+  - **Taste: the learning.** A source per user; its outputs are the learned thresholds, one per kind, normalled into
+    the Compressors' thresholds. The thumbs teach it. **Its design is to be redone for use** (the owner: "even if we
+    keep it, we should probably redesign it to make it usable"); a talk with the owner decides how, before it is built.
+    What was learned before is kept.
+  - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
+    (WCAG). It is safety, not taste: never learned, never removable, last.
+  - The precheck and the dice read the same thresholds.
 - **Normalled cables.** The connections every chain has by default are shown faint and can be unplugged: Envelope into
   each cable's depth, Music's hits into the flame's steps, the Clock into the turning, Track's look into the flame's look.
   Plugging another cable into such a port breaks the normal, as in Eurorack.
@@ -114,17 +138,26 @@ The owner: "freely routable". The picture side is a free graph, as the value sid
   - One output may feed several inputs (fan-out).
   - A module may take several picture inputs.
   - Nothing has a fixed position.
-- **Blend becomes a module.** Mix takes two or more pictures, each with its mode (add, screen, over, multiply, window)
+- **Blend becomes a module.** Mix takes two or more pictures, each with its mode (add, screen, over, multiply, window,
+  lighten: the brighter, as today's picture loop keeps)
   and amount. "Layers" are no longer a structure, just sources mixed.
 - **Feedback becomes a module.** It gives the picture its own output had last frame (TouchDesigner's Feedback; VCV
   Rack's one-step cable). Today's picture loop is wired from parts: Feedback → Warp → Keep → Mix with the new picture.
   - The flame's own loop is wired the same way.
   - A loop can be made around any part, at any size.
   - Several loops can run at once.
-- **The screen is a module.** Safety sits before it; whatever reaches it is drawn. Several outputs can be mixed into it.
+- **The screen is a module,** with its flash guard; whatever reaches it is drawn. Several outputs can be mixed into it.
 - **Places are views, not structure.** The graph's lanes (sources, picture, modulators) and the rack's groups (layers,
   loop, finish) are worked out from the wiring, not stored.
 - **Cycles.** A picture cycle must pass through a Feedback module; the graph refuses any other.
+
+- **Full screen** (the owner: MilkDrop "has full screen graphics. Everything is still a shape drawn on blackness"). Three
+  things make MilkDrop fill the screen, and each gets a module:
+  - **Full-screen sources:** Plasma (noise), Gradient, Cells, the Cover.
+  - **A Warp field:** every point moving its own way (swirl, ripple, push toward a point), driven by values or by a
+    picture through Displace. Not one move for the whole picture.
+  - **Feedback that fills:** a high Keep with an outward zoom, so trails reach the edges and the screen never goes
+    back to black.
 
 ### 5. Pictures as inputs
 
@@ -133,6 +166,7 @@ A module may take a second `picture` input: Hydra's modulate, TouchDesigner's co
 - **Displace**: one picture moves another's coordinates (the flame stirring the shapes);
 - **Mask**: the window mode of 70.1, as a module;
 - **Tint**: the Flame colours of 70.1, as a module, from any picture.
+- **Glow**: 70.1's glow, as a module of its own (one meaning a module).
 
 The tint and glow knobs built into the sources for 70.1 move into these modules.
 
@@ -165,8 +199,8 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | Step | What | Owner |
 |---|---|---|
 | 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
-| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
-| 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Safety module; Displace, Mask and Tint; the Mali cost of each | claude-632 |
+| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; Taste once redesigned; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
+| 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
 | 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
 | 5 | **Nesting and macros:** chains as modules, the whole frame's macros | claude-a5 |
 | 6 | **Retire:** aspects.ts, the routes' matrix, chain-cables.ts, the old settings keys | whoever's step frees it |
@@ -174,6 +208,15 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 claude-a5 coordinates and owns this record. Interfaces are fixed in step 1 (patch.ts) before steps 2 and 3 build on
 them. Until step 1 lands, steps 2 and 3 work behind today's interfaces (the equivalence harness; the compositor's
 graph walk).
+
+### Conversion details (claude-632, step 3)
+
+- A v1 effects stage samples once with every shape effect applied in slot order, then colours at the final
+  coordinates. As one module per effect, the same picture needs the colour effects and Echo first, in slot order, then
+  the shape effects in reverse slot order. Echo together with a shape effect cannot match exactly: it converts within
+  a measured tolerance, shown to the owner.
+- A module whose morph is bringing it back (target above neutral) keeps running while it is at neutral, so the flame
+  coming back from blend 0 has its light already gathered, as today.
 
 ## Consequences
 
@@ -187,4 +230,5 @@ graph walk).
 
 - Whether a band's six outputs show as one row with six channels (VCV's polyphonic cables) or as six ports. The graph's
   "Level · 6 bands" bundle suggests channels.
-- Where the Safety module's levers show in the rack.
+- Where the Compressors' reduction shows in the rack.
+- Taste's redesign (the owner wants it usable).
