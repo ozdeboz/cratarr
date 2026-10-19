@@ -514,6 +514,8 @@ struct Entry {
     kind: PlayerKind,
     /// A page's own id (one per browser tab), while a page is this player: another page may not take its name.
     page: Option<String>,
+    /// The account it is a device of (decision 0051): only they play on it. None: from before accounts, the owner's.
+    owner: Option<String>,
 }
 
 /// What a player is: the app; a Kodi (driven by Cratarr, app::kodi); a page in a browser, a player while it is open
@@ -558,6 +560,7 @@ impl Entry {
             joined: 0,
             kind: PlayerKind::App,
             page: None,
+            owner: None,
         }
     }
 
@@ -644,6 +647,41 @@ impl Entry {
     }
 }
 
+/// Whose players the running request reaches (decision 0051): its account's own. `None`: every one, while signing in
+/// is off (one user, whose they all are) and for Cratarr's own work (a task of its own, a signed link).
+pub fn whose() -> Option<String> {
+    let served = crate::serve::instance()?;
+    if !served.sign_in_required() {
+        return None;
+    }
+    crate::serve::who::current().map(|w| w.user)
+}
+
+/// The first administrator: a player from before accounts is theirs.
+fn first_owner() -> Option<String> {
+    crate::serve::instance().and_then(|s| s.users.owner())
+}
+
+/// Whether `e` is `user`'s (`first`: the first administrator's name).
+fn belongs_to(e: &Entry, user: &str, first: Option<&str>) -> bool {
+    e.owner.as_deref().or(first) == Some(user)
+}
+
+/// The player `name` for whose it is to be: made theirs when new; another account's is refused (a name is one
+/// player's, and one plays on one's own devices only).
+fn claim<'a>(entries: &'a mut HashMap<String, Entry>, name: &str, whose: Option<&str>) -> Result<&'a mut Entry, ToggleError> {
+    if let (Some(user), Some(e)) = (whose, entries.get(name))
+        && !belongs_to(e, user, first_owner().as_deref())
+    {
+        return Err(ToggleError::Refused(format!("{name} is another user's player.")));
+    }
+    let e = entries.entry(name.to_string()).or_insert_with(Entry::new);
+    if e.owner.is_none() {
+        e.owner = whose.map(str::to_string);
+    }
+    Ok(e)
+}
+
 /// A player as seen: a player of a group that does not lead it shows what the group plays, with its own name, reach
 /// and volume (decision 0037).
 fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Option<PlayerView> {
@@ -707,6 +745,8 @@ struct Saved {
     position_ms: u64,
     #[serde(default)]
     playing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
 }
 
 impl PlayOn {
@@ -726,6 +766,7 @@ impl PlayOn {
                 e.report.position_ms = s.position_ms;
                 e.report.playing = s.playing;
                 e.queue = s.queue;
+                e.owner = s.owner;
                 (name, e)
             })
             .collect();
@@ -779,9 +820,13 @@ impl PlayOn {
         }
     }
 
-    /// A Kodi's driver joins as a player (`app::kodi`).
-    pub(super) fn connect_kodi(self: &Arc<Self>, name: &str) -> Result<Commands, ToggleError> {
-        self.connect_as(name, PlayerKind::Kodi, None, None)
+    /// A Kodi's driver joins as a player (`app::kodi`), a device of the administrator who added it.
+    pub(super) fn connect_kodi(self: &Arc<Self>, name: &str, owner: Option<&str>) -> Result<Commands, ToggleError> {
+        let commands = self.connect_as(name, PlayerKind::Kodi, None, None)?;
+        if let Some(e) = self.entries().get_mut(name) {
+            e.owner = owner.map(str::to_string);
+        }
+        Ok(commands)
     }
 
     /// A page in a browser joins as a player while it is open (decision 0033; 0031 amended).
@@ -822,7 +867,7 @@ impl PlayOn {
     /// compared at one moment of Cratarr's time.
     pub async fn measure(&self) -> super::together::Measure {
         let id = self.samples.open();
-        let online: Vec<String> = self.entries().iter().filter(|(_, e)| e.online()).map(|(n, _)| n.clone()).collect();
+        let online: Vec<String> = self.list().into_iter().filter(|v| v.online).map(|v| v.name).collect();
         let asked: Vec<String> = online.into_iter().filter(|n| self.send(n, &Command::Sample { id }).is_ok()).collect();
         self.samples.wait(id, &asked).await
     }
@@ -830,6 +875,7 @@ impl PlayOn {
     /// A player's answer to a measurement.
     pub fn sample(&self, name: &str, s: super::together::Sample) -> Result<(), ToggleError> {
         valid_name(name)?;
+        self.reached(name)?;
         self.samples.answer(name, s);
         Ok(())
     }
@@ -842,8 +888,9 @@ impl PlayOn {
     /// The player Cratarr itself follows (its own source, 0032): of those online with something loaded, the one
     /// playing, else the one heard from last; else any online one. With its queue. `None` when none is online.
     pub fn followed(&self) -> Option<PlayerView> {
+        let (whose, first) = (whose(), first_owner());
         let entries = self.entries();
-        let online = entries.iter().filter(|(_, e)| e.online());
+        let online = entries.iter().filter(|(_, e)| e.online() && whose.as_deref().is_none_or(|u| belongs_to(e, u, first.as_deref())));
         let best = online
             .clone()
             .filter(|(_, e)| e.index() >= 0)
@@ -951,7 +998,8 @@ impl PlayOn {
                     .iter()
                     .map(|(n, e)| {
                         let v = e.view(n, false);
-                        (n.clone(), Saved { queue: e.queue.clone(), entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing })
+                        let (queue, owner) = (e.queue.clone(), e.owner.clone());
+                        (n.clone(), Saved { queue, entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing, owner })
                     })
                     .collect();
                 drop(me);
@@ -980,10 +1028,20 @@ impl PlayOn {
         self.changed.subscribe()
     }
 
-    /// Every player Cratarr has heard of since it started, by name.
+    /// Every player of the running request's account (`whose`) Cratarr has heard of since it started, by name.
     pub fn list(&self) -> Vec<PlayerView> {
+        self.list_for(whose().as_deref())
+    }
+
+    /// `user`'s players (`None`: every one).
+    pub fn list_for(&self, user: Option<&str>) -> Vec<PlayerView> {
+        let first = first_owner();
         let entries = self.entries();
-        let mut out: Vec<PlayerView> = entries.keys().filter_map(|n| view_in(&entries, n, false)).collect();
+        let mut out: Vec<PlayerView> = entries
+            .iter()
+            .filter(|(_, e)| user.is_none_or(|u| belongs_to(e, u, first.as_deref())))
+            .filter_map(|(n, _)| view_in(&entries, n, false))
+            .collect();
         drop(entries);
         let delays = self.settings().delays;
         for v in &mut out {
@@ -993,8 +1051,43 @@ impl PlayOn {
         out
     }
 
+    /// Whether the running request reaches player `name` (`whose`): else it is as if there were none.
+    pub fn reached(&self, name: &str) -> Result<(), ToggleError> {
+        let Some(user) = whose() else { return Ok(()) };
+        let first = first_owner();
+        match self.entries().get(name) {
+            Some(e) if !belongs_to(e, &user, first.as_deref()) => Err(ToggleError::Refused(format!("No player is called {name}."))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Forgets `user`'s player `name` (decision 0051: one's devices, removed): not while it is connected, nor a Kodi
+    /// (the Players settings' to remove). `false`: no such player of theirs.
+    pub fn forget(&self, name: &str, user: &str) -> Result<bool, ToggleError> {
+        let first = first_owner();
+        let mut entries = self.entries();
+        match entries.get(name) {
+            Some(e) if belongs_to(e, user, first.as_deref()) => {
+                if e.online() {
+                    return Err(ToggleError::Refused(format!("{name} is connected: close Cratarr there first.")));
+                }
+                if e.kind == PlayerKind::Kodi {
+                    return Err(ToggleError::Refused(format!("{name} is a Kodi: remove it in Players.")));
+                }
+            }
+            _ => return Ok(false),
+        }
+        entries.remove(name);
+        drop(entries);
+        self.settings.lock().unwrap_or_else(|p| p.into_inner()).delays.remove(name);
+        tracing::info!(target: "playon", player = name, user, "forgotten");
+        self.changed();
+        Ok(true)
+    }
+
     /// One player, with its queue.
     pub fn get(&self, name: &str) -> Option<PlayerView> {
+        self.reached(name).ok()?;
         let v = view_in(&self.entries(), name, true);
         v.map(|v| PlayerView { delay_ms: self.delay_of(name), ..v })
     }
@@ -1013,7 +1106,7 @@ impl PlayOn {
         let id = self.connections.fetch_add(1, Ordering::Relaxed);
         let replaced = {
             let mut entries = self.entries();
-            let e = entries.entry(name.to_string()).or_insert_with(Entry::new);
+            let e = claim(&mut entries, name, whose().as_deref())?;
             let replaced = e.connection.is_some().then(|| e.conn.clone());
             if replaced.is_some() {
                 e.ended = Some(("replaced", SystemTime::now()));
@@ -1080,7 +1173,7 @@ impl PlayOn {
     pub fn report(self: &Arc<Self>, name: &str, report: Report) -> Result<(), ToggleError> {
         valid_name(name)?;
         let mut entries = self.entries();
-        let e = entries.entry(name.to_string()).or_insert_with(Entry::new);
+        let e = claim(&mut entries, name, whose().as_deref())?;
         let before = e.view(name, false);
         e.seen = SystemTime::now();
         e.heard = Instant::now();
@@ -1200,6 +1293,11 @@ impl PlayOn {
 
     /// Asks player `name` to do something.
     pub async fn command(&self, name: &str, command: Command) -> Result<(), ToggleError> {
+        // One's own players only, and only with one's own (decision 0051).
+        self.reached(name)?;
+        if let Command::Join { to } | Command::Handover { to } = &command {
+            self.reached(to)?;
+        }
         // A command to any player of a group is the group's, played by its leader; its volume stays its own.
         let own = matches!(command, Command::Volume { .. } | Command::Duck | Command::Unduck | Command::Sample { .. } | Command::Join { .. } | Command::Leave);
         let leader = if own { None } else { self.leader_of(name) };
@@ -1216,7 +1314,7 @@ impl PlayOn {
             Command::Play { from, tracks, mut index, mut position_ms, shuffle, paused } => {
                 let picked = match &from.playlist {
                     Some(p) => Some(self.playlist_tracks(p).await?),
-                    None => own_tracks(&from).await?,
+                    None => own_tracks(&from, self.owner_of(name)).await?,
                 };
                 let Some(mut tracks) = picked.or(tracks) else {
                     return Err(ToggleError::Refused("Play what? Give a playlist, an album, the favourites, the library or tracks.".into()));
@@ -1615,12 +1713,11 @@ impl PlayOn {
             if kodi.iter().any(|o| o.name == name) {
                 return Err(ToggleError::BadSettings(format!("two Kodis are called {name}")));
             }
-            let password = if k.password.is_empty() {
-                before.kodi.iter().find(|o| o.name == name).map(|o| o.password.clone()).unwrap_or_default()
-            } else {
-                k.password
-            };
-            kodi.push(super::kodi::KodiConfig { name, url, user: k.user.trim().to_string(), password, stream_from });
+            let was = before.kodi.iter().find(|o| o.name == name);
+            let password = if k.password.is_empty() { was.map(|o| o.password.clone()).unwrap_or_default() } else { k.password };
+            // Whose device it is: as it was, else the administrator's who adds it.
+            let owner = was.and_then(|o| o.owner.clone()).or_else(whose);
+            kodi.push(super::kodi::KodiConfig { name, url, user: k.user.trim().to_string(), password, stream_from, owner });
         }
         let saved = PlayOnSettings { webhooks, delays: before.delays, kodi };
         let body = serde_json::to_string_pretty(&saved).map_err(anyhow::Error::from)?;
@@ -1629,6 +1726,11 @@ impl PlayOn {
         self.start_kodis();
         self.changed();
         Ok(self.settings_view())
+    }
+
+    /// The account a player is a device of (the first administrator for one from before accounts).
+    pub fn owner_of(&self, name: &str) -> Option<String> {
+        self.entries().get(name).and_then(|e| e.owner.clone()).or_else(first_owner)
     }
 
     /// A player's speaker delay (ms).
@@ -1640,6 +1742,7 @@ impl PlayOn {
     /// there is one.
     pub async fn set_delay(&self, name: &str, ms: u16) -> Result<u16, ToggleError> {
         valid_name(name)?;
+        self.reached(name)?;
         // A Kodi's delay is its own buffering too: up to the group's whole buffer.
         let kodi = self.entries().get(name).is_some_and(|e| e.kind == PlayerKind::Kodi);
         let ms = ms.min(if kodi { crate::snapcast::BUFFER_MS as u16 } else { MAX_DELAY_MS });
@@ -1677,7 +1780,10 @@ impl PlayOn {
                 tokio::time::sleep(SETTLE).await;
                 while rx.try_recv().is_ok() {}
                 let Some(me) = me.upgrade() else { return };
-                let (hooks, players) = (me.settings().webhooks, me.list());
+                // Home Assistant's: its key acts for the first administrator, whose players these are (decision 0051);
+                // every one while signing in is off.
+                let reach = crate::serve::instance().filter(|s| s.sign_in_required()).and_then(|s| s.users.owner());
+                let (hooks, players) = (me.settings().webhooks, me.list_for(reach.as_deref()));
                 let seq = me.seq.fetch_add(1, Ordering::Relaxed) + 1;
                 drop(me);
                 if hooks.is_empty() {
@@ -1781,22 +1887,20 @@ fn valid_name(name: &str) -> Result<(), ToggleError> {
     Ok(())
 }
 
-/// Tracks of Cratarr's own library (decision 0032) for `play`: an album in its order, the owner's favourites, or
-/// tracks from the whole library at random. `None` when none of those is asked for.
-async fn own_tracks(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
+/// Tracks of Cratarr's own library (decision 0032) for `play`: an album in its order, the favourites of the player's
+/// `owner`, or tracks from the whole library at random. `None` when none of those is asked for.
+async fn own_tracks(from: &PlayFrom, owner: Option<String>) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
     if from.album.is_none() && !from.favourites && !from.library {
         return Ok(None);
     }
     let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
     let from = from.clone();
-    // Read here: the blocking task does not carry the request's account.
-    let me = served.user_or_owner();
     let songs = tokio::task::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
         if let Some(album) = &from.album {
             return Ok(served.library.album(album)?.and_then(|a| a.song).unwrap_or_default());
         }
         if from.favourites {
-            let owner = me.context("there is no Subsonic account yet: make one in Settings")?;
+            let owner = owner.context("there is no account yet: make one in Settings")?;
             let ids = served.userdata.starred(&owner, crate::userdata::Kind::Song)?;
             return served.library.songs_by_id(&ids);
         }
@@ -1954,6 +2058,35 @@ mod tests {
 
     fn group_of(c: &mut Commands) -> Vec<Option<String>> {
         told(c).iter().filter(|m| m["command"] == "group").map(|m| m["leader"].as_str().map(str::to_string)).collect()
+    }
+
+    #[tokio::test]
+    async fn a_player_is_its_accounts_and_one_from_before_the_first_administrators() {
+        // A name is one account's player (decision 0051).
+        let mut entries = HashMap::new();
+        claim(&mut entries, "Phone", Some("ann")).unwrap();
+        assert_eq!(entries["Phone"].owner.as_deref(), Some("ann"));
+        assert!(claim(&mut entries, "Phone", Some("bob")).is_err(), "a name is one player's");
+        claim(&mut entries, "Phone", None).unwrap();
+        assert_eq!(entries["Phone"].owner.as_deref(), Some("ann"), "Cratarr's own work makes no one its owner");
+        let old = Entry::new();
+        assert!(belongs_to(&old, "me", Some("me")) && !belongs_to(&old, "bob", Some("me")), "from before accounts: the first administrator's");
+
+        let p = play_on().await;
+        let _phone = p.connect("Phone").unwrap();
+        let tablet = p.connect("Tablet").unwrap();
+        p.entries().get_mut("Phone").unwrap().owner = Some("ann".into());
+        p.entries().get_mut("Tablet").unwrap().owner = Some("bob".into());
+        let names = |user: Option<&str>| p.list_for(user).into_iter().map(|v| v.name).collect::<Vec<_>>();
+        assert_eq!(names(Some("ann")), ["Phone"]);
+        assert_eq!(names(Some("bob")), ["Tablet"]);
+        assert_eq!(names(None), ["Phone", "Tablet"]);
+        // One's own devices, removed: not while connected, nor another's.
+        assert!(p.forget("Tablet", "bob").is_err(), "connected");
+        drop(tablet);
+        assert!(!p.forget("Tablet", "ann").unwrap(), "not hers");
+        assert!(p.forget("Tablet", "bob").unwrap());
+        assert_eq!(names(None), ["Phone"]);
     }
 
     #[tokio::test]

@@ -35,6 +35,17 @@ pub fn current() -> Option<Who> {
     CURRENT.try_with(|w| w.clone()).ok()
 }
 
+/// `f` as the running request's account, for a task of its own that works for the request (a live channel's).
+pub fn carried<F: Future>(f: F) -> impl Future<Output = F::Output> {
+    let who = current();
+    async move {
+        match who {
+            Some(w) => acting_as(w, f).await,
+            None => f.await,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,12 +54,14 @@ mod tests {
     async fn a_request_is_for_its_account_and_a_task_of_its_own_for_no_one() {
         let ann = Who { user: "ann".into(), admin: false, scope: Scope::Full };
         assert_eq!(current(), None);
-        let (inside, spawned) = acting_as(ann.clone(), async {
+        let (inside, spawned, carried) = acting_as(ann.clone(), async {
             let spawned = tokio::spawn(async { current() }).await.unwrap();
-            (current(), spawned)
+            let carried = tokio::spawn(super::carried(async { current() })).await.unwrap();
+            (current(), spawned, carried)
         })
         .await;
-        assert_eq!(inside, Some(ann));
+        assert_eq!(inside, Some(ann.clone()));
         assert_eq!(spawned, None, "a spawned task carries no one: read it first and pass it on");
+        assert_eq!(carried, Some(ann), "unless it is carried");
     }
 }

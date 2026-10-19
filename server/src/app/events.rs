@@ -81,7 +81,7 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut collected = app.collection.subscribe();
     let mut players = app.play_on.subscribe();
     let app = app.clone();
-    tokio::spawn(async move {
+    tokio::spawn(crate::serve::who::carried(async move {
         let mut sent = String::new();
         let send_state = async |sent: &mut String| -> bool {
             match app.playing.state(follow.as_deref()).await {
@@ -151,7 +151,7 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 return;
             }
         }
-    });
+    }));
     rx
 }
 

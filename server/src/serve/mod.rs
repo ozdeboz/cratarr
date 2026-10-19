@@ -181,13 +181,6 @@ impl Serve {
         }
     }
 
-    /// The account work acts for that is not yet tied to one of its own (decision 0051's first stage): the running
-    /// request's, else the owner, as all of it did before several users. Each use is to name its account in the second
-    /// stage (a player's work, its owner's).
-    pub fn user_or_owner(&self) -> Option<String> {
-        self.current_user().or_else(|| self.users.owner())
-    }
-
     /// Whether the running request is an administrator's (as `current_user`: the owner while signing in is off).
     pub fn current_is_admin(&self) -> bool {
         match who::current() {

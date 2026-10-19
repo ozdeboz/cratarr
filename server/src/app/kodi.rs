@@ -43,6 +43,9 @@ pub struct KodiConfig {
     /// Cratarr's address as Kodi reaches it, e.g. `http://192.168.1.5:8081`: the tracks' addresses start with it.
     #[serde(default)]
     pub stream_from: String,
+    /// The administrator who added it, whose device it is (decision 0051); none: from before, the first one's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 /// Kodi's music player and playlist.
@@ -602,7 +605,7 @@ pub async fn drive(play_on: Weak<PlayOn>, cfg: KodiConfig) {
         }
         warned = false;
         let Some(me) = play_on.upgrade() else { return };
-        let Ok(mut commands) = me.connect_kodi(&cfg.name) else { return };
+        let Ok(mut commands) = me.connect_kodi(&cfg.name, cfg.owner.as_deref()) else { return };
         // The queue Cratarr holds for it: what Kodi's playlist was filled with before Cratarr started again.
         let queue = me.get(&cfg.name).and_then(|v| v.queue).unwrap_or_default();
         drop(me);
@@ -865,7 +868,7 @@ mod tests {
     #[ignore]
     async fn real_kodi() {
         let env = |k: &str| std::env::var(k).unwrap_or_default();
-        let cfg = KodiConfig { name: "Test".into(), url: env("KODI_URL"), user: env("KODI_USER"), password: env("KODI_PASS"), stream_from: env("STREAM_FROM") };
+        let cfg = KodiConfig { name: "Test".into(), url: env("KODI_URL"), user: env("KODI_USER"), password: env("KODI_PASS"), stream_from: env("STREAM_FROM"), owner: None };
         let mut d = Driver::new(&cfg, Vec::new());
         let was = d.rpc.call("Application.GetProperties", json!({ "properties": ["muted", "volume"] })).await.unwrap();
         println!("kodi before: {was}");

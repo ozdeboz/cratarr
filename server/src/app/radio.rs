@@ -6,7 +6,8 @@
 //!
 //! Cratarr's own library only. The index below reads the library and the user data from their own SQLite files, read
 //! only, and the playlists from the playlist service; it is built again when the library is, and at least every ten
-//! minutes (playlists, album tags and favourites change in between).
+//! minutes (playlists and album tags change in between). The listener's favourites and plays are read for each choice:
+//! the account whose player asks (decision 0051).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -171,7 +172,7 @@ pub struct NextRequest {
     /// Radio's inserts: what they are like; left out, the track.
     #[serde(default)]
     pub by: RadioBy,
-    /// Leave the owner's favourites out: only music not hearted yet (the More music sheet's switch).
+    /// Leave the listener's favourites out: only music not hearted yet (the More music sheet's switch).
     #[serde(default)]
     pub skip_favourites: bool,
 }
@@ -208,11 +209,12 @@ pub(crate) struct Song {
     pub playlists: Vec<u32>,
     /// Its album's tags.
     pub tags: Vec<u32>,
+    /// Hearted by the listener (`ready`).
     pub favourite: bool,
 }
 
 /// The library, ready to choose from.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Index {
     pub songs: Vec<Song>,
     by_id: HashMap<String, usize>,
@@ -638,8 +640,8 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
                 }
             }
         }
-        let owner = served2.users.owner();
-        read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), owner.as_deref(), &member)
+        // Everyone's: the listener's favourites are marked for each choice.
+        read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), None, &member)
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))??;
@@ -658,6 +660,13 @@ fn read_only(file: &Path) -> Result<Connection> {
 fn built_from(library: &Path) -> Result<String> {
     let conn = read_only(library)?;
     Ok(conn.query_row("SELECT value FROM meta WHERE key = 'built_from'", [], |r| r.get(0)).unwrap_or_default())
+}
+
+/// The songs `user` hearted.
+fn starred_songs(userdata: &Path, user: &str) -> Result<HashSet<String>> {
+    let conn = read_only(userdata)?;
+    let mut st = conn.prepare("SELECT item FROM annotation WHERE user = ?1 AND kind = 'song' AND starred = 1")?;
+    Ok(st.query_map(params![user], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
 }
 
 /// Songs played within seven days, with when (epoch seconds).
@@ -707,11 +716,8 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
             tags_of.entry(album).or_default().push(tag);
         }
     }
-    let starred: HashSet<String> = match owner {
-        Some(o) => {
-            let mut st = ud.prepare("SELECT item FROM annotation WHERE user = ?1 AND kind = 'song' AND starred = 1")?;
-            st.query_map(params![o], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?
-        }
+    let starred = match owner {
+        Some(o) => starred_songs(userdata, o)?,
         None => HashSet::new(),
     };
     let mut artists_of: HashMap<String, Vec<String>> = HashMap::new();
@@ -804,19 +810,27 @@ pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, 
     Ok(ranked.into_iter().take(count).map(|(a, _)| index.artist_ids[a as usize].clone()).collect())
 }
 
-/// The index and the recent plays, for a choice made here.
+/// The index with the listener's favourites marked, and their recent plays, for a choice made here: the running
+/// request's account's, whose player asks (decision 0051).
 async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let dir = served.data_dir.clone().ok_or_else(|| ToggleError::Refused("Radio needs Cratarr's data folder.".into()))?;
     let index = index(&served, &dir).await?;
-    let owner = served.users.owner();
-    let recent = tokio::task::spawn_blocking(move || match owner {
-        Some(o) => recent_plays(&dir.join("userdata.sqlite"), &o),
-        None => Ok(HashMap::new()),
+    let Some(user) = served.current_user() else { return Ok((index, HashMap::new())) };
+    let (recent, starred) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let userdata = dir.join("userdata.sqlite");
+        Ok((recent_plays(&userdata, &user)?, starred_songs(&userdata, &user)?))
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))??;
-    Ok((index, recent))
+    if starred.is_empty() {
+        return Ok((index, recent));
+    }
+    let mut theirs = Index::clone(&index);
+    for s in &mut theirs.songs {
+        s.favourite = starred.contains(&s.id);
+    }
+    Ok((Arc::new(theirs), recent))
 }
 
 #[cfg(test)]

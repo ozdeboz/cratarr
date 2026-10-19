@@ -1,5 +1,6 @@
 //! One's own account and, for the administrators, everyone's (decision 0051, several users): `/api/me` (who one is, what
 //! one may do, whether one's OpenSubsonic password is set, one's devices and sign-ins) and `/api/users` (the Users panel).
+//! A device is a Play On player of the account's (`{ id, name, kind, online, last_seen }`, its id its name).
 //! With signing in off (one user) there is no one to be: `/api/me` answers 404, and the page takes it for the owner.
 
 use std::sync::Arc;
@@ -20,11 +21,13 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/me", get(me))
         .route("/api/me/subsonic-password", put(set_app_password))
         .route("/api/me/sessions/{id}", delete(end_own_session))
+        .route("/api/me/devices/{id}", delete(forget_own_device))
         .merge(
             Router::new()
                 .route("/api/users", get(users))
                 .route("/api/users/{name}/permissions", put(set_permissions))
                 .route("/api/users/{name}/sessions/{id}", delete(end_session))
+                .route("/api/users/{name}/devices/{id}", delete(forget_device))
                 .layer(axum::middleware::from_fn(super::access::admin)),
         )
         .with_state(serve)
@@ -46,11 +49,20 @@ fn sessions_of(serve: &Serve, user: &str, current: Option<&str>) -> Vec<serde_js
         .collect()
 }
 
-/// An account as the Users panel shows it. Its devices come with Play On's owners (decision 0051's second stage).
+/// An account's devices: its Play On players.
+fn devices_of(user: &str) -> Vec<serde_json::Value> {
+    let Some(on) = crate::app::PlayOn::instance() else { return Vec::new() };
+    on.list_for(Some(user))
+        .into_iter()
+        .map(|p| json!({ "id": p.name, "name": p.name, "kind": p.kind, "online": p.online, "last_seen": p.seen }))
+        .collect()
+}
+
+/// An account as the Users panel shows it.
 fn view(serve: &Serve, u: &User, current: Option<&str>) -> serde_json::Value {
     json!({
         "name": u.name, "admin": u.admin, "active": u.active, "directory": u.directory, "permissions": u.permissions,
-        "app_password": !u.password.is_empty(), "devices": [], "sessions": sessions_of(serve, &u.name, current),
+        "app_password": !u.password.is_empty(), "devices": devices_of(&u.name), "sessions": sessions_of(serve, &u.name, current),
     })
 }
 
@@ -92,6 +104,25 @@ fn end(serve: &Serve, user: &str, id: &str) -> Response {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => refused(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),
     }
+}
+
+async fn forget_own_device(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Response {
+    let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
+    forget(&me, &id)
+}
+
+/// Forgets `user`'s device `id` (its queue with it); not found when it is someone else's.
+fn forget(user: &str, id: &str) -> Response {
+    let Some(on) = crate::app::PlayOn::instance() else { return refused(StatusCode::NOT_FOUND, "No such device.") };
+    match on.forget(id, user) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => refused(StatusCode::NOT_FOUND, "No such device."),
+        Err(e) => refused(StatusCode::CONFLICT, &e.to_string()),
+    }
+}
+
+async fn forget_device(Path((name, id)): Path<(String, String)>) -> Response {
+    forget(&name, &id)
 }
 
 async fn users(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {

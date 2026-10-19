@@ -170,7 +170,9 @@ async fn rest(
             return json_response(api::error(refused.code(), refused.message()));
         }
     };
-    match handle(&serve, &user, &method, &params, &headers).await {
+    // As its account (decision 0051): its own players, favourites and plays. An app controls; it administers nothing.
+    let who = super::who::Who { user: user.name.clone(), admin: user.admin, scope: super::who::Scope::Control };
+    match super::who::acting_as(who, handle(&serve, &user, &method, &params, &headers)).await {
         Ok(Answer::Json(body)) => json_response(api::ok(body)),
         Ok(Answer::Raw(r)) => r,
         Err(Failed(501, m)) => (StatusCode::NOT_IMPLEMENTED, axum::Json(api::error(0, &m))).into_response(),

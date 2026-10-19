@@ -202,7 +202,7 @@ async fn diagnostics_download(State(app): State<Arc<App>>) -> Result<Response, A
         "cratarr": env!("CARGO_PKG_VERSION"),
         "made": made,
         "levels": crate::diagnostics::levels(),
-        "players": app.play_on.list(),
+        "players": app.play_on.list_for(None),
         "play_on": play_on,
         "settings": settings,
         "log": log,
@@ -266,7 +266,8 @@ struct LogOf {
 }
 
 /// The last line Cratarr holds of a player's own log (decision 0045 item 2): the player sends the lines after it.
-async fn player_log_last(Path(name): Path<String>, Query(q): Query<LogOf>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn player_log_last(State(app): State<Arc<App>>, Path(name): Path<String>, Query(q): Query<LogOf>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_player(&app, &name)?;
     let last = with_log(move |d| d.last_line(&name, &q.log)).await?;
     Ok(Json(json!({ "last": last })))
 }
@@ -278,9 +279,15 @@ struct LogLines {
 }
 
 /// Lines of a player's own log, their times on Cratarr's clock: added after the last one held, which is the answer.
-async fn player_log_add(Path(name): Path<String>, Json(b): Json<LogLines>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn player_log_add(State(app): State<Arc<App>>, Path(name): Path<String>, Json(b): Json<LogLines>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_player(&app, &name)?;
     let last = with_log(move |d| d.add_lines(&name, &b.log, &b.lines)).await?;
     Ok(Json(json!({ "last": last })))
+}
+
+/// A player of the request's own, or one not known yet (decision 0051): another's is as if there were none.
+fn own_player(app: &App, name: &str) -> Result<(), ApiError> {
+    Ok(app.play_on.reached(name)?)
 }
 
 /// An id from outside is taken only as a short plain token: it goes into logs and headers.
@@ -337,7 +344,7 @@ async fn players_events(
     // settings; behind, every group's as it is now.
     let mut visuals = app.visuals.subscribe();
     let (out, rx) = tokio::sync::mpsc::channel::<(&'static str, String)>(8);
-    tokio::spawn(async move {
+    tokio::spawn(crate::serve::who::carried(async move {
         let mut sent = String::new();
         loop {
             let now = json!({ "players": app.play_on.list() }).to_string();
@@ -356,7 +363,7 @@ async fn players_events(
                         Err(RecvError::Lagged(_)) => app.visuals.all(),
                         Err(RecvError::Closed) => return,
                     };
-                    for c in all {
+                    for c in all.into_iter().filter(|c| own_group(&app, &c.group)) {
                         if out.send(("visuals", json!(c).to_string())).await.is_err() {
                             return;
                         }
@@ -365,7 +372,7 @@ async fn players_events(
                 () = out.closed() => return,
             }
         }
-    });
+    }));
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx).map(|(kind, d)| Ok(axum::response::sse::Event::default().event(kind).data(d)));
     axum::response::sse::Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15)))
 }
@@ -378,6 +385,9 @@ fn refused(status: StatusCode, error: impl Into<String>) -> Response {
 /// leader, or a player's on its own, by its name (its own page and any page driving it, as the owner's phone drives
 /// the salon tablet). 404 until one of them has started them.
 async fn group_visuals(State(app): State<Arc<App>>, Path(group): Path<String>) -> Response {
+    if !own_group(&app, &group) {
+        return refused(StatusCode::NOT_FOUND, "That group has no visuals yet.");
+    }
     match app.visuals.get(&group) {
         Some(g) => Json(g).into_response(),
         None => refused(StatusCode::NOT_FOUND, "That group has no visuals yet."),
@@ -395,7 +405,7 @@ struct GroupVisualsBody {
 
 async fn put_group_visuals(State(app): State<Arc<App>>, Path(group): Path<String>, Json(b): Json<GroupVisualsBody>) -> Response {
     use crate::app::visuals::Refused;
-    if !app.play_on.list().iter().any(|p| p.name == group || p.group.as_deref() == Some(group.as_str())) {
+    if !own_group(&app, &group) {
         return refused(StatusCode::NOT_FOUND, format!("No player or group is called {group}."));
     }
     match app.visuals.put(&group, b.base, b.settings, &b.writer) {
@@ -403,6 +413,11 @@ async fn put_group_visuals(State(app): State<Arc<App>>, Path(group): Path<String
         Err(Refused::Exists) => refused(StatusCode::CONFLICT, "That group has its visuals already."),
         Err(Refused::TooLarge) => refused(StatusCode::PAYLOAD_TOO_LARGE, "Those settings are too large to share."),
     }
+}
+
+/// Whether `group` is one of the request's own players, or a group one of them plays in (decision 0051).
+fn own_group(app: &App, group: &str) -> bool {
+    app.play_on.list().iter().any(|p| p.name == group || p.group.as_deref() == Some(group))
 }
 
 /// Whose snapshots Cratarr's own calls keep: the first administrator's (as its other calls act on).

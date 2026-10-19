@@ -497,6 +497,11 @@ pub struct PlaylistService {
     stats: StatsKept,
 }
 
+/// The account the running request is for, whose favourites the crates show.
+fn asking_user() -> Option<String> {
+    crate::serve::instance().and_then(|s| s.current_user())
+}
+
 /// How long the favourites heard are answered before they are asked for again (in the background).
 const FAVOURITES_KEEP: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -510,10 +515,12 @@ struct FavouritesKept {
     file: Option<std::path::PathBuf>,
 }
 
-/// `favourites.json`: the last answer, by server.
+/// `favourites.json`: the last answer, by server and whose favourites they are.
 #[derive(Serialize, serde::Deserialize)]
 struct KeptFile {
     source: String,
+    #[serde(default)]
+    user: Option<String>,
     lines: Vec<String>,
 }
 
@@ -521,6 +528,8 @@ struct KeptFile {
 struct Kept {
     at: std::time::Instant,
     source: String,
+    /// Whose favourites (decision 0051): the account that asked.
+    user: Option<String>,
     /// The last of Cratarr's own changes (`crates::favourite_changed`) the answer holds.
     upto: u64,
     /// `None`: the server did not answer.
@@ -532,15 +541,15 @@ impl FavouritesKept {
     fn load(file: Option<std::path::PathBuf>) -> Self {
         let last = file.as_ref().and_then(|f| std::fs::read(f).ok()).and_then(|b| serde_json::from_slice::<KeptFile>(&b).ok()).map(|k| {
             let now = std::time::Instant::now();
-            Kept { at: now.checked_sub(FAVOURITES_KEEP).unwrap_or(now), source: k.source, upto: 0, lines: Some(Arc::new(k.lines.into_iter().collect())) }
+            Kept { at: now.checked_sub(FAVOURITES_KEEP).unwrap_or(now), source: k.source, user: k.user, upto: 0, lines: Some(Arc::new(k.lines.into_iter().collect())) }
         });
         Self { last: std::sync::Mutex::new(last), asking: Arc::default(), file }
     }
 
     /// Keep an answer for the next run. A failure costs only the wait after the next start.
-    async fn save(&self, source: &str, lines: &Arc<HashSet<String>>) {
+    async fn save(&self, source: &str, user: Option<String>, lines: &Arc<HashSet<String>>) {
         let Some(file) = self.file.clone() else { return };
-        let body = KeptFile { source: source.to_string(), lines: lines.iter().cloned().collect() };
+        let body = KeptFile { source: source.to_string(), user, lines: lines.iter().cloned().collect() };
         let written = tokio::task::spawn_blocking(move || -> Result<()> {
             let tmp = file.with_extension("json.tmp");
             std::fs::write(&tmp, serde_json::to_vec(&body)?)?;
@@ -553,13 +562,14 @@ impl FavouritesKept {
     }
 
     fn kept(&self, source: &str) -> Option<Kept> {
-        self.last.lock().unwrap_or_else(|e| e.into_inner()).clone().filter(|k| k.source == source)
+        let user = asking_user();
+        self.last.lock().unwrap_or_else(|e| e.into_inner()).clone().filter(|k| k.source == source && k.user == user)
     }
 
     /// Ask the server (the caller holds `asking`). When it does not answer, what was heard before is kept, for another
     /// minute before asking again.
     async fn ask(&self, c: Arc<crate::catalogue::Catalogue>, source: &str, from: &Arc<dyn source::Source>) -> Kept {
-        let upto = crates::favourite_changes_made();
+        let (upto, user) = (crates::favourite_changes_made(), asking_user());
         let lines = match from.favorite_tracks().await {
             Ok(ids) => {
                 let s = source.to_string();
@@ -581,17 +591,17 @@ impl FavouritesKept {
             }
         };
         if let Some(l) = &lines {
-            self.save(source, l).await;
+            self.save(source, user.clone(), l).await;
         }
         let now = std::time::Instant::now();
         let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
-        let kept = match (lines, last.clone().filter(|k| k.source == source && k.lines.is_some())) {
+        let kept = match (lines, last.clone().filter(|k| k.source == source && k.user == user && k.lines.is_some())) {
             (Some(lines), _) => {
                 crates::favourite_changes_held(source, upto);
-                Kept { at: now, source: source.to_string(), upto, lines: Some(lines) }
+                Kept { at: now, source: source.to_string(), user, upto, lines: Some(lines) }
             }
             (None, Some(before)) => Kept { at: now, ..before },
-            (None, None) => Kept { at: now, source: source.to_string(), upto, lines: None },
+            (None, None) => Kept { at: now, source: source.to_string(), user, upto, lines: None },
         };
         *last = Some(kept.clone());
         kept
@@ -637,7 +647,7 @@ impl PlaylistService {
         let stamps: String = lists.iter().map(|(id, changed, lines)| format!("{id}:{changed}:{};", lines.len())).collect();
         let s = serve.clone();
         // Read here: the blocking task does not carry the request's account.
-        let me = serve.user_or_owner();
+        let me = serve.current_user();
         let key_and_owner = tokio::task::spawn_blocking(move || {
             let plays = me.as_ref().and_then(|me| s.userdata.plays_print(me).ok());
             (format!("{stamps}|{}|{plays:?}", s.built_at()), me)
@@ -927,7 +937,7 @@ impl PlaylistService {
         // The user's plays of each track and when each entry came, as the user data keeps them (the panel's orders).
         if let Some(serve) = crate::serve::instance() {
             let (id, rs) = (id.to_string(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
-            let me = serve.user_or_owner();
+            let me = serve.current_user();
             let facts = tokio::task::spawn_blocking(move || {
                 let plays = match me {
                     Some(me) => serve.userdata.play_stats(&me, &rs).unwrap_or_default(),
@@ -1038,10 +1048,10 @@ impl PlaylistService {
         let count = |conditions: Vec<crates::Condition>| {
             (!crates::needs_favourites(&conditions) || lib.favourites.is_some()).then(|| lib.select(&conditions).len())
         };
-        // The cards' facts: the songs of the Music folder, and what the owner has played.
+        // The cards' facts: the songs of the Music folder, and what the account asking has played.
         let songs_played = match crate::serve::instance() {
             Some(serve) => {
-                let me = serve.user_or_owner();
+                let me = serve.current_user();
                 tokio::task::spawn_blocking(move || {
                 let songs = serve.library.songs_by_rel(0).unwrap_or_default();
                 let played = me.and_then(|me| serve.userdata.played(&me).ok());
@@ -1298,10 +1308,11 @@ impl PlaylistService {
                     && let Ok(turn) = f.asking.clone().try_lock_owned()
                 {
                     let (f, c, s, from) = (f.clone(), self.lib.catalogue(), sid.to_string(), source.clone());
-                    tokio::spawn(async move {
+                    // For the account asking: their favourites.
+                    tokio::spawn(crate::serve::who::carried(async move {
                         let _turn = turn;
                         f.ask(c, &s, &from).await;
-                    });
+                    }));
                 }
                 k
             }
@@ -1582,7 +1593,7 @@ mod favourites_tests {
         let file = dir.join("favourites.json");
         let first = FavouritesKept::load(Some(file.clone()));
         assert!(first.kept("jellyfin").is_none(), "nothing kept yet");
-        first.save("jellyfin", &Arc::new(["A/1.flac".to_string(), "B/2.mp3".to_string()].into_iter().collect())).await;
+        first.save("jellyfin", None, &Arc::new(["A/1.flac".to_string(), "B/2.mp3".to_string()].into_iter().collect())).await;
 
         let next = FavouritesKept::load(Some(file));
         let k = next.kept("jellyfin").expect("kept from the last run");

@@ -191,6 +191,7 @@ struct Player {
     song: Option<String>,
 }
 
+/// The asking account's players (decision 0051).
 fn players() -> Vec<Player> {
     let Some(on) = crate::app::PlayOn::instance() else { return Vec::new() };
     on.list()
@@ -206,8 +207,9 @@ fn players() -> Vec<Player> {
         .collect()
 }
 
-/// `getNowPlaying`: each of Cratarr's players that plays or is paused in a song, and each app that reports one
-/// (`reportPlayback`, `scrobble` with `submission=false`), the latest first.
+/// `getNowPlaying`: each of the account's own players that plays or is paused in a song, and each of its apps that
+/// reports one (`reportPlayback`, `scrobble` with `submission=false`), the latest first. One's listening is one's own
+/// (decision 0051).
 pub async fn now_playing(serve: &Arc<Serve>, user: &User) -> Result<Answer, Failed> {
     struct Row {
         song: String,
@@ -226,7 +228,6 @@ pub async fn now_playing(serve: &Arc<Serve>, user: &User) -> Result<Answer, Fail
         .filter_map(|p| {
             Some(Row {
                 song: p.song?,
-                // Play On's players are the house's: shown under the account that asks.
                 username: user.name.clone(),
                 player_id: player_id("player", &p.name),
                 state: if p.playing { "playing" } else { "paused" },
@@ -237,7 +238,7 @@ pub async fn now_playing(serve: &Arc<Serve>, user: &User) -> Result<Answer, Fail
             })
         })
         .collect();
-    rows.extend(serve.now_playing.live().into_iter().map(|((username, app), s)| Row {
+    rows.extend(serve.now_playing.live().into_iter().filter(|((username, _), _)| *username == user.name).map(|((username, app), s)| Row {
         player_id: player_id("app", &format!("{username}\n{app}")),
         position_ms: s.position_now(),
         song: s.song,
@@ -307,10 +308,10 @@ struct Given {
     by: String,
 }
 
-/// The queue something new was last started in on one of Cratarr's players, with where it is now.
-fn latest_player_queue(catalogue: &crate::catalogue::Catalogue) -> Option<Given> {
+/// The queue something new was last started in on one of `whose` players (`whose_players`), with where it is now.
+fn latest_player_queue(catalogue: &crate::catalogue::Catalogue, whose: Option<&str>) -> Option<Given> {
     let on = crate::app::PlayOn::instance()?;
-    let newest = on.list().into_iter().filter(|v| v.queue_started > 0 && v.queue_length > 0).max_by_key(|v| v.queue_started)?;
+    let newest = on.list_for(whose).into_iter().filter(|v| v.queue_started > 0 && v.queue_length > 0).max_by_key(|v| v.queue_started)?;
     let v = on.get(&newest.name)?;
     let tracks = v.queue.unwrap_or_default();
     player_given(v.name, v.queue_started, v.index, v.position_ms, &tracks, |t| {
@@ -366,8 +367,8 @@ pub async fn get(serve: &Arc<Serve>, user: &User, by_index: bool) -> Result<Answ
         changed: q.changed,
         by: q.client,
     });
-    let catalogue = serve.catalogue().clone();
-    let player = tokio::task::spawn_blocking(move || latest_player_queue(&catalogue)).await.map_err(|e| Failed(0, e.to_string()))?;
+    let (catalogue, whose) = (serve.catalogue().clone(), crate::app::whose_players());
+    let player = tokio::task::spawn_blocking(move || latest_player_queue(&catalogue, whose.as_deref())).await.map_err(|e| Failed(0, e.to_string()))?;
     let Some(mut q) = saved.chain(player).max_by_key(|q| q.changed) else {
         return Ok(Answer::Json(json!({})));
     };

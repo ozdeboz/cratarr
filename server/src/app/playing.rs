@@ -136,10 +136,18 @@ pub struct PlayingService {
     /// The info chips of the last track asked about: the page asks for the state every few seconds, the file does not
     /// change meanwhile (the play count is read again for the next track).
     info: Mutex<Option<(String, Option<TrackInfo>)>>,
-    /// The last state worked out: when, for which source followed, and it. Whoever asks within `STATE_REUSE` gets it,
+    /// The last state worked out: when, for whom and which source followed (`StateKey`), and it. Whoever asks the same
+    /// within `STATE_REUSE` gets it,
     /// and one asks at a time: the pages (and the live channel) asking often, or a page caught in a loop, cost the media
     /// server one question at a time at most (2026-10-14: one tab's loop of 200 a second took it down).
-    state_kept: tokio::sync::Mutex<Option<(std::time::Instant, Option<String>, StateView)>>,
+    state_kept: tokio::sync::Mutex<Option<(std::time::Instant, StateKey, StateView)>>,
+}
+
+/// A state is its account's (their player, their favourites: decision 0051) for the source followed.
+type StateKey = (Option<String>, Option<String>);
+
+fn state_key(want: Option<&str>) -> StateKey {
+    (crate::serve::instance().and_then(|s| s.current_user()), want.map(str::to_string))
 }
 
 /// How long a state worked out is answered again.
@@ -152,15 +160,16 @@ impl PlayingService {
 
     /// What plays and which playlists hold it: as worked out within the last second, else afresh.
     pub async fn state(&self, want: Option<&str>) -> Result<StateView> {
+        let key = state_key(want);
         let mut kept = self.state_kept.lock().await;
-        if let Some((at, w, view)) = kept.as_ref()
-            && w.as_deref() == want
+        if let Some((at, k, view)) = kept.as_ref()
+            && *k == key
             && at.elapsed() < STATE_REUSE
         {
             return Ok(view.clone());
         }
         let view = self.work_out_state(want).await?;
-        *kept = Some((std::time::Instant::now(), want.map(str::to_string), view.clone()));
+        *kept = Some((std::time::Instant::now(), key, view.clone()));
         Ok(view)
     }
 
@@ -168,7 +177,7 @@ impl PlayingService {
     async fn fresh_state(&self, want: Option<&str>) -> Result<StateView> {
         let mut kept = self.state_kept.lock().await;
         let view = self.work_out_state(want).await?;
-        *kept = Some((std::time::Instant::now(), want.map(str::to_string), view.clone()));
+        *kept = Some((std::time::Instant::now(), state_key(want), view.clone()));
         Ok(view)
     }
 
