@@ -281,8 +281,9 @@ Today a track draws its own look from a seed of its own (the same track, the sam
 colours, and which effects are on. The owner: "the seed is used to control whatever's in the current synthesizer?
 That's clean". So:
 
-- A new track is a **seeded Randomize** (§4d) of the patch as it is: the track's seed gives every knob that is not
-  pinned a value in its range, morphed in over a track's time. The same track gives the same look while the patch is
+- A new track is a **seeded Randomize** (§4d) of the patch as it is, scope **Everything** (the owner chose it: motion
+  and generators too, not only the look): the track's seed gives every knob that is not pinned a value in its range,
+  morphed in over a track's time. Pins keep what should stay. The same track gives the same look while the patch is
   the same.
 - It never touches the structure: no module or cable is added, removed or switched. Effects you placed stay.
 - **Track** gives its `seed` (and its pulse); which knobs a track moves is set where Randomize's reach is set (the
@@ -340,6 +341,12 @@ graph where there is room and as sheets over it where there is not. On a phone t
 - the jump chips to reach a part quickly.
 
 The graph is built for touch from the start, not adapted to it later.
+
+### 7c. Sync groups: not in this version
+
+The owner: "since I won't be sync grouping in the upcoming version, spend no time on this." Sync groups are handled at
+the very end, after this version. Until then a v2 patch is not shared in a group, and the group features stay off for
+the new visuals.
 
 ### 8. Seeing it work
 
