@@ -236,6 +236,9 @@ pub(crate) struct Index {
     albums: HashMap<u32, Vec<usize>>,
     /// The artists' ids (`ar-…`) by their number, for OpenSubsonic's similar artists.
     artist_ids: Vec<String>,
+    /// AudioMuse's "sounds like" vector of each song, of unit length, where it has one (decision 0054); shared, as the
+    /// index is copied for each listener.
+    sounds: Arc<Vec<Option<Box<[f32]>>>>,
 }
 
 impl Index {
@@ -245,7 +248,17 @@ impl Index {
         for (i, s) in songs.iter().enumerate() {
             albums.entry(s.album_n).or_default().push(i);
         }
-        Self { songs, by_id, albums, artist_ids: Vec::new() }
+        Self { songs, by_id, albums, artist_ids: Vec::new(), sounds: Arc::default() }
+    }
+
+    /// With each song's "sounds like" vector, by its id (unit length; none where AudioMuse has not heard it).
+    pub(crate) fn with_sounds<'a>(mut self, sound_of: impl Fn(&str) -> Option<&'a Vec<f32>>) -> Self {
+        self.sounds = Arc::new(self.songs.iter().map(|s| sound_of(&s.id).map(|v| v.clone().into_boxed_slice())).collect());
+        self
+    }
+
+    fn sound(&self, i: usize) -> Option<&[f32]> {
+        self.sounds.get(i)?.as_deref()
     }
 
     /// The songs an OpenSubsonic id stands for: a song, an album's songs, or an artist's.
@@ -306,7 +319,16 @@ struct Profile {
     /// How much the artist counts against the other four signals: 1, or 2 for Radio's inserts (mostly the same artist,
     /// as Symfonium's).
     artist_weight: f64,
+    /// How the seed sounds (decision 0054): the mean of its songs' vectors, of unit length; none when none was heard.
+    sound: Option<Vec<f32>>,
 }
+
+/// "Sounds like" on 0 to 1, from AudioMuse's cosine similarity: measured on the library's 8,909 vectors
+/// (2026-10-19), two random tracks are 0.62 alike at the median, two of one album 0.875 and at most about 0.92 (its
+/// 90th percentile 0.956), the same artist's other albums 0.82; so 0.62 is nothing alike and 0.92 as alike as an
+/// album's tracks.
+const SOUND_LO: f32 = 0.62;
+const SOUND_HI: f32 = 0.92;
 
 impl Profile {
     fn of(index: &Index, seed: &[usize]) -> Self {
@@ -318,7 +340,22 @@ impl Profile {
             tags: HashMap::new(),
             year: None,
             artist_weight: 1.0,
+            sound: None,
         };
+        let heard: Vec<&[f32]> = seed.iter().filter_map(|&i| index.sound(i)).collect();
+        if let Some(first) = heard.first() {
+            let dims = first.len();
+            let mut mean = vec![0.0f32; dims];
+            for v in heard.iter().filter(|v| v.len() == dims) {
+                for (m, x) in mean.iter_mut().zip(v.iter()) {
+                    *m += x;
+                }
+            }
+            let n = mean.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if n > 0.0 {
+                p.sound = Some(mean.into_iter().map(|x| x / n).collect());
+            }
+        }
         let mut years = Vec::new();
         for &i in seed {
             let s = &index.songs[i];
@@ -334,11 +371,13 @@ impl Profile {
         p
     }
 
-    /// 0 to 1 on each of the five signals, weighed equally (the owner, 2026-10-16); the artist double for Radio.
-    fn score(&self, s: &Song) -> f64 {
+    /// 0 to 1 on each of the five signals, weighed equally (the owner, 2026-10-16); the artist double for Radio. A sixth,
+    /// "sounds like" (decision 0054), where both the seed and the song were heard by AudioMuse, weighed as the others.
+    fn score(&self, index: &Index, i: usize) -> f64 {
         if self.n == 0.0 {
             return 0.0;
         }
+        let s = &index.songs[i];
         let most = |map: &HashMap<u32, u32>, items: &[u32]| items.iter().filter_map(|x| map.get(x)).copied().max().unwrap_or(0) as f64;
         // A playlist holding the whole seed is the strongest sign; an artist, genre or tag shared by a quarter of it counts in full.
         let playlists = (most(&self.playlists, &s.playlists) / self.n).min(1.0);
@@ -350,7 +389,15 @@ impl Profile {
             (Some(a), Some(b)) => (1.0 - (a as f64 - b as f64).abs() / 10.0).max(0.0),
             _ => 0.0,
         };
-        (playlists + self.artist_weight * artist + genre + era + tags) / (4.0 + self.artist_weight)
+        let five = playlists + self.artist_weight * artist + genre + era + tags;
+        match (&self.sound, index.sound(i)) {
+            (Some(p), Some(v)) if p.len() == v.len() => {
+                let cos: f32 = p.iter().zip(v).map(|(a, b)| a * b).sum();
+                let sound = ((cos - SOUND_LO) / (SOUND_HI - SOUND_LO)).clamp(0.0, 1.0) as f64;
+                (five + sound) / (5.0 + self.artist_weight)
+            }
+            _ => five / (4.0 + self.artist_weight),
+        }
     }
 }
 
@@ -453,7 +500,7 @@ fn by_mode(index: &Index, req: &NextRequest, pool: &[usize], seed: &[usize], out
                 .iter()
                 .map(|&i| {
                     let s = &index.songs[i];
-                    (i, profile.score(s) + if s.favourite { 0.05 } else { 0.0 } + rng.unit() * 0.1)
+                    (i, profile.score(index, i) + if s.favourite { 0.05 } else { 0.0 } + rng.unit() * 0.1)
                 })
                 .collect();
             scored.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -565,7 +612,7 @@ fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>
             continue;
         }
         let e = sums.entry(s.album_n).or_default();
-        e.0 += if random { rng.unit() } else { profile.score(s) };
+        e.0 += if random { rng.unit() } else { profile.score(index, i) };
         e.1 += 1;
     }
     // Albums of at least two tracks (Finamp's Album mix); singles only when there is nothing else.
@@ -656,8 +703,10 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
                 }
             }
         }
-        // Everyone's: the listener's favourites are marked for each choice.
+        // Everyone's: the listener's favourites are marked for each choice. With how each song sounds (AudioMuse's).
+        let sounds = cat.audiomuse_vectors();
         read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), None, &member)
+            .map(|i| i.with_sounds(|id| crate::serve::ids::track_of(id).and_then(|t| sounds.get(&t))))
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))??;
@@ -1186,6 +1235,24 @@ mod tests {
         let picked = ids(&index, &choose(&index, &ask(true), &HashMap::new(), None, &mut Rng::seeded(3)));
         assert!(picked.len() == 3 && picked.iter().all(|p| ["t5", "t6", "t7"].contains(&p.as_str())), "{picked:?}");
         assert_eq!(choose(&index, &ask(false), &HashMap::new(), None, &mut Rng::seeded(3)).len(), 5);
+    }
+
+    #[test]
+    fn a_song_that_sounds_like_the_seed_scores_higher_where_the_other_signals_are_alike() {
+        let s = vec![song("seed", 1, 1, 1, 2000, &[]), song("near", 2, 9, 9, 2020, &[]), song("far", 3, 9, 9, 2020, &[]), song("unheard", 4, 9, 9, 2020, &[])];
+        let vectors: HashMap<String, Vec<f32>> = [
+            ("seed".to_string(), vec![1.0, 0.0]),
+            ("near".to_string(), vec![0.995, 0.0998]),
+            ("far".to_string(), vec![0.0, 1.0]),
+        ]
+        .into();
+        let index = Index::new(s).with_sounds(|id| vectors.get(id));
+        let p = Profile::of(&index, &[0]);
+        let (near, far, unheard) = (p.score(&index, 1), p.score(&index, 2), p.score(&index, 3));
+        assert!((near - 1.0 / 6.0).abs() < 1e-9, "only the sound: {near}");
+        assert_eq!(far, 0.0, "not alike at all");
+        assert_eq!(unheard, 0.0, "the five signals alone, none shared");
+        assert!(near > far);
     }
 
     #[test]

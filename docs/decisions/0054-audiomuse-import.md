@@ -32,7 +32,11 @@ over SSH every half hour.
   tags Style and keeps Mood for CLAP's (a5's cover overview).
 - **Crates** select on all four (the owner): Mood (CLAP's moods as values), Energy and Danceability (0–100%
   ranges), Style (the tags as values).
-- **Similarity**: the vectors are kept for Similar songs and the radio's "sounds like" (next step).
+- **Similarity**: "sounds like" is a sixth signal of the radio's closeness (Similar songs, Radio's inserts, Autoplay's
+  Similar), weighed as each of the other five, where the seed and the song were both heard: the cosine of the song's
+  vector with the seed's mean vector, on 0 to 1 from 0.62 to 0.92. Measured on the 8,909 vectors (2026-10-19): two
+  random tracks are 0.62 alike at the median, the same artist's other albums 0.82, one album's tracks 0.875 (90th
+  percentile 0.956). A song or seed AudioMuse has not heard keeps the five signals.
 
 ## Consequences
 

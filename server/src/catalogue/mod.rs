@@ -1419,6 +1419,22 @@ impl Catalogue {
             .flatten()
     }
 
+    /// Every track's AudioMuse "sounds like" vector, of unit length (decision 0054), for the radio. Blocking.
+    pub fn audiomuse_vectors(&self) -> HashMap<i64, Vec<f32>> {
+        let db = self.db();
+        let Ok(mut st) = db.prepare("SELECT track, embedding FROM audiomuse WHERE embedding IS NOT NULL") else { return HashMap::new() };
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)));
+        let mut out = HashMap::new();
+        for (track, bytes) in rows.into_iter().flatten().flatten() {
+            let v: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+            let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if n > 0.0 && n.is_finite() {
+                out.insert(track, v.into_iter().map(|x| x / n).collect());
+            }
+        }
+        out
+    }
+
     /// Several at once, in one transaction (an import's batch). Blocking.
     pub fn store_analyses(&self, items: &[(i64, String, u64, i64, crate::analysis::Analysis)]) -> Result<()> {
         let mut db = self.db();
