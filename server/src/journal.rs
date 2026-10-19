@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS changes (
 ";
 
 /// Columns added after the first schema; added to an existing journal when missing.
-const ADDED_COLUMNS: [(&str, &str); 1] = [("events", "applied INTEGER NOT NULL DEFAULT 1")];
+const ADDED_COLUMNS: [(&str, &str); 2] = [("events", "applied INTEGER NOT NULL DEFAULT 1"), ("changes", "account TEXT")];
 
 pub struct Journal {
     db: Mutex<Connection>,
@@ -340,21 +340,24 @@ impl Journal {
         .collect()
     }
 
-    /// Keep a change to playlists or crates (decision 0026); changes older than a day are forgotten on the way.
-    pub fn record_change(&self, at: i64, change: &Change) -> Result<EventId> {
+    /// Keep a change to playlists or crates (decision 0026) of `account`'s (decision 0051; `None`: the first
+    /// administrator's); changes older than a day are forgotten on the way.
+    pub fn record_change(&self, at: i64, change: &Change, account: Option<&str>) -> Result<EventId> {
         let db = self.db();
         db.execute("DELETE FROM changes WHERE at < ?1", [at - CHANGE_SECS])?;
-        db.execute("INSERT INTO changes (at, change) VALUES (?1, ?2)", params![at, serde_json::to_string(change)?])?;
+        db.execute("INSERT INTO changes (at, change, account) VALUES (?1, ?2, ?3)", params![at, serde_json::to_string(change)?, account])?;
         Ok(db.last_insert_rowid())
     }
 
-    /// A change and whether it was undone; `None` when it is not (or no longer) kept.
-    pub fn change(&self, id: EventId) -> Result<Option<(Change, bool)>> {
+    /// A change, whether it was undone, and whose it is; `None` when it is not (or no longer) kept.
+    pub fn change(&self, id: EventId) -> Result<Option<(Change, bool, Option<String>)>> {
         let row = self
             .db()
-            .query_row("SELECT change, undone_at FROM changes WHERE id = ?1", [id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?)))
+            .query_row("SELECT change, undone_at, account FROM changes WHERE id = ?1", [id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<String>>(2)?))
+            })
             .optional()?;
-        row.map(|(c, undone)| Ok((serde_json::from_str(&c)?, undone.is_some()))).transpose()
+        row.map(|(c, undone, account)| Ok((serde_json::from_str(&c)?, undone.is_some(), account))).transpose()
     }
 
     /// Take a change for undoing: true for the one caller that may undo it (it was not undone yet).
@@ -384,13 +387,13 @@ mod change_tests {
     fn a_change_is_kept_for_a_day_and_claimed_once() {
         let j = Journal::open(None).unwrap();
         let c = Change::Renamed { from: "a".into(), to: "b".into() };
-        let id = j.record_change(1_000_000, &c).unwrap();
-        assert_eq!(j.change(id).unwrap(), Some((c.clone(), false)));
+        let id = j.record_change(1_000_000, &c, Some("ann")).unwrap();
+        assert_eq!(j.change(id).unwrap(), Some((c.clone(), false, Some("ann".into()))));
         assert!(j.claim_change(id, 1_000_010).unwrap(), "the first undo takes it");
         assert!(!j.claim_change(id, 1_000_011).unwrap(), "a second, at the same time, does not");
         j.release_change(id).unwrap();
-        assert_eq!(j.change(id).unwrap(), Some((c.clone(), false)), "handed back after a refusal");
-        j.record_change(1_000_000 + CHANGE_SECS + 1, &c).unwrap();
+        assert_eq!(j.change(id).unwrap(), Some((c.clone(), false, Some("ann".into()))), "handed back after a refusal");
+        j.record_change(1_000_000 + CHANGE_SECS + 1, &c, None).unwrap();
         assert_eq!(j.change(id).unwrap(), None, "forgotten after a day");
         assert_eq!(fingerprint("x"), fingerprint("x"));
         assert_ne!(fingerprint("x"), fingerprint("y"));

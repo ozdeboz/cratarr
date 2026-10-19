@@ -134,6 +134,8 @@ pub struct Library {
     /// Where the libraries in use keep their files, and the playlists of the Music folder (swapped in whole when
     /// either changes).
     folders: std::sync::RwLock<(Folders, Option<Arc<Store>>)>,
+    /// The other accounts' playlists (decision 0051), by account, as opened (each in the Music folder of its day).
+    account_stores: std::sync::RwLock<std::collections::HashMap<String, Arc<Store>>>,
     /// Every audio file Cratarr can see, and the servers' ids for them (decision 0008).
     catalogue: Arc<Catalogue>,
     /// One change to the servers at a time, so two pages (or the background placement retry) cannot interleave.
@@ -198,6 +200,7 @@ impl Library {
             live: std::sync::RwLock::new(Arc::new(active)),
             data_dir,
             folders: std::sync::RwLock::new((folders, store)),
+            account_stores: std::sync::RwLock::default(),
             catalogue,
             changing: Mutex::new(()),
             tag_rules: std::sync::RwLock::new(tag_rules),
@@ -331,6 +334,46 @@ impl Library {
 
     pub(super) fn store(&self) -> Result<Arc<Store>, ToggleError> {
         self.store_opt().ok_or(ToggleError::NoMusicFolder)
+    }
+
+    /// One account's playlists (decision 0051): the first administrator's (`None`) are the Music folder's, as they
+    /// were before accounts; another's are in a folder of its own in the playlist folder.
+    pub(super) fn store_for(&self, account: Option<&str>) -> Result<Arc<Store>, ToggleError> {
+        let top = self.store()?;
+        let Some(account) = account else { return Ok(top) };
+        if !top.in_playlist_dir() {
+            return Err(ToggleError::Refused("Other users' playlists need the playlist folder (.playlists) in Music.".into()));
+        }
+        if !crate::playlists::account_folder_ok(account) {
+            return Err(ToggleError::Refused(format!("{account} cannot name a folder for its playlists.")));
+        }
+        if let Some(s) = self.account_stores.read().unwrap_or_else(|p| p.into_inner()).get(account).filter(|s| s.base() == top.base()) {
+            return Ok(s.clone());
+        }
+        let s = Arc::new(Store::of_account(top.base(), account));
+        self.account_stores.write().unwrap_or_else(|p| p.into_inner()).insert(account.to_string(), s.clone());
+        Ok(s)
+    }
+
+    /// Every account's playlists, for Cratarr's own work over all of them (albums that move, dead entries): the first
+    /// administrator's, and each other account's that has its folder.
+    pub(super) fn all_stores(&self) -> Vec<Arc<Store>> {
+        let Some(top) = self.store_opt() else { return Vec::new() };
+        let mut out = vec![top.clone()];
+        if !top.in_playlist_dir() {
+            return out;
+        }
+        let first = crate::serve::instance().and_then(|s| s.users.owner());
+        let Ok(dirs) = std::fs::read_dir(top.dir()) else { return out };
+        let mut accounts: Vec<String> = dirs
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|a| crate::playlists::account_folder_ok(a) && Some(a) != first.as_ref())
+            .collect();
+        accounts.sort();
+        out.extend(accounts.iter().filter_map(|a| self.store_for(Some(a)).ok()));
+        out
     }
 
     /// Open the Music folder's playlists again (after they moved into `.playlists`).

@@ -519,19 +519,19 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             let all = service.snapshot().await.map_err(toggle_failed)?;
             let mut out = Vec::with_capacity(all.len());
             for (name, lines, _) in all {
-                let lines = serve.held.shown(&name, lines);
+                let lines = serve.held.shown(&held_key(&service, &name)?, lines);
                 let songs = shown_songs(serve, &lines).await?;
-                out.push(playlist_json(serve, &me, &name, &lines, &songs)?);
+                out.push(playlist_json(serve, &service, &name, &lines, &songs)?);
             }
             Ok(Answer::Json(json!({ "playlists": { "playlist": out } })))
         }
         "getPlaylist" => {
             let service = playlist_service(serve)?;
             let (name, lines) = playlist_named(serve, &service, p.get("id")).await?;
-            let lines = serve.held.shown(&name, lines);
+            let lines = serve.held.shown(&held_key(&service, &name)?, lines);
             let mut songs = shown_songs(serve, &lines).await?;
             annotate_songs(serve, &me, &mut songs)?;
-            let mut body = playlist_json(serve, &me, &name, &lines, &songs)?;
+            let mut body = playlist_json(serve, &service, &name, &lines, &songs)?;
             // Asked by a name it had: answered under that id, the one the client keeps (its next listing has the new).
             body["id"] = p.get("id").unwrap_or_default().into();
             body["entry"] = serde_json::to_value(&songs)?;
@@ -545,7 +545,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 Some(id) => {
                     let (name, lines) = playlist_named(serve, &service, Some(id)).await?;
                     // Its songs replaced: an emptying held for it comes to the same.
-                    serve.held.take(&name);
+                    serve.held.take(&held_key(&service, &name)?);
                     let shown = shown_flags(serve, &lines).await?;
                     let all: Vec<usize> = (0..shown.iter().filter(|s| **s).count()).collect();
                     let new = super::playlists::edited(&lines, &shown, &all, &add);
@@ -559,26 +559,27 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                     let taken: Vec<String> = service.snapshot().await.map_err(toggle_failed)?.into_iter().map(|(n, _, _)| n).collect();
                     let name = super::playlists::new_name(wanted, &taken);
                     service.create_with(&name, &add).await.map_err(toggle_failed)?;
-                    serve.userdata.playlist_made(&name)?;
+                    serve.userdata.playlist_made(&held_key(&service, &name)?)?;
                     name
                 }
             };
             let lines = service.entries(&name).await.map_err(toggle_failed)?;
             let mut songs = shown_songs(serve, &lines).await?;
             annotate_songs(serve, &me, &mut songs)?;
-            let mut body = playlist_json(serve, &me, &name, &lines, &songs)?;
+            let mut body = playlist_json(serve, &service, &name, &lines, &songs)?;
             body["entry"] = serde_json::to_value(&songs)?;
             Ok(Answer::Json(json!({ "playlist": body })))
         }
         "updatePlaylist" => {
             let service = playlist_service(serve)?;
             let (name, _) = playlist_named(serve, &service, p.get("playlistId")).await?;
+            let key = held_key(&service, &name)?;
             let remove: Vec<usize> = p.all("songIndexToRemove").iter().filter_map(|i| i.trim().parse().ok()).collect();
             let add = lines_of_songs(serve, &p.all("songIdToAdd")).await?;
             let renamed = p.get("name").filter(|n| !n.trim().is_empty() && *n != name);
             if !remove.is_empty() || !add.is_empty() {
                 let lines = service.entries(&name).await.map_err(toggle_failed)?;
-                let emptied = serve.held.take(&name).filter(|e| e.before == lines).map(|e| e.after);
+                let emptied = serve.held.take(&key).filter(|e| e.before == lines).map(|e| e.after);
                 let shown = shown_flags(serve, &lines).await?;
                 match super::playlists::update_step(&lines, &shown, emptied, &remove, &add) {
                     super::playlists::Step::Hold(new) if renamed.is_none() => hold_emptying(serve, &service, &name, lines, new),
@@ -588,7 +589,7 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                     super::playlists::Step::Unchanged => {}
                 }
             } else if renamed.is_some() {
-                write_held(&service, &name, serve.held.take(&name)).await;
+                write_held(&service, &name, serve.held.take(&key)).await;
             }
             if let Some(wanted) = renamed {
                 let taken: Vec<String> =
@@ -603,9 +604,10 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         "deletePlaylist" => {
             let service = playlist_service(serve)?;
             let (name, _) = playlist_named(serve, &service, p.get("id")).await?;
-            serve.held.take(&name);
+            let key = held_key(&service, &name)?;
+            serve.held.take(&key);
             service.delete(&name).await.map_err(toggle_failed)?;
-            serve.userdata.playlist_gone(&name)?;
+            serve.userdata.playlist_gone(&key)?;
             Ok(Answer::Json(json!({})))
         }
         _ => Err(Failed(501, format!("{method} is not implemented"))),
@@ -616,14 +618,22 @@ fn playlist_service(serve: &Serve) -> Result<Arc<crate::app::PlaylistService>, F
     serve.playlists().cloned().ok_or_else(|| Failed(0, "Playlists are not ready yet".into()))
 }
 
-/// Holds a playlist's emptying for the call that refills it (`playlists::Held`); written on its own when none comes.
+/// A playlist's key among everyone's (decision 0051: two accounts' playlists may have one name), for what is kept of
+/// it here: an emptying held, when it was seen, its old names.
+fn held_key(service: &crate::app::PlaylistService, id: &str) -> Result<String, Failed> {
+    Ok(service.reach(id).map_err(toggle_failed)?.key())
+}
+
+/// Holds a playlist's emptying for the call that refills it (`playlists::Held`); written on its own when none comes,
+/// as the account that asked.
 fn hold_emptying(serve: &Arc<Serve>, service: &Arc<crate::app::PlaylistService>, name: &str, before: Vec<String>, after: Vec<String>) {
-    let ticket = serve.held.hold(name, before, after);
+    let Ok(key) = held_key(service, name) else { return };
+    let ticket = serve.held.hold(&key, before, after);
     let (serve, service, name) = (serve.clone(), service.clone(), name.to_string());
-    tokio::spawn(async move {
+    tokio::spawn(super::who::carried(async move {
         tokio::time::sleep(super::playlists::REFILL_WAIT).await;
-        write_held(&service, &name, serve.held.take_ticket(&name, ticket)).await;
-    });
+        write_held(&service, &name, serve.held.take_ticket(&key, ticket)).await;
+    }));
 }
 
 /// Writes an emptying that was held (`None`: nothing held).
@@ -641,7 +651,8 @@ async fn playlist_named(serve: &Serve, service: &crate::app::PlaylistService, id
     let name = playlist_name(id)?;
     match service.entries(&name).await {
         Err(crate::app::ToggleError::UnknownPlaylist) => {
-            let now = serve.userdata.playlist_alias(&name)?.ok_or_else(|| not_found("Playlist"))?;
+            let was = held_key(service, &name)?;
+            let now = service.id_of_key(&serve.userdata.playlist_alias(&was)?.ok_or_else(|| not_found("Playlist"))?);
             let lines = service.entries(&now).await.map_err(toggle_failed)?;
             Ok((now, lines))
         }
@@ -657,6 +668,8 @@ fn playlist_name(id: Option<&str>) -> Result<String, Failed> {
 fn toggle_failed(e: crate::app::ToggleError) -> Failed {
     match e {
         crate::app::ToggleError::UnknownPlaylist => not_found("Playlist"),
+        // Another's playlist (decision 0051): "not authorized for the given operation".
+        crate::app::ToggleError::Forbidden(m) => Failed(50, m),
         other => Failed(0, other.to_string()),
     }
 }
@@ -686,14 +699,17 @@ async fn lines_of_songs(serve: &Arc<Serve>, songs: &[String]) -> Result<Vec<Stri
     blocking(move || Ok(songs.iter().filter_map(|s| super::playlists::line_of_song(&cat, s)).collect())).await
 }
 
-fn playlist_json(serve: &Serve, me: &str, name: &str, lines: &[String], songs: &[Song]) -> Result<Value, Failed> {
+/// A playlist as OpenSubsonic shows it (`id`: as the asking account knows it): whose it is, shared (`public`) or not,
+/// and read-only when it is another's (decision 0051).
+fn playlist_json(serve: &Serve, service: &crate::app::PlaylistService, id: &str, lines: &[String], songs: &[Song]) -> Result<Value, Failed> {
     use md5::Digest;
+    let r = service.reach(id).map_err(toggle_failed)?;
     let print = format!("{:x}", md5::Md5::digest(lines.join("\n").as_bytes()));
-    let (created, changed) = serve.userdata.playlist_seen(name, &print)?;
+    let (created, changed) = serve.userdata.playlist_seen(&r.key(), &print)?;
     let mut v = json!({
-        "id": super::playlists::id_of(name), "name": name, "owner": me, "public": true,
+        "id": super::playlists::id_of(id), "name": r.name, "owner": r.owner, "public": r.shared,
         "songCount": songs.len(), "duration": songs.iter().map(|s| s.duration).sum::<u64>(),
-        "created": api::iso(created), "changed": api::iso(changed), "readonly": false,
+        "created": api::iso(created), "changed": api::iso(changed), "readonly": !r.mine,
     });
     if let Some(first) = songs.first() {
         v["coverArt"] = first.cover_art.clone().into();

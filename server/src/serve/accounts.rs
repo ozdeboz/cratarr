@@ -22,6 +22,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/me/subsonic-password", put(set_app_password))
         .route("/api/me/sessions/{id}", delete(end_own_session))
         .route("/api/me/devices/{id}", delete(forget_own_device))
+        .route("/api/me/settings", get(own_settings).put(set_own_settings))
         .merge(
             Router::new()
                 .route("/api/users", get(users))
@@ -123,6 +124,40 @@ fn forget(user: &str, id: &str) -> Response {
 
 async fn forget_device(Path((name, id)): Path<(String, String)>) -> Response {
     forget(&name, &id)
+}
+
+/// One's own settings (decision 0051's split: the server's are the administrators', these each user's): what the apps
+/// keep for the account (Radio's and Autoplay's defaults, leaving favourites out, and the like), as `{ version, settings }`.
+/// Signed in or not: while signing in is off, the owner's.
+async fn own_settings(State(serve): State<Arc<Serve>>) -> Response {
+    let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
+    match serve.userdata.settings_of(&me) {
+        Ok((version, settings)) => axum::Json(json!({ "version": version, "settings": settings })).into_response(),
+        Err(e) => refused(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),
+    }
+}
+
+/// `base`: the version last had (0 while none is kept); `settings`: all of them, as the app keeps them.
+#[derive(serde::Deserialize)]
+struct SettingsBody {
+    base: i64,
+    settings: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The most one's settings may hold, as JSON (bytes).
+const SETTINGS_BYTES: usize = 16 * 1024;
+
+async fn set_own_settings(State(serve): State<Arc<Serve>>, axum::Json(b): axum::Json<SettingsBody>) -> Response {
+    let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
+    let settings = serde_json::Value::Object(b.settings);
+    if settings.to_string().len() > SETTINGS_BYTES {
+        return refused(StatusCode::PAYLOAD_TOO_LARGE, "Those settings are too large to keep.");
+    }
+    match serve.userdata.put_settings(&me, b.base, &settings) {
+        Ok(Ok(version)) => axum::Json(json!({ "version": version })).into_response(),
+        Ok(Err(crate::userdata::Stale)) => refused(StatusCode::CONFLICT, "They changed meanwhile."),
+        Err(e) => refused(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),
+    }
 }
 
 async fn users(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {

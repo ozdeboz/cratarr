@@ -125,8 +125,28 @@ fn read<T: serde::de::DeserializeOwned>(journal: &Journal, id: i64, handler: &st
     journal.result(id, handler).ok().flatten().and_then(|v| serde_json::from_value(v).ok())
 }
 
-/// React to an album action. Returns the playlists that changed (none when it was already handled).
-async fn apply(store: &Store, folders: &[PathBuf], journal: &Journal, entry: &Entry) -> Result<Vec<String>> {
+/// Every account's playlists (decision 0051), as one list by their keys (`Store::key`).
+async fn snapshot_of(stores: &[&Store]) -> Result<Vec<(String, Vec<String>, usize)>> {
+    let mut out = Vec::new();
+    for store in stores {
+        out.extend(store.snapshot().await?.into_iter().map(|(n, l, d)| (store.key(&n), l, d)));
+    }
+    Ok(out)
+}
+
+/// `edit` on every account's playlists (by key); the keys of those it changed.
+async fn edit_all(stores: &[&Store], edit: impl Fn(&str, &[String]) -> Option<Vec<String>>) -> Result<Vec<String>> {
+    let mut changed = Vec::new();
+    for store in stores {
+        let done = store.edit_all(|id, entries| edit(&store.key(id), entries)).await?;
+        changed.extend(done.iter().map(|id| store.key(id)));
+    }
+    Ok(changed)
+}
+
+/// React to an album action in every account's playlists. Returns the playlists that changed, by key (none when it
+/// was already handled).
+async fn apply(stores: &[&Store], folders: &[PathBuf], journal: &Journal, entry: &Entry) -> Result<Vec<String>> {
     if journal.result(entry.id, PLAYLISTS)?.is_some() {
         return Ok(Vec::new());
     }
@@ -137,18 +157,18 @@ async fn apply(store: &Store, folders: &[PathBuf], journal: &Journal, entry: &En
                 None => {
                     let album = line_of(folders, &(*folder, dir.clone()));
                     let plan = match album {
-                        Some(a) => lines_under(&store.snapshot().await?, &a),
+                        Some(a) => lines_under(&snapshot_of(stores).await?, &a),
                         None => Removed::new(), // the folder is no longer in use
                     };
                     journal.done(entry.id, PLAYLISTS_PLAN, epoch_now(), &serde_json::to_value(&plan)?)?;
                     plan
                 }
             };
-            store.edit_all(|id, entries| without(entries, plan.get(id)?)).await?
+            edit_all(stores, |id, entries| without(entries, plan.get(id)?)).await?
         }
         event => {
             let map = renames(event, folders, false);
-            store.edit_all(|_, entries| renamed(entries, &map)).await?
+            edit_all(stores, |_, entries| renamed(entries, &map)).await?
         }
     };
     journal.done(entry.id, PLAYLISTS, epoch_now(), &serde_json::json!(changed))?;
@@ -156,14 +176,14 @@ async fn apply(store: &Store, folders: &[PathBuf], journal: &Journal, entry: &En
 }
 
 /// Put back what `apply` did, once the action is undone. Returns the playlists that changed.
-async fn undo(store: &Store, folders: &[PathBuf], journal: &Journal, entry: &Entry) -> Result<Vec<String>> {
+async fn undo(stores: &[&Store], folders: &[PathBuf], journal: &Journal, entry: &Entry) -> Result<Vec<String>> {
     if journal.result(entry.id, PLAYLISTS_UNDONE)?.is_some() {
         return Ok(Vec::new());
     }
     let changed = match &entry.event {
         // The plan, not the result: a crash may have cut `apply` short after some lines went.
         Event::AlbumRejected { .. } => match read::<Removed>(journal, entry.id, PLAYLISTS_PLAN) {
-            Some(plan) => store.edit_all(|id, entries| put_back(entries, plan.get(id)?)).await?,
+            Some(plan) => edit_all(stores, |id, entries| put_back(entries, plan.get(id)?)).await?,
             None => return Ok(Vec::new()),
         },
         event => {
@@ -171,7 +191,7 @@ async fn undo(store: &Store, folders: &[PathBuf], journal: &Journal, entry: &Ent
                 return Ok(Vec::new()); // nothing was renamed
             }
             let map = renames(event, folders, true);
-            store.edit_all(|_, entries| renamed(entries, &map)).await?
+            edit_all(stores, |_, entries| renamed(entries, &map)).await?
         }
     };
     journal.done(entry.id, PLAYLISTS_UNDONE, epoch_now(), &serde_json::json!(changed))?;
@@ -194,19 +214,27 @@ impl Follow {
 
     /// React to one event, or put it back when it was undone. Without a Music folder it waits (stays pending).
     pub(super) async fn handle(&self, entry: &Entry) {
-        let Some(store) = self.lib.store_opt() else { return };
+        let stores = self.lib.all_stores();
+        if stores.is_empty() {
+            return;
+        }
+        let stores: Vec<&Store> = stores.iter().map(|s| s.as_ref()).collect();
         let folders = self.lib.catalogue().folders();
-        let mut done = apply(&store, &folders, &self.journal, entry).await;
+        let mut done = apply(&stores, &folders, &self.journal, entry).await;
         // Undone while it was being handled, or before: put it back at once.
         if done.is_ok() && self.journal.get(entry.id).ok().flatten().is_some_and(|e| e.undone) {
-            done = undo(&store, &folders, &self.journal, entry).await;
+            done = undo(&stores, &folders, &self.journal, entry).await;
         }
         self.after(entry, done);
     }
 
     pub(super) async fn handle_undo(&self, entry: &Entry) {
-        let Some(store) = self.lib.store_opt() else { return };
-        let done = undo(&store, &self.lib.catalogue().folders(), &self.journal, entry).await;
+        let stores = self.lib.all_stores();
+        if stores.is_empty() {
+            return;
+        }
+        let stores: Vec<&Store> = stores.iter().map(|s| s.as_ref()).collect();
+        let done = undo(&stores, &self.lib.catalogue().folders(), &self.journal, entry).await;
         self.after(entry, done);
     }
 
@@ -215,7 +243,9 @@ impl Follow {
             Ok(changed) if !changed.is_empty() => {
                 let (title, _) = entry.event.album();
                 tracing::info!("playlists: {} changed with {title}", changed.len());
-                super::playlists::tell_sources(&self.lib, changed.into_iter().map(|n| (n, crate::source::PlaylistChange::Edited)).collect());
+                // The first administrator's are kept in step with other servers (their keys are their names).
+                let theirs = changed.into_iter().filter(|k| !k.contains('/'));
+                super::playlists::tell_sources(&self.lib, theirs.map(|n| (n, crate::source::PlaylistChange::Edited)).collect());
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("playlists: could not follow event {}: {e:#}", entry.id),
@@ -321,15 +351,15 @@ mod tests {
         let (store, j) = (Store::new(d.0.join("Music")), Journal::open(None).unwrap());
         let id = j.record(100, &adopted()).unwrap();
         let entry = j.get(id).unwrap().unwrap();
-        assert_eq!(apply(&store, &d.folders(), &j, &entry).await.unwrap(), vec!["Mix".to_string()]);
+        assert_eq!(apply(&[&store], &d.folders(), &j, &entry).await.unwrap(), vec!["Mix".to_string()]);
         assert_eq!(d.read("Mix"), ["A/01.mp3", "X - New (2020)/02.flac", "B/01.mp3", "X - New (2020)/01.flac"]);
-        assert!(apply(&store, &d.folders(), &j, &entry).await.unwrap().is_empty(), "once");
+        assert!(apply(&[&store], &d.folders(), &j, &entry).await.unwrap().is_empty(), "once");
         assert!(j.pending(PLAYLISTS, 0).unwrap().is_empty());
         j.mark_undone(id, 200).unwrap();
         let entry = j.get(id).unwrap().unwrap();
-        assert_eq!(undo(&store, &d.folders(), &j, &entry).await.unwrap(), vec!["Mix".to_string()]);
+        assert_eq!(undo(&[&store], &d.folders(), &j, &entry).await.unwrap(), vec!["Mix".to_string()]);
         assert_eq!(d.read("Mix"), ["A/01.mp3", "../incoming/X/New/02.flac", "B/01.mp3", "../incoming/X/New/01.flac"]);
-        assert!(undo(&store, &d.folders(), &j, &entry).await.unwrap().is_empty(), "once");
+        assert!(undo(&[&store], &d.folders(), &j, &entry).await.unwrap().is_empty(), "once");
     }
 
     #[tokio::test]
@@ -339,12 +369,12 @@ mod tests {
         let (store, j) = (Store::new(d.0.join("Music")), Journal::open(None).unwrap());
         let id = j.record(100, &rejected()).unwrap();
         let entry = j.get(id).unwrap().unwrap();
-        apply(&store, &d.folders(), &j, &entry).await.unwrap();
+        apply(&[&store], &d.folders(), &j, &entry).await.unwrap();
         assert_eq!(d.read("Mix"), ["A/01.mp3", "B/01.mp3", "../incoming/X/Newer/01.flac"], "only that album's folder");
         // Edited meanwhile: the lines come back at their old positions, as far as the playlist reaches.
         store.set_member("Mix", "C/01.mp3", true).await.unwrap();
         j.mark_undone(id, 200).unwrap();
-        undo(&store, &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
+        undo(&[&store], &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
         assert_eq!(
             d.read("Mix"),
             ["A/01.mp3", "../incoming/X/New/02.flac", "B/01.mp3", "../incoming/X/New/01.flac", "../incoming/X/Newer/01.flac", "C/01.mp3"]
@@ -361,11 +391,11 @@ mod tests {
         let id = j.record(100, &rejected()).unwrap();
         let plan: Removed = [("Mix".to_string(), vec![(0, "../incoming/X/New/01.flac".to_string())])].into();
         j.done(id, PLAYLISTS_PLAN, 100, &serde_json::to_value(&plan).unwrap()).unwrap();
-        apply(&store, &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
+        apply(&[&store], &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
         assert_eq!(d.read("Mix"), ["A/01.mp3"]);
         assert!(j.pending(PLAYLISTS, 0).unwrap().is_empty());
         j.mark_undone(id, 200).unwrap();
-        undo(&store, &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
+        undo(&[&store], &d.folders(), &j, &j.get(id).unwrap().unwrap()).await.unwrap();
         assert_eq!(d.read("Mix"), ["../incoming/X/New/01.flac", "A/01.mp3"]);
     }
 

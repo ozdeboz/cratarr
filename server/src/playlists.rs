@@ -29,6 +29,11 @@ pub struct PlaylistView {
     pub links: Vec<crate::sync_state::LinkView>,
     /// Other names it is spoken as (decision 0015); filled in by the playlist service.
     pub spoken: Vec<String>,
+    /// Whose it is, shared or not, and whether it is the asking account's own to change (decision 0051); filled in by
+    /// the playlist service.
+    pub owner: String,
+    pub shared: bool,
+    pub mine: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -235,10 +240,18 @@ pub struct Store {
     dir: PathBuf,
     /// The Music folder: entries are relative to it.
     base: PathBuf,
-    /// What lines carry in front of an entry: "" when the files are in Music itself, "../" in `.playlists`.
+    /// What lines carry in front of an entry: "" when the files are in Music itself, "../" in `.playlists`, "../../" in
+    /// an account's folder there.
     prefix: String,
+    /// Whose playlists (decision 0051): another account's, in its folder; `None`: the first administrator's.
+    account: Option<String>,
     cache: RwLock<HashMap<String, Cached>>,
     write: Mutex<()>,
+}
+
+/// Whether an account's name can name its playlists' folder: plain, as the directory's names are.
+pub fn account_folder_ok(account: &str) -> bool {
+    !account.is_empty() && account.len() <= 64 && !account.starts_with('.') && account.chars().all(|c| c.is_ascii_alphanumeric() || "._-@".contains(c))
 }
 
 /// Backup copies kept next to the playlists ("Love.bak.m3u") are not playlists: they are left alone, unlisted.
@@ -304,7 +317,7 @@ impl Store {
     /// Playlists kept in `dir` itself, entries relative to it.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
-        Self { base: dir.clone(), dir, prefix: String::new(), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
+        Self { base: dir.clone(), dir, prefix: String::new(), account: None, cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
     }
 
     /// The Music folder's playlists: in its playlist folder (`.playlists`) once that exists, else in the folder
@@ -313,9 +326,52 @@ impl Store {
         let base = music.into();
         let dir = base.join(PLAYLIST_DIR);
         if dir.is_dir() {
-            Self { dir, base, prefix: "../".into(), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
+            Self { dir, base, prefix: "../".into(), account: None, cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
         } else {
             Self::new(base)
+        }
+    }
+
+    /// Another account's playlists (decision 0051): in its own folder in the playlist folder (`.playlists/<account>`,
+    /// made with its first playlist), entries relative to Music as everyone's are.
+    pub fn of_account(music: impl Into<PathBuf>, account: &str) -> Self {
+        let base = music.into();
+        let dir = base.join(PLAYLIST_DIR).join(account);
+        Self { dir, base, prefix: "../../".into(), account: Some(account.to_string()), cache: RwLock::new(HashMap::new()), write: Mutex::new(()) }
+    }
+
+    /// In the playlist folder (`.playlists`), where other accounts' folders can be.
+    pub fn in_playlist_dir(&self) -> bool {
+        self.account.is_none() && self.prefix == "../"
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    pub fn base(&self) -> &Path {
+        &self.base
+    }
+
+    /// Whose playlists these are: another account's, or (`None`) the first administrator's.
+    pub fn account(&self) -> Option<&str> {
+        self.account.as_deref()
+    }
+
+    /// A playlist's key in Cratarr's own records (when its entries came, its old names): its name in the first
+    /// administrator's playlists, `account/name` in another's.
+    pub fn key(&self, id: &str) -> String {
+        match &self.account {
+            Some(a) => format!("{a}/{id}"),
+            None => id.to_string(),
+        }
+    }
+
+    /// The name of this store's playlist a key is of (`key`'s inverse); `None` for another store's.
+    pub fn name_of_key<'a>(&self, key: &'a str) -> Option<&'a str> {
+        match &self.account {
+            Some(a) => key.strip_prefix(a.as_str())?.strip_prefix('/'),
+            None => (!key.contains('/')).then_some(key),
         }
     }
 
@@ -328,11 +384,19 @@ impl Store {
         self.dir.join(format!("{id}.m3u"))
     }
 
+    /// Whether playlist `id` has its file.
+    pub fn path_exists(&self, id: &str) -> bool {
+        valid_id(id) && self.path_of(id).is_file()
+    }
+
     /// `(id, path, stamp)` for every visible `.m3u` file directly in the folder, backup copies left out.
     async fn list(&self) -> Result<Vec<(String, PathBuf, (SystemTime, u64))>> {
-        let mut rd = tokio::fs::read_dir(&self.dir)
-            .await
-            .with_context(|| format!("cannot read the playlist folder {}", self.dir.display()))?;
+        let mut rd = match tokio::fs::read_dir(&self.dir).await {
+            Ok(rd) => rd,
+            // An account's folder comes with its first playlist.
+            Err(e) if self.account.is_some() && e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(anyhow!(e).context(format!("cannot read the playlist folder {}", self.dir.display()))),
+        };
         let mut out = Vec::new();
         while let Some(e) = rd.next_entry().await? {
             let name = e.file_name();
@@ -388,6 +452,9 @@ impl Store {
                 id,
                 links: Vec::new(),
                 spoken: Vec::new(),
+                owner: String::new(),
+                shared: false,
+                mine: true,
             });
         }
         out.sort_by_key(|p| p.name.to_lowercase());
@@ -489,7 +556,7 @@ impl Store {
         }
         if let Some(told) = ON_WRITE.get() {
             let after: Vec<String> = m3u::entries(new_text).map(|l| unprefixed(&l, &self.prefix)).collect();
-            told(id, &before, &after);
+            told(&self.key(id), &before, &after);
         }
         Ok(new_text.to_string())
     }
@@ -736,6 +803,9 @@ impl Store {
         }
         let _one_writer = self.write.lock().await;
         let path = self.path_of(name);
+        if self.account.is_some() {
+            tokio::fs::create_dir_all(&self.dir).await.with_context(|| format!("making {}", self.dir.display()))?;
+        }
         // `create_new` fails if the file exists (also on a case-insensitive clash), so nothing is overwritten.
         match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&path).await {
             Ok(_) => {
@@ -975,8 +1045,8 @@ mod tests {
         assert_eq!(
             v,
             vec![
-                PlaylistView { id: "Analogic".into(), name: "Analogic".into(), member: false, count: 1, dead: 0, links: Vec::new(), spoken: Vec::new() },
-                PlaylistView { id: "chill".into(), name: "chill".into(), member: true, count: 2, dead: 0, links: Vec::new(), spoken: Vec::new() },
+                PlaylistView { id: "Analogic".into(), name: "Analogic".into(), member: false, count: 1, dead: 0, links: Vec::new(), spoken: Vec::new(), owner: String::new(), shared: false, mine: true },
+                PlaylistView { id: "chill".into(), name: "chill".into(), member: true, count: 2, dead: 0, links: Vec::new(), spoken: Vec::new(), owner: String::new(), shared: false, mine: true },
             ]
         );
     }

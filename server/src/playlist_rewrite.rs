@@ -163,15 +163,21 @@ pub fn rewrite(content: &str, music: &Path, home: &Path, moves: &Moves, exists: 
     (out, counts)
 }
 
-/// Every playlist file this covers: `*.m3u` in Music and in its playlist folder, and the `*.bak` backups of both.
+/// Every playlist file this covers: `*.m3u` in Music, in its playlist folder and in each account's folder there
+/// (decision 0051), and the `*.bak` backups of each.
 fn playlist_files(music: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for (dir, ext) in [
-        (music.to_path_buf(), "m3u"),
-        (music.join(BACKUP_DIR), "bak"),
-        (music.join(PLAYLIST_DIR), "m3u"),
-        (music.join(PLAYLIST_DIR).join(BACKUP_DIR), "bak"),
-    ] {
+    let mut dirs = vec![music.to_path_buf(), music.join(PLAYLIST_DIR)];
+    if let Ok(rd) = std::fs::read_dir(music.join(PLAYLIST_DIR)) {
+        let mut accounts: Vec<PathBuf> = rd
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && e.file_name().to_str().is_some_and(crate::playlists::account_folder_ok))
+            .map(|e| e.path())
+            .collect();
+        accounts.sort();
+        dirs.extend(accounts);
+    }
+    for (dir, ext) in dirs.iter().flat_map(|d| [(d.clone(), "m3u"), (d.join(BACKUP_DIR), "bak")]) {
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         let mut files: Vec<PathBuf> = rd
             .filter_map(|e| e.ok().map(|e| e.path()))

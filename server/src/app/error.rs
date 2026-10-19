@@ -27,6 +27,9 @@ pub enum ToggleError {
     /// Not this account's to do (decision 0051): an administrator's, or another user's.
     #[error("{0}")]
     Forbidden(String),
+    /// A player's name another account's player has (decision 0051): the device takes another.
+    #[error("{0} is another user's player.")]
+    NameTaken(String),
     #[error("no Music library is set")]
     NoMusicFolder,
     #[error("settings cannot be saved: CRATARR_DATA_DIR is not set")]

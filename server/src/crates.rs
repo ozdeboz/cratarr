@@ -300,6 +300,12 @@ impl CrateStore {
         Self { path: data_dir.map(|d| PathBuf::from(d).join("crates.json")), memory: tokio::sync::Mutex::new(None) }
     }
 
+    /// Another account's crates (decision 0051: one's own, not shared), in its folder of the data folder.
+    pub fn of_account(data_dir: Option<&str>, account: &str) -> Self {
+        let path = data_dir.map(|d| PathBuf::from(d).join("users").join(account).join("crates.json"));
+        Self { path, memory: tokio::sync::Mutex::new(None) }
+    }
+
     async fn stored(&self) -> Result<Stored> {
         let mut slot = self.memory.lock().await;
         if slot.is_none() {
@@ -347,6 +353,9 @@ impl CrateStore {
         s.version = VERSION;
         if let Some(path) = &self.path {
             let bytes = serde_json::to_vec_pretty(&s)?;
+            if let Some(dir) = path.parent() {
+                tokio::fs::create_dir_all(dir).await.context("making the crates' folder")?;
+            }
             if tokio::fs::try_exists(path).await.unwrap_or(false) {
                 tokio::fs::copy(path, path.with_extension("json.bak")).await.context("keeping the crates' previous version")?;
             }
@@ -558,6 +567,19 @@ mod tests {
         assert!(dir.join("crates.json.bak").exists(), "the version before kept");
         assert!(again.delete(&id).await.unwrap());
         assert!(again.list().await.unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn an_accounts_crates_are_its_own() {
+        let dir = std::env::temp_dir().join(format!("cratarr-crates-ann-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (first, ann) = (CrateStore::new(dir.to_str()), CrateStore::of_account(dir.to_str(), "ann"));
+        ann.save(None, "Late", Vec::new()).await.unwrap();
+        assert!(dir.join("users/ann/crates.json").is_file(), "in her folder, made with her first crate");
+        assert!(first.list().await.unwrap().is_empty(), "not the first administrator's");
+        first.save(None, "Late", Vec::new()).await.unwrap();
+        assert_eq!(ann.list().await.unwrap().len(), 1, "a name is unique among one's own only");
         std::fs::remove_dir_all(&dir).ok();
     }
 

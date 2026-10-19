@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::crates::{self, CrateDef};
 use crate::journal::{Change, EventId, Journal, TextChange, fingerprint};
-use crate::playlists::{Edited, PlaylistView, Repair, Repairs};
+use crate::playlists::{Edited, PlaylistView, Repair, Repairs, Store};
 use crate::source::{self, PlaylistChange, PlaylistEvent};
 use crate::sync_state::Kind;
 
@@ -377,6 +377,32 @@ mod undo_tests {
     }
 
     #[tokio::test]
+    async fn each_account_has_its_own_playlists_in_a_folder_of_its_own() {
+        let (d, s) = service().await;
+        let ann = s.lib.store_for(Some("ann")).unwrap();
+        assert!(ann.view(None).await.unwrap().is_empty(), "none until her first");
+        ann.create("Chill").await.unwrap();
+        ann.replace_entries_if("Chill", &[], &["A/1.mp3".to_string()]).await.unwrap();
+        assert_eq!(std::fs::read_to_string(d.join("ann/Chill.m3u")).unwrap(), "../../A/1.mp3
+", "Music-relative, from her folder");
+        // The first administrator's are as they were: hers is not among them, and one of the same name is another.
+        s.create("Chill").await.unwrap();
+        let mine: Vec<(String, bool)> = s.view(None).await.unwrap().into_iter().map(|p| (p.id, p.mine)).collect();
+        assert_eq!(mine, [("Chill".to_string(), true)]);
+        assert!(s.entries("Chill").await.unwrap().is_empty());
+        // Keys tell them apart in Cratarr's own records; Cratarr's own work covers every account's.
+        let top = s.lib.store_for(None).unwrap();
+        assert_eq!((top.key("Chill"), ann.key("Chill")), ("Chill".to_string(), "ann/Chill".to_string()));
+        assert_eq!((ann.name_of_key("ann/Chill"), ann.name_of_key("Chill"), top.name_of_key("ann/Chill")), (Some("Chill"), None, None));
+        let all: Vec<String> = s.lib.all_stores().iter().map(|st| st.key("Chill")).collect();
+        assert_eq!(all, ["Chill", "ann/Chill"]);
+        // Another's, not shared, is as if there were none; and it is never another's to change.
+        assert!(matches!(s.reach("ann/Chill"), Err(ToggleError::UnknownPlaylist)));
+        assert!(matches!(s.set_shared("ann/Chill", true), Err(ToggleError::UnknownPlaylist)));
+        std::fs::remove_dir_all(d.parent().unwrap()).ok();
+    }
+
+    #[tokio::test]
     async fn an_undo_is_undone_by_its_redo_and_happens_only_once() {
         let (d, s) = service().await;
         let lines = |v: &[&str]| v.iter().map(|l| l.to_string()).collect::<Vec<_>>();
@@ -488,7 +514,7 @@ pub struct PlaylistService {
     /// Keeps the user's own server playlists in step (decision 0012).
     sync: Arc<super::sync::SyncService>,
     /// One's own crates (decision 0024).
-    crate_store: crates::CrateStore,
+    crate_stores: CrateStores,
     /// Where every change is kept for its undo (decision 0026).
     journal: Arc<Journal>,
     /// The favourite tracks' lines for the crates (see `favourite_lines`).
@@ -500,6 +526,67 @@ pub struct PlaylistService {
 /// The account the running request is for, whose favourites the crates show.
 fn asking_user() -> Option<String> {
     crate::serve::instance().and_then(|s| s.current_user())
+}
+
+/// The account whose playlists and crates the running request's are (decision 0051): another account's, or `None` for
+/// the first administrator's (theirs are the ones from before accounts), as for Cratarr's own work.
+pub(crate) fn asking_account() -> Option<String> {
+    let s = crate::serve::instance()?;
+    let me = s.current_user()?;
+    (Some(&me) != s.users.owner().as_ref()).then_some(me)
+}
+
+/// Each account's crates (decision 0051: one's own, not shared): the first administrator's in `crates.json` as
+/// before, another's in `users/<account>/crates.json`. One store each, as each keeps its crates in memory.
+struct CrateStores {
+    data_dir: Option<String>,
+    first: Arc<crates::CrateStore>,
+    others: std::sync::Mutex<HashMap<String, Arc<crates::CrateStore>>>,
+}
+
+impl CrateStores {
+    fn new(data_dir: Option<&str>) -> Self {
+        Self { data_dir: data_dir.map(str::to_string), first: Arc::new(crates::CrateStore::new(data_dir)), others: Default::default() }
+    }
+
+    fn of(&self, account: Option<&str>) -> Result<Arc<crates::CrateStore>, ToggleError> {
+        let Some(account) = account else { return Ok(self.first.clone()) };
+        if !crate::playlists::account_folder_ok(account) {
+            return Err(ToggleError::Refused(format!("{account} cannot name a folder for its crates.")));
+        }
+        let mut others = self.others.lock().unwrap_or_else(|p| p.into_inner());
+        let store = others.entry(account.to_string()).or_insert_with(|| Arc::new(crates::CrateStore::of_account(self.data_dir.as_deref(), account)));
+        Ok(store.clone())
+    }
+}
+
+/// The account a playlist owner's name stands for (`None`: the first administrator).
+fn account_of(owner: &str) -> Option<String> {
+    let first = crate::serve::instance().and_then(|s| s.users.owner());
+    (Some(owner) != first.as_deref()).then(|| owner.to_string())
+}
+
+/// The name shown as the owner of an account's playlists.
+fn owner_name(account: Option<&str>) -> String {
+    account.map(str::to_string).or_else(|| crate::serve::instance().and_then(|s| s.users.owner())).unwrap_or_default()
+}
+
+/// A playlist as the asking account names it (decision 0051): its own by name, another's shared one as `owner/name`.
+pub struct Reached {
+    pub store: Arc<Store>,
+    /// Its name among its owner's playlists.
+    pub name: String,
+    /// Whose it is (shown), whether it is shared, and whether it is the asking account's own to change.
+    pub owner: String,
+    pub shared: bool,
+    pub mine: bool,
+}
+
+impl Reached {
+    /// Its key in Cratarr's own records (`Store::key`).
+    pub fn key(&self) -> String {
+        self.store.key(&self.name)
+    }
 }
 
 /// How long the favourites heard are answered before they are asked for again (in the background).
@@ -633,16 +720,15 @@ impl FavouritesKept {
 
 impl PlaylistService {
     pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>) -> Self {
-        let crate_store = crates::CrateStore::new(lib.data_dir());
+        let crate_stores = CrateStores::new(lib.data_dir());
         let favourites = Arc::new(FavouritesKept::load(lib.data_dir().map(|d| std::path::PathBuf::from(d).join("favourites.json"))));
-        Self { lib, sync, crate_store, journal, favourites, stats: StatsKept::default() }
+        Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default() }
     }
 
     /// Every playlist's facts for the Playlists page's table (decision 0042), by id. Worked out again only when a
     /// playlist's file, the library's build or the owner's plays changed since.
     pub async fn playlist_stats(&self) -> Result<std::collections::BTreeMap<String, PlaylistStats>, ToggleError> {
-        let Some(store) = self.lib.store_opt() else { return Ok(Default::default()) };
-        let lists = store.lines_of_all().await?;
+        let lists = self.visible_lines().await?;
         let Some(serve) = crate::serve::instance() else { return Ok(Default::default()) };
         let stamps: String = lists.iter().map(|(id, changed, lines)| format!("{id}:{changed}:{};", lines.len())).collect();
         let s = serve.clone();
@@ -675,8 +761,9 @@ impl PlaylistService {
     /// Ask the media server for the favourites once, at start, when a crate shows by them: the first visit to Crates
     /// then need not wait the minute that may take.
     pub async fn warm_favourites(&self) {
-        let Ok(set) = self.crate_store.all_favourites().await else { return };
-        let needed = crates::permanent().into_iter().chain(self.crate_store.list().await.unwrap_or_default()).any(|c| {
+        let first = self.crate_stores.first.clone();
+        let Ok(set) = first.all_favourites().await else { return };
+        let needed = crates::permanent().into_iter().chain(first.list().await.unwrap_or_default()).any(|c| {
             crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::None) != crates::Favourites::All
         });
         if let (true, Ok((sid, source))) = (needed, self.source_of(None)) {
@@ -687,7 +774,7 @@ impl PlaylistService {
     /// Keep a change in the journal; its undo token (decision 0026). A journal that cannot be written costs only the
     /// undo: the change itself is done.
     fn keep(&self, change: Change) -> Option<String> {
-        match self.journal.record_change(super::library::epoch_now(), &change) {
+        match self.journal.record_change(super::library::epoch_now(), &change, asking_account().as_deref()) {
             Ok(id) => Some(format!("c{id}")),
             Err(e) => {
                 tracing::warn!("journal: cannot keep a change for its undo: {e:#}");
@@ -711,11 +798,15 @@ impl PlaylistService {
     pub async fn undo(&self, token: &str) -> Result<Option<String>, ToggleError> {
         let gone = || ToggleError::Refused("That can no longer be undone.".into());
         let id: EventId = token.strip_prefix('c').and_then(|n| n.parse().ok()).ok_or_else(gone)?;
-        let (change, undone) = self.journal.change(id)?.ok_or_else(gone)?;
+        let (change, undone, account) = self.journal.change(id)?.ok_or_else(gone)?;
+        // One's own changes only (decision 0051).
+        if account != asking_account() {
+            return Err(gone());
+        }
         if undone || !self.journal.claim_change(id, super::library::epoch_now())? {
             return Err(ToggleError::Refused("That was undone already.".into()));
         }
-        match self.reverse(change).await {
+        match self.reverse(change, account.as_deref()).await {
             Ok(redo) => Ok(self.keep(redo)),
             Err(e) => {
                 if let Err(j) = self.journal.release_change(id) {
@@ -728,9 +819,9 @@ impl PlaylistService {
 
     /// Put back what a change replaced, after checking that everything it left is still there. Returns the change
     /// that undoes this undo.
-    async fn reverse(&self, change: Change) -> Result<Change, ToggleError> {
+    async fn reverse(&self, change: Change, account: Option<&str>) -> Result<Change, ToggleError> {
         let changed = || ToggleError::Refused("It changed since; nothing was undone.".into());
-        let store = self.lib.store()?;
+        let store = self.lib.store_for(account)?;
         let left = |text: Option<String>| text.map(|t| fingerprint(&t));
         match change {
             Change::Texts { changes } => {
@@ -746,7 +837,7 @@ impl PlaylistService {
                         None => tracing::warn!("undo: {} changed while it was being put back", c.playlist),
                     }
                 }
-                self.tell_sources(redo.iter().map(|c| (c.playlist.clone(), PlaylistChange::Edited)).collect());
+                self.tell_sources(&store, redo.iter().map(|c| (c.playlist.clone(), PlaylistChange::Edited)).collect());
                 Ok(Change::Texts { changes: redo })
             }
             Change::Created { playlists } => {
@@ -761,7 +852,7 @@ impl PlaylistService {
                         gone.push(name);
                     }
                 }
-                self.tell_sources(gone.iter().map(|n| (n.clone(), PlaylistChange::Deleted)).collect());
+                self.tell_sources(&store, gone.iter().map(|n| (n.clone(), PlaylistChange::Deleted)).collect());
                 Ok(Change::Deleted { playlists: gone })
             }
             Change::Deleted { playlists } => {
@@ -773,7 +864,9 @@ impl PlaylistService {
                 let mut back = Vec::new();
                 for name in playlists {
                     let text = store.restore_deleted(&name).await?;
-                    self.sync.restore_links(&name).await?;
+                    if store.account().is_none() {
+                        self.sync.restore_links(&name).await?;
+                    }
                     back.push((name, fingerprint(&text)));
                 }
                 Ok(Change::Created { playlists: back })
@@ -782,25 +875,27 @@ impl PlaylistService {
                 if store.text(&to).await.is_none() || store.text(&from).await.is_some() {
                     return Err(changed());
                 }
-                self.rename_unkept(&to, &from).await?;
+                self.rename_unkept(&store, &to, &from).await?;
                 Ok(Change::Renamed { from: to, to: from })
             }
             Change::Spoken { playlist, before, after } => {
-                if self.sync.spoken().remove(&playlist).unwrap_or_default() != after || store.text(&playlist).await.is_none() {
+                let key = store.key(&playlist);
+                if self.sync.spoken().remove(&key).unwrap_or_default() != after || store.text(&playlist).await.is_none() {
                     return Err(changed());
                 }
-                self.sync.set_spoken(&playlist, &before)?;
+                self.sync.set_spoken(&key, &before)?;
                 Ok(Change::Spoken { playlist, before: after, after: before })
             }
             Change::Crate { before, after } => {
                 let Some(id) = after.as_ref().or(before.as_ref()).map(|c| c.id.clone()) else { return Err(changed()) };
-                if self.crate_store.list().await?.into_iter().find(|c| c.id == id) != after {
+                let crates = self.crate_stores.of(account)?;
+                if crates.list().await?.into_iter().find(|c| c.id == id) != after {
                     return Err(changed());
                 }
                 match &before {
-                    Some(b) => self.crate_store.put(b.clone()).await.map_err(ToggleError::Refused)?,
+                    Some(b) => crates.put(b.clone()).await.map_err(ToggleError::Refused)?,
                     None => {
-                        self.crate_store.delete(&id).await?;
+                        crates.delete(&id).await?;
                     }
                 }
                 Ok(Change::Crate { before: after, after: before })
@@ -809,15 +904,127 @@ impl PlaylistService {
     }
 
     /// Every playlist, marked where it holds `entry` (the playing track's line), with its links.
+    /// The asking account's own, and the ones others share (decision 0051), by the ids it knows them by.
     pub(super) async fn view(&self, entry: Option<&str>) -> Result<Vec<PlaylistView>> {
-        let Some(store) = self.lib.store_opt() else { return Ok(Vec::new()) };
-        let mut list = store.view(entry).await?;
+        let Ok(own) = self.lib.store_for(asking_account().as_deref()) else { return Ok(Vec::new()) };
+        let shared = self.shared_keys();
+        let mut list = own.view(entry).await?;
         let (mut links, mut spoken) = (self.sync.links(), self.sync.spoken());
+        let mine = owner_name(own.account());
         for p in &mut list {
-            p.links = links.remove(&p.id).unwrap_or_default();
-            p.spoken = spoken.remove(&p.id).unwrap_or_default();
+            let key = own.key(&p.id);
+            // Kept in step with other servers: the first administrator's only.
+            if own.account().is_none() {
+                p.links = links.remove(&p.id).unwrap_or_default();
+            }
+            p.spoken = spoken.remove(&key).unwrap_or_default();
+            (p.owner, p.shared, p.mine) = (mine.clone(), shared.contains(&key), true);
         }
+        for store in self.others(&own) {
+            if !shared.iter().any(|k| store.name_of_key(k).is_some()) {
+                continue;
+            }
+            let owner = owner_name(store.account());
+            for mut p in store.view(entry).await? {
+                if shared.contains(&store.key(&p.id)) {
+                    p.id = format!("{owner}/{}", p.name);
+                    (p.owner, p.shared, p.mine) = (owner.clone(), true, false);
+                    list.push(p);
+                }
+            }
+        }
+        list.sort_by_key(|p| p.name.to_lowercase());
         Ok(list)
+    }
+
+    /// The other accounts' playlists, beside `own`.
+    fn others(&self, own: &Store) -> Vec<Arc<Store>> {
+        self.lib.all_stores().into_iter().filter(|s| s.account() != own.account()).collect()
+    }
+
+    /// The keys of the playlists their owners share.
+    fn shared_keys(&self) -> HashSet<String> {
+        let Some(serve) = crate::serve::instance() else { return HashSet::new() };
+        serve.userdata.shared_playlists().inspect_err(|e| tracing::warn!("the shared playlists not read: {e:#}")).unwrap_or_default()
+    }
+
+    /// `id` as the asking account names it (decision 0051), to read: its own playlist by name, or another's shared
+    /// one as `owner/name` (one not shared is as if there were none).
+    pub fn reach(&self, id: &str) -> Result<Reached, ToggleError> {
+        let me = asking_account();
+        let (account, name) = match id.split_once('/') {
+            Some((owner, name)) => (account_of(owner), name),
+            None => (me.clone(), id),
+        };
+        let store = self.lib.store_for(account.as_deref())?;
+        let shared = self.shared_keys().contains(&store.key(name));
+        let mine = account == me;
+        if !mine && !shared {
+            return Err(ToggleError::UnknownPlaylist);
+        }
+        Ok(Reached { owner: owner_name(store.account()), store, name: name.to_string(), shared, mine })
+    }
+
+    /// `id` to change: the asking account's own only (another's shared one is played and copied).
+    fn own(&self, id: &str) -> Result<(Arc<Store>, String), ToggleError> {
+        let r = self.reach(id)?;
+        if !r.mine {
+            return Err(ToggleError::Forbidden("Only its owner changes it: copy it into your own.".into()));
+        }
+        Ok((r.store, r.name))
+    }
+
+    /// The asking account's playlists and the ones others share, with their lines and when each last changed, by id.
+    async fn visible_lines(&self) -> Result<Vec<(String, i64, Vec<String>)>, ToggleError> {
+        let Ok(own) = self.lib.store_for(asking_account().as_deref()) else { return Ok(Vec::new()) };
+        let mut out = own.lines_of_all().await?;
+        let shared = self.shared_keys();
+        for store in self.others(&own) {
+            if !shared.iter().any(|k| store.name_of_key(k).is_some()) {
+                continue;
+            }
+            let owner = owner_name(store.account());
+            for (name, changed, lines) in store.lines_of_all().await? {
+                if shared.contains(&store.key(&name)) {
+                    out.push((format!("{owner}/{name}"), changed, lines));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Shares one's own playlist with everyone, or stops (decision 0051): they see it, play it and copy it.
+    pub fn set_shared(&self, id: &str, on: bool) -> Result<(), ToggleError> {
+        let (store, name) = self.own(id)?;
+        if !store.path_exists(&name) {
+            return Err(ToggleError::UnknownPlaylist);
+        }
+        let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        Ok(serve.userdata.set_playlist_shared(&store.key(&name), on)?)
+    }
+
+    /// A copy of a playlist (another's shared one, or one's own) among one's own, under a free name. Returns its name
+    /// and the undo token.
+    pub async fn copy(&self, id: &str) -> Result<(String, Option<String>), ToggleError> {
+        let from = self.reach(id)?;
+        let entries = from.store.entries(&from.name).await?;
+        let own = self.lib.store_for(asking_account().as_deref())?;
+        let taken: HashSet<String> = own.view(None).await?.into_iter().map(|p| p.id.to_lowercase()).collect();
+        let name = crate::playlists::free_name(&from.name, |n| taken.contains(&n.to_lowercase()));
+        let undo = self.create_with(&name, &entries).await?;
+        Ok((name, undo))
+    }
+
+    /// A playlist id the asking account would know a key by (`Store::key`): its own by name, another's as `owner/name`.
+    pub fn id_of_key(&self, key: &str) -> String {
+        let me = asking_account();
+        match self.lib.store_for(me.as_deref()).ok().and_then(|own| own.name_of_key(key).map(str::to_string)) {
+            Some(name) => name,
+            None => match key.split_once('/') {
+                Some((account, name)) => format!("{account}/{name}"),
+                None => format!("{}/{key}", owner_name(None)),
+            },
+        }
     }
 
     /// The playlist meant by what was said, as its tracks on a server (decision 0015): Cratarr is the playlist server;
@@ -839,13 +1046,15 @@ impl PlaylistService {
     /// Set the other names a playlist is spoken as. Blank ones are dropped. Returns the undo token (none when nothing
     /// changed).
     pub async fn set_spoken(&self, id: &str, names: &[String]) -> Result<Option<String>, ToggleError> {
-        if self.lib.store()?.entries(id).await.is_err() {
+        let (store, name) = self.own(id)?;
+        if store.entries(&name).await.is_err() {
             return Err(ToggleError::UnknownPlaylist);
         }
         let names: Vec<String> = names.iter().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
-        let before = self.sync.spoken().remove(id).unwrap_or_default();
-        self.sync.set_spoken(id, &names)?;
-        Ok((before != names).then(|| self.keep(Change::Spoken { playlist: id.to_string(), before, after: names })).flatten())
+        let key = store.key(&name);
+        let before = self.sync.spoken().remove(&key).unwrap_or_default();
+        self.sync.set_spoken(&key, &names)?;
+        Ok((before != names).then(|| self.keep(Change::Spoken { playlist: name, before, after: names })).flatten())
     }
 
     /// What a playlist can be linked to.
@@ -868,16 +1077,16 @@ impl PlaylistService {
     /// Make `entry` a member of the playlist or not (`Some`), or flip it (`None`, older pages). Only a real change
     /// is passed on.
     pub(super) async fn set_entry(&self, playlist_id: &str, entry: &str, member: Option<bool>) -> Result<(), ToggleError> {
-        let store = self.lib.store()?;
+        let (store, name) = self.own(playlist_id)?;
         let changed = match member {
-            Some(m) => store.set_member(playlist_id, entry, m).await?,
+            Some(m) => store.set_member(&name, entry, m).await?,
             None => {
-                store.toggle(playlist_id, entry).await?;
+                store.toggle(&name, entry).await?;
                 true
             }
         };
         if changed {
-            self.tell_sources(vec![(playlist_id.to_string(), PlaylistChange::Edited)]);
+            self.tell_sources(&store, vec![(name, PlaylistChange::Edited)]);
         }
         Ok(())
     }
@@ -926,7 +1135,8 @@ impl PlaylistService {
     /// of its file (the tags, the length, the server's id when matched) and whether the file is there. One read of the
     /// catalogue, no request to the server. Returns the server the ids are for.
     pub async fn rows(&self, id: &str, want: Option<&str>) -> Result<(String, Vec<PlaylistRow>), ToggleError> {
-        let entries = self.lib.store()?.entries(id).await?;
+        let r = self.reach(id)?;
+        let entries = r.store.entries(&r.name).await?;
         let sources = self.lib.connected();
         let source = want
             .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
@@ -936,7 +1146,7 @@ impl PlaylistService {
         let mut rows = self.rows_of(entries.clone(), &source).await?;
         // The user's plays of each track and when each entry came, as the user data keeps them (the panel's orders).
         if let Some(serve) = crate::serve::instance() {
-            let (id, rs) = (id.to_string(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
+            let (id, rs) = (r.key(), rows.iter().map(|r| r.id.clone().unwrap_or_default()).collect::<Vec<_>>());
             let me = serve.current_user();
             let facts = tokio::task::spawn_blocking(move || {
                 let plays = match me {
@@ -1008,10 +1218,10 @@ impl PlaylistService {
     /// size and the tags its name in one folder needs. Read from the disk and the catalogue; no request to the server.
     pub async fn export_plan(&self, names: &[String]) -> Result<crate::export::Plan, ToggleError> {
         let music = self.lib.music().ok_or(ToggleError::NoMusicFolder)?;
-        let store = self.lib.store()?;
         let mut lists = Vec::new();
         for n in names {
-            lists.push((n.clone(), store.entries(n).await?));
+            let r = self.reach(n)?;
+            lists.push((r.name.clone(), r.store.entries(&r.name).await?));
         }
         let c = self.lib.catalogue();
         let plan = tokio::task::spawn_blocking(move || {
@@ -1035,9 +1245,9 @@ impl PlaylistService {
 
     /// Every crate (the permanent ones first, then one's own) with how many tracks it holds now (decision 0024).
     pub async fn crates(&self, want: Option<&str>) -> Result<Vec<CrateView>, ToggleError> {
-        let own = self.crate_store.list().await?;
+        let own = self.own_crates()?.list().await?;
         let all: Vec<(bool, CrateDef)> = crates::permanent().into_iter().map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
-        let set = self.crate_store.all_favourites().await?;
+        let set = self.own_crates()?.all_favourites().await?;
         // The favourites are asked for only when a crate shows by them (its conditions, or its toggle): asking the
         // media server for every favourite is slow, and a list of crates that need none must not wait for it. The
         // other settings' counts are then unknown (null) until it is asked.
@@ -1098,6 +1308,7 @@ impl PlaylistService {
     /// Sets a crate's own picture: any picture Cratarr can read, kept as JPEG at most 800 px on its longer side.
     pub async fn set_crate_image(&self, id: &str, data: Vec<u8>) -> Result<(), ToggleError> {
         self.crate_def(id).await?;
+        self.may_picture(id)?;
         let Some(dir) = self.crate_images() else { return Err(ToggleError::SettingsReadOnly) };
         let file = dir.join(image_file(id));
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -1115,6 +1326,7 @@ impl PlaylistService {
 
     /// A crate's own picture and when it was set; `None` when it has none.
     pub async fn crate_image(&self, id: &str) -> Option<(Vec<u8>, std::time::SystemTime)> {
+        self.crate_def(id).await.ok()?;
         let file = self.crate_images()?.join(image_file(id));
         tokio::task::spawn_blocking(move || {
             let modified = std::fs::metadata(&file).and_then(|m| m.modified()).ok()?;
@@ -1127,6 +1339,8 @@ impl PlaylistService {
 
     /// The crate shows its albums' covers again.
     pub async fn remove_crate_image(&self, id: &str) -> Result<(), ToggleError> {
+        self.crate_def(id).await?;
+        self.may_picture(id)?;
         if let Some(file) = self.crate_images().map(|d| d.join(image_file(id))) {
             match tokio::fs::remove_file(&file).await {
                 Ok(()) => {}
@@ -1137,12 +1351,21 @@ impl PlaylistService {
         Ok(())
     }
 
+    /// A built-in crate is everyone's: its picture is the administrators' to change (decision 0051).
+    fn may_picture(&self, id: &str) -> Result<(), ToggleError> {
+        let built_in = crates::permanent().iter().any(|c| c.id == id) || crates::genre_crate(id).is_some();
+        if built_in && !crate::serve::access::administering() {
+            return Err(ToggleError::Forbidden("A built-in crate's picture is for administrators.".into()));
+        }
+        Ok(())
+    }
+
     /// A crate's definition: a permanent one, or one's own.
     pub async fn crate_def(&self, id: &str) -> Result<CrateDef, ToggleError> {
         if let Some(c) = crates::permanent().into_iter().find(|c| c.id == id).or_else(|| crates::genre_crate(id)) {
             return Ok(c);
         }
-        self.crate_store.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
+        self.own_crates()?.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
     }
 
     /// The lines these conditions select, newest first, and the server they are for.
@@ -1195,10 +1418,10 @@ impl PlaylistService {
 
     /// A crate's favourites toggle as set; a genre not set shows all its tracks (a crate not set shows no favourites).
     async fn crate_favourites(&self, id: &str) -> Result<crates::Favourites, ToggleError> {
-        match self.crate_store.all_favourites().await?.get(id) {
+        match self.own_crates()?.all_favourites().await?.get(id) {
             Some(f) => Ok(*f),
             None if crates::genre_crate(id).is_some() => Ok(crates::Favourites::All),
-            None => Ok(self.crate_store.favourites(id).await?),
+            None => Ok(self.own_crates()?.favourites(id).await?),
         }
     }
 
@@ -1206,7 +1429,7 @@ impl PlaylistService {
     /// a tap undoes it by tapping again.
     pub async fn set_crate_favourites(&self, id: &str, fav: crates::Favourites) -> Result<(), ToggleError> {
         self.crate_def(id).await?;
-        Ok(self.crate_store.set_favourites(id, fav).await?)
+        Ok(self.own_crates()?.set_favourites(id, fav).await?)
     }
 
     /// The builder's live preview: an unsaved crate's size and first rows (decision 0024, issue 6).
@@ -1241,7 +1464,7 @@ impl PlaylistService {
 
     /// One's own crate, if there is one with that id.
     async fn own_crate(&self, id: &str) -> Result<Option<CrateDef>> {
-        Ok(self.crate_store.list().await?.into_iter().find(|c| c.id == id))
+        Ok(self.own_crates()?.list().await?.into_iter().find(|c| c.id == id))
     }
 
     /// Saves one's own crate (a new one without `id`); returns its id and the undo token.
@@ -1253,7 +1476,7 @@ impl PlaylistService {
             Some(id) => self.own_crate(id).await?,
             None => None,
         };
-        let id = self.crate_store.save(id, name, conditions).await.map_err(ToggleError::Refused)?;
+        let id = self.own_crates()?.save(id, name, conditions).await.map_err(ToggleError::Refused)?;
         let after = self.own_crate(&id).await?;
         let undo = (before != after).then(|| self.keep(Change::Crate { before, after })).flatten();
         Ok((id, undo))
@@ -1265,7 +1488,7 @@ impl PlaylistService {
             return Err(ToggleError::Refused("A permanent crate cannot be deleted.".into()));
         }
         let before = self.own_crate(id).await?;
-        if !self.crate_store.delete(id).await? {
+        if !self.own_crates()?.delete(id).await? {
             return Err(ToggleError::UnknownPlaylist);
         }
         Ok(self.keep(Change::Crate { before, after: None }))
@@ -1274,7 +1497,7 @@ impl PlaylistService {
     /// The axes and their domains in this library, for the builder (decision 0024, issue 4).
     pub async fn crate_axes(&self, want: Option<&str>) -> Result<Vec<crates::AxisView>, ToggleError> {
         let lib = self.crate_library(want, false).await?;
-        let playlists: Vec<String> = self.lib.store()?.snapshot().await?.into_iter().map(|(name, _, _)| name).collect();
+        let playlists: Vec<String> = self.own_store()?.snapshot().await?.into_iter().map(|(name, _, _)| name).collect();
         Ok(crates::axes(&lib.files, &playlists))
     }
 
@@ -1287,7 +1510,7 @@ impl PlaylistService {
         let c = self.lib.catalogue();
         let files = tokio::task::spawn_blocking(move || c.crate_facts(0)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let mut membership: HashMap<String, Vec<String>> = HashMap::new();
-        for (name, lines, _) in self.lib.store()?.snapshot().await? {
+        for (name, lines, _) in self.own_store()?.snapshot().await? {
             for line in lines {
                 membership.entry(line).or_default().push(name.clone());
             }
@@ -1334,7 +1557,8 @@ impl PlaylistService {
         id: &str,
         want: Option<&str>,
     ) -> Result<(Arc<super::library::Active>, Arc<dyn source::Source>, Vec<String>, usize), ToggleError> {
-        let entries = self.lib.store()?.entries(id).await?;
+        let r = self.reach(id)?;
+        let entries = r.store.entries(&r.name).await?;
         let sources = self.lib.connected();
         let (active, source) = want
             .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
@@ -1349,9 +1573,22 @@ impl PlaylistService {
         Ok((active, source, found.into_iter().flatten().collect(), unknown))
     }
 
-    /// After an edit: the playlist's copies follow (the shared one at once, the others with the next pass).
-    fn tell_sources(&self, changes: Vec<(String, PlaylistChange)>) {
-        self.sync.changed(changes.into_iter().map(|(name, _)| name).collect());
+    /// After an edit: the playlist's copies follow (the shared one at once, the others with the next pass). Only the
+    /// first administrator's are kept in step with other servers (decision 0051).
+    fn tell_sources(&self, store: &Store, changes: Vec<(String, PlaylistChange)>) {
+        if store.account().is_none() {
+            self.sync.changed(changes.into_iter().map(|(name, _)| name).collect());
+        }
+    }
+
+    /// The asking account's own playlists.
+    fn own_store(&self) -> Result<Arc<Store>, ToggleError> {
+        self.lib.store_for(asking_account().as_deref())
+    }
+
+    /// The asking account's own crates.
+    fn own_crates(&self) -> Result<Arc<crates::CrateStore>, ToggleError> {
+        self.crate_stores.of(asking_account().as_deref())
     }
 
     /// 0 when there is no Music folder.
@@ -1359,21 +1596,23 @@ impl PlaylistService {
         Ok(self.view(None).await?.len())
     }
 
+    /// One's own playlists' repairs.
     pub async fn repairs(&self) -> Result<Repairs> {
-        self.lib.store()?.repairs().await
+        self.own_store()?.repairs().await
     }
 
     /// Apply the repairs the client chose (`None` = every safe one, or only those of the playlists `within`). The store
     /// only accepts pairs it currently offers. The sources are then told about each changed playlist. Returns the
     /// changed playlists and the undo token (one for all of them).
     pub async fn apply_repairs(&self, only: Option<Repair>, within: Option<&[String]>) -> Result<(Vec<String>, Option<String>), ToggleError> {
+        let store = self.own_store()?;
         let wanted = match only {
             Some(one) => vec![one],
-            None => safe_within(self.lib.store()?.repairs().await?.safe, within),
+            None => safe_within(store.repairs().await?.safe, within),
         };
-        let edits = self.lib.store()?.apply_repairs(&wanted).await?;
+        let edits = store.apply_repairs(&wanted).await?;
         let changed: Vec<String> = edits.iter().map(|e| e.id.clone()).collect();
-        self.tell_sources(changed.iter().map(|n| (n.clone(), PlaylistChange::Edited)).collect());
+        self.tell_sources(&store, changed.iter().map(|n| (n.clone(), PlaylistChange::Edited)).collect());
         Ok((changed, self.keep_texts(edits)))
     }
 
@@ -1382,7 +1621,7 @@ impl PlaylistService {
     pub async fn album_duplicates(&self) -> Result<Vec<crate::albums::AlbumGroup>> {
         use crate::albums::*;
         let Some(music) = self.lib.music().map(PathBuf::from) else { return Ok(Vec::new()) };
-        let store = self.lib.store()?;
+        let stores = self.lib.all_stores();
         let dir = music.clone();
         let folders: Vec<String> = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
             Ok(std::fs::read_dir(&dir)?
@@ -1410,7 +1649,11 @@ impl PlaylistService {
                         Err(e) => tracing::warn!("source {} has no details for {folder:?}: {e:#}", a.cfg.id),
                     }
                 }
-                let lines = store.lines_in_folder(folder).await?;
+                // Every account's playlists that hold it, by their keys.
+                let mut lines = Vec::new();
+                for store in &stores {
+                    lines.extend(store.lines_in_folder(folder).await?.into_iter().map(|(name, n)| (store.key(&name), n)));
+                }
                 albums.push(build_view(folder, files, cover, &known, lines));
             }
             let comparisons = albums.iter().skip(1).map(|b| compare(&albums[0], b)).collect();
@@ -1422,8 +1665,11 @@ impl PlaylistService {
 
     /// A new playlist is Shared, as playlists were before sync links (decision 0014). Returns the undo token.
     pub async fn create(&self, name: &str) -> Result<Option<String>, ToggleError> {
-        self.lib.store()?.create(name).await?;
-        self.sync.new_playlist(name).await?;
+        let store = self.own_store()?;
+        store.create(name).await?;
+        if store.account().is_none() {
+            self.sync.new_playlist(name).await?;
+        }
         Ok(self.keep(Change::Created { playlists: vec![(name.to_string(), fingerprint(""))] }))
     }
 
@@ -1434,18 +1680,20 @@ impl PlaylistService {
         if !is_rearrangement(expected, entries) {
             return Err(ToggleError::Refused("An edit can only reorder or remove the playlist's own lines.".into()));
         }
-        let Some(edit) = self.lib.store()?.replace_entries_if(id, expected, entries).await? else {
+        let (store, name) = self.own(id)?;
+        let Some(edit) = store.replace_entries_if(&name, expected, entries).await? else {
             return Err(ToggleError::Refused("The playlist changed meanwhile: look at it again.".into()));
         };
-        self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
+        self.tell_sources(&store, vec![(name, PlaylistChange::Edited)]);
         Ok(self.keep_texts(vec![edit]))
     }
 
     /// Take the repeats out of one playlist, the first copy of each track staying: the user's "Remove repeats"
     /// (decision 0025, amended 2026-10-16). Returns the undo token, none when it held none.
     pub async fn remove_repeats(&self, id: &str) -> Result<Option<String>, ToggleError> {
-        let Some(edit) = self.lib.store()?.remove_repeats(id).await? else { return Ok(None) };
-        self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
+        let (store, name) = self.own(id)?;
+        let Some(edit) = store.remove_repeats(&name).await? else { return Ok(None) };
+        self.tell_sources(&store, vec![(name, PlaylistChange::Edited)]);
         Ok(self.keep_texts(vec![edit]))
     }
 
@@ -1455,7 +1703,7 @@ impl PlaylistService {
     pub async fn append_tracks(&self, id: &str, source_id: &str, ids: &[String]) -> Result<(usize, Option<String>), ToggleError> {
         let gone = || ToggleError::Refused("Those tracks are not on a connected server.".into());
         let (a, s) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id).ok_or_else(gone)?;
-        let store = self.lib.store()?;
+        let (store, name) = self.own(id)?;
         let folders = self.lib.folders();
         let mut entries = Vec::new();
         for track in ids {
@@ -1471,19 +1719,40 @@ impl PlaylistService {
         if entries.is_empty() {
             return Err(ToggleError::NotInLibrary);
         }
-        let edit = store.append(id, &entries).await?;
-        self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
+        let edit = store.append(&name, &entries).await?;
+        self.tell_sources(&store, vec![(name, PlaylistChange::Edited)]);
         Ok((entries.len(), self.keep_texts(vec![edit])))
     }
 
-    /// Every playlist's name, lines and missing-track count (the OpenSubsonic playlists, decision 0030).
+    /// The asking account's playlists and the ones others share, by id, with their lines and missing-track counts
+    /// (the OpenSubsonic playlists, decision 0030).
     pub async fn snapshot(&self) -> Result<Vec<(String, Vec<String>, usize)>, ToggleError> {
-        Ok(self.lib.store()?.snapshot().await?)
+        let Ok(own) = self.own_store() else { return Ok(Vec::new()) };
+        let mut out = own.snapshot().await?;
+        let shared = self.shared_keys();
+        for store in self.others(&own) {
+            if !shared.iter().any(|k| store.name_of_key(k).is_some()) {
+                continue;
+            }
+            let owner = owner_name(store.account());
+            out.extend(store.snapshot().await?.into_iter().filter(|(n, _, _)| shared.contains(&store.key(n))).map(|(n, l, d)| (format!("{owner}/{n}"), l, d)));
+        }
+        Ok(out)
     }
 
-    /// One playlist's lines.
+    /// Every account's playlists' lines, for what draws on all of them (Radio's sense of what goes together).
+    pub async fn snapshot_all(&self) -> Result<Vec<(String, Vec<String>, usize)>, ToggleError> {
+        let mut out = Vec::new();
+        for store in self.lib.all_stores() {
+            out.extend(store.snapshot().await?.into_iter().map(|(n, l, d)| (store.key(&n), l, d)));
+        }
+        Ok(out)
+    }
+
+    /// One playlist's lines (one's own, or a shared one).
     pub async fn entries(&self, id: &str) -> Result<Vec<String>, ToggleError> {
-        Ok(self.lib.store()?.entries(id).await?)
+        let r = self.reach(id)?;
+        Ok(r.store.entries(&r.name).await?)
     }
 
     /// A playlist's lines replaced as one write, as `edit`, but the new list may also hold lines it did not have (an
@@ -1491,10 +1760,11 @@ impl PlaylistService {
     /// a client sent. Refused when the playlist changed since `expected`. Repeats are kept as the client wrote them
     /// (decision 0025, amended 2026-10-16). Returns the undo token (none when nothing changed).
     pub async fn set_entries(&self, id: &str, expected: &[String], entries: &[String]) -> Result<Option<String>, ToggleError> {
-        let Some(edit) = self.lib.store()?.replace_entries_if(id, expected, entries).await? else {
+        let (store, name) = self.own(id)?;
+        let Some(edit) = store.replace_entries_if(&name, expected, entries).await? else {
             return Err(ToggleError::Refused("The playlist changed meanwhile: look at it again.".into()));
         };
-        self.tell_sources(vec![(id.to_string(), PlaylistChange::Edited)]);
+        self.tell_sources(&store, vec![(name, PlaylistChange::Edited)]);
         Ok(self.keep_texts(vec![edit]))
     }
 
@@ -1522,44 +1792,57 @@ impl PlaylistService {
     /// A new playlist holding these entries, in order (a playlist made from the queue, decision 0019). Returns the
     /// undo token.
     pub async fn create_with(&self, name: &str, entries: &[String]) -> Result<Option<String>, ToggleError> {
-        let store = self.lib.store()?;
+        let store = self.own_store()?;
         store.create(name).await?;
         // Filled only while still empty: never over an edit made since it was created.
         let Some(filled) = store.replace_entries_if(name, &[], entries).await? else {
             return Err(ToggleError::Refused("The new playlist changed while it was being filled.".into()));
         };
-        self.sync.new_playlist(name).await?;
+        if store.account().is_none() {
+            self.sync.new_playlist(name).await?;
+        }
         Ok(self.keep(Change::Created { playlists: vec![(name.to_string(), fingerprint(&filled.after))] }))
     }
 
     /// Returns the undo token.
     pub async fn rename(&self, from: &str, to: &str) -> Result<Option<String>, ToggleError> {
-        self.rename_unkept(from, to).await?;
-        Ok(self.keep(Change::Renamed { from: from.to_string(), to: to.to_string() }))
+        let (store, from) = self.own(from)?;
+        self.rename_unkept(&store, &from, to).await?;
+        Ok(self.keep(Change::Renamed { from, to: to.to_string() }))
     }
 
-    async fn rename_unkept(&self, from: &str, to: &str) -> Result<(), ToggleError> {
-        let store = self.lib.store()?;
-        // Through the sync, so the server copies keep following the playlist (decision 0012).
-        self.sync.rename(from, to, store.rename(from, to)).await?;
-        self.tell_sources(vec![(from.to_string(), PlaylistChange::Deleted), (to.to_string(), PlaylistChange::Created)]);
-        // Subsonic clients keep a playlist's id (`pl-` and its name) across a rename (decision 0030).
+    async fn rename_unkept(&self, store: &Store, from: &str, to: &str) -> Result<(), ToggleError> {
+        if store.account().is_none() {
+            // Through the sync, so the server copies keep following the playlist (decision 0012).
+            self.sync.rename(from, to, store.rename(from, to)).await?;
+        } else {
+            store.rename(from, to).await?;
+        }
+        self.tell_sources(store, vec![(from.to_string(), PlaylistChange::Deleted), (to.to_string(), PlaylistChange::Created)]);
+        // Subsonic clients keep a playlist's id (`pl-` and its name) across a rename (decision 0030); it stays shared.
         if let Some(serve) = crate::serve::instance() {
-            serve.playlist_renamed(from, to);
+            serve.playlist_renamed(&store.key(from), &store.key(to));
         }
         Ok(())
     }
 
-    /// The store keeps it aside; its undo brings it back with the links it had. Returns the undo token.
+    /// The store keeps it aside; its undo brings it back with the links it had (unshared). Returns the undo token.
     pub async fn delete(&self, id: &str) -> Result<Option<String>, ToggleError> {
-        self.lib.store()?.delete(id).await?;
-        self.tell_sources(vec![(id.to_string(), PlaylistChange::Deleted)]);
-        Ok(self.keep(Change::Deleted { playlists: vec![id.to_string()] }))
+        let (store, name) = self.own(id)?;
+        store.delete(&name).await?;
+        if let Some(serve) = crate::serve::instance()
+            && let Err(e) = serve.userdata.set_playlist_shared(&store.key(&name), false)
+        {
+            tracing::warn!("{name}: no longer shared, but that was not kept: {e:#}");
+        }
+        self.tell_sources(&store, vec![(name.clone(), PlaylistChange::Deleted)]);
+        Ok(self.keep(Change::Deleted { playlists: vec![name] }))
     }
 
-    /// Re-check which playlist entries point at missing files (the library changes without the playlists).
+    /// Re-check which playlist entries point at missing files (the library changes without the playlists): every
+    /// account's.
     pub async fn refresh_dead(&self) {
-        if let Some(store) = self.lib.store_opt() {
+        for store in self.lib.all_stores() {
             store.refresh_dead().await;
         }
     }

@@ -624,9 +624,9 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
     {
         return Ok(c.index.clone());
     }
-    // The playlists' songs: each playlist's lines through the catalogue, as the Subsonic playlists are read.
+    // The playlists' songs: every account's playlists' lines through the catalogue (what people put together).
     let lines = match served.playlists() {
-        Some(p) => p.snapshot().await.map_err(|e| anyhow::anyhow!("reading the playlists: {e:?}"))?,
+        Some(p) => p.snapshot_all().await.map_err(|e| anyhow::anyhow!("reading the playlists: {e:?}"))?,
         None => Vec::new(),
     };
     let (served2, dir) = (served.clone(), dir.to_path_buf());

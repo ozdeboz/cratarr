@@ -90,6 +90,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists", post(create_playlist))
         .route("/api/playlists/{id}", delete(delete_playlist))
         .route("/api/playlists/{id}/rename", post(rename_playlist))
+        .route("/api/playlists/{id}/shared", put(share_playlist))
+        .route("/api/playlists/{id}/copy", post(copy_playlist))
         .route("/api/playlists/by-name", get(playlist_by_name))
         .route("/api/playlists/{id}/spoken", put(set_spoken))
         .route("/api/album-uses/{source}", get(album_uses))
@@ -1808,6 +1810,23 @@ async fn create_playlist(State(app): State<Arc<App>>, Json(req): Json<NameReques
     Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "undo": undo }))))
 }
 
+#[derive(Deserialize)]
+struct SharedRequest {
+    shared: bool,
+}
+
+/// One's own playlist shared with everyone, or no longer (decision 0051).
+async fn share_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<SharedRequest>) -> Result<StatusCode, ApiError> {
+    app.playlists.set_shared(&id, req.shared)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A copy of a playlist (another's shared one, or one's own) among one's own, under a free name.
+async fn copy_playlist(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let (name, undo) = app.playlists.copy(&id).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "playlist": name, "undo": undo }))))
+}
+
 async fn rename_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<RenameRequest>) -> Result<Json<serde_json::Value>, ApiError> {
     let undo = app.playlists.rename(&id, &req.to).await?;
     Ok(Json(json!({ "playlist": req.to, "undo": undo })))
@@ -2181,7 +2200,9 @@ impl IntoResponse for ApiError {
             | ToggleError::NothingToUndo
             | ToggleError::Exists => StatusCode::CONFLICT,
             ToggleError::BadName | ToggleError::BadSettings(_) => StatusCode::BAD_REQUEST,
-            ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::Refused(_) | ToggleError::NoMusicFolder => StatusCode::CONFLICT,
+            ToggleError::SettingsReadOnly | ToggleError::CannotPlay(_) | ToggleError::Refused(_) | ToggleError::NoMusicFolder | ToggleError::NameTaken(_) => {
+                StatusCode::CONFLICT
+            }
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
             ToggleError::Forbidden(_) => StatusCode::FORBIDDEN,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
@@ -2189,7 +2210,12 @@ impl IntoResponse for ApiError {
         if matches!(self.0, ToggleError::Upstream(_)) {
             tracing::error!("{:#}", self.0);
         }
-        (status, Json(json!({ "error": self.0.to_string() }))).into_response()
+        let mut body = json!({ "error": self.0.to_string() });
+        // The device takes another name (decision 0051).
+        if matches!(self.0, ToggleError::NameTaken(_)) {
+            body["taken"] = true.into();
+        }
+        (status, Json(body)).into_response()
     }
 }
 

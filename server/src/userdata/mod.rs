@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS visual_rating (
 CREATE TABLE IF NOT EXISTS visual_thumb (user TEXT NOT NULL, at INTEGER NOT NULL, thumb TEXT NOT NULL, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS visual_limits (
   user TEXT PRIMARY KEY, version INTEGER NOT NULL, limits TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS playlist_shared (playlist TEXT PRIMARY KEY, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS user_settings (user TEXT PRIMARY KEY, version INTEGER NOT NULL, settings TEXT NOT NULL, at INTEGER NOT NULL);
 ";
 
 /// Until 2026-10-16 the album panel's heart starred the album's id as a song's, where no Subsonic app looked; it is the
@@ -785,6 +787,35 @@ impl UserData {
         Ok(Ok(version))
     }
 
+    /// A user's own settings (decision 0051: Radio's and Autoplay's defaults and the like, as the apps keep them) and
+    /// their version; version 0 and none while nothing is kept.
+    pub fn settings_of(&self, user: &str) -> Result<(i64, serde_json::Value)> {
+        let kept = self
+            .db()
+            .query_row("SELECT version, settings FROM user_settings WHERE user = ?1", [user], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .optional()?;
+        Ok(match kept {
+            Some((version, s)) => (version, serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({}))),
+            None => (0, serde_json::json!({})),
+        })
+    }
+
+    /// A user's settings, kept over the version `base`; the new version, or `Stale` where `base` is not the one kept.
+    pub fn put_settings(&self, user: &str, base: i64, settings: &serde_json::Value) -> Result<std::result::Result<i64, Stale>> {
+        let db = self.db();
+        let kept: Option<i64> = db.query_row("SELECT version FROM user_settings WHERE user = ?1", [user], |r| r.get(0)).optional()?;
+        if kept.unwrap_or(0) != base {
+            return Ok(Err(Stale));
+        }
+        let version = now_ms().max(base + 1);
+        db.execute(
+            "INSERT INTO user_settings (user, version, settings, at) VALUES (?1, ?2, ?3, ?4)
+               ON CONFLICT (user) DO UPDATE SET version = excluded.version, settings = excluded.settings, at = excluded.at",
+            params![user, version, settings.to_string(), now()],
+        )?;
+        Ok(Ok(version))
+    }
+
     /// What was learned, forgotten: the next keeps over version 0.
     pub fn forget_learned(&self, user: &str) -> Result<()> {
         self.db().execute("DELETE FROM visual_limits WHERE user = ?1", [user])?;
@@ -807,6 +838,8 @@ impl UserData {
         tx.execute("DELETE FROM playlist_alias WHERE old = ?1", [to])?;
         tx.execute("DELETE FROM playlist_entry WHERE playlist = ?1", [to])?;
         tx.execute("UPDATE playlist_entry SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
+        tx.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [to])?;
+        tx.execute("UPDATE playlist_shared SET playlist = ?2 WHERE playlist = ?1", params![from, to])?;
         tx.commit()?;
         Ok(())
     }
@@ -822,10 +855,27 @@ impl UserData {
         Ok(())
     }
 
-    /// A playlist is gone: none of its old names leads anywhere.
+    /// A playlist is gone: none of its old names leads anywhere, and it is no longer shared.
     pub fn playlist_gone(&self, name: &str) -> Result<()> {
         self.db().execute("DELETE FROM playlist_alias WHERE name = ?1 OR old = ?1", [name])?;
         self.db().execute("DELETE FROM playlist_entry WHERE playlist = ?1", [name])?;
+        self.db().execute("DELETE FROM playlist_shared WHERE playlist = ?1", [name])?;
+        Ok(())
+    }
+
+    /// The playlists their owners share with everyone (decision 0051), by their keys (`Store::key`).
+    pub fn shared_playlists(&self) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT playlist FROM playlist_shared")?;
+        Ok(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_playlist_shared(&self, playlist: &str, on: bool) -> Result<()> {
+        if on {
+            self.db().execute("INSERT OR IGNORE INTO playlist_shared (playlist, at) VALUES (?1, ?2)", params![playlist, now()])?;
+        } else {
+            self.db().execute("DELETE FROM playlist_shared WHERE playlist = ?1", [playlist])?;
+        }
         Ok(())
     }
 

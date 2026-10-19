@@ -673,7 +673,7 @@ fn claim<'a>(entries: &'a mut HashMap<String, Entry>, name: &str, whose: Option<
     if let (Some(user), Some(e)) = (whose, entries.get(name))
         && !belongs_to(e, user, first_owner().as_deref())
     {
-        return Err(ToggleError::Refused(format!("{name} is another user's player.")));
+        return Err(ToggleError::NameTaken(name.to_string()));
     }
     let e = entries.entry(name.to_string()).or_insert_with(Entry::new);
     if e.owner.is_none() {
