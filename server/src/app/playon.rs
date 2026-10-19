@@ -1220,12 +1220,16 @@ impl PlayOn {
         if report.version.is_some_and(|v| v >= e.told) {
             e.giving_back = false;
         }
+        // Back without a queue before its command stream is open (an app reports as it starts, and may before it
+        // connects): what it says is not taken, and its queue is given back once it is connected (the tablet's was taken
+        // as empty at 13:23, 2026-10-19, after its app was updated, and was lost).
+        let early_empty = e.connection.is_none() && report.index < 0 && !e.queue.tracks.is_empty() && e.kind != PlayerKind::Kodi;
         if give_back.is_some() {
             e.giving_back = true;
             // Told here already (`send` tells it again): a report between this lock and the send must not count.
             e.told = e.queue.version;
             e.at = Instant::now();
-        } else if !before_given {
+        } else if !before_given && !early_empty {
             // Taken as the player holds it, unless it was made before Cratarr's latest edit reached the player: that edit
             // is on its way, and the player reports again once it has it (no flip back and forth).
             if report.version.is_none_or(|v| v >= e.told) {
@@ -2212,6 +2216,28 @@ mod tests {
         // Once it has it, its reports count again: the queue as it holds it, emptied too.
         p.report("tablet", Report { index: -1, queue: Some(Vec::new()), version: play["version"].as_u64(), ..Report::default() }).unwrap();
         assert_eq!(p.get("tablet").unwrap().queue_length, 0);
+    }
+
+    #[tokio::test]
+    async fn a_player_back_without_its_queue_before_it_connects_still_gets_it_back() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let tablet = p.connect("tablet").unwrap();
+        p.command("tablet", Command::play(vec![t("tr-1"), t("tr-2"), t("tr-3")], 2, 0)).await.unwrap();
+        let version = p.get("tablet").unwrap().queue_version;
+        p.report("tablet", Report { index: 2, version: Some(version), playing: true, ..Report::default() }).unwrap();
+
+        // Its app is updated and starts again by itself: it reports nothing queued before its connection is open (the
+        // tablet at 13:23, 2026-10-19), and that is not taken.
+        drop(tablet);
+        p.report("tablet", Report { index: -1, queue: Some(Vec::new()), ..Report::default() }).unwrap();
+        assert_eq!(p.get("tablet").unwrap().queue_length, 3, "not emptied before it is connected");
+        let mut tablet = p.connect("tablet").unwrap();
+        said(&mut tablet);
+        p.report("tablet", Report { index: -1, queue: Some(Vec::new()), ..Report::default() }).unwrap();
+        let back = told(&mut tablet);
+        let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back once connected");
+        assert_eq!((play["index"].as_u64(), play["tracks"].as_array().map(Vec::len)), (Some(2), Some(3)));
     }
 
     #[tokio::test]
