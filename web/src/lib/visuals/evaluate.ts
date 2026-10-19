@@ -81,9 +81,9 @@ const finite = (v: unknown, or = 0) => (typeof v === 'number' && Number.isFinite
 export const letThrough = (peak: number, y: number, e: number, w = 1) => 1 - w * (1 - Math.min(1, Math.max(0, 1 - e * (peak - y))));
 
 /** A cable's value as `compile` takes it: its end, its table where it bends, its peak, and whether it walks. */
-type Shape = { end: number; table: Float32Array | null; peak: number; walks: boolean };
+export type Shape = { end: number; table: Float32Array | null; peak: number; walks: boolean };
 const shapes = new WeakMap<Curve, { key: string; shape: Shape }>();
-function shapeOf(v: RouteValue): Shape {
+export function shapeOf(v: RouteValue): Shape {
   if (typeof v === 'number') {
     const end = finite(v);
     return { end, table: null, peak: Math.max(0, end), walks: false };
@@ -98,7 +98,7 @@ function shapeOf(v: RouteValue): Shape {
   shapes.set(v, { key, shape });
   return shape;
 }
-const heightOf = (s: Shape, x: number) => (s.table ? heightAt(s.table, x) : s.end * x);
+export const heightOf = (s: Shape, x: number) => (s.table ? heightAt(s.table, x) : s.end * x);
 
 /** A knob that is one band's own (`lighting.2`): band cables into it act as the whole track's do. */
 const BAND_KNOB = /\.\d+$/;

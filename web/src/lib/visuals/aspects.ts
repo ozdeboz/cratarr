@@ -186,7 +186,17 @@ export function stepAspects(
   m: Music,
   s: VisualSettings,
   dt: number,
-  opts: { still: boolean; now: number; matrix?: Matrix; fluidFull: number; levers?: Levers; routeWalk?: Float32Array },
+  opts: {
+    still: boolean;
+    now: number;
+    matrix?: Matrix;
+    fluidFull: number;
+    levers?: Levers;
+    routeWalk?: Float32Array;
+    /** More given beside the routes (decision 0056: the patch's cables into today's columns, chain-cables.ts), told the
+     *  track's signals now (the Track pulse in them) and the envelope. */
+    extra?: (got: Given, track: Float32Array, envelope: number) => void;
+  },
 ): AspectsNow {
   const { still, now } = opts;
   const L = opts.levers ?? OPEN;
@@ -217,6 +227,7 @@ export function stepAspects(
   const bands = m.bands ?? st.standIn;
   const envelope = m.playing ? st.lit : 0;
   give(matrix, track, bands, envelope, st.got, opts.routeWalk);
+  opts.extra?.(st.got, track, envelope);
   // Each column as far as its scale lets its routes move it (64.2): the whole track's and each band's.
   for (const [a, k] of SCALED) {
     const v = s[k];
