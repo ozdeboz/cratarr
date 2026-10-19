@@ -70,8 +70,10 @@
   import { FlameRenderer } from './render';
   import { Compositor } from './compose';
   import { newNormalState, signalsFor } from './normal';
+  import { giveCables } from './chain-cables';
+  import { shapeOf } from './evaluate';
   import { evaluate, newEvalState, type Evaluated } from './evaluate';
-  import type { Cable, Knob, Module, PatchExtra } from './patch';
+  import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
   import PatchGraph from './PatchGraph.svelte';
   import { cratarrPatch, cratarrTypes, type ModuleType } from './patch';
@@ -1577,6 +1579,11 @@
       const still = reducedMotion();
       // How it behaves now: as set, each walking slider at its walk's share of it (not with the rating page's trial).
       const behaving = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
+      // The signals, read once a frame (normal.ts), with the Track pulse aspects.ts makes; and the patch's cables into
+      // today's columns (chain-cables.ts) given beside the routes, from them and the modulators as last stepped.
+      let read: (ref: SignalRef) => number = () => 0;
+      const extraCables = s.extra?.cables ?? [];
+      const cableWalk = Object.fromEntries(extraCables.map((c) => [c.id, walkFactor[`cable:${c.id}`] ?? 1]));
       const d = stepAspects(aspects, m, behaving, dt, {
         still,
         now,
@@ -1584,6 +1591,12 @@
         fluidFull: FLUID_FULL,
         levers: governor.levers,
         routeWalk: routeWalkFor === matrix ? routeWalk : undefined,
+        extra: (got, trackNow, envelope) => {
+          m.track[T.track] = trackNow[T.track];
+          read = signalsFor(normal, m, now);
+          if (extraCables.length)
+            giveCables(got, extraCables, { signals: read, outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES }, envelope, cableWalk, BANDS);
+        },
       });
       const { turn, hits, parts, track } = d;
       if (m.playing && m.hits)
@@ -1620,7 +1633,7 @@
           dt: driftDt,
           seed: seedOf(m.key ?? 'cratarr'),
           bar: Math.floor((m.beat ? m.beat.index : m.position * 2) / 4),
-          keys: [...BEHAVIOUR_PINS, ...matrix.walks.map((k) => `route:${k}`)],
+          keys: [...BEHAVIOUR_PINS, ...matrix.walks.map((k) => `route:${k}`), ...(s.extra?.cables ?? []).filter((c) => shapeOf(c.value).walks).map((c) => `cable:${c.id}`)],
           pins: s.pins.filter((p) => !p.startsWith('route:')),
         });
         routeWalk = Float32Array.from(matrix.walks, (k) => walkFactor[`route:${k}`] ?? 1);
@@ -1752,9 +1765,8 @@
       // The patch past the flame, this frame: on when there is anything of it.
       const extra = s.extra;
       if (compositor && renderer) {
-        const read = signalsFor(normal, m, now);
         const p = patchNow;
-        evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat } }) : null;
+        evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat }, walk: cableWalk }) : null;
         const active = Compositor.active(extra, knobsOf);
         renderer.compose = active
           ? {
