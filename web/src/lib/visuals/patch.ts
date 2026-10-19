@@ -25,7 +25,7 @@ export type Knob = {
 
 /** Where a module can sit: a layer's source, a module on a layer (or after the blend), a loop (a layer's own, or the
  *  picture's), finish, the whole frame, or a modulator (no picture). */
-/** The kinds of busyness a Meter measures and a Compressor is keyed by (governor.ts's budgets but the flashes, which
+/** The kinds of busyness a Meter measures and a Compressor is keyed by (meters.ts's busyness measures but the flashes, which
  *  the Screen's guard holds). */
 export const BUSY = ['motion', 'shape', 'colour', 'zoom', 'looks'] as const;
 export type Busy = (typeof BUSY)[number];
