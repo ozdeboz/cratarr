@@ -34,6 +34,8 @@ for (const [a, [m, k]] of Object.entries(ASPECT_KNOB) as [Aspect, [string, strin
   if (k === 'size') COLUMN.set('flame|zoom', A[a]);
   else if (part) COLUMN.set(`show/${part.type}|${k}`, A[a]);
 }
+/** The chain's column a knob is (`module|knob`, flattened), by its place in ASPECTS. */
+export const columnAt = (key: string): number | undefined => COLUMN.get(key);
 /** The column a chain aspect's cables go into, flattened. */
 const columnOf = (a: Aspect): string[] => [...COLUMN].filter(([, i]) => i === A[a]).map(([key]) => key);
 /** Each ADSR gate's strikes, by the Music port its gate reads. */
