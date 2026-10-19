@@ -126,7 +126,7 @@ test('knobs: a few shown, the cabled ones always, never the device’s; opened o
   const o = (id: string) => open.nodes.find((n) => n.id === id)!.data as ModuleData;
   assert.equal(o('s1').knobs.length, 5);
   assert.equal(o('s1').hidden, 0);
-  assert.deepEqual(o('lfo').knobs.map((k) => k.id), ['rate', 'shape', 'offset', 'amount']);
+  assert.deepEqual(o('lfo').knobs.map((k) => k.id), ['rate', 'shape', 'offset', 'ratio', 'amount']);
 });
 
 test('signals and modulators sit under what they move, a port’s feed beside its modulator', () => {
