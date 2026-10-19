@@ -3,8 +3,8 @@
 // of today's pipeline, the Cratarr chain that is exactly that pipeline, and the way to and from today's settings
 // (settings.svelte.ts), losing nothing, so the panel and the renderer can move over one at a time. Pure.
 
-import { ASPECTS, isRoute, routeKey, type Aspect } from './routes';
-import type { RouteValue } from './curves';
+import { ASPECTS, BAND_SIGNALS, isRoute, routeKey, TRACK_SIGNALS, type Aspect } from './routes';
+import { curveFrom, valueOf as keptValue, type RouteValue } from './curves';
 import type { VisualSettings } from './settings.svelte';
 
 /** A knob: its range, its neutral (where its module does nothing) and its default. A level is a share its cables let
@@ -61,6 +61,12 @@ export type Patch = {
   /** What the dice, the walks and a track leave as it is: knobs (`module.knob`) and cables (`cable:<id>`). */
   pins: string[];
 };
+
+/** The patch beyond today's chain, as the settings keep it (`VisualSettings.extra`): the layers after the flame, the
+ *  picture's own loop, the modulators, the cables today's routes cannot hold (from a modulator; to a knob no route
+ *  column reaches; with a reference or a speed), and the macros. */
+export type PatchExtra = { layers: Layer[]; loop: Module[]; modulators: Module[]; cables: Cable[]; macros: Macro[] };
+export const emptyExtra = (): PatchExtra => ({ layers: [], loop: [], modulators: [], cables: [], macros: [] });
 
 /** What a frame gives the modules that draw (step 4). */
 export type FrameInfo = {
@@ -273,6 +279,90 @@ export function cratarrTypes(ranges: Record<string, [number, number]>, defaults:
   ];
 }
 
+// ---- The patch beyond today's chain, as kept: checked -------------------------------------------------------------
+
+/** The Cratarr chain's modules and their knobs (cables from the extras may reach them). */
+const CHAIN_KNOBS = (() => {
+  const out = new Map<string, Set<string>>();
+  const add = (m: string, k: string) => (out.get(m) ?? out.set(m, new Set()).get(m)!).add(k);
+  for (const [m, k] of Object.values(SETTING_KNOB)) add(m, k);
+  add('frame', 'lookWalk');
+  add('frame', 'behaviourWalk');
+  for (const key of BAND_KNOBS) for (let b = 0; b < BANDS; b++) add('flame', `${key}.${b}`);
+  return out;
+})();
+const ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const BLENDS = ['add', 'screen', 'over', 'multiply'] as const;
+const clampTo = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const listOf = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+/** The extras as kept or come from the group, checked against the module types there are (`typeOf`): a module of a
+ *  type there is not, in a place it cannot sit, or with an id taken, is left out; its knobs brought into their ranges
+ *  (a missing one at its default); a cable whose ends are not there, or a macro's target, left out. */
+export function extraFrom(kept: unknown, typeOf: (type: string) => ModuleType | undefined): PatchExtra {
+  const out = emptyExtra();
+  if (!isObject(kept)) return out;
+  const taken = new Set<string>([...CHAIN_KNOBS.keys(), 'flame', 'loop', 'finish']);
+  const knobsOf = new Map<string, Set<string>>(CHAIN_KNOBS);
+  const moduleFrom = (v: unknown, places: Place[]): Module | null => {
+    if (!isObject(v) || typeof v.id !== 'string' || !ID.test(v.id) || taken.has(v.id) || typeof v.type !== 'string') return null;
+    const t = typeOf(v.type);
+    if (!t || !places.includes(t.place)) return null;
+    const given = isObject(v.knobs) ? v.knobs : {};
+    const knobs = Object.fromEntries(t.knobs.map((k) => [k.id, clampTo(given[k.id], k.min, k.max, k.default)]));
+    taken.add(v.id);
+    knobsOf.set(v.id, new Set([...t.knobs.map((k) => k.id), ...(t.inputs ?? [])]));
+    return { id: v.id, type: t.type, knobs };
+  };
+  const modulesFrom = (v: unknown, places: Place[]) => listOf(v).map((m) => moduleFrom(m, places)).filter((m): m is Module => m !== null);
+  for (const l of listOf(kept.layers)) {
+    if (!isObject(l) || typeof l.id !== 'string' || !ID.test(l.id) || taken.has(l.id)) continue;
+    taken.add(l.id);
+    const source = moduleFrom(l.source, ['source']);
+    if (!source) continue;
+    const blend = isObject(l.blend) ? l.blend : {};
+    const mode = (BLENDS as readonly unknown[]).includes(blend.mode) ? (blend.mode as Layer['blend']['mode']) : 'add';
+    out.layers.push({ id: l.id, source, modules: modulesFrom(l.modules, ['module']), loop: modulesFrom(l.loop, ['loop']), blend: { mode, amount: clampTo(blend.amount, 0, 1, 1) } });
+  }
+  out.loop = modulesFrom(kept.loop, ['loop']);
+  out.modulators = modulesFrom(kept.modulators, ['modulator']);
+  const modulatorIds = new Set(out.modulators.map((m) => m.id));
+  const cableIds = new Set<string>();
+  for (const c of listOf(kept.cables)) {
+    if (!isObject(c) || typeof c.id !== 'string' || c.id.length > 80 || cableIds.has(c.id) || !isObject(c.from) || !isObject(c.to)) continue;
+    const to = c.to;
+    if (typeof to.module !== 'string' || typeof to.knob !== 'string' || !knobsOf.get(to.module)?.has(to.knob)) continue;
+    let from: Cable['from'] | null = null;
+    if (typeof c.from.modulator === 'string') from = modulatorIds.has(c.from.modulator) ? { modulator: c.from.modulator } : null;
+    else if (typeof c.from.signal === 'string') {
+      const track = (TRACK_SIGNALS as readonly string[]).includes(c.from.signal);
+      const band = (BAND_SIGNALS as readonly string[]).includes(c.from.signal);
+      const b = c.from.band;
+      if (track || (band && typeof b === 'number' && Number.isInteger(b) && b >= 0 && b < BANDS)) {
+        const ref: SignalRef = { signal: c.from.signal, ...(band ? { band: b as number } : {}) };
+        if (c.from.reference === 'track' || c.from.reference === 'lately' || c.from.reference === 'absolute') ref.reference = c.from.reference;
+        if (c.from.speed === 'fast' || c.from.speed === 'slow') ref.speed = c.from.speed;
+        from = ref;
+      }
+    }
+    if (!from) continue;
+    const curve = typeof c.value === 'number' ? null : curveFrom(c.value);
+    if (typeof c.value !== 'number' && !curve) continue;
+    cableIds.add(c.id);
+    const value: RouteValue = typeof c.value === 'number' ? clampTo(c.value, -1, 1, 0) : keptValue(curve!);
+    out.cables.push({ id: c.id, from, to: { module: to.module, knob: to.knob }, value, mode: c.mode === 'level' ? 'level' : 'swing' });
+  }
+  for (const m of listOf(kept.macros)) {
+    if (!isObject(m) || typeof m.id !== 'string' || !ID.test(m.id) || typeof m.on !== 'string') continue;
+    const targets = listOf(m.targets)
+      .filter((t): t is Record<string, unknown> => isObject(t) && typeof t.module === 'string' && typeof t.knob === 'string' && !!knobsOf.get(t.module)?.has(t.knob))
+      .map((t) => ({ module: t.module as string, knob: t.knob as string, from: clampTo(t.from, -1e6, 1e6, 0), to: clampTo(t.to, -1e6, 1e6, 1) }));
+    out.macros.push({ id: m.id, on: m.on, label: typeof m.label === 'string' ? m.label.slice(0, 40) : 'Macro', value: clampTo(m.value, 0, 1, 0), targets });
+  }
+  return out;
+}
+
 // ---- The Cratarr chain: today's settings as a patch, and back ---------------------------------------------------
 
 const MODULE_TYPE: Record<string, string> = {
@@ -319,15 +409,19 @@ export function cratarrPatch(s: VisualSettings): Patch {
       mode: LEVEL_ASPECTS.has(aspect) ? 'level' : 'swing',
     });
   }
+  const extra = s.extra ?? emptyExtra();
   return {
     v: 1,
     frame: m('frame'),
-    layers: [{ id: 'flame', source: m('flame'), modules: [m('show')], loop: [m('fluid'), m('tunnel'), m('dive'), m('trails'), m('loop-effect')], blend: { mode: 'add', amount: 1 } }],
-    loop: [],
+    layers: [
+      { id: 'flame', source: m('flame'), modules: [m('show')], loop: [m('fluid'), m('tunnel'), m('dive'), m('trails'), m('loop-effect')], blend: { mode: 'add', amount: 1 } },
+      ...extra.layers,
+    ],
+    loop: extra.loop,
     finish: [m('fx1'), m('fx2'), m('fx3')],
-    modulators: [],
-    cables,
-    macros: [],
+    modulators: extra.modulators,
+    cables: [...cables, ...extra.cables],
+    macros: extra.macros,
     pins: s.pins.map(pinOf).filter((p): p is string => p !== null),
   };
 }
@@ -355,15 +449,17 @@ export function settingsOf(p: Patch, base: VisualSettings): VisualSettings {
       const v = mods.get('flame')?.knobs[`${key}.${b}`];
       if (typeof v === 'number') out[key][b] = v;
     }
+  // A cable a route can hold (from a signal, plainly, to a knob a route column reaches) is that route; every other
+  // is kept with the extras.
   const aspectOf = new Map(ASPECTS.map((a) => [ASPECT_KNOB[a].join('.'), a]));
+  const extraCables: Cable[] = [];
   for (const c of p.cables) {
-    if ('modulator' in c.from) continue;
     const aspect = aspectOf.get(`${c.to.module}.${c.to.knob}`);
-    if (!aspect) continue;
-    const key = routeKey(c.from.signal as never, c.from.band ?? null, aspect);
-    if (!isRoute(key, BANDS)) continue;
-    out.routes[key] = c.value;
+    const key = 'signal' in c.from && aspect && !c.from.reference && !c.from.speed ? routeKey(c.from.signal as never, c.from.band ?? null, aspect) : null;
+    if (key && isRoute(key, BANDS) && key === c.id) out.routes[key] = c.value;
+    else extraCables.push(c);
   }
+  out.extra = { layers: p.layers.filter((l) => l.id !== 'flame'), loop: p.loop, modulators: p.modulators, cables: extraCables, macros: p.macros };
   out.pins = p.pins.map(pinFrom).filter((x): x is string => x !== null);
   return out;
 }

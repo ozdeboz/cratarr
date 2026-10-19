@@ -12,6 +12,8 @@ import { ENGINE_EFFECTS, LOOP_EFFECTS } from './effects';
 import { defaultRoutes, isRoute, keyNow, SCALE_KEYS, type RouteValue } from './routes';
 import { curveFrom, valueOf } from './curves';
 import { QUALITY } from './quality';
+import { emptyExtra, extraFrom, type PatchExtra } from './patch';
+import { extraType } from './registry';
 
 const KEY = 'cratarr-visuals';
 /** The kept settings' form: 3 since 65 (Quality, Haze, Family as Colours: what they replace is dropped, not converted,
@@ -93,6 +95,9 @@ export type VisualSettings = Preset & {
   continuity: number[];
   /** Each route's amount (-1..1) by its key (`routeKey`); one not here is 0. */
   routes: Record<string, RouteValue>;
+  /** The patch beyond today's chain (decision 0056, patch.ts): the layers after the flame, the picture's own loop, the
+   *  modulators, the cables routes cannot hold, the macros. */
+  extra: PatchExtra;
 };
 
 const touch = typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
@@ -165,9 +170,10 @@ export const DEFAULTS: VisualSettings = {
   evolution: [0.25, 0.25, 0.25, 0.25, 0.25, 0.25],
   continuity: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5],
   routes: defaultRoutes(BANDS),
+  extra: emptyExtra(),
 };
 
-type Ranged = Exclude<keyof VisualSettings, 'pins'>;
+type Ranged = Exclude<keyof VisualSettings, 'pins' | 'extra'>;
 
 /** Each setting's range, as its slider has it (the bands' times in seconds, though their sliders double). A kept value
  *  outside it (from a version whose range was another) is brought into it. */
@@ -246,6 +252,7 @@ const fresh = (): VisualSettings => ({
   evolution: [...DEFAULTS.evolution],
   continuity: [...DEFAULTS.continuity],
   routes: { ...DEFAULTS.routes },
+  extra: emptyExtra(),
 });
 
 const isPresetKey = (k: string): k is keyof Preset => (PRESET_KEYS as readonly string[]).includes(k);
@@ -297,7 +304,8 @@ export function keptFrom(kept: Record<string, unknown>): VisualSettings {
   }
   for (const k of Object.keys(DEFAULTS) as (keyof VisualSettings)[]) {
     const v = saved[k];
-    if (k === 'pins') {
+    if (k === 'extra') out.extra = extraFrom(v, extraType);
+    else if (k === 'pins') {
       if (Array.isArray(v)) out.pins = v.filter((x): x is string => typeof x === 'string' && isPinnable(x));
     } else if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = within(k, v);
     // Six bands' times; three (kept before the six bands, 2026-10-18) each for two of them.

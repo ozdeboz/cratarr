@@ -75,3 +75,44 @@ test('the module types: every knob within its range, its neutral too, the cables
   assert.deepEqual(p.layers[0].loop.map((x) => x.id), ['fluid', 'tunnel', 'dive', 'trails', 'loop-effect']);
   assert.deepEqual(p.finish.map((x) => x.type), ['kaleidoscope-engine', 'eyedo-engine', 'hydra-engine']);
 });
+
+test('the patch beyond today\'s chain: kept, checked, there and back', async () => {
+  const { extraFrom } = await import('../src/lib/visuals/patch.ts');
+  const { extraType } = await import('../src/lib/visuals/registry.ts');
+  const s = copy(DEFAULTS);
+  const kept = {
+    layers: [
+      {
+        id: 'shapes-1',
+        source: { id: 'shapes-1-src', type: 'shapes', knobs: { count: 5, nonsense: 3 } },
+        modules: [{ id: 'kal-1', type: 'kaleidoscope-engine', knobs: { amount: 2 } }, { id: 'bad', type: 'no-such-type', knobs: {} }],
+        loop: [],
+        blend: { mode: 'screen', amount: 0.7 },
+      },
+      { id: 'flame', source: { id: 'x', type: 'shapes', knobs: {} } },
+    ],
+    loop: [{ id: 'warp-1', type: 'warp', knobs: { zoom: 0.3 } }, { id: 'keep-1', type: 'keep', knobs: {} }, { id: 'warp-1', type: 'warp', knobs: {} }],
+    modulators: [{ id: 'drift-1', type: 'drift', knobs: {} }],
+    cables: [
+      { id: 'c1', from: { modulator: 'drift-1' }, to: { module: 'kal-1', knob: 'k1' }, value: 0.5, mode: 'swing' },
+      { id: 'c2', from: { signal: 'level', band: 2, reference: 'lately' }, to: { module: 'flame', knob: 'hue' }, value: { h1: [0.2, 0.1], h2: [0.7, 0.4], h: 0.9 }, mode: 'swing' },
+      { id: 'c3', from: { signal: 'beat' }, to: { module: 'nowhere', knob: 'x' }, value: 1, mode: 'swing' },
+      { id: 'c4', from: { modulator: 'gone' }, to: { module: 'warp-1', knob: 'turn' }, value: 1, mode: 'swing' },
+    ],
+    macros: [{ id: 'm1', on: 'shapes-1', label: 'Spin', value: 0.4, targets: [{ module: 'shapes-1-src', knob: 'spin', from: 0, to: 1 }, { module: 'x', knob: 'y', from: 0, to: 1 }] }],
+  };
+  s.extra = extraFrom(kept, extraType);
+  assert.deepEqual(s.extra.layers.map((l) => l.id), ['shapes-1'], 'a layer named flame is not kept');
+  assert.deepEqual(s.extra.layers[0].modules.map((m) => m.id), ['kal-1'], 'a module of a type there is not is left out');
+  assert.equal(s.extra.layers[0].modules[0].knobs.amount, 1, 'a knob brought into its range');
+  assert.ok(!('nonsense' in s.extra.layers[0].source.knobs), 'a knob the type has not is left out');
+  assert.deepEqual(s.extra.loop.map((m) => m.id), ['warp-1', 'keep-1'], 'an id taken twice is kept once');
+  assert.deepEqual(s.extra.cables.map((c) => c.id), ['c1', 'c2'], 'cables to nowhere and from a modulator not there are left out');
+  assert.equal(s.extra.macros[0].targets.length, 1);
+  // Through the patch and back: the extras unchanged, the routes as they were.
+  const back = settingsOf(cratarrPatch(s), DEFAULTS);
+  assert.deepEqual(back, s);
+  const p = cratarrPatch(s);
+  assert.equal(p.layers.length, 2);
+  assert.ok(p.cables.some((c) => c.id === 'c2'));
+});
