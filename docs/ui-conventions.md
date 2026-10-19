@@ -242,6 +242,8 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   would upgrade one in Music), Not played yet and 4 stars and up (decided 2026-10-16, by your plays and ratings)
   (each off again on leaving the page), the panel's Hide missing tracks (off again when
   the panel shows something else), and any still to come (a tag, a genre). While any is on, the funnel is lit too.
+  Under the Library's switches, while there are any, **Excluded (N)**: Cratarr's global exclusions, a row that opens
+  their own sheet to put them back (decision 0024; the owner moved it there from the top of the page, 2026-10-19).
 - **Icon buttons carry no text**, on any width (decided 2026-10-16): no label that shows only when there is room. A
   long-press (touch) or right-click (desktop) on one shows its label in a small tip beside it (`lib/labels.svelte.ts`,
   one listener for the whole page: any button or link whose only content is an icon, named by its title or

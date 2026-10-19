@@ -4,8 +4,8 @@
   // facts show with it: its library as a dot in that library's colour (none for Music, and only while more than one
   // shows), an Incoming album's conversion, or how it relates to Music (an upgrade, a duplicate). Its menu
   // (lib/LibrarySheet) moves it into another library, replaces the album in Music it upgrades, or deletes it.
-  // Above them, "N excluded": Cratarr's global exclusions (decision 0024, amended 2026-10-19), a tap lists them to put
-  // back (lib/ExcludedSheet).
+  // Cratarr's global exclusions (decision 0024, amended 2026-10-19) are counted here, for the filter sheet's
+  // "Excluded (N)" (lib/FilterSheet; the owner moved them off the page: "It takes up a lot of real estate").
   import { ApiError, type AlbumsSource, type ListedAlbum, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
@@ -20,14 +20,11 @@
   import { pageView } from './lib/pageView.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
-  import ExcludedSheet from './lib/ExcludedSheet.svelte';
-  import { excluded, loadExcluded } from './lib/exclusions.svelte';
-  import Icon from './lib/Icon.svelte';
+  import { loadExcluded } from './lib/exclusions.svelte';
 
   $effect(() => {
     loadExcluded();
   });
-  let excludedOpen = $state(false);
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
@@ -160,7 +157,6 @@
 </script>
 
 <main>
-  {#if excluded.n}<button class="excluded" onclick={() => (excludedOpen = true)}><Icon name="ban" size={14} /><span>{excluded.n.toLocaleString()} excluded</span></button>{/if}
   {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if shown === null}
@@ -188,9 +184,6 @@
   {/if}
 </main>
 
-{#if excludedOpen}
-  <ExcludedSheet onclose={() => (excludedOpen = false)} />
-{/if}
 {#if menuShown && menu}
   {@const m = menu}
   <AlbumMenu
@@ -214,21 +207,6 @@
   .empty {
     color: var(--muted);
     font-size: 0.9rem;
-  }
-
-  /* The global exclusions, as a crate's panel shows its own: a muted line. */
-  .excluded {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin: 4px 0 2px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: var(--muted);
-    font: inherit;
-    font-size: 0.9rem;
-    cursor: pointer;
   }
 
   .error {
