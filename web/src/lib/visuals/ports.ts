@@ -268,3 +268,17 @@ export function cyclesClosed(p: PatchV2, typeOf: (type: string) => (ModuleType &
   };
   return p.modules.every((m) => visit(m.id));
 }
+
+// ---- Devices (0057 §6): a group of modules as one node, after Ableton's Racks and Reaktor's macros ----------------
+
+/** A port of a device: one of its modules' ports, shown on the device (`as`: its id on the device). */
+export type ExposedPort = PortRef & { as: string; label: string };
+
+/** A device's macro: a knob on the device moving chosen knobs of its modules (0056's Macro, kept inside it). */
+export type DeviceMacro = { id: string; label: string; value: number; targets: { module: string; knob: string; from: number; to: number }[] };
+
+/** A device in a patch: a module of type `device` holding a patch of its own; its exposed ports and its macros. The
+ *  engine and the compositor flatten it before running. Nests: its patch may hold devices. */
+export type Device = Module & { type: 'device'; label: string; patch: PatchV2; inputs: ExposedPort[]; outputs: ExposedPort[]; macros: DeviceMacro[] };
+
+export const isDevice = (m: Module): m is Device => m.type === 'device';

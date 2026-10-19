@@ -127,7 +127,7 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
   - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
     (WCAG). It is safety, not taste: never learned, never removable, last.
   - The precheck and the dice read the same thresholds.
-- **Show, split into standard modules** (the owner: "it makes it more coherent"). Show is the flame's output stage, a
+- **Show, split into standard modules and kept as a device** (§6; the owner: "it makes it more coherent"). Show is the flame's output stage, a
   sound synth's channel strip, and each of its parts becomes the module it is. Only the first converts:
   | Module | Was Show's | Sound equivalent |
   |---|---|---|
@@ -214,10 +214,25 @@ A module may take a second `picture` input: Hydra's modulate, TouchDesigner's co
 
 The tint and glow knobs built into the sources for 70.1 move into these modules.
 
-### 6. Nesting
+### 6. Modules, devices and presets
 
-A chain can be one module of another patch, its chosen knobs exposed as its macros (Reaktor's blocks, Max's
-sub-patches). Presets are chains, and a preset can be dropped in as a part.
+Three layers, after Ableton's Racks and Reaktor's macros (VCV Rack has only selections: saved groups that come back as
+loose modules). The owner: "Show could be a device. A device consists of multiple modules. A preset is a multi-routed
+set of components, modules of which some are inserted as devices, but they are in essence just modules."
+
+- **Module:** the standard unit (Tone map, Curve, Blur, an LFO, a Mix, …).
+- **Device:** a group of modules with their wiring inside, shown as one node with a few macro knobs (chosen knobs of the
+  modules in it). It can be opened, in the graph and the rack, to see and change its modules and cables: nothing in it
+  is hidden. It can be collapsed again, and nested: a device may hold devices. Its ports are the ports of its modules
+  that it exposes.
+  - **Show is a device:** Tone map, Curve, Saturate, Blur, Scale and Bend, wired in the order that draws exactly today's
+    picture (claude-632's harness decides it), with Brightness, Haze, Saturation, Smoothing, Size and Waves as its
+    macros. So Show stays one familiar thing on the surface and is standard modules underneath.
+  - Other devices are made the same way: select modules, make a device, choose its macros, save it.
+- **Preset:** a saved patch: modules and cables, some of them inside devices. The chains (Calm, Pulse, Flow …) and the
+  examples are presets. A device can be saved and inserted alone too.
+- In the model a device is a module of type `device` whose `patch` is a v2 patch of its own, plus its exposed ports and
+  macros. The engine and the compositor flatten it before running, so it costs nothing.
 
 ### 7. One store
 
@@ -246,7 +261,7 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
 | 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
 | 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
-| 5 | **Nesting and macros:** chains as modules, the whole frame's macros | claude-a5 |
+| 5 | **Devices and macros:** the device type (a module holding a patch, its exposed ports and macros), flattening for the engine and compositor, Show as a device, open/collapse in the rack (graph: claude-632), the whole frame's macros | claude-a5 |
 | 6 | **Retire:** aspects.ts, the routes' matrix, chain-cables.ts, the old settings keys | whoever's step frees it |
 
 claude-a5 coordinates and owns this record. Interfaces are fixed in step 1 (patch.ts) before steps 2 and 3 build on
