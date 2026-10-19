@@ -50,7 +50,7 @@
   import { drifted, fresh, limitsOf, thumbed, type Learned } from './learning';
   import { forgetVisualsLimits, getVisualsLimits, postVisualsThumb, putVisualsLimits } from '../api';
   import { toast } from '../toast.svelte';
-  import type { MeterValues } from './meters';
+  import type { MeterValues, Tiles } from './meters';
   import type { TrialLoop } from './trial.svelte';
   import { beatsOf } from './beats';
   import { DEFAULT_LIMITS, prechecking, type Checked } from './precheck';
@@ -1566,6 +1566,8 @@
     let measured = 0;
     let measure: ReturnType<typeof measuring> | null = null;
     let counted = { since: performance.now(), frames: 0 };
+    // The flash meter's readings, taken first in a frame (flashmeter.ts) and given to the meters with its stats.
+    let unread: Tiles[] = [];
 
 
     const loop = (now: number) => {
@@ -1595,6 +1597,7 @@
         unsupported = true;
         return;
       }
+      unread.push(...renderer.tiles());
 
       // How it behaves: as the settings say, or as the rating page's trial does (the look stays the settings').
       const how = trial.settings ?? s;
@@ -1978,7 +1981,7 @@
         w,
         h,
       );
-      // What this frame did, measured (meters.ts): the screen read into tiles (back a frame or two later), the parts'
+      // What this frame did, measured (meters.ts): the screen read into tiles (back two or more frames later), the parts'
       // motion and change, a new look and why. The meters' values for the rating page four times a second.
       if (trial.settings !== trialSeen) {
         trialSeen = trial.settings;
@@ -2007,7 +2010,7 @@
         saturation: d.saturation,
         look: lookCame,
         symmetry: d.moments.symmetry,
-        tiles: renderer.tiles(),
+        tiles: unread.splice(0),
       };
       lookCame = null;
       metering.add(stats);
