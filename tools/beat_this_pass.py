@@ -1,7 +1,9 @@
 """Beat this! over the library, on a PC (decision 0049, amended: "the library on the PC, new music on the NAS"; the
 small model). The official `beat_this` package (pip install beat_this; PyTorch, soxr) hears each file Cratarr lists
 in `<data>/beats/wanted.jsonl`, and what it heard goes back in batches to `<data>/beats/in/` over SSH, where Cratarr
-takes it in. The audio is read over SSH too (`ssh <host> cat`) and decoded by ffmpeg.
+takes it in. The audio is read over SSH too (`ssh <host> cat`) and decoded as the package's own loader does when
+torchaudio cannot (soundfile; ffmpeg for what it cannot read either), at the file's own rate and channels: the package
+makes it mono and resamples it.
 
 Each line sent: `{"folder", "rel", "size", "mtime", "beats": [ms, …], "downbeats": [ms, …]}`, the file as Cratarr
 listed it. What was sent is also kept in `--work` (`sent.jsonl`), so a run started again skips it; failures go to
@@ -37,21 +39,26 @@ def read_lines(path: str) -> list[dict]:
         return [json.loads(l) for l in f if l.strip()]
 
 
-def decode(host: str, path: str, rate: int):
-    """The file's sound at `rate`, two channels (a mono file twice), as ffmpeg decodes what `ssh cat` reads."""
+def decode(host: str, path: str):
+    """The file's sound and its rate, every channel, as read over `ssh cat`: by soundfile (the package's loader when
+    torchaudio cannot), else by ffmpeg at 22,050 Hz in two channels."""
+    import io
     import numpy as np
-    cat = subprocess.Popen(['ssh', '-o', 'BatchMode=yes', host, f'cat {shlex.quote(path)}'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    ff = subprocess.run(['ffmpeg', '-v', 'error', '-i', 'pipe:0', '-f', 'f32le', '-ac', '2', '-ar', str(rate), 'pipe:1'],
-                        stdin=cat.stdout, capture_output=True)
-    cat.stdout.close()
-    if cat.wait() != 0:
-        raise RuntimeError(f'ssh cat ended with {cat.returncode}')
-    if ff.returncode != 0:
-        raise RuntimeError(f'ffmpeg: {ff.stderr.decode(errors="replace").strip()[:300]}')
-    sound = np.frombuffer(ff.stdout, dtype=np.float32).reshape(-1, 2)
+    import soundfile as sf
+    got = subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f'cat {shlex.quote(path)}'], capture_output=True)
+    if got.returncode != 0:
+        raise RuntimeError(f'ssh cat ended with {got.returncode}: {got.stderr.decode(errors="replace").strip()[:200]}')
+    try:
+        sound, rate = sf.read(io.BytesIO(got.stdout), dtype='float32')
+    except Exception:  # noqa: BLE001: soundfile cannot read it; ffmpeg can
+        ff = subprocess.run(['ffmpeg', '-v', 'error', '-i', 'pipe:0', '-f', 'f32le', '-ac', '2', '-ar', '22050', 'pipe:1'],
+                            input=got.stdout, capture_output=True)
+        if ff.returncode != 0:
+            raise RuntimeError(f'ffmpeg: {ff.stderr.decode(errors="replace").strip()[:300]}')
+        sound, rate = np.frombuffer(ff.stdout, dtype=np.float32).reshape(-1, 2), 22050
     if len(sound) == 0:
         raise RuntimeError('no sound')
-    return sound
+    return sound, rate
 
 
 def main() -> int:
@@ -91,7 +98,8 @@ def main() -> int:
     torch.set_num_threads(args.threads)
     hear = Audio2Beats(checkpoint_path=args.model, device='cpu', dbn=False)
 
-    sounds: queue.Queue = queue.Queue(maxsize=args.readers * 2)
+    # Decoded sound waits here: at the file's own rate, a long mix is hundreds of MB.
+    sounds: queue.Queue = queue.Queue(maxsize=args.readers)
     items: queue.Queue = queue.Queue()
     for w in todo:
         items.put(w)
@@ -105,7 +113,7 @@ def main() -> int:
                 return
             path = host_path(w['folder'].rstrip('/') + '/' + w['rel'])
             try:
-                sounds.put((w, decode(host, path, 22050), None))
+                sounds.put((w, decode(host, path), None))
             except Exception as e:  # noqa: BLE001: one file's failure is noted, the pass goes on
                 sounds.put((w, None, str(e)))
 
@@ -139,14 +147,15 @@ def main() -> int:
         if got is None:
             ended += 1
             continue
-        w, sound, error = got
+        w, decoded, error = got
         if error is None:
+            sound, rate = decoded
             try:
-                beats, downbeats = hear(sound, 22050)
+                beats, downbeats = hear(sound, rate)
                 ms = lambda v: [int(round(float(t) * 1000)) for t in v]  # noqa: E731
                 batch.append({**{k: w[k] for k in ('folder', 'rel', 'size', 'mtime')}, 'beats': ms(beats), 'downbeats': ms(downbeats)})
                 heard += 1
-                seconds += len(sound) / 22050
+                seconds += len(sound) / rate
             except Exception as e:  # noqa: BLE001
                 error = f'beat_this: {e}'
         if error is not None:

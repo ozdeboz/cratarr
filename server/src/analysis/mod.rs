@@ -529,7 +529,16 @@ impl Mono {
             }
             let decoded = match self.o.decoder.decode(&packet) {
                 Ok(d) => d,
-                Err(SymphoniaError::DecodeError(_)) => continue,
+                // A damaged frame: silence as long as it, so what follows keeps its time (as ffmpeg conceals it).
+                Err(SymphoniaError::DecodeError(_)) => {
+                    let (numer, denom) = self.o.time_base.unwrap_or((1, self.o.rate));
+                    let frames = packet.dur.get().saturating_mul(u64::from(numer)).saturating_mul(u64::from(self.o.rate)) / u64::from(denom.max(1));
+                    if frames == 0 || frames > u64::from(self.o.rate) {
+                        continue;
+                    }
+                    out.extend(std::iter::repeat_n(0.0, frames as usize));
+                    return Ok(true);
+                }
                 Err(e) => return Err(anyhow!("decoding: {e}")),
             };
             let n = decoded.frames();

@@ -359,7 +359,8 @@ fn logits(spect: &[f32]) -> Result<(Vec<f32>, Vec<f32>)> {
 }
 
 /// The minimal post-processing (`beat_this.model.postprocessor`): each logit over 0 that is the largest within three
-/// frames either way; next frames' peaks merged to their mean; downbeats moved to the nearest beat.
+/// frames either way; next frames' peaks merged to their mean; downbeats moved to the nearest beat (where there are
+/// beats; as they are where there are none).
 fn beats_of(beat: &[f32], down: &[f32]) -> Heard {
     let peaks = |v: &[f32]| -> Vec<f64> {
         let at: Vec<usize> =
@@ -369,7 +370,7 @@ fn beats_of(beat: &[f32], down: &[f32]) -> Heard {
     let beats = peaks(beat);
     let mut downbeats: Vec<f64> = peaks(down)
         .into_iter()
-        .filter_map(|d| beats.iter().copied().min_by(|a, b| (a - d).abs().total_cmp(&(b - d).abs())))
+        .map(|d| beats.iter().copied().min_by(|a, b| (a - d).abs().total_cmp(&(b - d).abs())).unwrap_or(d))
         .collect();
     downbeats.dedup();
     Heard { beats, downbeats }
@@ -412,6 +413,8 @@ mod tests {
         let h = beats_of(&beat, &down);
         assert_eq!(h.beats, vec![0.2, 35.5 / 50.0, 1.2]);
         assert_eq!(h.downbeats, vec![0.2, 1.2]);
+        // No beats: the downbeats as heard.
+        assert_eq!(beats_of(&[-5.0; 200], &down).downbeats, vec![11.0 / 50.0, 55.0 / 50.0]);
         // Against the running mean, as the reference does: 5 is 1.5 from the mean of 3 and 4.
         assert_eq!(merge(&[3, 4, 5, 9]), vec![3.5, 5.0, 9.0]);
     }
