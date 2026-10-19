@@ -16,7 +16,7 @@
   import AboutSheet from './lib/AboutSheet.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { target } from './lib/playOnTarget.svelte';
-  import { togglePlay } from './lib/localPlayer.svelte';
+  import { startWith, togglePlay } from './lib/localPlayer.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import SheetArea from './lib/SheetArea.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
@@ -42,6 +42,7 @@
   import { prefs } from './lib/prefs.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { loadMe, me } from './lib/me.svelte';
+  import { loadMine } from './lib/mySettings.svelte';
 
   type Page = { id: string; href: string; label: string; icon: IconName };
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
@@ -305,8 +306,10 @@
     return poll();
   });
 
-  // Who is signed in (decision 0051): the administrators' parts show for them only.
+  // Who is signed in (decision 0051): the administrators' parts show for them only. Their own choices (Radio's,
+  // Autoplay's) for this page's player while nothing plays (in the app, the app's player keeps its own).
   loadMe();
+  loadMine().then((c) => c && !inApp && startWith(c));
 
   // The conversion queue, followed on every page (an administrator's): its count on the Incoming tab, a toast when an
   // album is done.

@@ -13,6 +13,7 @@
 // of Cratarr's players (Play On, `drive`): then every call below is handed to that player (app.svelte.ts, or the
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
+import { keep, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
 import { getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
@@ -899,6 +900,7 @@ export function setRadio(on: boolean, opts: { by?: RadioBy; count?: number } = {
   const anew = local.radio && on && other;
   if (opts.by !== undefined) local.radioBy = opts.by;
   if (count !== undefined) local.radioCount = count;
+  if (other) keepRadio();
   local.radio = on;
   if (!on || anew) dropAhead('radio');
   if (handed()) {
@@ -914,6 +916,7 @@ export function setRadio(on: boolean, opts: { by?: RadioBy; count?: number } = {
 export function setSkipFavourites(on: boolean) {
   if (on === local.skipFavourites) return;
   local.skipFavourites = on;
+  keepRadio();
   dropAhead('radio');
   dropAhead('autoplay');
   if (handed()) return hand('skip_favourites', { on });
@@ -927,6 +930,7 @@ export function setSkipFavourites(on: boolean) {
 export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolean; restart?: boolean; seed?: string[]; within?: string | null } = {}) {
   if (mode === 'stop') {
     local.autoplay = null;
+    keep({ autoplay: null });
     dropAhead('autoplay');
     if (handed()) hand('autoplay', { mode: 'stop' });
     return;
@@ -941,6 +945,7 @@ export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolea
   };
   if (was && (was.mode !== next.mode || was.albums !== next.albums || was.within !== next.within)) dropAhead('autoplay');
   local.autoplay = next;
+  keep({ autoplay: { mode: next.mode, albums: next.albums } });
   if (local.repeat === 'all') local.repeat = 'off';
   // What is given only: the player keeps the rest (a player's view does not show the seed here).
   if (handed()) {
@@ -953,6 +958,21 @@ export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolea
     });
   }
   fillAutoplay();
+}
+
+/** Radio's choices (and leaving favourites out) as one's own settings keep them (lib/mySettings). */
+const keepRadio = () => keep({ radio: { by: local.radioBy, count: local.radioCount, skip_favourites: local.skipFavourites } });
+
+/** One's own choices (decision 0051, lib/mySettings), for a page that starts with nothing playing: Radio's, leaving
+ *  favourites out, Autoplay's. A player's own state, reported, comes over them. */
+export function startWith(c: Choices) {
+  if (local.queue.length || local.index >= 0) return;
+  if (c.radio) {
+    if (RADIO_BYS.includes(c.radio.by)) local.radioBy = c.radio.by;
+    if (c.radio.count > 0) local.radioCount = Math.min(Math.round(c.radio.count), RADIO_MAX);
+    local.skipFavourites = c.radio.skip_favourites === true;
+  }
+  if (c.autoplay !== undefined) local.autoplay = autoplayOf(c.autoplay);
 }
 
 /** A lane's tracks still to come, out here (the player that plays elsewhere does the same with what it is told). */

@@ -521,8 +521,8 @@ export const deletePlaylist = (id: string) =>
 /** Shares one's own playlist with the other users, or stops (decision 0051): they see it, play it and copy it. */
 export const setPlaylistShared = (id: string, shared: boolean) =>
   request<void>(`/api/playlists/${encodeURIComponent(id)}/shared`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shared }) });
-/** Another user's shared playlist, copied into one's own: the copy. */
-export const copyPlaylist = (id: string) => post<Playlist>(`/api/playlists/${encodeURIComponent(id)}/copy`, {});
+/** Another user's shared playlist (its id "owner/name"), copied into one's own under a free name: that name. */
+export const copyPlaylist = (id: string) => post<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/copy`, {});
 
 /** The other names a playlist is spoken as, exactly these. */
 /** The names a playlist is also spoken as, from what was typed (comma-separated). */
@@ -767,6 +767,12 @@ export const endMySession = (id: string) => request<void>(`/api/me/sessions/${en
 export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** The server's version and when it started, for everyone (the rest of its settings are its administrators'). */
 export const getAbout = () => quietly<{ version: string; started: number }>('/api/about');
+/** One's own settings (decision 0051), one object per account, as the pages and the app name its parts; `version`
+ *  counts its saves (0: none kept yet). A save names the version it changed, and is refused (409) if another came first. */
+export type MySettings = { version: number; settings: Record<string, unknown> };
+export const getMySettings = () => quietly<MySettings>('/api/me/settings');
+export const putMySettings = (base: number, settings: Record<string, unknown>) =>
+  request<{ version: number }>('/api/me/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base, settings }) });
 /** Each server's own name and libraries, and what each library is used as, for everyone (the filter): the part of the
  *  server's settings that is not its administrators' alone. */
 export type LibrariesView = {

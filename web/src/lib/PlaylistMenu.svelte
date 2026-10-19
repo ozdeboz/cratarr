@@ -162,7 +162,8 @@
     if (working) return;
     working = true;
     try {
-      await copyPlaylist(id);
+      const { playlist, undo } = await copyPlaylist(id);
+      withUndo(`Copied to ${playlist}.`, [undo], { after: (undone) => (undone ? followDelete(playlist) : followCreate(playlist)) });
       onclose();
     } catch (e) {
       fail(e, 'Something went wrong');
