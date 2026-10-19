@@ -2,7 +2,7 @@
 // fast or slow; the server's typical values and what is heard as it plays give the same scale.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MOST, newNormalState, signalsFor, typicalOf, type MusicNow } from '../src/lib/visuals/normal.ts';
+import { FLOOR, MOST, WARM_S, newNormalState, signalsFor, typicalOf, type MusicNow } from '../src/lib/visuals/normal.ts';
 import { B, BAND_SIGNALS, T, TRACK_SIGNALS } from '../src/lib/visuals/routes.ts';
 import { ID } from '../src/lib/visuals/signal-ids.ts';
 import type { Signals } from '../src/lib/visuals/signals.ts';
@@ -27,75 +27,104 @@ function signalsWith(levels: number[], hits: number[]): Signals {
   };
 }
 
-const frame = (key: string, level: number, hit = 0, typical: MusicNow['typical'] = null): MusicNow => {
+const frame = (key: string, level: number, hit = 0, typical: MusicNow['typical'] = null, playing = true): MusicNow => {
   const bands = Array.from({ length: BANDS }, () => {
     const v = new Float32Array(BAND_SIGNALS.length);
     v[B.level] = level;
     v[B.hits] = hit;
     return v;
   });
-  return { key, track: new Float32Array(TRACK_SIGNALS.length), bands, typical };
+  return { key, playing, track: new Float32Array(TRACK_SIGNALS.length), bands, typical };
 };
 
+/** Frames of `level` every `step` ms from `from` to `to`; the last reader. */
+function run(st: ReturnType<typeof newNormalState>, key: string, level: (t: number) => number, from: number, to: number, step = 16, playing = true) {
+  let read = signalsFor(st, frame(key, level(from), 0, null, playing), from);
+  for (let t = from + step; t <= to; t += step) read = signalsFor(st, frame(key, level(t), 0, null, playing), t);
+  return read;
+}
+
 test("this track: a band's level is its median where it sounds, silence left out", () => {
-  // Half the frames silent, the rest at 51 (0.2) and 102 (0.4) in equal measure, a few at 204 (0.8): median 0.4.
+  // Half the frames silent; of the rest 40 at 51 (0.2), 50 at 102 (0.4), 10 at 204 (0.8): the median 0.4.
   const levels = [...Array(100).fill(0), ...Array(40).fill(51), ...Array(50).fill(102), ...Array(10).fill(204)];
   const typical = typicalOf(signalsWith(levels, [0.5, 0.25, 0.5]), null);
   near(typical.bands[2][B.level], 0.4);
   near(typical.bands[2][B.hits], 0.5);
-  const st = newNormalState();
-  const read = signalsFor(st, frame('a', 0.8, 0, typical), 0);
+  const read = signalsFor(newNormalState(), frame('a', 0.8, 0, typical), 0);
   near(read({ signal: 'level', band: 2 }), 2);
   near(read({ signal: 'level', band: 2, reference: 'absolute' }), 0.8);
-  near(read({ signal: 'level' }), 2, 0.02);
+  near(read({ signal: 'level' }), 2);
   assert.equal(read({ signal: 'no such' }), 0);
   assert.equal(read({ signal: 'level', band: 9 }), 0);
 });
 
-test('heard as it plays: the same median, from what has been heard so far', () => {
+test('a typical value is never under FLOOR: a mostly silent series does not throw every blip to the top', () => {
+  const typical = typicalOf(signalsWith(Array(40).fill(1), []), null);
+  const read = signalsFor(newNormalState(), frame('n', 0.05, 0, typical), 0);
+  near(read({ signal: 'level', band: 0 }), 0.05 / FLOOR, 0.01);
+  near(signalsFor(newNormalState(), frame('n2', 1, 0, typical), 0)({ signal: 'level', band: 0 }), MOST, 0);
+});
+
+test('heard as it plays: the median by time, crossed in from the value as it is over the first seconds', () => {
   const st = newNormalState();
-  // Before enough has been heard, a level reads as it is.
+  // At first, as it is.
   near(signalsFor(st, frame('b', 0.3), 0)({ signal: 'level', band: 0 }), 0.3);
-  let read = signalsFor(st, frame('b', 0.3), 16);
-  for (let i = 0; i < 300; i++) read = signalsFor(st, frame('b', i % 2 ? 0.2 : 0.4), 32 + i * 16);
-  // Heard: 0.2 and 0.4 in equal measure, one 0.3: the median about 0.3 (histogram steps of 0.01).
-  near(signalsFor(st, frame('b', 0.6), 32 + 300 * 16)({ signal: 'level', band: 0 }), 0.6 / 0.3, 0.15);
+  // A second of 0.2 then 0.6 alternating every frame: the median by time between them (byte steps).
+  let read = run(st, 'b', (t) => (Math.round(t / 16) % 2 ? 0.2 : 0.6), 16, 1000);
+  const early = read({ signal: 'level', band: 0 });
+  // Warm: after WARM_S seconds of sound the ratio alone.
+  run(st, 'b', (t) => (Math.round(t / 16) % 2 ? 0.2 : 0.6), 1016, 1000 + WARM_S * 1000 + 100);
+  const typ = 0.6 / signalsFor(st, frame('b', 0.6), 1000 + WARM_S * 1000 + 108)({ signal: 'level', band: 0 });
+  assert.ok(typ >= 0.19 && typ <= 0.61, `${typ}`);
+  // Never a jump: one more frame moves the reading by little.
+  const a = signalsFor(st, frame('b', 0.4), 1000 + WARM_S * 1000 + 116)({ signal: 'level', band: 0 });
+  const b = signalsFor(st, frame('b', 0.4), 1000 + WARM_S * 1000 + 132)({ signal: 'level', band: 0 });
+  near(a, b, 0.02);
+  assert.ok(Number.isFinite(early));
 });
 
-test("a band's hits are typical at the top of a typical hit, heard or from the server", () => {
+test("a band's hits are typical at the top of a typical hit", () => {
   const st = newNormalState();
-  // Hits of 0.5, each ringing down over five frames.
   let t = 0;
-  let read = signalsFor(st, frame('c', 0, 0), t);
-  for (let h = 0; h < 40; h++)
-    for (const light of [0.5, 0.4, 0.3, 0.2, 0.1, 0]) read = signalsFor(st, frame('c', 0.5, light), (t += 16));
-  const top = signalsFor(st, frame('c', 0.5, 0.5), (t += 16));
-  near(top({ signal: 'hits', band: 1 }), 1, 0.05);
+  signalsFor(st, frame('c', 0, 0), t);
+  for (let h = 0; h < 40; h++) for (const light of [0.5, 0.4, 0.3, 0.2, 0.1, 0]) signalsFor(st, frame('c', 0.5, light), (t += 16));
+  near(signalsFor(st, frame('c', 0.5, 0.5), (t += 16))({ signal: 'hits', band: 1 }), 1, 0.05);
 });
 
-test('lately: against its own mean of the last few seconds; slow follows', () => {
+test('lately: against its own mean of the last seconds, and a return from silence is not many times it', () => {
   const st = newNormalState();
-  let read = signalsFor(st, frame('d', 0.2), 0);
-  for (let i = 1; i <= 600; i++) read = signalsFor(st, frame('d', 0.2), i * 16);
+  let read = run(st, 'd', () => 0.2, 0, 10_000);
   near(read({ signal: 'level', band: 0, reference: 'lately' }), 1);
-  // A sudden rise: the fast form doubles at once, the slow one has not got there yet.
-  read = signalsFor(st, frame('d', 0.4), 601 * 16);
+  read = signalsFor(st, frame('d', 0.4), 10_016);
   near(read({ signal: 'level', band: 0, reference: 'lately' }), 2, 0.05);
-  const slow = read({ signal: 'level', band: 0, reference: 'absolute', speed: 'slow' });
-  assert.ok(slow > 0.2 && slow < 0.4, `${slow}`);
+  // From silence: the first sound reads about 1, not the cap.
+  const quiet = newNormalState();
+  run(quiet, 'q', () => 0, 0, 3000);
+  near(signalsFor(quiet, frame('q', 0.3), 3016)({ signal: 'level', band: 0, reference: 'lately' }), 1, 0.05);
 });
 
-test('the same at any frame rate', () => {
-  const run = (step: number) => {
+test('slow: up over SLOW_UP_S, the same at any frame rate', () => {
+  const slowAt = (step: number) => {
     const st = newNormalState();
-    let read = signalsFor(st, frame('e', 0), 0);
-    for (let t = step; t <= 2000; t += step) read = signalsFor(st, frame('e', t < 1000 ? 0.1 : 0.5), t);
+    const read = run(st, 'e', (t) => (t < 1000 ? 0.1 : 0.5), 0, 1100, step);
     return read({ signal: 'level', band: 0, reference: 'absolute', speed: 'slow' });
   };
-  near(run(1000 / 30), run(1000 / 120), 0.01);
+  const a = slowAt(1000 / 30);
+  const b = slowAt(1000 / 120);
+  assert.ok(a > 0.2 && a < 0.5, `${a}`);
+  near(a, b, 0.03);
 });
 
-test('beats, tempo and downbeats from the beats; the key only ever as it is', () => {
+test('paused: nothing is heard and nothing moves on', () => {
+  const st = newNormalState();
+  run(st, 'p', () => 0.2, 0, 2000);
+  const before = signalsFor(st, frame('p', 0.2), 2016)({ signal: 'level', band: 0, reference: 'lately' });
+  run(st, 'p', () => 0.9, 2032, 60_000, 16, false);
+  const after = signalsFor(st, frame('p', 0.2), 60_016)({ signal: 'level', band: 0, reference: 'lately' });
+  near(after, before, 0.02);
+});
+
+test('beats, tempo and downbeats from the beats; the key only ever as it is; a new track starts afresh', () => {
   const at = Float64Array.from({ length: 64 }, (_, i) => i * 0.5);
   const strength = Float32Array.from({ length: 64 }, (_, i) => (i % 4 === 0 ? 1 : 0.5));
   const beats = { at, strength, typical: new Float32Array(64).fill(0.5) } as unknown as Beats;
@@ -111,16 +140,21 @@ test('beats, tempo and downbeats from the beats; the key only ever as it is', ()
   const f = frame('f', 0, 0, typical);
   f.track[T.tempo] = 1;
   f.track[T.key] = 0.25;
-  const read = signalsFor(newNormalState(), f, 0);
+  const st = newNormalState();
+  const read = signalsFor(st, f, 0);
   near(read({ signal: 'tempo' }), 1);
   near(read({ signal: 'key', reference: 'track' }), 0.25);
   near(read({ signal: 'loudness' }), 0);
+  // Another track: what was heard of the last is gone.
+  run(st, 'f', () => 0.8, 16, 8000);
+  near(signalsFor(st, frame('g', 0.3), 8016)({ signal: 'level', band: 0 }), 0.3);
 });
 
 test('never past MOST, nor anything but a number', () => {
   const st = newNormalState();
-  const typical = typicalOf(signalsWith(Array(20).fill(3), []), null);
-  const f = frame('g', Number.NaN, 0, typical);
-  assert.equal(signalsFor(st, f, 0)({ signal: 'level', band: 0 }), 0);
-  near(signalsFor(st, frame('g', 1, 0, typical), 16)({ signal: 'level', band: 0 }), MOST, 0);
+  const typical = typicalOf(signalsWith(Array(20).fill(60), []), null);
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) assert.equal(signalsFor(st, frame('h', bad, 0, typical), 0)({ signal: 'level', band: 0 }) >= 0, true);
+  near(signalsFor(newNormalState(), frame('h2', 1, 0, typical), 0)({ signal: 'level', band: 0 }), 1 / (60 / 255), 0.05);
+  const none = { key: 'z', playing: true, track: new Float32Array(TRACK_SIGNALS.length), bands: null, typical: null };
+  assert.equal(signalsFor(newNormalState(), none, 0)({ signal: 'level', band: 0 }), 0);
 });

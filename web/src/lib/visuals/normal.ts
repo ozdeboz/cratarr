@@ -30,12 +30,17 @@ export const SLOW_UP_S = 0.12;
 export const SLOW_DOWN_S = 0.5;
 /** No value goes above this many times typical: one wild frame does not throw a knob to its end. */
 export const MOST = 8;
-/** Below this a typical or a mean is none (the signal is not there). */
+/** A typical value is at least this (four steps of the server's bytes): a series that is mostly noise does not make
+ *  every blip above it read as many times typical. */
+export const FLOOR = 4 / 255;
+/** Below this a mean is none (the signal is not there). */
 const NONE = 1e-3;
-/** What has been heard of a signal is its median once it has this many values. */
-const HEARD_ENOUGH = 30;
-/** The histogram of what has been heard: this many steps over 0..1 (above 1 counts in the top one). */
-const STEPS = 100;
+/** What has been heard of a signal takes over from its value as it is over this much of it: seconds of a sound, or
+ *  moments (hits, beats) of a moment's; before that the two are crossed, so the scale never jumps. */
+export const WARM_S = 5;
+export const WARM_MOMENTS = 8;
+/** The histogram of what has been heard: a step a byte of the server's (values of 1 and above in the top one). */
+const STEPS = 256;
 
 /** A track's typical values, `NaN` where it has none: each track signal (`TRACK_SIGNALS` order) and each band's
  *  (`BAND_SIGNALS` order). The loudness has none here: Intensity is the loudness at the player's gain, so its typical
@@ -45,6 +50,8 @@ export type Typical = { track: Float32Array; bands: Float32Array[] };
 /** What the frame's signals are, as music.svelte.ts gives them (its `Music`). */
 export type MusicNow = {
   key: string | null;
+  /** Whether it plays: a paused frame is not heard, nor followed. */
+  playing: boolean;
   track: Float32Array;
   bands: Float32Array[] | null;
   /** The track's typical values from the server's signals and beats, where they are in. */
@@ -139,43 +146,49 @@ export function typicalOf(signals: Signals | null, beats: Beats | null): Typical
   return t;
 }
 
-/** A signal followed: its slow form, its lately mean, what has been heard of it (a histogram), and its last two values
- *  (a moment's top is heard as it starts to fall). */
-type Followed = { slow: number; lately: number; heard: Uint32Array; count: number; last: number; before: number };
-const followed = (): Followed => ({ slow: 0, lately: 0, heard: new Uint32Array(STEPS), count: 0, last: 0, before: 0 });
+/** A signal followed: its slow form, its lately mean, what has been heard of it (a histogram, by time for a sound and
+ *  by moments for a moment's), its median as last worked out (in frame `medianFrame`), and its last two values (a
+ *  moment's top is heard as it starts to fall). */
+type Followed = { slow: number; lately: number; heard: Float32Array; weight: number; median: number; medianFrame: number; last: number; before: number };
+const followed = (): Followed => ({ slow: 0, lately: 0, heard: new Float32Array(STEPS), weight: 0, median: Number.NaN, medianFrame: -1, last: 0, before: 0 });
 
 /** What `signalsFor` keeps from frame to frame. */
-export type NormalState = { key: string | null; at: number; track: Followed[]; bands: Followed[][] };
+export type NormalState = { key: string | null; at: number; frame: number; track: Followed[]; bands: Followed[][] };
 
 export function newNormalState(): NormalState {
   return {
     key: null,
     at: -1,
+    frame: 0,
     track: TRACK_SIGNALS.map(followed),
     bands: Array.from({ length: BANDS }, () => BAND_SIGNALS.map(followed)),
   };
 }
 
-/** The median of what has been heard, or NaN before enough. */
-function heardMedian(f: Followed): number {
-  if (f.count < HEARD_ENOUGH) return Number.NaN;
+/** The median of what has been heard (NaN before anything), worked out once a frame. */
+function heardMedian(f: Followed, frame: number): number {
+  if (f.medianFrame === frame) return f.median;
+  f.medianFrame = frame;
+  f.median = Number.NaN;
+  if (!(f.weight > 0)) return f.median;
   let seen = 0;
   for (let i = 0; i < STEPS; i++) {
     seen += f.heard[i];
-    if (seen * 2 >= f.count) return (i + 0.5) / STEPS;
+    if (seen * 2 >= f.weight) return (f.median = (i + 0.5) / STEPS);
   }
-  return Number.NaN;
+  return f.median;
 }
 
-function hear(f: Followed, v: number) {
-  f.heard[Math.min(STEPS - 1, Math.max(0, Math.floor(v * STEPS)))]++;
-  f.count++;
+function hear(f: Followed, v: number, weight: number) {
+  f.heard[Math.min(STEPS - 1, Math.max(0, Math.floor(v * STEPS)))] += weight;
+  f.weight += weight;
 }
 
 /** Follows one signal a frame on (`dt` s; −1: the first frame, or a new track), noting what is heard of it: every value
- *  above 0, or for a moment its top. */
+ *  above 0 for as long as it lasts, or for a moment its top. The lately mean starts at the first sound after silence,
+ *  so a return from a break is not many times what came before. */
 function follow(f: Followed, v: number, dt: number, moment: boolean) {
-  if (!Number.isFinite(v)) v = 0;
+  if (!Number.isFinite(v) || v < 0) v = 0;
   if (dt < 0) {
     f.slow = v;
     f.lately = v;
@@ -184,11 +197,12 @@ function follow(f: Followed, v: number, dt: number, moment: boolean) {
     return;
   }
   f.slow += (v - f.slow) * (1 - Math.exp(-dt / (v > f.slow ? SLOW_UP_S : SLOW_DOWN_S)));
-  f.lately += (v - f.lately) * (1 - Math.exp(-dt / LATELY_S));
+  if (f.lately < NONE && v > 0) f.lately = v;
+  else f.lately += (v - f.lately) * (1 - Math.exp(-dt / LATELY_S));
   if (moment) {
     // Its top: the last frame's, once it falls.
-    if (f.last > 0 && v < f.last && f.last >= f.before) hear(f, f.last);
-  } else if (v > 0) hear(f, v);
+    if (f.last > 0 && v < f.last && f.last >= f.before) hear(f, f.last, 1);
+  } else if (v > 0) hear(f, v, dt);
   f.before = f.last;
   f.last = v;
 }
@@ -205,23 +219,37 @@ export function signalsFor(st: NormalState, music: MusicNow, at: number): (ref: 
   }
   const dt = fresh ? -1 : Math.min(0.25, (at - st.at) / 1000);
   st.at = at;
-  for (let i = 0; i < TRACK_SIGNALS.length; i++) follow(st.track[i], music.track[i], dt, MOMENT_TRACK.has(i));
-  for (let b = 0; b < BANDS; b++) {
-    const v = music.bands?.[b];
-    for (let i = 0; i < BAND_SIGNALS.length; i++) follow(st.bands[b][i], v ? v[i] : 0, dt, MOMENT_BAND.has(i));
+  st.frame++;
+  // Paused: nothing is heard, nothing moves on (the first frame still starts each from where it is).
+  if (music.playing || dt < 0) {
+    for (let i = 0; i < TRACK_SIGNALS.length; i++) follow(st.track[i], music.track[i], dt, MOMENT_TRACK.has(i));
+    for (let b = 0; b < BANDS; b++) {
+      const v = music.bands?.[b];
+      for (let i = 0; i < BAND_SIGNALS.length; i++) follow(st.bands[b][i], v ? v[i] : 0, dt, MOMENT_BAND.has(i));
+    }
   }
   const typical = music.typical;
 
   const one = (signal: number, band: number | null, ref: SignalRef): number => {
     const f = band === null ? st.track[signal] : st.bands[band][signal];
+    const moment = band === null ? MOMENT_TRACK.has(signal) : MOMENT_BAND.has(signal);
     const now = band === null ? music.track[signal] : (music.bands?.[band]?.[signal] ?? 0);
-    const raw = ref.speed === 'slow' ? f.slow : Number.isFinite(now) ? now : 0;
+    const raw = ref.speed === 'slow' ? f.slow : Number.isFinite(now) && now > 0 ? now : 0;
     const reference = ABSOLUTE_ONLY.has(signal) && band === null ? 'absolute' : (ref.reference ?? (band === null && ABSOLUTE_BY_DEFAULT.has(signal) ? 'absolute' : 'track'));
     if (reference === 'absolute') return raw;
-    if (reference === 'lately') return f.lately < NONE ? (raw > 0 ? MOST : 0) : Math.min(MOST, raw / f.lately);
-    let typ = band === null ? (typical?.track[signal] ?? Number.NaN) : (typical?.bands[band]?.[signal] ?? Number.NaN);
-    if (!(typ > NONE)) typ = heardMedian(f);
-    return typ > NONE ? Math.min(MOST, raw / typ) : raw;
+    // This track's typical: the server's, else what has been heard, crossed with the value as it is while little has.
+    const known = band === null ? (typical?.track[signal] ?? Number.NaN) : (typical?.bands[band]?.[signal] ?? Number.NaN);
+    const heard = known > 0 ? Number.NaN : heardMedian(f, st.frame);
+    const typ = known > 0 ? known : heard;
+    if (reference === 'lately') {
+      // Never against less than a quarter of typical, where that is known: a quiet stretch is not many times itself.
+      const under = Math.max(NONE, typ > 0 ? 0.25 * Math.max(FLOOR, typ) : 0);
+      return Math.min(MOST, raw / Math.max(f.lately, under));
+    }
+    if (!(typ > 0)) return raw;
+    const ratio = Math.min(MOST, raw / Math.max(FLOOR, typ));
+    const warm = known > 0 ? 1 : Math.min(1, f.weight / (moment ? WARM_MOMENTS : WARM_S));
+    return raw + (ratio - raw) * warm;
   };
 
   return (ref: SignalRef) => {
