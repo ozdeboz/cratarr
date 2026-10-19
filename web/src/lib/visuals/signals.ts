@@ -5,29 +5,8 @@
 // open; the visuals ask for the playing track's and the next one's.
 import { asksSignIn, toSignIn } from '../reach.svelte';
 
-/** The sections, by the server's ids (analysis/signals.rs). */
-export const ID = {
-  table: 0,
-  loudness: 1,
-  level: 2,
-  flux: 3,
-  hits: 4,
-  percussive: 5,
-  harmonic: 6,
-  percussiveHits: 7,
-  crest: 8,
-  width: 9,
-  centroid: 10,
-  chroma: 11,
-  harmonicChange: 12,
-  harmonicChanges: 13,
-  novelty: 14,
-  boundaries: 15,
-  bar: 16,
-  swell: 17,
-  bandSwell: 18,
-  buildUp: 19,
-} as const;
+export { ID } from './signal-ids';
+import { ID } from './signal-ids';
 
 const KIND = { series: 0, hits: 1, marks: 2, table: 3 } as const;
 
