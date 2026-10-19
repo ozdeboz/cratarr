@@ -1,6 +1,6 @@
 // The patch's evaluator (decision 0056, step 4): each frame, every knob's value as its macros and cables move it, from
 // the music's signals and the modulators, for the modules the patch adds (new sources, modules on a layer, the
-// picture's loop, new finish modules, the modulators). Today's pipeline keeps aspects.ts (`TODAYS_TYPES`).
+// picture's loop, new finish modules, the modulators). Today's pipeline keeps aspects.ts (`TODAYS_IDS`).
 //
 // - A signal comes in as x = clamp(s / 2, 0, 1): 1 = typical is half way. A modulator's output comes in as it is
 //   (0..1); a bipolar one's as (v + 1) / 2, so its rest is half way as a typical signal's is.
@@ -31,7 +31,9 @@ import { BANDS, MODULATORS, type ModulatorType } from './modulators/modulators';
 import { modulesOf, type Cable, type FrameInfo, type Knob, type Macro, type Module, type ModuleType, type Modulator, type Patch, type SignalRef } from './patch';
 
 /** Today's pipeline's module types (patch.ts's Cratarr chain), which aspects.ts moves. */
-export const TODAYS_TYPES: ReadonlySet<string> = new Set(['frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'kaleidoscope-engine', 'eyedo-engine', 'hydra-engine']);
+/** Today's pipeline's modules (patch.ts's Cratarr chain), by id: aspects.ts moves them. By id, not type: an effect
+ *  engine on a layer has the finish slots' type, and is the patch's to move (claude-5f found it skipped). */
+export const TODAYS_IDS: ReadonlySet<string> = new Set(['frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']);
 
 /** A moment comes again no sooner than this (seconds; aspects.ts's 2000 ms). */
 export const MOMENT_GAP = 2;
@@ -144,7 +146,7 @@ function modulatorType(types: Record<string, ModuleType>, type: string): Modulat
 /** One frame: each module's knobs as its macros and cables move them, the modulators stepped `dt` seconds on. */
 export function evaluate(patch: Patch, types: Record<string, ModuleType>, signals: (ref: SignalRef) => number, state: EvalState, dt: number, opts: EvalOptions): Evaluated {
   const n = opts.bands ?? BANDS;
-  const skip = opts.skip ?? ((m: Module) => TODAYS_TYPES.has(m.type));
+  const skip = opts.skip ?? ((m: Module) => TODAYS_IDS.has(m.id));
   const step = Number.isFinite(dt) ? Math.max(0, dt) : 0;
   const envelope = clamp(finite(opts.envelope, 1), 0, 1);
   const mods = modulesOf(patch);
