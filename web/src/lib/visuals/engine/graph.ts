@@ -7,12 +7,12 @@
 // rule). What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
 
 import type { AspectsNow } from '../aspects';
-import { heightOf, letThrough, shapeOf } from '../evaluate';
+import { MOMENT_GAP, heightOf, letThrough, shapeOf, type MomentRequest } from '../evaluate';
 import { seedOf } from '../flame';
 import type { Levers } from '../governor';
 import { MODULATORS, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
-import { ASPECT_KNOB, type Knob, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
+import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
 import type { CableV2, PatchV2, PortRef } from '../ports';
 import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
@@ -30,6 +30,8 @@ const SCALED = (Object.entries(COLUMN_SCALES) as [Aspect, string][]).filter(([a]
 /** Halved with reduced motion, as the routes read them. */
 const HALVED = new Set(['beat', 'downbeat', 'section']);
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
+/** A macro's value as a knob (0..1), as evaluate.ts has it. */
+const MACRO_KNOB: Knob = { id: 'value', label: 'Value', min: 0, max: 1, neutral: 0, default: 0, kind: 'swing' };
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const finite = (v: unknown, or = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : or);
 
@@ -47,6 +49,9 @@ export type EngineState = {
   values: Record<string, number>;
   /** The beat last seen (beats into a port count exactly). */
   beat?: number | null;
+  /** Each macro's last value; each step's moment (ready, and how long since it last came). */
+  macros: Record<string, number>;
+  moments: Record<string, { armed: boolean; since: number }>;
 };
 
 export function newEngine(): EngineState {
@@ -64,6 +69,8 @@ export function newEngine(): EngineState {
     got: given(BANDS),
     modulators: {},
     values: {},
+    macros: {},
+    moments: {},
   };
 }
 
@@ -74,6 +81,10 @@ export type EngineFrame = {
   knobs: Record<string, Record<string, number>>;
   /** Every value output this frame, by `module.port`. */
   outputs: Record<string, number>;
+  /** Each macro's value this frame. */
+  macros: Record<string, number>;
+  /** The steps past the chain whose cables ask for a moment (morph.ts takes it at the module's neutral). */
+  moments: MomentRequest[];
 };
 
 export type EngineOptions = {
@@ -190,19 +201,46 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
     return sum;
   };
+  // The macros' targets: a target's base lerp(from, to, the macro's value) before its cables act (not a step's).
+  const macroIds = new Set(p.macros.map((x) => x.id));
+  for (const id of Object.keys(st.macros)) if (!macroIds.has(id)) delete st.macros[id];
+  const targets = new Map<string, { macro: Macro; from: number; to: number }[]>();
+  for (const macro of p.macros)
+    for (const t of macro.targets) {
+      const key = `${t.module}|${t.knob}`;
+      (targets.get(key) ?? targets.set(key, []).get(key)!).push({ macro, from: t.from, to: t.to });
+    }
+  const macros: Record<string, number> = {};
+  const macroOf = (x: Macro) => (x.id in macros ? macros[x.id] : finite(st.macros[x.id], clamp(finite(x.value), 0, 1)));
+  const moments: MomentRequest[] = [];
+  const modulesNow = new Set(p.modules.map((x) => x.id));
+  for (const key of Object.keys(st.moments)) if (!modulesNow.has(key.slice(0, key.indexOf('|')))) delete st.moments[key];
+
+  // The macros and the modulators, in the order their cables (and a modulator's macros) need.
   const knobs: Record<string, Record<string, number>> = {};
+  type Node = { id: string; macro?: Macro; module?: Module };
+  const nodes: Node[] = [...p.macros.map((macro) => ({ id: macro.id, macro })), ...running.map((module) => ({ id: module.id, module }))];
+  const ids = new Set(nodes.map((x) => x.id));
+  const needs = new Map<string, Set<string>>(nodes.map((x) => [x.id, new Set<string>()]));
+  for (const c of p.cables) if (ids.has(c.from.module) && ids.has(c.to.module) && c.from.module !== c.to.module) needs.get(c.to.module)!.add(c.from.module);
+  for (const macro of p.macros) for (const t of macro.targets) if (ids.has(t.module) && !macroIds.has(t.module)) needs.get(t.module)!.add(macro.id);
   const done = new Set<string>();
-  const needs = (x: Module) => p.cables.filter((c) => c.to.module === x.id && live.has(c.from.module)).map((c) => c.from.module);
-  while (done.size < running.length) {
-    const next = running.find((x) => !done.has(x.id) && needs(x).every((d) => done.has(d) || d === x.id)) ?? running.find((x) => !done.has(x.id))!;
+  while (done.size < nodes.length) {
+    const next = nodes.find((x) => !done.has(x.id) && [...needs.get(x.id)!].every((d) => done.has(d))) ?? nodes.find((x) => !done.has(x.id))!;
     done.add(next.id);
-    const t = modulatorType(next.type)!;
-    const k = knobsOf(next, t);
-    for (const port of t.inputs ?? []) k[port] = portSum(next.id, port);
-    knobs[next.id] = k;
-    outputs[next.id] = st.modulators[next.id].run.step(step, read, k);
+    if (next.macro) {
+      macros[next.id] = moved(next.id, MACRO_KNOB, clamp(finite(next.macro.value), 0, 1), into.get(`${next.id}|value`) ?? []);
+      continue;
+    }
+    const x = next.module!;
+    const t = modulatorType(x.type)!;
+    const k = knobsOf(x, t);
+    for (const port of t.inputs ?? []) k[port] = portSum(x.id, port);
+    knobs[x.id] = k;
+    outputs[x.id] = st.modulators[x.id].run.step(step, read, k);
   }
   for (const id of Object.keys(st.modulators)) if (id in outputs) st.values[id] = outputs[id];
+  for (const id of Object.keys(macros)) st.macros[id] = macros[id];
 
   // The chain's columns: what their cables give, by the routes' rules.
   const got = st.got;
@@ -277,27 +315,27 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     if (knobs[x.id] || live.has(x.id)) continue;
     const t = types[x.type];
     if (!t) continue;
-    const k: Record<string, number> = { ...x.knobs };
-    for (const knob of t.knobs) {
-      const cables = into.get(`${x.id}|${knob.id}`);
-      const base = finite(x.knobs[knob.id], knob.default);
-      k[knob.id] = cables && !COLUMN.has(`${x.id}|${knob.id}`) ? moved(knob, base, cables) : clamp(base, knob.min, knob.max);
-    }
-    knobs[x.id] = k;
+    if (t.knobs.some((knob) => COLUMN.has(`${x.id}|${knob.id}`))) continue;
+    knobs[x.id] = knobsOf(x, t);
   }
-  return { aspects, knobs, outputs };
+  return { aspects, knobs, outputs, macros, moments };
 
-  /** A module's knobs as set (each within its range). */
+  /** A module's knobs as its macros and cables move them. */
   function knobsOf(x: Module, t: ModuleType): Record<string, number> {
     const k: Record<string, number> = { ...x.knobs };
-    for (const knob of t.knobs) k[knob.id] = moved(knob, finite(x.knobs[knob.id], knob.default), into.get(`${x.id}|${knob.id}`) ?? []);
+    for (const knob of t.knobs) {
+      let base = finite(x.knobs[knob.id], knob.default);
+      if (knob.kind !== 'step') for (const g of targets.get(`${x.id}|${knob.id}`) ?? []) base = g.from + (g.to - g.from) * macroOf(g.macro);
+      k[knob.id] = moved(x.id, knob, base, into.get(`${x.id}|${knob.id}`) ?? []);
+    }
     return k;
   }
 
   /** A knob moved from its base by its cables (evaluate.ts's rule: a swing adds, a level lets through; a band's cable
    *  into a knob not a band's own, the bands' mean and geometric mean). */
-  function moved(k: Knob, base: number, cables: CableV2[]): number {
-    if (!cables.length || k.kind === 'step') return clamp(base, k.min, k.max);
+  function moved(module: string, k: Knob, base: number, cables: CableV2[]): number {
+    if (!cables.length) return clamp(base, k.min, k.max);
+    const bandSums = k.kind === 'step' ? new Float64Array(BANDS) : null;
     const ownBand = /\.\d+$/.test(k.id);
     let swing = 0;
     let level = 1;
@@ -311,11 +349,28 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       const w = walkOf(c);
       const e = depthOf(c);
       const apart = c.from.channel !== undefined && !ownBand;
-      if (c.mode === 'level') {
+      if (c.mode === 'level' && !bandSums) {
         if (apart) bandLevel *= letThrough(sh.peak, y, e, w);
         else level *= letThrough(sh.peak, y, e, w);
-      } else if (apart) bandSwing += e * y * w;
-      else swing += e * y * w;
+      } else if (apart) {
+        bandSwing += e * y * w;
+        const ch = c.from.channel!;
+        if (bandSums && ch >= 0 && ch < BANDS) bandSums[ch] += e * y * w;
+      } else swing += e * y * w;
+    }
+    if (bandSums) {
+      // A step is not moved: what its cables give (the bands' largest) rising past a half asks for a moment.
+      const key = `${module}|${k.id}`;
+      const asked = swing + Math.max(...bandSums);
+      const mo = (st.moments[key] ??= { armed: true, since: Infinity });
+      mo.since += step;
+      if (asked < 1 / 3) mo.armed = true;
+      if (asked > 0.5 && mo.armed && mo.since >= MOMENT_GAP) {
+        mo.armed = false;
+        mo.since = 0;
+        moments.push({ module, knob: k.id });
+      }
+      return clamp(base, k.min, k.max);
     }
     return clamp(base * level * bandLevel ** (1 / BANDS) + (swing + bandSwing / BANDS) * ((k.max - k.min) / 2), k.min, k.max);
   }
