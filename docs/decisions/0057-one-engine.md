@@ -94,10 +94,10 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 | **Moments** | trigger outputs of the module that has them | another symmetry, lens or form at a step's neutral (morph.ts) |
 | **Meter** | detector: picture in, busyness values out | the governor's meters |
 | **Compressor** | standard sidechain compressor on values | the governor's holding back, as normalled wiring |
-| **Taste** | source, one per user | the learned limits (the thumbs), as the Compressors' thresholds |
 | **Screen** (with its flash guard) | the output | the flash rule: fixed, always on, last |
 
-- **Effects, each its own module.** The owner asked: "And effects would also become modules, correct?" Yes.
+- **Effects, each its own module, in this version** (the owner: "effects on a layer, as in completely modular effects,
+  is also in the current version plan"). The owner asked: "And effects would also become modules, correct?" Yes.
   - Every effect is a module of its own: Kaleid, Repeat, Pixelate, Posterize, Rotate, Scroll, Magnify, Ripple,
     Stream, Echo, Colorama, Hue, Saturate, Rings, Interference, Pulse, Burst, Halo.
   - Each is wired freely (§4), as many as wanted, in any order.
@@ -118,10 +118,10 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
   - **The default wiring is normalled:** a Meter on the screen's picture, and a Compressor per kind keyed by it,
     through which the cables into knobs of that kind run (each knob declares its kind, `busy`). Today's behaviour is
     that wiring with today's limits as the thresholds. Everything in it can be seen, re-keyed, re-patched or removed.
-  - **Taste: the learning.** A source per user; its outputs are the learned thresholds, one per kind, normalled into
-    the Compressors' thresholds. The thumbs teach it. **Its design is to be redone for use** (the owner: "even if we
-    keep it, we should probably redesign it to make it usable"); a talk with the owner decides how, before it is built.
-    What was learned before is kept.
+  - **No Taste, no learning in this version** (the owner: "we drop taste altogether. We defer it to a future version,
+    maybe not even the next version"). The thumbs and learning.ts go. The Compressors' thresholds start at the limits
+    as they stand when the patch is converted (learned values included, frozen), and are plain knobs from then on. The
+    server keeps what was learned, untouched, for whenever the learning returns.
   - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
     (WCAG). It is safety, not taste: never learned, never removable, last.
   - The precheck and the dice read the same thresholds.
@@ -226,7 +226,7 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | Step | What | Owner |
 |---|---|---|
 | 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
-| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); Taste once redesigned; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
+| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
 | 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
 | 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
 | 5 | **Nesting and macros:** chains as modules, the whole frame's macros | claude-a5 |
@@ -258,4 +258,3 @@ graph walk).
 - Whether a band's six outputs show as one row with six channels (VCV's polyphonic cables) or as six ports. The graph's
   "Level · 6 bands" bundle suggests channels.
 - Where the Compressors' reduction shows in the rack.
-- Taste's redesign (the owner wants it usable).

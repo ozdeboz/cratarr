@@ -125,7 +125,7 @@ const BUSY_LABEL: Record<(typeof BUSY)[number], string> = { motion: 'Motion', sh
 export const METER = declared('meter', 'Meter', 'modulator', [], [PICTURE_IN], BUSY.map((b) => out(b, BUSY_LABEL[b])));
 
 /** A Compressor (0057): a standard sidechain compressor on values (Giannoulis, Massberg, Reiss 2012): `in` compressed
- *  by how far `key` stands over the threshold; `reduction` the gain reduction (1: none), for ducking anything else. */
+ *  by how far `key` stands over the threshold (a plain knob: no learning in this version); `reduction` the gain reduction (1: none), for ducking anything else. */
 export const COMPRESSOR = declared(
   'compressor',
   'Compressor',
@@ -145,9 +145,6 @@ export const COMPRESSOR = declared(
   [VALUE_OUT, out('reduction', 'Reduction')],
 );
 
-/** Taste (0057): the user's learned thresholds, one per kind (learning.ts; the thumbs teach it), normalled into the
- *  Compressors keyed by that kind. To be redesigned with the owner. */
-export const TASTE = declared('taste', 'Taste', 'modulator', [], [], BUSY.map((b) => out(b, BUSY_LABEL[b])));
 
 /** ADSR (0057 §4b, VCV's): an envelope on each gate or trigger; polyphonic, one a channel (Music's hits: one a band). */
 export const ADSR = declared(
@@ -185,7 +182,7 @@ export const LOOPER = declared(
   [VALUE_OUT],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, TASTE, ADSR, SEQUENCER, LOOPER];
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
