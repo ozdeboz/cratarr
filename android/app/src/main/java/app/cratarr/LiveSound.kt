@@ -5,13 +5,16 @@
  * flux from a 46 ms spectrum (as an AnalyserNode: Blackman window, |X|/N, no smoothing), and about every 100 ms the
  * mean square of the last 400 ms through R128's K-weighting filters (as the page's biquads). Worked out as the player
  * hands its sound over (a tee in its audio path, after decoding), and sent when it is heard, about twenty times a
- * second: `{type: "live", at, tickMs, channels, meanSquare, ticks: [{energy, flux}]}`. Only while the page asks.
+ * second: `{type: "live", at, tickMs, channels, meanSquare, ticks: [{energy, flux}], wave}`, `wave` the last tick's
+ * [WAVE] samples mixed to one, as bytes centred on 128 (an AnalyserNode's byte time domain; decision 0056's Waves
+ * source), in base64. Only while the page asks.
  */
 package app.cratarr
 
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Base64
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
@@ -35,6 +38,8 @@ object LiveSound : TeeAudioProcessor.AudioBufferSink {
     /** Each band's edges (Hz; 0 open), as live.ts's LIVE_EDGES. */
     private val EDGES = arrayOf(0.0 to 60.0, 60.0 to 150.0, 150.0 to 400.0, 400.0 to 2000.0, 2000.0 to 5000.0, 5000.0 to 0.0)
     const val TICK_MS = 12
+    /** The waveform's samples a tick. */
+    const val WAVE = 512
     /** Magnitudes compressed as ln(1 + γ·|X|) before the flux (live.ts's GAMMA). */
     private const val GAMMA = 100.0
     /** Ticks heard go to the page this often at most. */
@@ -76,7 +81,7 @@ object LiveSound : TeeAudioProcessor.AudioBufferSink {
     private var meanSquare: Double? = null
     private var sinceMean = 0
 
-    private class Tick(val atUs: Long, val energy: DoubleArray, val flux: DoubleArray)
+    private class Tick(val atUs: Long, val energy: DoubleArray, val flux: DoubleArray, val wave: ByteArray)
 
     private val pending = ArrayDeque<Tick>()
     private val ready = ArrayList<Tick>()
@@ -179,6 +184,7 @@ object LiveSound : TeeAudioProcessor.AudioBufferSink {
             .put("channels", channels)
             .put("meanSquare", meanSquare ?: JSONObject.NULL)
             .put("ticks", ticks)
+            .put("wave", Base64.encodeToString(ready.last().wave, Base64.NO_WRAP))
             .toString()
         ready.clear()
         main.post { to(message) }
@@ -203,7 +209,9 @@ object LiveSound : TeeAudioProcessor.AudioBufferSink {
             energy[b] += m * m
             flux[b] += rise
         }
-        return Tick(atUs, energy, flux)
+        // The last [WAVE] samples, as bytes centred on 128.
+        val wave = ByteArray(WAVE) { i -> (ring[(ringAt + n - WAVE + i) % n] * 128 + 128).roundToInt().coerceIn(0, 255).toByte() }
+        return Tick(atUs, energy, flux, wave)
     }
 
     private fun sample(b: ByteBuffer, bytes: Int): Double = when (encoding) {
