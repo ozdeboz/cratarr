@@ -95,10 +95,8 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 - **Effects, each its own module.** The owner asked: "And effects would also become modules, correct?" Yes.
   - Every effect is a module of its own: Kaleid, Repeat, Pixelate, Posterize, Rotate, Scroll, Magnify, Ripple,
     Stream, Echo, Colorama, Hue, Saturate, Rings, Interference, Pulse, Burst, Halo.
-  - Each can stand anywhere a picture module can: on a layer, in a layer's own loop, in the picture's loop, or in the
-    finish, as many as wanted, in any order.
+  - Each is wired freely (§4), as many as wanted, in any order.
   - The three engines stop being slots. Kaleidoscope, EYEDO and Hydra become groups in the module picker.
-  - The finish becomes a free chain, like the loop.
   - The Effects setting becomes a macro.
   - The Loop effect is the same effect modules in the flame's own loop.
   - Old patches convert: a slot with its sub-effect becomes that one module, at the slot's place.
@@ -108,7 +106,27 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 - **Macros.** The whole frame's Intensity, Flash, Speed and Wild become the top patch's macros, with visible cables into
   what they move.
 
-### 4. Pictures as inputs
+### 4. Freely routable pictures
+
+The owner: "freely routable". The picture side is a free graph, as the value side is, not a fixed line of places.
+
+- **Any picture output into any picture input.**
+  - One output may feed several inputs (fan-out).
+  - A module may take several picture inputs.
+  - Nothing has a fixed position.
+- **Blend becomes a module.** Mix takes two or more pictures, each with its mode (add, screen, over, multiply, window)
+  and amount. "Layers" are no longer a structure, just sources mixed.
+- **Feedback becomes a module.** It gives the picture its own output had last frame (TouchDesigner's Feedback; VCV
+  Rack's one-step cable). Today's picture loop is wired from parts: Feedback → Warp → Keep → Mix with the new picture.
+  - The flame's own loop is wired the same way.
+  - A loop can be made around any part, at any size.
+  - Several loops can run at once.
+- **The screen is a module.** Safety sits before it; whatever reaches it is drawn. Several outputs can be mixed into it.
+- **Places are views, not structure.** The graph's lanes (sources, picture, modulators) and the rack's groups (layers,
+  loop, finish) are worked out from the wiring, not stored.
+- **Cycles.** A picture cycle must pass through a Feedback module; the graph refuses any other.
+
+### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
 
@@ -118,18 +136,21 @@ A module may take a second `picture` input: Hydra's modulate, TouchDesigner's co
 
 The tint and glow knobs built into the sources for 70.1 move into these modules.
 
-### 5. Nesting
+### 6. Nesting
 
 A chain can be one module of another patch, its chosen knobs exposed as its macros (Reaktor's blocks, Max's
 sub-patches). Presets are chains, and a preset can be dropped in as a part.
 
-### 6. One store
+### 7. One store
 
 - The patch is the truth: kept, shared and saved in snapshots as a v2 patch.
+- A v2 patch is only `{ modules, cables, macros, pins }`: modules with their knobs, cables between typed ports. No
+  layers, loop or finish (§4). 0056's `Patch` shape becomes a view worked out from it while the old code still reads
+  that shape.
 - One store (`patch.svelte.ts`) holds every edit, with undo and redo. Both views read and write only through it.
 - Old settings and snapshots (v1) are converted once through 0056's lossless `cratarrPatch`.
 
-### 7. Seeing it work
+### 8. Seeing it work
 
 - Every picture node shows a live thumbnail.
 - Every modulator shows a moving meter.
