@@ -255,6 +255,19 @@ or on the whole patch, giving its knobs new values within their ranges. Pins are
 cables) is never touched, and the patch store makes it undoable. "Another look" reseeds the Track's look. Wild sets
 how far it goes. The double tap's "loose" (twice the governor's limits) goes with the governor.
 
+- **Its scopes** (the owner: "randomize everything, randomize effects, randomize generators … when long pressing the
+  randomize button, … a drop down with the various different options"):
+  - Everything;
+  - Look: the sources' knobs (the flame's shape and colours, Shapes, Waves);
+  - Effects: the picture modules' knobs;
+  - Generators: the control modules (LFO, Random, ADSR, Clock, Compressor …);
+  - Cables: the amounts of the cables there are.
+  - The scopes are the lanes the wiring gives (rack.ts), not a list kept by hand, so a new module falls into one by
+    itself.
+- **The button:** a tap randomizes everything. A long press opens the app's menu (MenuSheet, as every long-press menu)
+  with the scopes. The double tap's movement-only roll goes.
+- **A module's own menu** has Randomize too, for that module alone (VCV's per-module Randomize).
+
 ### 4e. A track's look: its seed
 
 Today a track draws its own look from a seed of its own (the same track, the same look): the flame's shape and
