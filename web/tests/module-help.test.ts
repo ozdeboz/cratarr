@@ -23,7 +23,7 @@ const idsOf = (type: string) => {
 
 test('every declared module type has its line', () => {
   for (const t of all) assert.ok(moduleHelp[t.type], `${t.type}: no line`);
-  assert.ok(helpFor('drift'), 'a renamed type reads as the one it is now');
+  assert.ok(helpFor('drift') && helpFor('flash') === moduleHelp.accent, 'a renamed type reads as the one it is now');
 });
 
 test('every port and knob has a line, help.ts’s text, or is plain by its label', () => {
@@ -31,6 +31,7 @@ test('every port and knob has a line, help.ts’s text, or is plain by its label
     for (const id of idsOf(t.type)) assert.ok(helpFor(t.type, id) || isPlain(t.type, id), `${t.type}.${id}: no help`);
   // A polyphonic knob's channel reads as its knob.
   assert.equal(helpFor('flame', 'lighting.3'), HELP.lighting);
+  assert.ok(helpFor('shapes', 'count:gain') && helpFor('flame', 'form:next'), 'a knob’s gain and next inputs');
 });
 
 test('no line, pointer or plain mark for a port or type that is not there', () => {
@@ -56,6 +57,6 @@ test('one line each, short', () => {
   const lines = [...Object.values(moduleHelp), ...Object.values(portHelp).flatMap((p) => Object.values(p))];
   for (const l of lines) {
     assert.ok(!l.includes('\n') && l.length <= 130, `too long: ${l}`);
-    assert.match(l, /^[A-Z].*\.$/, `a sentence: ${l}`);
+    assert.match(l, /^[A-Z0-9].*\.$/, `a sentence: ${l}`);
   }
 });

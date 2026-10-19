@@ -46,7 +46,9 @@ export const moduleHelp: Record<string, string> = {
   track: 'A pulse as each new track starts, and the track’s seed, which sets its own look.',
   envelope: 'An envelope follower on the loudness; it scales every cable’s depth unless unplugged.',
   clock: 'The tempo’s clock: a turn every so many beats, and beat, bar and phrase triggers.',
-  flash: 'Splits a value into a slow course and the swing about it, and keeps Flash’s share of the swing.',
+  accent: 'Splits a value into a slow course and the swing about it, and keeps Accent’s share of the swing.',
+  vca: 'A VCA: its input times its gain, the one way one signal multiplies another.',
+  merge: 'Makes one channel of a polyphonic cable’s several (VCV’s poly to mono).',
   compressor: 'A sidechain compressor on values: turns its input down as the sidechain goes over the threshold.',
   adsr: 'An ADSR envelope on each gate or trigger, one a channel.',
   sequencer: 'A step sequencer: up to sixteen values, one a clock step.',
@@ -89,6 +91,11 @@ const UP = 'Moves it up or down.';
 const SPIN = 'How fast it turns; below 0 the other way.';
 const ATTACK = 'How quickly it rises to a higher input (seconds).';
 const RELEASE = 'How quickly it falls to a lower input (seconds).';
+/** Lines for the inputs every level knob and every step knob has (ports.ts): `<knob>:gain`, `<knob>:next`. */
+const SUFFIX: Record<string, string> = {
+  gain: 'Its knob times this, from 0 to 1: a VCA’s output cabled in; 1 while unplugged.',
+  next: 'A trigger here moves its knob on to the next step, at its module’s neutral.',
+};
 
 const numbered = (n: number, id: (i: number) => string, line: (i: number) => string) => Object.fromEntries(Array.from({ length: n }, (_, i) => [id(i + 1), line(i + 1)]));
 
@@ -187,7 +194,13 @@ export const portHelp: Record<string, Record<string, string>> = {
     phase: 'Where it is in its turn, from 0 to 1.',
     rate: 'How fast it turns now.',
   },
-  flash: { in: 'The value to split.', course: 'How slowly the course follows (seconds): the swing about it is what Flash keeps.' },
+  accent: {
+    in: 'The value to split.',
+    accent: 'How much of the swing about the course it keeps: none at 0, twice it at 2.',
+    course: 'How slowly the course follows (seconds): the swing about it is what Accent keeps.',
+  },
+  vca: { gain: 'The gain: 0 shuts the input off, 1 lets it through as it is, 2 doubles it.', cv: 'The gain as a signal (CV), cabled in.' },
+  merge: { mode: 'Sum, mean, largest or geometric mean of the channels.' },
   compressor: {
     in: 'The signal it compresses.',
     key: 'The sidechain: the signal whose level sets how far it compresses.',
@@ -261,7 +274,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     amount: AMOUNT_OUT,
   },
   counter: { length: 'Steps to a full count: at 4, beats into it count a bar.', amount: AMOUNT_OUT },
-  music: { audio: 'The sound itself, its recent samples.', hold: 'How long each band’s envelope takes to fall (seconds).' },
+  music: { audio: 'The sound itself, its recent samples.', playing: '1 while the music plays, 0 while it is paused.', hold: 'How long each band’s envelope takes to fall (seconds).' },
   filterbank: {
     audio: 'The sound to split: Music’s unless unplugged.',
     ...numbered(5, (i) => `split${i}`, (i) => `Where band ${i} ends and band ${i + 1} begins (Hz).`),
@@ -307,22 +320,26 @@ export const HELP_KEY: Record<string, Record<string, string>> = (() => {
   add('frame', 'behaviourWalk', 'aspect:behaviour');
   add('envelope', 'intensity', 'intensity');
   add('clock', 'speed', 'speed');
-  add('flash', 'flash', 'flash');
   // Music's outputs: the signals' texts.
   for (const s of [...TRACK_SIGNALS, ...BAND_SIGNALS]) add('music', s, `signal:${s}`);
   return out;
 })();
 
+/** Types the engine has renamed (0057 §7e: Flash is Accent). */
+const WAS: Record<string, string> = { flash: 'accent' };
+
 /** Whether a port's label says all (no line wanted). */
 export const isPlain = (type: string, id: string) => PLAIN_ANYWHERE.has(id) || (PLAIN[type]?.includes(id) ?? false);
 
 /** The help for a module type, or for one of its ports or knobs (a polyphonic knob's channel, `lighting.3`, as its
- *  knob): its own line, else help.ts's text for it; undefined where the label says it all. A type saved under an old
- *  name (`drift`) is read as the one it is now. */
+ *  knob; a knob's `:gain` or `:next` input, the line all of those share): its own line, else help.ts's text for it;
+ *  undefined where the label says it all. A type saved under an old name (`drift`, `flash`) is read as the one it is now. */
 export function helpFor(type: string, portOrKnob?: string): string | undefined {
-  const t = RENAMED[type] ?? type;
+  const t = RENAMED[type] ?? WAS[type] ?? type;
   if (portOrKnob === undefined) return moduleHelp[t];
   const id = portOrKnob.replace(/\.\d+$/, '');
+  const suffix = /:(\w+)$/.exec(id)?.[1];
+  if (suffix && SUFFIX[suffix]) return SUFFIX[suffix];
   const own = portHelp[t]?.[id];
   if (own) return own;
   const key = HELP_KEY[t]?.[id];
