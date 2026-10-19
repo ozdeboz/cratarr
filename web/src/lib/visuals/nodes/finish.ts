@@ -4,7 +4,7 @@
 import { type EffectClocks, MOST_PICTURE, pictureShader } from '../effects';
 import type { Fluid } from '../fluid';
 import { program } from '../sources/gl';
-import type { Shown } from '../render';
+import type { EffectsParams } from '../chain-params';
 import { FULL, uniforms } from './shared';
 
 /** The effects stage's targets: the two finished pictures and the picture (2), the buffer's size. */
@@ -30,7 +30,7 @@ export class Finish {
 
   /** The picture chain's program for these effects, or null where none would show (none set, all at nothing, or one
    *  that would not compile here: then the stage stands aside for good for that chain). */
-  chainFor(fx: Shown['effects'], clocks: EffectClocks): WebGLProgram | null {
+  chainFor(fx: EffectsParams, clocks: EffectClocks): WebGLProgram | null {
     if (!fx || !(fx.amounts.some((a, k) => a > 0 && fx.ids[k]) || clocks.holding())) return null;
     const ids = fx.ids.slice(0, MOST_PICTURE);
     const key = ids.join(',');
@@ -92,7 +92,7 @@ export class Finish {
 
   /** The picture slot after the show pass: the chain's pass from the picture (and the last finished one, for echoes,
    *  and the flow, for what modulates by it) into the next finished one, which it gives. */
-  finish(p: WebGLProgram, fx: NonNullable<Shown['effects']>, into: FxTargets, picture: WebGLTexture, clocks: EffectClocks, frames: number, fluid: Fluid | null): WebGLTexture {
+  finish(p: WebGLProgram, fx: NonNullable<EffectsParams>, into: FxTargets, picture: WebGLTexture, clocks: EffectClocks, frames: number, fluid: Fluid | null): WebGLTexture {
     const gl = this.gl;
     const next = 1 - into.cur;
     gl.bindFramebuffer(gl.FRAMEBUFFER, into.fbo[next]);

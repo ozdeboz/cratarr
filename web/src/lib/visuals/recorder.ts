@@ -4,6 +4,7 @@
 import type { Compositor } from './compose';
 import type { Flame, Xform } from './flame';
 import type { FrameInfo, Module, PatchExtra, SignalRef } from './patch';
+import { shownOf } from './chain-params';
 import type { FlameRenderer, Shown } from './render';
 
 type Plain<T> = T extends Map<infer K, infer V> ? [K, V][] : T extends Float32Array ? number[] : T extends object ? { [P in keyof T]: Plain<T[P]> } : T;
@@ -71,11 +72,11 @@ export function recordPictures(renderer: FlameRenderer, compositor: Compositor |
     setFlame(f);
   };
   const frame = renderer.frame.bind(renderer);
-  renderer.frame = (passes, look, w, h) => {
-    if (want.done || !flame) return frame(passes, look, w, h);
-    pending = { at: performance.now(), passes, look: plain(look), flame: plain(flame), w, h, bw: renderer.width, bh: renderer.height, points: renderer.pointCount, compose: null, ...(pruned ? { pruned } : {}) };
+  renderer.frame = (passes, now, w, h) => {
+    if (want.done || !flame) return frame(passes, now, w, h);
+    pending = { at: performance.now(), passes, look: plain(shownOf(now)), flame: plain(flame), w, h, bw: renderer.width, bh: renderer.height, points: renderer.pointCount, compose: null, ...(pruned ? { pruned } : {}) };
     pruned = undefined;
-    frame(passes, look, w, h);
+    frame(passes, now, w, h);
     rec.frames.push(pending);
     pending = null;
     if (rec.frames.length >= want.max) want.done = true;

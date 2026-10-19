@@ -4,7 +4,7 @@
 import { FLOW_IN_LIGHT, Fluid, gridFor, type Loop } from '../fluid';
 import { loopFunction } from '../effects';
 import { program } from '../sources/gl';
-import type { Shown } from '../render';
+import type { CarryParams } from '../chain-params';
 import type { Light } from './light';
 import { FULL, uniforms } from './shared';
 
@@ -93,7 +93,7 @@ export class Carry {
   /** The light kept from the last frame into this one (bound, blending on), `since` seconds on: faded where it was;
    *  read nearer the middle (the tunnel) or by the loop's effect; or carried along the fluid's flow. The fluid drawn
    *  with, if any. */
-  draw(light: Light, look: Shown, since: number, loop: LoopNow | null): Fluid | null {
+  draw(light: Light, look: CarryParams, since: number, loop: LoopNow | null): Fluid | null {
     const gl = this.gl;
     const follow = (shown: number, to: number) => shown + (to - shown) * (1 - Math.exp(-since / (to > shown ? FLUID_RISE : FLUID_FALL)));
     this.fluidShown = follow(this.fluidShown, Math.max(0, look.fluid));

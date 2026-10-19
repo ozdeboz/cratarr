@@ -4,7 +4,7 @@
 import { MARK, colourOf, PARTS, type Flame } from '../flame';
 import { diveCamera, diveFit, diveTarget, type DiveFit } from '../zoom';
 import { program } from '../sources/gl';
-import type { Shown } from '../render';
+import type { PointsParams } from '../chain-params';
 import type { Light } from './light';
 import { uniforms } from './shared';
 
@@ -515,7 +515,7 @@ export class FlamePoints {
 
   /** This frame's steps into the light in use (bound, blending on): `passes` steps of every point, each drawn where
    *  it lands, after the unseen ones of the points still settling. */
-  draw(light: Light, look: Shown, passes: number, since: number) {
+  draw(light: Light, look: PointsParams, passes: number, since: number) {
     const gl = this.gl;
     const flame = this.flame!;
     // The points: each pass one step of the chaos game for every point, drawn where it lands.

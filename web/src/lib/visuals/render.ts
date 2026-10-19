@@ -10,6 +10,7 @@
 //   (decision 0046, amended), so a band's transient lights its own colour where it lies;
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
+import type { ChainNow } from './chain-params';
 import type { Flame } from './flame';
 import type { Flow, Force, Loop } from './fluid';
 import { EffectClocks } from './effects';
@@ -21,6 +22,7 @@ import { FlamePoints } from './nodes/points';
 import { Screen } from './nodes/screen';
 import { Show } from './nodes/show';
 
+/** Everything the nodes read in a frame, as one (the frozen renderer's look; chain-params.ts groups it by node). */
 export type Shown = {
   /** Brightness, around 1. */
   brightness: number;
@@ -185,8 +187,9 @@ export class FlameRenderer {
     this.points.setFlame(flame);
   }
 
-  /** One frame: the old picture fades by `look.keep`, `passes` more steps of every point fall into it, and it shows. */
-  frame(passes: number, look: Shown, viewWidth: number, viewHeight: number) {
+  /** One frame: the old picture fades by `now.carry.keep`, `passes` more steps of every point fall into it, and it
+   *  shows. */
+  frame(passes: number, now: ChainNow, viewWidth: number, viewHeight: number) {
     const [screenWidth, screenHeight] = [viewWidth, viewHeight];
     const gl = this.gl;
     const light = this.light;
@@ -200,7 +203,7 @@ export class FlameRenderer {
     const since = this.shownAt ? Math.min(0.25, (at - this.shownAt) / 1000) : 0;
     this.shownAt = at;
     // The loop slot's effect, where there is one.
-    const fxl = look.effects;
+    const fxl = now.effects;
     this.fxFrames = Math.min(4, since * 60);
     if (fxl) this.clocks.run(fxl);
     const loop =
@@ -209,19 +212,19 @@ export class FlameRenderer {
         : null;
     // Fade what is there; with the Fluid setting, carry it along the flow as it fades, into the other set of buffers
     // (as the scrub copies), and draw on there.
-    const fluid = this.carry.draw(light, look, since, loop);
-    this.points.draw(light, look, passes, since);
+    const fluid = this.carry.draw(light, now.carry, since, loop);
+    this.points.draw(light, now.points, passes, since);
 
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where a
     // chain of effects is set, into the picture at the buffer's size, for the chain's pass to finish.
-    const chain = this.fin.chainFor(look.effects, this.clocks);
+    const chain = this.fin.chainFor(now.effects, this.clocks);
     const composing = !!this.compose?.active;
     const into = chain || composing ? this.fin.targets(light.width, light.height) : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
     if (into) viewWidth = light.width, viewHeight = light.height;
-    this.show.draw(light, this.points, look, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
+    this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
     const picture = into && composing ? this.compose!.run(into.tex[2], into.w, into.h) : into ? into.tex[2] : null;
-    if (chain && into && picture) this.screen.toScreen(this.fin.finish(chain, look.effects!, into, picture, this.clocks, this.fxFrames, this.carry.fluid), screenWidth, screenHeight);
+    if (chain && into && picture) this.screen.toScreen(this.fin.finish(chain, now.effects!, into, picture, this.clocks, this.fxFrames, this.carry.fluid), screenWidth, screenHeight);
     else if (into && picture) this.screen.toScreen(picture, screenWidth, screenHeight);
     else this.fin.idle();
   }
