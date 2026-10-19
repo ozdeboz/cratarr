@@ -78,7 +78,7 @@ Six kinds of signal, each with its own wire in the graph:
 
 ### 3. The Cratarr chain as modules
 
-Each of today's hidden behaviours becomes a module with ports, in the graph and the rack:
+Each of today's hidden behaviours becomes a module with ports, in the graph:
 
 | Module | Kind | What it is today |
 |---|---|---|
@@ -329,6 +329,18 @@ set of components, modules of which some are inserted as devices, but they are i
 - One store (`patch.svelte.ts`) holds every edit, with undo and redo. Both views read and write only through it.
 - Old settings and snapshots (v1) are converted once through 0056's lossless `cratarrPatch`.
 
+### 7b. One interface on every screen
+
+The owner: "Phones get what everybody gets, no difference." The graph is the interface everywhere, phones included.
+There is no separate phone rack. The panel's pages (a module's knobs, a cable's sheet, the pickers) open beside the
+graph where there is room and as sheets over it where there is not. On a phone that means:
+
+- touch throughout: pinch to zoom, drag to pan and to cable, tap to open, long press for the menu;
+- semantic zoom so labels stay readable;
+- the jump chips to reach a part quickly.
+
+The graph is built for touch from the start, not adapted to it later.
+
 ### 8. Seeing it work
 
 - Every picture node shows a live thumbnail.
@@ -346,7 +358,7 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
 | 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash modules (the walks as Drifts) and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); the Grid's points and channels (§4c); the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
 | 3 | **Picture graph:** the compositor over typed picture ports, lazy; Fold (one module for the grid's symmetries) and Instance (§4c); the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
-| 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
+| 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo; the graph on every screen, phones included, touch first (§7b) (graph: claude-632; its pages and sheets: claude-a5) | claude-632, claude-a5 |
 | 5 | **Devices and macros:** the device type (a module holding a patch, its exposed ports and macros), flattening for the engine and compositor, Show as a device, open/collapse in the rack (graph: claude-632), the whole frame's macros | claude-a5 |
 | 6 | **Retire:** aspects.ts, the routes' matrix, chain-cables.ts, the old settings keys | whoever's step frees it |
 
