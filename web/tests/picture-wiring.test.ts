@@ -47,3 +47,19 @@ test('passes out of the order this version draws them in are refused', () => {
   const c = compile(toV2(settings()), types);
   assert.equal(stagesOf({ ...c, order: [...c.order].reverse() }), null);
 });
+
+test("the effects in a line drawing today's one pass: colours and echoes in slot order, then the shapes reversed", async () => {
+  const { effectsInOrder } = await import('../src/lib/visuals/picture-wiring.ts');
+  const fx = (id: string, type: string, effect: number) => ({ id, type, knobs: { effect, amount: 1 } });
+  // Rotate (a shape), Pulse (a shape), Echo; Posterize (a colour) between shapes.
+  assert.deepEqual(effectsInOrder([fx('fx1', 'kaleidoscope-engine', 3), fx('fx2', 'eyedo-engine', 1), fx('fx3', 'hydra-engine', 1)]).map((m) => m.id), ['fx3', 'fx2', 'fx1']);
+  assert.deepEqual(effectsInOrder([fx('fx1', 'kaleidoscope-engine', 1), fx('fx3', 'hydra-engine', 7)]).map((m) => m.id), ['fx3', 'fx1']);
+});
+
+test('the effects run as one pass, but a run ends at an Echo that shows', async () => {
+  const { effectRuns } = await import('../src/lib/visuals/picture-graph.ts');
+  const ids = [10, 16, 9]; // Rotate, Pulse, Echo
+  assert.deepEqual(effectRuns([0, 1, 2], ids, [1, 1, 1]), [[10, 16, 9]], 'Echo last: one pass');
+  assert.deepEqual(effectRuns([2, 1, 0], ids, [1, 1, 1]), [[0, 0, 9], [10, 16, 0]]);
+  assert.deepEqual(effectRuns([2, 1, 0], ids, [1, 1, 0]), [[10, 16, 9]], 'an Echo at nothing ends none');
+});

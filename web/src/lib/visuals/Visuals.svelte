@@ -1291,7 +1291,7 @@
     // The picture lab's recorder (development only, where the lab asks): each frame's inputs, for a replay.
     if (import.meta.env.DEV && renderer) recordPictures(renderer);
     // The patch's structure as the renderer last had it (its picture side: picture-graph.ts).
-    let patched = false;
+    let patched = '';
     const normal = newNormalState();
     // The patch's cables, modulators and macros made into each knob's value this frame (claude-632's evaluate.ts):
     // what the compositor draws with; today's chain stays with aspects.ts.
@@ -1813,8 +1813,10 @@
       shownKnobs = { ...morphFrame.knobs, ...Object.fromEntries(morphFrame.leaving.map((l) => [l.id, l.knobs])) };
       const extra = withLeaving(extraSet, drawnExtra, leavingIds(morphFrame.leaving));
       if (renderer && (extraChanged || morphFrame.leaving.length !== goingBefore)) renderer.prune(extra);
-      if (renderer && (extraChanged || !patched)) {
-        patched = true;
+      // The effects' order follows what each slot draws (a shape or a colour: picture-wiring.ts).
+      const effectsDrawn = `${Math.round(s.fx1)},${Math.round(s.fx2)},${Math.round(s.fx3)}`;
+      if (renderer && (extraChanged || patched !== effectsDrawn)) {
+        patched = effectsDrawn;
         try {
           renderer.setPatch(toV2($state.snapshot(s) as VisualSettings), PICTURE_TYPES);
           if (renderer.errors.length) console.warn('Visuals:', renderer.errors);

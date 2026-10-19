@@ -8,6 +8,7 @@
 //                              &seedB=n starts the second one's points elsewhere (the harness's own check: it differs)
 // window.pictureLab holds the recording or the result; web/scripts/check-picture.mjs drives both.
 import { EXAMPLES } from './chains';
+import { ENGINE_EFFECTS, ENGINES } from './effects';
 import { randomFrom } from './flame';
 import type { Tiles } from './meters';
 import type { FrameInfo, Module, PatchExtra } from './patch';
@@ -62,14 +63,17 @@ const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, opti
     const [{ FlameRenderer }, { v2Types }, { toV2 }, { cratarrTypes }, { DEFAULTS, RANGES }] = await Promise.all([import('./render'), import('./picture-graph'), import('./v2'), import('./patch'), import('./settings.svelte')]);
     const r = new FlameRenderer(canvas, points, 'high-performance', options);
     const types = v2Types(cratarrTypes(RANGES, DEFAULTS));
-    let patched = false;
+    let patched = '';
     return driver(r, (f, all) => {
       prepare(r, canvas, f);
-      if (!patched) {
-        // Today's chain with the extras the recording draws.
-        r.setPatch(toV2({ ...DEFAULTS, extra: all.frames.find((x) => x.compose)?.compose?.extra ?? emptyExtra() } as VisualSettings), types);
+      // Today's chain with the extras the recording draws and the effects it draws now (each slot's at its place in
+      // its engine's list).
+      const ids = f.look.effects?.ids ?? [0, 0, 0];
+      if (patched !== ids.join()) {
+        const places = Object.fromEntries(ENGINES.map((e, k) => [`fx${k + 1}`, ENGINE_EFFECTS[e.key].findIndex((x) => x.id === ids[k]) + 1]));
+        r.setPatch(toV2({ ...DEFAULTS, ...places, extra: all.frames.find((x) => x.compose)?.compose?.extra ?? emptyExtra() } as VisualSettings), types);
         if (r.errors.length) throw new Error(r.errors.join(' '));
-        patched = true;
+        patched = ids.join();
       }
       if (f.pruned) r.prune(f.pruned);
       const c = f.compose;
@@ -335,6 +339,8 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
     lit: count ? lit / count : 0,
     psnr: mse ? 10 * Math.log10((255 * 255) / mse) : Infinity,
     framesDiffering: perFrame.filter((d) => d > 0).length,
+    /** The first frames' largest difference each. */
+    first: perFrame.slice(0, 12),
     digests: sides.map((s) => s.digest.toString(16).padStart(8, '0')),
     tiles: { a: sides[0].tiles.length, b: sides[1].tiles.length, matched: tilesMatched, max: tilesWorst },
     gpu: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '?',
