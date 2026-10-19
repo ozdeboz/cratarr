@@ -91,8 +91,9 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 | **Fluid**, **Tunnel**, **Dive**, **Trails**, **Loop effect** | picture modules in the flame's own loop | as today |
 | **Effects** | picture modules, one per effect | today three fixed slots (Kaleidoscope, EYEDO, Hydra), each choosing one sub-effect by a step knob; see below |
 | **Moments** | trigger outputs of the module that has them | another symmetry, lens or form at a step's neutral (morph.ts) |
-| **Governor** | modulator watching a picture, as many as wanted | the governor: levers per kind of busyness, cabled (normalled by kind) into what they hold back |
-| **Taste** | source, one per user | the learned limits (the thumbs), normalled into every Governor |
+| **Meter** | detector: picture in, busyness values out | the governor's meters |
+| **Compressor** | standard sidechain compressor on values | the governor's holding back, as normalled wiring |
+| **Taste** | source, one per user | the learned limits (the thumbs), as the Compressors' thresholds |
 | **Screen** (with its flash guard) | the output | the flash rule: fixed, always on, last |
 
 - **Effects, each its own module.** The owner asked: "And effects would also become modules, correct?" Yes.
@@ -103,36 +104,26 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
   - The Effects setting becomes a macro.
   - The Loop effect is the same effect modules in the flame's own loop.
   - Old patches convert: a slot with its sub-effect becomes that one module, at the slot's place.
-- **The governor, the taste and the flash guard** (the owner: "If there aren't multiple governors, then it's not truly
-  a modular component. And if it's not truly a modular component, then it's not properly integrated into the
-  architecture"). Three parts, each where it belongs:
-  - **Governor: a module, as many as wanted.** Like a compressor's sidechain, it takes a `picture` in (what it
-    watches) and gives `value` outs, one lever per kind of busyness. A lever is 1 while that busyness is within its
-    limit, and falls while it is over. Cables carry the levers wherever they should hold back.
-    - By default each lever is normalled into the depth of the cables into knobs of its kind. Every knob declares its
-      kind (`busy`: motion, shape, colour, zoom, looks).
-    - A default patch has one Governor watching the whole picture. Another on a layer holds back that layer's own
-      cables, and a nested chain may bring its own.
-    - Its knobs are its limits, one per kind, scaled by its Wild.
-    - **It is a sidechain compressor, not an invention** (the owner: "sidechaining is something we don't have to invent
-      ourselves"). Per kind of busyness:
-      - the detector is that meter;
-      - the threshold is its limit;
-      - ratio, knee, attack and release shape the lever;
-      - the lever is the gain reduction.
-      The gain computer and its ballistics follow the standard design (Giannoulis, Massberg and Reiss, "Digital
-      Dynamic Range Compressor Design", JAES 2012). Today's levers already behave like one; they are restated as
-      such, with the same defaults.
-  - **Taste: the learning, a source module.** One per user. Its outputs are the learned limits, one per kind,
-    normalled into every Governor's limits, which then act as offsets on them.
-    - The thumbs teach Taste by 0048's rules. The flow is unchanged: one thumb on the picture as it is.
-    - The thumb's kind is the one that stood out most against its limit in the 20 seconds before, read from the
-      Governors watching what is shown. The whole picture's watcher counts first.
-    - What was learned before is Taste's state as it is.
-  - **Flash guard: part of the Screen,** like a master limiter: three flashes a second over the area the owner chose
-    (WCAG). It is safety, not taste: never learned, never removable, the last thing before the picture is shown. It
-    holds the picture itself, and holds back the Flash modules' swing through their own normalled lever.
-  - The precheck and the dice read the same Taste and Governor limits.
+- **No governor: sidechaining, done the standard way** (the owner: "We shouldn't call it the governor. We should
+  remove the governor and implement sidechaining as it is supposed to be done … we shouldn't reinvent it"). The
+  governor goes. Its job is done by standard parts, wired as any sidechain is:
+  - **Meter: a detector.** Picture in, `value` outs: motion, shape churn, colour churn, zoom pumping, new looks a
+    minute (meters.ts's measures). It is like an envelope follower on audio. As many as wanted, on any picture.
+  - **Compressor: a sidechain compressor on values.** Inputs: `in` (the signal it compresses, e.g. a cable's
+    modulation) and `key` (the sidechain, e.g. a Meter's motion). Knobs: threshold, ratio, knee, attack, release,
+    makeup. Outputs: `out` (the compressed signal) and `reduction` (the gain reduction, to drive anything else, as a
+    ducker does). The gain computer and its ballistics follow the textbook design (Giannoulis, Massberg and Reiss,
+    "Digital Dynamic Range Compressor Design", JAES 2012); nothing of our own.
+  - **The default wiring is normalled:** a Meter on the screen's picture, and a Compressor per kind keyed by it,
+    through which the cables into knobs of that kind run (each knob declares its kind, `busy`). Today's behaviour is
+    that wiring with today's limits as the thresholds. Everything in it can be seen, re-keyed, re-patched or removed.
+  - **Taste: the learning.** A source per user; its outputs are the learned thresholds, one per kind, normalled into
+    the Compressors' thresholds. The thumbs teach it. **Its design is to be redone for use** (the owner: "even if we
+    keep it, we should probably redesign it to make it usable"); a talk with the owner decides how, before it is built.
+    What was learned before is kept.
+  - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
+    (WCAG). It is safety, not taste: never learned, never removable, last.
+  - The precheck and the dice read the same thresholds.
 - **Normalled cables.** The connections every chain has by default are shown faint and can be unplugged: Envelope into
   each cable's depth, Music's hits into the flame's steps, the Clock into the turning, Track's look into the flame's look.
   Plugging another cable into such a port breaks the normal, as in Eurorack.
@@ -208,8 +199,8 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | Step | What | Owner |
 |---|---|---|
 | 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
-| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
-| 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Governor (a sidechain compressor), Taste and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
+| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; Taste once redesigned; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
+| 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
 | 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
 | 5 | **Nesting and macros:** chains as modules, the whole frame's macros | claude-a5 |
 | 6 | **Retire:** aspects.ts, the routes' matrix, chain-cables.ts, the old settings keys | whoever's step frees it |
@@ -239,4 +230,5 @@ graph walk).
 
 - Whether a band's six outputs show as one row with six channels (VCV's polyphonic cables) or as six ports. The graph's
   "Level · 6 bands" bundle suggests channels.
-- Where a Governor's levers show in the rack.
+- Where the Compressors' reduction shows in the rack.
+- Taste's redesign (the owner wants it usable).

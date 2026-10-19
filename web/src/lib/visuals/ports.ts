@@ -119,29 +119,35 @@ export const WALK = declared('walk', 'Walk', 'modulator', [knob('amount', 'Amoun
 
 const BUSY_LABEL: Record<(typeof BUSY)[number], string> = { motion: 'Motion', shape: 'Shape churn', colour: 'Colour churn', zoom: 'Zoom pumping', looks: 'New looks' };
 
-/** A Governor (0057): a sidechain compressor over the picture it watches, one per kind of busyness (detector: that
- *  meter; threshold: its limit, from Taste unless set; ratio, knee, attack, release); its levers (the gain reduction:
- *  1 within the limit, less over it) normalled into the depth of the cables into knobs of their kind. As many as
- *  wanted. */
-export const GOVERNOR = declared(
-  'governor',
-  'Governor',
+/** A Meter (0057): a detector; the picture it watches in, its busyness out (meters.ts's measures). */
+export const METER = declared('meter', 'Meter', 'modulator', [], [PICTURE_IN], BUSY.map((b) => out(b, BUSY_LABEL[b])));
+
+/** A Compressor (0057): a standard sidechain compressor on values (Giannoulis, Massberg, Reiss 2012): `in` compressed
+ *  by how far `key` stands over the threshold; `reduction` the gain reduction (1: none), for ducking anything else. */
+export const COMPRESSOR = declared(
+  'compressor',
+  'Compressor',
   'modulator',
   [
-    knob('wild', 'Wild', 0, 1, 0.5),
+    knob('threshold', 'Threshold', 0, 4, 1),
     knob('ratio', 'Ratio', 1, 20, 4),
-    knob('knee', 'Knee', 0, 1, 0.2),
-    knob('attack', 'Attack', 0.01, 2, 0.25),
-    knob('release', 'Release', 0.05, 10, 2),
+    knob('knee', 'Knee', 0, 2, 0.2),
+    knob('attack', 'Attack', 0.001, 2, 0.25),
+    knob('release', 'Release', 0.01, 10, 2),
+    knob('makeup', 'Makeup', 0, 4, 1),
   ],
-  [PICTURE_IN, ...BUSY.map((b): Port => ({ id: `limit.${b}`, label: `${BUSY_LABEL[b]} limit`, type: 'value', normal: { module: 'taste', port: b } }))],
-  BUSY.map((b) => out(b, BUSY_LABEL[b])),
+  [
+    { id: 'in', label: 'Input', type: 'value' },
+    { id: 'key', label: 'Sidechain', type: 'value' },
+  ],
+  [VALUE_OUT, out('reduction', 'Reduction')],
 );
 
-/** Taste (0057): the user's learned limits, one per kind (learning.ts; the thumbs teach it), into every Governor. */
+/** Taste (0057): the user's learned thresholds, one per kind (learning.ts; the thumbs teach it), normalled into the
+ *  Compressors keyed by that kind. To be redesigned with the owner. */
 export const TASTE = declared('taste', 'Taste', 'modulator', [], [], BUSY.map((b) => out(b, BUSY_LABEL[b])));
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, GOVERNOR, TASTE];
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, TASTE];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
