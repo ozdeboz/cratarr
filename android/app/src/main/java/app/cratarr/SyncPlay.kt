@@ -92,9 +92,10 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
 
     /** Cratarr's word (main thread): the group it plays in, where its sound is (on `host`, else on the host Cratarr's
      *  pages come from). */
-    fun group(leader: String?, host: String?, port: Int, bufferMs: Long) {
+    fun group(leader: String?, host: String?, port: Int, bufferMs: Long, secret: String) {
         val host = host ?: prefs.serverUrl?.let { Uri.parse(it.trim()).host }
-        val me = prefs.playerName
+        // What Cratarr's sync server knows this player by (decision 0051): its secret, a colon, its name.
+        val me = "$secret:${prefs.playerName}"
         val wasLeading = leads
         val wasFollowing = follows
         this.leader = leader?.takeIf { host != null }
@@ -150,7 +151,7 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     fun leave() {
         val server = prefs.serverUrl?.trimEnd('/') ?: return
         val url = "$server/api/players/${Uri.encode(prefs.playerName)}/command"
-        group(null, null, 0, bufferMs)
+        group(null, null, 0, bufferMs, "")
         Thread {
             try {
                 val c = Net.open(context, url)
@@ -280,7 +281,9 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
                         s.tcpNoDelay = true
                         s.connect(InetSocketAddress(host, port), 5_000)
                         val out = BufferedOutputStream(s.getOutputStream(), 64 * 1024)
-                        out.write(message(SOURCE, json(JSONObject().put("player", name))))
+                        // Its name and its secret (`group`'s id: secret, a colon, name).
+                        val secret = name.substringBefore(':', "")
+                        out.write(message(SOURCE, json(JSONObject().put("player", name.substringAfter(':')).put("secret", secret))))
                         // Afresh: the format first, then what plays from now on.
                         queue.clear()
                         format?.let { (rate, channels, _) -> out.write(message(CODEC_HEADER, codecHeader(rate, channels))) }

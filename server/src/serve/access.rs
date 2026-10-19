@@ -187,19 +187,26 @@ fn who_of(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, query: O
 /// The requirement, around every route (`main`): a request without a way in is refused; one let in runs as whoever it
 /// is for (`who`).
 pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Next) -> Response {
+    let (method, uri) = (request.method().as_str().to_string(), request.uri().clone());
     if !serve.sign_in_required() {
         // Off, a key still counts as used: before the switch, Settings shows that a client sends its key.
         if let Some(key) = key_of(request.headers()) {
             let _ = serve.sessions.check_key(key, now());
         }
-        // One user: the owner's, as an administrator.
-        let owner = serve.users.owner().map(|user| Who { user, admin: true, scope: Scope::Full });
-        return match owner {
+        // Not required, still heard (decision 0051): one signed in, or with a key, is that account; anyone else is
+        // the owner, as an administrator (one user, as before accounts).
+        let who = match who_of(&serve, &method, request.headers(), uri.path(), uri.query()) {
+            Some(Some(who)) => Some(who),
+            _ => serve.users.owner().map(|user| Who { user, admin: true, scope: Scope::Full }),
+        };
+        return match who {
+            Some(who) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") => {
+                (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This key only reads." }))).into_response()
+            }
             Some(who) => acting_as(who, next.run(request)).await,
             None => next.run(request).await,
         };
     }
-    let (method, uri) = (request.method().as_str().to_string(), request.uri().clone());
     match who_of(&serve, &method, request.headers(), uri.path(), uri.query()) {
         // A key that only reads changes nothing.
         Some(Some(who)) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") => {
@@ -496,6 +503,12 @@ mod tests {
         let keyed = HttpRequest::get("/api/library").header("authorization", format!("Bearer {key}")).body(Body::empty()).unwrap();
         assert_eq!(status(&s, keyed).await.0, StatusCode::OK);
         assert!(s.sessions.keys().unwrap().iter().find(|k| k.id == made.id).unwrap().last_used.is_some());
+        // Not required, still heard: one signed in is themselves, not the owner (decision 0051).
+        assert_eq!(status(&s, get_("/api/auth/keys")).await.0, StatusCode::OK, "anyone else: the owner");
+        s.users.from_directory("ann", false).unwrap();
+        let (token, _) = s.sessions.create("ann", "d", now()).unwrap();
+        let ann = HttpRequest::get("/api/auth/keys").header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap();
+        assert_eq!(status(&s, ann).await.0, StatusCode::FORBIDDEN);
         let fresh = Serve::open(None, Rules::default(), &|_| None).unwrap();
         fresh.sessions.set_required(true).unwrap();
         assert_eq!(status(&fresh, get_("/api/library")).await.0, StatusCode::OK, "no account to sign in with yet");

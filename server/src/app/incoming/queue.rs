@@ -68,6 +68,9 @@ struct Job {
     undo: Option<String>,
     why: Option<String>,
     finished: Option<i64>,
+    /// Who queued it (decision 0051): the journal says who changed the library.
+    #[serde(default)]
+    by: Option<String>,
 }
 
 /// A job as the page sees it.
@@ -303,6 +306,7 @@ impl IncomingService {
                 undo: None,
                 why: None,
                 finished: None,
+                by: crate::serve::who::current().map(|w| w.user),
             });
         });
         self.queue.wake.notify_one();
@@ -357,7 +361,7 @@ impl IncomingService {
 
     async fn run(&self, id: u64) {
         let Some(job) = self.queue.get(id) else { return };
-        let outcome = self.run_job(job).await;
+        let outcome = crate::journal::done_by(job.by.clone(), self.run_job(job)).await;
         let (state, undo, why) = match outcome {
             Outcome::Done(undo) => (State::Done, undo, None),
             Outcome::Failed(why) => (State::Failed, None, Some(why)),
@@ -583,6 +587,7 @@ mod tests {
             undo: None,
             why: None,
             finished,
+            by: None,
         };
         {
             let q = Queue::open(Some(file.clone()));

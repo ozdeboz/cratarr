@@ -41,6 +41,15 @@ pub trait Groups: Send + Sync + 'static {
     fn volume_of(&self, player: &str) -> u8;
     /// How late its speaker sounds (ms): its snapclient plays that much earlier.
     fn latency_of(&self, player: &str) -> i32;
+    /// Whether `secret` is player `player`'s (decision 0051): it was told it with its group, and only it may listen to
+    /// its group or play into it.
+    fn admits(&self, player: &str, secret: &str) -> bool;
+}
+
+/// A snapclient's id as Cratarr's players give it (`--hostID`): their secret, a colon, their name. The secret has no
+/// colon; the name may.
+fn named(id: &str) -> (&str, &str) {
+    id.split_once(':').unwrap_or(("", id))
 }
 
 /// What a group's stream sends its devices.
@@ -261,14 +270,25 @@ impl Snapcast {
             .await
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "no hello"))??;
         let said = proto::read_json(&payload).unwrap_or_default();
+        // Only a player with its secret (decision 0051): another device on the network named it, nothing more.
+        let refused = |name: &str, kind: &str| {
+            tracing::warn!(target: "syncplay", player = name, kind, "refused: not that player's secret");
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "not that player"))
+        };
         match hello.kind {
             proto::HELLO => {
-                let name = said["ID"].as_str().unwrap_or_default().to_string();
-                self.client(name, hello, reader, writer).await
+                let (secret, name) = named(said["ID"].as_str().unwrap_or_default());
+                if !self.groups.admits(name, secret) {
+                    return refused(name, "listener");
+                }
+                self.client(name.to_string(), hello, reader, writer).await
             }
             proto::SOURCE => {
-                let name = said["player"].as_str().unwrap_or_default().to_string();
-                self.source(name, reader).await
+                let name = said["player"].as_str().unwrap_or_default();
+                if !self.groups.admits(name, said["secret"].as_str().unwrap_or_default()) {
+                    return refused(name, "leader");
+                }
+                self.source(name.to_string(), reader).await
             }
             other => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("a first message of type {other}"))),
         }
@@ -408,6 +428,43 @@ mod tests {
     /// 20 ms of F.
     const CHUNK: usize = 50_000 * 4 / 50;
 
+    /// Only a player with its secret listens or leads; anyone else's connection is closed at its hello.
+    #[tokio::test]
+    async fn sync_play_admits_only_a_player_with_its_secret() {
+        struct Kept;
+        impl Groups for Kept {
+            fn leader_of(&self, _: &str) -> Option<String> {
+                Some("lead".into())
+            }
+            fn volume_of(&self, _: &str) -> u8 {
+                100
+            }
+            fn latency_of(&self, _: &str) -> i32 {
+                0
+            }
+            fn admits(&self, player: &str, secret: &str) -> bool {
+                (player, secret) == ("p1", "s1") || (player, secret) == ("lead", "s0")
+            }
+        }
+        assert_eq!(named("s1:Kitchen: left"), ("s1", "Kitchen: left"));
+        assert_eq!(named("p1"), ("", "p1"), "an app from before: no secret");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(Snapcast::new(Arc::new(Kept), 1000).serve(listener));
+        let hello = |id: &str| proto::message(proto::HELLO, 0, 0, 0, &proto::json(&serde_json::json!({ "ID": id })));
+        // What the server answers first, or nothing (closed).
+        async fn first(port: u16, m: Vec<u8>) -> usize {
+            use tokio::io::AsyncReadExt;
+            let mut s = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            s.write_all(&m).await.unwrap();
+            let mut buf = [0u8; 64];
+            tokio::time::timeout(Duration::from_secs(2), s.read(&mut buf)).await.unwrap().unwrap_or(0)
+        }
+        assert!(first(port, hello("s1:p1")).await > 0, "its settings come");
+        assert_eq!(first(port, hello("p1")).await, 0, "without its secret: closed");
+        assert_eq!(first(port, hello("s0:p1")).await, 0, "another's secret");
+    }
+
     fn stamps(out: &[Out]) -> Vec<i64> {
         out.iter()
             .filter_map(|o| match o {
@@ -433,6 +490,9 @@ mod tests {
             }
             fn latency_of(&self, _: &str) -> i32 {
                 0
+            }
+            fn admits(&self, _: &str, _: &str) -> bool {
+                true
             }
         }
         let snap = Snapcast::new(Arc::new(One), 1000);

@@ -1000,6 +1000,11 @@ impl PlaylistService {
             return Err(ToggleError::UnknownPlaylist);
         }
         let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        // As the account's permissions say (decision 0051); stopping is always one's own to do.
+        let may = serve.current_user().and_then(|u| serve.users.get(&u)).is_none_or(|u| u.permissions.share);
+        if on && !may {
+            return Err(ToggleError::Forbidden("This account may not share playlists.".into()));
+        }
         Ok(serve.userdata.set_playlist_shared(&store.key(&name), on)?)
     }
 

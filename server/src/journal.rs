@@ -163,7 +163,23 @@ CREATE TABLE IF NOT EXISTS changes (
 ";
 
 /// Columns added after the first schema; added to an existing journal when missing.
-const ADDED_COLUMNS: [(&str, &str); 2] = [("events", "applied INTEGER NOT NULL DEFAULT 1"), ("changes", "account TEXT")];
+const ADDED_COLUMNS: [(&str, &str); 4] =
+    [("events", "applied INTEGER NOT NULL DEFAULT 1"), ("changes", "account TEXT"), ("events", "account TEXT"), ("events", "undone_by TEXT")];
+
+tokio::task_local! {
+    /// Whose a queued job's journal entries are: whoever queued it (it runs on its own, after their request).
+    static BY: Option<String>;
+}
+
+/// `f`, what it journals done by `account` (decision 0051: the journal says who changed the library).
+pub async fn done_by<F: std::future::Future>(account: Option<String>, f: F) -> F::Output {
+    BY.scope(account, f).await
+}
+
+/// Who does what the running task journals: a queued job's account, else the running request's (none: Cratarr itself).
+fn by() -> Option<String> {
+    BY.try_with(Clone::clone).ok().flatten().or_else(|| crate::serve::who::current().map(|w| w.user))
+}
 
 pub struct Journal {
     db: Mutex<Connection>,
@@ -199,7 +215,7 @@ impl Journal {
     /// between leaves it in `intents`, to be finished or forgotten (whichever the disk shows). Returns its id.
     pub fn intend(&self, at: i64, event: &Event) -> Result<EventId> {
         let db = self.db();
-        db.execute("INSERT INTO events (at, event, applied) VALUES (?1, ?2, 0)", params![at, serde_json::to_string(event)?])?;
+        db.execute("INSERT INTO events (at, event, applied, account) VALUES (?1, ?2, 0, ?3)", params![at, serde_json::to_string(event)?, by()])?;
         Ok(db.last_insert_rowid())
     }
 
@@ -235,7 +251,7 @@ impl Journal {
     pub fn record(&self, at: i64, event: &Event) -> Result<EventId> {
         let id = {
             let db = self.db();
-            db.execute("INSERT INTO events (at, event) VALUES (?1, ?2)", params![at, serde_json::to_string(event)?])?;
+            db.execute("INSERT INTO events (at, event, account) VALUES (?1, ?2, ?3)", params![at, serde_json::to_string(event)?, by()])?;
             db.last_insert_rowid()
         };
         let _ = self.tell.send(id);
@@ -311,7 +327,7 @@ impl Journal {
 
     /// Mark an event undone, then tell whoever listens for that. False when it already was (so an Undo runs once).
     pub fn mark_undone(&self, id: EventId, at: i64) -> Result<bool> {
-        let marked = self.db().execute("UPDATE events SET undone_at = ?2 WHERE id = ?1 AND undone_at IS NULL", params![id, at])? == 1;
+        let marked = self.db().execute("UPDATE events SET undone_at = ?2, undone_by = ?3 WHERE id = ?1 AND undone_at IS NULL", params![id, at, by()])? == 1;
         if marked {
             let _ = self.tell_undone.send(id);
         }
@@ -415,6 +431,21 @@ mod tests {
             token: "100/X - Y".into(),
             release_group: Some("rg".into()),
         }
+    }
+
+    #[tokio::test]
+    async fn a_library_change_says_who_made_it_and_who_undid_it() {
+        use crate::serve::who::{Scope, Who, acting_as};
+        let j = Journal::open(None).unwrap();
+        let id = done_by(Some("ann".into()), async { j.intend(100, &rejected("A")).unwrap() }).await;
+        let bob = Who { user: "bob".into(), admin: true, scope: Scope::Full };
+        acting_as(bob, async { j.mark_undone(id, 200).unwrap() }).await;
+        let who: (Option<String>, Option<String>) =
+            j.db().query_row("SELECT account, undone_by FROM events WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(who, (Some("ann".into()), Some("bob".into())), "a queued job's: who queued it; an undo: who asked");
+        let own = j.intend(300, &rejected("B")).unwrap();
+        let by: Option<String> = j.db().query_row("SELECT account FROM events WHERE id = ?1", [own], |r| r.get(0)).unwrap();
+        assert_eq!(by, None, "Cratarr's own");
     }
 
     #[test]

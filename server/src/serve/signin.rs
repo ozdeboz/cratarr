@@ -356,7 +356,8 @@ async fn sign_in(State(serve): State<Arc<Serve>>, request: Request) -> Response 
     let name = form.username.trim();
     let now = now();
     let client = client(&headers, parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0));
-    let keys = [format!("client {client}"), format!("account {name}")];
+    // The account in any case: the directory matches names regardless of it.
+    let keys = [format!("client {client}"), format!("account {}", name.to_lowercase())];
     if let Some(wait) = serve.throttle.wait(&keys, now) {
         tracing::warn!(target: "signin", client = %client, user = name, wait, status = 429u16, "sign-in throttled");
         let error = format!("Too many tries. Try again in {} min.", (wait + 59) / 60);

@@ -69,6 +69,11 @@ pub(super) fn missing(name: &str) -> Failed {
     Failed(10, format!("Required parameter is missing: {name}"))
 }
 
+/// What the account's permissions do not let its apps do (decision 0051): "not authorized for the given operation".
+fn not_permitted(what: &str) -> Failed {
+    Failed(50, format!("This account may not {what}."))
+}
+
 pub(super) fn not_found(what: &str) -> Failed {
     Failed(70, format!("{what} not found"))
 }
@@ -150,7 +155,7 @@ async fn rest(
     let method = method.strip_suffix(".view").unwrap_or(&method).to_string();
     // Repeated wrong passwords hold the account and the client back a while (decision 0051), as the sign-in page does.
     let client = super::signin::client(&headers, peer.map(|p| p.0.0));
-    let keys = [format!("client {client}"), format!("account {}", params.get("u").unwrap_or(""))];
+    let keys = [format!("client {client}"), format!("account {}", params.get("u").unwrap_or("").to_lowercase())];
     if let Some(wait) = serve.throttle.wait(&keys, super::now()) {
         let message = format!("Too many tries. Try again in {} min.", (wait + 59) / 60);
         return json_response(api::error(40, &message));
@@ -209,10 +214,12 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
             { "name": "indexBasedQueue", "versions": [1] },
             { "name": "playbackReport", "versions": [1] },
         ] }))),
+        // Its roles as its permissions say (decision 0051): keeping tracks offline, playlists, public share links.
         "getUser" => Ok(Answer::Json(json!({ "user": {
             "username": user.name, "adminRole": user.admin, "settingsRole": user.admin, "streamRole": true,
-            "downloadRole": true, "playlistRole": true, "coverArtRole": true, "commentRole": false, "podcastRole": false,
-            "shareRole": false, "jukeboxRole": false, "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
+            "downloadRole": user.permissions.offline, "playlistRole": user.permissions.playlists, "coverArtRole": true,
+            "commentRole": false, "podcastRole": false, "shareRole": user.permissions.links, "jukeboxRole": false,
+            "uploadRole": false, "videoConversionRole": false, "scrobblingEnabled": true,
             "folder": (0..serve.catalogue().folders().len()).map(|i| i + 1).collect::<Vec<_>>(),
         } }))),
         "getMusicFolders" => {
@@ -504,6 +511,8 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
         "savePlayQueueByIndex" => super::queues::save(serve, user, p, true),
         "getNowPlaying" => super::queues::now_playing(serve, user).await,
         "reportPlayback" => super::queues::report_playback(serve, user, p).await,
+        "download" if !user.permissions.offline => Err(not_permitted("keep tracks offline")),
+        "createPlaylist" | "updatePlaylist" | "deletePlaylist" if !user.permissions.playlists => Err(not_permitted("change playlists")),
         "stream" | "download" => {
             let id = p.get("id").ok_or_else(|| missing("id"))?.to_string();
             let path = serve.song_path(&id).await?.ok_or_else(|| not_found("Song"))?;

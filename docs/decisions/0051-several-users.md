@@ -1,6 +1,6 @@
 # 0051: Several users
 
-- Status: proposed (the design agreed with the owner, 2026-10-19; building waits for their go)
+- Status: accepted (the owner, 2026-10-19: "Go.")
 - Date: 2026-10-19
 - Builds on: 0030 (OpenSubsonic and its accounts), 0031 (Play On), 0033 (Cratarr holds the queues), 0039 (sign-in and
   sessions), 0040 (the directory asked first), 0043 (sign-in everywhere)
@@ -70,3 +70,38 @@ The owner (2026-10-19): "we need to support multiple users, their own settings".
 - **Sync play admits only its own players** (the owner: "Yes, the fix should go in"). Its port on the local network
   (0037) took any device that named a player, to listen to a group or, as its leader, to play into it. A player is given
   a secret of its own when it joins a group, and the sync server turns away a listener or a leader without it.
+
+## Amendment, 2026-10-19: as built
+
+- **Who a request is for.** Each request runs as its account: a sign-in fully; an API key as its owner (a key from
+  before keys had one: the first administrator), reading or controlling as made; an OpenSubsonic app as its login,
+  controlling. An administrator's routes take an administrator signed in, never a key or an app. While signing in is
+  not required, one who signed in (or sends a key) is still that account; anyone else is the first administrator, and
+  everything is theirs as before.
+- **Devices.** A player is the device of the account it first connected or reported with, and a name is one account's
+  player: another account's device under that name is refused (`taken`), and the app and the page take the next free
+  name. The players from before accounts are the first administrator's; a Kodi is the administrator's who added it.
+  Requests reach only their own players: the list, the commands, joining and handing over at both ends, the player
+  behind what plays now, the groups' visuals. Cratarr's own work sees every player. Home Assistant's webhooks carry the
+  first administrator's players, as its key acts for them.
+- **Playlists on disk.** The first administrator's stay where they were, in the playlist folder; another account's are
+  in a folder of its own there (`.playlists/<account>`, made with its first playlist), their lines relative to Music as
+  everyone's. An account knows its own by name, so nothing that was there changed its id, and another's shared one as
+  `owner/name`. Cratarr's own records of a playlist (when its entries came, its old names, its sharing) are keyed the
+  same way. Album moves follow into every account's playlists. Only the first administrator's are kept in step with
+  other servers, and only their names are spoken to the voice assistant.
+- **Undo** takes back one's own changes only: the journal keeps whose each change is.
+- **Crates** are kept per account (`users/<account>/crates.json`); the built-in ones are everyone's, and their pictures
+  are the administrators' to change.
+- **One's own settings** are kept on the server (`/api/me/settings`), as the apps keep them, for every device of the
+  account. The server's settings stay the administrators'.
+- **Permissions**: without "offline" an OpenSubsonic app may not download, and without "playlists" it may not change
+  playlists (the roles it is told say so); without "share" one may not share one's playlists. Public share links are
+  not offered yet, so "links" waits for them.
+- **Sync play**: a player is told its secret with its group; its snapclient's id is `secret:name`, and a leader's sound
+  comes with it. A Kodi listens through signed links, as before.
+- **The journal** keeps who did each change to the library (a queued one: who queued it) and who undid it.
+- **Wrong passwords** are counted per client and per account, the account's name in any case, on the sign-in page and
+  for OpenSubsonic apps alike.
+- **Not covered yet**: deleting an album stops it first only on the deleting administrator's own player; another
+  user's device finds it gone at its next track.

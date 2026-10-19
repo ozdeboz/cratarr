@@ -178,6 +178,13 @@ class PlayOnLink(
                 c.readTimeout = 60_000
                 c.setRequestProperty("Accept", "text/event-stream")
                 val code = Net.code(service, c)
+                if (code == 409 && taken(c)) {
+                    // Another account's player has this name (decision 0051): this one takes the next free one.
+                    val next = nextName(prefs.playerName)
+                    LinkLog.add(service, "warn", "playon", "name taken", "name" to prefs.playerName, "now" to next)
+                    prefs.playerName = next
+                    continue
+                }
                 if (code != 200) throw java.io.IOException("HTTP $code")
                 opened = true
                 LinkLog.add(service, "info", "playon", "connected", "address" to address, "conn" to id, "failed_before" to failed.takeIf { it > 0 })
@@ -224,6 +231,19 @@ class PlayOnLink(
             sleep(wait)
             wait = (wait * 2).coerceAtMost(60_000L)
         }
+    }
+
+    /** Whether a refused connection's answer says another account's player has the name (`{ error, taken: true }`). */
+    private fun taken(c: java.net.HttpURLConnection): Boolean = try {
+        c.errorStream?.use { JSONObject(it.readBytes().toString(Charsets.UTF_8)).optBoolean("taken") } ?: false
+    } catch (_: Exception) {
+        false
+    }
+
+    /** "Pixel 8" → "Pixel 8 2", "Pixel 8 2" → "Pixel 8 3": as Cratarr names a copy. */
+    private fun nextName(name: String): String {
+        val n = name.substringAfterLast(' ', "").toIntOrNull()
+        return if (n != null && n in 2..98 && name.contains(' ')) "${name.substringBeforeLast(' ')} ${n + 1}" else "$name 2"
     }
 
     /** An attempt that failed: counted, and written down when it is the first of a run or fails otherwise than the last. */
@@ -356,6 +376,7 @@ class PlayOnLink(
                 if (m.isNull("host")) null else m.optString("host").ifEmpty { null },
                 m.optInt("port", 1704),
                 m.optLong("buffer_ms", 1000),
+                m.optString("secret"),
             )
             "radio" -> Radio.command(service, p, m)
             "autoplay" -> Autoplay.command(service, p, m)

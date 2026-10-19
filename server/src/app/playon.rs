@@ -354,6 +354,10 @@ pub enum Command {
         host: Option<String>,
         port: u16,
         buffer_ms: u32,
+        /// Its own secret, which the sync server asks of it (decision 0051): as a listener, its snapclient's id is
+        /// `secret:name`; as a leader, its source hello carries `secret`.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        secret: String,
     },
 }
 
@@ -516,6 +520,8 @@ struct Entry {
     page: Option<String>,
     /// The account it is a device of (decision 0051): only they play on it. None: from before accounts, the owner's.
     owner: Option<String>,
+    /// What it shows the sync server it is (decision 0051), told it with its group; new with each start of Cratarr.
+    secret: String,
 }
 
 /// What a player is: the app; a Kodi (driven by Cratarr, app::kodi); a page in a browser, a player while it is open
@@ -561,6 +567,7 @@ impl Entry {
             kind: PlayerKind::App,
             page: None,
             owner: None,
+            secret: new_secret(),
         }
     }
 
@@ -647,14 +654,15 @@ impl Entry {
     }
 }
 
-/// Whose players the running request reaches (decision 0051): its account's own. `None`: every one, while signing in
-/// is off (one user, whose they all are) and for Cratarr's own work (a task of its own, a signed link).
+/// Whose players the running request reaches (decision 0051): its account's own. `None`: every one, for Cratarr's own
+/// work (a task of its own, a signed link), and for the owner while signing in is off (one user, whose they all are).
 pub fn whose() -> Option<String> {
     let served = crate::serve::instance()?;
-    if !served.sign_in_required() {
+    let user = crate::serve::who::current()?.user;
+    if !served.sign_in_required() && served.users.owner().as_deref() == Some(user.as_str()) {
         return None;
     }
-    crate::serve::who::current().map(|w| w.user)
+    Some(user)
 }
 
 /// The first administrator: a player from before accounts is theirs.
@@ -1504,7 +1512,8 @@ impl PlayOn {
     fn tell_group(&self, name: &str) {
         let (port, buffer_ms, host) = self.sync_play().unwrap_or((crate::snapcast::PORT, crate::snapcast::BUFFER_MS, None));
         let leader = self.leader_of(name);
-        let _ = self.send(name, &Command::Group { leader, host, port, buffer_ms });
+        let secret = self.entries().get(name).map(|e| e.secret.clone()).unwrap_or_default();
+        let _ = self.send(name, &Command::Group { leader, host, port, buffer_ms, secret });
     }
 
     /// `name` plays with `to`'s group, which `to` leads when it plays in none (decision 0037). Out of any group it
@@ -1829,12 +1838,28 @@ impl crate::snapcast::Groups for PlayOn {
         i32::from(self.delay_of(player))
     }
 
+    fn admits(&self, player: &str, secret: &str) -> bool {
+        self.entries().get(player).is_some_and(|e| !secret.is_empty() && same(e.secret.as_bytes(), secret.as_bytes()))
+    }
+
     fn volume_of(&self, player: &str) -> u8 {
         self.entries().get(player).map_or(100, |e| {
             let v = e.report.volume.min(100);
             if e.report.ducked { (f32::from(v) * DUCKED) as u8 } else { v }
         })
     }
+}
+
+/// A player's sync play secret: 16 random bytes, as hex.
+fn new_secret() -> String {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).expect("the operating system's random source");
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Equal, in a time that does not tell how much of it is.
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// A ducked player plays at this part of its volume (as the app ducks: PlayOnLink's DUCKED).

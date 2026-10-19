@@ -823,7 +823,7 @@ mod tests {
         assert_eq!((d.now.ours, d.report().index), (false, -1));
 
         // Into a group: its own music stops, the group's sound plays.
-        d.run(Command::Group { leader: Some("Salon tablet".into()), host: None, port: 1704, buffer_ms: 1000 }).await.unwrap();
+        d.run(Command::Group { leader: Some("Salon tablet".into()), host: None, port: 1704, buffer_ms: 1000, secret: String::new() }).await.unwrap();
         let k = kodi.lock().unwrap();
         assert!(k.playlist.is_empty());
         let open = k.calls.iter().rev().find(|(m, _)| m == "Player.Open").unwrap();
