@@ -34,7 +34,12 @@ export type LiveNow = {
   /** LUFS, momentary (the last 400 ms or so); null before there is enough sound. */
   loudness: number | null;
   bands: LiveBand[];
+  /** The sound's last `WAVE` samples, mixed to one (−1..1), for the Waves source (decision 0056); null before any. */
+  wave: Float32Array | null;
 };
+
+/** The waveform's samples (the app's LiveSound.WAVE). */
+export const WAVE = 512;
 
 /** Listened this often (ms): about the server's frame rate, whatever the screen's. */
 const TICK_MS = 12;
@@ -97,6 +102,7 @@ function hearing() {
   const bands: LiveBand[] = LIVE_EDGES.map(() => ({ level: 0, flux: 0, hits: 0, lastHitStrength: 0 }));
   const lastHit = LIVE_EDGES.map(() => -Infinity);
   let loudness: number | null = null;
+  let wave: Float32Array | null = null;
   let toppedAt = 0;
 
   return {
@@ -141,7 +147,11 @@ function hearing() {
     loudness(meanSquare: number, stereo: boolean) {
       loudness = meanSquare > 1e-10 ? -0.691 + 10 * Math.log10(meanSquare * (stereo ? 2 : 1)) : null;
     },
-    now: (): LiveNow => ({ loudness, bands: bands.map((b) => ({ ...b })) }),
+    /** The sound's last samples, as heard now. */
+    wave(w: Float32Array) {
+      wave = w;
+    },
+    now: (): LiveNow => ({ loudness, bands: bands.map((b) => ({ ...b })), wave }),
   };
 }
 
@@ -210,9 +220,17 @@ export function startLive(source: AudioNode, context: AudioContext): { now(): Li
     }
   };
   const timer = setInterval(listen, TICK_MS);
+  // The waveform, read when asked for (a frame): the spectrum's analyser holds the sound as it is, its last `WAVE`.
+  const all = new Float32Array(spectral.fftSize);
+  const last = new Float32Array(WAVE);
 
   return {
-    now: heard.now,
+    now: () => {
+      spectral.getFloatTimeDomainData(all);
+      last.set(all.subarray(all.length - WAVE));
+      heard.wave(last);
+      return heard.now();
+    },
     stop: () => {
       clearInterval(timer);
       for (const node of [spectral, shelf]) {
@@ -242,6 +260,12 @@ export function startAppLive(): { now(): LiveNow; stop(): void } {
     const end = performance.now();
     ticks.forEach((t, i) => heard.tick(t.energy ?? [], t.flux ?? [], end - (ticks.length - 1 - i) * step));
     if (typeof m.meanSquare === 'number') heard.loudness(m.meanSquare, typeof m.channels === 'number' ? m.channels >= 2 : true);
+    if (typeof m.wave === 'string') {
+      const bytes = atob(m.wave);
+      const w = new Float32Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) w[i] = (bytes.charCodeAt(i) - 128) / 128;
+      heard.wave(w);
+    }
   });
   toApp({ type: 'live', on: true });
   return {
