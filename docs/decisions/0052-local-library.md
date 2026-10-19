@@ -73,6 +73,15 @@ features is weird"; and, asked whether a local queue goes away: no, each mode ke
   volume, duck, unduck and sleep pass; stop pauses; play, a queue taken up and a handover to it pass (the app switches
   back); the rest, and a handover from it, are refused with "That device plays its own music."
 
+## Live sound (the owner, 2026-10-19)
+
+"I do want live sound, but no live visuals." The app sends the page the sound as it is heard (LiveSound: the
+spectrum's six bands, energy and flux each 12 ms, and the K-weighted mean square), the page's live analysis keeping its
+statistics: in the app the music plays natively, so the visuals of a track the server has not analysed yet have
+nothing to listen to otherwise. Page to app `{type: 'live', on}`; app to page, about twenty times a second, `{type:
+'live', at, tickMs, channels, meanSquare, ticks: [{energy: [6], flux: [6]}]}`, `at` the first tick's time as heard
+(epoch ms). Local mode shows no visuals.
+
 ## The switch (the owner, 2026-10-19)
 
 - **At the top of the page menu**: "Cratarr | Local", where the connection line is. The menu below shows what that mode

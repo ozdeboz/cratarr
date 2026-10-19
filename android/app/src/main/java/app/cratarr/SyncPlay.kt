@@ -67,24 +67,37 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
         player.addListener(this)
     }
 
-    /** The audio path of this app's player: its sound tapped for Cratarr and silenced here while it leads. */
+    /** The audio path of this app's player: its sound tapped for Cratarr and silenced here while it leads, and tapped
+     *  for the page's visuals (LiveSound), told as it is heard. */
     fun renderers(context: Context) = object : DefaultRenderersFactory(context) {
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink {
             val sink = DefaultAudioSink.Builder(context)
                 .setEnableFloatOutput(enableFloatOutput)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                .setAudioProcessors(arrayOf<AudioProcessor>(TeeAudioProcessor(source), silencer))
+                .setAudioProcessors(arrayOf<AudioProcessor>(TeeAudioProcessor(source), TeeAudioProcessor(LiveSound), silencer))
                 .build()
             // A seek, a jump or a stop: the sound breaks off here, in order with what was played before it.
             return object : ForwardingAudioSink(sink) {
                 override fun flush() {
                     source.brk()
+                    LiveSound.clear()
                     super.flush()
                 }
 
                 override fun reset() {
                     source.brk()
+                    LiveSound.clear()
                     super.reset()
+                }
+
+                override fun handleBuffer(buffer: ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
+                    LiveSound.writing(presentationTimeUs)
+                    return super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+                }
+
+                // Where it is heard: leading a group, a buffer later.
+                override fun getCurrentPositionUs(sourceEnded: Boolean): Long = super.getCurrentPositionUs(sourceEnded).also {
+                    if (it != AudioSink.CURRENT_POSITION_NOT_SET && LiveSound.listener != null) LiveSound.heard(it - if (leads) bufferMs * 1000 else 0)
                 }
             }
         }
