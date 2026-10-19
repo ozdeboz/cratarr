@@ -2,9 +2,14 @@
   // A crate on the Crates page (decided 2026-10-16: big cards, "lots of information to show"): its picture (its own,
   // else a mosaic of its albums' covers), its name, how many tracks and how long, its top genres, how many of its
   // tracks were never played and how many came this week, and along its foot how much of it was played (explored).
-  // Its favourites setting shows as the small heart after the count, as on the panel's toggle. A tap views it.
+  // Its favourites setting shows as the small heart after the count, as on the panel's toggle; its favourite albums
+  // setting as the small disc beside it, as on its toggle (decision 0024, amended 2026-10-19). A tap views it;
+  // its picture shuffles it (the owner, 2026-10-19: "a play button on the crates, which automatically plays it with
+  // shuffle"): wherever a cover plays, its icon is in the cover's lower right corner (decided 2026-10-16), here
+  // Shuffle's, which is what it does.
   import type { Crate } from './api';
-  import { crateArt, FAVOURITES, favouritesOf } from './crates.svelte';
+  import { crateArt, FAVOURITE_ALBUMS, FAVOURITES, favouriteAlbumsOf, favouritesOf, shuffleCrate } from './crates.svelte';
+  import { toast } from './toast.svelte';
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
   import { clockText } from './remote.svelte';
@@ -13,24 +18,40 @@
 
   const art = $derived(crateArt(c.id));
   const fav = $derived(FAVOURITES[favouritesOf(c.id)]);
+  const albums = $derived(FAVOURITE_ALBUMS[favouriteAlbumsOf(c.id)]);
   const st = $derived(c.stats);
   const tracks = $derived(st?.tracks ?? c.counts[favouritesOf(c.id)]);
   const line = $derived(
     [tracks === null ? null : plural(tracks, 'track'), st?.seconds ? clockText(st.seconds) : null].filter(Boolean).join(' • '),
   );
+  let starting = $state(false);
+  async function shuffle() {
+    navigator.vibrate?.(8);
+    starting = true;
+    try {
+      await shuffleCrate(c.id, c.name);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    } finally {
+      starting = false;
+    }
+  }
   /** The share played, 0 to 1; null where not known. */
   const explored = $derived(st && st.unplayed !== null && st.tracks ? (st.tracks - st.unplayed) / st.tracks : null);
 </script>
 
-<button class="card" class:active {onclick} aria-label="View {c.name}">
-  <span class="art" class:mosaic={art.length === 4}>
+<div class="card" class:active>
+  <button class="art" class:mosaic={art.length === 4} aria-label="Shuffle {c.name}" title="Shuffle" disabled={starting} aria-busy={starting} onclick={shuffle}>
     {#each art as src, i (i)}<img {src} alt="" loading="lazy" decoding="async" />{:else}<span class="noart"><Icon name="crates" size={40} /></span>{/each}
-  </span>
+    <span class="corner" aria-hidden="true"><Icon name="shuffle" size={14} /></span>
+  </button>
+  <button class="view" {onclick} aria-label="View {c.name}">
   <span class="text">
     <span class="name">{c.name}</span>
     <span class="line">
       {line}
       <span class="heart" class:filled={fav.filled} title={fav.label} aria-label={fav.label}><Icon name={fav.icon} size={12} /></span>
+      <span class="heart" class:filled={albums.filled} title={albums.label} aria-label={albums.label}><Icon name={albums.icon} size={12} /></span>
     </span>
     {#if st?.genres.length}<span class="genres">{st.genres.join(' • ')}</span>{/if}
     {#if st?.unplayed || st?.new_week}
@@ -40,10 +61,11 @@
       </span>
     {/if}
   </span>
+  </button>
   {#if explored !== null}
     <span class="explored" role="img" aria-label="{Math.round(explored * 100)}% played"><span style:width="{explored * 100}%"></span></span>
   {/if}
-</button>
+</div>
 
 <style>
   .card {
@@ -65,8 +87,48 @@
     transition: transform 80ms;
   }
 
-  .card:active {
+  .card:has(.view:active) {
     transform: scale(0.98);
+  }
+
+  /* The rest of the card views the crate. */
+  .view {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+
+  /* Its picture shuffles it: Shuffle's icon on the corner, as a playing cover has its play icon. */
+  .art {
+    position: relative;
+    padding: 0;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .art:disabled {
+    cursor: default;
+  }
+
+  .corner {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-text);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
   }
 
   /* Viewed in the panel: a border only, as a playlist's chip. */

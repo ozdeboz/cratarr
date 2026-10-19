@@ -1,6 +1,8 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
-import { albumCoverUrl, crateImageUrl, getCrates, removeCrateImage, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
+import { albumCoverUrl, crateImageUrl, crateRows, getCrates, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites, type PlaylistRow } from './api';
+import type { LocalTrack } from './localPlayer.svelte';
+import { playPlaylistFrom } from './output.svelte';
 import { prefs } from './prefs.svelte';
 import { viewPlaylist } from './panel.svelte';
 import { toast } from './toast.svelte';
@@ -11,7 +13,11 @@ export async function loadCrates() {
   try {
     const list = await getCrates(prefs.source || undefined);
     // A tap still on its way to the server keeps showing.
-    crates.list = list.map((c) => (c.id in pending ? { ...c, favourites: pending[c.id] } : c));
+    crates.list = list.map((c) => ({
+      ...c,
+      ...(c.id in pending ? { favourites: pending[c.id] } : {}),
+      ...(c.id in pendingAlbums ? { favourite_albums: pendingAlbums[c.id] } : {}),
+    }));
     crates.error = null;
     await moveBrowserSettings(list);
   } catch (e) {
@@ -24,7 +30,7 @@ export async function loadCrates() {
 const pending: Record<string, CrateFavourites> = {};
 let saving: Promise<unknown> = Promise.resolve();
 export const favouritesOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourites ?? (genreOf(id) !== null ? 'all' : 'none');
-/** Resolves when every tap so far is on the server (Make playlist reads the setting there). */
+/** Resolves when every tap so far (on either toggle) is on the server (Make playlist reads the settings there). */
 export const favouritesSaved = () => saving;
 /** How each setting shows, on the panel's toggle and the Crates page's rows: a variation on the heart. */
 export const FAVOURITES = {
@@ -48,6 +54,42 @@ export function cycleFavourites(id: string) {
         delete pending[id];
         const shown = crates.list?.find((x) => x.id === id);
         if (shown) shown.favourites = was;
+        toast.fail(e, "The crate's setting wasn't saved");
+      },
+    ),
+  );
+}
+
+// The favourite albums toggle (decision 0024, amended 2026-10-19), beside the favourites one and as it is: one setting
+// per crate on the server, a tap shown at once. A crate not set yet shows all albums. Its sizes are counted with it as
+// set, so the crates are read again once a tap is saved.
+const pendingAlbums: Record<string, CrateFavourites> = {};
+export const favouriteAlbumsOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourite_albums ?? 'all';
+/** How each setting shows: a variation on the album's disc. */
+export const FAVOURITE_ALBUMS = {
+  all: { icon: 'disc', label: 'All albums', filled: false },
+  only: { icon: 'disc', label: 'Only favourite albums', filled: true },
+  none: { icon: 'albumsOff', label: 'No favourite albums', filled: false },
+} as const;
+/** A tap on the albums toggle: No favourite albums, Only favourite albums, All albums, and round again. */
+export function cycleFavouriteAlbums(id: string) {
+  const c = crates.list?.find((x) => x.id === id);
+  if (!c) return;
+  const was = c.favourite_albums ?? 'all';
+  const next = NEXT[was];
+  c.favourite_albums = pendingAlbums[id] = next;
+  saving = saving.then(() =>
+    setCrateFavouriteAlbums(id, next).then(
+      () => {
+        if (pendingAlbums[id] !== next) return;
+        delete pendingAlbums[id];
+        loadCrates();
+      },
+      (e) => {
+        if (pendingAlbums[id] !== next) return;
+        delete pendingAlbums[id];
+        const shown = crates.list?.find((x) => x.id === id);
+        if (shown) shown.favourite_albums = was;
         toast.fail(e, "The crate's setting wasn't saved");
       },
     ),
@@ -153,4 +195,33 @@ export function startCrate(name: string, conditions: Condition[] = []) {
     /* the builder starts empty */
   }
   viewPlaylist(NEW_CRATE);
+}
+
+// A crate shuffled from its card (the owner, 2026-10-19: "a play button on the crates, which automatically plays it with
+// shuffle"): its tracks as both its toggles let them through, from anywhere in it, in a random order, as a new queue.
+// A crate comes 500 tracks at a time, so a big one is sampled: up to three stretches of 500 from anywhere in it.
+const STRETCH = 500;
+const STRETCHES = 3;
+const shuffled = <T>(list: T[]) => {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
+export async function shuffleCrate(id: string, name: string) {
+  const source = prefs.source || undefined;
+  const fav = favouritesOf(id);
+  const alb = favouriteAlbumsOf(id);
+  const first = await crateRows(id, 0, STRETCH, source, fav, alb);
+  const all = Math.ceil(first.total / STRETCH);
+  const picks = all <= STRETCHES ? [...Array(all).keys()] : shuffled([...Array(all).keys()]).slice(0, STRETCHES);
+  const pages = await Promise.all(picks.map((p) => (p === 0 ? first : crateRows(id, p * STRETCH, STRETCH, source, fav, alb))));
+  const tracks: LocalTrack[] = pages
+    .flatMap((p) => p.rows)
+    .filter((r: PlaylistRow) => r.id && !r.missing)
+    .map((r: PlaylistRow) => ({ source: first.source, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
+  if (!tracks.length) throw new Error('Nothing in this crate to play');
+  await playPlaylistFrom(name, first.source, shuffled(tracks), 0);
 }

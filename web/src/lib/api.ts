@@ -303,6 +303,9 @@ export type Crate = {
   id: string;
   name: string;
   favourites: CrateFavourites;
+  /** Its favourite albums toggle (decision 0024, amended 2026-10-19); a server from before it: all. */
+  favourite_albums?: CrateFavourites;
+  /** Its size with each favourites setting, its favourite albums toggle as it is set. */
   counts: Record<CrateFavourites, number | null>;
   permanent: boolean;
   /** What its card shows, as its favourites toggle is set; absent where that is not known (favourites not read). */
@@ -367,18 +370,21 @@ export const setCrateImage = (id: string, file: Blob) =>
 export const removeCrateImage = (id: string) => request<void>(`/api/crates/${encodeURIComponent(id)}/image`, { method: 'DELETE' });
 /** The crate panel's favourites toggle (decision 0024, amended): all its tracks, only the favourites, or none. */
 export type CrateFavourites = 'all' | 'only' | 'none';
-/** `favourites`: the toggle's setting as the page shows it (a tap may be on its way); the saved one without. */
-export const crateRows = (id: string, offset: number, limit: number, source?: string, favourites?: CrateFavourites) => {
+/** `favourites`, `favouriteAlbums`: the toggles' settings as the page shows them (a tap may be on its way); the saved
+ *  ones without. */
+export const crateRows = (id: string, offset: number, limit: number, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites) => {
   const q = new URLSearchParams({ offset: String(offset), limit: String(limit) });
   if (favourites) q.set('favourites', favourites);
+  if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
   if (source) q.set('source', source);
   return quietly<{ source: string; total: number; rows: PlaylistRow[]; genres: string[] }>(`/api/crates/${encodeURIComponent(id)}/rows?${q}`);
 };
 /** A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, 60 to 180, counted on the server. */
 export type TempoBands = { bands: number[]; with_tempo: number; total: number };
-export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites) => {
+export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites) => {
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);
+  if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
   if (source) q.set('source', source);
   return quietly<TempoBands>(`/api/crates/${encodeURIComponent(id)}/tempo?${q}`);
 };
@@ -395,6 +401,13 @@ export const setCrateFavourites = (id: string, favourites: CrateFavourites) =>
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ favourites }),
+  });
+/** A crate's favourite albums toggle (decision 0024, amended 2026-10-19), kept on the server for every device. */
+export const setCrateFavouriteAlbums = (id: string, favourite_albums: CrateFavourites) =>
+  request<{ crate: string; favourite_albums: CrateFavourites }>(`/api/crates/${encodeURIComponent(id)}/favourite-albums`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ favourite_albums }),
   });
 export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
 /** `ids`: the queue to make it from (the local player's); without, the server's player's queue. `repeats`: a track
