@@ -143,7 +143,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         val item = track?.let { mediaItems(JSONArray().put(it)).firstOrNull() } ?: return
         val located = DeviceMusic.located(item) ?: Downloads.locate(context, item, Prefs(context).serverUrl?.trimEnd('/'))
         val p = previewer ?: ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(Downloads.playback(context)))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(androidx.media3.datasource.DefaultDataSource.Factory(context, Downloads.playback(context))))
             .build()
             .also { previewer = it }
         if (!p.isPlaying) resumeAfter = controller.playWhenReady && controller.playbackState != Player.STATE_ENDED
