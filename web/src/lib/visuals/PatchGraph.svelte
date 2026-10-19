@@ -27,6 +27,10 @@
   // Wires and handles by type (0057 §1, patchgraph.ts WIRES); a connection only where its types fit (ports.ts `fits`)
   // and a picture one only where its cycle passes a Feedback (`cyclesClosed`). `live` feeds the control sources' faces.
   //
+  // In v2, modules selected (Shift and drag, or Ctrl and a tap) can be made a device ("Make device": its ports the
+  // cables crossing the selection's edge, its macros the knobs chosen); a device's long press, Open (here) and Unmake.
+  // `helpFor(type, port?)`: a module's help, shown in its long press's menu where given.
+  //
   // `v2` in place of `patch`: a v2 patch drawn (patchgraph.ts graphOfV2, 0057 §6), the level `v2.at` leads to; a device
   // a node (its exposed ports, its macros), opened in place to a frame round its modules, or entered (`v2.onenter`,
   // with a breadcrumb back); every edit out as a V2Edit (`v2.onedit`) for the store.
@@ -103,6 +107,7 @@
     live,
     openAtStart = [],
     sheetHeight = 0,
+    helpFor,
   }: {
     patch?: Patch;
     /** A v2 patch drawn instead (the lab's, until a5's step brings the app over). */
@@ -136,6 +141,8 @@
     openAtStart?: string[];
     /** How much of the graph's bottom an open sheet covers (px): the fitted view keeps clear of it. */
     sheetHeight?: number;
+    /** A module's help (module-help.ts), for its long press's menu. */
+    helpFor?: (type: string, port?: string) => string | null;
   } = $props();
 
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -170,7 +177,9 @@
   /** The cable last tapped: its configuration is what the parent shows. */
   let openCable = $state<string | null>(null);
   /** A long press's menu: a cable's, a module's; or the types to add somewhere. */
-  type Menu = { kind: 'cable'; id: string; at: XY } | { kind: 'node'; id: string } | { kind: 'add'; to: AddTo };
+  type Menu = { kind: 'cable'; id: string; at: XY } | { kind: 'node'; id: string } | { kind: 'add'; to: AddTo } | { kind: 'make'; ids: string[] };
+  // The knobs chosen as a device's macros while it is being made (`<node>|<knob>`).
+  let picks = $state<string[]>([]);
   let menu = $state<Menu | null>(null);
   let reroute = $state<{ id: string; at: XY } | null>(null);
   /** Until the viewer pans, zooms or moves something, the graph keeps all of the patch in view. */
@@ -327,7 +336,12 @@
     },
     opened: (id) => opened.has(id),
     openKnob: (module, knob) => onopenknob?.(module, knob),
-    removable: (id) => !v2 && !!onremove && removable(id) && nodes.some((n) => n.id === id && (n.data as NodeData).kind === 'module'),
+    // A menu on a long press: v1, Delete where it can go; v2, a device's Open and Unmake, a module's help.
+    removable: (id) => {
+      const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
+      if (d?.kind !== 'module') return false;
+      return v2 ? !!d.device || !!helpFor?.(d.type) : !!onremove && removable(id);
+    },
     menu(id) {
       holdStill();
       menu = { kind: 'node', id };
@@ -363,6 +377,29 @@
     if (d?.kind !== 'module' || !d.knobs.some((k) => knobHandle(k.id) === h.id)) return;
     onpick({ from: 'knob', module: d.module, knob: h.id.slice(2) }, { x: Math.round(state.to.x), y: Math.round(state.to.y) });
   }
+  // Modules selected at one level (v2): what "Make device" makes a device of.
+  const chosen = $derived.by(() => {
+    if (!v2) return [];
+    const ids = nodes.filter((n) => n.selected && (n.data as NodeData).kind === 'module').map((n) => n.id);
+    const scopes = new Set(ids.map((id) => id.split('/').slice(0, -1).join('/')));
+    return scopes.size === 1 ? ids : [];
+  });
+  function make(ids: string[]) {
+    if (!v2) return;
+    const scope = ids[0].split('/').slice(0, -1);
+    const macros = picks.map((p) => {
+      const [node, knob] = p.split('|');
+      return { module: node.split('/').pop()!, knob };
+    });
+    v2.onedit({ kind: 'make', scope: [...v2.at, ...scope], modules: ids.map((id) => id.split('/').pop()!), macros });
+    menu = null;
+    picks = [];
+  }
+  const knobsOfNode = (id: string) => {
+    const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
+    if (d?.kind !== 'module') return [];
+    return (types[d.type]?.knobs ?? []).filter((k) => !k.device).map((k) => ({ key: `${id}|${k.id}`, label: `${d.label} · ${k.label}` }));
+  };
   // The wire types drawn, for the legend.
   const LEGEND: [PortType, string][] = [
     ['picture', 'Picture'],
@@ -480,6 +517,7 @@
     <PatchFit {layout} active={!touched} {padding} onzoom={(z) => (zoom = z)} />
     <Panel position="bottom-left" class="chips-panel">
       <div class="bottom">
+        {#if chosen.length > 1}<button class="opacity make" onclick={() => (menu = { kind: 'make', ids: chosen })}>Make device</button>{/if}
         <PatchChips {parts} {padding} onjump={() => (touched = true)} />
         <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
       </div>
@@ -520,17 +558,50 @@
   />
 {:else if menu?.kind === 'node'}
   {@const id = menu.id}
+  {@const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined}
+  {@const help = d?.kind === 'module' ? helpFor?.(d.type) : null}
   <MenuSheet label={nodeName(id)} title={nodeName(id)} onclose={() => (menu = null)} over>
+    {#if help}<p class="help">{help}</p>{/if}
     <div role="menu">
-      <MenuEntry
-        icon="trash"
-        label="Delete"
-        danger
-        onclick={() => {
-          menu = null;
-          onremove?.([id]);
-        }}
-      />
+      {#if v2 && d?.kind === 'module' && d.device}
+        <MenuEntry
+          icon="expand"
+          label="Open"
+          onclick={() => {
+            menu = null;
+            const next = new Set(opened);
+            next.add(id);
+            opened = next;
+          }}
+        />
+        <MenuEntry
+          label="Unmake"
+          onclick={() => {
+            menu = null;
+            v2.onedit({ kind: 'unmake', scope: [...v2.at, ...id.split('/').slice(0, -1)], device: id.split('/').pop()! });
+          }}
+        />
+      {:else if !v2}
+        <MenuEntry
+          icon="trash"
+          label="Delete"
+          danger
+          onclick={() => {
+            menu = null;
+            onremove?.([id]);
+          }}
+        />
+      {/if}
+    </div>
+  </MenuSheet>
+{:else if menu?.kind === 'make'}
+  {@const ids = menu.ids}
+  <MenuSheet label="Make device" title="Make device" onclose={() => ((menu = null), (picks = []))} over>
+    <div role="menu">
+      {#each ids.flatMap(knobsOfNode) as k (k.key)}
+        <MenuEntry label={k.label} checked={picks.includes(k.key)} onclick={() => (picks = picks.includes(k.key) ? picks.filter((x) => x !== k.key) : [...picks, k.key])} />
+      {/each}
+      <MenuEntry icon="intoBox" label="Make" onclick={() => make(ids)} />
     </div>
   </MenuSheet>
 {:else if menu?.kind === 'add'}
@@ -733,6 +804,16 @@
   /* Labels never under 11 px: each grows as the view zooms out (--z, the zoom). */
   .patch-graph.small :global(.svelte-flow__edge-label:not(.svelte-flow__edgeupdater)) {
     visibility: hidden;
+  }
+  .help {
+    margin: 0 20px 12px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .make {
+    color: var(--text);
+    white-space: nowrap;
   }
   .opacity {
     min-height: 32px;

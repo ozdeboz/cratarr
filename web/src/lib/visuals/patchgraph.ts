@@ -18,6 +18,7 @@ import { cyclesClosed, FEEDBACK, fits, isDevice, MUSIC, polyKnobs, portsOf, type
 import { byCategory, CATEGORIES, CATEGORY_LABEL, categoryOf, type Category } from './rack';
 import { FACES, type FaceKind } from './faces';
 import { freeCableId, newCable, type Cables } from './cable-actions';
+import { makeDevice, unmakeDevice, type MacroPick } from './device-make';
 
 export type Side = 'left' | 'right' | 'top' | 'bottom';
 export type XY = { x: number; y: number };
@@ -1091,13 +1092,16 @@ export type V2Edit =
   | { kind: 'connect'; scope: string[]; from: PortRef; to: PortRef }
   | { kind: 'remove'; scope: string[]; cables: string[] }
   | { kind: 'pin'; scope: string[]; category: Category; on: boolean }
-  | { kind: 'add'; scope: string[]; type: string };
+  | { kind: 'add'; scope: string[]; type: string }
+  | { kind: 'make'; scope: string[]; modules: string[]; macros: MacroPick[]; label?: string }
+  | { kind: 'unmake'; scope: string[]; device: string };
 
 /** The store's key for an edit: a knob's turns one step. */
 export const editKey = (e: V2Edit) => (e.kind === 'knob' ? `knob:${e.module.join('/')}.${e.knob}` : null);
 
-/** An edit applied to `p` in place (a store's draft), and `p`. */
-export function applyV2(p: PatchV2, e: V2Edit): PatchV2 {
+/** An edit applied to `p` in place (a store's draft), and `p`. `types`: the knobs' ranges and names a device made
+ *  takes for its macros and ports (device-make.ts). */
+export function applyV2(p: PatchV2, e: V2Edit, types?: Record<string, ModuleType>): PatchV2 {
   if (e.kind === 'knob') {
     const inside = patchAt(p, e.module.slice(0, -1));
     const m = inside?.modules.find((x) => x.id === e.module[e.module.length - 1]);
@@ -1120,6 +1124,14 @@ export function applyV2(p: PatchV2, e: V2Edit): PatchV2 {
     const pin = categoryPin(e.category);
     inside.pins = inside.pins.filter((x) => x !== pin);
     if (e.on) inside.pins.push(pin);
+    return p;
+  }
+  if (e.kind === 'make') {
+    makeDevice(inside, e.modules, { label: e.label, macros: e.macros, types });
+    return p;
+  }
+  if (e.kind === 'unmake') {
+    unmakeDevice(inside, e.device);
     return p;
   }
   if (e.kind === 'add') {

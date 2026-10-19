@@ -114,7 +114,7 @@
   const level = $derived(at.join('/'));
   const here = $derived(Object.fromEntries(Object.entries(v2positions).flatMap(([k, v]) => (k.startsWith(`${level}|`) ? [[k.slice(level.length + 1), v]] : []))));
   function onedit(e: V2Edit) {
-    store = change(store, (p) => applyV2(p, e), editKey(e));
+    store = change(store, (p) => applyV2(p, e, v2types), editKey(e));
     last = `${e.kind} ${JSON.stringify(e).slice(0, 120)} · ${store.past.length} back`;
   }
   const v2 = $derived(v2mode ? { patch: store.now, at, onedit, onenter: (next: string[]) => (at = next) } : undefined);

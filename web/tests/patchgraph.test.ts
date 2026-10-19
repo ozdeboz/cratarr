@@ -537,6 +537,7 @@ test("a band's knobs are one polyphonic knob, its six as ticks, opened out to si
 // ---- A v2 patch drawn: devices as nodes, opened in place, entered; edits for the store (0057 §6, §7) ------------------
 
 const await_graph = await import('../src/lib/visuals/patchgraph.ts');
+const import_device = await import('../src/lib/visuals/device-make.ts');
 const { graphOfV2, applyV2, editKey, connectionV2, patchAt, crumbsOf, portsOfModule, handleOf, macroKnob } = await import('../src/lib/visuals/patchgraph.ts');
 const { toV2 } = await import('../src/lib/visuals/v2.ts');
 const { newStore, change, undo, redo } = await import('../src/lib/visuals/patch-store.ts');
@@ -750,4 +751,78 @@ test('faces: a VCA its gain as a bar; a Merge its channels as ticks into one bar
   assert.equal(faces.FACES.vca, 'vca');
   assert.equal(faces.FACES.merge, 'merge');
   assert.equal(labelOf({ type: 'flash', label: 'Flash' }), 'Accent');
+});
+
+test('Make device: the modules in, their own cables with them, the crossing ones led to its ports, macros chosen; undone', () => {
+  const { makeDevice, unmakeDevice } = import_device;
+  // flame → bend → blur → fx1, a clock cable into blur, a cable out of bend to a meter; blur's knob in a macro.
+  const p: PatchV2 = {
+    v: 2,
+    modules: [
+      { id: 'flame', type: 'flame', knobs: {} },
+      { id: 'bend', type: 'bend', knobs: { waves: 0.5 } },
+      { id: 'blur', type: 'blur', knobs: { smoothing: 0.25 } },
+      { id: 'clock', type: 'clock', knobs: {} },
+      { id: 'meter', type: 'meter', knobs: {} },
+    ],
+    cables: [
+      { id: 'a', from: { module: 'flame', port: 'light' }, to: { module: 'bend', port: 'picture' }, value: 1, mode: 'swing' },
+      { id: 'b', from: { module: 'bend', port: 'picture' }, to: { module: 'blur', port: 'picture' }, value: 1, mode: 'swing' },
+      { id: 'c', from: { module: 'clock', port: 'phase' }, to: { module: 'blur', port: 'smoothing' }, value: 0.5, mode: 'swing' },
+      { id: 'd', from: { module: 'blur', port: 'picture' }, to: { module: 'meter', port: 'picture' }, value: 1, mode: 'swing' },
+      { id: 'e', from: { module: 'clock', port: 'phase' }, to: { module: 'bend', port: 'waves' }, value: 0.5, mode: 'swing' },
+    ],
+    macros: [{ id: 'm', on: 'frame', label: 'M', value: 0, targets: [{ module: 'bend', knob: 'waves', from: 0, to: 1 }] }],
+    pins: ['blur.smoothing'],
+  };
+  let st = newStore(structuredClone(p));
+  st = change(st, (q: PatchV2) => applyV2(q, { kind: 'make', scope: [], modules: ['bend', 'blur'], macros: [{ module: 'blur', knob: 'smoothing' }] }, v2types), null, 1);
+  const d = st.now.modules.find((m) => m.type === 'device') as Device;
+  assert.ok(d, 'a device');
+  assert.deepEqual(st.now.modules.map((m) => m.id), ['flame', d.id, 'clock', 'meter'], 'where its first module was');
+  assert.deepEqual(d.patch.modules.map((m) => m.id), ['bend', 'blur']);
+  assert.deepEqual(d.patch.cables.map((c) => c.id), ['b']);
+  assert.deepEqual(d.inputs.map((e) => [e.as, e.module, e.port]), [['picture', 'bend', 'picture'], ['smoothing', 'blur', 'smoothing'], ['waves', 'bend', 'waves']]);
+  assert.deepEqual(d.outputs.map((e) => [e.as, e.module, e.port]), [['picture', 'blur', 'picture']]);
+  const at = (id: string) => st.now.cables.find((c) => c.id === id)!;
+  assert.deepEqual([at('a').to, at('c').to, at('d').from], [{ module: d.id, port: 'picture' }, { module: d.id, port: 'smoothing' }, { module: d.id, port: 'picture' }]);
+  assert.equal(d.macros.length, 1);
+  assert.equal(d.macros[0].targets[0].module, 'blur');
+  assert.ok(Math.abs(d.macros[0].value - 0.25) < 1e-9, 'from where the knob is');
+  assert.equal(st.now.macros[0].targets[0].module, `${d.id}/bend`, "the level's macro reaches in by the device's path");
+  assert.deepEqual(st.now.pins, [`${d.id}/blur.smoothing`]);
+  // Drawn: one node, its ports the crossing cables'.
+  const g = graphOfV2({ patch: st.now, types: v2types });
+  assert.equal(g.edges.find((e) => e.id === 'd')?.source, d.id);
+  // Unmade: as it was (but for the macros it made, now the level's own).
+  st = change(st, (q: PatchV2) => applyV2(q, { kind: 'unmake', scope: [], device: d.id }), null, 2);
+  assert.deepEqual(st.now.modules.map((m) => m.id), ['flame', 'bend', 'blur', 'clock', 'meter']);
+  const ends = (q: PatchV2) => q.cables.map((c) => `${c.from.module}.${c.from.port}>${c.to.module}.${c.to.port}`).sort();
+  assert.deepEqual(ends(st.now), ends(p));
+  assert.equal(st.now.macros[0].targets[0].module, 'bend');
+  assert.equal(st.now.macros.length, 2);
+  assert.deepEqual(st.now.pins, ['blur.smoothing']);
+  // Undo, undo: the patch as it began.
+  st = undo(undo(st));
+  assert.deepEqual(st.now, p);
+  // Fewer than two: nothing.
+  const q = structuredClone(p);
+  assert.equal(makeDevice(q, ['bend']), null);
+  assert.equal(unmakeDevice(q, 'bend'), false);
+});
+
+test('Make device inside a device, and unmade there: ids taken at the level get a number', () => {
+  const p = v2patch();
+  const show = () => patchAt(p, ['show'])!;
+  applyV2(p, { kind: 'make', scope: ['show'], modules: ['curve', 'saturate'], macros: [], label: 'Finish' }, v2types);
+  const inner = show().modules.find((m) => m.type === 'device') as Device;
+  assert.equal(inner.label, 'Finish');
+  assert.deepEqual(inner.patch.modules.map((m) => m.id), ['curve', 'saturate']);
+  // Show's exposed knob for its saturation still reaches the knob (through the inner device's port).
+  const g = graphOfV2({ patch: p, types: v2types, open: new Set(['show', `show/${inner.id}`]) });
+  assert.ok(g.nodes.some((n) => n.id === `show/${inner.id}/saturate`));
+  // A module of the same id at Show's level: the unmade one is renamed.
+  show().modules.push({ id: 'curve', type: 'curve', knobs: {} });
+  applyV2(p, { kind: 'unmake', scope: ['show'], device: inner.id });
+  assert.ok(show().modules.some((m) => m.id === 'curve-2'));
 });
