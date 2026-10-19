@@ -1667,6 +1667,8 @@ impl PlayOn {
         drop(self);
         tokio::spawn(async move {
             let http = reqwest::Client::builder().timeout(WEBHOOK_TIMEOUT).build().expect("a plain client builds");
+            // Each webhook's failures in a row, so the log shows when a bad spell began, why, and when it ended.
+            let mut failing: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
             loop {
                 // Behind (more changes than the channel holds) is a change too; closed is Cratarr stopping.
                 if let Err(broadcast::error::RecvError::Closed) = rx.recv().await {
@@ -1683,13 +1685,32 @@ impl PlayOn {
                 }
                 let body = serde_json::json!({ "seq": seq, "players": players });
                 for url in hooks {
-                    if let Err(e) = http.post(&url).json(&body).send().await.and_then(|r| r.error_for_status()) {
-                        tracing::warn!("Play On webhook {url}: {e}");
+                    let started = std::time::Instant::now();
+                    let sent = http.post(&url).json(&body).send().await.and_then(|r| r.error_for_status());
+                    if let Err(e) = sent {
+                        let n = failing.entry(url.clone()).or_insert(0);
+                        *n += 1;
+                        tracing::warn!("Play On webhook {url} failed after {} ms ({n} in a row): {}", started.elapsed().as_millis(), causes(&e));
+                    } else if let Some(n) = failing.remove(&url) {
+                        tracing::info!("Play On webhook {url} answers again, after {n} failures");
                     }
                 }
             }
         });
     }
+}
+
+/// An error with each of its causes. reqwest's own message leaves them out: a refused connection, a timeout and a name
+/// not found all read "error sending request for url".
+fn causes(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        out.push_str(": ");
+        out.push_str(&c.to_string());
+        cause = c.source();
+    }
+    out
 }
 
 /// What the Snapcast server asks of Play On (decision 0037).
@@ -1831,6 +1852,16 @@ fn write_private(path: &std::path::Path, body: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_webhook_failure_is_logged_with_its_causes() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("error sending request for url")]
+        struct Sending(#[source] std::io::Error);
+        let refused = Sending(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused"));
+        assert_eq!(causes(&refused), "error sending request for url: connection refused");
+        assert_eq!(causes(&std::io::Error::other("plain")), "plain");
+    }
 
     #[test]
     fn commands_read_as_home_assistant_sends_them_and_reach_the_player_resolved() {
