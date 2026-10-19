@@ -37,10 +37,34 @@ const PICTURE_OUT: Port = { id: 'picture', label: 'Picture', type: 'picture' };
 const VALUE_OUT: Port = { id: 'out', label: 'Out', type: 'value' };
 const TAKES_PICTURE: ReadonlySet<Place> = new Set<Place>(['module', 'loop', 'finish']);
 
+/** A type's per-band knobs as today's chain keeps them (`lighting.0` … `lighting.5`) as one polyphonic knob each
+ *  (0057 §4b): `lighting`, six channels, its values kept as they were. */
+export function polyKnobs(t: ModuleType): ModuleType {
+  const out: Knob[] = [];
+  const seen = new Map<string, Knob>();
+  for (const k of t.knobs) {
+    const m = /^(.+)\.(\d+)$/.exec(k.id);
+    if (!m) {
+      out.push(k);
+      continue;
+    }
+    const was = seen.get(m[1]);
+    if (was) was.channels = Math.max(was.channels ?? 1, Number(m[2]) + 1);
+    else {
+      const poly: Knob = { ...k, id: m[1], label: k.label.replace(/\s*\d+$/, ''), channels: Number(m[2]) + 1 };
+      seen.set(m[1], poly);
+      out.push(poly);
+    }
+  }
+  return { ...t, knobs: out };
+}
+
+const knobPortOf = (k: Knob): Port => ({ ...knobPort(k), ...(k.channels ? { channels: k.channels } : {}) });
+
 /** A module type's ports, from what it declares (its own `ports` where it has them: the modules below). */
 export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   if (t.ports) return t.ports;
-  const knobs = t.knobs.filter((k) => !k.device).map(knobPort);
+  const knobs = polyKnobs(t).knobs.filter((k) => !k.device).map(knobPortOf);
   const inputs = (t.inputs ?? []).map((id): Port => ({ id, label: id === 'in' ? 'Input' : id[0].toUpperCase() + id.slice(1), type: id === 'trigger' ? 'trigger' : 'value' }));
   if (t.place === 'modulator') return { in: [...inputs, ...knobs], out: [VALUE_OUT] };
   if (t.place === 'frame') return { in: knobs, out: [] };

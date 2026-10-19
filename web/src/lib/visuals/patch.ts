@@ -21,6 +21,8 @@ export type Knob = {
   device?: boolean;
   /** The kind of busyness it makes (0057): the cables into it run through the Compressor keyed by that kind. */
   busy?: Busy;
+  /** A polyphonic knob (0057 §4b): one value a channel, kept as `<id>.<channel>` among its module's knobs. */
+  channels?: number;
 };
 
 /** Where a module can sit: a layer's source, a module on a layer (or after the blend), a loop (a layer's own, or the
