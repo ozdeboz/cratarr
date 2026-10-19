@@ -68,6 +68,7 @@ class PlayerService : MediaSessionService() {
         // Another server or name: Cratarr says the group again once connected.
         if ((key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, null, 0, sync.bufferMs, "")
         if (key == Prefs.LEVELLING) link?.levellingChanged()
+        if (key == Prefs.OUTPUT_CHOICE) applyOutput()
         if (key == Prefs.SLEEP) {
             keepSleep()
             link?.sleepChanged()
@@ -132,6 +133,7 @@ class PlayerService : MediaSessionService() {
             .build()
         link = PlayOnLink(this, player, prefs, sync).also { it.start() }
         Ready.ensure(this, "service started")
+        applyOutput()
         Reach.watch(this)
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(prefsChanged)
     }
@@ -190,6 +192,25 @@ class PlayerService : MediaSessionService() {
         } catch (e: IllegalStateException) {
             Log.w(TAG, "cannot stay in front while grouped: ${e.message}")
         }
+    }
+
+    /**
+     * This device's output as chosen in its sheet (decision 0033, amended 2026-10-19): the player's sound goes there,
+     * alone or leading a group (Snapcast's own player, following one, takes none: Android routes it). A choice lasts
+     * until the outputs there are change (a Bluetooth device comes or goes): then it is Automatic again, so the speaker
+     * picked in the car is not picked the next time.
+     */
+    fun outputsChanged() {
+        if (prefs.outputChoice.isNotEmpty() && Output.set(this) != prefs.outputChoiceSet) {
+            LinkLog.add(this, "info", "playon", "output choice ended", "was" to prefs.outputChoice)
+            prefs.outputChoice = ""
+        }
+        applyOutput()
+    }
+
+    private fun applyOutput() {
+        val chosen = prefs.outputChoice.takeIf { it.isNotEmpty() }?.let { Output.find(this, it) }
+        player.setPreferredAudioDevice(chosen)
     }
 
     /** The sleep timer as set: the end of the track by the player itself, the time by a wait. */

@@ -160,7 +160,12 @@ class MainActivity : AppCompatActivity() {
         Kept.sync(this)
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(inUseChanged)
         Reach.watch(this)
+        // An output coming or going: the page's device sheet shows the outputs there are now.
+        outputs = Output.Watch(this) { page?.postMessage(appMessage()) }
     }
+
+    /** Watches the outputs while the page is shown (decision 0033, amended 2026-10-19). */
+    private var outputs: Output.Watch? = null
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -189,6 +194,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        outputs?.stop()
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
         Downloads.manager(this).removeListener(downloadsChanged)
         webView?.let {
@@ -289,6 +295,11 @@ class MainActivity : AppCompatActivity() {
             }
             "device-set" -> {
                 message.optString("player").trim().takeIf { it.isNotEmpty() }?.let { prefs.playerName = it }
+                // This device's output (decision 0033, amended 2026-10-19): an output's id, or null for Automatic.
+                if (message.has("output")) {
+                    prefs.outputChoice = if (message.isNull("output")) "" else message.optString("output")
+                    prefs.outputChoiceSet = Output.set(this)
+                }
                 if (message.has("stayReady")) {
                     prefs.stayReady = message.optBoolean("stayReady")
                     PlayerService.ready(this)
@@ -394,6 +405,9 @@ class MainActivity : AppCompatActivity() {
         .put("refused", refused ?: "")
         .put("version", BuildConfig.VERSION_NAME)
         .put("player", prefs.playerName)
+        // Its outputs, and the one chosen (null: Automatic); `output` in Play On's reports is the one that plays.
+        .put("outputs", org.json.JSONArray(Output.all(this)))
+        .put("output", prefs.outputChoice.ifEmpty { null } ?: org.json.JSONObject.NULL)
         .put("stayReady", prefs.stayReady)
         // `server`: the public address, for pages from before there were two.
         .put("server", prefs.publicAddress ?: "")

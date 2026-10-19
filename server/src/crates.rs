@@ -240,6 +240,7 @@ fn holds(c: &Condition, f: &Facts, w: &World) -> bool {
     let yes = match (c.axis.as_str(), &c.value) {
         ("favourite", Value::Yes) => w.favourites.is_some_and(|s| s.contains(&f.rel)),
         ("favourite_album", Value::Yes) => w.favourite_albums.is_some_and(|s| s.contains(&f.rel)),
+        (LEFT_OUT, Value::AnyOf { values }) => values.iter().any(|v| *v == f.rel),
         ("playlist", Value::AnyOf { values }) => match w.membership.get(&f.rel) {
             None => false,
             Some(lists) if values.is_empty() => !lists.is_empty(),
@@ -262,6 +263,20 @@ pub fn select<'a>(files: &'a [Facts], conditions: &[Condition], w: &World) -> Ve
 pub fn needs_favourites(conditions: &[Condition]) -> bool {
     conditions.iter().any(|c| c.axis == "favourite")
 }
+
+/// A crate's conditions with its tracks left out by hand (decision 0024, amended 2026-10-19: a crate's left-out list,
+/// over its conditions and both toggles, so a favourite left out stays out). Not an axis one builds with: the crate
+/// carries it unseen.
+pub fn leaving_out(lines: &[String], conditions: &[Condition]) -> Vec<Condition> {
+    let mut all = conditions.to_vec();
+    if !lines.is_empty() {
+        all.push(Condition { axis: LEFT_OUT.into(), not: true, value: Value::AnyOf { values: lines.to_vec() } });
+    }
+    all
+}
+
+/// The left-out list's condition: a line that is one of these.
+const LEFT_OUT: &str = "line";
 
 /// Whether working the conditions out needs the favourite albums (the Library's hearts).
 pub fn needs_favourite_albums(conditions: &[Condition]) -> bool {
@@ -313,6 +328,9 @@ struct Stored {
     /// Each crate's favourite albums setting (decision 0024, amended 2026-10-19), by id; a crate not in it shows all.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     favourite_albums: BTreeMap<String, Favourites>,
+    /// Each crate's tracks left out by hand (decision 0024, amended 2026-10-19), by id: their lines, relative to Music.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    left_out: BTreeMap<String, Vec<String>>,
 }
 
 /// One's own crates (decision 0024, issue 2): one file in Cratarr's data folder, the version before each change kept
@@ -374,6 +392,26 @@ impl CrateStore {
     pub async fn set_favourite_albums(&self, id: &str, albums: Favourites) -> Result<()> {
         let mut s = self.stored().await?;
         s.favourite_albums.insert(id.to_string(), albums);
+        self.write_stored(s).await
+    }
+
+    /// A crate's tracks left out by hand (their lines; none until some are).
+    pub async fn left_out(&self, id: &str) -> Result<Vec<String>> {
+        Ok(self.stored().await?.left_out.get(id).cloned().unwrap_or_default())
+    }
+
+    /// Every crate's left-out list that holds any.
+    pub async fn all_left_out(&self) -> Result<BTreeMap<String, Vec<String>>> {
+        Ok(self.stored().await?.left_out)
+    }
+
+    pub async fn set_left_out(&self, id: &str, lines: Vec<String>) -> Result<()> {
+        let mut s = self.stored().await?;
+        if lines.is_empty() {
+            s.left_out.remove(id);
+        } else {
+            s.left_out.insert(id.to_string(), lines);
+        }
         self.write_stored(s).await
     }
 
@@ -573,6 +611,18 @@ mod tests {
     }
 
     #[test]
+    fn tracks_left_out_by_hand_stay_out_over_conditions_and_both_toggles() {
+        let (files, membership, favourites) = library();
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
+        let left = vec!["a".to_string()];
+        // "a" is a favourite: left out, it stays out with only favourites shown.
+        assert_eq!(select(&files, &leaving_out(&left, &Favourites::Only.with(&[])), &w), vec!["b"]);
+        assert_eq!(select(&files, &leaving_out(&left, &[]), &w), vec!["b", "c", "d"]);
+        assert_eq!(leaving_out(&[], &[]), Vec::new(), "nothing left out, nothing added");
+        assert!(!is_axis("line"), "not an axis one builds with");
+    }
+
+    #[test]
     fn conditions_combine_with_and_take_several_values_or_a_range_and_can_be_negated() {
         let (files, membership, favourites) = library();
         let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
@@ -632,6 +682,12 @@ mod tests {
         again.set_favourite_albums(&id, Favourites::None).await.unwrap();
         again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
         assert_eq!(CrateStore::new(dir.to_str()).favourite_albums(&id).await.unwrap(), Favourites::None, "kept, and through a change");
+        // Tracks left out by hand: kept per crate, through a change of it; an empty list is none.
+        again.set_left_out(&id, vec!["x.flac".into()]).await.unwrap();
+        again.save(Some(&id), "Rock", rock.clone()).await.unwrap();
+        assert_eq!(CrateStore::new(dir.to_str()).left_out(&id).await.unwrap(), vec!["x.flac".to_string()]);
+        again.set_left_out(&id, Vec::new()).await.unwrap();
+        assert!(again.all_left_out().await.unwrap().is_empty());
         assert!(dir.join("crates.json.bak").exists(), "the version before kept");
         assert!(again.delete(&id).await.unwrap());
         assert!(again.list().await.unwrap().is_empty());
