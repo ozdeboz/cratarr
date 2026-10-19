@@ -267,6 +267,10 @@ how far it goes. The double tap's "loose" (twice the governor's limits) goes wit
 - **The button:** a tap randomizes everything. A long press opens the app's menu (MenuSheet, as every long-press menu)
   with the scopes. The double tap's movement-only roll goes.
 - **A module's own menu** has Randomize too, for that module alone (VCV's per-module Randomize).
+- **Pins keep knobs still against randomizing** (the owner): a pinned knob is left as it is by Randomize, by its
+  scopes, by "Another look" and by a new track's seeded Randomize. Cables still move it: a cable is a choice, not a
+  roll. A pin can be on one knob, one channel of a polyphonic knob, a cable's amount, or a whole module or device. It
+  shows as a pin mark on the knob's ring.
 
 ### 4e. A track's look: its seed
 
