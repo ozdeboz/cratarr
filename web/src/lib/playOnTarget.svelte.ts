@@ -45,7 +45,8 @@ async function anotherUsers(n: string): Promise<boolean> {
     const res = await fetch(`/api/players/${encodeURIComponent(n)}/connect?kind=browser&page=${PAGE}`, { signal: ctl.signal });
     if (res.status !== 409) return false;
     const body = await res.json().catch(() => ({}));
-    return typeof body?.error === 'string' && body.error.includes("another user's player");
+    // `taken` since stage 3; the words before it.
+    return body?.taken === true || (typeof body?.error === 'string' && body.error.includes("another user's player"));
   } catch {
     return false;
   } finally {
