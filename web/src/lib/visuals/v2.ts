@@ -10,7 +10,8 @@
 // 4. Every other route comes from Music's port of its signal (a band's as that channel), read as the routes read it
 //    (`reference: 'absolute'`), its depth normalled to the Loudness's `out`.
 // 5. A route's cable keeps the route's key as its id, its value (an amount or a curve, walking or not) and its mode.
-// 6. Intensity, Flash and Speed move to the modules that do them: Loudness, Flash, Clock.
+// 6. Intensity, Flash and Speed move to the modules that do them: Loudness, Flash, Clock. Show is split into its
+//    parts (ports.ts SHOW_PARTS): a route into `show.<knob>` goes into the part that took the knob.
 // 7. The extras' modules come as they are; their cables from Music's or a modulator's port.
 //
 // The picture side's wiring (which picture goes into which) is claude-632's (step 3): `pictureCables`, empty until
@@ -18,7 +19,7 @@
 
 import { isRoute } from './routes';
 import { cratarrPatch, modulesOf, type Cable, type Module, type Patch } from './patch';
-import type { CableV2, PatchV2 } from './ports';
+import { SHOW_PARTS, type CableV2, type PatchV2 } from './ports';
 import type { VisualSettings } from './settings.svelte';
 
 const BANDS = 6;
@@ -69,10 +70,19 @@ export function toV2(s: VisualSettings): PatchV2 {
     engine.get(module)!.knobs[knob] = (s as unknown as Record<string, number>)[setting];
     if (frame) delete frame.knobs[setting];
   }
+  // Show split into its parts (0057): each takes its knob, under its own id.
+  const showAt = modules.findIndex((m) => m.id === 'show');
+  if (showAt >= 0) {
+    const show = modules[showAt];
+    const parts = SHOW_PARTS.map(({ knob, type }) => ({ id: type, type, knobs: knob in show.knobs ? { [knob]: show.knobs[knob] } : {} }));
+    modules.splice(showAt, 1, ...parts);
+  }
+  const partOf = new Map(SHOW_PARTS.map((x) => [x.knob, x.type]));
+  const target = (to: Cable['to']) => (to.module === 'show' && partOf.has(to.knob) ? { module: partOf.get(to.knob)!, port: to.knob } : { module: to.module, port: to.knob });
   const extraIds = new Set((s.extra?.cables ?? []).map((c) => c.id));
   const cables: CableV2[] = [];
   for (const c of p.cables) {
-    const to = { module: c.to.module, port: c.to.knob };
+    const to = target(c.to);
     if (isRoute(c.id, BANDS) && !extraIds.has(c.id)) {
       // A route set to nothing is no cable.
       if (typeof c.value === 'number' && c.value === 0) continue;

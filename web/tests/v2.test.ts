@@ -37,8 +37,9 @@ test('Intensity, Flash and Speed move to the modules that do them; the column sc
   assert.equal(m.flash.knobs.flash, 1.4);
   assert.equal(m.clock.knobs.speed, 0.7);
   for (const k of ['intensity', 'flash', 'speed']) assert.ok(!(k in m.frame.knobs), k);
-  assert.equal(m.show.knobs.size, 0.5);
-  for (const id of ['music', 'track', 'envelope', 'clock', 'flash', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
+  assert.equal(m.scale.knobs.size, 0.5);
+  assert.ok(!m.show, 'Show split into its parts');
+  for (const id of ['music', 'track', 'envelope', 'clock', 'flash', 'frame', 'flame', 'tonemap', 'curve', 'saturate', 'blur', 'scale', 'bend', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
 });
 
 test('the extras come as they are: their modules, and their cables from a modulator or from Music with their reference and speed', () => {
@@ -52,4 +53,5 @@ test('the extras come as they are: their modules, and their cables from a modula
   assert.deepEqual(by['calm-size'].from, { module: 'breath', port: 'out' });
   assert.deepEqual(by['calm-hue'].from, { module: 'music', port: 'swell', speed: 'slow' });
   assert.deepEqual(by['calm-in'].to, { module: 'breath', port: 'in' });
+  assert.deepEqual(by['calm-size'].to, { module: 'scale', port: 'size' }, "a cable into Show's size goes into Scale");
 });

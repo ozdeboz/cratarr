@@ -182,6 +182,27 @@ export const LOOPER = declared(
   [VALUE_OUT],
 );
 
+/** Show's parts (0057): each of its knobs, the module that takes it (id and type alike), in Show's order. Tone map
+ *  turns the flame's light into a picture; the rest are picture modules. */
+export const SHOW_PARTS: readonly { knob: string; type: string; label: string }[] = [
+  { knob: 'glow', type: 'tonemap', label: 'Tone map' },
+  { knob: 'haze', type: 'curve', label: 'Curve' },
+  { knob: 'saturation', type: 'saturate', label: 'Saturate' },
+  { knob: 'smoothing', type: 'blur', label: 'Blur' },
+  { knob: 'size', type: 'scale', label: 'Scale' },
+  { knob: 'waves', type: 'bend', label: 'Bend' },
+];
+
+/** Show's parts as module types, each with its knob as Show's type has it (`show`: patch.ts cratarrTypes's). */
+export function showPartTypes(show: ModuleType): Declared[] {
+  return SHOW_PARTS.map(({ knob: id, type, label: name }) => {
+    const k = show.knobs.find((x) => x.id === id);
+    const knobs = k ? [k] : [];
+    const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : PICTURE_IN;
+    return declared(type, name, 'module', knobs, [input], [PICTURE_OUT]);
+  });
+}
+
 export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------

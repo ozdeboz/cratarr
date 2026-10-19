@@ -88,7 +88,7 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 | **Flash** | modulator, one per target | the course-and-swing filter (a slow course, Flash's share of the swing about it) |
 | **Walk** (Look, Behaviour) | modulator | drift.ts's walks |
 | **Flame** | picture source | the fractal flame; its parts' evolution (per band), continuity and steps on hits as its own knobs and `trigger` inputs, normalled from Music's hits |
-| **Show** | picture module | size, glow, saturation, smoothing, haze, waves |
+| **Show**, split (below) | Tone map, Curve, Saturate, Blur, Scale, Bend | size, glow, saturation, smoothing, haze, waves |
 | **Fluid**, **Tunnel**, **Dive**, **Trails**, **Loop effect** | picture modules in the flame's own loop | as today |
 | **Effects** | picture modules, one per effect | today three fixed slots (Kaleidoscope, EYEDO, Hydra), each choosing one sub-effect by a step knob; see below |
 | **Moments** | trigger outputs of the module that has them | another symmetry, lens or form at a step's neutral (morph.ts) |
@@ -127,6 +127,21 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
   - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
     (WCAG). It is safety, not taste: never learned, never removable, last.
   - The precheck and the dice read the same thresholds.
+- **Show, split into standard modules** (the owner: "it makes it more coherent"). Show is the flame's output stage, a
+  sound synth's channel strip, and each of its parts becomes the module it is. Only the first converts:
+  | Module | Was Show's | Sound equivalent |
+  |---|---|---|
+  | **Tone map** (light in, picture out) | the log-density display, its Brightness (`glow`) | compressor / limiter |
+  | **Curve** | Haze (gamma, floor) | waveshaper |
+  | **Saturate** | Saturation | drive |
+  | **Blur** | Smoothing | low-pass filter |
+  | **Scale** | Size | output level |
+  | **Bend** | Waves (the slow giant waves) | a slow warp; later the Warp field's |
+  - Curve, Saturate, Blur, Scale and Bend are ordinary picture modules, usable on any source (Shapes, Waves, a Mix), so
+    every picture can get the flame's finish.
+  - The 70.1 Glow (a halo) stays its own module, beside these.
+  - The conversion gives today's chain the six in Show's order. The routes into `show.<knob>` go into the module that
+    took that knob.
 - **Normalled cables.** The connections every chain has by default are shown faint and can be unplugged: Envelope into
   each cable's depth, Music's hits into the flame's steps, the Clock into the turning, Track's look into the flame's look.
   Plugging another cable into such a port breaks the normal, as in Eurorack.
