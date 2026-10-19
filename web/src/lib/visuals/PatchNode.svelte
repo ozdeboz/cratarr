@@ -1,9 +1,11 @@
 <script lang="ts">
   // A node of the patch graph (patchgraph.ts): a module (its knobs, its picture in and out), a modulator or a signal
-  // (an output to cable from), the blend, the screen, or a box around a layer or the loop. Tapping its title, or
-  // double-clicking it, opens its page.
+  // (an output to cable from), the blend, the screen, or a box around a layer or the loop; a layer that is off as one
+  // row ("+ bring back"); "+ Add layer", "+ Add modulator". Tapping its title, or double-clicking it, opens its page; a
+  // knob tapped, what moves it; a long press (or right click) on a module that can go, its menu (lib/longpress).
   import { getContext } from 'svelte';
   import { Handle, Position, useUpdateNodeInternals } from '@xyflow/svelte';
+  import { longpress } from '../longpress';
   import PatchKnob from './PatchKnob.svelte';
   import { GRAPH, knobHandle, MOD_OUT, type GraphActions, type NodeData, type Side } from './patchgraph';
 
@@ -25,14 +27,25 @@
 </script>
 
 {#if data.kind === 'box'}
-  <div class="box" ondblclick={() => graph.open(id)} role="presentation"><span class="bl">{data.label}</span></div>
+  {@const add = data.add}
+  <div class="box" ondblclick={() => graph.open(id)} role="presentation">
+    <span class="bl"
+      >{data.label}{#if add}<button class="plus nodrag" aria-label="Add to {data.label}" title="Add to {data.label}" onclick={() => graph.adding({ box: add })}>+</button>{/if}</span
+    >
+  </div>
+{:else if data.kind === 'off'}
+  {@const layer = data.layer}
+  <div class="node off"><span class="t">{data.label} · off</span><button class="back nodrag" onclick={() => graph.bringBack(layer)}>+ bring back</button></div>
+{:else if data.kind === 'add'}
+  {@const to = data.to}
+  <button class="node add nodrag" onclick={() => graph.adding(to)}>{data.label}</button>
 {:else if data.kind === 'signal'}
   <div class="node mod" class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
     <span class="t">{data.label}</span>
     <Handle type="source" id={MOD_OUT} position={Position.Top} class="out" />
   </div>
 {:else if data.kind === 'module'}
-  <div class="node" class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
+  <div class="node" class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation" use:longpress={() => graph.removable(id) && graph.menu(id)}>
     <button class="t nodrag" onclick={() => graph.open(id)}>{data.label}<span class="chev">›</span></button>
     {#if data.ports.length}
       <div class="ports">
@@ -48,7 +61,7 @@
       <div class="knobs">
         {#each data.knobs as k (k.id)}
           <div class="kw">
-            <PatchKnob knob={k} onturn={(v) => graph.knob(id, k.id, v)} />
+            <PatchKnob knob={k} onturn={(v) => graph.knob(id, k.id, v)} ontap={() => graph.openKnob(id, k.id)} />
             <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="in-mod" style="top: 17.5px; bottom: auto" />
           </div>
         {/each}
@@ -112,6 +125,40 @@
   .node.mark {
     min-width: 0;
     padding: 8px 12px;
+  }
+  /* A layer that is off: one faint row. */
+  .node.off {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    min-width: 0;
+    padding: 8px 12px;
+    border-style: dashed;
+    background: none;
+    color: var(--muted);
+  }
+  .back,
+  .node.add {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+  .back:hover,
+  .node.add:hover,
+  .plus:hover {
+    color: var(--text);
+  }
+  .node.add {
+    min-width: 0;
+    padding: 6px 12px;
+    border-style: dashed;
+    background: none;
+  }
+  .plus {
+    margin-left: 6px;
+    padding: 0 4px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1;
   }
   .node.sel {
     border-color: var(--accent);

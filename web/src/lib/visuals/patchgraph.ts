@@ -1,8 +1,10 @@
+// Cable sag after VCV Rack's CableWidget (GPL-3.0-or-later, © Andrew Belt), ported to TypeScript.
 // The patch drawn as a graph (decision 0056, step 3): PatchGraph's nodes and edges from a patch, its module types and
 // where things were put. Picture cables follow the patch's order (each layer's source, its modules, its own loop, into
 // the blend; then the loop, finish, the screen); modulation cables are the patch's cables, from a signal or a modulator
 // to a knob or a modulator's port. Positions are not the patch's (0056 keeps none): the parent keeps them by graph id
-// and anything without one is laid out here. Pure.
+// and anything without one is laid out here. A layer blended at nothing (`blend.amount` 0: the flame after "Start from
+// scratch") is off: one row, its name and "+ bring back". A muted cable (`off`) is drawn apart and moves no ring. Pure.
 
 import { endOf, type RouteValue } from './curves';
 import type { Cable, Knob, Module, ModuleType, Patch, Place, SignalRef } from './patch';
@@ -45,8 +47,13 @@ export type ModuleData = {
 };
 export type SignalData = { kind: 'signal'; label: string; ref: SignalRef };
 export type MarkData = { kind: 'blend' | 'screen'; label: string; in: Side; out: Side | null };
-export type BoxData = { kind: 'box'; label: string };
-export type NodeData = ModuleData | SignalData | MarkData | BoxData;
+/** A layer's box, or the loop's; `add`: where a module added from its "+" goes (the layer's id, or `loop`). */
+export type BoxData = { kind: 'box'; label: string; add?: string };
+/** A layer that is off, as one row: what brings it back is its id (the flame's: `flame`). */
+export type OffData = { kind: 'off'; layer: string; label: string };
+/** "+ Add layer" at the picture lane's end, "+ Add modulator" by the modulators. */
+export type AddData = { kind: 'add'; to: 'layer' | 'modulator'; label: string };
+export type NodeData = ModuleData | SignalData | MarkData | BoxData | OffData | AddData;
 
 export type GraphNode = {
   id: string;
@@ -61,6 +68,7 @@ export type GraphNode = {
   selectable?: boolean;
   connectable?: boolean;
   deletable: false;
+  draggable?: false;
   zIndex?: number;
 };
 
@@ -75,7 +83,7 @@ export type GraphEdge = {
   label?: string;
   deletable: boolean;
   selectable: boolean;
-  data?: { amount: string; lit?: boolean };
+  data?: { amount: string; lit?: boolean; muted?: true };
 };
 
 /** Graph ids that are not a module's (a module's node is its id). */
@@ -87,6 +95,8 @@ export const signalKey = (r: SignalRef) => `signal:${r.signal}|${r.band ?? '-'}|
 /** A knob's (or a port's) handle on its module's node. */
 export const knobHandle = (knob: string) => `k:${knob}`;
 export const MOD_OUT = 'mod';
+export const ADD_LAYER = '@add-layer';
+export const ADD_MODULATOR = '@add-modulator';
 
 const KNOB_W = 44;
 const KNOBS_ACROSS = 6;
@@ -152,6 +162,8 @@ function typeOf(m: Module, types: Record<string, ModuleType>): ModuleType {
 
 /** A node's size before it is measured, from what it shows. */
 export function sizeOf(d: NodeData): Size {
+  if (d.kind === 'off') return { width: 200, height: 36 };
+  if (d.kind === 'add') return { width: 130, height: 32 };
   if (d.kind !== 'module') return d.kind === 'box' ? { width: 0, height: 0 } : { width: d.kind === 'signal' ? 150 : d.kind === 'blend' ? 84 : 120, height: 36 };
   const shown = d.knobs.length + (d.hidden ? 1 : 0);
   const rows = Math.ceil(shown / KNOBS_ACROSS);
@@ -172,15 +184,23 @@ export type GraphInput = {
   open?: ReadonlySet<string>;
   /** Nodes' sizes as measured, where they have been. */
   sizes?: Record<string, Size>;
+  /** Whether layers, modules and modulators can be added here: the "+" nodes and the boxes' "+". */
+  adds?: boolean;
+  /** Which boxes take a module from their "+" (a layer's id, or `loop`); every one when not given. */
+  addTo?: (where: string) => boolean;
 };
+
+/** Whether a layer is off: blended at nothing, so none of it is seen. */
+export const layerOff = (l: Pick<Patch['layers'][number], 'blend'>) => l.blend.amount <= 0;
 
 /** The patch as Svelte Flow's nodes and edges. The picture runs left to right: each layer a row in its box (its own
  *  loop at the row's end), the layers stacked, then the blend, the loop, finish and the screen in one row; the frame
  *  under the screen. Signals and modulators sit under the knobs they move, so their cables run short and mostly up. */
-export function graphOf({ patch, types, positions = {}, signals = [], open = new Set(), sizes = {} }: GraphInput): { nodes: GraphNode[]; edges: GraphEdge[] } {
+export function graphOf({ patch, types, positions = {}, signals = [], open = new Set(), sizes = {}, adds = false, addTo = () => true }: GraphInput): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const into = new Map<string, Cable[]>();
+  const muted = (c: Cable) => !!(c as Cable & { off?: true }).off;
   for (const c of patch.cables) {
     const key = `${c.to.module}.${c.to.knob}`;
     (into.get(key) ?? into.set(key, []).get(key)!).push(c);
@@ -204,7 +224,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     const knobs: KnobView[] = shown.map((k) => {
       const value = m.knobs[k.id] ?? k.default;
       const at = k.max > k.min ? clamp01((value - k.min) / (k.max - k.min)) : 0;
-      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at, ring: ringOf(at, into.get(`${m.id}.${k.id}`) ?? []) };
+      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at, ring: ringOf(at, (into.get(`${m.id}.${k.id}`) ?? []).filter((c) => !muted(c))) };
     });
     return {
       kind: 'module',
@@ -236,8 +256,9 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     edges.push({ id: `pic:${a}>${b}`, source: a, target: b, sourceHandle: 'out', targetHandle: 'in', class: 'picture', deletable: false, selectable: false, ...(label ? { label } : {}) });
 
   /** A box around a row of modules, those from `loopAt` on a loop (its last back to its first). */
-  const chain = (boxId: string, label: string, row: Module[], loopAt: number, firstIn: Side | null, origin: XY) => {
-    const box: GraphNode = { id: boxId, type: 'box', position: put(boxId, origin), data: { kind: 'box', label }, deletable: false, selectable: false, connectable: false, zIndex: -1 };
+  const chain = (boxId: string, label: string, row: Module[], loopAt: number, firstIn: Side | null, origin: XY, add?: string) => {
+    const data: BoxData = { kind: 'box', label, ...(adds && add && addTo(add) ? { add } : {}) };
+    const box: GraphNode = { id: boxId, type: 'box', position: put(boxId, origin), data, deletable: false, selectable: false, connectable: false, zIndex: -1 };
     nodes.push(box);
     const inside: GraphNode[] = [];
     const loops = row.length - loopAt > 1;
@@ -261,12 +282,24 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
   let right = 0;
   const toBlend: { id: string; label?: string }[] = [];
   for (const l of patch.layers) {
+    if (layerOff(l)) {
+      const n = node(layerBox(l.id), { kind: 'off', layer: l.id, label: typeOf(l.source, types).label }, { x: 0, y });
+      Object.assign(n, { selectable: false, connectable: false });
+      y = n.position.y + size(n).height + 40;
+      right = Math.max(right, n.position.x + size(n).width);
+      continue;
+    }
     const row = [l.source, ...l.modules, ...l.loop];
-    const { box, last } = chain(layerBox(l.id), typeOf(l.source, types).label, row, row.length - l.loop.length, null, { x: 0, y });
+    const { box, last } = chain(layerBox(l.id), typeOf(l.source, types).label, row, row.length - l.loop.length, null, { x: 0, y }, l.id);
     y = box.position.y + box.height! + 40;
     right = Math.max(right, box.position.x + box.width!);
     const b = l.blend;
     if (last) toBlend.push({ id: last, label: b.mode === 'add' && b.amount === 1 ? undefined : `${b.mode} ${Math.round(b.amount * 100)}%` });
+  }
+  if (adds) {
+    const n = node(ADD_LAYER, { kind: 'add', to: 'layer', label: '+ Add layer' }, { x: 0, y });
+    Object.assign(n, { selectable: false, connectable: false, draggable: false });
+    y = n.position.y + size(n).height + 40;
   }
   let bottom = Math.max(0, y - 40);
 
@@ -277,7 +310,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
   let from = BLEND;
   let x = blend.position.x + size(blend).width + GAP_X;
   if (patch.loop.length) {
-    const { box, last } = chain(LOOP, 'Loop', patch.loop, 0, 'left', { x, y: Math.max(0, mid - BOX_TOP - 4) });
+    const { box, last } = chain(LOOP, 'Loop', patch.loop, 0, 'left', { x, y: Math.max(0, mid - BOX_TOP - 4) }, 'loop');
     picture(BLEND, patch.loop[0].id);
     from = last!;
     x = box.position.x + box.width! + GAP_X;
@@ -356,6 +389,11 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     for (const it of r.items) node(it.s.id, it.s.data, { x: Math.round(it.x), y: sy });
     sy += Math.max(...r.items.map((it) => it.size.height)) + 28;
   }
+  if (adds) {
+    const first = patch.modulators.map((m) => placedAt.get(m.id)).filter((v): v is number => v !== undefined);
+    const n = node(ADD_MODULATOR, { kind: 'add', to: 'modulator', label: '+ Add modulator' }, { x: Math.round(first.length ? Math.min(...first) : 0), y: sy });
+    Object.assign(n, { selectable: false, connectable: false, draggable: false });
+  }
 
   // The modulation cables, where both ends are drawn.
   const ids = new Set(nodes.map((n) => n.id));
@@ -366,7 +404,8 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     if (!ids.has(source) || !target) continue;
     if (!target.knobs.some((k) => k.id === c.to.knob) && !target.ports.some((p) => p.id === c.to.knob)) continue;
     const amount = amountLabel(c.value, c.mode);
-    edges.push({ id: c.id, source, target: c.to.module, sourceHandle: MOD_OUT, targetHandle: knobHandle(c.to.knob), type: 'cable', class: 'cable', deletable: true, selectable: true, data: { amount } });
+    const data = { amount, ...(muted(c) ? { muted: true as const } : {}) };
+    edges.push({ id: c.id, source, target: c.to.module, sourceHandle: MOD_OUT, targetHandle: knobHandle(c.to.knob), type: 'cable', class: 'cable', deletable: true, selectable: true, data });
   }
   return { nodes, edges };
 }
@@ -396,6 +435,57 @@ export function turned(k: Pick<KnobView, 'min' | 'max' | 'kind'>, value: number,
   return k.kind === 'step' ? Math.round(v) : v;
 }
 
+/** Which end of a cable a press is nearer: `from` (its signal's or modulator's output) or `to` (its knob or port). */
+export function nearestEnd(at: XY, from: XY, to: XY): 'from' | 'to' {
+  return Math.hypot(at.x - from.x, at.y - from.y) < Math.hypot(at.x - to.x, at.y - to.y) ? 'from' : 'to';
+}
+
+/** A cable's end moved (a reconnection in the graph: the cable as it was, the connection it would be now): which end
+ *  moved and where to, checked as a cable drawn there would be (`cableOf`, the cable itself left out). `to`: the knob or
+ *  port it goes into now; `from`: the signal or modulator it comes from. Null where it cannot go, or nothing moved. */
+export function rerouted(
+  cable: Cable,
+  now: { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null },
+  nodes: { id: string; data: NodeData }[],
+  cables: Cable[],
+): { end: 'from'; next: Cable['from'] } | { end: 'to'; next: Cable['to'] } | null {
+  const made = cableOf(now, nodes, cables.filter((c) => c.id !== cable.id));
+  if (!made) return null;
+  const source = 'modulator' in cable.from ? cable.from.modulator : signalKey(cable.from);
+  if (now.source !== source) return now.target === cable.to.module && now.targetHandle === knobHandle(cable.to.knob) ? { end: 'from', next: made.from } : null;
+  if (made.to.module === cable.to.module && made.to.knob === cable.to.knob) return null;
+  return { end: 'to', next: made.to };
+}
+
+// ---- Cable sag after VCV Rack's CableWidget (GPL-3.0-or-later, © Andrew Belt), ported to TypeScript -----------------
+// Rack's src/app/CableWidget.cpp (VCVRack/Rack v2, 061ccf63), getSlumpPos and drawLayer: a cable is a quadratic curve
+// from its output to its input through the point midway between them, lowered as the cable grows longer:
+// `(1 - tension) * (150 + dist)`. Rack's tension setting is 0..1; here it is fixed for a slight sag on the graph's scale.
+// Its opacity is drawn as `opacity ** 1.5`, as Rack's nvgAlpha(pow(opacity, 1.5)).
+
+/** How taut a modulation cable hangs (Rack's cableTension: 1 straight, 0 its fullest sag). */
+export const CABLE_TENSION = 0.9;
+
+/** Where a cable from `a` to `b` is pulled down to: their midpoint, lower the longer the cable (Rack's getSlumpPos). */
+export function slumpOf(a: XY, b: XY, tension = CABLE_TENSION): XY {
+  const dist = Math.hypot(a.x - b.x, a.y - b.y);
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + (1 - tension) * (150 + dist) };
+}
+
+/** A sagging cable's path (SVG, one quadratic curve through its slump) and its middle (where its amount shows). */
+export function saggingPath(a: XY, b: XY, tension = CABLE_TENSION): [path: string, mid: XY] {
+  const s = slumpOf(a, b, tension);
+  const f = (v: number) => Math.round(v * 100) / 100;
+  // The curve at its middle (t = 0.5): a quarter of each end and half the slump.
+  const mid = { x: 0.25 * a.x + 0.5 * s.x + 0.25 * b.x, y: 0.25 * a.y + 0.5 * s.y + 0.25 * b.y };
+  return [`M${f(a.x)},${f(a.y)} Q${f(s.x)},${f(s.y)} ${f(b.x)},${f(b.y)}`, mid];
+}
+
+/** The cables' opacity steps (the graph's corner button cycles them), and as drawn (Rack's `opacity ** 1.5`). */
+export const CABLE_OPACITIES = [1, 0.5, 0.2] as const;
+export const drawnOpacity = (o: number) => Math.pow(Math.min(1, Math.max(0, o)), 1.5);
+export const nextOpacity = (o: number) => CABLE_OPACITIES[(Math.max(0, CABLE_OPACITIES.indexOf(o as (typeof CABLE_OPACITIES)[number])) + 1) % CABLE_OPACITIES.length];
+
 /** What PatchGraph hands its nodes and cables (Svelte context, under `GRAPH`). */
 export type GraphActions = {
   knob(module: string, knob: string, value: number): void;
@@ -403,6 +493,19 @@ export type GraphActions = {
   /** Open a node out to every knob, or back. */
   toggle(id: string): void;
   opened(id: string): boolean;
-  disconnect(cable: string): void;
+  /** A knob tapped (not turned): what moves it. */
+  openKnob(module: string, knob: string): void;
+  /** Whether a node can be removed, and its long press (its menu: Delete). */
+  removable(id: string): boolean;
+  menu(id: string): void;
+  /** A "+" tapped: the types to add there (a layer, a modulator, or a module into a box: its `add`). */
+  adding(to: 'layer' | 'modulator' | { box: string }): void;
+  /** A layer that is off, brought back. */
+  bringBack(layer: string): void;
+  /** A cable tapped (its amount, too): its configuration; its long press at a point (the window's), its menu. */
+  openCable(id: string): void;
+  cableMenu(id: string, at: XY): void;
+  /** The cable being rerouted, and where its long press was (its nearer end is the one that moves). */
+  rerouting(): { id: string; at: XY } | null;
 };
 export const GRAPH = 'patchgraph';

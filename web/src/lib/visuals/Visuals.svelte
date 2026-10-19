@@ -1088,6 +1088,29 @@
     panelBox?.scrollTo(0, 0);
     showChrome();
   }
+  // The graph's cables and adds (claude-632's PatchGraph, after 70): a cable's page, a knob's What moves, removing,
+  // a dragged end (rerouteCable), the "+"s as the panel's own adds.
+  const graphPage = (page: string) => {
+    path = [page];
+    cell = null;
+    panelBox?.scrollTo(0, 0);
+    showChrome();
+  };
+  function graphRemove(ids: string[]) {
+    const cables = ids.filter((id) => patchNow.cables.some((c) => c.id === id));
+    if (cables.length) setCables(removeCables(cablesNow(), cables));
+    path = path.filter((p) => !cables.some((id) => p === `cable:${id}`));
+    for (const id of ids) {
+      if (id === 'flame') set('flameLayer', 0);
+      else if (!cables.includes(id) && extraModule(id)) removeExtra(id);
+    }
+  }
+  function graphAdd(where: 'layer' | 'loop' | 'modulators' | string, type: string) {
+    if (where === 'layer' && type === 'flame') return (set('flameLayer', 1), graphPage('layer:flame'));
+    path = [where === 'layer' ? 'newlayer' : where === 'loop' ? 'newloop' : where === 'modulators' ? 'newmodulator' : `newmodule:${where}`];
+    if (where === 'layer') addLayer(type);
+    else addTo(where, type);
+  }
 
   // A page's name in the breadcrumb.
   function pageLabel(page: string): string {
@@ -2329,6 +2352,16 @@
             onknob={graphKnob}
             onmove={graphMove}
             onopen={graphOpen}
+            addTypes={EXTRA_TYPES}
+            removable={(id) => id === 'flame' || !!extraModule(id)}
+            canAddTo={(where) => where === 'loop' || s.extra.layers.some((l) => l.id === where)}
+            onopencable={(id) => graphPage(`cable:${id}`)}
+            onopenknob={(mid, kid) => graphPage(`moves:${mid}.${kid}`)}
+            onremove={graphRemove}
+            onreroute={(id, end, next) => rerouteCable(id, end, next as never)}
+            onaddlayer={(type) => graphAdd('layer', type)}
+            onaddmodule={graphAdd}
+            onaddmodulator={(type) => graphAdd('modulators', type)}
           />
         </div>
       {/if}
