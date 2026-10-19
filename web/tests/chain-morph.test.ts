@@ -2,7 +2,7 @@
 // is gone; the evaluator reads the knobs as the morph shows them: npm test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { morphedPatch, morphModules, sameModules, withLeaving } from '../src/lib/visuals/chain-morph.ts';
+import { morphedPatch, morphModules, rolledExtra, sameModules, withLeaving } from '../src/lib/visuals/chain-morph.ts';
 import { morphTo, newMorph, stepMorph } from '../src/lib/visuals/morph.ts';
 import { emptyExtra, type Knob, type Layer, type Module, type ModuleType, type Patch, type PatchExtra } from '../src/lib/visuals/patch.ts';
 
@@ -78,4 +78,22 @@ test('through the morph: a removed module fades out drawn, then is let go', () =
   assert.equal(f.leaving[0]?.knobs.amount ?? 0, 0);
   f = stepMorph(m, 0.1, null, TYPES);
   assert.equal(f.leaving.length, 0);
+});
+
+test('the dice within a chain: every look knob anew in its range, the chain and the modulators as they are', () => {
+  const knob = (id: string, kind: Knob['kind'], min: number, max: number, neutral: number, device = false): Knob => ({ id, label: id, min, max, neutral, default: neutral, kind, ...(device ? { device } : {}) });
+  const TYPES = {
+    shapes: { knobs: [knob('amount', 'level', 0, 1, 0), knob('spin', 'swing', -1, 1, 0), knob('count', 'step', 1, 6, 1), knob('quality', 'level', 0, 2, 1, true)] },
+    lfo: { knobs: [knob('rate', 'swing', 0, 4, 1)] },
+  };
+  const e = extra({ layers: [{ ...layer('a'), source: mod('s', 'shapes', { amount: 0.1, spin: 0, count: 2, quality: 1 }) }], modulators: [mod('l', 'lfo', { rate: 1 })] });
+  for (const r of [0, 0.5, 0.999]) {
+    const out = rolledExtra(e, TYPES, () => r);
+    const k = out.layers[0].source.knobs;
+    assert.ok(k.amount >= 0 && k.amount <= 0.75 && k.spin >= -1 && k.spin <= 1 && Number.isInteger(k.count) && k.count >= 1 && k.count <= 6, JSON.stringify(k));
+    assert.equal(k.quality, 1);
+    assert.equal(out.modulators[0], e.modulators[0]);
+    assert.ok(sameModules(out, e));
+  }
+  assert.equal(e.layers[0].source.knobs.amount, 0.1, 'the extras themselves as they were');
 });

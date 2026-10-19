@@ -78,3 +78,25 @@ export function sameModules(a: PatchExtra, b: PatchExtra): boolean {
     [...e.layers.map((l) => `layer:${l.id}`), ...morphModules(e).map((m) => `${m.id}|${m.type}`)].sort().join(',');
   return key(a) === key(b);
 }
+
+/** The dice within a chain (the owner: "chains become presets, then within that we can freely evolve"): each of the
+ *  extras' knobs anew, its modules and cables as they are, morphed to. A level between its neutral and three quarters
+ *  of its way up, a swing anywhere in its range, a step any of its whole steps; the device's knobs, and modulators'
+ *  (how the patch moves, not how it looks), kept. `rand` 0..1. */
+export function rolledExtra(extra: PatchExtra, types: Record<string, { knobs: { id: string; min: number; max: number; neutral: number; kind: string; device?: boolean }[] }>, rand: () => number): PatchExtra {
+  const roll = (m: Module): Module => {
+    const knobs = { ...m.knobs };
+    for (const k of types[m.type]?.knobs ?? []) {
+      if (k.device || !(k.id in knobs)) continue;
+      if (k.kind === 'step') knobs[k.id] = Math.min(k.max, Math.ceil(k.min) + Math.floor(rand() * (Math.floor(k.max) - Math.ceil(k.min) + 1)));
+      else if (k.kind === 'level') knobs[k.id] = k.neutral + (k.max - k.neutral) * 0.75 * rand();
+      else knobs[k.id] = k.min + (k.max - k.min) * rand();
+    }
+    return { ...m, knobs };
+  };
+  return {
+    ...extra,
+    layers: extra.layers.map((l) => ({ ...l, source: roll(l.source), modules: l.modules.map(roll), loop: l.loop.map(roll) })),
+    loop: extra.loop.map(roll),
+  };
+}

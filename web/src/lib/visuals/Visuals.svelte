@@ -43,7 +43,7 @@
   import { newAspects, stepAspects, wavesMotion, zoomsMotion } from './aspects';
   import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
   import { curveOf, endOf, heightAt, straight, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
-  import { ASPECT_KNOB, SETTING_KNOB } from './patch';
+  import { ASPECT_KNOB, emptyExtra, SETTING_KNOB } from './patch';
   import CurveEditor from './CurveEditor.svelte';
   import { densityOf, newHistory, remember } from './history';
   import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
@@ -74,7 +74,7 @@
   import { shapeOf } from './evaluate';
   import { evaluate, newEvalState, type Evaluated } from './evaluate';
   import { askStep, morphTo, newMorph, stepMorph } from './morph';
-  import { leavingIds, morphedPatch, morphModules, sameModules, withLeaving } from './chain-morph';
+  import { leavingIds, morphedPatch, morphModules, rolledExtra, withLeaving } from './chain-morph';
   import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
   import PatchGraph from './PatchGraph.svelte';
@@ -377,7 +377,7 @@
   // A roll's recipe and, for a full one, the look drawn with it (and checked with it).
   type Rolled = { recipe: Recipe; look: Drawn | null };
   const wildNow = (wild: number) => (s.loose ? Math.max(wild, 1) : wild);
-  let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings>; loose: number } | null>(null);
+  let undo = $state<{ look: Record<string, number>; pins: string[]; behaviour: Partial<VisualSettings>; loose: number; extra: PatchExtra } | null>(null);
   let diceWait = 0;
   function diceTapped() {
     if (diceWait) {
@@ -416,12 +416,15 @@
   }
   function rolled({ recipe, look }: Rolled, scope: Scope) {
     const now = $state.snapshot(s) as VisualSettings;
-    undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings>, loose: now.loose };
+    undo = { look: lookNow(), pins: [...now.pins], behaviour: Object.fromEntries(BEHAVIOUR.map((k) => [k, now[k]])) as Partial<VisualSettings>, loose: now.loose, extra: now.extra };
     const next = settingsOf(recipe, now, scope);
     for (const k of BEHAVIOUR) if (!s.pins.includes(k)) (s as Record<string, unknown>)[k] = next[k];
     s.loose = scope === 'movement' ? 1 : 0;
+    // A full roll evolves the extras within their chain too (decision 0056): their knobs anew, morphed to as a look
+    // blends in; the chain itself (modules, cables) as it is.
+    if (scope === 'all') s.extra = rolledExtra(now.extra, GRAPH_TYPES, Math.random);
     saveVisualSettings();
-    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), loose: s.loose });
+    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), loose: s.loose, extra: $state.snapshot(s.extra) });
     // The look the roll was checked with, into the settings as a drawn one is (blended in, to the group).
     if (look) drawingNow = { draws: (function* (): Generator<void, Drawn> { return look; })(), blend: ANOTHER_MS, share: true, load: true, why: 'dice' };
   }
@@ -433,10 +436,10 @@
     rolling = null;
     nextBlend = ANOTHER_MS;
     lookCame = 'dice';
-    Object.assign(s, was.behaviour, was.look, { pins: was.pins });
+    Object.assign(s, was.behaviour, was.look, { pins: was.pins, extra: was.extra });
     s.loose = was.loose;
     saveVisualSettings();
-    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), ...lookNow(), pins: [...s.pins], loose: s.loose });
+    share({ ...Object.fromEntries(BEHAVIOUR.map((k) => [k, $state.snapshot(s[k])])), ...lookNow(), pins: [...s.pins], loose: s.loose, extra: $state.snapshot(s.extra) });
     showChrome();
   }
 
@@ -487,6 +490,8 @@
     for (const k of ['fx1', 'fx1Amount', 'fx2', 'fx2Amount', 'fx3', 'fx3Amount', 'fxLoop', 'fxLoopAmount', 'facets', 'lattice'] as const) if (!(k in settings)) settings[k] = 0;
     for (const k of ['fx1K1','fx1K2','fx2K1','fx2K2','fx3K1','fx3K2','fxLoopK1','fxLoopK2'] as const) if (!(k in settings)) settings[k] = 0.5;
     if (!('effects' in settings)) settings.effects = 1;
+    // One saved before the patch (70): the chain as it was then, today's alone. A recall sets the chain whole.
+    if (!('extra' in settings)) settings.extra = emptyExtra();
     delete settings.v;
     // This device's own sliders, on this device only.
     applyDevice(settings);
@@ -506,7 +511,6 @@
     }
     drawingNow = null;
     nextBlend = ANOTHER_MS;
-    morphNext = ANOTHER_MS / 1000;
     lookCame = 'track';
     if (snap.id === STANDARD.id) {
       // Each track's own look again: nothing pinned, the playing track's drawn anew (and sent to the group, as after
@@ -841,6 +845,7 @@
     const m = extraModule(id);
     if (!m) return;
     m.knobs[knob] = v;
+    morphNext = KNOB_MORPH;
     saveVisualSettings();
     share({ extra: $state.snapshot(s.extra) });
     showChrome();
@@ -889,7 +894,9 @@
   const patchNow = $derived(cratarrPatch(s));
   // The extras as set, a new value on any change of them: the frame loop morphs to each (decision 0056, step 6).
   const extraNow = $derived($state.snapshot(s.extra) as PatchExtra);
-  // The next change's morph (seconds), where it is not the usual: a recall's.
+  // The next change's morph (seconds): a knob moved here, over a moment (`KNOB_MORPH`); anything else (a module added or
+  // removed, a recall, the dice, the group's) as a look blends in.
+  const KNOB_MORPH = 0.15;
   let morphNext: number | null = null;
   const GRAPH_TYPES: Record<string, ModuleType> = Object.fromEntries([...EXTRA_TYPES, ...cratarrTypes(RANGES, DEFAULTS)].map((t) => [t.type, t]));
   const GRAPH_KEY = 'cratarr-visuals-graph';
@@ -1295,8 +1302,7 @@
     let evaluated: Evaluated | null = null;
     // The morph (claude-632's morph.ts): the extras' knobs from one state to the next, never a cut; a chain change's
     // modules fading in from neutral and out to it (drawn till then: chain-morph.ts); a step only at its module's
-    // neutral, the evaluator's moments too. A knob's change over a moment, a chain's or a recall's as a look blends.
-    const KNOB_MORPH = 0.15;
+    // neutral, the evaluator's moments too.
     const morph = newMorph(morphModules(extraNow), GRAPH_TYPES);
     let morphedTo = extraNow;
     let drawnExtra = extraNow;
@@ -1782,7 +1788,7 @@
       const extraSet = extraNow;
       const extraChanged = extraSet !== morphedTo;
       if (extraChanged) {
-        morphTo(morph, morphModules(extraSet), morphNext ?? (sameModules(extraSet, morphedTo) ? KNOB_MORPH : ANOTHER_MS / 1000), GRAPH_TYPES);
+        morphTo(morph, morphModules(extraSet), morphNext ?? ANOTHER_MS / 1000, GRAPH_TYPES);
         morphNext = null;
         morphedTo = extraSet;
       }
