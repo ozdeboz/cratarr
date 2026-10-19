@@ -46,13 +46,14 @@ and the rack. The Cratarr look is a chain built from those modules, nothing spec
 
 ### 1. Typed ports
 
-Five kinds of signal, each with its own wire in the graph:
+Six kinds of signal, each with its own wire in the graph:
 
 | Type | Carries | Wire |
 |---|---|---|
 | `picture` | a texture each frame | solid |
 | `light` | the flame's accumulated light before Show displays it (its RGBA and its bands' shares); the flame's own loop works on it, and only Show turns it into a picture (claude-632) | solid, thick |
 | `audio` | the sound itself: its recent samples each frame (the page's own player, or the app's `wave`); Music gives it, the Waves source takes it (the owner: "is video and audio essentially the same?": no) | double line |
+| `points` | a set of positions with values per point (a grid's points; TouchDesigner's geometry for instancing) | chain line |
 | `value` | a number each frame (a signal on 1 = typical; a modulator's own range; a knob's) | dashed |
 | `trigger` | events (a beat, a band's hit, a gate opening), each with its strength | dotted |
 
@@ -223,6 +224,30 @@ come later** (the owner):
   the Clock.
 - The loudness follower, so as not to be confused with the ADSR, is named Loudness.
 
+### 4c. Grids
+
+The owner asked whether grids are always kaleidoscopic or mosaic, how they control things, how shapes follow them and
+how they are modules. A grid is a lattice (square, hexagonal, triangular, polar rings, a spiral) and a symmetry; mosaic
+(translation), kaleidoscope (rotation and mirror) and pixelate (a colour a cell) are uses of one. Learned, not invented:
+Hydra's `kaleid`, `repeat` and `pixelate` (already ours, 0050); the 17 wallpaper groups (the mathematics of symmetry
+since the 1890s, as symmetry tools such as Kali use it); TouchDesigner's Grid SOP, instancing and TOP to CHOP; cables.gl's
+points and instancing ops (MIT, ported with a notice); VCV's polyphony; the monome grid.
+
+In this version:
+- **Grid:** a source of `points`. Knobs: lattice (square, hexagonal, triangular, rings, spiral), count, spacing,
+  rotation, jitter. Per-point values out as polyphonic channels: index, distance from the centre, angle, row, column.
+- **Fold:** a picture folded by a grid's symmetry. Modes: mosaic, kaleidoscope, mirror, pixelate, and the wallpaper
+  groups beyond. It takes Hydra's Kaleid, Repeat and Pixelate as its first modes, and the fluid's hidden lattice
+  switch becomes a Fold too. The group mathematics is taken from the literature, not from anyone's shader, so the
+  licence stays clean.
+- **Instance:** draws a source once at each point of a `points` input. Shapes follow a grid this way: Grid → Instance
+  → Shapes. Each instance gets its point's values as channels, so distance can drive size, angle rotation, and index a
+  phase that runs a wave across the grid.
+
+Later, with the Sequencer and the Looper:
+- **Sample:** a picture read at each point, giving one value a point. The picture becomes a controller.
+- **A grid sequencer** (the monome's): the Clock stepping through the cells.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
@@ -278,8 +303,8 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | Step | What | Owner |
 |---|---|---|
 | 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
-| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
-| 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
+| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); the Grid's points and channels (§4c); the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
+| 3 | **Picture graph:** the compositor over typed picture ports, lazy; Fold (one module for the grid's symmetries) and Instance (§4c); the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
 | 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
 | 5 | **Devices and macros:** the device type (a module holding a patch, its exposed ports and macros), flattening for the engine and compositor, Show as a device, open/collapse in the rack (graph: claude-632), the whole frame's macros | claude-a5 |
 | 6 | **Retire:** aspects.ts, the routes' matrix, chain-cables.ts, the old settings keys | whoever's step frees it |

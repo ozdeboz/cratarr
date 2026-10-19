@@ -10,7 +10,8 @@ import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 /** `light`: the flame's accumulated light (its RGBA and its bands' shares) before Show turns it into a picture; the
  *  flame's own loop works on it (claude-632, step 3). Only Show converts light into a picture. */
 /** `audio`: the sound itself, its recent samples (Music gives it; the Waves source draws it). */
-export type PortType = 'picture' | 'light' | 'audio' | 'value' | 'trigger';
+/** `points`: a set of positions with values per point (a Grid's; for Instance). */
+export type PortType = 'picture' | 'light' | 'audio' | 'points' | 'value' | 'trigger';
 
 /** A port: its id on its module, its name, its type; `channels`: a band's six at once (VCV's polyphonic cable; a
  *  cable may take one of them); `normal`: what it is wired to unless a cable is plugged in (Eurorack's normalled
@@ -206,7 +207,58 @@ export function showPartTypes(show: ModuleType): Declared[] {
   });
 }
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER];
+/** The lattices a Grid lays its points on (0057 §4c). */
+export const LATTICES = ['square', 'hexagonal', 'triangular', 'rings', 'spiral'] as const;
+/** The most points a Grid gives (its channels). */
+export const MOST_POINTS = 64;
+
+/** Grid (0057 §4c; TouchDesigner's Grid SOP): points on a lattice, and each point's values as channels. */
+export const GRID = declared(
+  'grid',
+  'Grid',
+  'modulator',
+  [
+    knob('lattice', 'Lattice', 0, LATTICES.length - 1, 0, 'step'),
+    knob('count', 'Count', 1, MOST_POINTS, 16, 'level', 1),
+    knob('spacing', 'Spacing', 0.02, 1, 0.25),
+    knob('rotation', 'Rotation', 0, 1, 0),
+    knob('jitter', 'Jitter', 0, 1, 0, 'level'),
+  ],
+  [],
+  [
+    out('points', 'Points', 'points'),
+    out('index', 'Index', 'value', MOST_POINTS),
+    out('distance', 'Distance', 'value', MOST_POINTS),
+    out('angle', 'Angle', 'value', MOST_POINTS),
+    out('row', 'Row', 'value', MOST_POINTS),
+    out('column', 'Column', 'value', MOST_POINTS),
+  ],
+);
+
+/** The symmetries a Fold applies (0057 §4c): Hydra's three first, the wallpaper groups beyond. */
+export const FOLDS = ['mosaic', 'kaleidoscope', 'mirror', 'pixelate'] as const;
+
+/** Fold (0057 §4c): a picture folded by a grid's symmetry; with no grid plugged in, its own centre and count. */
+export const FOLD = declared(
+  'fold',
+  'Fold',
+  'module',
+  [knob('mode', 'Mode', 0, FOLDS.length - 1, 1, 'step'), knob('count', 'Count', 1, 24, 6), knob('turn', 'Turn', -1, 1, 0), knob('amount', 'Amount', 0, 1, 1, 'level')],
+  [PICTURE_IN, { id: 'grid', label: 'Grid', type: 'points' }],
+  [PICTURE_OUT],
+);
+
+/** Instance (0057 §4c; TouchDesigner's and cables.gl's instancing): its source drawn at each point. */
+export const INSTANCE = declared(
+  'instance',
+  'Instance',
+  'module',
+  [knob('amount', 'Amount', 0, 1, 1, 'level')],
+  [{ id: 'points', label: 'Points', type: 'points' }, PICTURE_IN],
+  [PICTURE_OUT],
+);
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
