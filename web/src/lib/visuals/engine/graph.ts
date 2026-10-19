@@ -1,10 +1,11 @@
 // The one engine (decision 0057, step 2): every value and trigger of a v2 patch, a frame at a time, over its typed
-// cables. Music, Track and the Envelope first (what every cable reads and what scales it); then the modulators in the
-// order their cables need (a cycle reads last frame's value, VCV Rack's rule); then what the cables give each of the
-// Cratarr chain's columns, by the routes' rules (routes.ts give: a swing sums, a level lets through, a band's cable into
-// a part's column is that part's own, into another the bands' mean, a moment's their largest), each column's knob its
-// scale; then the chain's own modules (chain.ts); and every other module's knobs as their cables move them (evaluate.ts's
-// rule). What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
+// cables. Music, Track and the Envelope first (what every cable reads and what scales it); then the modulators, VCAs
+// and Merges in the order their cables need (a cycle reads last frame's value, VCV Rack's rule); then what the cables
+// give each of the Cratarr chain's columns, by the routes' rules (routes.ts give: a swing sums, a level lets through, a
+// band's cable into a part's column is that part's own, into another the bands' mean, a moment's their largest; a
+// column's scale is in its cables' amounts, 0057 §7e), a level column's gain input and a moment column's trigger; then
+// the chain's own modules (chain.ts); and every other module's knobs as their cables move them (evaluate.ts's rule).
+// What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
 
 import type { AspectsNow } from '../aspects';
 import { MOMENT_GAP, heightOf, letThrough, shapeOf, type MomentRequest } from '../evaluate';
@@ -14,7 +15,7 @@ import { modulatorOf, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
 import { SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
-import { A, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
+import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newChain, stepChain, type ChainState } from './chain';
 import { NO_STRIKE, adsrOf, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
@@ -43,8 +44,6 @@ const MERGE_MODES = ['sum', 'mean', 'max', 'geometric'] as const;
 /** A knob's own inputs beside its value (ports.ts): a level knob's gain, a step knob's trigger to its next step. */
 const GAIN = ':gain';
 const NEXT = ':next';
-/** Each column a setting scales (COLUMN_SCALES; the fluid's stirring is scaled where it stirs). */
-const SCALED = (Object.entries(COLUMN_SCALES) as [Aspect, string][]).filter(([a]) => a !== 'stir' && a !== 'flow' && a !== 'swirl').map(([a, k]) => [A[a], k] as const);
 /** Halved with reduced motion, as the routes read them. */
 const HALVED = new Set(['beat', 'downbeat', 'section']);
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
@@ -405,13 +404,6 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const [module, knob] = base.split('|');
     if (gain && IS_LEVEL[a]) got.level[a] *= gainOf(module, knob);
     if (!gain && IS_MOMENT[a]) firedNow[ASPECTS[a]] ||= fired(module, knob) ?? false;
-  }
-  const settings = s as unknown as Record<string, number>;
-  for (const [a, k] of SCALED) {
-    const v = settings[k];
-    if (v === 1) continue;
-    got.whole[a] *= v;
-    for (const own of got.band) own[a] *= v;
   }
 
   // The chain's own modules.
