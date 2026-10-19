@@ -581,6 +581,9 @@ async fn album_lines(albums: HashSet<String>) -> HashMap<String, Vec<String>> {
 
 /// A crate's lines to leave out: its own tracks left out, its albums' tracks now, and the tracks excluded everywhere.
 fn left_lines(left: &crates::LeftOut, album_tracks: &HashMap<String, Vec<String>>, excluded: &[String]) -> Vec<String> {
+    if left.is_empty() {
+        return excluded.to_vec();
+    }
     let of_albums = left.albums.iter().filter_map(|a| album_tracks.get(a)).flatten();
     left.lines.iter().chain(of_albums).chain(excluded).cloned().collect()
 }
