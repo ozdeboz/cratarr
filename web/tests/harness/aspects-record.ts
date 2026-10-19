@@ -65,14 +65,14 @@ export function flatten(a: AspectsNow): Map<string, number> {
 export const FPS = 30;
 
 /** Steps `engine` over `t` from `from` for `seconds` at FPS, as the precheck does (musicOf, playing). One map a frame. */
-export function record(engine: Engine, t: Track, s: VisualSettings, from = 0, seconds = 30): Map<string, number>[] {
+export function record(engine: Engine, t: Track, s: VisualSettings, from = 0, seconds = 30, still = false): Map<string, number>[] {
   const state = newMusicState();
   const dt = 1 / FPS;
   const frames: Map<string, number>[] = [];
   for (let k = 0; k < Math.round(seconds * FPS); k++) {
     const at = from + k * dt;
     const m = musicOf(t.signals, t.beats, at, true, { state, at: at * 1000, lighting: s.lighting });
-    frames.push(flatten(engine.step(m, s, dt, { still: false, now: at * 1000, fluidFull: FLUID_FULL })));
+    frames.push(flatten(engine.step(m, s, dt, { still, now: at * 1000, fluidFull: FLUID_FULL })));
   }
   return frames;
 }
