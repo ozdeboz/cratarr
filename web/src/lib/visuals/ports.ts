@@ -10,12 +10,13 @@ import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 /** `light`: the flame's accumulated light (its RGBA and its bands' shares) before Show turns it into a picture; the
  *  flame's own loop works on it (claude-632, step 3). Only Show converts light into a picture. */
 /** `audio`: the sound itself, its recent samples (Music gives it; the Waves source draws it). */
-export type PortType = 'picture' | 'light' | 'audio' | 'value' | 'trigger';
+/** `points`: a set of positions with values per point (a Grid's; for Instance). */
+export type PortType = 'picture' | 'light' | 'audio' | 'points' | 'value' | 'trigger';
 
 /** A port: its id on its module, its name, its type; `channels`: a band's six at once (VCV's polyphonic cable; a
  *  cable may take one of them); `normal`: what it is wired to unless a cable is plugged in (Eurorack's normalled
  *  connection: shown faint, broken by a cable). */
-export type Port = { id: string; label: string; type: PortType; channels?: number; normal?: PortRef };
+export type Port = { id: string; label: string; type: PortType; channels?: number; normal?: PortRef; polymorphic?: boolean };
 
 /** One end of a cable: a module's port, a channel of it where it has several. */
 export type PortRef = { module: string; port: string; channel?: number };
@@ -25,8 +26,10 @@ export type Ports = { in: Port[]; out: Port[] };
 /** The signals that are events: a beat, a band's hits. Into a value port they come as a pulse. */
 export const TRIGGER_SIGNALS: ReadonlySet<string> = new Set(['beat', 'downbeat', 'section', 'hits', 'percussiveHits']);
 
-/** Whether a cable may go from a port of `from` type into one of `to` type: the same, or a trigger into a value. */
-export const fits = (from: PortType, to: PortType) => from === to || (from === 'trigger' && to === 'value');
+/** Whether a cable may go from a port of `from` type into one of `to` type: the same, or a trigger into a value; a
+ *  polymorphic port (`light` or `picture`, its output following its input, as VCV's modules take any voltage) either. */
+export const fits = (from: PortType, to: PortType, polymorphic = false) =>
+  from === to || (from === 'trigger' && to === 'value') || (polymorphic && (from === 'light' || from === 'picture') && (to === 'light' || to === 'picture'));
 
 const knobPort = (k: Knob): Port => ({ id: k.id, label: k.label, type: 'value' });
 const PICTURE_IN: Port = { id: 'picture', label: 'Picture', type: 'picture' };
@@ -34,10 +37,34 @@ const PICTURE_OUT: Port = { id: 'picture', label: 'Picture', type: 'picture' };
 const VALUE_OUT: Port = { id: 'out', label: 'Out', type: 'value' };
 const TAKES_PICTURE: ReadonlySet<Place> = new Set<Place>(['module', 'loop', 'finish']);
 
+/** A type's per-band knobs as today's chain keeps them (`lighting.0` … `lighting.5`) as one polyphonic knob each
+ *  (0057 §4b): `lighting`, six channels, its values kept as they were. */
+export function polyKnobs(t: ModuleType): ModuleType {
+  const out: Knob[] = [];
+  const seen = new Map<string, Knob>();
+  for (const k of t.knobs) {
+    const m = /^(.+)\.(\d+)$/.exec(k.id);
+    if (!m) {
+      out.push(k);
+      continue;
+    }
+    const was = seen.get(m[1]);
+    if (was) was.channels = Math.max(was.channels ?? 1, Number(m[2]) + 1);
+    else {
+      const poly: Knob = { ...k, id: m[1], label: k.label.replace(/\s*\d+$/, ''), channels: Number(m[2]) + 1 };
+      seen.set(m[1], poly);
+      out.push(poly);
+    }
+  }
+  return { ...t, knobs: out };
+}
+
+const knobPortOf = (k: Knob): Port => ({ ...knobPort(k), ...(k.channels ? { channels: k.channels } : {}) });
+
 /** A module type's ports, from what it declares (its own `ports` where it has them: the modules below). */
 export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   if (t.ports) return t.ports;
-  const knobs = t.knobs.filter((k) => !k.device).map(knobPort);
+  const knobs = polyKnobs(t).knobs.filter((k) => !k.device).map(knobPortOf);
   const inputs = (t.inputs ?? []).map((id): Port => ({ id, label: id === 'in' ? 'Input' : id[0].toUpperCase() + id.slice(1), type: id === 'trigger' ? 'trigger' : 'value' }));
   if (t.place === 'modulator') return { in: [...inputs, ...knobs], out: [VALUE_OUT] };
   if (t.place === 'frame') return { in: knobs, out: [] };
@@ -125,7 +152,7 @@ const BUSY_LABEL: Record<(typeof BUSY)[number], string> = { motion: 'Motion', sh
 export const METER = declared('meter', 'Meter', 'modulator', [], [PICTURE_IN], BUSY.map((b) => out(b, BUSY_LABEL[b])));
 
 /** A Compressor (0057): a standard sidechain compressor on values (Giannoulis, Massberg, Reiss 2012): `in` compressed
- *  by how far `key` stands over the threshold; `reduction` the gain reduction (1: none), for ducking anything else. */
+ *  by how far `key` stands over the threshold (a plain knob: no learning in this version); `reduction` the gain reduction (1: none), for ducking anything else. */
 export const COMPRESSOR = declared(
   'compressor',
   'Compressor',
@@ -145,9 +172,6 @@ export const COMPRESSOR = declared(
   [VALUE_OUT, out('reduction', 'Reduction')],
 );
 
-/** Taste (0057): the user's learned thresholds, one per kind (learning.ts; the thumbs teach it), normalled into the
- *  Compressors keyed by that kind. To be redesigned with the owner. */
-export const TASTE = declared('taste', 'Taste', 'modulator', [], [], BUSY.map((b) => out(b, BUSY_LABEL[b])));
 
 /** ADSR (0057 §4b, VCV's): an envelope on each gate or trigger; polyphonic, one a channel (Music's hits: one a band). */
 export const ADSR = declared(
@@ -185,7 +209,80 @@ export const LOOPER = declared(
   [VALUE_OUT],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, TASTE, ADSR, SEQUENCER, LOOPER];
+/** The Show device's modules (0057 §6), in the order that draws exactly today's picture (claude-632, render.ts's
+ *  show pass): each with the knob it took from Show (id and type alike). Bend and Blur take light or a picture
+ *  (polymorphic); Tone map turns light into a picture; the compositor fuses the five into one pass. Show's Size is
+ *  the Flame's own zoom, not here. */
+export const SHOW_PARTS: readonly { knob: string; type: string; label: string; polymorphic?: boolean }[] = [
+  { knob: 'waves', type: 'bend', label: 'Bend', polymorphic: true },
+  { knob: 'smoothing', type: 'blur', label: 'Blur', polymorphic: true },
+  { knob: 'glow', type: 'tonemap', label: 'Tone map' },
+  { knob: 'haze', type: 'curve', label: 'Curve' },
+  { knob: 'saturation', type: 'saturate', label: 'Saturate' },
+];
+
+/** Show's parts as module types, each with its knob as Show's type has it (`show`: patch.ts cratarrTypes's). */
+export function showPartTypes(show: ModuleType): Declared[] {
+  return SHOW_PARTS.map(({ knob: id, type, label: name, polymorphic }) => {
+    const k = show.knobs.find((x) => x.id === id);
+    const knobs = k ? [k] : [];
+    const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : polymorphic ? { ...PICTURE_IN, polymorphic } : PICTURE_IN;
+    return declared(type, name, 'module', knobs, [input], [polymorphic ? { ...PICTURE_OUT, polymorphic } : PICTURE_OUT]);
+  });
+}
+
+/** The lattices a Grid lays its points on (0057 §4c). */
+export const LATTICES = ['square', 'hexagonal', 'triangular', 'rings', 'spiral'] as const;
+/** The most points a Grid gives (its channels). */
+export const MOST_POINTS = 64;
+
+/** Grid (0057 §4c; TouchDesigner's Grid SOP): points on a lattice, and each point's values as channels. */
+export const GRID = declared(
+  'grid',
+  'Grid',
+  'modulator',
+  [
+    knob('lattice', 'Lattice', 0, LATTICES.length - 1, 0, 'step'),
+    knob('count', 'Count', 1, MOST_POINTS, 16, 'level', 1),
+    knob('spacing', 'Spacing', 0.02, 1, 0.25),
+    knob('rotation', 'Rotation', 0, 1, 0),
+    knob('jitter', 'Jitter', 0, 1, 0, 'level'),
+  ],
+  [],
+  [
+    out('points', 'Points', 'points'),
+    out('index', 'Index', 'value', MOST_POINTS),
+    out('distance', 'Distance', 'value', MOST_POINTS),
+    out('angle', 'Angle', 'value', MOST_POINTS),
+    out('row', 'Row', 'value', MOST_POINTS),
+    out('column', 'Column', 'value', MOST_POINTS),
+  ],
+);
+
+/** The symmetries a Fold applies (0057 §4c): Hydra's three first, the wallpaper groups beyond. */
+export const FOLDS = ['mosaic', 'kaleidoscope', 'mirror', 'pixelate'] as const;
+
+/** Fold (0057 §4c): a picture folded by a grid's symmetry; with no grid plugged in, its own centre and count. */
+export const FOLD = declared(
+  'fold',
+  'Fold',
+  'module',
+  [knob('mode', 'Mode', 0, FOLDS.length - 1, 1, 'step'), knob('count', 'Count', 1, 24, 6), knob('turn', 'Turn', -1, 1, 0), knob('amount', 'Amount', 0, 1, 1, 'level')],
+  [PICTURE_IN, { id: 'grid', label: 'Grid', type: 'points' }],
+  [PICTURE_OUT],
+);
+
+/** Instance (0057 §4c; TouchDesigner's and cables.gl's instancing): its source drawn at each point. */
+export const INSTANCE = declared(
+  'instance',
+  'Instance',
+  'module',
+  [knob('amount', 'Amount', 0, 1, 1, 'level')],
+  [{ id: 'points', label: 'Points', type: 'points' }, PICTURE_IN],
+  [PICTURE_OUT],
+);
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
@@ -250,3 +347,17 @@ export function cyclesClosed(p: PatchV2, typeOf: (type: string) => (ModuleType &
   };
   return p.modules.every((m) => visit(m.id));
 }
+
+// ---- Devices (0057 §6): a group of modules as one node, after Ableton's Racks and Reaktor's macros ----------------
+
+/** A port of a device: one of its modules' ports, shown on the device (`as`: its id on the device). */
+export type ExposedPort = PortRef & { as: string; label: string };
+
+/** A device's macro: a knob on the device moving chosen knobs of its modules (0056's Macro, kept inside it). */
+export type DeviceMacro = { id: string; label: string; value: number; targets: { module: string; knob: string; from: number; to: number }[] };
+
+/** A device in a patch: a module of type `device` holding a patch of its own; its exposed ports and its macros. The
+ *  engine and the compositor flatten it before running. Nests: its patch may hold devices. */
+export type Device = Module & { type: 'device'; label: string; patch: PatchV2; inputs: ExposedPort[]; outputs: ExposedPort[]; macros: DeviceMacro[] };
+
+export const isDevice = (m: Module): m is Device => m.type === 'device';

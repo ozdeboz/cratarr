@@ -7,14 +7,14 @@ import assert from 'node:assert/strict';
 const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts');
 const { cratarrTypes } = await import('../src/lib/visuals/patch.ts');
 const { EXTRA_TYPES } = await import('../src/lib/visuals/registry.ts');
-const { ENGINE_MODULES, fits, portsOf } = await import('../src/lib/visuals/ports.ts');
+const { ENGINE_MODULES, fits, polyKnobs, portsOf } = await import('../src/lib/visuals/ports.ts');
 
 test('every module type has typed ports: a knob is a value input, a picture module takes and gives a picture', () => {
   for (const t of [...EXTRA_TYPES, ...cratarrTypes(RANGES, DEFAULTS), ...ENGINE_MODULES]) {
     const p = portsOf(t);
     const ids = p.in.map((x) => x.id);
     assert.equal(new Set(ids).size, ids.length, `${t.type}: an input twice`);
-    for (const k of t.knobs.filter((k) => !k.device)) assert.equal(p.in.find((x) => x.id === k.id)?.type, 'value', `${t.type}.${k.id}`);
+    for (const k of polyKnobs(t).knobs.filter((k) => !k.device)) assert.equal(p.in.find((x) => x.id === k.id)?.type, 'value', `${t.type}.${k.id}`);
     if (t.place === 'module' || t.place === 'loop') assert.ok(p.in.some((x) => x.type === 'picture') && p.out.some((x) => x.type === 'picture'), t.type);
     if (t.place === 'source') assert.ok(!p.in.some((x) => x.type === 'picture') && p.out.some((x) => x.type === 'picture'), t.type);
     if (t.place === 'modulator') assert.ok(p.out.length > 0 && p.out.every((x) => x.type !== 'picture'), t.type);
@@ -22,7 +22,7 @@ test('every module type has typed ports: a knob is a value input, a picture modu
 });
 
 test("today's hidden behaviours are modules; the beats and hits are triggers, a band's signals six channels", () => {
-  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'track', 'envelope', 'clock', 'flash', 'walk', 'meter', 'compressor', 'taste', 'adsr', 'sequencer', 'looper']);
+  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'track', 'envelope', 'clock', 'flash', 'walk', 'meter', 'compressor', 'adsr', 'sequencer', 'looper', 'grid', 'fold', 'instance']);
   const music = portsOf(ENGINE_MODULES[0]);
   assert.equal(music.out.find((x) => x.id === 'beat')?.type, 'trigger');
   assert.equal(music.out.find((x) => x.id === 'hits')?.channels, 6);
@@ -48,4 +48,13 @@ test('v2: a picture cycle must pass through a Feedback', async () => {
   assert.ok(!cyclesClosed(open, typeOf));
   assert.equal(FEEDBACK.type, 'feedback');
   assert.equal(MIX.ports.in.filter((p) => p.type === 'picture').length, 4);
+});
+
+test("the bands' knobs are polyphonic: one knob, six channels, in the Flame's ports", () => {
+  const flame = cratarrTypes(RANGES, DEFAULTS).find((t) => t.type === 'flame')!;
+  const p = portsOf(flame);
+  for (const id of ['lighting', 'evolution', 'continuity']) {
+    assert.equal(p.in.find((x) => x.id === id)?.channels, 6, id);
+    assert.ok(!p.in.some((x) => x.id === `${id}.0`), `${id}.0`);
+  }
 });

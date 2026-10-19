@@ -21,11 +21,13 @@ export type Knob = {
   device?: boolean;
   /** The kind of busyness it makes (0057): the cables into it run through the Compressor keyed by that kind. */
   busy?: Busy;
+  /** A polyphonic knob (0057 §4b): one value a channel, kept as `<id>.<channel>` among its module's knobs. */
+  channels?: number;
 };
 
 /** Where a module can sit: a layer's source, a module on a layer (or after the blend), a loop (a layer's own, or the
  *  picture's), finish, the whole frame, or a modulator (no picture). */
-/** The kinds of busyness a Meter measures and a Compressor is keyed by (governor.ts's budgets but the flashes, which
+/** The kinds of busyness a Meter measures and a Compressor is keyed by (meters.ts's busyness measures but the flashes, which
  *  the Screen's guard holds). */
 export const BUSY = ['motion', 'shape', 'colour', 'zoom', 'looks'] as const;
 export type Busy = (typeof BUSY)[number];
