@@ -112,7 +112,6 @@
     FLUID_FULL,
     fluidFrom63,
     RANGES,
-    resetRoutes,
     loadPreset,
     pinned,
     resetVisualSettings,
@@ -1107,10 +1106,6 @@
   // marked where they differ; a change sets all six).
   const matrix = $derived(compile(s.routes, BANDS));
   let pick = $state<number | null>(null);
-  // The grid wider than the panel scrolls across on its own: the aspects' names over it follow it, and its visible
-  // width keeps the bands' chips in sight.
-  let gridHead = $state<HTMLDivElement>();
-  let gridView = $state(0);
   let cell = $state<{ signal: Signal; aspect: Aspect } | null>(null);
   const isBandSignal = (signal: Signal) => (BAND_SIGNALS as readonly string[]).includes(signal);
   const keysOf = (signal: Signal, aspect: Aspect) =>
@@ -1238,14 +1233,6 @@
     share({ pins: [...s.pins] });
     showChrome();
   }
-  // The routes back to the defaults; to the group, each route set before as nothing.
-  function routesReset() {
-    s.loose = 0;
-    const before = Object.keys(s.routes);
-    resetRoutes();
-    saveVisualSettings();
-    share({ routes: { ...Object.fromEntries(before.map((k) => [k, 0])), ...$state.snapshot(s.routes) }, loose: 0 });
-  }
   const signed = (v: number) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%`;
   const cellLabel = (signal: Signal, aspect: Aspect) => `${SIGNAL_LABEL[signal]}${isBandSignal(signal) ? ` (${pick === null ? 'All' : BAND_ROWS[pick]})` : ''} → ${columnName(aspect)}`;
   // A column's name (65.1): an effect's control is named for the chosen effect's (Sides, Spin…; — where it has none),
@@ -1264,10 +1251,6 @@
   // Each signal now, for the meters by the rows' names (the picked band's, or the bands' mean), ten times a second
   // while the panel shows.
   let meters = $state<{ track: number[]; bands: number[][]; lit: number }>({ track: [], bands: [], lit: 1 });
-  // The routes' box, and how far the walking cells' borders have marched (px, one dash and gap is 12): on at the pace of
-  // the behaviour's walk, standing still while it does.
-  let routesBox = $state<HTMLElement | null>(null);
-  let marched = 0;
   const meterOf = (signal: Signal) => {
     if (!isBandSignal(signal)) return meters.track[T[signal as keyof typeof T]] ?? 0;
     const i = B[signal as keyof typeof B];
@@ -1697,10 +1680,6 @@
           if (h.index > hitsSeen[b] && hitsSeen[b] >= 0 && h.index - hitsSeen[b] <= 3) hitsCounted += h.index - hitsSeen[b];
           hitsSeen[b] = h.index;
         });
-      if (panel && routesBox) {
-        marched = (marched + 40 * Math.abs(d.behaviour) * dt) % 12;
-        routesBox.style.setProperty('--march', `${marched.toFixed(2)}px`);
-      }
       if (panel && now - metered > 100) {
         metered = now;
         meters = { track: Array.from(track), bands: d.bands.map((v) => Array.from(v)), lit: d.lit };
@@ -2189,25 +2168,6 @@
   {:else}
     <span></span>
   {/if}
-{/snippet}
-
-{#snippet routeRow(signal: Signal)}
-  <span class="signal" use:held={`signal:${signal}`}>{SIGNAL_LABEL[signal]}<i style:width="{Math.round(Math.min(1, Math.max(0, meterOf(signal))) * 100)}%"></i></span>
-  {#each ASPECTS as aspect (aspect)}
-    {@const a = cellOf(signal, aspect)}
-    <button
-      class="cell"
-      class:negative={a.now < 0}
-      class:mixed={a.mixed}
-      class:pinned={a.pinned}
-      class:walks={a.walks}
-      class:picked={cell?.signal === signal && cell?.aspect === aspect}
-      style:--now={Math.abs(a.now)}
-      aria-label="{cellLabel(signal, aspect)}, {signed(a.v)}"
-      onclick={() => (cell = { signal, aspect })}
-      >{#if a.path}<svg class="curve" viewBox="0 0 32 24" preserveAspectRatio="none" aria-hidden="true"><path d={a.path} /></svg>{/if}</button
-    >
-  {/each}
 {/snippet}
 
 <div
@@ -2911,13 +2871,6 @@
   }
 
   .rows h3,
-  .routes h3 {
-    margin: 2px 0 0;
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: rgb(255 255 255 / 0.6);
-  }
-
   .row {
     display: grid;
     grid-template-columns: 6.2em 1fr 3.4em;
@@ -2974,213 +2927,6 @@
     cursor: pointer;
   }
 
-  .routes {
-    margin-top: 6px;
-    padding-top: 6px;
-    border-top: 1px solid rgb(255 255 255 / 0.12);
-    container-type: inline-size;
-  }
-
-  .routes .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  /* The grid: its names' column, then a cell an aspect, at least 28 px (a finger's tap, its number readable) and at most
-     2.1em, the panel's width shared out between them where it fits; else it scrolls across on its own, the signals'
-     names kept at its left and the aspects' (a grid of their own over it, the same columns, following its scroll) at
-     the top of the panel. Sized from the routes' width (cqw), not by their content, so both grids line up exactly. */
-  .grid {
-    --cell: clamp(28px, calc((100cqw - 4.6em - var(--columns) * 2px) / var(--columns)), 2.1em);
-    display: grid;
-    grid-template-columns: 4.6em repeat(var(--columns), var(--cell));
-    gap: 2px;
-    width: max-content;
-  }
-
-  .grid-head {
-    position: sticky;
-    /* Up to the panel's edge (its padding), so nothing shows over it. */
-    top: -8px;
-    z-index: 2;
-    margin-top: 4px;
-    padding-top: 2px;
-    overflow: hidden;
-    background: rgb(20 20 24);
-  }
-
-  .grid-scroll {
-    padding-top: 2px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: thin;
-    scrollbar-color: rgb(255 255 255 / 0.25) transparent;
-    touch-action: pan-x pan-y;
-  }
-
-  /* The routes' header's first cell, over the signals' names (its own name: .corner is the top controls'). */
-  .head-corner {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    background: rgb(20 20 24);
-  }
-
-  .aspect {
-    justify-self: center;
-    padding: 4px 0;
-    writing-mode: vertical-rl;
-    transform: rotate(180deg);
-    font-size: 0.72rem;
-    color: rgb(255 255 255 / 0.6);
-    white-space: nowrap;
-  }
-
-  /* A signal's name, kept at the grid's left over the cells scrolled under it. */
-  .signal {
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    padding-right: 4px;
-    overflow: hidden;
-    background: rgb(20 20 24);
-    box-shadow: 4px 0 6px -4px rgb(0 0 0 / 0.7);
-    font-size: 0.8rem;
-    line-height: 28px;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  /* What the signal is now. */
-  .signal i {
-    position: absolute;
-    left: 0;
-    bottom: 0;
-    height: 2px;
-    border-radius: 1px;
-    background: rgb(255 255 255 / 0.55);
-  }
-
-  .cell {
-    position: relative;
-    min-width: 0;
-    height: 28px;
-    padding: 0;
-    border: 0;
-    border-radius: 4px;
-    /* Opaque: the picture behind the panel would tint an empty cell. */
-    background: rgb(42 42 48);
-    color: #fff;
-    font: inherit;
-    font-size: 0.62rem;
-    font-variant-numeric: tabular-nums;
-    cursor: pointer;
-  }
-
-  /* What the route gives now: the cell filled from the bottom that far, green the one way, pink the other. */
-  .cell::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: calc(var(--now) * 100%);
-    border-radius: 0 0 4px 4px;
-    background: var(--accent);
-    opacity: 0.85;
-  }
-
-  .cell.negative::before {
-    background: #e8708f;
-  }
-
-  /* Pinned: a solid line round it (walking, its marching border is drawn as heavy instead). */
-  .cell.pinned:not(.walks) {
-    outline: 2px solid rgb(255 255 255 / 0.85);
-    outline-offset: -2px;
-  }
-
-  /* Walking with the behaviour: long dashes and short gaps (10 and 2 px; the picked square's are short and even)
-     marching round it, at the walk's pace. */
-  .cell.walks::after {
-    --line: 1.5px;
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    pointer-events: none;
-    background:
-      linear-gradient(90deg, #fff 10px, transparent 0) var(--march, 0px) 0 / 12px var(--line) repeat-x,
-      linear-gradient(90deg, #fff 10px, transparent 0) calc(-1 * var(--march, 0px)) 100% / 12px var(--line) repeat-x,
-      linear-gradient(0deg, #fff 10px, transparent 0) 0 calc(-1 * var(--march, 0px)) / var(--line) 12px repeat-y,
-      linear-gradient(0deg, #fff 10px, transparent 0) 100% var(--march, 0px) / var(--line) 12px repeat-y;
-  }
-
-  .cell.walks.pinned::after {
-    --line: 2.5px;
-  }
-
-  /* Picked too: the march inside the picked outline. */
-  .cell.walks.picked::after {
-    inset: 3px;
-  }
-
-  /* Its curve, scaled to the cell. */
-  .cell .curve {
-    position: absolute;
-    inset: 2px;
-    width: calc(100% - 4px);
-    height: calc(100% - 4px);
-    fill: none;
-    stroke: rgb(255 255 255 / 0.9);
-    stroke-width: 1.4;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    vector-effect: non-scaling-stroke;
-  }
-
-  .cell.mixed {
-    outline: 1px dashed rgb(255 255 255 / 0.5);
-    outline-offset: -2px;
-  }
-
-  .cell.picked {
-    outline: 2px dashed #fff;
-    outline-offset: -1px;
-  }
-
-  /* The bands' chips: as wide as the grid shows, kept in sight as it scrolls. */
-  .bands {
-    position: sticky;
-    left: 0;
-    grid-column: 1 / -1;
-    justify-self: start;
-    box-sizing: border-box;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin: 8px 0 4px;
-  }
-
-  .chip {
-    min-height: 30px;
-    padding: 0 10px;
-    border: 0;
-    border-radius: 15px;
-    background: rgb(255 255 255 / 0.08);
-    color: #fff;
-    font: inherit;
-    font-size: 0.8rem;
-    cursor: pointer;
-  }
-
-  .chip.on {
-    background: rgb(255 255 255 / 0.85);
-    color: #000;
-  }
-
-  /* The picked route's curve, kept in sight under the grid. */
   .route {
     position: sticky;
     /* Down to the panel's edge (its padding), so nothing shows under it; over the grid's sticky names and header. */
