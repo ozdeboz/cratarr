@@ -3,6 +3,7 @@
 // and Node's tests too. The whole track's signals and each band's, as `Music` gives them, from signals.ts's sections and
 // beats.ts's beats.
 import { beatAt, tempoAt, type Beat, type Beats } from './beats';
+import type { Strike } from './engine/modules';
 import { followEnvelopes } from './envelope';
 import { typicalOf, type Typical } from './normal';
 import { B, BAND_SIGNALS, T, TRACK_SIGNALS } from './routes';
@@ -29,6 +30,9 @@ export type Music = {
   /** Each band's signals now, in `BAND_SIGNALS` order; null where none are known here (yet). */
   bands: Float32Array[] | null;
   hits: Steps[] | null;
+  /** Each band's strikes, its hits and its drum hits as triggers (an ADSR's input, decision 0057); null where none are
+   *  known here (yet). */
+  strikes: BandStrikes[] | null;
   /** Where the bands' signals come from. */
   from: 'server' | 'live' | null;
   playing: boolean;
@@ -40,6 +44,9 @@ export type Music = {
   /** The sound's last samples (−1..1), where this device plays it (live.ts), for the Waves source; null elsewhere. */
   wave: Float32Array | null;
 };
+
+export type BandStrikes = { hits: Strike; drums: Strike };
+const noStrikes = (): BandStrikes => ({ hits: { since: Infinity, velocity: 0, next: null }, drums: { since: Infinity, velocity: 0, next: null } });
 
 /** The loudness as heard that makes the show's intensity nothing, and all (LUFS): a quiet room's music to a loud
  *  master's chorus, in equal steps of dB. */
@@ -58,6 +65,7 @@ export type MusicState = {
   track: Float32Array;
   bands: Float32Array[];
   hits: Steps[];
+  strikes: BandStrikes[];
   fifths: { x: number; y: number; at: number };
   /** Each band's envelope's hold (what its sound still holds, followed), and when it was last followed (ms; −1 never). */
   held: Float32Array;
@@ -68,6 +76,7 @@ export function newMusicState(): MusicState {
     track: new Float32Array(TRACK_SIGNALS.length),
     bands: Array.from({ length: BANDS }, () => new Float32Array(BAND_SIGNALS.length)),
     hits: Array.from({ length: BANDS }, () => ({ index: -1, weight: 1, perSecond: 0, nextIn: null })),
+    strikes: Array.from({ length: BANDS }, noStrikes),
     fifths: { x: 0, y: 0, at: 0 },
     held: new Float32Array(BANDS),
     heldAt: -1,
@@ -86,7 +95,7 @@ const pulseOf = (b: Beat, most: number, share: number) => (0.35 + 0.65 * b.stren
 /** Where the hits and beats are known ahead (the server's), a light or pulse rises into each over this long (s) rather
  *  than coming on all at once, its most still on the moment: a light on in one frame and gone in the next was a strobe
  *  (2026-10-18). The sound heard as it plays cannot be got ahead of, so its hits still come on at once. */
-const ATTACK = 0.04;
+export const ATTACK = 0.04;
 /** How far a light has risen with `until` seconds to go (0..1, smoothly). */
 function risen(until: number): number {
   const x = 1 - until / ATTACK;
@@ -99,6 +108,15 @@ function lightOf(e: Events | undefined, pos: number, ring: number): number {
   const next = lastOf(e, pos + ATTACK);
   const on = last.index < 0 ? 0 : ringOf(last.since, last.value, ring);
   return next.index > last.index ? Math.max(on, next.value * risen(ATTACK - next.since)) : on;
+}
+
+/** A list of events' strike at `pos`, into `s`: the last one, and the next where it is within ATTACK. */
+function strikeOf(s: Strike, e: Events | undefined, pos: number) {
+  const last = lastOf(e, pos);
+  const next = lastOf(e, pos + ATTACK);
+  s.since = last.index < 0 ? Infinity : last.since;
+  s.velocity = last.index < 0 ? 0 : last.value;
+  s.next = next.index > last.index ? { until: ATTACK - next.since, velocity: next.value } : null;
 }
 
 /** A beat's pulse at `pos` (`beat`: the one at or before it), rising into the next where it is near; `counts`: whether
@@ -178,12 +196,12 @@ export function musicOf(
   const intensity = intensityOf(lufsAt(signals, position), opts.gainDb ?? 0, opts.energy ?? null);
   finish(st, intensity, bps, beats, beat, position);
   const typical = typicalOf(signals, beats);
-  return { key: opts.key ?? null, intensity, bps, beat, track: st.track, bands: st.bands, hits: st.hits, from: 'server', playing, position, typical, wave: null };
+  return { key: opts.key ?? null, intensity, bps, beat, track: st.track, bands: st.bands, hits: st.hits, strikes: st.strikes, from: 'server', playing, position, typical, wave: null };
 }
 
 /** The server's signals at `pos`, into `st`. */
 function fromServer(st: MusicState, s: Signals, pos: number, beats: Beats | null, beat: Beat | null, at: number, lighting: readonly number[]) {
-  const { track, bands, hits, fifths } = st;
+  const { track, bands, hits, strikes, fifths } = st;
   const one = (id: number) => seriesAt(s, id, pos)?.[0] ?? 0;
   // A downbeat: a beat that starts its bar, as surely as the server is of where bars start.
   const bar = s.series.get(ID.bar);
@@ -231,6 +249,8 @@ function fromServer(st: MusicState, s: Signals, pos: number, beats: Beats | null
     const ring = lighting[b];
     v[B.hits] = lightOf(all?.[b], pos, ring);
     v[B.percussiveHits] = lightOf(drums?.[b], pos, ring);
+    strikeOf(strikes[b].hits, all?.[b], pos);
+    strikeOf(strikes[b].drums, drums?.[b], pos);
     const hit = lastOf(all?.[b], pos);
     const next = all?.[b]?.at[hit.index + 1];
     hits[b] = { index: hit.index, weight: hit.value / Math.max(0.05, s.meanStrength[b] ?? 1), perSecond: s.perSecond[b] ?? 0, nextIn: next === undefined ? null : next - pos };

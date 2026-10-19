@@ -52,7 +52,7 @@ function levelDb(source: string, id: string): number {
 
 // The visuals' own.
 const own = newMusicState();
-const { track, bands, hits } = own;
+const { track, bands, hits, strikes } = own;
 /** The music now. `at` is the frame's time (performance.now()), to move the position on between the player's reports;
  *  `lighting`: each band's hits' ring (s; by default the settings'); `wantWave`: a source draws the sound's waveform
  *  (the Waves, decision 0056), so it is listened to even where the server's signals are in. */
@@ -61,7 +61,7 @@ export function musicNow(at: number, lighting: readonly number[] = visualSetting
   track.fill(0);
   if (!np) {
     stopLive();
-    return { key: null, intensity: 0, bps: 1.5, beat: null, track, bands: null, hits: null, from: null, playing: false, position: 0, typical: null, wave: null };
+    return { key: null, intensity: 0, bps: 1.5, beat: null, track, bands: null, hits: null, strikes: null, from: null, playing: false, position: 0, typical: null, wave: null };
   }
   const key = `${np.source}/${np.id}`;
   loadWaveform(np.source, np.id);
@@ -109,7 +109,7 @@ export function musicNow(at: number, lighting: readonly number[] = visualSetting
   const intensity = intensityOf(heard, levelDb(np.source, np.id), energy());
   finish(own, intensity, bps, beats ?? null, beat, pos);
   const typical = beats ? typicalOf(null, beats) : null;
-  return { key, intensity, bps, beat, track, bands: from ? bands : null, hits: from ? hits : null, from, playing: on, position: pos, typical, wave: now?.wave ?? null };
+  return { key, intensity, bps, beat, track, bands: from ? bands : null, hits: from ? hits : null, strikes: from ? strikes : null, from, playing: on, position: pos, typical, wave: now?.wave ?? null };
 }
 
 // The sound heard as it plays: listened to while the visuals ask and the page's own player plays (on the tap it has
@@ -144,6 +144,7 @@ function fromLive(now: LiveNow, at: number, lighting: readonly number[]) {
     const heard = now.bands[b];
     const v = bands[b];
     v.fill(0);
+    for (const s of [strikes[b].hits, strikes[b].drums]) Object.assign(s, { since: Infinity, velocity: 0, next: null });
     if (!heard) continue;
     const h = heardHits[b];
     if (heard.hits !== h.count) {
@@ -156,6 +157,7 @@ function fromLive(now: LiveNow, at: number, lighting: readonly number[]) {
     v[B.level] = heard.level;
     v[B.flux] = heard.flux;
     v[B.hits] = h.count ? ringOf((at - h.at) / 1000, h.strength, lighting[b]) : 0;
+    Object.assign(strikes[b].hits, { since: h.count ? (at - h.at) / 1000 : Infinity, velocity: h.count ? h.strength : 0, next: null });
     const secs = (at - h.since) / 1000;
     hits[b] = { index: h.count - 1, weight: h.strength / Math.max(0.05, h.mean), perSecond: secs > 5 ? (h.count - h.first) / secs : 2, nextIn: null };
   }
