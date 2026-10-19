@@ -17,6 +17,7 @@
   import { prefs } from './prefs.svelte';
   import { art, clockText, coverFailed, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import Waveform from './Waveform.svelte';
+  import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, setRepeat, setShuffle } from './localPlayer.svelte';
@@ -91,12 +92,19 @@
     const r = el.getBoundingClientRect();
     return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (dur ?? 0);
   };
+  // The waveform lens (the owner, 2026-10-19; lib/WaveLens): while the bar is held over a waveform, where it is, and
+  // the room it has (the player's edges).
+  let lens = $state<{ width: number; middle: number; waveHeight: number; min: number; max: number } | null>(null);
   function seekDown(e: PointerEvent) {
     if (!canSeek) return;
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     clearTimeout(heldTimer);
     held = at(e, el);
+    const r = el.getBoundingClientRect();
+    const room = head?.getBoundingClientRect() ?? r;
+    const w = el.querySelector('.wave')?.getBoundingClientRect();
+    lens = wave && w ? { width: r.width, middle: r.height / 2, waveHeight: w.height, min: room.left - r.left + 75, max: room.right - r.left - 75 } : null;
   }
   function seekMove(e: PointerEvent) {
     if (held === null || !(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
@@ -104,6 +112,7 @@
   }
   function seekUp(e: PointerEvent) {
     const el = e.currentTarget as HTMLElement;
+    lens = null;
     if (held === null || !el.hasPointerCapture(e.pointerId)) return;
     release(at(e, el));
   }
@@ -477,7 +486,7 @@
                 onpointerdown={seekDown}
                 onpointermove={seekMove}
                 onpointerup={seekUp}
-                onpointercancel={() => (held = null)}
+                onpointercancel={() => ((held = null), (lens = null))}
                 onkeydown={seekKey}
               >
                 {#if wave}
@@ -485,8 +494,11 @@
                 {:else}
                   <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
                 {/if}
-                <!-- Over a waveform the handle shows only while held (where it is going). -->
-                {#if canSeek && (!wave || held !== null)}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
+                <!-- The plain bar's handle; over a waveform, while held, the lens instead (where it is going). -->
+                {#if canSeek && !wave}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
+                {#if wave && lens && held !== null && dur}
+                  <WaveLens bins={wave} point={held / dur} {...lens} time={clockText(held)} paused={np.progress.paused} />
+                {/if}
               </div>
               <span class="t">{dur ? clockText(dur) : '–:––'}</span>
             </div>

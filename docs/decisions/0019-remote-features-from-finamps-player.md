@@ -81,3 +81,8 @@ any different".
   short of height, as the chips did.
 - **The album's name** under the title opens the album in the panel, as the artist's chip opens the artist; it looks
   as before.
+- **The waveform lens** (the owner's idea: "It's awesome. We build it like this."): holding the seek bar over a
+  waveform shows a 130 px round lens instead of the dot (the plain bar keeps its dot), its bottom edge 36 px above the
+  waveform's middle, a stem from the point and a white line across the waveform there. Inside, the waveform under it
+  three times as finely (the same 512 bins, a bar per 3 px), played in the accent left of the point, and a line at
+  the point; its centre keeps 10 px inside the player. The time where it will land sits above it. Release seeks.

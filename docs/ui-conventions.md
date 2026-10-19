@@ -46,7 +46,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
     circle drawn on the cover, or the info button, shows the cover's overview over the blurred cover. Playing on this device the progress bar is a
     slider (Finamp's): drag the handle and the time follows, the player seeks on release; arrow keys move 5 s. Where
     the track is analysed (decision 0035) the bar is its **waveform**: its loudness along it as bars (against its own
-    loudest), what has played in the accent; the handle shows only while held. Elsewhere the thin line. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
+    loudest), what has played in the accent; held, a round lens over it instead of a handle (the owner's, 2026-10-19,
+    `lib/WaveLens.svelte`): the waveform under the finger three times as finely, lifted clear of the finger, a stem and
+    a line at the point, the time where it will land above it. Elsewhere the thin line. Its background is the cover, blurred under a veil; its accent comes from the cover. On the
     cover: tap plays or pauses, double-tap is the favourite, swipe left or right skips; anywhere (over the page and beside it): swipe up opens the queue, swipe down closes.
     A long press on any heart (2026-10-19: the full and the mini player's, the queue's playing card's, every track
     row's) opens the same sheet (`lib/HeartSheet.svelte`): Favourite (its switch), the crate's Excludes where they
