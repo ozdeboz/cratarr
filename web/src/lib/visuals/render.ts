@@ -11,6 +11,10 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import type { ChainNow } from './chain-params';
+import { Compositor } from './compose';
+import type { FrameInfo, Module, PatchExtra } from './patch';
+import { compile, STAGES, stagesOf, type Stage, type TypeOf } from './picture-graph';
+import type { PatchV2 } from './ports';
 import type { Flame } from './flame';
 import type { Flow, Force, Loop } from './fluid';
 import { EffectClocks } from './effects';
@@ -81,12 +85,19 @@ export type Shown = {
 
 export type RendererOptions = { random?: () => number; now?: () => number };
 
+/** The compose step's inputs this frame (compose.ts: the layers past the flame and the picture's own loop): the
+ *  extras as drawn, each module's knobs, the frame, the flame layer's share. */
+export type Extras = { extra: PatchExtra; knobsOf: (m: Module) => Record<string, number>; frame: FrameInfo; flame: number };
+
 export class FlameRenderer {
   private gl: WebGL2RenderingContext;
-  /** The patch past the flame (decision 0056, compose.ts): when `active`, the flame's picture goes into a texture even
-   *  without effects, `run` composes the other layers and the picture's own loop over it, and finish (or the copy to
-   *  the screen) reads what it gives. Set by the visuals each frame; none, and nothing changes. */
-  compose: { active: boolean; run: (picture: WebGLTexture, width: number, height: number) => WebGLTexture } | null = null;
+  /** The compose step (compose.ts): the layers past the flame and the picture's own loop, drawn between the show and
+   *  the effects when there is anything of them; none where this device cannot. */
+  private compositor: Compositor | null = null;
+  /** The patch's picture side as drawn (picture-graph.ts): the stages it needs, in this version each fused as before;
+   *  every one until a patch is given. Why any of it is not drawn. */
+  private stages = new Set<Stage>(STAGES);
+  errors: string[] = [];
   /** The context, for what draws beside the flame (the compositor). */
   get context(): WebGL2RenderingContext {
     return this.gl;
@@ -140,6 +151,24 @@ export class FlameRenderer {
     this.show = new Show(gl);
     this.fin = new Finish(gl, this.now);
     this.screen = new Screen(gl);
+    try {
+      this.compositor = new Compositor(gl);
+    } catch (e) {
+      console.warn('Visuals: no layers past the flame on this device', e);
+    }
+  }
+
+  /** The patch to draw (a v2 patch, its picture side wired: v2.ts, picture-wiring.ts), on a change of its structure. */
+  setPatch(p: PatchV2, typeOf: TypeOf) {
+    const c = compile(p, typeOf);
+    const stages = stagesOf(c);
+    this.errors = stages ? c.errors : [...c.errors, 'This version draws the picture in its own order only.'];
+    this.stages = new Set(stages ?? STAGES);
+  }
+
+  /** Lets go of what layers no longer in the extras held. */
+  prune(extra: PatchExtra) {
+    this.compositor?.prune(extra);
   }
 
   get width(): number {
@@ -189,7 +218,7 @@ export class FlameRenderer {
 
   /** One frame: the old picture fades by `now.carry.keep`, `passes` more steps of every point fall into it, and it
    *  shows. */
-  frame(passes: number, now: ChainNow, viewWidth: number, viewHeight: number) {
+  frame(passes: number, now: ChainNow, viewWidth: number, viewHeight: number, extras: Extras | null = null) {
     const [screenWidth, screenHeight] = [viewWidth, viewHeight];
     const gl = this.gl;
     const light = this.light;
@@ -217,13 +246,14 @@ export class FlameRenderer {
 
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where a
     // chain of effects is set, into the picture at the buffer's size, for the chain's pass to finish.
-    const chain = this.fin.chainFor(now.effects, this.clocks);
-    const composing = !!this.compose?.active;
+    const chain = this.stages.has('effects') ? this.fin.chainFor(now.effects, this.clocks) : null;
+    const compose = this.stages.has('compose') && extras && this.compositor && Compositor.active(extras.extra, extras.knobsOf, extras.flame) ? this.compositor : null;
+    const composing = !!compose;
     const into = chain || composing ? this.fin.targets(light.width, light.height) : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
     if (into) viewWidth = light.width, viewHeight = light.height;
     this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
-    const picture = into && composing ? this.compose!.run(into.tex[2], into.w, into.h) : into ? into.tex[2] : null;
+    const picture = into && compose ? compose.run(into.tex[2], into.w, into.h, extras!.extra, extras!.knobsOf, extras!.frame, extras!.flame) : into ? into.tex[2] : null;
     if (chain && into && picture) this.screen.toScreen(this.fin.finish(chain, now.effects!, into, picture, this.clocks, this.fxFrames, this.carry.fluid), screenWidth, screenHeight);
     else if (into && picture) this.screen.toScreen(picture, screenWidth, screenHeight);
     else this.fin.idle();
@@ -252,6 +282,7 @@ export class FlameRenderer {
   }
 
   dispose() {
+    this.compositor?.dispose();
     for (const n of [this.carry, this.screen, this.points, this.light, this.show, this.fin]) n.dispose();
     this.gl.getExtension('WEBGL_lose_context')?.loseContext();
   }

@@ -1,7 +1,7 @@
 // The picture lab's recorder (decision 0057, step 3; development only): each frame's inputs to the renderer and the
 // compositor, kept as plain data for picture-lab.html to replay through two pipelines and compare pixel by pixel. On
 // only where the lab asks for it (`globalThis.cratarrPictureRecord`), before the visuals open.
-import type { Compositor } from './compose';
+import { Compositor } from './compose';
 import type { Flame, Xform } from './flame';
 import type { FrameInfo, Module, PatchExtra, SignalRef } from './patch';
 import { shownOf } from './chain-params';
@@ -57,48 +57,45 @@ export const lookOf = (l: Plain<Shown>): Shown => l as unknown as Shown;
 /** A signal reference's key in a recording. */
 export const signalKey = (ref: SignalRef) => JSON.stringify([ref.signal, ref.band ?? null, ref.reference ?? null, ref.speed ?? null]);
 
-/** Records what `renderer` and `compositor` are given, frame by frame, where the lab asks. */
-export function recordPictures(renderer: FlameRenderer, compositor: Compositor | null) {
+/** Records what `renderer` is given, frame by frame, where the lab asks. */
+export function recordPictures(renderer: FlameRenderer) {
   const want = (globalThis as { cratarrPictureRecord?: RecordRequest }).cratarrPictureRecord;
   if (!want || want.recording) return;
   const rec: Recording = { v: 1, name: want.name, points: renderer.pointCount, frames: [] };
   want.recording = rec;
   let flame: Flame | null = null;
-  let pending: RecordedFrame | null = null;
   let pruned: PatchExtra | undefined;
   const setFlame = renderer.setFlame.bind(renderer);
   renderer.setFlame = (f) => {
     flame = f;
     setFlame(f);
   };
-  const frame = renderer.frame.bind(renderer);
-  renderer.frame = (passes, now, w, h) => {
-    if (want.done || !flame) return frame(passes, now, w, h);
-    pending = { at: performance.now(), passes, look: plain(shownOf(now)), flame: plain(flame), w, h, bw: renderer.width, bh: renderer.height, points: renderer.pointCount, compose: null, ...(pruned ? { pruned } : {}) };
-    pruned = undefined;
-    frame(passes, now, w, h);
-    rec.frames.push(pending);
-    pending = null;
-    if (rec.frames.length >= want.max) want.done = true;
-  };
-  if (!compositor) return;
-  const prune = compositor.prune.bind(compositor);
-  compositor.prune = (extra) => {
+  const prune = renderer.prune.bind(renderer);
+  renderer.prune = (extra) => {
     pruned = plain(extra);
     prune(extra);
   };
-  const run = compositor.run.bind(compositor);
-  compositor.run = (picture, width, height, extra, knobsOf, info, share = 1) => {
-    if (!pending) return run(picture, width, height, extra, knobsOf, info, share);
-    const signals: Record<string, number> = {};
-    const modules: Module[] = [...extra.layers.flatMap((l) => [l.source, ...l.modules]), ...extra.loop];
-    pending.compose = {
-      extra: plain(extra),
-      knobs: Object.fromEntries(modules.map((m) => [m.id, { ...knobsOf(m) }])),
-      frame: { dt: info.dt, time: info.time, beat: info.beat && { ...info.beat }, signals, waveform: info.waveform ? Array.from(info.waveform) : null },
-      flame: share,
-    };
-    const read = info.signals;
-    return run(picture, width, height, extra, knobsOf, { ...info, signals: (ref) => (signals[signalKey(ref)] = read(ref)) }, share);
+  const frame = renderer.frame.bind(renderer);
+  renderer.frame = (passes, now, w, h, extras = null) => {
+    if (want.done || !flame) return frame(passes, now, w, h, extras);
+    const pending: RecordedFrame = { at: performance.now(), passes, look: plain(shownOf(now)), flame: plain(flame), w, h, bw: renderer.width, bh: renderer.height, points: renderer.pointCount, compose: null, ...(pruned ? { pruned } : {}) };
+    pruned = undefined;
+    // The compose step as drawn: only where it draws (compose.ts `active`), its signals as they are read.
+    let given = extras;
+    if (extras && Compositor.active(extras.extra, extras.knobsOf, extras.flame)) {
+      const signals: Record<string, number> = {};
+      const modules: Module[] = [...extras.extra.layers.flatMap((l) => [l.source, ...l.modules]), ...extras.extra.loop];
+      const info = extras.frame;
+      pending.compose = {
+        extra: plain(extras.extra),
+        knobs: Object.fromEntries(modules.map((m) => [m.id, { ...extras.knobsOf(m) }])),
+        frame: { dt: info.dt, time: info.time, beat: info.beat && { ...info.beat }, signals, waveform: info.waveform ? Array.from(info.waveform) : null },
+        flame: extras.flame,
+      };
+      given = { ...extras, frame: { ...info, signals: (ref) => (signals[signalKey(ref)] = info.signals(ref)) } };
+    }
+    frame(passes, now, w, h, given);
+    rec.frames.push(pending);
+    if (rec.frames.length >= want.max) want.done = true;
   };
 }

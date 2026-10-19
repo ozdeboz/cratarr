@@ -11,9 +11,12 @@
 //   reader has drawn; a Feedback adopts its input's target rather than copying it.
 // Devices are opened first (v2.ts `flatten`): they cost nothing. A polymorphic port takes light or a picture, its
 // module's output the type of what comes in. A module's picture outputs are one picture.
-import { MIX_MODES, portsOf, type Port, type PatchV2, type PortRef, type Ports, type PortType } from './ports';
+import { ENGINE_MODULES, GRAPH_MODULES, LIGHT_CARRIERS, MIX_MODES, portsOf, showPartTypes, SHOW_PARTS, type Port, type PatchV2, type PortRef, type Ports, type PortType } from './ports';
 import type { ModuleType } from './patch';
+import { EXTRA_TYPES } from './registry';
 import { flatten } from './v2';
+// A converted patch's picture side (v2.ts's hook).
+import './picture-wiring';
 
 export type TypeOf = (type: string) => (ModuleType & { ports?: Ports }) | undefined;
 
@@ -35,6 +38,46 @@ export type Compiled = {
   errors: string[];
 };
 
+/** Every module type a converted patch holds: the extras', today's chain's (`chain`: patch.ts cratarrTypes), the
+ *  engine's, the graph's and Show's parts. */
+export function v2Types(chain: readonly ModuleType[]): TypeOf {
+  const show = chain.find((t) => t.type === 'show');
+  const all = new Map<string, ModuleType & { ports?: Ports }>([...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...(show ? showPartTypes(show) : [])].map((t) => [t.type, t]));
+  return (t) => all.get(t);
+}
+
+/** The passes this version draws a picture graph with, in their order: the flame's own loop on its light, its points,
+ *  Show's device, the compose step (the layers and the picture's own loop), the effects, the screen; each fused into
+ *  one as today's renderer draws it. */
+export const STAGES = ['carry', 'points', 'show', 'compose', 'effects', 'screen'] as const;
+export type Stage = (typeof STAGES)[number];
+const SHOWN = new Set(SHOW_PARTS.map((p) => p.type));
+
+/** The stages a compiled graph needs, or null where its modules are not in their order (not drawn in this version). */
+export function stagesOf(c: Compiled): Stage[] | null {
+  const stage = (n: PictureNode): Stage | null => {
+    if (n.type === 'feedback') return null;
+    if (LIGHT_CARRIERS.has(n.type)) return 'carry';
+    if (LIGHT_ROLES.points.has(n.type)) return 'points';
+    if (SHOWN.has(n.type)) return 'show';
+    if (n.type === 'screen') return 'screen';
+    // Today's effects keep their ids (v2.ts): the finish's slots.
+    if (/^fx\d$/.test(n.id)) return 'effects';
+    return 'compose';
+  };
+  const out: Stage[] = [];
+  let at = 0;
+  for (const n of c.order) {
+    const s = stage(n);
+    if (!s) continue;
+    const i = STAGES.indexOf(s);
+    if (i < at) return null;
+    at = i;
+    if (out.at(-1) !== s) out.push(s);
+  }
+  return out;
+}
+
 /** An output's key: `module.port`. */
 export const outKey = (r: PortRef) => `${r.module}.${r.port}`;
 
@@ -43,7 +86,7 @@ export const outKey = (r: PortRef) => `${r.module}.${r.port}`;
 export const LIGHT_ROLES = {
   points: new Set(['flame']),
   tonemap: new Set(['tonemap']),
-  carry: new Set(['fluid', 'tunnel', 'dive', 'trails', 'loop-effect']),
+  carry: LIGHT_CARRIERS,
 };
 
 /** The picture graph of `patch` (its devices opened): what reaches the Screen, in order. */

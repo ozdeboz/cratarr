@@ -66,8 +66,9 @@
   import { held } from './held.svelte';
   import Help from './Help.svelte';
   import { newStirring, stir } from './stirring';
-  import { FlameRenderer } from './render';
-  import { Compositor } from './compose';
+  import { FlameRenderer, type Extras } from './render';
+  import { v2Types } from './picture-graph';
+  import { toV2 } from './v2';
   import { recordPictures } from './recorder';
   import { chainNow as nodesNow } from './chain-params';
   import { newNormalState, signalsFor } from './normal';
@@ -831,6 +832,8 @@
   const KNOB_MORPH = 0.15;
   let morphNext: number | null = null;
   const GRAPH_TYPES: Record<string, ModuleType> = Object.fromEntries([...EXTRA_TYPES, ...cratarrTypes(RANGES, DEFAULTS)].map((t) => [t.type, t]));
+  // Every type a v2 patch holds, for its picture side (picture-graph.ts).
+  const PICTURE_TYPES = v2Types(cratarrTypes(RANGES, DEFAULTS));
   // ---- Cables in the rack (the owner on 70: "each line is clickable, removable"; a long press "to get the option to
   // delete or reroute"): claude-5f's KnobCables, CableSheet, CableMenu and SourcePicker over cable-actions.ts ----------
   const cablesNow = (): Cables => ({ routes: $state.snapshot(s.routes) as Record<string, RouteValue>, extra: $state.snapshot(s.extra) as PatchExtra });
@@ -1285,16 +1288,10 @@
       console.warn('Visuals:', e);
       unsupported = true;
     }
-    // The patch past the flame (decision 0056): the other layers and the picture's own loop, drawn between the flame's
-    // show and finish (compose.ts). Its knobs as set for now; the cables move them once the evaluator is in.
-    let compositor: Compositor | null = null;
-    try {
-      compositor = renderer ? new Compositor(renderer.context) : null;
-    } catch (e) {
-      console.warn('Visuals: no layers past the flame on this device', e);
-    }
     // The picture lab's recorder (development only, where the lab asks): each frame's inputs, for a replay.
-    if (import.meta.env.DEV && renderer) recordPictures(renderer, compositor);
+    if (import.meta.env.DEV && renderer) recordPictures(renderer);
+    // The patch's structure as the renderer last had it (its picture side: picture-graph.ts).
+    let patched = false;
     const normal = newNormalState();
     // The patch's cables, modulators and macros made into each knob's value this frame (claude-632's evaluate.ts):
     // what the compositor draws with; today's chain stays with aspects.ts.
@@ -1815,25 +1812,28 @@
       const morphFrame = stepMorph(morph, dt, m.bps > 0 ? 1 / m.bps : null, GRAPH_TYPES);
       shownKnobs = { ...morphFrame.knobs, ...Object.fromEntries(morphFrame.leaving.map((l) => [l.id, l.knobs])) };
       const extra = withLeaving(extraSet, drawnExtra, leavingIds(morphFrame.leaving));
-      if (compositor && (extraChanged || morphFrame.leaving.length !== goingBefore)) compositor.prune(extra);
+      if (renderer && (extraChanged || morphFrame.leaving.length !== goingBefore)) renderer.prune(extra);
+      if (renderer && (extraChanged || !patched)) {
+        patched = true;
+        try {
+          renderer.setPatch(toV2($state.snapshot(s) as VisualSettings), PICTURE_TYPES);
+          if (renderer.errors.length) console.warn('Visuals:', renderer.errors);
+        } catch (e) {
+          console.warn('Visuals: the patch could not be drawn as a graph', e);
+        }
+      }
       goingBefore = morphFrame.leaving.length;
       drawnExtra = extra;
-      if (compositor && renderer) {
+      // The layers past the flame and the picture's own loop (compose.ts), with their knobs as the cables move them.
+      let extras: Extras | null = null;
+      if (renderer) {
         const p = morphedPatch(patchNow, morphFrame.knobs);
         evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat }, walk: cableWalk }) : null;
         // A step its cables move on: taken at its module's next neutral.
         for (const r of evaluated?.moments ?? []) askStep(morph, r.module, r.knob, GRAPH_TYPES);
         const flameTo = s.flameLayer ?? 1;
         flameShown = flameTo > flameShown ? Math.min(flameTo, flameShown + dt / (ANOTHER_MS / 1000)) : Math.max(flameTo, flameShown - dt / (ANOTHER_MS / 1000));
-        const flame = flameShown;
-        const active = Compositor.active(extra, knobsOf, flame);
-        renderer.compose = active
-          ? {
-              active,
-              run: (picture, width, height) =>
-                compositor!.run(picture, width, height, extra, knobsOf, { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame),
-            }
-          : null;
+        extras = { extra, knobsOf, frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame: flameShown };
       }
       renderer.frame(
         passes,
@@ -1853,6 +1853,7 @@
         }),
         w,
         h,
+        extras,
       );
       // What this frame did, measured (meters.ts): the screen read into tiles (back two or more frames later), the parts'
       // motion and change, a new look and why. The meters' values for the rating page four times a second.
@@ -2009,7 +2010,6 @@
       lock?.release().catch(() => {});
       // The full screen the visuals over the page went to ends with them; beside it, they made none.
       if (!docked && document.fullscreenElement) document.exitFullscreen().catch(() => {});
-      compositor?.dispose();
       renderer?.dispose();
       stopGroup();
       stopIdle?.();
