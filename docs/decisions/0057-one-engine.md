@@ -248,6 +248,13 @@ Later, with the Sequencer and the Looper:
 - **Sample:** a picture read at each point, giving one value a point. The picture becomes a controller.
 - **A grid sequencer** (the monome's): the Clock stepping through the cells.
 
+### 4d. The dice: Randomize, an action
+
+The owner: "the dice become a randomized action". As VCV Rack's Randomize: not a module but an action on one module,
+or on the whole patch, giving its knobs new values within their ranges. Pins are kept, the structure (modules,
+cables) is never touched, and the patch store makes it undoable. "Another look" reseeds the Track's look. Wild sets
+how far it goes. The double tap's "loose" (twice the governor's limits) goes with the governor.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
