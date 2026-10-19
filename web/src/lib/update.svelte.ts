@@ -6,13 +6,12 @@
 // does not hold the reload there (it did, and the salon tablet, playing all day, ran 63's page under 64 until it was
 // reloaded by hand: its visuals were not shared, 2026-10-18). In a browser the page plays the music itself, so there it
 // waits until the music is paused. Either way it waits while something is being typed, for half a minute after a touch
-// or a key, and while the rating page runs; the visuals, where they are open, open again after it.
+// or a key; the visuals, where they are open, open again after it.
 
 import { inApp } from './app.svelte';
 import { local } from './localPlayer.svelte';
 import { playsHere } from './output.svelte';
 import { REOPEN, visuals } from './visuals/shown.svelte';
-import { rating } from './visuals/trial.svelte';
 
 /** This page's build: its script's name (`index-<hash>.js`); none in development. */
 const own =
@@ -59,11 +58,10 @@ const session = {
   },
 };
 
-/** Nothing would be lost: no music this page plays itself, nothing typed, nobody at it, no rating running. */
+/** Nothing would be lost: no music this page plays itself, nothing typed, nobody at it. */
 function quiet() {
   if (!inApp && playsHere() && local.index >= 0 && !local.paused) return false;
   if (Date.now() - touched < IDLE_S * 1000) return false;
-  if (rating.run) return false;
   const a = document.activeElement;
   return !(a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a instanceof HTMLElement && a.isContentEditable));
 }

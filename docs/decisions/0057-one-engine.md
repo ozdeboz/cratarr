@@ -46,12 +46,14 @@ and the rack. The Cratarr look is a chain built from those modules, nothing spec
 
 ### 1. Typed ports
 
-Four kinds of signal, each with its own wire in the graph:
+Six kinds of signal, each with its own wire in the graph:
 
 | Type | Carries | Wire |
 |---|---|---|
 | `picture` | a texture each frame | solid |
 | `light` | the flame's accumulated light before Show displays it (its RGBA and its bands' shares); the flame's own loop works on it, and only Show turns it into a picture (claude-632) | solid, thick |
+| `audio` | the sound itself: its recent samples each frame (the page's own player, or the app's `wave`); Music gives it, the Waves source takes it (the owner: "is video and audio essentially the same?": no) | double line |
+| `points` | a set of positions with values per point (a grid's points; TouchDesigner's geometry for instancing) | chain line |
 | `value` | a number each frame (a signal on 1 = typical; a modulator's own range; a knob's) | dashed |
 | `trigger` | events (a beat, a band's hit, a gate opening), each with its strength | dotted |
 
@@ -82,21 +84,21 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 |---|---|---|
 | **Music** | source of values and triggers | the analysis: the whole track's signals, each band's level, hits and envelope; reference and speed per cable (0056) |
 | **Track** | source | a new track's pulse, and the track's own look (its preset) as outputs into the flame's look knobs |
-| **Envelope** | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); normalled into every cable's depth |
+| **Loudness** (type `envelope`) | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); normalled into every cable's depth |
 | **Clock** | modulator | the tempo's turning clock (once round in 32 beats at Speed); its phase feeds whatever turns |
 | **Flash** | modulator, one per target | the course-and-swing filter (a slow course, Flash's share of the swing about it) |
 | **Walk** (Look, Behaviour) | modulator | drift.ts's walks |
 | **Flame** | picture source | the fractal flame; its parts' evolution (per band), continuity and steps on hits as its own knobs and `trigger` inputs, normalled from Music's hits |
-| **Show** | picture module | size, glow, saturation, smoothing, haze, waves |
+| **Show**, split (below) | Tone map, Curve, Saturate, Blur, Scale, Bend | size, glow, saturation, smoothing, haze, waves |
 | **Fluid**, **Tunnel**, **Dive**, **Trails**, **Loop effect** | picture modules in the flame's own loop | as today |
 | **Effects** | picture modules, one per effect | today three fixed slots (Kaleidoscope, EYEDO, Hydra), each choosing one sub-effect by a step knob; see below |
 | **Moments** | trigger outputs of the module that has them | another symmetry, lens or form at a step's neutral (morph.ts) |
 | **Meter** | detector: picture in, busyness values out | the governor's meters |
 | **Compressor** | standard sidechain compressor on values | the governor's holding back, as normalled wiring |
-| **Taste** | source, one per user | the learned limits (the thumbs), as the Compressors' thresholds |
 | **Screen** (with its flash guard) | the output | the flash rule: fixed, always on, last |
 
-- **Effects, each its own module.** The owner asked: "And effects would also become modules, correct?" Yes.
+- **Effects, each its own module, in this version** (the owner: "effects on a layer, as in completely modular effects,
+  is also in the current version plan"). The owner asked: "And effects would also become modules, correct?" Yes.
   - Every effect is a module of its own: Kaleid, Repeat, Pixelate, Posterize, Rotate, Scroll, Magnify, Ripple,
     Stream, Echo, Colorama, Hue, Saturate, Rings, Interference, Pulse, Burst, Halo.
   - Each is wired freely (§4), as many as wanted, in any order.
@@ -117,13 +119,30 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
   - **The default wiring is normalled:** a Meter on the screen's picture, and a Compressor per kind keyed by it,
     through which the cables into knobs of that kind run (each knob declares its kind, `busy`). Today's behaviour is
     that wiring with today's limits as the thresholds. Everything in it can be seen, re-keyed, re-patched or removed.
-  - **Taste: the learning.** A source per user; its outputs are the learned thresholds, one per kind, normalled into
-    the Compressors' thresholds. The thumbs teach it. **Its design is to be redone for use** (the owner: "even if we
-    keep it, we should probably redesign it to make it usable"); a talk with the owner decides how, before it is built.
-    What was learned before is kept.
+  - **No Taste, no learning in this version** (the owner: "we drop taste altogether. We defer it to a future version,
+    maybe not even the next version"). The thumbs and learning.ts go. The Compressors' thresholds start at the limits
+    as they stand when the patch is converted (learned values included, frozen), and are plain knobs from then on. The
+    server keeps what was learned, untouched, for whenever the learning returns.
+  - **No rating page** (the owner: "Yes, the rating page should also go"). It existed to calibrate the governor and the
+    learning. Its fitting (fit.ts) and the trial's plumbing go with aspects.ts.
   - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
     (WCAG). It is safety, not taste: never learned, never removable, last.
   - The precheck and the dice read the same thresholds.
+- **Show, split into standard modules and kept as a device** (§6; the owner: "it makes it more coherent"). Show is the flame's output stage, a
+  sound synth's channel strip, and each of its parts becomes the module it is. Only the first converts:
+  | Module | Was Show's | Sound equivalent |
+  |---|---|---|
+  | **Tone map** (light in, picture out) | the log-density display, its Brightness (`glow`) | compressor / limiter |
+  | **Curve** | Haze (gamma, floor) | waveshaper |
+  | **Saturate** | Saturation | drive |
+  | **Blur** | Smoothing | low-pass filter |
+  | **Scale** | Size | output level |
+  | **Bend** | Waves (the slow giant waves) | a slow warp; later the Warp field's |
+  - Curve, Saturate, Blur, Scale and Bend are ordinary picture modules, usable on any source (Shapes, Waves, a Mix), so
+    every picture can get the flame's finish.
+  - The 70.1 Glow (a halo) stays its own module, beside these.
+  - The conversion gives today's chain the six in Show's order. The routes into `show.<knob>` go into the module that
+    took that knob.
 - **Normalled cables.** The connections every chain has by default are shown faint and can be unplugged: Envelope into
   each cable's depth, Music's hits into the flame's steps, the Clock into the turning, Track's look into the flame's look.
   Plugging another cable into such a port breaks the normal, as in Eurorack.
@@ -159,6 +178,76 @@ The owner: "freely routable". The picture side is a free graph, as the value sid
   - **Feedback that fills:** a high Keep with an outward zoom, so trails reach the edges and the screen never goes
     back to black.
 
+### 4b. Control sources, after VCV
+
+The owner asked how looping and envelopes fit, keeping it modular. VCV Rack's own answer is small modules that make
+control signals; we take its set as it is, in the order the owner agreed. **1 and 2 ship with this version; 3 and 4
+come later** (the owner):
+
+1. **ADSR** (an envelope: attack, decay, sustain, release on each gate or trigger), **polyphonic**: fed Music's hits
+   (six channels, one a band) it runs six envelopes, one into each part of the flame. It is the visible form of
+   today's hidden "Linger" (the bands' lighting), so it belongs to the North Star itself.
+2. **The Clock's outputs**:
+   - Beat, Bar and Phrase as triggers, with a divider and multiplier;
+   - a **clocked LFO**: rate in beats when its clock input is plugged, reset on the downbeat, sine, triangle, saw and
+     square.
+   Everything rhythmic syncs through a visible trigger line, never a hidden tempo.
+3. **Sequencer**: 8 or 16 steps, each a knob, stepped by a clock input, reset input, length; a value out and a gate out.
+   It replaces the Counter.
+4. **Looper**: records a value (a knob's movement, a macro) over a number of bars and loops it in sync with the Clock;
+   record, overdub, clear. In the rack it sits on the knob itself: hold Record, turn the knob.
+
+- **Filter bank and band control, the modular way** (the owner: multiband control is how modular synths do it; "this
+  completely replaces our previous implementation of band control"). In a synth, multiband control is a filter bank
+  (a crossover splitting the audio into bands), a follower on each band, and polyphonic cables carrying the bands
+  on. So:
+  - **Filter bank:** `audio` in, six bands out on one 6-channel cable, a standard crossover (Linkwitz–Riley) with
+    movable split points. Into followers, or any module, per band. For the live sound, or bands of one's own.
+  - **Music keeps its analysed bands** as the precise source: measured on the server over the whole track, each
+    against the track's own typical, with hits, flux and percussive/harmonic that a live filter bank cannot give. They
+    come out as 6-channel cables too.
+  - **Everything band-specific becomes polyphony:**
+    - a band is a channel of a cable, not a kind of route;
+    - a module fed six channels runs six times (one ADSR, six envelopes);
+    - the flame's six parts take six channels;
+    - per-band knobs (Evolution, Continuity, the ADSR's release that was Linger) are polyphonic knobs, one value a
+      channel.
+  - **Retired with it:**
+    - the band routes and their "Every band / one band" choice;
+    - the Bands pages and the band pins;
+    - the `lighting`/`evolution`/`continuity` settings arrays.
+    The conversion turns them into channels and polyphonic knobs.
+- VCV's other basics are named and sorted as VCV does: Sample & Hold, Random (our Drift), Slew (our followers).
+- Each shows its state on its node and its row (VCV's lights): the LFO's wave with a moving dot, the ADSR's shape
+  lighting as it runs, the Sequencer's step.
+- A knob's "+ Add" offers "New ▸ LFO / ADSR / Sequencer / Looper": the module and its cable in one step, synced to
+  the Clock.
+- The loudness follower, so as not to be confused with the ADSR, is named Loudness.
+
+### 4c. Grids
+
+The owner asked whether grids are always kaleidoscopic or mosaic, how they control things, how shapes follow them and
+how they are modules. A grid is a lattice (square, hexagonal, triangular, polar rings, a spiral) and a symmetry; mosaic
+(translation), kaleidoscope (rotation and mirror) and pixelate (a colour a cell) are uses of one. Learned, not invented:
+Hydra's `kaleid`, `repeat` and `pixelate` (already ours, 0050); the 17 wallpaper groups (the mathematics of symmetry
+since the 1890s, as symmetry tools such as Kali use it); TouchDesigner's Grid SOP, instancing and TOP to CHOP; cables.gl's
+points and instancing ops (MIT, ported with a notice); VCV's polyphony; the monome grid.
+
+In this version:
+- **Grid:** a source of `points`. Knobs: lattice (square, hexagonal, triangular, rings, spiral), count, spacing,
+  rotation, jitter. Per-point values out as polyphonic channels: index, distance from the centre, angle, row, column.
+- **Fold:** a picture folded by a grid's symmetry. Modes: mosaic, kaleidoscope, mirror, pixelate, and the wallpaper
+  groups beyond. It takes Hydra's Kaleid, Repeat and Pixelate as its first modes, and the fluid's hidden lattice
+  switch becomes a Fold too. The group mathematics is taken from the literature, not from anyone's shader, so the
+  licence stays clean.
+- **Instance:** draws a source once at each point of a `points` input. Shapes follow a grid this way: Grid → Instance
+  → Shapes. Each instance gets its point's values as channels, so distance can drive size, angle rotation, and index a
+  phase that runs a wave across the grid.
+
+Later, with the Sequencer and the Looper:
+- **Sample:** a picture read at each point, giving one value a point. The picture becomes a controller.
+- **A grid sequencer** (the monome's): the Clock stepping through the cells.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
@@ -170,10 +259,25 @@ A module may take a second `picture` input: Hydra's modulate, TouchDesigner's co
 
 The tint and glow knobs built into the sources for 70.1 move into these modules.
 
-### 6. Nesting
+### 6. Modules, devices and presets
 
-A chain can be one module of another patch, its chosen knobs exposed as its macros (Reaktor's blocks, Max's
-sub-patches). Presets are chains, and a preset can be dropped in as a part.
+Three layers, after Ableton's Racks and Reaktor's macros (VCV Rack has only selections: saved groups that come back as
+loose modules). The owner: "Show could be a device. A device consists of multiple modules. A preset is a multi-routed
+set of components, modules of which some are inserted as devices, but they are in essence just modules."
+
+- **Module:** the standard unit (Tone map, Curve, Blur, an LFO, a Mix, …).
+- **Device:** a group of modules with their wiring inside, shown as one node with a few macro knobs (chosen knobs of the
+  modules in it). It can be opened, in the graph and the rack, to see and change its modules and cables: nothing in it
+  is hidden. It can be collapsed again, and nested: a device may hold devices. Its ports are the ports of its modules
+  that it exposes.
+  - **Show is a device:** Tone map, Curve, Saturate, Blur, Scale and Bend, wired in the order that draws exactly today's
+    picture (claude-632's harness decides it), with Brightness, Haze, Saturation, Smoothing, Size and Waves as its
+    macros. So Show stays one familiar thing on the surface and is standard modules underneath.
+  - Other devices are made the same way: select modules, make a device, choose its macros, save it.
+- **Preset:** a saved patch: modules and cables, some of them inside devices. The chains (Calm, Pulse, Flow …) and the
+  examples are presets. A device can be saved and inserted alone too.
+- In the model a device is a module of type `device` whose `patch` is a v2 patch of its own, plus its exposed ports and
+  macros. The engine and the compositor flatten it before running, so it costs nothing.
 
 ### 7. One store
 
@@ -199,10 +303,10 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | Step | What | Owner |
 |---|---|---|
 | 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
-| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; Taste once redesigned; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
-| 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
+| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; the control sources of §4b (ADSR and the Clock's outputs with a clocked LFO now; Sequencer and Looper later); the Grid's points and channels (§4c); the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
+| 3 | **Picture graph:** the compositor over typed picture ports, lazy; Fold (one module for the grid's symmetries) and Instance (§4c); the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
 | 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
-| 5 | **Nesting and macros:** chains as modules, the whole frame's macros | claude-a5 |
+| 5 | **Devices and macros:** the device type (a module holding a patch, its exposed ports and macros), flattening for the engine and compositor, Show as a device, open/collapse in the rack (graph: claude-632), the whole frame's macros | claude-a5 |
 | 6 | **Retire:** aspects.ts, the routes' matrix, chain-cables.ts, the old settings keys | whoever's step frees it |
 
 claude-a5 coordinates and owns this record. Interfaces are fixed in step 1 (patch.ts) before steps 2 and 3 build on
@@ -231,4 +335,3 @@ graph walk).
 - Whether a band's six outputs show as one row with six channels (VCV's polyphonic cables) or as six ports. The graph's
   "Level · 6 bands" bundle suggests channels.
 - Where the Compressors' reduction shows in the rack.
-- Taste's redesign (the owner wants it usable).

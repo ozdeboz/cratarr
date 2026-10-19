@@ -293,3 +293,19 @@ test('beats into a port count exactly from the frame’s beat index: a weak beat
   assert.equal(run(true), 6 / 8, 'every beat');
   assert.equal(run(false), 5 / 8, 'the normalised pulse misses the weak one');
 });
+
+test('an effect engine on a layer is the patch’s to move: cables into it act (by id, not type)', async () => {
+  const { evaluate, newEvalState } = await import('../src/lib/visuals/evaluate.ts');
+  const { ENGINE_TYPES } = await import('../src/lib/visuals/registry.ts');
+  const t = ENGINE_TYPES.find((x) => x.type === 'kaleidoscope-engine')!;
+  const types = { [t.type]: t, shapes: { type: 'shapes', label: 'Shapes', place: 'source', knobs: [] } } as never;
+  const k1 = t.knobs.find((k) => k.id === 'k1')!;
+  const engine = { id: 'on-layer', type: 'kaleidoscope-engine', knobs: Object.fromEntries(t.knobs.map((k) => [k.id, k.default])) };
+  const patch = {
+    v: 1, frame: { id: 'frame', type: 'frame', knobs: {} }, finish: [], loop: [], modulators: [], macros: [], pins: [],
+    layers: [{ id: 'l', source: { id: 'src', type: 'shapes', knobs: {} }, modules: [engine], loop: [], blend: { mode: 'add', amount: 1 } }],
+    cables: [{ id: 'c', from: { signal: 'loudness' }, to: { module: 'on-layer', knob: 'k1' }, value: 1, mode: 'swing' }],
+  } as never;
+  const out = evaluate(patch, types, () => 2, newEvalState(), 1 / 60, { envelope: 1 });
+  assert.notEqual(out.knobs['on-layer']?.k1, engine.knobs.k1, `k1 moved from ${k1.default}`);
+});
