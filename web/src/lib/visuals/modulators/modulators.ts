@@ -161,7 +161,8 @@ const mean = define('mean', 'Mean', 'unipolar', [knob('horizon', 'Horizon', 0, 6
 
 // The beat gate: opens when its input goes above Above (1: above typical, where MilkDrop's beat tests sit), closes
 // below that less its Hysteresis share. Each opening lifts the next one's threshold by Lift, which fades over Recover,
-// as presets' adaptive thresholds do. Open it gives 1; shut it falls over Release.
+// as presets' adaptive thresholds do. It opens no sooner than Gap after it last did (a step's moments: 2 s). Open it
+// gives 1; shut it falls over Release.
 const gate = define(
   'gate',
   'Beat gate',
@@ -184,7 +185,8 @@ const gate = define(
     return (dt, _signals, k) => {
       lifted *= keep(dt, k.recover);
       since += dt;
-      if (!open && k.in > k.above + lifted && since >= k.gap) {
+      // More than Gap since it last opened (a frame exactly Gap on is not yet: a sum of frames' times is a hair off).
+      if (!open && k.in > k.above + lifted && (k.gap <= 0 || since > k.gap + 1e-9)) {
         open = true;
         lifted += k.lift;
         since = 0;
