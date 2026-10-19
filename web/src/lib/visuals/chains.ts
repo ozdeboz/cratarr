@@ -77,7 +77,7 @@ export const CHAINS: readonly Chain[] = [
       modulators: [mod('slow', 'breath', { attack: 0.8, release: 2.5 }), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('calm-in', { signal: 'loudness' }, 'breath', 'in', 1),
-        cable('calm-size', { modulator: 'breath' }, 'show', 'size', 0.5),
+        cable('calm-size', { modulator: 'breath' }, 'flame', 'zoom', 0.5),
         cable('calm-saturation', { modulator: 'breath' }, 'show', 'saturation', 0.6),
         cable('calm-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
         cable('calm-hue', { signal: 'swell', speed: 'slow' }, 'flame', 'hue', 0.15),
@@ -110,7 +110,7 @@ export const CHAINS: readonly Chain[] = [
       modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.15, amount: 1 }), mod('random', 'wander', { rate: 0.1, amount: 1 })],
       cables: [
         cable('pulse-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
-        cable('pulse-size', { modulator: 'kick' }, 'show', 'size', 0.3),
+        cable('pulse-size', { modulator: 'kick' }, 'flame', 'zoom', 0.3),
         cable('pulse-glow', { modulator: 'kick' }, 'show', 'glow', 0.4),
         cable('pulse-radius', { modulator: 'kick' }, 'pulse-shapes-source', 'radius', 0.25),
         cable('pulse-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
@@ -198,7 +198,7 @@ export const CHAINS: readonly Chain[] = [
         cable('mosaic-bars-in', { signal: 'downbeat' }, 'bars', 'in', 1),
         cable('mosaic-tiles', { modulator: 'bars' }, 'fx1', 'k1', 0.6),
         cable('mosaic-breath-in', { signal: 'loudness' }, 'breath', 'in', 1),
-        cable('mosaic-size', { modulator: 'breath' }, 'show', 'size', 0.4),
+        cable('mosaic-size', { modulator: 'breath' }, 'flame', 'zoom', 0.4),
         cable('mosaic-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
       ],
     },
@@ -292,7 +292,7 @@ export const EXAMPLES: readonly Chain[] = [
     extra: {
       ...emptyExtra(),
       modulators: [mod('gate', 'kick', { above: 1, amount: 1 })],
-      cables: [cable('example-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1), cable('example-size', { modulator: 'kick' }, 'show', 'size', 0.4)],
+      cables: [cable('example-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1), cable('example-size', { modulator: 'kick' }, 'flame', 'zoom', 0.4)],
     },
     settings: { ...QUIET },
   },

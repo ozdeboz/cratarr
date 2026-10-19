@@ -152,7 +152,7 @@ export const SETTING_KNOB: Record<string, [string, string]> = {
   rotation: ['flame', 'rotation'],
   lights: ['flame', 'lights'],
   presence: ['flame', 'presence'],
-  size: ['show', 'size'],
+  size: ['flame', 'zoom'],
   glow: ['show', 'glow'],
   saturation: ['show', 'saturation'],
   smoothing: ['show', 'smoothing'],
@@ -195,7 +195,7 @@ export const ASPECT_KNOB: Record<Aspect, [string, string]> = {
   spread: ['flame', 'spread'],
   presence: ['flame', 'presence'],
   brightness: ['show', 'glow'],
-  size: ['show', 'size'],
+  size: ['flame', 'zoom'],
   saturation: ['show', 'saturation'],
   trails: ['trails', 'trails'],
   smoothing: ['show', 'smoothing'],
@@ -343,7 +343,8 @@ export function extraFrom(kept: unknown, typeOf: (type: string) => ModuleType | 
   const cableIds = new Set<string>();
   for (const c of listOf(kept.cables)) {
     if (!isObject(c) || typeof c.id !== 'string' || c.id.length > 80 || cableIds.has(c.id) || !isObject(c.from) || !isObject(c.to)) continue;
-    const to = c.to;
+    // Show's Size is the Flame's zoom (0057): a cable kept before into show.size goes there.
+    const to = c.to.module === 'show' && c.to.knob === 'size' ? { ...c.to, module: 'flame', knob: 'zoom' } : c.to;
     if (typeof to.module !== 'string' || typeof to.knob !== 'string' || !knobsOf.get(to.module)?.has(to.knob)) continue;
     let from: Cable['from'] | null = null;
     if (typeof c.from.modulator === 'string') from = modulatorIds.has(c.from.modulator) ? { modulator: c.from.modulator } : null;

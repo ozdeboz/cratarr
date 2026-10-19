@@ -167,7 +167,7 @@ export function toV2(s: VisualSettings): PatchV2 {
   const flame = modules.find((m) => m.id === 'flame');
   const show = p.layers[0]?.modules.find((m) => m.id === 'show');
   if (flame && show && typeof show.knobs.size === 'number') flame.knobs.zoom = show.knobs.size;
-  const target = (to: Cable['to']) => (to.module === 'show' && to.knob === 'size' ? { module: 'flame', port: 'zoom' } : { module: to.module, port: to.knob });
+  const target = (to: Cable['to']) => ({ module: to.module, port: to.knob });
   // The bands' Linger leaves the Flame: Music's hold, and the ADSRs' release.
   const lighting = [...s.lighting];
   for (let b = 0; b < BANDS; b++) {
@@ -204,7 +204,6 @@ export function toV2(s: VisualSettings): PatchV2 {
     const m = mid === 'show' ? undefined : modules.find((x) => x.id === mid);
     if (m) m.knobs[kid] = 1;
   }
-  if (flame && SCALE_OF.has('show.size')) flame.knobs.zoom = 1;
   const showAsDevice = modules.find((x) => x.id === 'show') as Device | undefined;
   for (const part of showAsDevice?.patch.modules ?? []) for (const k of Object.keys(part.knobs)) if (SCALE_OF.has(`show.${k}`)) part.knobs[k] = 1;
   for (const c of p.cables) {
