@@ -6,6 +6,12 @@
 //! The login check follows nghe's `auth` module (https://github.com/vnghia/nghe, AGPL-3.0, Copyright vnghia):
 //! token (`t`, `s`), password (`p`, plain or `enc:` hex), each with the user `u`. Changed: Subsonic's error codes are
 //! answered in the envelope with HTTP 200 (see `api`), and API keys are not offered yet.
+//!
+//! Cratarr's own accounts, made and kept in the Users panel beside the directory's (decision 0051, amended
+//! 2026-10-19), are translated from nghe's user routes (same project and licence: `nghe/src/route/user/{setup,create,
+//! update_role,update_password,delete}.rs`), with Navidrome's rules as the checklist. Changed from nghe: a name is taken
+//! whatever its case and by either kind of account; a removed account is kept, inactive (its data stays), not deleted;
+//! no one changes their own role or removes themselves; the last active administrator stays one.
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -87,6 +93,51 @@ impl User {
 pub struct Users {
     file: Option<PathBuf>,
     users: RwLock<Vec<User>>,
+}
+
+/// Why an account could not be changed, in one short sentence: a bad request, a conflict with what is, no such
+/// account, or the change could not be saved.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Refusal {
+    Bad(&'static str),
+    Conflict(&'static str),
+    Missing,
+    Unsaved,
+}
+
+impl Refusal {
+    pub fn message(&self) -> &'static str {
+        match self {
+            Refusal::Bad(m) | Refusal::Conflict(m) => *m,
+            Refusal::Missing => "There is no such account.",
+            Refusal::Unsaved => "The accounts could not be saved.",
+        }
+    }
+}
+
+/// A name an account may have: not empty, at most 64 characters, no `/` nor control characters, no spaces around it,
+/// and not `.` or `..` (an account's playlists are a folder of its name).
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= 64
+        && name.trim() == name
+        && !name.chars().any(|c| c == '/' || c == '\\' || c.is_control())
+        && name != "."
+        && name != ".."
+}
+
+/// Cratarr's own account `name` (not the directory's, whose role and password the directory keeps).
+fn own_account(users: &[User], name: &str) -> Result<User, Refusal> {
+    let u = users.iter().find(|u| u.name == name).ok_or(Refusal::Missing)?;
+    if u.directory {
+        return Err(Refusal::Conflict("Set in the directory."));
+    }
+    Ok(u.clone())
+}
+
+/// Whether an active administrator other than `name` is left.
+fn other_admin(users: &[User], name: &str) -> bool {
+    users.iter().any(|u| u.admin && u.active && u.name != name)
 }
 
 fn token(password: &str, salt: &str) -> String {
@@ -276,6 +327,93 @@ impl Users {
         Ok(())
     }
 
+    /// A change to the accounts, kept: undone when it cannot be saved.
+    fn change<T>(&self, f: impl FnOnce(&mut Vec<User>) -> Result<T, Refusal>) -> Result<T, Refusal> {
+        let mut users = self.users.write().unwrap_or_else(|p| p.into_inner());
+        let before = users.clone();
+        let out = f(&mut users)?;
+        if let Err(e) = self.save(&users) {
+            tracing::warn!("subsonic: could not save the accounts: {e:#}");
+            *users = before;
+            return Err(Refusal::Unsaved);
+        }
+        Ok(out)
+    }
+
+    /// A new account of Cratarr's own (nghe's `create`; its `setup` while there is none: then an administrator, whatever
+    /// is asked). Its name is free of either kind of account, whatever its case.
+    pub fn create(&self, name: &str, password: &str, admin: bool) -> Result<User, Refusal> {
+        if !valid_name(name) {
+            return Err(Refusal::Bad("Choose a name of at most 64 characters, without / and without spaces around it."));
+        }
+        if password.is_empty() {
+            return Err(Refusal::Bad("Choose a password."));
+        }
+        self.change(|users| {
+            if users.iter().any(|u| u.name.to_lowercase() == name.to_lowercase()) {
+                return Err(Refusal::Conflict("That name is taken."));
+            }
+            let user = User { password: password.to_string(), admin: admin || users.is_empty(), ..User::named(name) };
+            users.push(user.clone());
+            Ok(user)
+        })
+    }
+
+    /// An administrator or not (nghe's `update_role`): Cratarr's own accounts only (the directory says it for its own),
+    /// never one's own (`by`), and the last active administrator stays one.
+    pub fn set_admin(&self, name: &str, admin: bool, by: Option<&str>) -> Result<(), Refusal> {
+        self.change(|users| {
+            let u = own_account(users, name)?;
+            if by == Some(name) {
+                return Err(Refusal::Conflict("You cannot change your own role."));
+            }
+            if u.admin && !admin && u.active && !other_admin(users, name) {
+                return Err(Refusal::Conflict("Cratarr needs an administrator: make another one first."));
+            }
+            if let Some(u) = users.iter_mut().find(|u| u.name == name) {
+                u.admin = admin;
+            }
+            Ok(())
+        })
+    }
+
+    /// A Cratarr account's password, set by an administrator (nghe's `update_password` with an id): no current one asked.
+    /// It is also the account's OpenSubsonic password.
+    pub fn set_password(&self, name: &str, password: &str) -> Result<(), Refusal> {
+        if password.is_empty() {
+            return Err(Refusal::Bad("Choose a password."));
+        }
+        self.change(|users| {
+            own_account(users, name)?;
+            if let Some(u) = users.iter_mut().find(|u| u.name == name) {
+                u.password = password.to_string();
+            }
+            Ok(())
+        })
+    }
+
+    /// A Cratarr account removed (`false`; nghe's `delete`, but kept, inactive: its data stays, as when a directory
+    /// account leaves its group) or restored. Never one's own (`by`), nor the last active administrator. Returns whether
+    /// it changed.
+    pub fn set_active(&self, name: &str, active: bool, by: Option<&str>) -> Result<bool, Refusal> {
+        self.change(|users| {
+            let u = own_account(users, name)?;
+            if u.active == active {
+                return Ok(false);
+            }
+            if by == Some(name) {
+                return Err(Refusal::Conflict("You cannot remove yourself."));
+            }
+            if !active && u.admin && !other_admin(users, name) {
+                return Err(Refusal::Conflict("Cratarr needs an administrator: make another one first."));
+            }
+            if let Some(u) = users.iter_mut().find(|u| u.name == name) {
+                u.active = active;
+            }
+            Ok(true)
+        })
+    }
+
     fn save(&self, users: &[User]) -> Result<()> {
         let Some(path) = &self.file else { return Ok(()) };
         use std::io::Write;
@@ -383,5 +521,46 @@ mod tests {
         assert!(again.check(Some("me"), None, None, Some("three")).unwrap().admin);
         assert!(!again.check(Some("you"), None, None, Some("two")).unwrap().admin);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn cratarr_accounts_are_made_and_kept_beside_the_directorys() {
+        let users = Users::open(None).unwrap();
+        // The first is an administrator whatever is asked (nghe's setup); the name rules; a name taken whatever its case.
+        assert!(users.create("ann", "pw", false).unwrap().admin);
+        for bad in ["", " bob", "bob ", "a/b", "..", &"x".repeat(65)] {
+            assert!(matches!(users.create(bad, "pw", false), Err(Refusal::Bad(_))), "{bad:?}");
+        }
+        assert!(matches!(users.create("bob", "", false), Err(Refusal::Bad(_))));
+        users.from_directory("dee", false).unwrap();
+        assert_eq!(users.create("ANN", "pw", false), Err(Refusal::Conflict("That name is taken.")));
+        assert_eq!(users.create("Dee", "pw", false), Err(Refusal::Conflict("That name is taken.")), "a directory account's too");
+        let bob = users.create("Bob Smith", "pw", false).unwrap();
+        assert!(!bob.admin && !bob.directory && bob.active);
+        assert!(users.sign_in("Bob Smith", "pw").is_some());
+
+        // Roles: not the directory's, not one's own, and the last active administrator stays one.
+        assert_eq!(users.set_admin("dee", true, Some("ann")), Err(Refusal::Conflict("Set in the directory.")));
+        assert_eq!(users.set_admin("ann", false, Some("ann")), Err(Refusal::Conflict("You cannot change your own role.")));
+        assert!(matches!(users.set_admin("ann", false, Some("Bob Smith")), Err(Refusal::Conflict(_))), "the last administrator");
+        users.set_admin("Bob Smith", true, Some("ann")).unwrap();
+        users.set_admin("ann", false, Some("Bob Smith")).unwrap();
+        assert!(!users.get("ann").unwrap().admin);
+        assert_eq!(users.set_admin("nobody", true, None), Err(Refusal::Missing));
+
+        // A password set by an administrator, no current one asked; not a directory account's.
+        users.set_password("ann", "new").unwrap();
+        assert!(users.sign_in("ann", "new").is_some() && users.sign_in("ann", "pw").is_none());
+        assert_eq!(users.set_password("dee", "x"), Err(Refusal::Conflict("Set in the directory.")));
+
+        // Removed: kept, inactive, no sign-in; not oneself, nor the last active administrator; restored.
+        assert_eq!(users.set_active("ann", false, Some("ann")), Err(Refusal::Conflict("You cannot remove yourself.")));
+        assert!(matches!(users.set_active("Bob Smith", false, Some("ann")), Err(Refusal::Conflict(_))), "the last administrator");
+        assert_eq!(users.set_active("ann", false, Some("Bob Smith")), Ok(true));
+        assert!(users.sign_in("ann", "new").is_none() && users.get("ann").is_some_and(|u| !u.active));
+        assert_eq!(users.set_active("ann", false, Some("Bob Smith")), Ok(false), "already removed");
+        assert_eq!(users.set_active("ann", true, Some("Bob Smith")), Ok(true));
+        assert!(users.sign_in("ann", "new").is_some());
+        assert_eq!(users.set_active("dee", false, Some("ann")), Err(Refusal::Conflict("Set in the directory.")));
     }
 }

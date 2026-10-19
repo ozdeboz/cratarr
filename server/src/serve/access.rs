@@ -448,6 +448,39 @@ mod tests {
         HttpRequest::get(uri).body(Body::empty()).unwrap()
     }
 
+    /// A JSON request, and its answer's status and body.
+    async fn send_json(s: &Arc<Serve>, method: &str, uri: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+        let req = HttpRequest::builder().method(method).uri(uri).header("content-type", "application/json").body(Body::from(body.to_string())).unwrap();
+        let r = app(s).oneshot(req).await.unwrap();
+        let status = r.status();
+        let bytes = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+    }
+
+    #[tokio::test]
+    async fn the_users_panel_makes_and_keeps_cratarr_accounts_and_says_why_not() {
+        // Signing in off: the owner ("me") administers.
+        let s = served(false);
+        let (status, ann) = send_json(&s, "POST", "/api/users", json!({ "name": "ann", "password": "pw", "admin": false })).await;
+        assert_eq!((status, ann["name"].as_str(), ann["directory"].as_bool(), ann["admin"].as_bool()), (StatusCode::OK, Some("ann"), Some(false), Some(false)));
+        let (status, taken) = send_json(&s, "POST", "/api/users", json!({ "name": "Ann", "password": "pw" })).await;
+        assert_eq!((status, taken["error"].as_str()), (StatusCode::CONFLICT, Some("That name is taken.")));
+        assert_eq!(send_json(&s, "POST", "/api/users", json!({ "name": "a/b", "password": "pw" })).await.0, StatusCode::BAD_REQUEST);
+        let (status, own) = send_json(&s, "PUT", "/api/users/me/role", json!({ "admin": false })).await;
+        assert_eq!((status, own["error"].as_str()), (StatusCode::CONFLICT, Some("You cannot change your own role.")));
+        assert_eq!(send_json(&s, "PUT", "/api/users/ann/password", json!({ "password": "new" })).await.0, StatusCode::NO_CONTENT);
+        assert_eq!(send_json(&s, "PUT", "/api/users/ann/active", json!({ "active": false })).await.0, StatusCode::NO_CONTENT);
+        assert!(s.users.sign_in("ann", "new").is_none(), "removed");
+        assert_eq!(send_json(&s, "PUT", "/api/users/nobody/active", json!({ "active": true })).await.0, StatusCode::NOT_FOUND);
+        // One's own password: the current one asked.
+        let (status, wrong) = send_json(&s, "PUT", "/api/me/password", json!({ "current": "nope", "password": "x" })).await;
+        assert_eq!((status, wrong["error"].as_str()), (StatusCode::FORBIDDEN, Some("The current password is wrong.")));
+        assert_eq!(send_json(&s, "PUT", "/api/me/password", json!({ "current": "pw", "password": "x" })).await.0, StatusCode::NO_CONTENT);
+        assert!(s.users.sign_in("me", "x").is_some());
+        // A Cratarr account's app password is its password.
+        assert_eq!(send_json(&s, "PUT", "/api/me/subsonic-password", json!({ "password": "y" })).await.0, StatusCode::CONFLICT);
+    }
+
     #[tokio::test]
     async fn a_refusal_is_in_the_diagnostics_log_with_why_and_without_what_it_carried() {
         use tracing_subscriber::layer::SubscriberExt;

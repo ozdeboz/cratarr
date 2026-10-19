@@ -13,19 +13,23 @@ use axum::routing::{delete, get, put};
 use serde_json::json;
 
 use super::signin::session_of;
-use super::users::{Permissions, User};
+use super::users::{Permissions, Refusal, User};
 use super::{Serve, now};
 
 pub fn router(serve: Arc<Serve>) -> Router {
     Router::new()
         .route("/api/me", get(me))
+        .route("/api/me/password", put(change_own_password))
         .route("/api/me/subsonic-password", put(set_app_password))
         .route("/api/me/sessions/{id}", delete(end_own_session))
         .route("/api/me/devices/{id}", delete(forget_own_device))
         .route("/api/me/settings", get(own_settings).put(set_own_settings))
         .merge(
             Router::new()
-                .route("/api/users", get(users))
+                .route("/api/users", get(users).post(create_user))
+                .route("/api/users/{name}/role", put(set_role))
+                .route("/api/users/{name}/password", put(set_password))
+                .route("/api/users/{name}/active", put(set_active))
                 .route("/api/users/{name}/permissions", put(set_permissions))
                 .route("/api/users/{name}/sessions/{id}", delete(end_session))
                 .route("/api/users/{name}/devices/{id}", delete(forget_device))
@@ -36,6 +40,17 @@ pub fn router(serve: Arc<Serve>) -> Router {
 
 fn refused(status: StatusCode, error: &str) -> Response {
     (status, axum::Json(json!({ "error": error }))).into_response()
+}
+
+/// An account change refused, as the Users panel shows it.
+fn refusal(r: Refusal) -> Response {
+    let status = match r {
+        Refusal::Bad(_) => StatusCode::BAD_REQUEST,
+        Refusal::Conflict(_) => StatusCode::CONFLICT,
+        Refusal::Missing => StatusCode::NOT_FOUND,
+        Refusal::Unsaved => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    refused(status, r.message())
 }
 
 /// An account's sign-ins, the one this request came with marked `current`.
@@ -81,9 +96,13 @@ struct AppPassword {
     password: String,
 }
 
-/// One's own OpenSubsonic password (an account from the directory has none until then: its apps sign in with this).
+/// One's own OpenSubsonic password, for an account from the directory (none until then: its apps sign in with this). A
+/// Cratarr account's own password is its OpenSubsonic one too (`/api/me/password`).
 async fn set_app_password(State(serve): State<Arc<Serve>>, axum::Json(b): axum::Json<AppPassword>) -> Response {
     let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
+    if serve.users.get(&me).is_some_and(|u| !u.directory) {
+        return refused(StatusCode::CONFLICT, "Your password is your app password too: change that.");
+    }
     match serve.users.set_app_password(&me, &b.password) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(why) => refused(StatusCode::BAD_REQUEST, why),
@@ -160,6 +179,105 @@ async fn set_own_settings(State(serve): State<Arc<Serve>>, axum::Json(b): axum::
     }
 }
 
+#[derive(serde::Deserialize)]
+struct OwnPassword {
+    current: String,
+    password: String,
+}
+
+/// One's own password, for a Cratarr account (any user; the directory keeps its own accounts'): the current one asked.
+/// The other sign-ins end.
+async fn change_own_password(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json(b): axum::Json<OwnPassword>) -> Response {
+    let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
+    if serve.users.get(&me).is_some_and(|u| u.directory) {
+        return refused(StatusCode::CONFLICT, "Set in the directory.");
+    }
+    if let Err(why) = serve.users.change_password(&me, &b.current, &b.password) {
+        let status = if why == "The current password is wrong." { StatusCode::FORBIDDEN } else { StatusCode::BAD_REQUEST };
+        return refused(status, why);
+    }
+    let keep = session_of(&serve, &headers).map(|s| s.id);
+    let _ = serve.sessions.revoke_user(&me, keep.as_deref());
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct NewUser {
+    name: String,
+    password: String,
+    #[serde(default)]
+    admin: bool,
+}
+
+/// A new Cratarr account (decision 0051, amended): answered as the Users panel shows it.
+async fn create_user(State(serve): State<Arc<Serve>>, axum::Json(b): axum::Json<NewUser>) -> Response {
+    match serve.users.create(&b.name, &b.password, b.admin) {
+        Ok(u) => {
+            tracing::info!(target: "signin", user = %u.name, admin = u.admin, "account made");
+            axum::Json(view(&serve, &u, None)).into_response()
+        }
+        Err(r) => refusal(r),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct Role {
+    admin: bool,
+}
+
+async fn set_role(State(serve): State<Arc<Serve>>, Path(name): Path<String>, axum::Json(b): axum::Json<Role>) -> Response {
+    match serve.users.set_admin(&name, b.admin, serve.current_user().as_deref()) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(r) => refusal(r),
+    }
+}
+
+/// A Cratarr account's password, set by an administrator: its sign-ins end (the administrator's own, when it is theirs,
+/// stays).
+async fn set_password(State(serve): State<Arc<Serve>>, headers: HeaderMap, Path(name): Path<String>, axum::Json(b): axum::Json<AppPassword>) -> Response {
+    if let Err(r) = serve.users.set_password(&name, &b.password) {
+        return refusal(r);
+    }
+    let keep = (serve.current_user().as_deref() == Some(name.as_str())).then(|| session_of(&serve, &headers).map(|s| s.id)).flatten();
+    let _ = serve.sessions.revoke_user(&name, keep.as_deref());
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct Active {
+    active: bool,
+}
+
+/// A Cratarr account removed (inactive, its data kept) or restored.
+async fn set_active(State(serve): State<Arc<Serve>>, Path(name): Path<String>, axum::Json(b): axum::Json<Active>) -> Response {
+    match serve.users.set_active(&name, b.active, serve.current_user().as_deref()) {
+        Ok(changed) => {
+            if changed && !b.active {
+                let ended = left(&serve, &name).await;
+                tracing::warn!(target: "signin", user = %name, sessions = ended, "account removed: deactivated");
+            } else if changed {
+                tracing::info!(target: "signin", user = %name, "account restored");
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(r) => refusal(r),
+    }
+}
+
+/// An account that may no longer use Cratarr (removed, or out of the directory's group): its sign-ins end and its
+/// devices stop playing for it (paused: their queues stay, as its data does). Returns how many sign-ins ended.
+async fn left(serve: &Serve, name: &str) -> usize {
+    let ended = serve.sessions.revoke_user(name, None).unwrap_or(0);
+    if let Some(on) = crate::app::PlayOn::instance() {
+        for p in on.list_for(Some(name)).into_iter().filter(|p| p.online && p.playing) {
+            if let Err(e) = on.command(&p.name, crate::app::PlayOnCommand::Pause).await {
+                tracing::warn!(target: "signin", user = %name, player = %p.name, "could not stop its player: {e}");
+            }
+        }
+    }
+    ended
+}
+
 async fn users(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {
     let current = session_of(&serve, &headers).map(|s| s.id);
     let list: Vec<_> = serve.users.all().iter().map(|u| view(&serve, u, current.as_deref())).collect();
@@ -192,7 +310,7 @@ pub async fn check_directory(serve: &Serve) {
         }
         match serve.users.deactivate(&u.name) {
             Ok(true) => {
-                let ended = serve.sessions.revoke_user(&u.name, None).unwrap_or(0);
+                let ended = left(serve, &u.name).await;
                 serve.directory.forget_account(&u.name);
                 tracing::warn!(target: "signin", user = %u.name, sessions = ended, "left the directory's group: deactivated");
             }
