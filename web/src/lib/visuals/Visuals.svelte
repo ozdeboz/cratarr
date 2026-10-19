@@ -73,6 +73,8 @@
   import { giveCables } from './chain-cables';
   import { shapeOf } from './evaluate';
   import { evaluate, newEvalState, type Evaluated } from './evaluate';
+  import { askStep, morphTo, newMorph, stepMorph } from './morph';
+  import { leavingIds, morphedPatch, morphModules, sameModules, withLeaving } from './chain-morph';
   import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
   import PatchGraph from './PatchGraph.svelte';
@@ -504,6 +506,7 @@
     }
     drawingNow = null;
     nextBlend = ANOTHER_MS;
+    morphNext = ANOTHER_MS / 1000;
     lookCame = 'track';
     if (snap.id === STANDARD.id) {
       // Each track's own look again: nothing pinned, the playing track's drawn anew (and sent to the group, as after
@@ -884,6 +887,10 @@
   // The same patch as the panel's, drawn; every edit made the way the panel makes it. Where its nodes stand is this
   // device's own (kept here, not shared).
   const patchNow = $derived(cratarrPatch(s));
+  // The extras as set, a new value on any change of them: the frame loop morphs to each (decision 0056, step 6).
+  const extraNow = $derived($state.snapshot(s.extra) as PatchExtra);
+  // The next change's morph (seconds), where it is not the usual: a recall's.
+  let morphNext: number | null = null;
   const GRAPH_TYPES: Record<string, ModuleType> = Object.fromEntries([...EXTRA_TYPES, ...cratarrTypes(RANGES, DEFAULTS)].map((t) => [t.type, t]));
   const GRAPH_KEY = 'cratarr-visuals-graph';
   let graphAt = $state<Record<string, { x: number; y: number }>>(
@@ -1286,7 +1293,16 @@
     // what the compositor draws with; today's chain stays with aspects.ts.
     const evalState = newEvalState();
     let evaluated: Evaluated | null = null;
-    const knobsOf = (m: Module) => evaluated?.knobs[m.id] ?? m.knobs;
+    // The morph (claude-632's morph.ts): the extras' knobs from one state to the next, never a cut; a chain change's
+    // modules fading in from neutral and out to it (drawn till then: chain-morph.ts); a step only at its module's
+    // neutral, the evaluator's moments too. A knob's change over a moment, a chain's or a recall's as a look blends.
+    const KNOB_MORPH = 0.15;
+    const morph = newMorph(morphModules(extraNow), GRAPH_TYPES);
+    let morphedTo = extraNow;
+    let drawnExtra = extraNow;
+    let goingBefore = 0;
+    let shownKnobs: Record<string, Record<string, number>> = {};
+    const knobsOf = (m: Module) => evaluated?.knobs[m.id] ?? shownKnobs[m.id] ?? m.knobs;
 
     // What shows: the flame blended from (`from`) to the playing track's (`to`); `shown` is the last one drawn, so a
     // track that starts mid-blend blends on from where it was.
@@ -1762,11 +1778,25 @@
           behaving[aspect] *
           (trial.settings ? (aspects.matrix ? heightOn(aspects.matrix, signal, band, aspect, x) : x) : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined)),
       });
-      // The patch past the flame, this frame: on when there is anything of it.
-      const extra = s.extra;
+      // The patch past the flame, this frame: on when there is anything of it, morphed to the extras as set.
+      const extraSet = extraNow;
+      const extraChanged = extraSet !== morphedTo;
+      if (extraChanged) {
+        morphTo(morph, morphModules(extraSet), morphNext ?? (sameModules(extraSet, morphedTo) ? KNOB_MORPH : ANOTHER_MS / 1000), GRAPH_TYPES);
+        morphNext = null;
+        morphedTo = extraSet;
+      }
+      const morphFrame = stepMorph(morph, dt, m.bps > 0 ? 1 / m.bps : null, GRAPH_TYPES);
+      shownKnobs = { ...morphFrame.knobs, ...Object.fromEntries(morphFrame.leaving.map((l) => [l.id, l.knobs])) };
+      const extra = withLeaving(extraSet, drawnExtra, leavingIds(morphFrame.leaving));
+      if (compositor && (extraChanged || morphFrame.leaving.length !== goingBefore)) compositor.prune(extra);
+      goingBefore = morphFrame.leaving.length;
+      drawnExtra = extra;
       if (compositor && renderer) {
-        const p = patchNow;
+        const p = morphedPatch(patchNow, morphFrame.knobs);
         evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat }, walk: cableWalk }) : null;
+        // A step its cables move on: taken at its module's next neutral.
+        for (const r of evaluated?.moments ?? []) askStep(morph, r.module, r.knob, GRAPH_TYPES);
         const active = Compositor.active(extra, knobsOf);
         renderer.compose = active
           ? {
