@@ -221,20 +221,41 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   right, which views it in the shell's panel (`?view=`); while a playlist is viewed the graph's selection and the panel
   follow each other. The **Legend** button is always in the graph's bottom-right corner; it opens the legend as a sheet
   (lines, points, and the colour groups named by their most common genres).
-- **Settings** is a portal of cards (decided 2026-10-16): one card per part, its name and what it is set to in a
-  line, a tap opening the part in the panel (`?view=settings:<part>`, lib/SettingsPanel), as a playlist opens: beside
-  the cards on a wide page (the open card bordered), over them on a phone, ✕ back to them. The parts, in this order:
-  This device (in the app only), Connections (servers: address, key, status; Lidarr the same way, shown only when an
-  Incoming library is set), Libraries (one row per server library: its use, Music, Incoming or Not used, and the
-  folder Cratarr sees its files in, or a warning when it can't; then the names, the trash, the catalogue status and
-  tag splitting), Authentication (the account Subsonic apps sign in with; decided 2026-10-16, not "Subsonic"), Import
-  (plays, favourites, ratings and added dates from a server), Display (theme, progress bar). About (version, port,
-  file locations) is not a part: it is a sheet opened from the info button at the page's top right, in the floating
-  row (lib/AboutSheet). Each part is its own file (lib/settings/*Part) over one editor (lib/settings/editor), so what is
-  changed in one part shows the Save bar in all of them and survives going from one to another.
-  What a part edits is saved with the Save bar at its foot. A part opens on the settings last read (reading them
-  checks every connection, which takes seconds) and takes the fresh ones unless something was edited meanwhile.
-  Technical details go to About or nowhere. A use is set only there (decision 0009).
+- **Settings** is a list of its parts (decided 2026-10-16 as cards; rows since 2026-10-19, the owner: "just make it
+  so"): two groups under small muted headings, **Personal** (each user's own) and **Server** (its administrators' only,
+  decision 0051), each group's rows in one rounded block with a line between them. A part is a row: its icon, its
+  name, what it is set to in a line (a list too long for one is counted: "10 players"), and ›. A tap opens the part in
+  the panel (`?view=settings:<part>`, lib/SettingsPanel).
+  - **On a roomy window the list sits beside a part, always** (the owner, 2026-10-19: "just force the panel open on
+    the settings page"). The list is a column of 400 px; the panel is beside it whatever the place chosen elsewhere,
+    and takes the rest of the width. It shows the part last open in this browser, or else the first. The part opens
+    without a step in the history, so Back leaves the page. Its row is tinted in the accent. There is no ✕ and no
+    place to choose, and the edge is a plain line, not a handle.
+  - **On a phone, or a window without room,** the list is alone. A part opens over it as a playlist does, and ✕ goes
+    back to the list.
+  - **A part belongs to the Settings page.** Going to another page leaves it closed (`keepViewed` does not carry it).
+  - **The parts, in this order:**
+    - This device (its name in the row's line; in the app also its player, Stay ready, what is downloaded);
+    - Network and Sync (in the app only);
+    - Account (who is signed in, the app password, devices and sign-ins);
+    - Display (theme, progress bar);
+    - then the server's:
+      - Connections (servers: address, key, status; Lidarr the same way, shown only when an Incoming library is set);
+      - Libraries (one row per server library: its use, Music, Incoming or Not used, and the folder Cratarr sees its
+        files in, or a warning when it can't; then the names, the trash, the catalogue status and tag splitting);
+      - Players;
+      - Users;
+      - Authentication (the account Subsonic apps sign in with; decided 2026-10-16, not "Subsonic");
+      - Import (plays, favourites, ratings and added dates from a server);
+      - Diagnostics.
+  - **About** (version, port, file locations) is not a part: it is a sheet opened from the info button at the page's
+    top right, in the floating row (lib/AboutSheet).
+  - **One editor.** Each part is its own file (lib/settings/*Part) over one editor (lib/settings/editor), so what is
+    changed in one part shows the Save bar in all of them and survives going from one to another.
+  - **Saving.** What a part edits is saved with the Save bar at its foot. A part opens on the settings last read
+    (reading them checks every connection, which takes seconds) and takes the fresh ones unless something was edited
+    meanwhile.
+  - Technical details go to About or nowhere. A use is set only there (decision 0009).
 - **Settings as Finamp presents them** (the owner, 2026-10-17: "we learn from the way Finamp presents settings and
   deeper settings"; chosen: these three, not a quick-settings card):
   - **One short line, the rest behind an (i).** A setting shows its name and at most one short line; a longer

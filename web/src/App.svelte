@@ -34,7 +34,7 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { closePlaylist, keepViewed, panel, settingsOf } from './lib/panel.svelte';
+  import { closePlaylist, keepViewed, panel, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace } from './lib/panel.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
   import { known, remember } from './lib/sources.svelte';
@@ -136,7 +136,10 @@
     page;
     untrack(collapse);
   });
-  const sidebar = $derived(inSidebar());
+  // Settings on a roomy window is its list beside a part (the owner, 2026-10-19: "just force the panel open on the
+  // settings page"): the panel is always beside it there, showing a part.
+  const settingsSplit = $derived(page === 'settings' && player.roomy);
+  const sidebar = $derived(settingsSplit || inSidebar());
   // The visuals beside the page: in the panel where the player goes, while it is there (a narrow window: over the page).
   const visualsBeside = $derived(visuals.open && visuals.side && sidebar);
   const overlay = $derived(player.full && !sidebar);
@@ -175,6 +178,19 @@
   const PLAYABLE = ['playlists', 'crates', 'library', 'downloads'];
   // A part of the settings in the panel (lib/SettingsPanel), when the panel shows one.
   const settingsShown = $derived(SECTIONS.find((x) => x.id === settingsOf(panel.viewed))?.id ?? (null as SettingsSection | null));
+  // Beside Settings' list a part is always open: the one last open in this browser, else the first; opened in place, so
+  // Back leaves the page rather than closing it. Once it is known who is signed in (the server's parts are its
+  // administrators'). Only while the address is Settings' own: leaving it (Back, a link) clears the part a moment before
+  // `page` follows, and opening one then would write it into the next page's address.
+  $effect(() => {
+    if (!settingsSplit || settingsShown || !me.known || fromHash() !== 'settings') return;
+    const parts = SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin));
+    const part = parts.find((x) => x.id === prefs.settingsPart) ?? parts[0];
+    if (part) untrack(() => viewInPlace(SETTINGS_VIEW + part.id));
+  });
+  $effect(() => {
+    if (settingsShown) prefs.settingsPart = settingsShown;
+  });
   const pagePill = $derived(PLAYABLE.includes(page));
   // An icon button's label on a long-press or right-click, everywhere (lib/labels).
   $effect(installLabels);
@@ -241,6 +257,9 @@
   const fitWidth = (w: number) => Math.round(Math.min(Math.max(w, PLAYER_MIN), area.w - PAGE_MIN));
   let dragged = $state<number | null>(null);
   const playerWidth = $derived(fitWidth(dragged ?? prefs.playerWidth));
+  // Beside Settings' list the part takes all but the list's column (no grip there: the list's width is its own).
+  const SETTINGS_LIST = 400;
+  const sideWidth = $derived(settingsSplit ? Math.max(PLAYER_MIN, area.w - SETTINGS_LIST) : playerWidth);
   let contentEl = $state<HTMLElement>();
   // The page's side and the panel's: sheets opened in either stand over it (lib/SheetArea.svelte).
   let pageEl = $state<HTMLElement>();
@@ -411,7 +430,7 @@
     ></button>
   </div>
 
-  <div class="content" class:with-side={sidebar} style:--player-w="{playerWidth}px" bind:this={contentEl}>
+  <div class="content" class:with-side={sidebar} style:--player-w="{sideWidth}px" bind:this={contentEl}>
     <div class="page" class:under-row={pageRow} bind:this={pageEl}>
     <SheetArea area={() => pageEl}>
     {#if page === 'settings'}
@@ -433,7 +452,9 @@
     {/if}
     </SheetArea>
     </div>
-    {#if sidebar}
+    {#if settingsSplit}
+      <div class="grip line" aria-hidden="true"></div>
+    {:else if sidebar}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div
         class="grip edge-grip"
@@ -447,10 +468,12 @@
         onpointerdown={grip}
         onkeydown={gripKey}
       ></div>
+    {/if}
+    {#if sidebar}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" aria-label={panelShowsPlayer() ? 'Player' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={settingsSplit} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} />{:else}<PlaylistView />{/if}
+          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}
@@ -475,7 +498,7 @@
     >
   {/if}
   {#if pageRow}
-    <div class="page-row" class:beside={sidebar} style:--player-w="{playerWidth}px">
+    <div class="page-row" class:beside={sidebar} style:--player-w="{sideWidth}px">
       {#if navAt > 0}
         <span class="navpill"><button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button></span>
       {:else}
@@ -664,7 +687,16 @@
     height: calc(var(--app-h, 100dvh) - var(--top-h, 0px) - env(safe-area-inset-top));
   }
 
-  /* The edge between page and player wears the shared handle (app.css .edge-grip). */
+  /* The edge between page and player wears the shared handle (app.css .edge-grip). Beside Settings' list it is a plain
+     line: no handle, so no cut in the panel for one (.whole). */
+  .grip.line {
+    width: 1px;
+    background: var(--border);
+  }
+
+  .player-side.whole {
+    mask: none;
+  }
 
   /* The panel scrolls on its own: a scroll in it never moves the page beside it (nor where it has nothing to scroll).
      Its content answers to the panel's width (a container), which can be dragged narrow. */

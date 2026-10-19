@@ -1,6 +1,7 @@
 <script lang="ts">
   // A part of the settings in the panel (decided 2026-10-16: "the settings page should really be a portal with cards that
-  // open settings-specific panels"): the Settings page's card opens it, as a playlist opens. Each part is its own file
+  // open settings-specific panels"): the Settings page's row opens it, as a playlist opens. Beside the page's list on a
+  // roomy window (`beside`, the owner 2026-10-19) a part is always open: no ✕ and no place to choose there. Each part is its own file
   // (lib/settings/*Part) over one editor (lib/settings/editor), so what is changed in one part shows the Save bar in
   // all of them and survives going from one to another. Authentication's account, Import, this device's settings and
   // Display act at once. The server's parts are its administrators' (decision 0051): for anyone else they show nothing,
@@ -11,9 +12,8 @@
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import PanelPlace from './PanelPlace.svelte';
-  import { appInfo, askDevice, askDownloads, inApp } from './app.svelte';
+  import { askDevice, askDownloads, inApp } from './app.svelte';
   import { closePlaylist } from './panel.svelte';
-  import { prefs } from './prefs.svelte';
   import { SECTIONS, type SettingsSection } from './settingsSections.svelte';
   import { ed } from './settings/editor.svelte';
   import { partReset } from './settings/reset.svelte';
@@ -31,14 +31,9 @@
   import DiagnosticsPart from './settings/DiagnosticsPart.svelte';
   import PlayersSettings from './PlayersSettings.svelte';
 
-  let { section }: { section: SettingsSection } = $props();
-  const title = $derived(
-    section === 'device'
-      ? inApp
-        ? (appInfo.player ?? 'This device')
-        : prefs.browserName || 'This browser'
-      : (SECTIONS.find((x) => x.id === section)?.title ?? 'Settings'),
-  );
+  let { section, beside = false }: { section: SettingsSection; beside?: boolean } = $props();
+  // The part's name, as its row on the Settings page has it (This device too: the device's name is in its line).
+  const title = $derived(SECTIONS.find((x) => x.id === section)?.title ?? 'Settings');
 
   // Inside the Android app: its settings as they are now (Android's background permission may have changed meanwhile).
   if (inApp) {
@@ -65,15 +60,15 @@
 </script>
 
 <div class="view">
-  <div class="bar">
-    <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
+  <div class="bar" class:beside>
+    {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
     <h2 class="title">{title}</h2>
     <span class="end">
       <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
       {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
       <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar. -->
       {#if partReset.run}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
-      <PanelPlace />
+      {#if !beside}<PanelPlace />{/if}
     </span>
   </div>
   <div class="scroll">
@@ -140,8 +135,14 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    min-height: 65px;
     padding: 8px 8px 8px 12px;
     border-bottom: 1px solid var(--border);
+  }
+
+  /* Beside the list, without ✕: the name in line with the part under it. */
+  .bar.beside {
+    padding-left: clamp(12px, 2vw, 24px);
   }
 
   .bar .title {

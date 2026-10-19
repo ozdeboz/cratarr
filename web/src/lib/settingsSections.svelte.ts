@@ -40,4 +40,6 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
 ];
 
 export const settingsSaved = $state({ n: 0 });
+/** Diagnostics' More detail, on or off as last read or set (null: not read yet): its row says it beside the part. */
+export const logDetail = $state({ on: null as boolean | null });
 export const settingsRead = $state({ s: null as Settings | null });

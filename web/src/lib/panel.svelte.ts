@@ -42,7 +42,7 @@ export function artistOf(viewed: string | null): { source: string; name: string;
 /** A playlist being made: the panel's edit mode, with no playlist yet (New playlist, as `crate-new` is New crate). */
 export const NEW_PLAYLIST = 'playlist-new';
 
-/** A part of the settings (`settings:libraries`), opened from the Settings page's cards (lib/SettingsPanel). */
+/** A part of the settings (`settings:libraries`), opened from the Settings page's list (lib/SettingsPanel). */
 export const SETTINGS = 'settings:';
 export const settingsOf = (viewed: string | null) => (viewed?.startsWith(SETTINGS) ? viewed.slice(SETTINGS.length) : null);
 
@@ -126,6 +126,14 @@ export function viewSelection(names: string[], tab: Tab = 'tracks') {
 /** Views one playlist (or a crate, or an album) on its Tracks. */
 export const viewPlaylist = (name: string) => viewSelection([name]);
 
+/** Views a subject without a step in the history, even when nothing was viewed: what a page shows by itself (Settings
+ *  opening a part beside its list), which Back does not close. */
+export function viewInPlace(name: string) {
+  panel.playerTop = false;
+  replace(address([name], 'tracks'));
+  read();
+}
+
 /** Views a subject over the one viewed, going deeper (an album's artist, an artist's album, as Symfonium's): a step of
  *  its own, which back returns from. With nothing viewed, as viewPlaylist. */
 export function viewOver(name: string) {
@@ -196,8 +204,8 @@ export function albumGone(source: string, id: string) {
   if (panel.viewed === albumSubject(source, id)) closePlaylist();
 }
 
-/** A page's link that keeps what is viewed viewed. */
+/** A page's link that keeps what is viewed viewed. A part of the settings is the Settings page's own: it stays there. */
 export const keepViewed = (href: string) => {
   const q = location.hash.split('?')[1];
-  return panel.viewed && q ? `${href}?${q}` : href;
+  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) ? `${href}?${q}` : href;
 };
