@@ -17,6 +17,8 @@ import subprocess
 import sys
 
 SEP = '\x1f'
+# Run by a scheduled task with pythonw: the commands it runs open no windows either.
+QUIET = {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
 QUERY = """
 SELECT m.provider_track_id, s.energy, s.key, s.scale, s.mood_vector, s.other_features,
        replace(encode(e.embedding, 'base64'), E'\\n', '')
@@ -30,7 +32,7 @@ ORDER BY m.provider_track_id
 
 def rows(docker: list[str], container: str, user: str, db: str) -> list[dict]:
     cmd = docker + ['exec', container, 'psql', '-U', user, '-d', db, '-At', '-F', SEP, '-c', QUERY]
-    out = subprocess.run(cmd, capture_output=True, check=True).stdout.decode('utf-8')
+    out = subprocess.run(cmd, capture_output=True, check=True, **QUIET).stdout.decode('utf-8')
     lines = []
     for raw in out.splitlines():
         f = raw.split(SEP)
@@ -74,9 +76,11 @@ def main() -> int:
         return 0
     host, path = args.copy_to.split(':', 1)
     folder = path.rsplit('/', 1)[0]
-    subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f'mkdir -p {shlex.quote(folder)}'], check=True)
-    subprocess.run(['scp', '-q', '-o', 'BatchMode=yes', args.out, f'{host}:{path}.part'], check=True)
-    subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f'chmod 644 {shlex.quote(path + ".part")} && mv {shlex.quote(path + ".part")} {shlex.quote(path)}'], check=True)
+    # A folder made here is open to read: Cratarr may run as another user than the one ssh signs in as.
+    q = shlex.quote(folder)
+    subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f'[ -d {q} ] || {{ mkdir -p {q} && chmod 755 {q}; }}'], check=True, **QUIET)
+    subprocess.run(['scp', '-q', '-o', 'BatchMode=yes', args.out, f'{host}:{path}.part'], check=True, **QUIET)
+    subprocess.run(['ssh', '-o', 'BatchMode=yes', host, f'chmod 644 {shlex.quote(path + ".part")} && mv {shlex.quote(path + ".part")} {shlex.quote(path)}'], check=True, **QUIET)
     with open(last_file, 'w', encoding='utf-8') as f:
         f.write(f'{digest} {args.copy_to}\n')
     print(f'copied to {args.copy_to}')
