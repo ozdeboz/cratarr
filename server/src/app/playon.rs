@@ -110,6 +110,13 @@ pub struct Report {
     /// out or null: nothing holds it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
+    /// `device` while the app plays the device's own music (decision 0052, local mode): the rest of this report is that
+    /// player's, and Cratarr's queue is left as it was. Left out: Cratarr's music, as ever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// In local mode, the track that plays (the device's own: Cratarr cannot serve it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_track: Option<DeviceTrack>,
     /// Where its sound goes now (decision 0033, amended 2026-10-19), as its app tells: left out by pages, Kodi and
     /// apps from before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -121,6 +128,22 @@ pub struct Report {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_name: Option<String>,
 }
+
+/// A track of a device's own music, as its app tells it in local mode (decision 0052).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceTrack {
+    pub name: String,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub album: Option<String>,
+}
+
+/// A report's mode for the device's own music (decision 0052).
+const DEVICE_MODE: &str = "device";
+
+/// Why Cratarr refuses to change a device's queue in local mode (decision 0052).
+const OWN_MUSIC: &str = "That device plays its own music.";
 
 /// A device's audio output (decision 0033, amended 2026-10-19): `bluetooth`, `speaker`, `wired`, `usb`, `hdmi`,
 /// `remote` or `other`, and the device's own name where it has one (a car's Bluetooth, say; none for a speaker).
@@ -518,6 +541,10 @@ pub struct PlayerView {
     pub queues: Option<Vec<QueueItem>>,
     /// Goes up whenever that list changes: ask for the player by name to see it.
     pub queues_version: u64,
+    /// `cratarr`, or `device` while it plays the device's own music (decision 0052): then `title`, `artist`, `album`,
+    /// `state` and `position_ms` are that music's, and nothing of Cratarr's queue plays (`track` none, `index` -1,
+    /// `queue_length` 0; the queue itself waits, as do its queues).
+    pub mode: &'static str,
 }
 
 /// Saved in `players.json`.
@@ -599,6 +626,8 @@ struct Entry {
     secret: String,
     /// Its queues left behind, newest first (decision 0033, amended: queue history); a browser keeps its own.
     kept: Vec<Kept>,
+    /// While it plays the device's own music (decision 0052, local mode): its last report then, and when it came.
+    device: Option<(Report, Instant)>,
     /// Goes up whenever that list changes, so a page asks for it again.
     kept_version: u64,
 }
@@ -649,6 +678,7 @@ impl Entry {
             secret: new_secret(),
             kept: Vec::new(),
             kept_version: 0,
+            device: None,
         }
     }
 
@@ -717,6 +747,16 @@ impl Entry {
 
     /// Where it is in its track now: as it last reported, moved on by the time since while it plays.
     fn position_now(&self) -> u64 {
+        if let Some((d, at)) = &self.device {
+            let mut p = d.position_ms;
+            if d.playing {
+                p += at.elapsed().as_millis() as u64;
+                if let Some(len) = d.duration_ms {
+                    p = p.min(len);
+                }
+            }
+            return p;
+        }
         let r = &self.report;
         let mut position_ms = r.position_ms;
         if r.playing {
@@ -729,6 +769,29 @@ impl Entry {
     }
 
     fn view(&self, name: &str, with_queue: bool) -> PlayerView {
+        let mut v = self.cratarr_view(name, with_queue);
+        // Local mode (decision 0052): the device's own music is what plays.
+        if let Some((d, at)) = &self.device {
+            let t = d.device_track.clone().unwrap_or_default();
+            let mut position_ms = d.position_ms;
+            if d.playing {
+                position_ms += at.elapsed().as_millis() as u64;
+                if let Some(len) = d.duration_ms {
+                    position_ms = position_ms.min(len);
+                }
+            }
+            v.mode = DEVICE_MODE;
+            v.state = if d.playing { "playing" } else { "paused" };
+            (v.playing, v.position_ms, v.duration_ms, v.index, v.queue_length) = (d.playing, position_ms, d.duration_ms, -1, 0);
+            (v.title, v.artist, v.album) = (Some(t.name).filter(|n| !n.is_empty()), t.artist, t.album);
+            (v.track, v.ids, v.current_entry_id) = (None, TrackIds::default(), None);
+            v.queue = with_queue.then(Vec::new);
+        }
+        v
+    }
+
+    /// The view of Cratarr's music on it.
+    fn cratarr_view(&self, name: &str, with_queue: bool) -> PlayerView {
         let r = &self.report;
         let position_ms = self.position_now();
         let index = self.index();
@@ -788,6 +851,7 @@ impl Entry {
             queue: with_queue.then(|| self.queue.tracks.clone()),
             queues: Some(self.queues()),
             queues_version: self.kept_version,
+            mode: "cratarr",
         }
     }
 }
@@ -1385,6 +1449,23 @@ impl PlayOn {
         let mut entries = self.entries();
         let e = claim(&mut entries, name, whose().as_deref())?;
         let before = e.view(name, false);
+        // Local mode (decision 0052): what plays there is kept as said, its volume, output and link with it; Cratarr's
+        // queue, the queue given back on a return, and its history are left alone until the app plays Cratarr again.
+        if report.mode.as_deref() == Some(DEVICE_MODE) {
+            e.seen = SystemTime::now();
+            e.heard = Instant::now();
+            (e.report.volume, e.report.ducked) = (report.volume, report.ducked);
+            (e.report.output, e.report.link, e.report.held) = (report.output.clone(), report.link.clone(), report.held.clone());
+            e.device = Some((report, Instant::now()));
+            let after = e.view(name, false);
+            drop(entries);
+            let still = |v: &PlayerView| PlayerView { position_ms: 0, position_at: 0, seen: 0, ..v.clone() };
+            if still(&before) != still(&after) {
+                self.changed();
+            }
+            return Ok(());
+        }
+        e.device = None;
         e.seen = SystemTime::now();
         e.heard = Instant::now();
         // Back without a queue (the app was updated, or killed): it gets its queue back where it was, playing on if it
@@ -1543,6 +1624,19 @@ impl PlayOn {
         let leader = if own { None } else { self.leader_of(name) };
         let name = leader.as_deref().unwrap_or(name);
         let mut started: Option<&'static str> = None;
+        // Local mode (decision 0052): steered, not edited. A play (or a queue taken up, or a handover to it) is Cratarr's
+        // music again, and the app goes back to it; a stop pauses it, so Cratarr's waiting queue stays.
+        let command = if self.entries().get(name).is_some_and(|e| e.device.is_some()) {
+            match command {
+                Command::Pause | Command::Resume | Command::Toggle | Command::Next | Command::Previous | Command::Volume { .. } => command,
+                Command::Duck | Command::Unduck | Command::Sleep { .. } | Command::Seek { .. } | Command::Sample { .. } => command,
+                Command::Play { .. } | Command::Queue { .. } | Command::QueueRename { .. } | Command::QueueDelete { .. } => command,
+                Command::Stop => Command::Pause,
+                _ => return Err(ToggleError::Refused(OWN_MUSIC.into())),
+            }
+        } else {
+            command
+        };
         let command = match command {
             Command::Join { to } => return self.join(name, &to).await,
             Command::Leave => return self.leave(name).await,
@@ -1705,6 +1799,9 @@ impl PlayOn {
     /// The queue moves on as itself, its id and name with it, and the player it left keeps it as it stood (0033 amended).
     async fn handover(&self, from: &str, to: &str) -> Result<(), ToggleError> {
         tracing::info!(target: "playon", player = from, to, "handover");
+        if self.entries().get(from).is_some_and(|e| e.device.is_some()) {
+            return Err(ToggleError::Refused(OWN_MUSIC.into()));
+        }
         let (queue, index, position_ms, sleep) = {
             let entries = self.entries();
             let Some(e) = entries.get(from) else { return Err(ToggleError::Refused(format!("No player is called {from}."))) };
@@ -2857,6 +2954,38 @@ mod tests {
         assert_eq!((play["queue_name"].as_str(), play["paused"].as_bool()), (Some("JVC KW-M560BT"), None), "played");
         let nowhere = Command::Queue { id: String::new(), played_on: Some("kitchen".into()) };
         assert!(matches!(p.command("Salon tablet", nowhere).await, Err(ToggleError::Refused(m)) if m == "No queue played on kitchen."));
+    }
+
+    #[tokio::test]
+    async fn a_device_in_local_mode_is_seen_and_steered_but_its_queue_is_not_cratarrs_to_change() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let mut phone = p.connect("Phone").unwrap();
+        p.command("Phone", Command::play(vec![t("tr-1"), t("tr-2")], 1, 0)).await.unwrap();
+        let version = p.get("Phone").unwrap().queue_version;
+        p.report("Phone", Report { index: 1, version: Some(version), playing: true, ..Report::default() }).unwrap();
+        said(&mut phone);
+
+        // Local mode (decision 0052): its own music shows; Cratarr's queue waits as it was.
+        let own = DeviceTrack { name: "Demo take".into(), artist: Some("Me".into()), album: None };
+        let local = Report { mode: Some("device".into()), device_track: Some(own), playing: true, position_ms: 5_000, index: -1, ..Report::default() };
+        p.report("Phone", local).unwrap();
+        let v = p.get("Phone").unwrap();
+        assert_eq!((v.mode, v.title.as_deref(), v.artist.as_deref(), v.state, v.queue_length, v.index), ("device", Some("Demo take"), Some("Me"), "playing", 0, -1));
+        assert!(v.track.is_none());
+        // Steered: a pause reaches it; a stop is a pause there; an edit or a handover from it is refused.
+        p.command("Phone", Command::Pause).await.unwrap();
+        p.command("Phone", Command::Stop).await.unwrap();
+        assert_eq!(said(&mut phone), ["pause", "pause"]);
+        let add = Command::Add { from: Default::default(), tracks: vec![t("tr-9")], at: None, after: None, how: None };
+        assert!(matches!(p.command("Phone", add).await, Err(ToggleError::Refused(m)) if m == OWN_MUSIC));
+        let _tablet = p.connect("tablet").unwrap();
+        assert!(matches!(p.command("Phone", Command::Handover { to: "tablet".into() }).await, Err(ToggleError::Refused(m)) if m == OWN_MUSIC));
+
+        // Back to Cratarr's music: its queue as it was.
+        p.report("Phone", Report { index: 1, version: Some(version), playing: true, ..Report::default() }).unwrap();
+        let v = p.get("Phone").unwrap();
+        assert_eq!((v.mode, v.queue_length, v.index), ("cratarr", 2, 1));
     }
 
     #[test]
