@@ -83,7 +83,7 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
 |---|---|---|
 | **Music** | source of values and triggers | the analysis: the whole track's signals, each band's level, hits and envelope; reference and speed per cable (0056) |
 | **Track** | source | a new track's pulse, and the track's own look (its preset) as outputs into the flame's look knobs |
-| **Envelope** | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); normalled into every cable's depth |
+| **Loudness** (type `envelope`) | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); normalled into every cable's depth |
 | **Clock** | modulator | the tempo's turning clock (once round in 32 beats at Speed); its phase feeds whatever turns |
 | **Flash** | modulator, one per target | the course-and-swing filter (a slow course, Flash's share of the swing about it) |
 | **Walk** (Look, Behaviour) | modulator | drift.ts's walks |
@@ -160,6 +160,31 @@ The owner: "freely routable". The picture side is a free graph, as the value sid
   - **Feedback that fills:** a high Keep with an outward zoom, so trails reach the edges and the screen never goes
     back to black.
 
+### 4b. Control sources, after VCV
+
+The owner asked how looping and envelopes fit, keeping it modular. VCV Rack's own answer is small modules that make
+control signals; we take its set as it is, in the order the owner agreed:
+
+1. **ADSR** (an envelope: attack, decay, sustain, release on each gate or trigger), **polyphonic**: fed Music's hits
+   (six channels, one a band) it runs six envelopes, one into each part of the flame. It is the visible form of
+   today's hidden "Linger" (the bands' lighting), so it belongs to the North Star itself.
+2. **The Clock's outputs**:
+   - Beat, Bar and Phrase as triggers, with a divider and multiplier;
+   - a **clocked LFO**: rate in beats when its clock input is plugged, reset on the downbeat, sine, triangle, saw and
+     square.
+   Everything rhythmic syncs through a visible trigger line, never a hidden tempo.
+3. **Sequencer**: 8 or 16 steps, each a knob, stepped by a clock input, reset input, length; a value out and a gate out.
+   It replaces the Counter.
+4. **Looper**: records a value (a knob's movement, a macro) over a number of bars and loops it in sync with the Clock;
+   record, overdub, clear. In the rack it sits on the knob itself: hold Record, turn the knob.
+
+- VCV's other basics are named and sorted as VCV does: Sample & Hold, Random (our Drift), Slew (our followers).
+- Each shows its state on its node and its row (VCV's lights): the LFO's wave with a moving dot, the ADSR's shape
+  lighting as it runs, the Sequencer's step.
+- A knob's "+ Add" offers "New ▸ LFO / ADSR / Sequencer / Looper": the module and its cable in one step, synced to
+  the Clock.
+- The loudness follower, so as not to be confused with the ADSR, is named Loudness.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
@@ -200,7 +225,7 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 | Step | What | Owner |
 |---|---|---|
 | 1 | **Model:** port types and declarations for every module type; the v2 patch as the truth; the store with undo; the v1 → v2 migration; the chain modules' declarations (3) with their normalled cables | claude-a5 |
-| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; Taste once redesigned; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
+| 2 | **Engine:** the one evaluator over typed ports; aspects.ts's behaviours ported into the Music, Track, Envelope, Clock, Flash, Walk modules and the Flame's part logic; the Compressor; the control sources of §4b (ADSR, the Clock's outputs and clocked LFO, Sequencer, Looper, in that order); Taste once redesigned; the precheck, the recipe and the dice on the new engine; equivalence tests | claude-5f |
 | 3 | **Picture graph:** the compositor over typed picture ports, lazy; the Flame, Show and loop modules as nodes in it (render.ts driven by knob values, not AspectsNow); the Meter and the Screen's flash guard; Displace, Mask, Tint and Glow; the Mali cost of each | claude-632 |
 | 4 | **Views:** typed wires and ports, normalled cables shown faint, rings, thumbnails and meters, bypass, undo (graph: claude-632; rack: claude-a5) | claude-632, claude-a5 |
 | 5 | **Nesting and macros:** chains as modules, the whole frame's macros | claude-a5 |

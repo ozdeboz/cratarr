@@ -90,7 +90,7 @@ function declared(type: string, name: string, place: Place, knobs: Knob[], input
 
 export const ENVELOPE = declared(
   'envelope',
-  'Envelope',
+  'Loudness',
   'modulator',
   [knob('intensity', 'Intensity', 0, 1, 0.5, 'level', 0), knob('time', 'Time', 0.02, 2, 0.2)],
   [{ id: 'in', label: 'Input', type: 'value', normal: { module: 'music', port: 'loudness' } }],
@@ -105,7 +105,7 @@ export const CLOCK = declared(
   'modulator',
   [knob('speed', 'Speed', 0, 2, 1, 'level', 0), knob('beats', 'Beats a turn', 4, 128, 32)],
   [{ id: 'tempo', label: 'Tempo', type: 'value', normal: { module: 'music', port: 'tempo' } }],
-  [out('phase', 'Turn'), out('rate', 'Rate')],
+  [out('phase', 'Turn'), out('rate', 'Rate'), out('beat', 'Beat', 'trigger'), out('bar', 'Bar', 'trigger'), out('phrase', 'Phrase', 'trigger')],
 );
 
 export const FLASH = declared(
@@ -149,7 +149,43 @@ export const COMPRESSOR = declared(
  *  Compressors keyed by that kind. To be redesigned with the owner. */
 export const TASTE = declared('taste', 'Taste', 'modulator', [], [], BUSY.map((b) => out(b, BUSY_LABEL[b])));
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, TASTE];
+/** ADSR (0057 §4b, VCV's): an envelope on each gate or trigger; polyphonic, one a channel (Music's hits: one a band). */
+export const ADSR = declared(
+  'adsr',
+  'ADSR',
+  'modulator',
+  [knob('attack', 'Attack', 0, 2, 0.01), knob('decay', 'Decay', 0, 4, 0.2), knob('sustain', 'Sustain', 0, 1, 0, 'level'), knob('release', 'Release', 0, 8, 0.2), knob('amount', 'Amount', 0, 1, 1, 'level')],
+  [{ id: 'gate', label: 'Gate', type: 'trigger', channels: 6 }],
+  [out('out', 'Out', 'value', 6)],
+);
+
+/** Sequencer (0057 §4b, VCV's SEQ): sixteen steps, each a knob, stepped by its clock, back to the first on reset. */
+export const SEQUENCER = declared(
+  'sequencer',
+  'Sequencer',
+  'modulator',
+  [knob('length', 'Steps', 1, 16, 8, 'step'), ...Array.from({ length: 16 }, (_, i) => knob(`step${i + 1}`, `Step ${i + 1}`, 0, 1, 0.5))],
+  [
+    { id: 'clock', label: 'Clock', type: 'trigger', normal: { module: 'clock', port: 'beat' } },
+    { id: 'reset', label: 'Reset', type: 'trigger', normal: { module: 'clock', port: 'bar' } },
+  ],
+  [VALUE_OUT, out('gate', 'Gate', 'trigger')],
+);
+
+/** Looper (0057 §4b): a value recorded over its bars and looped in time with the Clock. */
+export const LOOPER = declared(
+  'looper',
+  'Looper',
+  'modulator',
+  [knob('bars', 'Bars', 1, 16, 4, 'step'), knob('record', 'Record', 0, 1, 0, 'step'), knob('overdub', 'Overdub', 0, 1, 0, 'step')],
+  [
+    { id: 'in', label: 'Input', type: 'value' },
+    { id: 'clock', label: 'Clock', type: 'trigger', normal: { module: 'clock', port: 'bar' } },
+  ],
+  [VALUE_OUT],
+);
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, FLASH, WALK, METER, COMPRESSOR, TASTE, ADSR, SEQUENCER, LOOPER];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
