@@ -9,30 +9,86 @@
 // window.pictureLab holds the recording or the result; web/scripts/check-picture.mjs drives both.
 import { EXAMPLES } from './chains';
 import { randomFrom } from './flame';
-import type { Compositor } from './compose';
 import type { Tiles } from './meters';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { emptyExtra } from './patch';
-import { flameOf, lookOf, signalKey, type RecordedCompose, type Recording, type RecordRequest } from './recorder';
+import { flameOf, lookOf, signalKey, type RecordedCompose, type RecordedFrame, type Recording, type RecordRequest } from './recorder';
 import { chainOfShown } from './chain-params';
 import type { FlameRenderer, RendererOptions, Shown } from './render';
 import type { VisualSettings } from './settings.svelte';
 import { ID } from './signal-ids';
 
-/** The pipelines a replay can run: today's renderer and compositor (`current`), and the frozen copies every step is
- *  compared with (`legacy`: render-legacy.ts, compose-legacy.ts). */
-type Renderer = Pick<FlameRenderer, 'setPoints' | 'setFlame' | 'resize' | 'measure' | 'tiles' | 'dispose' | 'pointCount' | 'precision' | 'context' | 'compose'> & {
-  frame(passes: number, look: never, w: number, h: number): void;
+/** A pipeline as a replay drives it: a recorded frame drawn as its renderer takes it, and what the comparison reads. */
+type Driver = {
+  context: WebGL2RenderingContext;
+  precision: number;
+  draw(f: RecordedFrame, all: Recording): void;
+  measure(w: number, h: number, t: number): void;
+  tiles(): Tiles[];
+  dispose(): void;
 };
-/** Each takes the recorded look as its renderer reads it (`look`): the frozen one as one, today's by node. */
-type Pipeline = {
-  look: (l: Shown) => unknown;
-  Renderer: new (canvas: HTMLCanvasElement, points: number, power: WebGLPowerPreference, options: RendererOptions) => Renderer;
-  Compositor: new (gl: WebGL2RenderingContext) => Pick<Compositor, 'run' | 'prune' | 'dispose'>;
-};
-const PIPELINES: Record<string, () => Promise<Pipeline>> = {
-  current: async () => ({ Renderer: (await import('./render')).FlameRenderer, Compositor: (await import('./compose')).Compositor, look: chainOfShown }),
-  legacy: async () => ({ Renderer: (await import('./render-legacy')).FlameRenderer, Compositor: (await import('./compose-legacy')).Compositor, look: (l) => l }),
+type Made = Pick<FlameRenderer, 'setPoints' | 'setFlame' | 'resize' | 'pointCount' | 'measure' | 'tiles' | 'dispose' | 'context' | 'precision'>;
+
+/** What both renderers take alike before a frame: the points, the flame, the sizes. */
+function prepare(r: Made, canvas: HTMLCanvasElement, f: RecordedFrame) {
+  if (f.points !== r.pointCount) r.setPoints(f.points);
+  r.setFlame(flameOf(f.flame));
+  if (canvas.width !== f.w || canvas.height !== f.h) {
+    canvas.width = f.w;
+    canvas.height = f.h;
+  }
+  r.resize(f.bw, f.bh);
+}
+
+const driver = (r: Made, draw: Driver['draw']): Driver => ({
+  context: r.context,
+  get precision() {
+    return r.precision;
+  },
+  set precision(p: number) {
+    r.precision = p as 32 | 16 | 8;
+  },
+  draw,
+  measure: (w, h, t) => r.measure(w, h, t),
+  tiles: () => r.tiles(),
+  dispose: () => r.dispose(),
+});
+
+/** The pipelines a replay can run: today's renderer (`current`: the patch's picture side as a graph, the nodes'
+ *  values, its own compose step) and the frozen copies every step is compared with (`legacy`: render-legacy.ts and
+ *  compose-legacy.ts, the look as one, the compose step as a hook). */
+const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, options: RendererOptions) => Promise<Driver>> = {
+  current: async (canvas, points, options) => {
+    const [{ FlameRenderer }, { v2Types }, { toV2 }, { cratarrTypes }, { DEFAULTS, RANGES }] = await Promise.all([import('./render'), import('./picture-graph'), import('./v2'), import('./patch'), import('./settings.svelte')]);
+    const r = new FlameRenderer(canvas, points, 'high-performance', options);
+    const types = v2Types(cratarrTypes(RANGES, DEFAULTS));
+    let patched = false;
+    return driver(r, (f, all) => {
+      prepare(r, canvas, f);
+      if (!patched) {
+        // Today's chain with the extras the recording draws.
+        r.setPatch(toV2({ ...DEFAULTS, extra: all.frames.find((x) => x.compose)?.compose?.extra ?? emptyExtra() } as VisualSettings), types);
+        if (r.errors.length) throw new Error(r.errors.join(' '));
+        patched = true;
+      }
+      if (f.pruned) r.prune(f.pruned);
+      const c = f.compose;
+      r.frame(f.passes, chainOfShown(lookOf(f.look)), f.w, f.h, c ? { extra: c.extra, knobsOf: (m) => c.knobs[m.id] ?? m.knobs, frame: frameOf(c), flame: c.flame } : null);
+    });
+  },
+  legacy: async (canvas, points, options) => {
+    const [{ FlameRenderer }, { Compositor }] = await Promise.all([import('./render-legacy'), import('./compose-legacy')]);
+    const r = new FlameRenderer(canvas, points, 'high-performance', options);
+    const compositor = new Compositor(r.context);
+    return driver(r, (f) => {
+      prepare(r, canvas, f);
+      if (f.pruned) compositor.prune(f.pruned);
+      const c = f.compose;
+      const knobsOf = (m: Module) => c?.knobs[m.id] ?? m.knobs;
+      r.compose = c ? { active: true, run: (picture, width, height) => compositor.run(picture, width, height, c.extra, knobsOf, frameOf(c), c.flame) } : null;
+      r.frame(f.passes, lookOf(f.look), f.w, f.h);
+    });
+  },
 };
 
 // ---- Scenes: the settings a recording is made in (the look's own pinned, so the track's preset leaves them) ----
@@ -192,7 +248,7 @@ async function load(name: string): Promise<Recording> {
 const SEED = 20261020;
 
 /** `digest`: every frame's pixels hashed (FNV-1a), to tell two runs of the lab apart. */
-type Side = { name: string; look: Pipeline['look']; canvas: HTMLCanvasElement; renderer: Renderer; compositor: InstanceType<Pipeline['Compositor']>; tiles: Tiles[]; pixels: Uint8Array; digest: number };
+type Side = { name: string; canvas: HTMLCanvasElement; renderer: Driver; tiles: Tiles[]; pixels: Uint8Array; digest: number };
 
 function frameOf(c: RecordedCompose): FrameInfo {
   return { dt: c.frame.dt, time: c.frame.time, beat: c.frame.beat, signals: (ref) => c.frame.signals[signalKey(ref)] ?? 0, waveform: c.frame.waveform ? Float32Array.from(c.frame.waveform) : null };
@@ -202,14 +258,14 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
   const rec = await load(name);
   const clock = { at: 0 };
   const make = async (key: string, seed: number): Promise<Side> => {
-    const p = await PIPELINES[key]?.();
-    if (!p) throw new Error(`No pipeline ${key}`);
     const canvas = document.createElement('canvas');
     canvas.style.cssText = 'width: 320px; height: auto; margin: 4px;';
     document.body.append(canvas);
-    const renderer = new p.Renderer(canvas, rec.points, 'high-performance', { random: randomFrom(seed), now: () => clock.at });
+    const p = PIPELINES[key];
+    if (!p) throw new Error(`No pipeline ${key}`);
+    const renderer = await p(canvas, rec.points, { random: randomFrom(seed), now: () => clock.at });
     if (bits) renderer.precision = bits;
-    return { name: key, look: p.look, canvas, renderer, compositor: new p.Compositor(renderer.context), tiles: [], pixels: new Uint8Array(0), digest: 0x811c9dc5 };
+    return { name: key, canvas, renderer, tiles: [], pixels: new Uint8Array(0), digest: 0x811c9dc5 };
   };
   const sides = [await make(a, SEED), await make(b, seedB)];
   const perFrame: number[] = [];
@@ -227,18 +283,7 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
       const r = s.renderer;
       // The flash meter's readings first in a frame, as the visuals take them.
       s.tiles.push(...r.tiles());
-      if (f.points !== r.pointCount) r.setPoints(f.points);
-      r.setFlame(flameOf(f.flame));
-      if (s.canvas.width !== f.w || s.canvas.height !== f.h) {
-        s.canvas.width = f.w;
-        s.canvas.height = f.h;
-      }
-      r.resize(f.bw, f.bh);
-      if (f.pruned) s.compositor.prune(f.pruned);
-      const c = f.compose;
-      const knobsOf = (m: Module) => c?.knobs[m.id] ?? m.knobs;
-      r.compose = c ? { active: true, run: (picture, width, height) => s.compositor.run(picture, width, height, c.extra, knobsOf, frameOf(c), c.flame) } : null;
-      r.frame(f.passes, s.look(lookOf(f.look)) as never, f.w, f.h);
+      r.draw(f, rec);
       const gl = r.context;
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       if (s.pixels.length !== f.w * f.h * 4) s.pixels = new Uint8Array(f.w * f.h * 4);
@@ -296,7 +341,6 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
     seconds: (performance.now() - started) / 1000,
   };
   for (const s of sides) {
-    s.compositor.dispose();
     s.renderer.dispose();
   }
 }
