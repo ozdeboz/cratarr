@@ -289,11 +289,12 @@
           }}
         />
       {/if}
-      {#if one && one.mine === false && me.permissions.playlists}
+      {#if one && one.mine === false}
         {@const id = one.id}
         <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(id)} />
       {/if}
-      {#if one && one.mine !== false && one.shared !== undefined && me.permissions.share}
+      <!-- Sharing needs the permission to share; one shared before can always be unshared. -->
+      {#if one && one.mine !== false && one.shared !== undefined && (me.permissions.share || one.shared)}
         {@const p = one}
         <MenuEntry icon="users" label="Shared with other users" switched={!!p.shared} onclick={() => setShared(p.id, !p.shared)} />
       {/if}

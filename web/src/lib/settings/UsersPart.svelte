@@ -10,11 +10,12 @@
   import { toast } from '../toast.svelte';
   import { when } from './when';
 
+  // Downloading and changing playlists bind OpenSubsonic apps; sharing playlists binds Cratarr too. Public share links
+  // (`links`) wait until links are offered.
   const PERMISSIONS: { key: keyof Permissions; label: string }[] = [
-    { key: 'offline', label: 'Keep tracks offline' },
-    { key: 'playlists', label: 'Make playlists' },
+    { key: 'offline', label: 'Download in apps' },
+    { key: 'playlists', label: 'Change playlists in apps' },
     { key: 'share', label: 'Share playlists' },
-    { key: 'links', label: 'Share links' },
   ];
 
   let users = $state<User[] | null>(null);
@@ -71,7 +72,7 @@
         </summary>
         {#if !u.admin}
           <div class="group">
-            <h3>Permissions <MoreInfo label="Permissions" text="In Cratarr and in OpenSubsonic apps alike. Administrators may do everything." /></h3>
+            <h3>Permissions <MoreInfo label="Permissions" text="Apps: OpenSubsonic apps. Administrators may do everything." /></h3>
           </div>
           <div class="checks">
             {#each PERMISSIONS as p (p.key)}
