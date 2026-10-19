@@ -8,11 +8,16 @@ import { keptPerSecond } from './loopmods';
 import type { FrameInfo, Layer, Module, PatchExtra, PictureModule } from './patch';
 import { createSource } from './sources/index';
 import { createFluidLoop, FLUID_LOOP } from './fluid-loop';
+import { createEngine } from './engine-module';
 
 /** The picture modules the compositor runs by type: those a layer carries after its source, and those in the
  *  picture's own loop besides Warp and Keep (drawn here). Each draws `input` into `out`, an exact copy at its neutral. */
 export const MODULE_MAKERS: Record<string, (gl: WebGL2RenderingContext) => PictureModule> = {
   [FLUID_LOOP.type]: () => createFluidLoop(),
+  // The effect engines on a layer (claude-5f's engine-module.ts): a kaleidoscope on the shapes.
+  'kaleidoscope-engine': (gl) => createEngine('kaleidoscope-engine', gl),
+  'eyedo-engine': (gl) => createEngine('eyedo-engine', gl),
+  'hydra-engine': (gl) => createEngine('hydra-engine', gl),
 };
 import { done, program } from './sources/gl';
 
