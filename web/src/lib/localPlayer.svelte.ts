@@ -786,7 +786,7 @@ function hand(op: string, args: Record<string, unknown> = {}) {
   if (driven === null) return toApp({ type: 'player', op, ...args });
   const command: Record<string, unknown> =
     op === 'queue'
-      ? { command: 'play', tracks: args.tracks, index: args.index, position_ms: args.positionMs }
+      ? { command: 'play', tracks: args.tracks, index: args.index, position_ms: args.positionMs, ...(args.name ? { name: args.name } : {}) }
       : op === 'seek'
         ? { command: 'seek', position_ms: args.positionMs }
         : op === 'play'
@@ -1130,6 +1130,9 @@ export const restoreUpcoming = (tracks: LocalTrack[]) => replaceUpcoming(tracks)
  *  replaces the album or playlist that played, not what was added by hand: those come right after its first track, as
  *  before (decision 0033's two lanes). */
 export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null, position = 0, shuffle = false) {
+  // Played here: the queue it leaves is kept as it stood (decision 0033, amended); a player that plays elsewhere keeps
+  // its own.
+  const left = handed() ? null : standing();
   tracks = numbered(tracks);
   if (shuffle) [tracks, index, position] = [shuffledCopy(tracks), 0, 0];
   // A queue moved here whole keeps its shuffle.
@@ -1148,8 +1151,9 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   if (handed()) {
     Object.assign(local, { index, position, paused: false, error: null });
     reported = { positionMs: position * 1000, at: performance.now() };
-    return hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true, shuffled: local.shuffled });
+    return hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true, shuffled: local.shuffled, name: from });
   }
+  keepLocal(left, newQueueId());
   fresh(index, position);
   fill();
 }
@@ -1283,6 +1287,7 @@ export function seek(secs: number) {
 export function stop(): { queue: LocalTrack[]; index: number; position: number } {
   const was = { queue: local.queue, index: local.index, position: local.position };
   if (handed()) hand('stop');
+  else keepLocal(standing(), '');
   generation++;
   fetching?.abort();
   audio?.pause();
@@ -1291,6 +1296,149 @@ export function stop(): { queue: LocalTrack[]; index: number; position: number }
   local.index = -1;
   local.paused = true;
   return was;
+}
+
+// --- Queue history in this browser (decision 0033, amended: a browser playing itself keeps its own, here only) ---
+
+/** A queue left behind in this browser, whole, as it stood: its tracks, where it was, whether it played, its settings. */
+export type KeptQueue = {
+  id: string;
+  name: string;
+  renamed: boolean;
+  /** When it was left (epoch s). */
+  updated: number;
+  tracks: LocalTrack[];
+  index: number;
+  position: number;
+  playing: boolean;
+  shuffled: boolean;
+  repeat: Repeat;
+  radio: boolean;
+  radioBy: RadioBy;
+  radioCount: number;
+  skipFavourites: boolean;
+  autoplay: Autoplay | null;
+};
+
+const KEPT_KEY = 'cratarr-queues';
+/** Queues in all, with the one that plays. */
+const QUEUES = 20;
+
+function loadKept(): KeptQueue[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(KEPT_KEY) ?? '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+/** This browser's queues left behind, newest first; `id`, `renamed`: the one that plays. */
+export const keptHere = $state({ list: loadKept(), id: '', renamed: false });
+
+function saveKept() {
+  try {
+    localStorage.setItem(KEPT_KEY, JSON.stringify(keptHere.list));
+  } catch {
+    // A private window, or storage refused: the list lasts as long as the page.
+  }
+}
+
+const newQueueId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+
+/** A queue's name when none was given: its album's, else its artist's, else its first track's. */
+function nameOf(tracks: LocalTrack[]): string {
+  const own = tracks.some((t) => !t.lane) ? tracks.filter((t) => !t.lane) : tracks;
+  const same = (f: (t: LocalTrack) => string | null) => (own.every((t) => f(t) === f(own[0])) ? f(own[0]) : null);
+  return (own.length && (same((t) => t.album) ?? same((t) => t.artist) ?? own[0].name)) || '';
+}
+
+/** The queue that plays here, as it stands, to keep as it is left behind; null when there is none. */
+function standing(): KeptQueue | null {
+  if (!local.queue.length) return null;
+  return {
+    id: keptHere.id || newQueueId(),
+    name: local.from ?? nameOf(local.queue),
+    renamed: keptHere.renamed,
+    updated: Math.floor(Date.now() / 1000),
+    tracks: local.queue,
+    index: Math.max(0, local.index),
+    position: local.position,
+    playing: !local.paused,
+    shuffled: local.shuffled,
+    repeat: local.repeat,
+    radio: local.radio,
+    radioBy: local.radioBy,
+    radioCount: local.radioCount,
+    skipFavourites: local.skipFavourites,
+    autoplay: local.autoplay,
+  };
+}
+
+/** `left` kept, first (in place of an earlier copy of it); the queue that plays now is `id` (none: nothing plays). At
+ *  most QUEUES in all: the oldest not renamed goes first. */
+function keepLocal(left: KeptQueue | null, id: string) {
+  let list = keptHere.list.filter((k) => k.id !== id && k.id !== left?.id);
+  if (left) list = [left, ...list];
+  while (list.length >= QUEUES) {
+    const oldest = list.map((k) => !k.renamed).lastIndexOf(true);
+    if (oldest < 0) break;
+    list = list.filter((_, i) => i !== oldest);
+  }
+  keptHere.list = list;
+  keptHere.id = id;
+  keptHere.renamed = false;
+  saveKept();
+}
+
+/** This browser's list as the queue sheet shows it: the queue that plays (marked), then those left, newest first. */
+export function localQueues(): { id: string; name: string; tracks: number; from: string | null; updated: number; playing: boolean }[] {
+  const now = local.queue.length
+    ? [{ id: keptHere.id, name: local.from ?? nameOf(local.queue), tracks: local.queue.length, from: null, updated: Math.floor(Date.now() / 1000), playing: true }]
+    : [];
+  return [...now, ...keptHere.list.map((k) => ({ id: k.id, name: k.name, tracks: k.tracks.length, from: null, updated: k.updated, playing: false }))];
+}
+
+/** Takes up queue `id` of this browser's where it was left, playing if it played; the one it leaves is kept. */
+export function switchLocal(id: string) {
+  const k = keptHere.list.find((x) => x.id === id);
+  if (!k || id === keptHere.id) return;
+  keepLocal(standing(), k.id);
+  keptHere.renamed = k.renamed;
+  saveKept();
+  Object.assign(local, {
+    queue: k.tracks,
+    shuffled: k.shuffled,
+    repeat: k.repeat,
+    radio: k.radio,
+    radioBy: k.radioBy,
+    radioCount: k.radioCount,
+    skipFavourites: k.skipFavourites,
+    autoplay: k.autoplay,
+    from: k.name,
+  });
+  fresh(Math.min(k.index, k.tracks.length - 1), k.position, k.playing);
+  fill();
+}
+
+/** Renames queue `id` of this browser's (the one that plays too); a renamed one stays until deleted. */
+export function renameLocal(id: string, name: string) {
+  name = name.trim().slice(0, 100);
+  if (!name) return;
+  if (id === keptHere.id && local.queue.length) {
+    local.from = name;
+    keptHere.renamed = true;
+  } else {
+    keptHere.list = keptHere.list.map((k) => (k.id === id ? { ...k, name, renamed: true } : k));
+  }
+  saveKept();
+}
+
+/** Takes queue `id` out of this browser's list; not the one that plays. */
+export function deleteLocal(id: string) {
+  if (id === keptHere.id && local.queue.length) return;
+  keptHere.list = keptHere.list.filter((k) => k.id !== id);
+  saveKept();
 }
 
 // --- Play On to this page (decision 0033: a page is a Play On target while it is open; 0031 amended) ---
@@ -1340,11 +1488,14 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       const tracks = numbered(tracksOf(m.tracks));
       if (!tracks.length) return false;
       const index = Math.min(Math.max(0, typeof m.index === 'number' ? m.index : 0), tracks.length - 1);
-      // Cratarr's queue as it is (shuffled already, its hand-added ones in it): this page keeps none of its own.
+      // Cratarr's queue as it is (shuffled already, its hand-added ones in it): this page keeps none of its own. The one
+      // it leaves goes into this browser's list, and the new one is known by Cratarr's id and name.
+      const left = standing();
       local.queue = tracks;
       local.shuffled = m.shuffle === true;
       if (local.repeat === 'one') local.repeat = 'off';
-      local.from = null;
+      local.from = typeof m.queue_name === 'string' ? m.queue_name : null;
+      keepLocal(left, typeof m.queue_id === 'string' ? m.queue_id : newQueueId());
       fresh(index, (typeof m.position_ms === 'number' ? m.position_ms : 0) / 1000, m.paused !== true);
       fill();
       return m.paused !== true;

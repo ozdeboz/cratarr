@@ -345,6 +345,13 @@ class PlayOnLink(
                 Repeat.newPlay(service, p)
                 Autoplay.newPlay(service, m.optJSONArray("tracks"))
                 Prefs(service).shuffled = m.optBoolean("shuffle")
+                // The queue as Cratarr names it (decision 0033, amended); a server from before names none: a new one.
+                if (m.has("queue_id")) {
+                    Prefs(service).queueId = m.optString("queue_id")
+                    Prefs(service).queueName = m.optString("queue_name")
+                } else {
+                    Prefs(service).newQueue("")
+                }
                 // A queue given back after the app came back without one waits for a play.
                 release()
                 if (m.optBoolean("paused")) p.pause() else {
@@ -648,6 +655,8 @@ class PlayOnLink(
             .put("volume", (volume * 100).toInt())
             .put("ducked", ducked)
             .put("held", heldBack ?: JSONObject.NULL)
+            .put("queue_id", Prefs(service).queueId.ifEmpty { null } ?: JSONObject.NULL)
+            .put("queue_name", Prefs(service).queueName.ifEmpty { null } ?: JSONObject.NULL)
             .put("link", linkJson())
         val withQueue = !queueSent
         if (withQueue) out.put("queue", queueOf(p))

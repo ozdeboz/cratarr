@@ -43,6 +43,19 @@ pub struct Queue {
     /// saved queue, decision 0033 step 5).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub started: u64,
+    /// Which queue this is (decision 0033, amended: queue history): a new one with each new play, kept with it when
+    /// it is left behind; empty for a queue from before.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// Its name: the play's own (a playlist's, an album's title), until the owner renames it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Renamed by the owner: kept until deleted, however many come after it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub renamed: bool,
+    /// What it was started from: `playlist`, `album`, `favourites`, `library`, `tracks`, or `player` (started there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -231,14 +244,24 @@ impl Queue {
         let told = match command {
             // Something new replaces the album or playlist, not what was added by hand: that comes right after its first
             // track (0033's lanes). What the new queue holds already (a queue moved whole) is not added twice.
-            Command::Play { from, tracks: Some(tracks), index, position_ms, shuffle, paused } => {
+            Command::Play { from, tracks: Some(tracks), index, position_ms, shuffle, paused, queue_id, queue_name } => {
                 let mut tracks = with_entries(tracks);
-                let ahead: Vec<QueueTrack> =
-                    self.added_ahead(current).into_iter().filter(|t| !tracks.iter().any(|x| x.entry == t.entry)).collect();
-                let at = (index + 1).min(tracks.len());
-                tracks.splice(at..at, ahead);
+                // A queue taken up whole (one switched back to) brings nothing of the one it leaves: that is kept as it
+                // stood, its own tracks with it.
+                if !from.whole {
+                    let ahead: Vec<QueueTrack> =
+                        self.added_ahead(current).into_iter().filter(|t| !tracks.iter().any(|x| x.entry == t.entry)).collect();
+                    let at = (index + 1).min(tracks.len());
+                    tracks.splice(at..at, ahead);
+                }
                 self.tracks = tracks;
                 self.started = now_secs();
+                // Another queue (decision 0033, amended): its own id and name, not renamed until it is.
+                if let Some(id) = &queue_id {
+                    self.id = id.clone();
+                    self.name = queue_name.clone().unwrap_or_default();
+                    self.renamed = false;
+                }
                 // Something new turns repeat one off; repeat all stays (decision 0033, amended, rule 4).
                 if self.repeat == Repeat::One {
                     self.repeat = Repeat::Off;
@@ -252,7 +275,7 @@ impl Queue {
                     a.seed.clear();
                     a.within = None;
                 }
-                Command::Play { from, tracks: Some(self.tracks.clone()), index, position_ms, shuffle, paused }
+                Command::Play { from, tracks: Some(self.tracks.clone()), index, position_ms, shuffle, paused, queue_id, queue_name }
             }
             Command::Add { tracks, at, after, how } => {
                 let mut tracks = with_entries(tracks);
@@ -397,10 +420,17 @@ impl Queue {
         Ok(told)
     }
 
+    /// [`Queue::adopted`]: `true` when the queue changed.
+    #[cfg(test)]
+    pub fn adopt(&mut self, reported: Vec<QueueTrack>) -> bool {
+        self.adopted(reported).is_some()
+    }
+
     /// The queue a player reports, taken as it is: the player holds what plays (decision 0033, step 1). Tracks it
     /// sends without entries (an app from before 0033) keep the entries they had here, in order, so an entry keeps
-    /// its id through moves. `true` when the queue changed.
-    pub fn adopt(&mut self, reported: Vec<QueueTrack>) -> bool {
+    /// its id through moves. None when nothing changed; else whether it is another queue: something new the player
+    /// started itself, or none at all (the one before is left behind, decision 0033 amended).
+    pub fn adopted(&mut self, reported: Vec<QueueTrack>) -> Option<bool> {
         let mut known: Vec<Option<&QueueTrack>> = self.tracks.iter().map(Some).collect();
         let tracks: Vec<QueueTrack> = reported
             .into_iter()
@@ -413,7 +443,7 @@ impl Queue {
             })
             .collect();
         if tracks == self.tracks {
-            return false;
+            return None;
         }
         // Something new the player started itself: none of the album's or playlist's entries are left (a queue of
         // tracks added by hand alone: none of its entries).
@@ -426,9 +456,10 @@ impl Queue {
         if fresh && !tracks.is_empty() {
             self.started = now_secs();
         }
+        let other = fresh || tracks.is_empty();
         self.tracks = tracks;
         self.version += 1;
-        true
+        Some(other)
     }
 }
 

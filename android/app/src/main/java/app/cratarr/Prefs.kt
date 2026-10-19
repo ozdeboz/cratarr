@@ -133,6 +133,24 @@ class Prefs(context: Context) {
             p.edit().putBoolean(SHUFFLED, value).apply()
         }
 
+    /** Which queue plays, and its name (decision 0033, amended: queue history): Cratarr's for a play it sends, a new one
+     *  for a play the page starts here. Reported with every report; Cratarr keeps the queue before a new one. */
+    var queueId: String
+        get() = p.getString(QUEUE_ID, null).orEmpty()
+        set(value) {
+            p.edit().putString(QUEUE_ID, value).apply()
+        }
+    var queueName: String
+        get() = p.getString(QUEUE_NAME, null).orEmpty()
+        set(value) {
+            p.edit().putString(QUEUE_NAME, value).apply()
+        }
+
+    /** A new queue starts: its own id, and its name (empty: Cratarr names it after its album, artist or first track). */
+    fun newQueue(name: String) {
+        p.edit().putString(QUEUE_ID, java.util.UUID.randomUUID().toString()).putString(QUEUE_NAME, name).apply()
+    }
+
     /** The sleep timer (Sleep), as "atMs,endOfTrack" (no time: empty); null when none is set. */
     var sleep: Sleep.Timer?
         get() = p.getString(SLEEP, null)?.split(',')?.takeIf { it.size == 2 }?.let { (at, end) -> Sleep.Timer(at.toLongOrNull(), end == "true") }
@@ -242,6 +260,8 @@ class Prefs(context: Context) {
         const val SLEEP = "sleep"
         const val REPEAT = "repeat"
         const val SHUFFLED = "shuffled"
+        const val QUEUE_ID = "queue_id"
+        const val QUEUE_NAME = "queue_name"
         /** The public address (the app's only one before it had two). */
         const val SERVER_URL = "server_url"
         const val LOCAL_URL = "local_url"

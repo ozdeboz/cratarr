@@ -219,3 +219,24 @@ On 2026-10-17 the phone came back 8½ minutes later without a queue, and was giv
 - The player left is stopped in Cratarr as the stop would have left it: its queue empty, nothing playing. Back without
   a queue, it is given nothing.
 - Back still playing an entry of the queue that moved, it is told to stop. Music started on it since plays on.
+
+## Amendment (2026-10-19): queue history as built
+
+Built on the owner's "build it as decided" (2026-10-19), after the salon tablet lost a queue of 142 tracks that day: its
+app, updated, reported nothing queued before it connected, and Cratarr kept only the queue that plays.
+
+- **When a queue is kept:** a play of something new, a stop, a handover (the player left keeps it), and a queue a
+  player reports that is another one: named by the player with an id of its own (`queue_id`, `queue_name`: the page in
+  the app played an album there), or something new it started, or none at all. Kept whole, as it stood: its tracks with
+  their entries, the entry that played, the position, whether it played, repeat, Radio and Autoplay.
+- **Names:** as the one who plays gives it (the page sends the album's title or the playlist with each play, `name`),
+  else the playlist's, "Favourites", "Library", else the album, artist or first track the tracks share. `from` says
+  what it was started from: `playlist`, `album`, `favourites`, `library`, `tracks`, or `player` (started there).
+- **The list** is saved with the queues (`queues.json`); queues from before get an id and a name as they load. A full
+  view carries `queues` (the playing one first and marked, then newest first); every view carries `queues_version`,
+  which goes up as the list changes. 20 in all with the playing one; the oldest not renamed goes first.
+- **Commands** `queue {id}`, `queue_rename {id, name}` (the playing one too; at most 100 characters), `queue_delete
+  {id}` (not the playing one), as decided. A switch takes the queue up whole: nothing of the queue it leaves comes
+  along (unlike a new play, which keeps what was added by hand); its shuffle stays in its order.
+- **A browser** playing itself keeps its own list in that browser (`localStorage`), as decided; Cratarr keeps none for
+  it. The app and the players driven from a page are Cratarr's to keep.

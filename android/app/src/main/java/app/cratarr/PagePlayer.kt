@@ -53,6 +53,9 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
                 Repeat.newPlay(context, c)
                 Autoplay.newPlay(context, m.optJSONArray("tracks"))
                 Prefs(context).shuffled = m.optBoolean("shuffled")
+                // Another queue, started here (decision 0033, amended): its own id and the play's name; Cratarr keeps the
+                // one before.
+                Prefs(context).newQueue(m.optString("name"))
                 c.setMediaItems(mediaItems(m.optJSONArray("tracks")), m.optInt("index", 0), m.optLong("positionMs", 0))
                 c.prepare()
                 c.playWhenReady = m.optBoolean("play", true)

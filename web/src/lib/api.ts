@@ -205,7 +205,17 @@ export type PlayOnPlayer = {
   link?: PlayerLink;
   track: QueueTrack | null;
   queue?: QueueTrack[];
+  /** Why it does not play what it was told to (its device would not let it, decision 0031 amended); null otherwise. */
+  held?: string | null;
+  /** Its queues (decision 0033, amended: queue history), the one that plays marked, newest first; by name only. */
+  queues?: QueueItem[];
+  /** Goes up when that list changes: read the player by name for the new one. */
+  queues_version?: number;
 };
+
+/** A queue in a player's list (decision 0033, amended): `tracks` how many, `from` what it was started from
+ *  (`playlist`, `album`, `favourites`, `library`, `tracks`, `player`), `updated` when it was left (epoch s). */
+export type QueueItem = { id: string; name: string; tracks: number; from: string | null; updated: number; playing: boolean };
 
 /** A player's link as Cratarr knows it, and as the player last told (decision 0045); times epoch seconds, the
  *  player's own epoch ms. */

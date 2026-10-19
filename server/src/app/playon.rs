@@ -110,6 +110,12 @@ pub struct Report {
     /// out or null: nothing holds it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
+    /// Which queue it plays, and its name (decision 0033, amended): another id than Cratarr's is a queue the player
+    /// started itself, and the one before is kept. Apps from before leave them out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_name: Option<String>,
 }
 
 /// A player's link as the player sees it (decision 0045): what Cratarr cannot see while the player's reports still get
@@ -204,6 +210,12 @@ pub struct PlayFrom {
     /// At most this many tracks, after shuffling.
     #[serde(default, skip_serializing)]
     pub limit: Option<usize>,
+    /// The play's name, as the one who asks gives it (an album's title, say; decision 0033 amended): else Cratarr's own.
+    #[serde(default, skip_serializing)]
+    pub name: Option<String>,
+    /// A queue taken up whole (one switched back to): nothing of the queue it leaves comes along. Cratarr's own.
+    #[serde(skip)]
+    pub whole: bool,
 }
 
 /// How many tracks `play {library}` picks when not told.
@@ -230,6 +242,12 @@ pub enum Command {
         /// Loaded, not started: a queue given back, paused, to a player that came back without one.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         paused: bool,
+        /// Which queue this is, and its name (decision 0033, amended: queue history): a player reports them back as it
+        /// plays it. Given by the one who asks only to take up a queue again (a handover, a switch).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue_name: Option<String>,
     },
     /// Tracks into the queue after entry `after` ("" for first), else at place `at`, else at the end. A player is told
     /// both (decision 0033). With `how` (`next`, `last`) they are added by hand, placed as decision 0033's lanes say.
@@ -342,6 +360,13 @@ pub enum Command {
     Unduck,
     /// The queue and position move to player `to`, and this one stops. Handled here; never sent to a player.
     Handover { to: String },
+    /// Queue history (decision 0033, amended): the player takes up its queue `id` where it was left, playing if it
+    /// played, else paused there; the one it leaves is kept. Handled here; the player is told a play.
+    Queue { id: String },
+    /// Queue history: queue `id` (the one that plays too) renamed; kept then until deleted. Handled here.
+    QueueRename { id: String, name: String },
+    /// Queue history: queue `id` out of the list; not the one that plays. Handled here.
+    QueueDelete { id: String },
     /// Sync play, step 1 (decision 0037): what it plays this moment, answered at once (`POST .../sample`).
     Sample { id: u64 },
     /// Sync play (decision 0037): this player plays with `to`'s group, which `to` leads when it plays in none. Handled
@@ -368,7 +393,7 @@ pub enum Command {
 impl Command {
     /// Play these tracks, as a player is told to.
     pub fn play(tracks: Vec<QueueTrack>, index: usize, position_ms: u64) -> Self {
-        Command::Play { from: PlayFrom::default(), tracks: Some(tracks), index, position_ms, shuffle: false, paused: false }
+        Command::Play { from: PlayFrom::default(), tracks: Some(tracks), index, position_ms, shuffle: false, paused: false, queue_id: None, queue_name: None }
     }
 }
 
@@ -449,6 +474,12 @@ pub struct PlayerView {
     /// The whole queue, for one player asked for by name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queue: Option<Vec<QueueTrack>>,
+    /// Its queues (decision 0033, amended: queue history), the one that plays marked, newest first; for one player
+    /// asked for by name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queues: Option<Vec<QueueItem>>,
+    /// Goes up whenever that list changes: ask for the player by name to see it.
+    pub queues_version: u64,
 }
 
 /// Saved in `players.json`.
@@ -528,6 +559,10 @@ struct Entry {
     owner: Option<String>,
     /// What it shows the sync server it is (decision 0051), told it with its group; new with each start of Cratarr.
     secret: String,
+    /// Its queues left behind, newest first (decision 0033, amended: queue history); a browser keeps its own.
+    kept: Vec<Kept>,
+    /// Goes up whenever that list changes, so a page asks for it again.
+    kept_version: u64,
 }
 
 /// What a player is: the app; a Kodi (driven by Cratarr, app::kodi); a page in a browser, a player while it is open
@@ -574,7 +609,60 @@ impl Entry {
             page: None,
             owner: None,
             secret: new_secret(),
+            kept: Vec::new(),
+            kept_version: 0,
         }
+    }
+
+    /// The queue that plays, as it stands now, to be kept as it is left behind; none when there is none, nor for a
+    /// browser (it keeps its own, decision 0033 amended).
+    fn standing(&self) -> Option<Kept> {
+        if self.queue.tracks.is_empty() || self.kind == PlayerKind::Browser {
+            return None;
+        }
+        let index = usize::try_from(self.index()).ok();
+        let entry = index.and_then(|i| self.queue.tracks.get(i)).map(|t| t.entry.clone()).filter(|e| !e.is_empty());
+        Some(Kept { queue: self.queue.clone(), entry, position_ms: self.position_now(), playing: self.report.playing, updated: now_secs() })
+    }
+
+    /// A queue left behind, kept: first, in place of an earlier copy of it; a queue from before gets an id and a name.
+    /// At most `QUEUES` in all with the one that plays: the oldest not renamed goes first, a renamed one stays.
+    fn keep(&mut self, k: Option<Kept>) {
+        let Some(mut k) = k else { return };
+        if k.queue.id.is_empty() {
+            k.queue.id = super::queue::new_entry();
+        }
+        if k.queue.name.is_empty() {
+            k.queue.name = name_of(&k.queue.tracks);
+        }
+        self.kept.retain(|x| x.queue.id != k.queue.id);
+        self.kept.insert(0, k);
+        while self.kept.len() >= QUEUES {
+            let Some(oldest) = self.kept.iter().rposition(|x| !x.queue.renamed) else { break };
+            self.kept.remove(oldest);
+        }
+        self.kept_version += 1;
+    }
+
+    /// The list a page shows: the queue that plays (marked) and those left behind, newest first.
+    fn queues(&self) -> Vec<QueueItem> {
+        let playing = (!self.queue.tracks.is_empty()).then(|| QueueItem {
+            id: self.queue.id.clone(),
+            name: if self.queue.name.is_empty() { name_of(&self.queue.tracks) } else { self.queue.name.clone() },
+            tracks: self.queue.tracks.len(),
+            from: self.queue.from.clone(),
+            updated: now_secs(),
+            playing: true,
+        });
+        let kept = self.kept.iter().map(|k| QueueItem {
+            id: k.queue.id.clone(),
+            name: k.queue.name.clone(),
+            tracks: k.queue.tracks.len(),
+            from: k.queue.from.clone(),
+            updated: k.updated,
+            playing: false,
+        });
+        playing.into_iter().chain(kept).collect()
     }
 
     /// The place of the entry that plays: found by its entry where the player says it, else as the player counts.
@@ -657,6 +745,8 @@ impl Entry {
             kind: self.kind.name(),
             track,
             queue: with_queue.then(|| self.queue.tracks.clone()),
+            queues: with_queue.then(|| self.queues()),
+            queues_version: self.kept_version,
         }
     }
 }
@@ -763,6 +853,60 @@ struct Saved {
     playing: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     owner: Option<String>,
+    /// Its queues left behind (decision 0033, amended).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    kept: Vec<Kept>,
+}
+
+/// A queue left behind (decision 0033, amended: queue history), whole: its tracks with their entries, its repeat,
+/// Radio and Autoplay, and where it stood (the entry that played, the position, whether it played).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct Kept {
+    #[serde(flatten)]
+    queue: Queue,
+    #[serde(default)]
+    entry: Option<String>,
+    #[serde(default)]
+    position_ms: u64,
+    #[serde(default)]
+    playing: bool,
+    /// When it was left (epoch seconds).
+    #[serde(default)]
+    updated: u64,
+}
+
+/// A queue in a player's list, as a page shows it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct QueueItem {
+    pub id: String,
+    pub name: String,
+    /// How many tracks.
+    pub tracks: usize,
+    /// What it was started from (`playlist`, `album`, `favourites`, `library`, `tracks`, `player`).
+    pub from: Option<String>,
+    /// When it was left (epoch seconds); for the one that plays, now.
+    pub updated: u64,
+    pub playing: bool,
+}
+
+/// Queues per player, with the one that plays (decision 0033, amended).
+const QUEUES: usize = 20;
+/// A queue's name, at most this many characters.
+const QUEUE_NAME_MAX: usize = 100;
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// A queue's name when none was given: its album's, else its artist's, else its first track's.
+fn name_of(tracks: &[QueueTrack]) -> String {
+    let own: Vec<&QueueTrack> = tracks.iter().filter(|t| t.lane.is_none()).collect();
+    let own = if own.is_empty() { tracks.iter().collect() } else { own };
+    let same = |f: fn(&QueueTrack) -> Option<&String>| {
+        let first = own.first().and_then(|t| f(t))?;
+        own.iter().all(|t| f(t) == Some(first)).then(|| first.clone())
+    };
+    same(|t| t.album.as_ref()).or_else(|| same(|t| t.artist.as_ref())).or_else(|| own.first().map(|t| t.name.clone())).unwrap_or_default()
 }
 
 impl PlayOn {
@@ -782,7 +926,11 @@ impl PlayOn {
                 e.report.position_ms = s.position_ms;
                 e.report.playing = s.playing;
                 e.queue = s.queue;
+                if e.queue.id.is_empty() && !e.queue.tracks.is_empty() {
+                    (e.queue.id, e.queue.name) = (super::queue::new_entry(), name_of(&e.queue.tracks));
+                }
                 e.owner = s.owner;
+                e.kept = s.kept;
                 (name, e)
             })
             .collect();
@@ -1014,8 +1162,8 @@ impl PlayOn {
                     .iter()
                     .map(|(n, e)| {
                         let v = e.view(n, false);
-                        let (queue, owner) = (e.queue.clone(), e.owner.clone());
-                        (n.clone(), Saved { queue, entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing, owner })
+                        let (queue, owner, kept) = (e.queue.clone(), e.owner.clone(), e.kept.clone());
+                        (n.clone(), Saved { queue, entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing, owner, kept })
                     })
                     .collect();
                 drop(me);
@@ -1203,7 +1351,8 @@ impl PlayOn {
             // 2026-10-18, by a report with its group's version).
             e.queue.version += 1;
             let (index, position_ms, paused) = (before.index.max(0) as usize, before.position_ms, !before.playing);
-            Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused }
+            let (queue_id, queue_name) = ((!e.queue.id.is_empty()).then(|| e.queue.id.clone()), (!e.queue.name.is_empty()).then(|| e.queue.name.clone()));
+            Command::Play { from: PlayFrom::default(), tracks: Some(e.queue.tracks.clone()), index, position_ms, shuffle: false, paused, queue_id, queue_name }
         });
         // Back after its music was handed away (its stop could not reach it): still playing that music, it stops now, as
         // it would have then; what was started on it since is its own.
@@ -1233,10 +1382,26 @@ impl PlayOn {
             // Taken as the player holds it, unless it was made before Cratarr's latest edit reached the player: that edit
             // is on its way, and the player reports again once it has it (no flip back and forth).
             if report.version.is_none_or(|v| v >= e.told) {
-                if let Some(q) = report.queue.clone()
-                    && e.queue.adopt(q)
-                {
-                    adopted = Some((e.queue.tracks.len(), e.queue.version));
+                // Another queue (decision 0033, amended): one the player names itself, something new it started, or
+                // none at all. The one before is kept as it stood.
+                let standing = e.standing();
+                let named = report.queue_id.clone().filter(|id| *id != e.queue.id);
+                let other = match report.queue.clone().map(|q| e.queue.adopted(q)) {
+                    Some(Some(other)) => {
+                        adopted = Some((e.queue.tracks.len(), e.queue.version));
+                        other
+                    }
+                    _ => false,
+                };
+                if named.is_some() || other {
+                    e.keep(standing);
+                    let (id, name) = match named {
+                        Some(id) => (id, report.queue_name.clone().unwrap_or_else(|| name_of(&e.queue.tracks))),
+                        None if e.queue.tracks.is_empty() => (String::new(), String::new()),
+                        None => (super::queue::new_entry(), name_of(&e.queue.tracks)),
+                    };
+                    e.queue.from = (!id.is_empty()).then(|| "player".to_string());
+                    (e.queue.id, e.queue.name, e.queue.renamed) = (id, name, false);
                 }
                 if let Some(r) = report.repeat {
                     e.queue.repeat = r;
@@ -1322,6 +1487,7 @@ impl PlayOn {
         let own = matches!(command, Command::Volume { .. } | Command::Duck | Command::Unduck | Command::Sample { .. } | Command::Join { .. } | Command::Leave);
         let leader = if own { None } else { self.leader_of(name) };
         let name = leader.as_deref().unwrap_or(name);
+        let mut started: Option<&'static str> = None;
         let command = match command {
             Command::Join { to } => return self.join(name, &to).await,
             Command::Leave => return self.leave(name).await,
@@ -1331,7 +1497,21 @@ impl PlayOn {
                 self.dissolve(name);
                 return self.handover(name, &to).await;
             }
-            Command::Play { from, tracks, mut index, mut position_ms, shuffle, paused } => {
+            Command::Queue { id } => return self.switch(name, &id).await,
+            Command::QueueRename { id, name: new } => return self.rename_queue(name, &id, &new),
+            Command::QueueDelete { id } => return self.delete_queue(name, &id),
+            Command::Play { from, tracks, mut index, mut position_ms, shuffle, paused, queue_id, queue_name } => {
+                // A new queue (decision 0033, amended): what it was started from, kept with it; one taken up again (a
+                // handover, a switch) comes with its own id, and keeps what it had.
+                if queue_id.is_none() {
+                    started = Some(match () {
+                        _ if from.playlist.is_some() => "playlist",
+                        _ if from.album.is_some() => "album",
+                        _ if from.favourites => "favourites",
+                        _ if from.library => "library",
+                        _ => "tracks",
+                    });
+                }
                 let picked = match &from.playlist {
                     Some(p) => Some(self.playlist_tracks(p).await?),
                     None => own_tracks(&from, self.owner_of(name)).await?,
@@ -1353,8 +1533,16 @@ impl PlayOn {
                 if let Some(n) = from.limit {
                     tracks.truncate(n.max(1));
                 }
-                let tracks = Some(self.named(tracks).await);
-                Command::Play { from: PlayFrom::default(), tracks, index, position_ms, shuffle, paused }
+                let tracks = self.named(tracks).await;
+                // Its name: as given, else the playlist's, else Cratarr's own (the album's title, say).
+                let queue_name = queue_name.or(from.name).or(from.playlist).unwrap_or_else(|| match started {
+                    Some("favourites") => "Favourites".into(),
+                    Some("library") => "Library".into(),
+                    _ => name_of(&tracks),
+                });
+                let queue_id = Some(queue_id.unwrap_or_else(super::queue::new_entry));
+                let from = PlayFrom { whole: from.whole, ..PlayFrom::default() };
+                Command::Play { from, tracks: Some(tracks), index, position_ms, shuffle, paused, queue_id, queue_name: Some(queue_name) }
             }
             Command::Add { tracks, at, after, how } => Command::Add { tracks: self.named(tracks).await, at, after, how },
             Command::Seek { position_ms: None, percent: Some(p), .. } => {
@@ -1385,12 +1573,30 @@ impl PlayOn {
             tracing::warn!(target: "playon", player = name, command = command_name(&command).as_str(), reason = "offline", "command not delivered");
             return Err(ToggleError::Refused(format!("{name} is not connected.")));
         }
+        let leaves = matches!(command, Command::Play { .. } | Command::Stop);
+        let standing = if leaves { e.standing() } else { None };
         let mut queue = e.queue.clone();
         let told = queue.edit_at(command, usize::try_from(e.index()).ok())?;
         Self::tell(e, name, &told, queue.version)?;
         let edited = queue != e.queue;
         if edited {
             e.told = queue.version;
+        }
+        if leaves {
+            // Kept only once a queue took its place, or it stopped (decision 0033, amended).
+            if standing.as_ref().is_some_and(|s| s.queue.id != queue.id || queue.tracks.is_empty()) {
+                e.keep(standing);
+            }
+            if queue.tracks.is_empty() {
+                (queue.id, queue.name, queue.renamed, queue.from) = (String::new(), String::new(), false, None);
+            } else if let Some(kind) = started {
+                queue.from = Some(kind.to_string());
+            }
+            let before = e.kept.len();
+            e.kept.retain(|k| k.queue.id != queue.id);
+            if e.kept.len() != before {
+                e.kept_version += 1;
+            }
         }
         e.queue = queue;
         drop(entries);
@@ -1429,45 +1635,33 @@ impl PlayOn {
     }
 
     /// The queue and position of `from` go to `to`, which plays them, with their entries; `from` stops (decision 0033).
+    /// The queue moves on as itself, its id and name with it, and the player it left keeps it as it stood (0033 amended).
     async fn handover(&self, from: &str, to: &str) -> Result<(), ToggleError> {
         tracing::info!(target: "playon", player = from, to, "handover");
-        let (tracks, index, position_ms) = {
+        let (queue, index, position_ms, sleep) = {
             let entries = self.entries();
             let Some(e) = entries.get(from) else { return Err(ToggleError::Refused(format!("No player is called {from}."))) };
             let v = e.view(from, false);
-            (e.queue.tracks.clone(), v.index.max(0) as usize, v.position_ms)
+            (e.queue.clone(), v.index.max(0) as usize, v.position_ms, e.report.sleep)
         };
-        if tracks.is_empty() {
+        if queue.tracks.is_empty() {
             return Err(ToggleError::Refused(format!("{from} has nothing to hand over.")));
         }
-        let (repeat, sleep, radio, autoplay) = self
-            .entries()
-            .get(from)
-            .map(|e| {
-                let radio = (e.queue.radio, e.queue.radio_by, e.queue.radio_count(), e.queue.skip_favourites);
-                (e.queue.repeat, e.report.sleep, radio, e.queue.autoplay.clone())
-            })
-            .unwrap_or_default();
-        Box::pin(self.command(to, Command::play(tracks, index, position_ms))).await?;
-        // Repeat moves with the queue (decision 0033, amended), repeat one too; a sleep timer moves with the music; Radio
-        // with its choice and count, and Autoplay too, with its seed and bound (decision 0036, amended). Autoplay last
-        // (on turns repeat all off, and both came so).
-        let _ = Box::pin(self.command(to, Command::Repeat { mode: repeat })).await;
-        let (on, by, count, skip) = radio;
-        let radio = Command::Radio { on, mode: None, seed: None, within: None, by: Some(by), count: Some(count.max(1)) };
-        let _ = Box::pin(self.command(to, radio)).await;
-        let _ = Box::pin(self.command(to, Command::SkipFavourites { on: skip })).await;
-        let auto = match autoplay {
-            Some(a) => Command::Autoplay {
-                mode: AutoplayMode::of(Some(a.mode)),
-                albums: Some(a.albums),
-                restart: Some(a.restart),
-                seed: Some(a.seed),
-                within: Some(a.within.unwrap_or_default()),
-            },
-            None => Command::Autoplay { mode: AutoplayMode::Stop, albums: None, restart: None, seed: None, within: None },
+        let id = if queue.id.is_empty() { super::queue::new_entry() } else { queue.id.clone() };
+        let name = if queue.name.is_empty() { name_of(&queue.tracks) } else { queue.name.clone() };
+        let play = Command::Play {
+            from: PlayFrom::default(),
+            tracks: Some(queue.tracks.clone()),
+            index,
+            position_ms,
+            shuffle: false,
+            paused: false,
+            queue_id: Some(id),
+            queue_name: Some(name),
         };
-        let _ = Box::pin(self.command(to, auto)).await;
+        Box::pin(self.command(to, play)).await?;
+        self.settle(to, &queue).await;
+        // A sleep timer moves with the music.
         if let Some(s) = sleep.filter(|s| s.at_ms.is_some() || s.end_of_track) {
             let _ = Box::pin(self.command(to, Command::Sleep { at_ms: s.at_ms, end_of_track: s.end_of_track })).await;
         }
@@ -1479,6 +1673,111 @@ impl PlayOn {
         Ok(())
     }
 
+    /// A queue's settings on the player that takes it up (a handover, a switch): repeat (repeat one too, decision 0033
+    /// amended), Radio with its choice and count, favourites in or out, and Autoplay with its seed and bound (decision
+    /// 0036, amended). Autoplay last (on turns repeat all off, and both came so). Its queue keeps what it was started
+    /// from, and a name the owner gave it.
+    async fn settle(&self, to: &str, queue: &Queue) {
+        let _ = Box::pin(self.command(to, Command::Repeat { mode: queue.repeat })).await;
+        let radio = Command::Radio {
+            on: queue.radio,
+            mode: None,
+            seed: None,
+            within: None,
+            by: Some(queue.radio_by),
+            count: Some(queue.radio_count().max(1)),
+        };
+        let _ = Box::pin(self.command(to, radio)).await;
+        let _ = Box::pin(self.command(to, Command::SkipFavourites { on: queue.skip_favourites })).await;
+        let auto = match queue.autoplay.clone() {
+            Some(a) => Command::Autoplay {
+                mode: AutoplayMode::of(Some(a.mode)),
+                albums: Some(a.albums),
+                restart: Some(a.restart),
+                seed: Some(a.seed),
+                within: Some(a.within.unwrap_or_default()),
+            },
+            None => Command::Autoplay { mode: AutoplayMode::Stop, albums: None, restart: None, seed: None, within: None },
+        };
+        let _ = Box::pin(self.command(to, auto)).await;
+        let target = self.leader_of(to).unwrap_or_else(|| to.to_string());
+        if let Some(e) = self.entries().get_mut(&target)
+            && e.queue.id == queue.id
+        {
+            (e.queue.from, e.queue.renamed) = (queue.from.clone(), queue.renamed);
+        }
+    }
+
+    /// Queue history (decision 0033, amended): the player takes up its queue `id` where it was left, playing if it
+    /// played, else paused there; the one it leaves is kept as it stood.
+    async fn switch(&self, name: &str, id: &str) -> Result<(), ToggleError> {
+        let kept = {
+            let entries = self.entries();
+            let Some(e) = entries.get(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
+            if !id.is_empty() && e.queue.id == id {
+                return Ok(());
+            }
+            e.kept.iter().find(|k| k.queue.id == id).cloned()
+        };
+        let Some(k) = kept else { return Err(ToggleError::Refused("That queue is not kept.".into())) };
+        let index = k.entry.as_deref().and_then(|x| k.queue.at(x)).unwrap_or(0);
+        let play = Command::Play {
+            from: PlayFrom { whole: true, ..PlayFrom::default() },
+            tracks: Some(k.queue.tracks.clone()),
+            index,
+            position_ms: k.position_ms,
+            shuffle: false,
+            paused: !k.playing,
+            queue_id: Some(k.queue.id.clone()),
+            queue_name: Some(k.queue.name.clone()),
+        };
+        Box::pin(self.command(name, play)).await?;
+        self.settle(name, &k.queue).await;
+        tracing::info!(target: "playon", player = name, queue = k.queue.name.as_str(), "queue taken up again");
+        self.changed();
+        Ok(())
+    }
+
+    /// Queue history: queue `id` (the one that plays too) renamed; kept then until deleted.
+    fn rename_queue(&self, name: &str, id: &str, new: &str) -> Result<(), ToggleError> {
+        let new: String = new.trim().chars().take(QUEUE_NAME_MAX).collect();
+        if new.is_empty() {
+            return Err(ToggleError::Refused("A queue needs a name.".into()));
+        }
+        let mut entries = self.entries();
+        let Some(e) = entries.get_mut(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
+        let queue = if !id.is_empty() && e.queue.id == id {
+            &mut e.queue
+        } else if let Some(k) = e.kept.iter_mut().find(|k| k.queue.id == id) {
+            &mut k.queue
+        } else {
+            return Err(ToggleError::Refused("That queue is not kept.".into()));
+        };
+        (queue.name, queue.renamed) = (new, true);
+        e.kept_version += 1;
+        drop(entries);
+        self.changed();
+        Ok(())
+    }
+
+    /// Queue history: queue `id` out of the list; not the one that plays (switch to another first).
+    fn delete_queue(&self, name: &str, id: &str) -> Result<(), ToggleError> {
+        let mut entries = self.entries();
+        let Some(e) = entries.get_mut(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
+        if !id.is_empty() && e.queue.id == id {
+            return Err(ToggleError::Refused("That queue plays: switch to another first.".into()));
+        }
+        let before = e.kept.len();
+        e.kept.retain(|k| k.queue.id != id);
+        if e.kept.len() == before {
+            return Err(ToggleError::Refused("That queue is not kept.".into()));
+        }
+        e.kept_version += 1;
+        drop(entries);
+        self.changed();
+        Ok(())
+    }
+
     /// A player the music was handed away from without its knowing: its queue emptied here, as a stop does, so it is
     /// not given back when the player returns without one; the entries that moved kept, to stop it should it still
     /// play one of them.
@@ -1486,9 +1785,12 @@ impl PlayOn {
         let mut entries = self.entries();
         let Some(e) = entries.get_mut(name) else { return };
         e.moved = e.queue.tracks.iter().map(|t| t.entry.clone()).filter(|x| !x.is_empty()).collect();
+        let standing = e.standing();
+        e.keep(standing);
         if e.queue.edit_at(Command::Stop, None).is_ok() {
             e.told = e.queue.version;
         }
+        (e.queue.id, e.queue.name, e.queue.renamed, e.queue.from) = (String::new(), String::new(), false, None);
         e.report = Report { index: -1, volume: e.report.volume, ducked: e.report.ducked, ..Report::default() };
         e.at = Instant::now();
         drop(entries);
@@ -2010,10 +2312,10 @@ mod tests {
     fn commands_read_as_home_assistant_sends_them_and_reach_the_player_resolved() {
         let c: Command = serde_json::from_str(r#"{"command":"play","playlist":"Chill","shuffle":true}"#).unwrap();
         let chill = PlayFrom { playlist: Some("Chill".into()), ..PlayFrom::default() };
-        assert_eq!(c, Command::Play { from: chill, tracks: None, index: 0, position_ms: 0, shuffle: true, paused: false });
+        assert_eq!(c, Command::Play { from: chill, tracks: None, index: 0, position_ms: 0, shuffle: true, paused: false, queue_id: None, queue_name: None });
         let c: Command = serde_json::from_str(r#"{"command":"play","library":true,"shuffle":true,"limit":50}"#).unwrap();
         let library = PlayFrom { library: true, limit: Some(50), ..PlayFrom::default() };
-        assert_eq!(c, Command::Play { from: library, tracks: None, index: 0, position_ms: 0, shuffle: true, paused: false });
+        assert_eq!(c, Command::Play { from: library, tracks: None, index: 0, position_ms: 0, shuffle: true, paused: false, queue_id: None, queue_name: None });
         let c: Command = serde_json::from_str(r#"{"command":"play","album":"al-x"}"#).unwrap();
         assert!(matches!(c, Command::Play { from: PlayFrom { album: Some(a), favourites: false, .. }, .. } if a == "al-x"));
         let c: Command = serde_json::from_str(r#"{"command":"seek","percent":50}"#).unwrap();
@@ -2216,6 +2518,128 @@ mod tests {
         // Once it has it, its reports count again: the queue as it holds it, emptied too.
         p.report("tablet", Report { index: -1, queue: Some(Vec::new()), version: play["version"].as_u64(), ..Report::default() }).unwrap();
         assert_eq!(p.get("tablet").unwrap().queue_length, 0);
+    }
+
+    #[tokio::test]
+    async fn a_new_play_keeps_the_queue_it_leaves_and_a_switch_takes_it_up_where_it_was() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), album: Some("Transit".into()), ..QueueTrack::default() };
+        let mut tablet = p.connect("tablet").unwrap();
+        p.command("tablet", Command::play(vec![t("tr-1"), t("tr-2"), t("tr-3")], 1, 0)).await.unwrap();
+        let first = p.get("tablet").unwrap().queues.unwrap();
+        assert_eq!((first.len(), first[0].name.as_str(), first[0].playing, first[0].from.as_deref()), (1, "Transit", true, Some("tracks")));
+        let version = p.get("tablet").unwrap().queue_version;
+        p.report("tablet", Report { index: 1, version: Some(version), position_ms: 40_000, playing: true, ..Report::default() }).unwrap();
+
+        // Something new, by name: the one before is kept whole, where it stood.
+        let mut chill = Command::play(vec![t("tr-7")], 0, 0);
+        if let Command::Play { from, .. } = &mut chill {
+            from.name = Some("Chill".into());
+        }
+        p.command("tablet", chill).await.unwrap();
+        let list = p.get("tablet").unwrap().queues.unwrap();
+        assert_eq!(list.iter().map(|q| (q.name.as_str(), q.playing, q.tracks)).collect::<Vec<_>>(), vec![("Chill", true, 1), ("Transit", false, 3)]);
+        let told_play = told(&mut tablet).into_iter().rfind(|m| m["command"] == "play").unwrap();
+        assert_eq!(told_play["queue_name"], "Chill", "the player is told the queue's name and id");
+        assert_eq!(told_play["queue_id"].as_str(), Some(list[0].id.as_str()));
+
+        // Taken up again: from its track and position, playing as it played; Chill kept in its place.
+        let transit = list[1].id.clone();
+        p.command("tablet", Command::Queue { id: transit.clone() }).await.unwrap();
+        let play = told(&mut tablet).into_iter().find(|m| m["command"] == "play").unwrap();
+        assert_eq!((play["index"].as_u64(), play["position_ms"].as_u64(), play["paused"].as_bool()), (Some(1), Some(40_000), None));
+        assert_eq!(play["tracks"].as_array().map(Vec::len), Some(3), "whole, nothing of Chill's brought along");
+        let list = p.get("tablet").unwrap().queues.unwrap();
+        assert_eq!(list.iter().map(|q| (q.name.as_str(), q.playing)).collect::<Vec<_>>(), vec![("Transit", true), ("Chill", false)]);
+        assert_eq!(list[0].id, transit);
+
+        // Renamed (the playing one too) and deleted (not the playing one).
+        p.command("tablet", Command::QueueRename { id: list[1].id.clone(), name: "  Evening  ".into() }).await.unwrap();
+        assert!(matches!(p.command("tablet", Command::QueueDelete { id: transit }).await, Err(ToggleError::Refused(_))));
+        let evening = p.get("tablet").unwrap().queues.unwrap()[1].clone();
+        assert_eq!(evening.name, "Evening");
+        p.command("tablet", Command::QueueDelete { id: evening.id }).await.unwrap();
+        assert_eq!(p.get("tablet").unwrap().queues.unwrap().len(), 1);
+        // A stop keeps it too.
+        p.command("tablet", Command::Stop).await.unwrap();
+        let list = p.get("tablet").unwrap().queues.unwrap();
+        assert_eq!(list.iter().map(|q| (q.name.as_str(), q.playing)).collect::<Vec<_>>(), vec![("Transit", false)]);
+    }
+
+    #[tokio::test]
+    async fn twenty_queues_a_player_the_oldest_not_renamed_going_first() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let mut tablet = p.connect("tablet").unwrap();
+        p.command("tablet", Command::play(vec![t("first")], 0, 0)).await.unwrap();
+        p.command("tablet", Command::play(vec![t("second")], 0, 0)).await.unwrap();
+        let first = p.get("tablet").unwrap().queues.unwrap()[1].id.clone();
+        p.command("tablet", Command::QueueRename { id: first, name: "Keep".into() }).await.unwrap();
+        for i in 0..30 {
+            p.command("tablet", Command::play(vec![t(&format!("tr-{i}"))], 0, 0)).await.unwrap();
+            said(&mut tablet);
+        }
+        let list = p.get("tablet").unwrap().queues.unwrap();
+        assert_eq!(list.len(), QUEUES);
+        assert_eq!(list[0].name, "tr-29");
+        assert!(list.iter().any(|q| q.name == "Keep"), "a renamed one stays");
+        assert!(!list.iter().any(|q| q.name == "second"), "the oldest not renamed went");
+    }
+
+    #[tokio::test]
+    async fn a_queue_the_player_starts_itself_or_empties_keeps_the_one_before() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), artist: Some("Skalpel".into()), ..QueueTrack::default() };
+        let _tablet = p.connect("tablet").unwrap();
+        p.command("tablet", Command::play(vec![t("tr-1"), t("tr-2")], 0, 0)).await.unwrap();
+        let version = p.get("tablet").unwrap().queue_version;
+        p.report("tablet", Report { index: 0, version: Some(version), ..Report::default() }).unwrap();
+
+        // Its own, named: the page in the app played an album there.
+        let own = vec![QueueTrack { entry: "e-9".into(), ..t("tr-9") }];
+        let named = Report { index: 0, version: Some(version), queue: Some(own), queue_id: Some("q-own".into()), queue_name: Some("Sleep".into()), ..Report::default() };
+        p.report("tablet", named).unwrap();
+        let list = p.get("tablet").unwrap().queues.unwrap();
+        assert_eq!(list.iter().map(|q| (q.id.as_str(), q.name.as_str(), q.playing)).collect::<Vec<_>>()[0], ("q-own", "Sleep", true));
+        assert_eq!((list[1].name.as_str(), list[1].tracks), ("Skalpel", 2), "the one before, named after its artist");
+        // Emptied there (an app from before names none): kept too, and nothing plays.
+        p.report("tablet", Report { index: -1, version: Some(version), queue: Some(Vec::new()), ..Report::default() }).unwrap();
+        let list = p.get("tablet").unwrap().queues.unwrap();
+        assert_eq!(list.iter().map(|q| (q.name.as_str(), q.playing)).collect::<Vec<_>>(), vec![("Sleep", false), ("Skalpel", false)]);
+    }
+
+    #[tokio::test]
+    async fn a_handover_moves_the_queue_as_itself_and_the_player_it_left_keeps_it() {
+        let p = play_on().await;
+        let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
+        let (_phone, mut tablet) = (p.connect("phone").unwrap(), p.connect("tablet").unwrap());
+        let mut car = Command::play(vec![t("tr-1"), t("tr-2")], 0, 0);
+        if let Command::Play { from, .. } = &mut car {
+            from.name = Some("Car".into());
+        }
+        p.command("phone", car).await.unwrap();
+        let id = p.get("phone").unwrap().queues.unwrap()[0].id.clone();
+        p.command("phone", Command::Handover { to: "tablet".into() }).await.unwrap();
+        let play = told(&mut tablet).into_iter().find(|m| m["command"] == "play").unwrap();
+        assert_eq!((play["queue_id"].as_str(), play["queue_name"].as_str()), (Some(id.as_str()), Some("Car")));
+        let phone = p.get("phone").unwrap().queues.unwrap();
+        assert_eq!(phone.iter().map(|q| (q.id.as_str(), q.playing)).collect::<Vec<_>>(), vec![(id.as_str(), false)]);
+        // A browser keeps its own list (in the page), none here.
+        let _page = p.connect_browser("Chrome on Android", Some("tab-1")).unwrap();
+        p.command("Chrome on Android", Command::play(vec![t("tr-1")], 0, 0)).await.unwrap();
+        p.command("Chrome on Android", Command::play(vec![t("tr-2")], 0, 0)).await.unwrap();
+        assert_eq!(p.get("Chrome on Android").unwrap().queues.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn kept_queues_are_saved_with_the_queue() {
+        let s: Saved = serde_json::from_str(
+            r#"{"version":3,"tracks":[],"kept":[{"version":1,"tracks":[{"source":"cratarr","id":"tr-1","name":"One"}],"id":"q1","name":"Morning","renamed":true,"entry":"e1","position_ms":5,"playing":true,"updated":9}]}"#,
+        )
+        .unwrap();
+        assert_eq!((s.kept[0].queue.name.as_str(), s.kept[0].queue.renamed, s.kept[0].position_ms), ("Morning", true, 5));
+        let again: Saved = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(again.kept, s.kept);
     }
 
     #[tokio::test]
