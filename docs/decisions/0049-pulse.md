@@ -85,8 +85,10 @@ measured against it first; and the interim Tempo fade now.
   server's part, claude-5f). Its CPU time on the NAS is measured on a sample first, so the library's pass is planned
   from a real figure; 1 and 2 above are dropped, the reference sample in 3 stays as the check that it works here.
 - **The interim, in 70** (the page's part, a5: `lib/visuals/music.svelte.ts`): the Tempo row is the tempo times a
-  smoothstep of the last bar's mean beat strength, 0 at 0.15 or less (the break figure) and all of it at 0.5 or more
-  (provisional, not yet measured); 0 without beats or outside the grid, moving across each beat so it never jumps. The
+  smoothstep of the last bar's mean beat strength, 0 at 0.15 or less (the break figure) and all of it at 0.35 or more
+  (provisional: measured by a5 on 12 Test-crate tracks, a steady bar's mean is 0.3 to 0.85; at 0.35 the grooves are
+  full 69 to 95% of the time and the breaks reach 0); 0 without beats or outside the grid, moving across each beat so
+  it never jumps. The
   turning keeps the grid's tempo (`bps` untouched), so the flame does not stand still in ambient passages.
 
 ## Sources
