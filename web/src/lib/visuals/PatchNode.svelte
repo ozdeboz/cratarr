@@ -3,10 +3,14 @@
   // (an output to cable from), the blend, the screen, or a box around a layer or the loop; a layer that is off as one
   // row ("+ bring back"); "+ Add layer", "+ Add modulator". Tapping its title, or double-clicking it, opens its page; a
   // knob tapped, what moves it; a long press (or right click) on a module that can go, its menu (lib/longpress).
+  // Each handle by its port's type (0057 §1: the wire's colour; a trigger's a diamond, the sound's a ring); a modulator
+  // with several outputs, a row of jacks (the Clock's Beat, Bar and Phrase blink); a control source, its face.
   import { getContext } from 'svelte';
   import { Handle, Position, useUpdateNodeInternals } from '@xyflow/svelte';
   import { longpress } from '../longpress';
   import PatchKnob from './PatchKnob.svelte';
+  import PatchFace from './PatchFace.svelte';
+  import { clockLights } from './faces';
   import { GRAPH, knobHandle, MOD_OUT, type GraphActions, type NodeData, type Side } from './patchgraph';
 
   let { id, data, selected }: { id: string; data: NodeData; selected?: boolean } = $props();
@@ -16,10 +20,11 @@
   const SIDE: Record<Side, Position> = { left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom };
   // Picture handles sit on the title's line at the sides.
   const at = (s: Side) => (s === 'left' || s === 'right' ? 'top: 19px' : undefined);
-  const port = (p: string) => p.charAt(0).toUpperCase() + p.slice(1);
+  // The Clock's lights, from the graph's live frame (only a Clock's node reads it).
+  const lights = $derived(data.kind === 'module' && data.face?.kind === 'clock' ? (clockLights(graph.live()?.beat ?? null) as Record<string, number>) : null);
 
-  // The handles move when the knobs shown change: measured again.
-  const shape = $derived(data.kind === 'module' ? data.knobs.map((k) => k.id).join() + '|' + data.ports.length : '');
+  // The handles move when the knobs, ports or jacks shown change: measured again.
+  const shape = $derived(data.kind === 'module' ? data.knobs.map((k) => k.id).join() + '|' + data.ports.map((p) => p.id).join() + '|' + data.outs.length + '|' + (data.face?.lanes ?? 0) : '');
   $effect(() => {
     void shape;
     update(id);
@@ -42,7 +47,7 @@
 {:else if data.kind === 'signal'}
   <div class="node mod" class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
     <span class="t">{data.label}</span>
-    <Handle type="source" id={MOD_OUT} position={Position.Top} class="out" />
+    <Handle type="source" id={MOD_OUT} position={Position.Top} class="out t-{data.type}" />
   </div>
 {:else if data.kind === 'module'}
   <div class="node" class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation" use:longpress={() => graph.removable(id) && graph.menu(id)}>
@@ -51,8 +56,8 @@
       <div class="ports">
         {#each data.ports as p (p.id)}
           <div class="port" class:cabled={p.cabled}>
-            {port(p.id)}
-            <Handle type="target" id={knobHandle(p.id)} position={Position.Left} class="in-mod" style="left: -10px" />
+            {p.label}
+            <Handle type="target" id={knobHandle(p.id)} position={Position.Left} class="in-mod t-{p.type}" style="left: -10px" />
           </div>
         {/each}
       </div>
@@ -62,7 +67,7 @@
         {#each data.knobs as k (k.id)}
           <div class="kw">
             <PatchKnob knob={k} onturn={(v) => graph.knob(id, k.id, v)} ontap={() => graph.openKnob(id, k.id)} />
-            <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="in-mod" style="top: 17.5px; bottom: auto" />
+            <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="in-mod t-value" style="top: 17.5px; bottom: auto" />
           </div>
         {/each}
         {#if data.hidden}
@@ -72,12 +77,23 @@
         {/if}
       </div>
     {/if}
-    {#if data.in}<Handle type="target" id="in" position={SIDE[data.in]} isConnectable={false} class="pic" style={at(data.in)} />{/if}
+    {#if data.outs.length}
+      <div class="outs">
+        {#each data.outs as o (o.id)}
+          <div class="jack">
+            <i class="light t-{o.type}" style:--lit={lights?.[o.id] ?? 0}></i>{o.label}
+            <Handle type="source" id={o.handle} position={Position.Top} isConnectable={o.handle === MOD_OUT} class="out t-{o.type}" />
+          </div>
+        {/each}
+      </div>
+    {/if}
+    {#if data.face && data.face.kind !== 'clock'}<PatchFace {id} face={data.face} />{/if}
+    {#if data.in}<Handle type="target" id="in" position={SIDE[data.in]} isConnectable={false} class="pic t-picture" style={at(data.in)} />{/if}
     {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={false} class="pic" style={at(data.out)} />{/if}
     {#if data.feedback}<Handle type="source" id="fb" position={Position.Bottom} isConnectable={false} class="fb" />{/if}
     {#if data.feedbackIn}<Handle type="target" id="fbin" position={Position.Bottom} isConnectable={false} class="fb" />{/if}
-    {#if data.modulator}
-      <Handle type="source" id={MOD_OUT} position={Position.Top} class="out" />
+    {#if data.modulator && !data.outs.length}
+      <Handle type="source" id={MOD_OUT} position={Position.Top} class="out t-{data.gives?.type ?? 'value'}" />
     {/if}
   </div>
 {:else}
@@ -241,6 +257,55 @@
   .node :global(.svelte-flow__handle.in-mod.connectingto),
   .node :global(.svelte-flow__handle.in-mod:hover) {
     background: var(--patch-mod);
+  }
+  /* By type: a value's purple, a trigger's a diamond, the sound's a ring, light amber (PatchGraph's --wire-*). */
+  .node :global(.svelte-flow__handle.t-trigger) {
+    background: var(--wire-trigger);
+    border-radius: 0;
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+    width: 10px;
+    height: 10px;
+  }
+  .node :global(.svelte-flow__handle.in-mod.t-trigger) {
+    background: color-mix(in srgb, var(--wire-trigger) 55%, transparent);
+  }
+  .node :global(.svelte-flow__handle.t-audio) {
+    background: var(--patch-bg);
+    box-shadow: inset 0 0 0 2px var(--wire-audio);
+    width: 10px;
+    height: 10px;
+  }
+  .node :global(.svelte-flow__handle.t-light) {
+    background: var(--wire-light);
+  }
+  .node :global(.svelte-flow__handle.in-mod.t-trigger.connectingto),
+  .node :global(.svelte-flow__handle.in-mod.t-trigger:hover) {
+    background: var(--wire-trigger);
+  }
+  .outs {
+    display: flex;
+    gap: 2px;
+    margin-top: 10px;
+  }
+  .jack {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    min-width: 26px;
+    padding-top: 6px;
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+  .light {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--wire-value) 25%, transparent);
+  }
+  .light.t-trigger {
+    background: color-mix(in srgb, var(--wire-trigger) calc(18% + 82% * var(--lit, 0)), transparent);
+    box-shadow: 0 0 calc(6px * var(--lit, 0)) var(--wire-trigger);
   }
   .node :global(.svelte-flow__handle.fb) {
     opacity: 0;

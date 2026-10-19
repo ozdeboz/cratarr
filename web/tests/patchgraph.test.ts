@@ -122,7 +122,7 @@ test('knobs: a few shown, the cabled ones always, never the device’s; opened o
   assert.deepEqual(data('frame').knobs.map((k) => k.id), ['intensity']);
   // A modulator shows only its cabled knobs until opened; its ports always.
   assert.deepEqual(data('lfo').knobs, []);
-  assert.deepEqual(data('fol').ports, [{ id: 'in', cabled: true }]);
+  assert.deepEqual(data('fol').ports, [{ id: 'in', label: 'Input', type: 'value', cabled: true }]);
   const open = graphOf({ patch: sample(), types, open: new Set(['s1', 'lfo']) });
   const o = (id: string) => open.nodes.find((n) => n.id === id)!.data as ModuleData;
   assert.equal(o('s1').knobs.length, 5);
@@ -264,4 +264,213 @@ test('cable opacity: 100, 50, 20 % in turn, drawn as Rack draws it (to the power
   assert.equal(nextOpacity(0.7), 0.5);
   assert.equal(drawnOpacity(1), 1);
   assert.ok(Math.abs(drawnOpacity(0.25) - 0.125) < 1e-9);
+});
+
+// ---- Typed wires and ports, normals, bundles, faces, "New ▸ LFO / ADSR" (0057 §1, §4b) ------------------------------
+
+const { WIRES, MUTED_DASH, wireStyle, bundleLabel, cableLabel, sourcePort, pictureFits, withModulator, CLOCK_BEAT } = await import('../src/lib/visuals/patchgraph.ts');
+const { ADSR, CLOCK, ENVELOPE, SEQUENCER } = await import('../src/lib/visuals/ports.ts');
+const { WAVES, soundOf } = await import('../src/lib/visuals/sources/waves.ts');
+const { withInputs } = await import('../src/lib/visuals/compose.ts');
+const faces = await import('../src/lib/visuals/faces.ts');
+type GraphEdge = import('../src/lib/visuals/patchgraph.ts').GraphEdge;
+
+const typed: Record<string, ModuleType> = { ...types, waves: WAVES, adsr: ADSR, clock: CLOCK, envelope: ENVELOPE, sequencer: SEQUENCER };
+function wired(cables: Patch['cables'], modulators: Module[] = []): Patch {
+  return {
+    ...sample(),
+    layers: [{ id: 'w', source: mod('waves', 'waves'), modules: [], loop: [], blend: { mode: 'add', amount: 1 } }],
+    loop: [],
+    finish: [],
+    modulators: [mod('lfo', 'lfo'), mod('adsr', 'adsr'), mod('clock', 'clock'), mod('seq', 'sequencer'), mod('env', 'envelope'), ...modulators],
+    cables,
+  };
+}
+const edgeOf = (edges: GraphEdge[], id: string) => edges.find((e) => e.id === id);
+
+test('wires by type: picture solid, light solid and thicker, value dashed, trigger dotted, audio a double line', () => {
+  assert.equal(WIRES.picture.dash, null);
+  assert.equal(WIRES.light.dash, null);
+  assert.ok(WIRES.light.width > WIRES.picture.width);
+  assert.equal(WIRES.value.dash, '6 5');
+  const [on, off] = WIRES.trigger.dash!.split(' ').map(Number);
+  assert.ok(on < 0.5 && off > on, 'dots: next to no dash, a gap');
+  assert.ok(WIRES.audio.double && !WIRES.value.double && !WIRES.picture.double);
+  assert.equal(wireStyle('value'), '--wire-w: 1.5px; --wire-dash: 6 5');
+  assert.ok(wireStyle('trigger', true).endsWith(MUTED_DASH));
+  const { edges } = graphOf({
+    patch: wired([
+      { id: 'b', from: { signal: 'beat' }, to: { module: 'adsr', knob: 'gate' }, value: 1, mode: 'swing' },
+      { id: 'l', from: { modulator: 'lfo' }, to: { module: 'waves', knob: 'hue' }, value: 0.3, mode: 'swing' },
+      { id: 't', from: { signal: 'beat' }, to: { module: 'waves', knob: 'width' }, value: 0.3, mode: 'level' },
+    ]),
+    types: typed,
+  });
+  assert.equal(edgeOf(edges, 'b')?.data?.wire, 'trigger');
+  assert.equal(edgeOf(edges, 'l')?.data?.wire, 'value');
+  assert.equal(edgeOf(edges, 't')?.data?.wire, 'trigger', 'a trigger into a value is still drawn as a trigger');
+  assert.equal(edgeOf(edges, 'pic:waves>@blend')?.class, 'picture');
+  // A source that gives light (the flame's, before Show) draws it as light.
+  const lit = graphOf({ patch: sample(), types: { ...types, src: { ...types.src, ports: { in: [], out: [{ id: 'light', label: 'Light', type: 'light' }] } } as ModuleType } });
+  assert.equal(edgeOf(lit.edges, 'pic:s1>k1')?.class, 'light');
+  assert.equal(edgeOf(lit.edges, 'pic:k1>@blend')?.class, 'picture');
+});
+
+test('ports and handles by type; connections only where the types fit; a picture cycle only through a Feedback', () => {
+  const { nodes } = graphOf({ patch: wired([]), types: typed });
+  const d = (id: string) => nodes.find((n) => n.id === id)!.data as ModuleData;
+  assert.deepEqual(d('waves').ports.map((p) => [p.id, p.type]), [['audio', 'audio']]);
+  assert.deepEqual(d('adsr').ports.map((p) => [p.id, p.type, p.channels]), [['gate', 'trigger', 6]]);
+  // Polyphonic as many channels as come in (VCV Rack's rule): nothing in, one.
+  assert.deepEqual(d('adsr').gives, { type: 'value' });
+  assert.deepEqual(
+    d('clock').outs.map((o) => [o.id, o.type, o.handle]),
+    [
+      ['phase', 'value', 'mod'],
+      ['rate', 'value', 'o:rate'],
+      ['beat', 'trigger', 'o:beat'],
+      ['bar', 'trigger', 'o:bar'],
+      ['phrase', 'trigger', 'o:phrase'],
+    ],
+  );
+  // Music's beat into the ADSR's gate fits; an LFO's value into it does not; a trigger into a knob does.
+  const sig = graphOf({ patch: wired([]), types: typed, signals: [{ signal: 'beat' }] });
+  const beat = signalKey({ signal: 'beat' });
+  assert.ok(cableOf({ source: beat, target: 'adsr', sourceHandle: 'mod', targetHandle: 'k:gate' }, sig.nodes, []));
+  assert.equal(cableOf({ source: 'lfo', target: 'adsr', sourceHandle: 'mod', targetHandle: 'k:gate' }, sig.nodes, []), null);
+  assert.ok(cableOf({ source: beat, target: 'waves', sourceHandle: 'mod', targetHandle: 'k:width' }, sig.nodes, []));
+  // Music's sound is no cable's source: its node takes none.
+  const sound = nodes.find((n) => n.data.kind === 'signal' && n.data.type === 'audio')!;
+  assert.equal(sound.connectable, false);
+  assert.equal(cableOf({ source: sound.id, target: 'waves', sourceHandle: 'mod', targetHandle: 'k:audio' }, nodes, []), null);
+  // Pictures: forward fine; back into the chain only through a Feedback.
+  const chain = [
+    { source: 'a', target: 'b', class: 'picture' },
+    { source: 'b', target: 'c', class: 'picture w-picture' },
+  ];
+  const at = (id: string, type: string) => ({ id, data: { kind: 'module', type, module: id } as unknown as ModuleData });
+  const ns = [at('a', 'src'), at('b', 'fx'), at('c', 'fx'), at('fb', 'feedback')];
+  assert.ok(pictureFits({ source: 'c', target: '@screen', sourceHandle: 'out', targetHandle: 'in' }, ns, chain));
+  assert.ok(!pictureFits({ source: 'c', target: 'a', sourceHandle: 'out', targetHandle: 'in' }, ns, chain));
+  assert.ok(pictureFits({ source: 'fb', target: 'a', sourceHandle: 'out', targetHandle: 'in' }, ns, [...chain, { source: 'c', target: 'fb', class: 'picture' }]));
+  assert.ok(!pictureFits({ source: 'c', target: 'a', sourceHandle: 'mod', targetHandle: 'k:x' }, ns, chain));
+});
+
+test("a port's normal is drawn faint until a cable is plugged into it, then it is gone", () => {
+  const { edges, nodes } = graphOf({ patch: wired([]), types: typed });
+  const normal = (id: string) => edgeOf(edges, `normal:${id}`);
+  // Music's sound into Waves: a double line from the Sound; the Loudness from Music's loudness; the Clock's tempo.
+  const sound = normal('waves.audio')!;
+  assert.equal(sound.class, 'normal w-audio');
+  assert.equal((nodes.find((n) => n.id === sound.source)!.data as { label: string }).label, 'Sound');
+  assert.ok(sound.data?.normal && !sound.selectable && !sound.deletable);
+  assert.equal(normal('env.in')?.source, signalKey({ signal: 'loudness' }));
+  assert.equal(normal('clock.tempo')?.data?.wire, 'value');
+  // From a module's jack: the Sequencer stepped by the Clock's beat, reset by its bar.
+  assert.deepEqual([normal('seq.clock')?.source, normal('seq.clock')?.sourceHandle, normal('seq.clock')?.data?.wire], ['clock', 'o:beat', 'trigger']);
+  assert.equal(normal('seq.reset')?.sourceHandle, 'o:bar');
+  // A cable plugged into the Loudness's input breaks its normal; the others stay.
+  const plugged = graphOf({ patch: wired([{ id: 'x', from: { signal: 'level', band: 0 }, to: { module: 'env', knob: 'in' }, value: 1, mode: 'swing' }]), types: typed });
+  assert.equal(edgeOf(plugged.edges, 'normal:env.in'), undefined);
+  assert.ok(edgeOf(plugged.edges, 'x') && edgeOf(plugged.edges, 'normal:waves.audio'));
+  // A normal from a module not drawn is not drawn.
+  const alone = graphOf({ patch: { ...wired([]), modulators: [mod('seq', 'sequencer')] }, types: typed });
+  assert.equal(edgeOf(alone.edges, 'normal:seq.clock'), undefined);
+});
+
+test('a band’s six at once is one line marked "· 6"; one band is one channel', () => {
+  assert.equal(bundleLabel(6), '· 6');
+  assert.equal(bundleLabel(1), '');
+  assert.equal(bundleLabel(undefined), '');
+  assert.equal(cableLabel({ amount: '50%', channels: 6 }, false), '· 6');
+  assert.equal(cableLabel({ amount: '50%', channels: 6 }, true), '50% · 6');
+  assert.equal(cableLabel({ amount: '50%' }, true), '50%');
+  assert.equal(cableLabel({ amount: '50%' }, false), '');
+  assert.deepEqual(sourcePort({ signal: 'hits' }, () => undefined), { type: 'trigger', channels: 6 });
+  assert.deepEqual(sourcePort({ signal: 'hits', band: 2 }, () => undefined), { type: 'trigger' });
+  assert.deepEqual(sourcePort({ signal: 'loudness' }, () => undefined), { type: 'value' });
+  const { edges, nodes } = graphOf({
+    patch: wired([
+      { id: 'all', from: { signal: 'hits' }, to: { module: 'adsr', knob: 'gate' }, value: 1, mode: 'swing' },
+      { id: 'one', from: { signal: 'level', band: 3 }, to: { module: 'waves', knob: 'hue' }, value: 0.2, mode: 'swing' },
+      { id: 'poly', from: { modulator: 'adsr' }, to: { module: 'waves', knob: 'width' }, value: 0.2, mode: 'level' },
+    ]),
+    types: typed,
+  });
+  assert.equal(edges.filter((e) => e.id === 'all').length, 1, 'one line');
+  assert.equal(edgeOf(edges, 'all')?.data?.channels, 6);
+  assert.equal(edgeOf(edges, 'one')?.data?.channels, undefined);
+  assert.equal(edgeOf(edges, 'poly')?.data?.channels, 6);
+  // Fed six channels, the ADSR's face has a lane each.
+  assert.equal((nodes.find((n) => n.id === 'adsr')!.data as ModuleData).face?.lanes, 6);
+  const mono = graphOf({ patch: wired([{ id: 'b', from: { signal: 'beat' }, to: { module: 'adsr', knob: 'gate' }, value: 1, mode: 'swing' }]), types: typed });
+  assert.equal((mono.nodes.find((n) => n.id === 'adsr')!.data as ModuleData).face?.lanes, 1);
+  const monoOut = graphOf({ patch: wired([{ id: 'b', from: { signal: 'beat' }, to: { module: 'adsr', knob: 'gate' }, value: 1, mode: 'swing' }, { id: 'o', from: { modulator: 'adsr' }, to: { module: 'waves', knob: 'width' }, value: 0.2, mode: 'level' }]), types: typed });
+  assert.equal(edgeOf(monoOut.edges, 'o')?.data?.channels, undefined, 'one gate in, one envelope out');
+});
+
+test("faces: an ADSR's stage from its output, an LFO's phase, the Clock's lights", () => {
+  const k = { attack: 0.1, decay: 0.2, sustain: 0.5, release: 0.3, amount: 1 };
+  let m = faces.newAdsrMemo();
+  const seen: string[] = [];
+  for (const out of [0, 0.3, 0.8, 1, 0.8, 0.6, 0.5, 0.5, 0.5, 0.4, 0.2, 0.05, 0]) {
+    m = faces.adsrStep(m, k, out);
+    if (seen.at(-1) !== m.stage) seen.push(m.stage);
+  }
+  assert.deepEqual(seen, ['idle', 'attack', 'decay', 'sustain', 'release', 'idle']);
+  // The dot: along the attack by the level, the release by how far from where it began.
+  const spans = faces.adsrSpans(k, 100);
+  assert.ok(spans.attack[0] === 0 && Math.abs(spans.release[1] - 100) < 1e-9 && spans.decay[0] === spans.attack[1]);
+  assert.equal(faces.adsrDot({ stage: 'attack', level: 0.5, from: 0 }, k, 100, 10)!.x, (spans.attack[0] + spans.attack[1]) / 2);
+  assert.equal(faces.adsrDot({ stage: 'release', level: 0.25, from: 0.5 }, k, 100, 10)!.x, (spans.release[0] + spans.release[1]) / 2);
+  assert.equal(faces.adsrDot({ stage: 'idle', level: 0, from: 0 }, k, 100, 10), null);
+  assert.equal(faces.adsrStagePath(k, 'attack', 100, 10), `M0,10 L${Math.round(spans.attack[1] * 10) / 10},0`);
+  // A channel's output by `module.port.n`, else `module.port`, else (its out) the module's own.
+  assert.equal(faces.outputOf({ 'a.out.2': 0.4, 'a.out': 0.1 }, 'a', 'out', 2), 0.4);
+  assert.equal(faces.outputOf({ a: 0.7 }, 'a'), 0.7);
+  assert.equal(faces.outputOf({}, 'a'), null);
+  // The LFO's phase from its value and its way: a sine's and a triangle's exactly, a mix of them near enough.
+  for (const shape of [0, 1, 0.4])
+    for (const p of [0.05, 0.2, 0.4, 0.6, 0.8, 0.95]) {
+      const v = faces.lfoWave(p, shape);
+      const rising = p < 0.25 || p > 0.75;
+      const tol = shape === 0 || shape === 1 ? 1e-9 : 0.06;
+      assert.ok(Math.abs(faces.lfoPhase(v, rising, shape) - p) < tol, `${shape} ${p}`);
+    }
+  assert.equal(faces.lfoStep({ value: 0.2, rising: true }, 0.1).rising, false);
+  // The Clock: the beat flashes and fades; a bar's first beat lights Bar; a phrase's, Phrase too.
+  assert.deepEqual(faces.clockLights(null), { beat: 0, bar: 0, phrase: 0 });
+  assert.deepEqual(faces.clockLights({ index: 32, since: 0, length: 0.5, strength: 1 }), { beat: 1, bar: 1, phrase: 1 });
+  const third = faces.clockLights({ index: 6, since: 0.06, length: 0.5, strength: 1 });
+  assert.ok(third.beat > 0 && third.beat < 1 && third.bar === 0 && third.phrase === 0);
+  assert.equal(faces.clockLights({ index: 4, since: 0, length: 0.5, strength: 1 }).phrase, 0);
+});
+
+test('"New ▸ ADSR" from a knob: the module, the cable into the knob and its gate from the beat, in one change', () => {
+  const before = { routes: {}, extra: { layers: [], loop: [], modulators: [mod('lfo', 'lfo')], cables: [{ id: 'cable-1', from: { modulator: 'lfo' }, to: { module: 's1', knob: 'a' }, value: 0.5, mode: 'swing' as const }], macros: [] } };
+  const made = withModulator(before, { id: 'adsr-1', type: 'adsr', knobs: { attack: 0.01 } }, ADSR, { module: 's1', knob: 'b' }, 'level');
+  assert.deepEqual(made.cables.extra.modulators.map((m) => m.id), ['lfo', 'adsr-1']);
+  const [sync, into] = made.cables.extra.cables.slice(1);
+  assert.deepEqual([sync.from, sync.to, sync.value], [CLOCK_BEAT, { module: 'adsr-1', knob: 'gate' }, 1]);
+  assert.deepEqual([into.from, into.to, into.mode], [{ modulator: 'adsr-1' }, { module: 's1', knob: 'b' }, 'level']);
+  assert.equal(made.cable, into);
+  assert.equal(new Set(made.cables.extra.cables.map((c) => c.id)).size, 3, 'ids free');
+  assert.equal(before.extra.cables.length, 1, 'the cables before, untouched');
+  // An LFO declares no trigger input: the module and its cable only. Ports normalled from the Clock stay so.
+  assert.equal(withModulator(before, { id: 'lfo-2', type: 'lfo', knobs: {} }, MODULATORS.lfo, { module: 's1', knob: 'b' }, 'swing').cables.extra.cables.length, 2);
+  assert.equal(withModulator(before, { id: 'seq-1', type: 'sequencer', knobs: {} }, SEQUENCER, { module: 's1', knob: 'b' }, 'swing').cables.extra.cables.length, 2);
+});
+
+test("Waves takes the sound by its audio port, normalled from Music's; the frame's samples where nothing passes it", () => {
+  const audio = WAVES.ports.in.find((p) => p.id === 'audio')!;
+  assert.deepEqual([audio.type, audio.normal], ['audio', { module: 'music', port: 'audio' }]);
+  const wave = Float32Array.from([0, 0.5, -0.5]);
+  const other = Float32Array.from([1, -1]);
+  const frame = { dt: 0, time: 0, beat: null, signals: () => 0, waveform: wave };
+  assert.equal(withInputs('waves', frame).inputs?.audio, wave);
+  assert.equal(withInputs('shapes', frame), frame, 'a source with no audio port: the frame as it is');
+  assert.equal(soundOf({ waveform: wave, inputs: { audio: other } }), other);
+  assert.equal(soundOf({ waveform: wave, inputs: { audio: null } }), wave);
+  assert.equal(soundOf({ waveform: wave }), wave);
+  assert.equal(soundOf({ waveform: null }), null);
 });

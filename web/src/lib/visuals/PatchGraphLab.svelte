@@ -1,12 +1,20 @@
 <script lang="ts">
   // Development only (graph-lab.html): PatchGraph alone on a sample patch held here, every callback applied, so the
   // graph can be edited as the panel would. ?cratarr shows the Cratarr chain (today's pipeline) instead; ?off starts
-  // with the flame layer off (blended at nothing). A tapped cable shows a stand-in for its configuration.
+  // with the flame layer off (blended at nothing). A tapped cable shows a stand-in for its configuration. ?wires: every
+  // wire type, the normals and the control sources' live faces (an LFO run as the engine runs it; the ADSRs and the
+  // beat stood in for here until claude-5f's engine gives them), and "New ▸ LFO / ADSR" from a knob dragged into the
+  // empty.
+  import { onMount } from 'svelte';
   import PatchGraph from './PatchGraph.svelte';
   import { cratarrPatch, cratarrTypes, type Cable, type Knob, type Module, type ModuleType, type Patch } from './patch';
   import { MODULATORS } from './modulators/modulators';
+  import { ADSR, CLOCK, ENVELOPE, SEQUENCER, type Ports } from './ports';
+  import { WAVES } from './sources/waves';
   import { DEFAULTS, RANGES } from './settings.svelte';
-  import type { XY } from './patchgraph';
+  import { withModulator, type PickRequest, type XY } from './patchgraph';
+  import { LiveFaces } from './faces.svelte';
+  import type { FrameInfo } from './patch';
 
   const k = (id: string, label: string, min: number, max: number, def: number, kind: Knob['kind'] = 'level', neutral = min): Knob => ({ id, label, min, max, neutral, default: def, kind });
   // Sources and modules the pipeline has not yet (step 4), for the sample.
@@ -17,8 +25,10 @@
     { type: 'colour', label: 'Colour', place: 'finish', knobs: [k('hue', 'Hue', 0, 1, 0.2, 'swing', 0.2), k('vivid', 'Vivid', 0, 2, 1, 'swing', 1)] },
   ];
   const types: Record<string, ModuleType> = Object.fromEntries(
-    [...cratarrTypes(RANGES as Record<string, [number, number]>, DEFAULTS), ...extra, ...Object.values(MODULATORS)].map((t) => [t.type, t]),
+    [...cratarrTypes(RANGES as Record<string, [number, number]>, DEFAULTS), ...extra, ...Object.values(MODULATORS), WAVES, CLOCK, ADSR, ENVELOPE, SEQUENCER].map((t) => [t.type, t]),
   );
+  // The flame gives its light, which only Show makes a picture of (0057 §1): drawn so with ?wires, where Show follows it.
+  if (new URLSearchParams(location.search).has('wires')) types.flame = { ...types.flame, ports: { in: [], out: [{ id: 'light', label: 'Light', type: 'light' }] } } as ModuleType & { ports: Ports };
   const mod = (id: string, type: string, knobs: Record<string, number> = {}): Module => ({ id, type, knobs: { ...Object.fromEntries(types[type].knobs.map((x) => [x.id, x.default])), ...knobs } });
   const cable = (id: string, from: Cable['from'], module: string, knob: string, value: number, mode: Cable['mode'] = 'swing'): Cable => ({ id, from, to: { module, knob }, value, mode });
 
@@ -45,8 +55,39 @@
     };
   }
 
+  // Every wire type: the flame's light into Show, pictures into the blend, the sound into Waves (its normal, a double
+  // line), values dashed, triggers dotted, the bands' hits at once "· 6"; the Clock's jacks into a Sequencer by their
+  // normals; an LFO, a single ADSR and one on the six bands, each with its face.
+  function wires(): Patch {
+    const base = cratarrPatch(DEFAULTS);
+    return {
+      ...base,
+      layers: [
+        { id: 'flame', source: base.layers[0].source, modules: base.layers[0].modules, loop: [], blend: { mode: 'add', amount: 1 } },
+        { id: 'waves', source: mod('waves', 'waves'), modules: [], loop: [], blend: { mode: 'screen', amount: 0.8 } },
+      ],
+      loop: [],
+      finish: [],
+      modulators: [
+        mod('clock', 'clock'),
+        mod('lfo', 'lfo', { rate: 0.5, shape: 0.3 }),
+        mod('adsr', 'adsr', { attack: 0.06, decay: 0.25, sustain: 0.45, release: 0.35 }),
+        mod('bands', 'adsr', { attack: 0.02, decay: 0.2, sustain: 0.3, release: 0.3 }),
+        mod('seq', 'sequencer'),
+      ],
+      cables: [
+        cable('c1', { signal: 'beat' }, 'adsr', 'gate', 1),
+        cable('c2', { signal: 'hits' }, 'bands', 'gate', 1),
+        cable('c3', { modulator: 'lfo' }, 'waves', 'hue', 0.3),
+        cable('c4', { modulator: 'adsr' }, 'show', 'glow', 0.4),
+        cable('c5', { modulator: 'bands' }, 'flame', 'lighting.0', 0.5),
+        cable('c6', { signal: 'level', band: 1 }, 'waves', 'amplitude', 0.4),
+      ],
+    };
+  }
+
   const query = new URLSearchParams(location.search);
-  const first = query.has('cratarr') ? cratarrPatch(DEFAULTS) : sample();
+  const first = query.has('cratarr') ? cratarrPatch(DEFAULTS) : query.has('wires') ? wires() : sample();
   if (query.has('off')) first.layers[0] = { ...first.layers[0], blend: { ...first.layers[0].blend, amount: 0 } };
   let patch = $state.raw<Patch>(first);
   let openCable = $state<string | null>(null);
@@ -124,6 +165,63 @@
     patch = { ...patch, modulators: [...patch.modulators, mod(`${type}${++n}`, type)] };
     last = `add modulator ${type}`;
   }
+  // A knob dragged into the empty: "New ▸ LFO / ADSR" (the app's is claude-5f's SourcePicker), made as Visuals makes it.
+  let picking = $state<{ r: PickRequest; at: XY } | null>(null);
+  function onpick(r: PickRequest, at: XY) {
+    picking = { r, at };
+    last = `pick for ${r.module}.${r.knob} at ${at.x},${at.y}`;
+  }
+  function pickNew(type: string) {
+    if (!picking) return;
+    const { r, at } = picking;
+    const id = `${type}${++n}`;
+    const all = new Map([patch.frame, ...patch.layers.flatMap((l) => [l.source, ...l.modules, ...l.loop]), ...patch.loop, ...patch.finish, ...patch.modulators].map((m) => [m.id, m]));
+    const kind = types[all.get(r.module)?.type ?? '']?.knobs.find((x) => x.id === r.knob)?.kind ?? 'swing';
+    const made = withModulator({ routes: {}, extra: { layers: [], loop: [], modulators: patch.modulators, cables: patch.cables, macros: [] } }, mod(id, type), types[type], { module: r.module, knob: r.knob }, kind);
+    patch = { ...patch, modulators: made.cables.extra.modulators, cables: made.cables.extra.cables };
+    positions = { ...positions, [id]: at };
+    picking = null;
+    last = `new ${type} → ${r.module}.${r.knob}`;
+  }
+
+  // The live faces: the beat at 120 a minute, the LFO stepped as the engine steps it, the ADSRs stood in for (a gate on
+  // each beat; one band's hit a beat, in turn).
+  const live = new LiveFaces();
+  onMount(() => {
+    if (!query.has('wires')) return;
+    const lfo = MODULATORS.lfo.create();
+    const t0 = performance.now();
+    let before = t0;
+    let raf = 0;
+    const env = (since: number, k: Record<string, number>, held = 0.12) => {
+      const a = Math.max(1e-3, k.attack);
+      const d = Math.max(1e-3, k.decay);
+      const at = (t: number) => (t < a ? t / a : t < a + d ? 1 - (1 - k.sustain) * ((t - a) / d) : k.sustain);
+      if (since < held) return at(since);
+      return at(held) * Math.max(0, 1 - (since - held) / Math.max(1e-3, k.release));
+    };
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      const t = (now - t0) / 1000;
+      const dt = (now - before) / 1000;
+      before = now;
+      const beats = t * 2;
+      const index = Math.floor(beats);
+      const beat: FrameInfo['beat'] = { index, since: (beats - index) / 2, length: 0.5, strength: 1 };
+      const knobsOf = (id: string) => patch.modulators.find((m) => m.id === id)?.knobs ?? {};
+      const outputs: Record<string, number> = {};
+      for (const m of patch.modulators) {
+        const k = { amount: 1, ...m.knobs };
+        if (m.type === 'lfo') outputs[m.id] = lfo.step(dt, () => 0, knobsOf(m.id));
+        if (m.type !== 'adsr') continue;
+        if (m.id === 'bands') for (let c = 0; c < 6; c++) outputs[`${m.id}.out.${c}`] = env(((beats - c / 3 + 60) % 2) / 2, k, 0.08);
+        else outputs[m.id] = env(beat.since, k, 0.2);
+      }
+      live.offer(now, () => ({ time: t, beat, outputs }));
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  });
 </script>
 
 <div class="lab">
@@ -143,7 +241,14 @@
     {onaddlayer}
     {onaddmodule}
     {onaddmodulator}
+    {onpick}
+    {live}
   />
+  {#if picking}
+    <aside class="pick">
+      <button onclick={() => pickNew('lfo')}>New ▸ LFO</button><button onclick={() => pickNew('adsr')}>New ▸ ADSR</button><button aria-label="Close" onclick={() => (picking = null)}>×</button>
+    </aside>
+  {/if}
   {#if openCable}
     <aside><span>{openCable}</span><button aria-label="Close" onclick={() => (openCable = null)}>×</button></aside>
   {/if}

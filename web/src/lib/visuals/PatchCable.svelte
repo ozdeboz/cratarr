@@ -3,18 +3,21 @@
   // Rack's cables); its amount shown while it or a node at its ends is in focus. A tap opens it (PatchGraph); a long
   // press or a right click (lib/longpress), its menu. Rerouted, the end nearer the press gets a grip to drag onto another
   // knob or output (Svelte Flow's reconnection). Its hit path is wider than it looks, wider still under a finger.
+  // Its wire is its type's (patchgraph.ts WIRES, as CSS variables in `style`): the sound's a double line (its middle
+  // drawn out); a band's six at once marked "· 6". A port's normal (`normal`) is the line alone, faint, never tapped.
   import { getContext } from 'svelte';
   import { BaseEdge, EdgeLabel, EdgeReconnectAnchor, useSvelteFlow, type EdgeProps } from '@xyflow/svelte';
   import { longpress } from '../longpress';
-  import { GRAPH, nearestEnd, saggingPath, type GraphActions } from './patchgraph';
+  import { cableLabel, GRAPH, nearestEnd, saggingPath, WIRES, type CableData, type GraphActions } from './patchgraph';
 
-  let { id, sourceX, sourceY, targetX, targetY, data, selected }: EdgeProps = $props();
+  let { id, sourceX, sourceY, targetX, targetY, data, selected, style }: EdgeProps = $props();
   const graph = getContext<GraphActions>(GRAPH);
   const flow = useSvelteFlow();
   const HIT = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 28 : 16;
 
   const [path, mid] = $derived(saggingPath({ x: sourceX, y: sourceY }, { x: targetX, y: targetY }));
-  const d = $derived((data ?? {}) as { amount?: string; lit?: boolean });
+  const d = $derived((data ?? { amount: '', wire: 'value' }) as CableData);
+  const label = $derived(cableLabel(d, !!(selected || d.lit)));
 
   // Where the last press on it was (the long press's), for the end to reroute.
   let pressed = { x: 0, y: 0 };
@@ -27,7 +30,9 @@
   let reconnecting = $state(false);
 </script>
 
-<BaseEdge {path} interactionWidth={0} class={reconnecting ? 'cable-path held' : 'cable-path'} />
+<BaseEdge {path} {style} interactionWidth={0} class={reconnecting ? 'cable-path held' : 'cable-path'} />
+{#if WIRES[d.wire]?.double}<path d={path} class="gap" />{/if}
+{#if !d.normal}
 <path
   d={path}
   class="svelte-flow__edge-interaction"
@@ -39,9 +44,9 @@
   onpointerdown={(e) => (pressed = { x: e.clientX, y: e.clientY })}
   use:longpress={() => graph.cableMenu(id, pressed)}
 />
-{#if (selected || d.lit) && !reconnecting}
+{#if label && !reconnecting}
   <EdgeLabel x={mid.x} y={mid.y} class="cable-label nodrag nopan" onclick={() => graph.openCable(id)}>
-    <span class:selected>{d.amount ?? ''}</span>
+    <span class:selected class="w-{d.wire}">{label}</span>
   </EdgeLabel>
 {/if}
 {#if end}
@@ -55,13 +60,26 @@
     <i class="grip"></i>
   </EdgeReconnectAnchor>
 {/if}
+{/if}
 
 <style>
+  .gap {
+    fill: none;
+    stroke: var(--patch-bg);
+    stroke-width: 1.6px;
+    pointer-events: none;
+  }
   span {
     font-size: 11.5px;
     color: var(--patch-mod);
     font-variant-numeric: tabular-nums;
     cursor: pointer;
+  }
+  span.w-trigger {
+    color: var(--wire-trigger);
+  }
+  span.w-audio {
+    color: var(--wire-audio);
   }
   span.selected {
     color: var(--text);

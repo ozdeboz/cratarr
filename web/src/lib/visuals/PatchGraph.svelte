@@ -21,6 +21,11 @@
   // - onaddlayer(type), onaddmodule(layerId | 'loop', type), onaddmodulator(type): "+ Add layer", a box's "+",
   //   "+ Add modulator", each with a menu of `addTypes` by place (a source: a layer; a module, into a layer; a loop
   //   module, into the loop; a modulator). A layer that is off ("+ bring back"): onaddlayer(its id), the flame's `flame`.
+  // - onpick(request, at): a cable dragged from a knob and let go on nothing: a source for that knob is to be picked
+  //   (claude-5f's SourcePicker); `at` where it was let go, in the graph's own coordinates (for a new module's node).
+  //
+  // Wires and handles by type (0057 §1, patchgraph.ts WIRES); a connection only where its types fit (ports.ts `fits`)
+  // and a picture one only where its cycle passes a Feedback (`cyclesClosed`). `live` feeds the control sources' faces.
   import { setContext, untrack } from 'svelte';
   import { SvelteFlow, Panel, type Connection, type Edge, type Node } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/base.css';
@@ -32,9 +37,16 @@
   import PatchConnection from './PatchConnection.svelte';
   import PatchFit from './PatchFit.svelte';
   import type { Cable, ModuleType, Patch, Place, SignalRef } from './patch';
+  import type { PortType } from './ports';
+  import type { LiveFaces } from './faces.svelte';
   import {
     CABLE_OPACITIES,
     cableOf,
+    knobHandle,
+    pictureFits,
+    wireStyle,
+    type CableData,
+    type PickRequest,
     drawnOpacity,
     graphOf,
     GRAPH,
@@ -67,6 +79,8 @@
     onaddlayer,
     onaddmodule,
     onaddmodulator,
+    onpick,
+    live,
   }: {
     patch: Patch;
     /** Module types by their type id. */
@@ -92,6 +106,8 @@
     onaddlayer?: (type: string) => void;
     onaddmodule?: (where: string, type: string) => void;
     onaddmodulator?: (type: string) => void;
+    onpick?: (request: PickRequest, at: XY) => void;
+    live?: LiveFaces;
   } = $props();
 
   const nodeTypes = { patch: PatchNode, box: PatchNode };
@@ -165,8 +181,10 @@
     return list.map((e) => {
       if (e.type !== 'cable') return e;
       const shown = lit.has(e.id) || on.has(e.source) || on.has(e.target);
-      const muted = (e.data as { muted?: true } | undefined)?.muted ? ' muted' : '';
-      const cls = (shown ? 'cable lit' : any ? 'cable dim' : 'cable') + muted;
+      const d = e.data as CableData | undefined;
+      if (d?.normal) return e;
+      const muted = d?.muted ? ' muted' : '';
+      const cls = (shown ? 'cable lit' : any ? 'cable dim' : 'cable') + muted + ` w-${d?.wire ?? 'value'}`;
       return e.class === cls ? e : { ...e, class: cls, data: { ...e.data, lit: shown } };
     });
   }
@@ -258,10 +276,28 @@
       menu = { kind: 'cable', id, at };
     },
     rerouting: () => reroute,
+    live: () => live?.frame ?? null,
   });
 
   const ends = () => nodes as unknown as { id: string; data: NodeData }[];
-  const valid = (c: Connection | Edge) => cableOf(c, ends(), patch.cables) !== null;
+  const valid = (c: Connection | Edge) => (c.sourceHandle === 'out' ? pictureFits(c, ends(), edges) : cableOf(c, ends(), patch.cables) !== null);
+  // A cable dragged from a knob and let go on nothing: a source for the knob to be picked.
+  function connectEnd(_: MouseEvent | TouchEvent, state: { fromHandle?: { id?: string | null; nodeId: string; type: string } | null; toHandle?: unknown; to?: XY | null }) {
+    const h = state.fromHandle;
+    if (!onpick || !h || state.toHandle || h.type !== 'target' || !h.id?.startsWith('k:') || !state.to) return;
+    const d = nodes.find((n) => n.id === h.nodeId)?.data as NodeData | undefined;
+    if (d?.kind !== 'module' || !d.knobs.some((k) => knobHandle(k.id) === h.id)) return;
+    onpick({ from: 'knob', module: d.module, knob: h.id.slice(2) }, { x: Math.round(state.to.x), y: Math.round(state.to.y) });
+  }
+  // The wire types drawn, for the legend.
+  const LEGEND: [PortType, string][] = [
+    ['picture', 'Picture'],
+    ['light', 'Light'],
+    ['value', 'Value'],
+    ['trigger', 'Trigger'],
+    ['audio', 'Sound'],
+  ];
+  const wires = $derived(new Set(edges.map((e) => (e.data as CableData | undefined)?.wire ?? (String(e.class).startsWith('light') ? 'light' : 'picture'))));
   function connect(c: Connection) {
     const cable = cableOf(c, ends(), patch.cables);
     if (cable) onconnect(cable.from, cable.to);
@@ -332,6 +368,7 @@
     connectionLineComponent={PatchConnection}
     isValidConnection={valid}
     onbeforeconnect={connect}
+    onconnectend={connectEnd}
     onbeforereconnect={reconnect}
     onreconnectend={() => (reroute = null)}
     onbeforedelete={unplug}
@@ -350,7 +387,13 @@
     <PatchFit {layout} active={!touched} />
     <Panel position="top-right">
       <div class="legend">
-        <span><i></i>Picture</span><span><i class="m"></i>Modulation</span>
+        {#each LEGEND.filter(([t]) => wires.has(t)) as [t, name] (t)}
+          <span
+            ><svg width="24" height="8" aria-hidden="true"
+              ><path d="M1,4 H23" class="w-{t}" style={wireStyle(t)} />{#if t === 'audio'}<path d="M1,4 H23" class="gap" />{/if}</svg
+            >{name}</span
+          >
+        {/each}
         <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
       </div>
     </Panel>
@@ -396,6 +439,11 @@
 <style>
   .patch-graph {
     --patch-mod: #b48cff;
+    /* Each wire type's colour (the value's is the modulation purple). */
+    --wire-value: var(--patch-mod);
+    --wire-trigger: #5fc6ee;
+    --wire-audio: #72d39f;
+    --wire-light: #f0b04a;
     --patch-bg: color-mix(in srgb, var(--bg) 92%, var(--text));
     width: 100%;
     height: 100%;
@@ -411,15 +459,20 @@
     stroke-dasharray: 6 5;
   }
   .patch-graph :global(.svelte-flow__edge.picture .svelte-flow__edge-path),
+  .patch-graph :global(.svelte-flow__edge.light .svelte-flow__edge-path),
   .patch-graph :global(.svelte-flow__edge.feedback .svelte-flow__edge-path) {
     stroke: var(--text);
-    stroke-width: 2;
+    stroke-width: var(--wire-w, 2px);
     fill: none;
     opacity: 0.75;
   }
+  .patch-graph :global(.svelte-flow__edge.light .svelte-flow__edge-path) {
+    stroke: var(--wire-light);
+    opacity: 0.6;
+  }
+  /* A loop's way back: still a picture's solid line, fainter. */
   .patch-graph :global(.svelte-flow__edge.feedback .svelte-flow__edge-path) {
-    opacity: 0.55;
-    stroke-dasharray: 2 4;
+    opacity: 0.35;
   }
   /* The modulation cables at the opacity set (the corner's button); one in focus at all of it. */
   .patch-graph :global(.svelte-flow__edge.cable) {
@@ -430,29 +483,47 @@
   .patch-graph :global(.svelte-flow__edge.cable.selected) {
     opacity: 1;
   }
-  .patch-graph :global(.svelte-flow__edge.cable .svelte-flow__edge-path) {
-    stroke: var(--patch-mod);
-    stroke-width: 1.5;
-    stroke-dasharray: 6 5;
+  .patch-graph :global(.svelte-flow__edge.cable .svelte-flow__edge-path),
+  .patch-graph :global(.svelte-flow__edge.normal .svelte-flow__edge-path) {
+    stroke: var(--wire-value);
+    stroke-width: var(--wire-w, 1.5px);
+    stroke-dasharray: var(--wire-dash, 6 5);
     fill: none;
     opacity: 0.45;
     transition: opacity 0.15s;
   }
+  .patch-graph :global(.svelte-flow__edge.w-trigger .svelte-flow__edge-path) {
+    stroke: var(--wire-trigger);
+    stroke-linecap: round;
+  }
+  .patch-graph :global(.svelte-flow__edge.w-audio .svelte-flow__edge-path) {
+    stroke: var(--wire-audio);
+  }
+  .patch-graph :global(.svelte-flow__edge.w-light .svelte-flow__edge-path) {
+    stroke: var(--wire-light);
+  }
+  /* A port's normal: what it is wired to until a cable is plugged in; faint, not to be tapped. */
+  .patch-graph :global(.svelte-flow__edge.normal) {
+    pointer-events: none;
+    opacity: 0.45;
+  }
+  .patch-graph :global(.svelte-flow__edge.normal .svelte-flow__edge-path) {
+    opacity: 0.7;
+  }
   .patch-graph :global(.svelte-flow__edge.cable.lit .svelte-flow__edge-path) {
-    stroke-width: 2;
+    stroke-width: calc(var(--wire-w, 1.5px) + 0.5px);
     opacity: 1;
   }
   .patch-graph :global(.svelte-flow__edge.cable.dim .svelte-flow__edge-path) {
     opacity: 0.1;
   }
   .patch-graph :global(.svelte-flow__edge.cable.selected .svelte-flow__edge-path) {
-    stroke-width: 3;
+    stroke-width: calc(var(--wire-w, 1.5px) + 1.5px);
     opacity: 1;
   }
-  /* Muted: grey, a sparser dash. */
+  /* Muted: grey, a sparser dash (its style's). */
   .patch-graph :global(.svelte-flow__edge.cable.muted .svelte-flow__edge-path) {
     stroke: var(--muted);
-    stroke-dasharray: 2 8;
   }
   /* Its end lifted (rerouting): the cable as it was, faint, under the one being drawn. */
   .patch-graph :global(.svelte-flow__edge.cable .svelte-flow__edge-path.held) {
@@ -479,15 +550,34 @@
     color: var(--muted);
     font-size: 12.5px;
   }
-  .legend i {
-    display: inline-block;
-    width: 24px;
-    margin-right: 6px;
-    vertical-align: middle;
-    border-top: 2px solid var(--text);
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
-  .legend i.m {
-    border-top: 2px dashed var(--patch-mod);
+  .legend path {
+    fill: none;
+    stroke: var(--text);
+    stroke-width: var(--wire-w);
+    stroke-dasharray: var(--wire-dash);
+  }
+  .legend path.w-value {
+    stroke: var(--wire-value);
+  }
+  .legend path.w-trigger {
+    stroke: var(--wire-trigger);
+    stroke-linecap: round;
+  }
+  .legend path.w-audio {
+    stroke: var(--wire-audio);
+  }
+  .legend path.w-light {
+    stroke: var(--wire-light);
+  }
+  .legend path.gap {
+    stroke: var(--patch-bg);
+    stroke-width: 1.6px;
+    stroke-dasharray: none;
   }
   .opacity {
     min-width: 44px;
