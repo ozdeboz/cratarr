@@ -102,6 +102,36 @@ export const heightOf = (s: Shape, x: number) => (s.table ? heightAt(s.table, x)
 
 /** A knob that is one band's own (`lighting.2`): band cables into it act as the whole track's do. */
 const BAND_KNOB = /\.\d+$/;
+
+/** A continuous knob moved from `base` by its cables (the rules above; a step is not moved here): `x` each cable's x
+ *  (null: its source is not there), `walk` its walk factor, `envelope` 0..1, `n` the bands. Also chain-cables.ts's,
+ *  for today's knobs that are no routes' column. */
+export function moveKnob(k: Knob, base: number, cables: readonly Cable[], x: (c: Cable) => number | null, walk: (c: Cable) => number, envelope: number, n: number): number {
+  const ownBand = BAND_KNOB.test(k.id);
+  let swing = 0;
+  let level = 1;
+  let bandSwing = 0;
+  let bandLevel = 1;
+  for (const c of cables) {
+    const at = x(c);
+    if (at === null) continue;
+    const band = 'signal' in c.from && c.from.band !== undefined ? c.from.band : null;
+    if (band !== null && !(Number.isInteger(band) && band >= 0 && band < n)) continue;
+    const s = shapeOf(c.value);
+    const y = heightOf(s, at);
+    const w = s.walks ? walk(c) : 1;
+    const e = 'signal' in c.from && c.from.signal === 'loudness' && band === null ? 1 : envelope;
+    const apart = band !== null && !ownBand;
+    if (c.mode === 'level') {
+      const through = letThrough(s.peak, y, e, w);
+      if (apart) bandLevel *= through;
+      else level *= through;
+    } else if (apart) bandSwing += e * y * w;
+    else swing += e * y * w;
+  }
+  const v = base * level * (n ? bandLevel ** (1 / n) : 1) + (swing + (n ? bandSwing / n : 0)) * ((k.max - k.min) / 2);
+  return clamp(v, k.min, k.max);
+}
 const MACRO_KNOB: Knob = { id: 'value', label: 'Value', min: 0, max: 1, neutral: 0, default: 0, kind: 'swing' };
 const at = (module: string, knob: string) => `${module}|${knob}`;
 
@@ -182,6 +212,7 @@ export function evaluate(patch: Patch, types: Record<string, ModuleType>, signal
     const key = at(module, k.id);
     const cables = into.get(key);
     if (!cables) return clamp(base, k.min, k.max);
+    if (k.kind !== 'step') return moveKnob(k, base, cables, xOf, (c) => walkOf(c, shapeOf(c.value)), envelope, n);
     const ownBand = BAND_KNOB.test(k.id);
     let swing = 0;
     let level = 1;

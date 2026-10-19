@@ -70,7 +70,7 @@
   import { FlameRenderer } from './render';
   import { Compositor } from './compose';
   import { newNormalState, signalsFor } from './normal';
-  import { giveCables } from './chain-cables';
+  import { cabledSettings, cableGain, cableSignals, giveCables, type Cabled } from './chain-cables';
   import { shapeOf } from './evaluate';
   import { evaluate, newEvalState, type Evaluated } from './evaluate';
   import { askStep, morphTo, newMorph, stepMorph } from './morph';
@@ -1378,6 +1378,10 @@
     // The behaviour's walk (drift.ts): each walking slider's factor on its set value now (none: as set).
     const walking = newBehaviourWalk();
     let walkFactor: Record<string, number> = {};
+    // What the patch's cables make of today's settings that are no column (chain-cables.ts), as last worked out: the
+    // look's as the flame is made, Purity as drawn, the bands' times and the behaviour as the aspects take them.
+    let cabled: Cabled = { settings: {}, bands: {} };
+    const lookOf = (k: string) => ((cabled.settings as Record<string, number | undefined>)[k] ?? s[k as keyof VisualSettings]) as number;
     // The walking routes' factors (`Matrix.walks` order) and the matrix they are for (a route changed: none till the
     // next step).
     let routeWalk: Float32Array | undefined;
@@ -1482,7 +1486,7 @@
 
       // How it behaves: as the settings say, or as the rating page's trial does (the look stays the settings').
       const how = trial.settings ?? s;
-      const m = musicNow(now, how.lighting);
+      const m = musicNow(now, cabled.bands.lighting ?? how.lighting);
       if (m.key !== key || resets !== resetsSeen) {
         // A track's preset into the look's settings not pinned (after the panel's Reset, the playing one's again): the
         // first shows at once, each next blends in. Drawn ahead where it was (the next track's, at idle time, with the
@@ -1574,13 +1578,14 @@
       // asked; a choice (Form, Symmetry, Mirror, Lens, Family) or another colour mode over a second and a half; a
       // setting dragged by degrees at once; the cover's colours coming in while a flame blends in join that blend.
       const colours = `${mode}/${covered ? m.key : ''}`;
-      const changed = !made ? SHAPING : SHAPING.filter((k) => made![k] !== s[k]);
+      const changed = !made ? SHAPING : SHAPING.filter((k) => made![k] !== lookOf(k));
       if (changed.length || colours !== madeColours) {
         // Unframed: the framing below measures what is drawn anyway.
-        if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, s[k]])) as Preset, false);
+        if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, lookOf(k)])) as Preset, false);
         const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
         const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
-        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k));
+        // A cable's move is the patch's own, not from outside.
+        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k) && !(k in cabled.settings));
         if (outside) looksOutside++;
         if (blend && shown) {
           from = shown;
@@ -1588,7 +1593,7 @@
           blendMs = blend;
           blendOutside = outside;
         }
-        made = Object.fromEntries(SHAPING.map((k) => [k, s[k]]));
+        made = Object.fromEntries(SHAPING.map((k) => [k, lookOf(k)]));
         madeColours = colours;
         to = coloured(base!, mode, covered);
         if (!from) shown = to;
@@ -1600,7 +1605,9 @@
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
       // How it behaves now: as set, each walking slider at its walk's share of it (not with the rating page's trial).
-      const behaving = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
+      const walked = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
+      // And as the patch's cables move it (last frame's: they are read once the aspects have the signals).
+      const behaving = trial.settings ? how : ({ ...walked, ...cabled.settings, ...cabled.bands } as VisualSettings);
       // The signals, read once a frame (normal.ts), with the Track pulse aspects.ts makes; and the patch's cables into
       // today's columns (chain-cables.ts) given beside the routes, from them and the modulators as last stepped.
       let read: (ref: SignalRef) => number = () => 0;
@@ -1613,11 +1620,14 @@
         fluidFull: FLUID_FULL,
         levers: governor.levers,
         routeWalk: routeWalkFor === matrix ? routeWalk : undefined,
+        // The Track pulse goes into Music's own track (which the next frame makes anew) for signalsFor to read; the
+        // modulators feeding these cables are last frame's (the evaluator steps after, on the envelope made here).
         extra: (got, trackNow, envelope) => {
           m.track[T.track] = trackNow[T.track];
           read = signalsFor(normal, m, now);
-          if (extraCables.length)
-            giveCables(got, extraCables, { signals: read, outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES }, envelope, cableWalk, BANDS);
+          const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
+          if (extraCables.length) giveCables(got, extraCables, src, envelope, cableWalk, BANDS);
+          cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
         },
       });
       const { turn, hits, parts, track } = d;
@@ -1690,7 +1700,7 @@
       const k = from ? Math.min(1, (now - blendStart) / blendMs) : 1;
       shown = from && k < 1 ? between(from, to, k * k * (3 - 2 * k)) : to;
       if (k >= 1) from = null;
-      const drawnFlame = evolved(shown, parts, s.purity, s.spread);
+      const drawnFlame = evolved(shown, parts, lookOf('purity'), s.spread);
       if (!measure && now - measured > 500) {
         measured = now;
         // The first all at once: the picture starts framed.
@@ -1782,7 +1792,11 @@
         // times that column's scale.
         gain: (signal, band, aspect, x) =>
           behaving[aspect] *
-          (trial.settings ? (aspects.matrix ? heightOn(aspects.matrix, signal, band, aspect, x) : x) : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined)),
+          (trial.settings
+            ? aspects.matrix
+              ? heightOn(aspects.matrix, signal, band, aspect, x)
+              : x
+            : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined) + cableGain(extraCables, signal, band, aspect, x, cableWalk)),
       });
       // The patch past the flame, this frame: on when there is anything of it, morphed to the extras as set.
       const extraSet = extraNow;
