@@ -4,6 +4,7 @@
 
 import { ENGINE_EFFECTS, ENGINES } from './effects';
 import { LOOP_TYPES } from './loopmods';
+import { FLUID_LOOP } from './fluid-loop';
 import { MODULATORS } from './modulators/modulators';
 import type { Knob, ModuleType } from './patch';
 import { SOURCE_TYPES } from './sources/index';
@@ -24,7 +25,10 @@ export const ENGINE_TYPES: ModuleType[] = ENGINES.map((e) => ({
   ],
 }));
 
-export const EXTRA_TYPES: ModuleType[] = [...SOURCE_TYPES, ...ENGINE_TYPES, ...LOOP_TYPES, ...Object.values(MODULATORS)];
+/** What can go in the picture's own loop: Warp and Keep (drawn by the compositor) and claude-5f's fluid. */
+export const PICTURE_LOOP_TYPES: ModuleType[] = [...LOOP_TYPES, FLUID_LOOP];
+
+export const EXTRA_TYPES: ModuleType[] = [...SOURCE_TYPES, ...ENGINE_TYPES, ...PICTURE_LOOP_TYPES, ...Object.values(MODULATORS)];
 
 const BY_TYPE = new Map(EXTRA_TYPES.map((t) => [t.type, t]));
 export const extraType = (type: string): ModuleType | undefined => BY_TYPE.get(type);

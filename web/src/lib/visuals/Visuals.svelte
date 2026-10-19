@@ -71,9 +71,10 @@
   import { Compositor } from './compose';
   import { newNormalState, signalsFor } from './normal';
   import type { Cable, Knob, Module, PatchExtra } from './patch';
-  import { ENGINE_TYPES, extraType } from './registry';
+  import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
+  import PatchGraph from './PatchGraph.svelte';
+  import { cratarrPatch, cratarrTypes, type ModuleType } from './patch';
   import { SOURCE_TYPES } from './sources/index';
-  import { LOOP_TYPES } from './loopmods';
   import { MODULATORS } from './modulators/modulators';
   import { DIVE_MOST, TUNNEL_MOST } from './zoom';
   import { effectsNow, ENGINE_EFFECTS, ENGINES, knobLabel, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
@@ -874,6 +875,85 @@
   function removeExtraCable(id: string) {
     changeExtra((e) => (e.cables = e.cables.filter((c) => c.id !== id)));
     openCableId = null;
+  }
+
+  // ---- The graph builder (decision 0056, step 3: claude-632's PatchGraph) beside the panel where there is room ------
+  // The same patch as the panel's, drawn; every edit made the way the panel makes it. Where its nodes stand is this
+  // device's own (kept here, not shared).
+  const patchNow = $derived(cratarrPatch(s));
+  const GRAPH_TYPES: Record<string, ModuleType> = Object.fromEntries([...EXTRA_TYPES, ...cratarrTypes(RANGES, DEFAULTS)].map((t) => [t.type, t]));
+  const GRAPH_KEY = 'cratarr-visuals-graph';
+  let graphAt = $state<Record<string, { x: number; y: number }>>(
+    (() => {
+      try {
+        return JSON.parse(localStorage.getItem(GRAPH_KEY) ?? '{}');
+      } catch {
+        return {};
+      }
+    })(),
+  );
+  let wide = $state(typeof innerWidth === 'number' ? innerWidth >= 1100 : false);
+  $effect(() => {
+    const resized = () => (wide = innerWidth >= 1100);
+    addEventListener('resize', resized);
+    return () => removeEventListener('resize', resized);
+  });
+  const graphShown = $derived(panel && wide && !docked && !rating.run);
+  function graphConnect(from: Cable['from'], to: Cable['to']) {
+    const aspect = ASPECT_OF.get(`${to.module}.${to.knob}`);
+    if ('signal' in from && aspect && !from.reference && !from.speed) {
+      // A route can hold it: one band's, or (a band signal without one) every band's.
+      pick = from.band ?? null;
+      setCurve(from.signal as Signal, aspect, straight(0.5), true);
+      return;
+    }
+    const kind = GRAPH_TYPES[[...extraModulesAll(), patchNow.frame].find((m) => m.id === to.module)?.type ?? '']?.knobs.find((k) => k.id === to.knob)?.kind;
+    const id = newCableId();
+    changeExtra((e) => e.cables.push({ id, from, to, value: 0.5, mode: kind === 'level' ? 'level' : 'swing' }));
+  }
+  const extraModulesAll = () => [...s.extra.layers.flatMap((l) => [l.source, ...l.modules, ...l.loop]), ...s.extra.loop, ...s.extra.modulators];
+  function graphDisconnect(id: string) {
+    if (id in s.routes) {
+      const [signal, band, aspect] = id.split('|') as [Signal, string, Aspect];
+      pick = band === '-' ? null : Number(band);
+      setCurve(signal, aspect, straight(0), true);
+    } else removeExtraCable(id);
+  }
+  function graphKnob(mid: string, kid: string, v: number) {
+    const key = SETTING_OF.get(`${mid}.${kid}`);
+    if (key) return set(key, v);
+    const band = /^(lighting|evolution|continuity)\.(\d)$/.exec(kid);
+    if (mid === 'flame' && band) {
+      if (band[1] === 'continuity') setContinuity(Number(band[2]), v);
+      else setTime(band[1] as 'lighting' | 'evolution', Number(band[2]), Math.log2(v));
+      return;
+    }
+    setKnob(mid, kid, v);
+  }
+  function graphMove(id: string, x: number, y: number) {
+    graphAt = { ...graphAt, [id]: { x, y } };
+    try {
+      localStorage.setItem(GRAPH_KEY, JSON.stringify(graphAt));
+    } catch {
+      /* this visit only */
+    }
+  }
+  // A node opened: its page in the panel.
+  function graphOpen(id: string) {
+    const chainPage: Record<string, string[]> = {
+      flame: ['layer:flame', 'module:flame'],
+      show: ['layer:flame', 'module:show'],
+      ...Object.fromEntries(FLAME_LOOP.map((m) => [m, ['layer:flame', `module:${m}`]])),
+      fx1: ['module:fx1'],
+      fx2: ['module:fx2'],
+      fx3: ['module:fx3'],
+      'layer:flame': ['layer:flame'],
+    };
+    const layer = id.startsWith('layer:') ? s.extra.layers.find((l) => l.id === id.slice('layer:'.length)) : undefined;
+    path = chainPage[id] ?? (layer ? [`xlayer:${layer.id}`] : extraModule(id) ? [`xmodule:${id}`] : []);
+    cell = null;
+    panelBox?.scrollTo(0, 0);
+    showChrome();
   }
 
   // A page's name in the breadcrumb.
@@ -2065,6 +2145,20 @@
           >
         {/if}
       </div>
+      {#if graphShown}
+        <div class="graph" role="group" aria-label="Patch" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
+          <PatchGraph
+            patch={patchNow}
+            types={GRAPH_TYPES}
+            positions={graphAt}
+            onconnect={graphConnect}
+            ondisconnect={graphDisconnect}
+            onknob={graphKnob}
+            onmove={graphMove}
+            onopen={graphOpen}
+          />
+        </div>
+      {/if}
       {#if panel && !rating.run}
         <div class="panel" role="group" aria-label="Settings" bind:this={panelBox} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
           {#if path.length}
@@ -2228,7 +2322,7 @@
               {#if here === 'newlayer'}
                 {#each SOURCE_TYPES as t (t.type)}<button class="go" onclick={() => addLayer(t.type)}><span class="name">{t.label}</span></button>{/each}
               {:else if here === 'newloop'}
-                {#each LOOP_TYPES as t (t.type)}<button class="go" onclick={() => addTo('loop', t.type)}><span class="name">{t.label}</span></button>{/each}
+                {#each PICTURE_LOOP_TYPES as t (t.type)}<button class="go" onclick={() => addTo('loop', t.type)}><span class="name">{t.label}</span></button>{/each}
               {:else if here === 'newmodulator'}
                 {#each MODULATOR_TYPES as t (t.type)}<button class="go" onclick={() => addTo('modulators', t.type)}><span class="name">{t.label}</span></button>{/each}
               {:else}
@@ -2538,6 +2632,19 @@
     .round:hover {
       background: rgb(255 255 255 / 0.12);
     }
+  }
+
+  /* The graph builder (decision 0056): beside the panel where there is room, the same height. */
+  .graph {
+    position: absolute;
+    top: calc(max(12px, env(safe-area-inset-top)) + 56px);
+    left: max(12px, env(safe-area-inset-left));
+    right: calc(max(12px, env(safe-area-inset-right)) + 512px);
+    bottom: max(12px, env(safe-area-inset-bottom));
+    overflow: hidden;
+    border-radius: 14px;
+    background: rgb(14 16 21 / 0.86);
+    pointer-events: auto;
   }
 
   .panel {

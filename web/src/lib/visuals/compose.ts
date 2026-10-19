@@ -7,6 +7,13 @@
 import { keptPerSecond } from './loopmods';
 import type { FrameInfo, Layer, Module, PatchExtra, PictureModule } from './patch';
 import { createSource } from './sources/index';
+import { createFluidLoop, FLUID_LOOP } from './fluid-loop';
+
+/** The picture modules the compositor runs by type: those a layer carries after its source, and those in the
+ *  picture's own loop besides Warp and Keep (drawn here). Each draws `input` into `out`, an exact copy at its neutral. */
+export const MODULE_MAKERS: Record<string, (gl: WebGL2RenderingContext) => PictureModule> = {
+  [FLUID_LOOP.type]: () => createFluidLoop(),
+};
 import { done, program } from './sources/gl';
 
 const FULL = `#version 300 es
@@ -79,6 +86,9 @@ export class Compositor {
   private h = 0;
   /** Each layer's source, running, by its source module's id and type. */
   private sources = new Map<string, { type: string; module: PictureModule | null }>();
+  /** Every other running module (a layer's, the loop's), by its module's id. */
+  private running = new Map<string, { type: string; module: PictureModule | null }>();
+  private scratch: Target[] = [];
   private layerTargets = new Map<string, Target>();
   private mix: Target[] = [];
   private feedback: Target[] = [];
@@ -152,11 +162,24 @@ export class Compositor {
       size = k.wobbleSize ?? size;
     }
     const dt = frame.dt;
-    const last = this.feedback[this.fed];
+    let last = this.feedback[this.fed];
+    // The loop's other modules (claude-5f's fluid…), in order, on the last picture before it is warped and kept.
+    let scratchAt = 0;
+    for (const m of extra.loop) {
+      if (m.type === 'warp' || m.type === 'keep') continue;
+      const run = this.module(m.id, m.type);
+      if (!run) continue;
+      const out = this.scratch[scratchAt];
+      run.draw(gl, last.tex, out.fbo, this.w, this.h, knobsOf(m), frame);
+      done(gl);
+      last = out;
+      scratchAt = 1 - scratchAt;
+    }
     const next = this.feedback[1 - this.fed];
     gl.bindFramebuffer(gl.FRAMEBUFFER, next.fbo);
     gl.viewport(0, 0, this.w, this.h);
     gl.disable(gl.BLEND);
+    gl.bindVertexArray(null);
     gl.useProgram(this.loop);
     this.bind(0, base, 'uNow', this.loop);
     this.bind(1, last.tex, 'uLast', this.loop);
@@ -198,7 +221,37 @@ export class Compositor {
     }
     s.module.draw(gl, null, t.fbo, this.w, this.h, knobsOf(layer.source), frame);
     done(gl);
-    return t.tex;
+    // Its modules, in order, each from the last picture into the other scratch (then copied back by being the next
+    // one's input): the layer's picture is the last one written.
+    let picture = t.tex;
+    let into = 0;
+    for (const m of layer.modules) {
+      const run = this.module(m.id, m.type);
+      if (!run) continue;
+      const out = this.scratch[into];
+      run.draw(gl, picture, out.fbo, this.w, this.h, knobsOf(m), frame);
+      done(gl);
+      picture = out.tex;
+      into = 1 - into;
+    }
+    return picture;
+  }
+
+  /** A running module of `type` for module `id` (made on first use; none for a type the compositor does not run). */
+  private module(id: string, type: string): PictureModule | null {
+    let r = this.running.get(id);
+    if (!r || r.type !== type) {
+      r?.module?.dispose(this.gl);
+      let module: PictureModule | null = null;
+      try {
+        module = MODULE_MAKERS[type]?.(this.gl) ?? null;
+      } catch (e) {
+        console.warn('Visuals: a module could not be made here', type, e);
+      }
+      r = { type, module };
+      this.running.set(id, r);
+    }
+    return r.module;
   }
 
   /** Lets go of what layers no longer in the patch held. */
@@ -207,16 +260,19 @@ export class Compositor {
     for (const [id, s] of this.sources) if (!sources.has(id)) (s.module?.dispose(this.gl), this.sources.delete(id));
     const layers = new Set(extra.layers.map((l) => l.id));
     for (const [id, t] of this.layerTargets) if (!layers.has(id)) (this.free(t), this.layerTargets.delete(id));
+    const modules = new Set([...extra.layers.flatMap((l) => l.modules.map((m) => m.id)), ...extra.loop.map((m) => m.id)]);
+    for (const [id, r] of this.running) if (!modules.has(id)) (r.module?.dispose(this.gl), this.running.delete(id));
   }
 
   private sized(width: number, height: number) {
     if (width === this.w && height === this.h && this.mix.length) return;
-    for (const t of [...this.mix, ...this.feedback, ...this.layerTargets.values()]) this.free(t);
+    for (const t of [...this.mix, ...this.feedback, ...this.scratch, ...this.layerTargets.values()]) this.free(t);
     this.layerTargets.clear();
     this.w = width;
     this.h = height;
     this.mix = [this.target(), this.target()];
     this.feedback = [this.target(), this.target()];
+    this.scratch = [this.target(), this.target()];
     this.fed = 0;
   }
 
@@ -262,8 +318,8 @@ export class Compositor {
 
   dispose() {
     const gl = this.gl;
-    for (const s of this.sources.values()) s.module?.dispose(gl);
-    for (const t of [...this.mix, ...this.feedback, ...this.layerTargets.values()]) this.free(t);
+    for (const s of [...this.sources.values(), ...this.running.values()]) s.module?.dispose(gl);
+    for (const t of [...this.mix, ...this.feedback, ...this.scratch, ...this.layerTargets.values()]) this.free(t);
     gl.deleteProgram(this.blend);
     gl.deleteProgram(this.loop);
     gl.deleteVertexArray(this.empty);
