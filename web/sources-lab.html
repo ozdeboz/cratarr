@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sources lab</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #e8eaf0; font: 14px system-ui, sans-serif; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #panel { position: fixed; top: 8px; left: 8px; max-height: calc(100% - 16px); overflow: auto; width: 260px; padding: 10px;
+    background: #0f1115cc; border-radius: 10px; }
+  label { display: grid; grid-template-columns: 90px 1fr 44px; gap: 6px; align-items: center; margin: 3px 0; }
+  input[type=range] { width: 100%; }
+  button, select { font: inherit; margin: 2px 4px 6px 0; }
+  #err { color: #ff8080; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<!-- Development only (Vite builds index.html alone). One of decision 0056's new sources alone on the screen, every knob a
+     slider. No sound: the bands make the wave (levels swaying about 1 = typical, a beat on the bass). Mic: the
+     microphone's samples as `frame.waveform`. -->
+<canvas id="c"></canvas>
+<div id="panel">
+  <select id="type"></select>
+  <button id="defaults">Defaults</button>
+  <button id="neutral">Neutral</button>
+  <button id="mic">Mic</button>
+  <div id="knobs"></div>
+  <div id="err"></div>
+</div>
+<script type="module">
+  import { SOURCE_TYPES, createSource } from '/src/lib/visuals/sources/index.ts';
+  import { defaults, neutrals } from '/src/lib/visuals/sources/knob.ts';
+
+  const canvas = document.getElementById('c');
+  const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false });
+  const err = (e) => (document.getElementById('err').textContent = String(e?.message ?? e));
+  window.addEventListener('error', (e) => err(e.message));
+  const select = document.getElementById('type');
+  for (const t of SOURCE_TYPES) select.add(new Option(t.label, t.type));
+  let type, source, knobs;
+  const sliders = new Map();
+
+  function use(id) {
+    source?.dispose(gl);
+    type = SOURCE_TYPES.find((t) => t.type === id);
+    try { source = createSource(id, gl); } catch (e) { err(e); }
+    knobs = defaults(type);
+    const box = document.getElementById('knobs');
+    box.textContent = '';
+    sliders.clear();
+    for (const k of type.knobs) {
+      const row = document.createElement('label');
+      const input = Object.assign(document.createElement('input'), { type: 'range', min: k.min, max: k.max, step: (k.max - k.min) / 1000, value: k.default });
+      const shown = document.createElement('span');
+      const show = () => (shown.textContent = (+input.value).toFixed(3));
+      input.addEventListener('input', () => { knobs[k.id] = +input.value; show(); });
+      row.append(k.label, input, shown);
+      box.append(row);
+      sliders.set(k.id, { input, show });
+      show();
+    }
+  }
+  const set = (values) => {
+    knobs = { ...values };
+    for (const [id, s] of sliders) { s.input.value = knobs[id]; s.show(); }
+  };
+  select.addEventListener('change', () => use(select.value));
+  document.getElementById('defaults').addEventListener('click', () => set(defaults(type)));
+  document.getElementById('neutral').addEventListener('click', () => set(neutrals(type)));
+
+  let analyser = null, samples = null;
+  document.getElementById('mic').addEventListener('click', async (e) => {
+    try {
+      const ctx = new AudioContext();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      ctx.createMediaStreamSource(stream).connect(analyser);
+      samples = new Float32Array(analyser.fftSize);
+      e.currentTarget.disabled = true;
+    } catch (x) { err(x); }
+  });
+
+  // The bands swaying about typical, the bass lifted on a beat at 120 bpm.
+  const signals = (time) => (ref) => {
+    const b = ref.band ?? 0;
+    const beat = b < 2 ? 1.2 * Math.exp(-((time * 2) % 1) * 6) : 0;
+    return Math.max(0, 1 + 0.5 * Math.sin(time * (0.7 + 0.37 * b) + b) + beat);
+  };
+
+  let last = performance.now() / 1000;
+  function tick() {
+    const dpr = Math.min(2, devicePixelRatio);
+    const [w, h] = [Math.round(canvas.clientWidth * dpr), Math.round(canvas.clientHeight * dpr)];
+    if (canvas.width !== w || canvas.height !== h) Object.assign(canvas, { width: w, height: h });
+    const time = performance.now() / 1000;
+    const dt = Math.min(0.1, time - last);
+    last = time;
+    if (analyser) analyser.getFloatTimeDomainData(samples);
+    try {
+      source?.draw(gl, null, null, w, h, knobs, { dt, time, beat: null, signals: signals(time), waveform: analyser ? samples : null });
+    } catch (e) { err(e); }
+    requestAnimationFrame(tick);
+  }
+  use(SOURCE_TYPES[0].type);
+  requestAnimationFrame(tick);
+</script>
+</body>
+</html>
