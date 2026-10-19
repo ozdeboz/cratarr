@@ -70,6 +70,7 @@
   import { FlameRenderer } from './render';
   import { Compositor } from './compose';
   import { newNormalState, signalsFor } from './normal';
+  import { evaluate, newEvalState, type Evaluated } from './evaluate';
   import type { Cable, Knob, Module, PatchExtra } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
   import PatchGraph from './PatchGraph.svelte';
@@ -1279,7 +1280,11 @@
       console.warn('Visuals: no layers past the flame on this device', e);
     }
     const normal = newNormalState();
-    const knobsOf = (m: Module) => m.knobs;
+    // The patch's cables, modulators and macros made into each knob's value this frame (claude-632's evaluate.ts):
+    // what the compositor draws with; today's chain stays with aspects.ts.
+    const evalState = newEvalState();
+    let evaluated: Evaluated | null = null;
+    const knobsOf = (m: Module) => evaluated?.knobs[m.id] ?? m.knobs;
 
     // What shows: the flame blended from (`from`) to the playing track's (`to`); `shown` is the last one drawn, so a
     // track that starts mid-blend blends on from where it was.
@@ -1748,6 +1753,8 @@
       const extra = s.extra;
       if (compositor && renderer) {
         const read = signalsFor(normal, m, now);
+        const p = patchNow;
+        evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat } }) : null;
         const active = Compositor.active(extra, knobsOf);
         renderer.compose = active
           ? {
