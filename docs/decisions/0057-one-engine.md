@@ -101,6 +101,26 @@ Each of today's hidden behaviours becomes a module with ports, in the graph and 
   - The Effects setting becomes a macro.
   - The Loop effect is the same effect modules in the flame's own loop.
   - Old patches convert: a slot with its sub-effect becomes that one module, at the slot's place.
+- **Safety, the governor and the learning** (the owner: "I thought learning and the governor were inherently coupled";
+  they are).
+  - There is exactly one Safety, fixed before the screen. Nested chains bring none of their own.
+  - Its meters measure the picture: flashes, motion, shape churn, colour churn, zoom pumping, new looks a minute. So
+    they hold for any patch.
+  - It has one limit knob per kind of busyness, all scaled by Wild (a macro).
+  - Every knob declares which kind of busyness it makes. Safety's levers are normalled into the depth of the cables
+    into knobs of that kind, so it holds back any patch, new modules included. The knobs it holds show it on their
+    rings.
+  - **The learning is Safety's memory.** The thumbs move its limit knobs by 0048's rules:
+    - a thumbs down tightens the kind that stood out over the 20 seconds before it;
+    - a thumbs up loosens the one holding the picture back then;
+    - steps halve each time they turn;
+    - limits drift back over 30 days and stay within half and twice their start.
+  - The user's flow is unchanged: one thumb on the picture as it is. The patch's wiring plays no part, so what was
+    learned before carries over as it is.
+  - Safety's page shows each limit, how far the thumbs have moved it, and the amber dot while it holds back.
+  - The flash rule (WCAG, three a second over the area the owner chose) is never learned, never loosened, and holds
+    the picture itself as the last guard.
+  - The precheck and the dice use the same limits.
 - **Normalled cables.** The connections every chain has by default are shown faint and can be unplugged: Envelope into
   each cable's depth, Music's hits into the flame's steps, the Clock into the turning, Track's look into the flame's look.
   Plugging another cable into such a port breaks the normal, as in Eurorack.
