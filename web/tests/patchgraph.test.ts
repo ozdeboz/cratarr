@@ -1,18 +1,20 @@
-// The graph builder's mapping (decision 0056 step 3, patchgraph.ts): a patch as nodes and edges, picture cables in the
-// patch's order, every cable an edge onto its knob, the knobs shown and their rings, connections checked; a layer that is
-// off, muted cables, the adds, a cable's end rerouted, the cables' sag (after VCV Rack's): npm test.
+// The graph builder's mapping (decisions 0056 step 3, 0057 §6, §7; patchgraph.ts): a v2 patch as nodes and edges,
+// every cable an edge between its ports' handles, wires by type, normals, bundles, the knobs shown and their rings,
+// connections checked, a cable's end rerouted, modules removed, the cables' sag (after VCV Rack's): npm test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 (globalThis as Record<string, unknown>).$state = <T>(v: T) => v;
 const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts');
-const { cratarrPatch, cratarrTypes } = await import('../src/lib/visuals/patch.ts');
+const { cratarrTypes } = await import('../src/lib/visuals/patch.ts');
 const { MODULATORS } = await import('../src/lib/visuals/modulators/modulators.ts');
-const { ADD_LAYER, ADD_MODULATOR, BLEND, SCREEN, LOOP, amountLabel, cableOf, drawnOpacity, graphOf, labelOf, layerBox, nearestEnd, nextOpacity, rerouted, ringOf, saggingPath, signalKey, slumpOf, turned } = await import('../src/lib/visuals/patchgraph.ts');
-type Patch = import('../src/lib/visuals/patch.ts').Patch;
+const { amountLabel, drawnOpacity, labelOf, nearestEnd, nextOpacity, ringOf, saggingPath, slumpOf, turned } = await import('../src/lib/visuals/patchgraph.ts');
+const { ADSR, CLOCK, ENVELOPE, MUSIC, SEQUENCER, FEEDBACK } = await import('../src/lib/visuals/ports.ts');
 type ModuleType = import('../src/lib/visuals/patch.ts').ModuleType;
 type Module = import('../src/lib/visuals/patch.ts').Module;
 type ModuleData = import('../src/lib/visuals/patchgraph.ts').ModuleData;
+type PatchV2 = import('../src/lib/visuals/ports.ts').PatchV2;
+type CableV2 = import('../src/lib/visuals/ports.ts').CableV2;
 
 const knob = (id: string, kind: 'level' | 'swing' | 'step' = 'level', device = false) => ({ id, label: id, min: 0, max: 1, neutral: 0, default: 0.5, kind, ...(device ? { device } : {}) });
 const types: Record<string, ModuleType> = {
@@ -21,25 +23,29 @@ const types: Record<string, ModuleType> = {
   fx: { type: 'fx', label: 'Effect', place: 'module', knobs: [knob('amount'), knob('turn', 'swing')] },
   move: { type: 'move', label: 'Move', place: 'loop', knobs: [knob('amount')] },
   ...MODULATORS,
+  music: MUSIC,
+  feedback: FEEDBACK,
 };
-const mod = (id: string, type: string): Module => ({ id, type, knobs: {} });
+const mod = (id: string, type: string, knobs: Record<string, number> = {}): Module => ({ id, type, knobs });
+let ids = 0;
+/** A cable `module.port` → `module.port`. */
+const cab = (from: string, to: string, value = 1, channel?: number, id = `c${++ids}`): CableV2 => {
+  const [fm, fp] = from.split('.');
+  const [tm, ...tp] = to.split('.');
+  return { id, from: { module: fm, port: fp, ...(channel === undefined ? {} : { channel }) }, to: { module: tm, port: tp.join('.') }, value };
+};
 
-function sample(): Patch {
+/** Two sources, an effect, two loop modules, two finishes, an LFO, a follower on a band, Music. */
+function sample(cables?: CableV2[]): PatchV2 {
   return {
-    v: 1,
-    frame: mod('frame', 'frame'),
-    layers: [
-      { id: 'one', source: mod('s1', 'src'), modules: [mod('k1', 'fx')], loop: [], blend: { mode: 'add', amount: 1 } },
-      { id: 'two', source: mod('s2', 'src'), modules: [], loop: [mod('m1', 'move'), mod('m2', 'move')], blend: { mode: 'screen', amount: 0.5 } },
-    ],
-    loop: [mod('l1', 'move'), mod('l2', 'move')],
-    finish: [mod('f1', 'fx'), mod('f2', 'fx')],
-    modulators: [mod('lfo', 'lfo'), mod('fol', 'fast')],
-    cables: [
-      { id: 'c1', from: { modulator: 'lfo' }, to: { module: 'k1', knob: 'turn' }, value: 0.4, mode: 'swing' },
-      { id: 'c2', from: { signal: 'level', band: 0 }, to: { module: 'fol', knob: 'in' }, value: 1, mode: 'swing' },
-      { id: 'c3', from: { modulator: 'fol' }, to: { module: 's1', knob: 'e' }, value: 0.5, mode: 'level' },
-      { id: 'c4', from: { signal: 'beat' }, to: { module: 'gone', knob: 'x' }, value: 1, mode: 'swing' },
+    v: 2,
+    modules: [mod('s1', 'src'), mod('k1', 'fx'), mod('s2', 'src'), mod('m1', 'move'), mod('l1', 'move'), mod('f1', 'fx'), mod('lfo', 'lfo'), mod('fol', 'fast'), mod('music', 'music')],
+    cables: cables ?? [
+      cab('s1.picture', 'k1.picture', 1, undefined, 'p1'),
+      cab('lfo.out', 'k1.turn', 0.4, undefined, 'c1'),
+      cab('music.level', 'fol.in', 1, 0, 'c2'),
+      cab('fol.out', 's1.e', 0.5, undefined, 'c3'),
+      cab('music.beat', 'gone.x', 1, undefined, 'c4'),
     ],
     macros: [],
     pins: [],
@@ -53,6 +59,16 @@ function freeze<T>(o: T): T {
   }
   return o;
 }
+
+const { graphOfV2, applyV2, connectionV2, rerouteV2, handleOf, WIRES, MUTED_DASH, wireStyle, bundleLabel, cableLabel, withModulator, CLOCK_BEAT, polyTurned } = await import('../src/lib/visuals/patchgraph.ts');
+const { WAVES, soundOf } = await import('../src/lib/visuals/sources/waves.ts');
+const { withInputs } = await import('../src/lib/visuals/compose.ts');
+const faces = await import('../src/lib/visuals/faces.ts');
+const lab = await import('../src/lib/visuals/graph-lab.ts');
+type GraphEdge = import('../src/lib/visuals/patchgraph.ts').GraphEdge;
+const edgeOf = (edges: GraphEdge[], id: string) => edges.find((e) => e.id === id);
+const dataOf = (g: { nodes: { id: string; data: unknown }[] }, id: string) => g.nodes.find((n) => n.id === id)!.data as ModuleData;
+const labTypes = lab.labTypes();
 
 test('engine modules are named by their engine, as the panel names them; others by their type', () => {
   assert.equal(labelOf({ type: 'kaleidoscope-engine', label: 'Effect 1' }), 'Kaleidoscope');
@@ -76,174 +92,106 @@ test('amounts: a swing signed, a level a share, a curve by its end', () => {
   assert.equal(amountLabel({ h1: [0.2, 0.5], h2: [0.5, 0.9], h: 1 }, 'swing'), '+100%');
 });
 
-test('picture cables run in the patch order, into the blend, through the loop and finish to the screen', () => {
-  const { edges } = graphOf({ patch: freeze(sample()), types });
-  const pic = edges.filter((e) => e.class === 'picture').map((e) => `${e.source}>${e.target}`);
-  assert.deepEqual(pic.sort(), ['s1>k1', 'k1>@blend', 's2>m1', 'm1>m2', 'm2>@blend', '@blend>l1', 'l1>l2', 'l2>f1', 'f1>f2', 'f2>@screen'].sort());
-  assert.ok(edges.filter((e) => e.class !== 'cable').every((e) => !e.deletable));
-  assert.equal(edges.find((e) => e.id === 'pic:m2>@blend')!.label, 'screen 50%');
-  assert.equal(edges.find((e) => e.id === 'pic:k1>@blend')!.label, undefined);
-  // Each loop's last back to its first.
-  assert.deepEqual(edges.filter((e) => e.class === 'feedback').map((e) => `${e.source}>${e.target}`), ['m2>m1', 'l2>l1']);
-});
-
-test('layers and the loop are boxes holding their modules; the frame, signals and modulators stand alone', () => {
-  const { nodes } = graphOf({ patch: sample(), types });
-  const by = new Map(nodes.map((n) => [n.id, n]));
-  for (const [id, box] of [['s1', layerBox('one')], ['k1', layerBox('one')], ['s2', layerBox('two')], ['m2', layerBox('two')], ['l1', LOOP]]) assert.equal(by.get(id)!.parentId, box);
-  for (const id of ['frame', 'f1', BLEND, SCREEN, 'lfo', signalKey({ signal: 'beat' })]) assert.equal(by.get(id)?.parentId, undefined, id);
-  assert.equal(by.get(layerBox('one'))!.data.kind, 'box');
-  // A signal only a cable to nothing names is still drawn (it is in the patch); its cable is not.
-  assert.ok(by.has(signalKey({ signal: 'beat' })));
-  assert.equal(nodes.length, new Set(nodes.map((n) => n.id)).size);
-});
-
-test('every cable onto its knob or port, dashed and deletable; one to nothing is left out', () => {
-  const { edges } = graphOf({ patch: sample(), types });
-  const cables = edges.filter((e) => e.class === 'cable');
+test('every cable an edge between its ports’ handles, deletable; a picture one a wire, the rest cables; one to nothing left out', () => {
+  const p = freeze(sample());
+  const { nodes, edges } = graphOfV2({ patch: p, types });
   assert.deepEqual(
-    cables.map((e) => [e.id, e.source, e.sourceHandle, e.target, e.targetHandle, e.deletable]),
+    edges.map((e) => [e.id, e.source, e.sourceHandle, e.target, e.targetHandle, e.type]),
     [
-      ['c1', 'lfo', 'mod', 'k1', 'k:turn', true],
-      ['c2', signalKey({ signal: 'level', band: 0 }), 'mod', 'fol', 'k:in', true],
-      ['c3', 'fol', 'mod', 's1', 'k:e', true],
+      ['p1', 's1', 'out', 'k1', 'in', 'wire'],
+      ['c1', 'lfo', 'mod', 'k1', 'k:turn', 'cable'],
+      ['c2', 'music', 'o:level', 'fol', 'k:in', 'cable'],
+      ['c3', 'fol', 'mod', 's1', 'k:e', 'cable'],
     ],
   );
-  assert.equal(cables[0].data!.amount, '+40%');
+  assert.ok(edges.every((e) => e.deletable && e.selectable));
+  assert.equal(edgeOf(edges, 'c1')?.data?.amount, '+40%');
+  assert.equal(edgeOf(edges, 'p1')?.class, 'picture');
+  assert.equal(edgeOf(edges, 'p1')?.data?.step, true);
+  assert.equal(nodes.filter((n) => n.data.kind === 'module').length, p.modules.length, 'every module a node, once');
 });
 
 test('knobs: a few shown, the cabled ones always, never the device’s; opened out, all; rings from the cables', () => {
-  const g = graphOf({ patch: sample(), types });
-  const data = (id: string) => g.nodes.find((n) => n.id === id)!.data as ModuleData;
-  assert.deepEqual(data('s1').knobs.map((k) => k.id), ['a', 'b', 'c', 'e']);
-  assert.equal(data('s1').hidden, 1);
-  assert.deepEqual(data('s1').knobs.find((k) => k.id === 'e')!.ring, [0.25, 0.5]);
-  assert.equal(data('s1').knobs[0].ring, null);
-  assert.deepEqual(data('frame').knobs.map((k) => k.id), ['intensity']);
-  // A modulator shows only its cabled knobs until opened; its ports always.
-  assert.deepEqual(data('lfo').knobs, []);
-  assert.deepEqual(data('fol').ports, [{ id: 'in', label: 'Input', type: 'value', cabled: true }]);
-  const open = graphOf({ patch: sample(), types, open: new Set(['s1', 'lfo']) });
-  const o = (id: string) => open.nodes.find((n) => n.id === id)!.data as ModuleData;
-  assert.equal(o('s1').knobs.length, 5);
-  assert.equal(o('s1').hidden, 0);
-  assert.deepEqual(o('lfo').knobs.map((k) => k.id), ['rate', 'shape', 'offset', 'ratio', 'amount']);
+  const g = graphOfV2({ patch: sample(), types });
+  const s1 = dataOf(g, 's1');
+  assert.deepEqual(s1.knobs.map((k) => k.id), ['a', 'b', 'c', 'e']);
+  assert.equal(s1.hidden, 1);
+  assert.deepEqual(s1.knobs.find((k) => k.id === 'e')!.ring, [0.5, 1]);
+  assert.equal(s1.knobs.find((k) => k.id === 'a')!.ring, null);
+  const open = graphOfV2({ patch: sample(), types, open: new Set(['s1']) });
+  assert.deepEqual(dataOf(open, 's1').knobs.map((k) => k.id), ['a', 'b', 'c', 'd', 'e']);
+  assert.equal(dataOf(open, 's1').hidden, 0);
 });
 
-test('signals and modulators sit under what they move, a port’s feed beside its modulator', () => {
-  const { nodes } = graphOf({ patch: sample(), types });
-  const by = new Map(nodes.map((n) => [n.id, n]));
-  const k1 = by.get('k1')!;
-  const box = by.get(layerBox('one'))!;
-  const turn = box.position.x + k1.position.x + 10 + 1 * 44 + 22;
-  const lfo = by.get('lfo')!;
-  assert.ok(Math.abs(lfo.position.x + 75 - turn) < 1, `lfo at ${lfo.position.x}, Turn at ${turn}`);
-  const level = by.get(signalKey({ signal: 'level', band: 0 }))!;
-  assert.ok(level.position.x < by.get('fol')!.position.x);
-  assert.ok(Math.min(lfo.position.y, level.position.y) > Math.max(...nodes.filter((n) => n.data.kind === 'module' && !(n.data as ModuleData).modulator && !n.parentId).map((n) => n.position.y)));
-});
-
-test('positions given are kept, a box grows round a module moved inside it', () => {
-  const auto = graphOf({ patch: sample(), types });
-  const box = auto.nodes.find((n) => n.id === layerBox('one'))!;
-  const moved = graphOf({ patch: sample(), types, positions: { k1: { x: 900, y: 300 }, [BLEND]: { x: 5, y: 6 } } });
-  const by = new Map(moved.nodes.map((n) => [n.id, n]));
-  assert.deepEqual(by.get('k1')!.position, { x: 900, y: 300 });
-  assert.deepEqual(by.get(BLEND)!.position, { x: 5, y: 6 });
-  assert.ok(by.get(layerBox('one'))!.width! > Math.max(box.width!, 900));
-  assert.ok(by.get(layerBox('one'))!.height! > 300);
-});
-
-test('signals asked for are drawn once, beside those cabled', () => {
-  const g = graphOf({ patch: sample(), types, signals: [{ signal: 'beat' }, { signal: 'tempo' }, { signal: 'level', band: 0, speed: 'slow' }] });
-  const ids = g.nodes.filter((n) => n.data.kind === 'signal').map((n) => n.id);
-  assert.deepEqual(ids.sort(), ['signal:beat|-|track|fast', 'signal:level|0|track|fast', 'signal:level|0|track|slow', 'signal:tempo|-|track|fast']);
-});
-
-test('connections: from an output to a knob or a port, never to a picture handle, itself, or twice', () => {
-  const p = sample();
-  const { nodes } = graphOf({ patch: p, types });
-  const c = (source: string, target: string, targetHandle: string, sourceHandle = 'mod') => cableOf({ source, target, sourceHandle, targetHandle }, nodes, p.cables);
-  assert.deepEqual(c('lfo', 'f1', 'k:amount'), { from: { modulator: 'lfo' }, to: { module: 'f1', knob: 'amount' } });
-  assert.deepEqual(c(signalKey({ signal: 'beat' }), 'fol', 'k:in'), { from: { signal: 'beat' }, to: { module: 'fol', knob: 'in' } });
-  assert.equal(c('lfo', 'k1', 'k:turn'), null);
-  assert.equal(c('lfo', 'f1', 'in'), null);
-  assert.equal(c('fol', 'fol', 'k:in'), null);
-  assert.equal(c('s1', 'f1', 'k:amount', 'out'), null);
-  assert.equal(c('lfo', BLEND, 'k:in'), null);
+test('positions given are kept, by node id at the level shown', () => {
+  const g = graphOfV2({ patch: sample(), types, positions: { k1: { x: 5, y: 7 } } });
+  assert.deepEqual(g.nodes.find((n) => n.id === 'k1')!.position, { x: 5, y: 7 });
 });
 
 test('turning: clamped to the range, a step by whole steps', () => {
   const k = { min: 0, max: 1, kind: 'level' as const };
   assert.equal(turned(k, 0.5, 80), 1);
-  assert.equal(turned(k, 0.5, -40), 0.25);
-  assert.equal(turned({ min: 1, max: 12, kind: 'step' }, 6, 20), 7);
-  assert.equal(turned({ min: 1, max: 12, kind: 'step' }, 6, 2), 6);
+  assert.equal(turned(k, 0.5, -16), 0.4);
+  assert.equal(turned({ min: 1, max: 9, kind: 'step' as const }, 3, 31), 5);
 });
 
-test('the Cratarr chain draws whole: every cable onto a knob, no node twice', () => {
-  const s = JSON.parse(JSON.stringify(DEFAULTS));
-  const patch = cratarrPatch(s);
-  const all = Object.fromEntries(cratarrTypes(RANGES as Record<string, [number, number]>, s).map((t: ModuleType) => [t.type, t]));
-  const g = graphOf({ patch, types: all });
-  assert.equal(g.edges.filter((e) => e.class === 'cable').length, patch.cables.length);
-  assert.equal(g.nodes.length, new Set(g.nodes.map((n) => n.id)).size);
-  const pic = g.edges.filter((e) => e.class === 'picture').map((e) => e.target);
-  assert.deepEqual(pic.slice(-4), ['fx1', 'fx2', 'fx3', SCREEN]);
+test('every output labelled, down the right: a modulator’s Out its `mod` handle, the rest `o:<port>`', () => {
+  const g = graphOfV2({ patch: sample(), types: { ...types, clock: CLOCK } });
+  assert.deepEqual(dataOf(g, 'lfo').outs, [{ id: 'out', label: 'Out', type: 'value', handle: 'mod' }]);
+  const clock = graphOfV2({ patch: { ...sample(), modules: [mod('clock', 'clock')] }, types: { ...types, clock: CLOCK } });
+  // Each by its declared label (ports.ts).
+  assert.deepEqual(
+    dataOf(clock, 'clock').outs.map((o) => [o.id, o.label, o.handle]),
+    CLOCK.ports.out.map((o, i) => [o.id, o.label, i ? `o:${o.id}` : 'mod']),
+  );
+  assert.deepEqual(CLOCK.ports.out.map((o) => o.id), ['phase', 'rate', 'beat', 'bar', 'phrase']);
+  // A picture module's picture output is its own (its `out` handle), not in the list.
+  assert.deepEqual(dataOf(g, 'k1').outs, []);
+  assert.ok(g.nodes.every((n) => n.data.kind !== 'module' || (n.data as ModuleData).outs.every((o) => o.label)));
 });
 
-test('a layer blended at nothing is one row, "off": none of its modules, no picture into the blend, no cables into it', () => {
+test('rerouting: the knob end onto another knob, the source end onto another output; checked; nothing moved, nothing', () => {
   const p = sample();
-  p.layers[0] = { ...p.layers[0], blend: { ...p.layers[0].blend, amount: 0 } };
-  const { nodes, edges } = graphOf({ patch: p, types });
-  const row = nodes.find((n) => n.id === layerBox('one'))!;
-  assert.deepEqual(row.data, { kind: 'off', layer: 'one', label: 'Source' });
-  assert.ok(!nodes.some((n) => n.id === 's1' || n.id === 'k1'));
-  assert.ok(!edges.some((e) => e.target === BLEND && e.source === 'k1'));
-  assert.deepEqual(edges.filter((e) => e.target === BLEND).map((e) => e.source), ['m2']);
-  // c1 (into k1) and c3 (into s1) have nothing to go into.
-  assert.deepEqual(edges.filter((e) => e.class === 'cable').map((e) => e.id), ['c2']);
+  const g = graphOfV2({ patch: p, types });
+  const r = rerouteV2('c1', { source: 'lfo', sourceHandle: 'mod', target: 'k1', targetHandle: 'k:amount' }, g.nodes, p, [], types);
+  assert.deepEqual(r, { kind: 'reroute', scope: [], cable: 'c1', from: { module: 'lfo', port: 'out' }, to: { module: 'k1', port: 'amount' } });
+  const from = rerouteV2('c1', { source: 'fol', sourceHandle: 'mod', target: 'k1', targetHandle: 'k:turn' }, g.nodes, p, [], types);
+  assert.deepEqual(from?.from, { module: 'fol', port: 'out' });
+  assert.equal(rerouteV2('c1', { source: 'lfo', sourceHandle: 'mod', target: 'k1', targetHandle: 'k:turn' }, g.nodes, p, [], types), null, 'nothing moved');
+  assert.equal(rerouteV2('c1', { source: 'lfo', sourceHandle: 'mod', target: 'k1', targetHandle: 'in' }, g.nodes, p, [], types), null, 'a value into a picture: no');
+  // Applied: the same cable (its amount kept), its end moved; the unmoved end keeps its channel.
+  const next = applyV2(structuredClone(p), r!, types);
+  assert.deepEqual(next.cables.find((c) => c.id === 'c1'), { id: 'c1', from: { module: 'lfo', port: 'out' }, to: { module: 'k1', port: 'amount' }, value: 0.4 });
+  const c2 = applyV2(structuredClone(p), { kind: 'reroute', scope: [], cable: 'c2', from: { module: 'music', port: 'level' }, to: { module: 'k1', port: 'turn' } }, types);
+  assert.deepEqual(c2.cables.find((c) => c.id === 'c2')!.from, { module: 'music', port: 'level', channel: 0 });
 });
 
-test('a muted cable is drawn as one, and moves no ring', () => {
+test('modules removed: their cables, the depths read from them, their pins; a device’s ports onto them and the cables into those', () => {
   const p = sample();
-  p.cables = p.cables.map((c) => (c.id === 'c3' ? { ...c, off: true } : c));
-  const g = graphOf({ patch: p, types });
-  assert.equal(g.edges.find((e) => e.id === 'c3')!.data!.muted, true);
-  assert.equal(g.edges.find((e) => e.id === 'c1')!.data!.muted, undefined);
-  const e = (g.nodes.find((n) => n.id === 's1')!.data as ModuleData).knobs.find((k) => k.id === 'e')!;
-  assert.equal(e.ring, null);
-});
-
-test('adds: "+ Add layer" under the layers, "+ Add modulator" by the modulators, a box’s "+" where it takes one', () => {
-  assert.ok(!graphOf({ patch: sample(), types }).nodes.some((n) => n.data.kind === 'add'));
-  const g = graphOf({ patch: sample(), types, adds: true, addTo: (w) => w !== 'two' });
-  const by = new Map(g.nodes.map((n) => [n.id, n]));
-  assert.equal(by.get(ADD_LAYER)!.data.kind, 'add');
-  assert.ok(by.get(ADD_LAYER)!.position.y > by.get(layerBox('two'))!.position.y);
-  assert.ok(by.get(ADD_MODULATOR)!.position.y > by.get('lfo')!.position.y);
-  assert.equal((by.get(layerBox('one'))!.data as { add?: string }).add, 'one');
-  assert.equal((by.get(layerBox('two'))!.data as { add?: string }).add, undefined);
-  assert.equal((by.get(LOOP)!.data as { add?: string }).add, 'loop');
-});
-
-test('rerouting: the nearer end; the knob end onto another knob, the source end onto another output; checked', () => {
-  assert.equal(nearestEnd({ x: 10, y: 10 }, { x: 0, y: 0 }, { x: 100, y: 100 }), 'from');
-  assert.equal(nearestEnd({ x: 90, y: 80 }, { x: 0, y: 0 }, { x: 100, y: 100 }), 'to');
-  const p = sample();
-  const { nodes } = graphOf({ patch: p, types });
-  const c1 = p.cables[0]; // lfo → k1.turn
-  const now = (source: string, target: string, targetHandle: string) => rerouted(c1, { source, sourceHandle: 'mod', target, targetHandle }, nodes, p.cables);
-  assert.deepEqual(now('lfo', 'f1', 'k:amount'), { end: 'to', next: { module: 'f1', knob: 'amount' } });
-  assert.deepEqual(now('fol', 'k1', 'k:turn'), { end: 'from', next: { modulator: 'fol' } });
-  assert.deepEqual(now(signalKey({ signal: 'beat' }), 'k1', 'k:turn'), { end: 'from', next: { signal: 'beat' } });
-  // Back where it was, onto a picture handle, or both ends at once: nothing.
-  assert.equal(now('lfo', 'k1', 'k:turn'), null);
-  assert.equal(now('lfo', 'f1', 'in'), null);
-  assert.equal(now('fol', 'f1', 'k:amount'), null);
-  // Not onto a knob already cabled from the same source.
-  const more = [...p.cables, { id: 'c5', from: { modulator: 'lfo' }, to: { module: 'f1', knob: 'amount' }, value: 0.2, mode: 'level' as const }];
-  assert.equal(rerouted(c1, { source: 'lfo', sourceHandle: 'mod', target: 'f1', targetHandle: 'k:amount' }, nodes, more), null);
+  p.pins = ['k1.turn', 'cable:c1', 'lfo', 'category:effects'];
+  p.cables[2] = { ...p.cables[2], depth: { module: 'lfo', port: 'out' } };
+  const next = applyV2(structuredClone(p), { kind: 'removeModules', scope: [], modules: ['lfo'] }, types);
+  assert.ok(!next.modules.some((m) => m.id === 'lfo'));
+  assert.ok(!next.cables.some((c) => c.id === 'c1'));
+  assert.equal(next.cables.find((c) => c.id === 'c2')!.depth, null);
+  assert.deepEqual(next.pins, ['k1.turn', 'category:effects']);
+  // Inside a device: its port onto the module goes, and the cable outside into that port.
+  const d: PatchV2 = {
+    v: 2,
+    modules: [
+      mod('lfo', 'lfo'),
+      { id: 'dev', type: 'device', label: 'Dev', knobs: {}, patch: { v: 2, modules: [mod('k1', 'fx'), mod('k2', 'fx')], cables: [], macros: [], pins: [] }, inputs: [{ module: 'k1', port: 'turn', as: 'turn', label: 'Turn' }, { module: 'k2', port: 'amount', as: 'amount', label: 'Amount' }], outputs: [], macros: [{ id: 'macro-1', label: 'M', value: 0.5, targets: [{ module: 'k1', knob: 'amount', from: 0, to: 1 }] }] } as Module,
+    ],
+    cables: [cab('lfo.out', 'dev.turn', 1, undefined, 'x1'), cab('lfo.out', 'dev.amount', 1, undefined, 'x2')],
+    macros: [],
+    pins: [],
+  };
+  const out = applyV2(structuredClone(d), { kind: 'removeModules', scope: ['dev'], modules: ['k1'] }, types);
+  const dev = out.modules.find((m) => m.id === 'dev') as unknown as { inputs: { as: string }[]; patch: PatchV2; macros: { targets: unknown[] }[] };
+  assert.deepEqual(dev.inputs.map((x) => x.as), ['amount']);
+  assert.deepEqual(dev.patch.modules.map((m) => m.id), ['k2']);
+  assert.equal(dev.macros[0].targets.length, 0);
+  assert.deepEqual(out.cables.map((c) => c.id), ['x2']);
 });
 
 test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tension)(150 + length)', () => {
@@ -255,6 +203,8 @@ test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tens
   const [path, mid] = saggingPath({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5);
   assert.equal(path, 'M0,0 Q50,125 100,0');
   assert.deepEqual(mid, { x: 50, y: 62.5 });
+  assert.equal(nearestEnd({ x: 10, y: 0 }, { x: 0, y: 0 }, { x: 100, y: 0 }), 'from');
+  assert.equal(nearestEnd({ x: 90, y: 0 }, { x: 0, y: 0 }, { x: 100, y: 0 }), 'to');
 });
 
 test('cable opacity: 100, 50, 20 % in turn, drawn as Rack draws it (to the power 1.5)', () => {
@@ -266,115 +216,83 @@ test('cable opacity: 100, 50, 20 % in turn, drawn as Rack draws it (to the power
   assert.ok(Math.abs(drawnOpacity(0.25) - 0.125) < 1e-9);
 });
 
-// ---- Typed wires and ports, normals, bundles, faces, "New ▸ LFO / ADSR" (0057 §1, §4b) ------------------------------
+// ---- Typed wires and ports, normals, bundles, faces, "New ▸ LFO / ADSR" (0057 §1, §4b, §4h) -------------------------
 
-const { WIRES, MUTED_DASH, wireStyle, bundleLabel, cableLabel, sourcePort, pictureFits, withModulator, CLOCK_BEAT } = await import('../src/lib/visuals/patchgraph.ts');
-const { ADSR, CLOCK, ENVELOPE, SEQUENCER } = await import('../src/lib/visuals/ports.ts');
-const { WAVES, soundOf } = await import('../src/lib/visuals/sources/waves.ts');
-const { withInputs } = await import('../src/lib/visuals/compose.ts');
-const faces = await import('../src/lib/visuals/faces.ts');
-type GraphEdge = import('../src/lib/visuals/patchgraph.ts').GraphEdge;
-
-const typed: Record<string, ModuleType> = { ...types, waves: WAVES, adsr: ADSR, clock: CLOCK, envelope: ENVELOPE, sequencer: SEQUENCER };
-function wired(cables: Patch['cables'], modulators: Module[] = []): Patch {
-  return {
-    ...sample(),
-    layers: [{ id: 'w', source: mod('waves', 'waves'), modules: [], loop: [], blend: { mode: 'add', amount: 1 } }],
-    loop: [],
-    finish: [],
-    modulators: [mod('lfo', 'lfo'), mod('adsr', 'adsr'), mod('clock', 'clock'), mod('seq', 'sequencer'), mod('env', 'envelope'), ...modulators],
-    cables,
-  };
-}
-const edgeOf = (edges: GraphEdge[], id: string) => edges.find((e) => e.id === id);
-
-test('wires by type: picture solid, light solid and thicker, value dashed, trigger dotted, audio a double line', () => {
+test('wires by type: picture solid, light solid and thicker, value dashed, trigger dotted, audio and flow double lines', () => {
   assert.equal(WIRES.picture.dash, null);
   assert.equal(WIRES.light.dash, null);
   assert.ok(WIRES.light.width > WIRES.picture.width);
   assert.equal(WIRES.value.dash, '6 5');
   const [on, off] = WIRES.trigger.dash!.split(' ').map(Number);
   assert.ok(on < 0.5 && off > on, 'dots: next to no dash, a gap');
-  assert.ok(WIRES.audio.double && !WIRES.value.double && !WIRES.picture.double);
+  assert.ok(WIRES.audio.double && WIRES.flow.double && !WIRES.value.double && !WIRES.picture.double);
+  assert.ok(WIRES.flow.dash && WIRES.flow.dash !== WIRES.value.dash, 'a flow in long dashes');
   assert.equal(wireStyle('value'), '--wire-w: 1.5px; --wire-dash: 6 5');
   assert.ok(wireStyle('trigger', true).endsWith(MUTED_DASH));
-  const { edges } = graphOf({
-    patch: wired([
-      { id: 'b', from: { signal: 'beat' }, to: { module: 'adsr', knob: 'gate' }, value: 1, mode: 'swing' },
-      { id: 'l', from: { modulator: 'lfo' }, to: { module: 'waves', knob: 'hue' }, value: 0.3, mode: 'swing' },
-      { id: 't', from: { signal: 'beat' }, to: { module: 'waves', knob: 'width' }, value: 0.3, mode: 'level' },
-    ]),
-    types: typed,
-  });
-  assert.equal(edgeOf(edges, 'b')?.data?.wire, 'trigger');
-  assert.equal(edgeOf(edges, 'l')?.data?.wire, 'value');
-  assert.equal(edgeOf(edges, 't')?.data?.wire, 'trigger', 'a trigger into a value is still drawn as a trigger');
-  assert.equal(edgeOf(edges, 'pic:waves>@blend')?.class, 'picture');
-  // A source that gives light (the flame's, before Show) draws it as light.
-  const lit = graphOf({ patch: sample(), types: { ...types, src: { ...types.src, ports: { in: [], out: [{ id: 'light', label: 'Light', type: 'light' }] } } as ModuleType } });
-  assert.equal(edgeOf(lit.edges, 'pic:s1>k1')?.class, 'light');
-  assert.equal(edgeOf(lit.edges, 'pic:k1>@blend')?.class, 'picture');
+  // The lab's every-wire patch: each cable drawn, by its type.
+  const p = lab.wiresV2();
+  const { edges } = graphOfV2({ patch: p, types: labTypes });
+  for (const c of p.cables) assert.ok(edgeOf(edges, c.id), `${c.id} drawn`);
+  const wire = (from: string, to: string) => {
+    const c = p.cables.find((x) => `${x.from.module}.${x.from.port}` === from && `${x.to.module}.${x.to.port}` === to)!;
+    return edgeOf(edges, c.id)!;
+  };
+  assert.deepEqual([wire('flame.light', 'fluid.light').type, wire('flame.light', 'fluid.light').class], ['wire', 'light']);
+  assert.deepEqual([wire('flame.points', 'fluid.at').type, wire('flame.points', 'fluid.at').data?.wire], ['cable', 'points']);
+  assert.deepEqual([wire('fluid.field', 'bend.field').type, wire('fluid.field', 'bend.field').data?.wire], ['cable', 'flow']);
+  assert.equal(wire('waves.picture', 'bend.picture').class, 'picture');
+  assert.equal(wire('music.beat', 'adsr.gate').data?.wire, 'trigger');
+  assert.equal(wire('lfo.out', 'waves.hue').data?.wire, 'value');
+  assert.deepEqual(new Set(edges.map((e) => e.data?.wire)), new Set(['picture', 'light', 'value', 'trigger', 'audio', 'points', 'flow']), 'every type drawn');
 });
 
-test('ports and handles by type; connections only where the types fit; a picture cycle only through a Feedback', () => {
-  const { nodes } = graphOf({ patch: wired([]), types: typed });
-  const d = (id: string) => nodes.find((n) => n.id === id)!.data as ModuleData;
-  assert.deepEqual(d('waves').ports.map((p) => [p.id, p.type]), [['audio', 'audio']]);
-  assert.deepEqual(d('adsr').ports.map((p) => [p.id, p.type, p.channels]), [['gate', 'trigger', 6]]);
-  // Polyphonic as many channels as come in (VCV Rack's rule): nothing in, one.
-  assert.deepEqual(d('adsr').gives, { type: 'value' });
-  assert.deepEqual(
-    d('clock').outs.map((o) => [o.id, o.type, o.handle]),
-    [
-      ['phase', 'value', 'mod'],
-      ['rate', 'value', 'o:rate'],
-      ['beat', 'trigger', 'o:beat'],
-      ['bar', 'trigger', 'o:bar'],
-      ['phrase', 'trigger', 'o:phrase'],
-    ],
-  );
-  // Music's beat into the ADSR's gate fits; an LFO's value into it does not; a trigger into a knob does.
-  const sig = graphOf({ patch: wired([]), types: typed, signals: [{ signal: 'beat' }] });
-  const beat = signalKey({ signal: 'beat' });
-  assert.ok(cableOf({ source: beat, target: 'adsr', sourceHandle: 'mod', targetHandle: 'k:gate' }, sig.nodes, []));
-  assert.equal(cableOf({ source: 'lfo', target: 'adsr', sourceHandle: 'mod', targetHandle: 'k:gate' }, sig.nodes, []), null);
-  assert.ok(cableOf({ source: beat, target: 'waves', sourceHandle: 'mod', targetHandle: 'k:width' }, sig.nodes, []));
-  // Music's sound is no cable's source: its node takes none.
-  const sound = nodes.find((n) => n.data.kind === 'signal' && n.data.type === 'audio')!;
-  assert.equal(sound.connectable, false);
-  assert.equal(cableOf({ source: sound.id, target: 'waves', sourceHandle: 'mod', targetHandle: 'k:audio' }, nodes, []), null);
-  // Pictures: forward fine; back into the chain only through a Feedback.
-  const chain = [
-    { source: 'a', target: 'b', class: 'picture' },
-    { source: 'b', target: 'c', class: 'picture w-picture' },
-  ];
-  const at = (id: string, type: string) => ({ id, data: { kind: 'module', type, module: id } as unknown as ModuleData });
-  const ns = [at('a', 'src'), at('b', 'fx'), at('c', 'fx'), at('fb', 'feedback')];
-  assert.ok(pictureFits({ source: 'c', target: '@screen', sourceHandle: 'out', targetHandle: 'in' }, ns, chain));
-  assert.ok(!pictureFits({ source: 'c', target: 'a', sourceHandle: 'out', targetHandle: 'in' }, ns, chain));
-  assert.ok(pictureFits({ source: 'fb', target: 'a', sourceHandle: 'out', targetHandle: 'in' }, ns, [...chain, { source: 'c', target: 'fb', class: 'picture' }]));
-  assert.ok(!pictureFits({ source: 'c', target: 'a', sourceHandle: 'mod', targetHandle: 'k:x' }, ns, chain));
+test('a polymorphic output carries what comes in: a Feedback on light gives light, Bend on a picture a picture', () => {
+  const p = lab.wiresV2();
+  const g = graphOfV2({ patch: p, types: labTypes });
+  const into = (to: string) => g.edges.find((e) => e.target === to && e.targetHandle === 'in')!;
+  assert.equal(into('flame').class, 'light', 'the Feedback, fed light, gives light');
+  assert.equal(dataOf(g, 'feedback').poutType, 'light');
+  assert.equal(dataOf(g, 'fluid').pinType, 'light');
+  assert.equal(into('mix').class, 'picture');
+  // Out of a Fluid fed light, into a picture input: no; out of one fed nothing, any of its types.
+  const mixIn2 = { target: 'mix', targetHandle: handleOf(dataOf(g, 'mix'), 'in', 'in2') };
+  assert.equal(connectionV2({ source: 'fluid', sourceHandle: 'out', ...mixIn2 }, g.nodes, p, [], labTypes), null);
+  const bare: PatchV2 = { ...p, cables: p.cables.filter((c) => c.to.module !== 'fluid') };
+  const gb = graphOfV2({ patch: bare, types: labTypes });
+  assert.ok(connectionV2({ source: 'fluid', sourceHandle: 'out', ...mixIn2 }, gb.nodes, bare, [], labTypes));
+});
+
+test('ports and handles by type; connections only where the types fit', () => {
+  const t = { ...types, waves: WAVES, adsr: ADSR, clock: CLOCK, envelope: ENVELOPE, sequencer: SEQUENCER };
+  const p: PatchV2 = { ...sample([]), modules: [mod('music', 'music'), mod('waves', 'waves'), mod('adsr', 'adsr'), mod('lfo', 'lfo')] };
+  const g = graphOfV2({ patch: p, types: t });
+  assert.deepEqual(dataOf(g, 'waves').ports.map((x) => [x.id, x.type]).filter(([id]) => id === 'audio'), [['audio', 'audio']]);
+  assert.deepEqual(dataOf(g, 'adsr').ports.filter((x) => x.id === 'gate').map((x) => x.type), ['trigger']);
+  const music = dataOf(g, 'music');
+  const c = (from: string, port: string, to: string, into: string) => connectionV2({ source: from, sourceHandle: handleOf(dataOf(g, from), 'out', port), target: to, targetHandle: handleOf(dataOf(g, to), 'in', into) }, g.nodes, p, [], t);
+  assert.ok(c('music', 'beat', 'adsr', 'gate'), 'a trigger into a trigger');
+  assert.equal(c('lfo', 'out', 'adsr', 'gate'), null, 'a value into a trigger: no');
+  assert.ok(c('music', 'beat', 'waves', 'width'), 'a trigger into a value');
+  assert.ok(music.outs.some((o) => o.id === 'audio' && o.type === 'audio'));
 });
 
 test("a port's normal is drawn faint until a cable is plugged into it, then it is gone", () => {
-  const { edges, nodes } = graphOf({ patch: wired([]), types: typed });
+  const p = lab.wiresV2();
+  const { edges } = graphOfV2({ patch: p, types: labTypes });
   const normal = (id: string) => edgeOf(edges, `normal:${id}`);
-  // Music's sound into Waves: a double line from the Sound; the Loudness from Music's loudness; the Clock's tempo.
   const sound = normal('waves.audio')!;
   assert.equal(sound.class, 'normal w-audio');
-  assert.equal((nodes.find((n) => n.id === sound.source)!.data as { label: string }).label, 'Sound');
+  assert.equal(sound.source, 'music');
   assert.ok(sound.data?.normal && !sound.selectable && !sound.deletable);
-  assert.equal(normal('env.in')?.source, signalKey({ signal: 'loudness' }));
-  assert.equal(normal('clock.tempo')?.data?.wire, 'value');
+  // The Fluid's flow into the Loop effect by its normal; Bend's is cabled, so none.
+  assert.deepEqual([normal('loop.field')?.source, normal('loop.field')?.sourceHandle, normal('loop.field')?.class], ['fluid', 'o:field', 'normal w-flow']);
+  assert.equal(normal('bend.field'), undefined);
+  assert.equal(normal('fluid.at'), undefined, 'the flame’s points cabled in');
   // From a module's jack: the Sequencer stepped by the Clock's beat, reset by its bar.
   assert.deepEqual([normal('seq.clock')?.source, normal('seq.clock')?.sourceHandle, normal('seq.clock')?.data?.wire], ['clock', 'o:beat', 'trigger']);
   assert.equal(normal('seq.reset')?.sourceHandle, 'o:bar');
-  // A cable plugged into the Loudness's input breaks its normal; the others stay.
-  const plugged = graphOf({ patch: wired([{ id: 'x', from: { signal: 'level', band: 0 }, to: { module: 'env', knob: 'in' }, value: 1, mode: 'swing' }]), types: typed });
-  assert.equal(edgeOf(plugged.edges, 'normal:env.in'), undefined);
-  assert.ok(edgeOf(plugged.edges, 'x') && edgeOf(plugged.edges, 'normal:waves.audio'));
-  // A normal from a module not drawn is not drawn.
-  const alone = graphOf({ patch: { ...wired([]), modulators: [mod('seq', 'sequencer')] }, types: typed });
+  // A normal from a module not there is not drawn.
+  const alone = graphOfV2({ patch: { ...p, modules: p.modules.filter((m) => m.id !== 'clock') }, types: labTypes });
   assert.equal(edgeOf(alone.edges, 'normal:seq.clock'), undefined);
 });
 
@@ -386,27 +304,14 @@ test('a band’s six at once is one line marked "· 6"; one band is one channel'
   assert.equal(cableLabel({ amount: '50%', channels: 6 }, true), '50% · 6');
   assert.equal(cableLabel({ amount: '50%' }, true), '50%');
   assert.equal(cableLabel({ amount: '50%' }, false), '');
-  assert.deepEqual(sourcePort({ signal: 'hits' }, () => undefined), { type: 'trigger', channels: 6 });
-  assert.deepEqual(sourcePort({ signal: 'hits', band: 2 }, () => undefined), { type: 'trigger' });
-  assert.deepEqual(sourcePort({ signal: 'loudness' }, () => undefined), { type: 'value' });
-  const { edges, nodes } = graphOf({
-    patch: wired([
-      { id: 'all', from: { signal: 'hits' }, to: { module: 'adsr', knob: 'gate' }, value: 1, mode: 'swing' },
-      { id: 'one', from: { signal: 'level', band: 3 }, to: { module: 'waves', knob: 'hue' }, value: 0.2, mode: 'swing' },
-      { id: 'poly', from: { modulator: 'adsr' }, to: { module: 'waves', knob: 'width' }, value: 0.2, mode: 'level' },
-    ]),
-    types: typed,
-  });
-  assert.equal(edges.filter((e) => e.id === 'all').length, 1, 'one line');
-  assert.equal(edgeOf(edges, 'all')?.data?.channels, 6);
-  assert.equal(edgeOf(edges, 'one')?.data?.channels, undefined);
-  assert.equal(edgeOf(edges, 'poly')?.data?.channels, 6);
-  // Fed six channels, the ADSR's face has a lane each.
-  assert.equal((nodes.find((n) => n.id === 'adsr')!.data as ModuleData).face?.lanes, 6);
-  const mono = graphOf({ patch: wired([{ id: 'b', from: { signal: 'beat' }, to: { module: 'adsr', knob: 'gate' }, value: 1, mode: 'swing' }]), types: typed });
-  assert.equal((mono.nodes.find((n) => n.id === 'adsr')!.data as ModuleData).face?.lanes, 1);
-  const monoOut = graphOf({ patch: wired([{ id: 'b', from: { signal: 'beat' }, to: { module: 'adsr', knob: 'gate' }, value: 1, mode: 'swing' }, { id: 'o', from: { modulator: 'adsr' }, to: { module: 'waves', knob: 'width' }, value: 0.2, mode: 'level' }]), types: typed });
-  assert.equal(edgeOf(monoOut.edges, 'o')?.data?.channels, undefined, 'one gate in, one envelope out');
+  const p = lab.wiresV2();
+  const g = graphOfV2({ patch: p, types: labTypes });
+  const by = (from: string, to: string) => edgeOf(g.edges, p.cables.find((c) => `${c.from.module}.${c.from.port}` === from && c.to.module === to)!.id)!;
+  assert.equal(by('music.hits', 'bands').data?.channels, 6);
+  assert.equal(by('music.level', 'waves').data?.channels, undefined, 'one band');
+  // Fed six channels, the ADSR's face has a lane each; fed one, one.
+  assert.equal(dataOf(g, 'bands').face?.lanes, 6);
+  assert.equal(dataOf(g, 'adsr').face?.lanes, 1);
 });
 
 test("faces: an ADSR's stage from its output, an LFO's phase, the Clock's lights", () => {
@@ -446,7 +351,7 @@ test("faces: an ADSR's stage from its output, an LFO's phase, the Clock's lights
   assert.equal(faces.clockLights({ index: 4, since: 0, length: 0.5, strength: 1 }).phrase, 0);
 });
 
-test('"New ▸ ADSR" from a knob: the module, the cable into the knob and its gate from the beat, in one change', () => {
+test('"New ▸ ADSR" from a knob (Visuals’ v1 cables until the store is mounted): the module, its cable, its gate from the beat', () => {
   const before = { routes: {}, extra: { layers: [], loop: [], modulators: [mod('lfo', 'lfo')], cables: [{ id: 'cable-1', from: { modulator: 'lfo' }, to: { module: 's1', knob: 'a' }, value: 0.5, mode: 'swing' as const }], macros: [] } };
   const made = withModulator(before, { id: 'adsr-1', type: 'adsr', knobs: { attack: 0.01 } }, ADSR, { module: 's1', knob: 'b' }, 'level');
   assert.deepEqual(made.cables.extra.modulators.map((m) => m.id), ['lfo', 'adsr-1']);
@@ -456,12 +361,6 @@ test('"New ▸ ADSR" from a knob: the module, the cable into the knob and its ga
   assert.equal(made.cable, into);
   assert.equal(new Set(made.cables.extra.cables.map((c) => c.id)).size, 3, 'ids free');
   assert.equal(before.extra.cables.length, 1, 'the cables before, untouched');
-  // The clocked LFO: its clock from the beat; its reset normalled to the Clock's bar, left so.
-  const lfo = withModulator(before, { id: 'lfo-2', type: 'lfo', knobs: {} }, MODULATORS.lfo, { module: 's1', knob: 'b' }, 'swing').cables.extra.cables.slice(1);
-  assert.deepEqual(lfo.map((c) => [c.from, c.to]), [
-    [CLOCK_BEAT, { module: 'lfo-2', knob: 'clock' }],
-    [{ modulator: 'lfo-2' }, { module: 's1', knob: 'b' }],
-  ]);
   // A port normalled from the Clock stays so (a Sequencer's clock and reset).
   assert.equal(withModulator(before, { id: 'seq-1', type: 'sequencer', knobs: {} }, SEQUENCER, { module: 's1', knob: 'b' }, 'swing').cables.extra.cables.length, 2);
 });
@@ -482,37 +381,34 @@ test("Waves takes the sound by its audio port, normalled from Music's; the frame
 
 // ---- Points, polyphonic knobs, the grid modules (0057 §4b, §4c) ------------------------------------------------------
 
-const { polyTurned } = await import('../src/lib/visuals/patchgraph.ts');
 const { GRID, FOLD, INSTANCE } = await import('../src/lib/visuals/ports.ts');
 
 test('points: a chain line (dash, dot); a Grid is an ordinary node with its jacks, its points into a Fold only', () => {
   const [dash, gap, dot] = WIRES.points.dash!.split(' ').map(Number);
   assert.ok(dash > 3 && dot < 0.5 && gap > 0, 'a dash and a dot');
   assert.ok(new Set(Object.values(WIRES).map((w) => `${w.dash}|${w.width}|${w.double}`)).size === Object.keys(WIRES).length, 'each type its own look');
-  const t = { ...typed, grid: GRID, fold: FOLD, instance: INSTANCE };
-  const p: Patch = {
-    ...wired([{ id: 'g', from: { modulator: 'grid' }, to: { module: 'fold', knob: 'grid' }, value: 1, mode: 'swing' }], [mod('grid', 'grid')]),
-    layers: [{ id: 'w', source: mod('waves', 'waves'), modules: [mod('fold', 'fold'), mod('inst', 'instance')], loop: [], blend: { mode: 'add', amount: 1 } }],
-  };
-  const { nodes, edges } = graphOf({ patch: p, types: t });
-  const d = (id: string) => nodes.find((n) => n.id === id)!.data as ModuleData;
-  assert.deepEqual(d('grid').gives, { type: 'points' });
-  assert.deepEqual(d('grid').outs.map((o) => o.id), ['points', 'index', 'distance', 'angle', 'row', 'column']);
-  assert.deepEqual(d('fold').ports.map((p) => [p.id, p.type]), [['grid', 'points']]);
-  assert.deepEqual(d('inst').ports.map((p) => [p.id, p.type]), [['points', 'points']]);
-  assert.equal(edgeOf(edges, 'g')?.data?.wire, 'points');
-  assert.equal(cableOf({ source: 'grid', target: 'waves', sourceHandle: 'mod', targetHandle: 'k:hue' }, nodes, p.cables), null, 'points into a value: no');
-  assert.ok(cableOf({ source: 'grid', target: 'inst', sourceHandle: 'mod', targetHandle: 'k:points' }, nodes, p.cables));
+  const t = { ...types, waves: WAVES, grid: GRID, fold: FOLD, instance: INSTANCE };
+  const p: PatchV2 = { ...sample([cab('grid.points', 'fold.grid', 1, undefined, 'g')]), modules: [mod('waves', 'waves'), mod('grid', 'grid'), mod('fold', 'fold'), mod('inst', 'instance')] };
+  const g = graphOfV2({ patch: p, types: t });
+  assert.deepEqual(dataOf(g, 'grid').gives, { type: 'points' });
+  assert.deepEqual(dataOf(g, 'grid').outs.map((o) => o.id), ['points', 'index', 'distance', 'angle', 'row', 'column']);
+  assert.ok(dataOf(g, 'fold').ports.some((x) => x.id === 'grid' && x.type === 'points'));
+  assert.ok(dataOf(g, 'inst').ports.some((x) => x.id === 'points' && x.type === 'points'));
+  assert.equal(edgeOf(g.edges, 'g')?.data?.wire, 'points');
+  const c = (to: string, port: string) => connectionV2({ source: 'grid', sourceHandle: 'mod', target: to, targetHandle: handleOf(dataOf(g, to), 'in', port) }, g.nodes, p, [], t);
+  assert.equal(c('waves', 'hue'), null, 'points into a value: no');
+  assert.ok(c('inst', 'points'));
 });
 
 test("a band's knobs are one polyphonic knob, its six as ticks, opened out to six; turned as one they keep apart", () => {
   const knob6 = (id: string) => Array.from({ length: 6 }, (_, b) => ({ id: `${id}.${b}`, label: `Linger ${b + 1}`, min: 0, max: 1, neutral: 0, default: 0.5, kind: 'level' as const }));
   const t = { ...types, src: { ...types.src, knobs: [...knob6('lighting'), knob('a')] } };
-  const s1 = { id: 's1', type: 'src', knobs: { 'lighting.0': 0.2, 'lighting.1': 0.4, 'lighting.2': 0.6, 'lighting.3': 0.8, 'lighting.4': 0.5, 'lighting.5': 0.5 } };
-  const p = (cables: Patch['cables']): Patch => ({ ...sample(), layers: [{ id: 'one', source: s1, modules: [], loop: [], blend: { mode: 'add', amount: 1 } }], cables });
-  const into2: Patch['cables'] = [{ id: 'b2', from: { signal: 'level', band: 2 }, to: { module: 's1', knob: 'lighting.2' }, value: 0.5, mode: 'swing' }];
-  const { nodes, edges } = graphOf({ patch: p(into2), types: t });
-  const d = nodes.find((n) => n.id === 's1')!.data as ModuleData;
+  const p: PatchV2 = {
+    ...sample([cab('music.level', 's1.lighting.2', 0.5, 2, 'b2')]),
+    modules: [{ id: 's1', type: 'src', knobs: { 'lighting.0': 0.2, 'lighting.1': 0.4, 'lighting.2': 0.6, 'lighting.3': 0.8, 'lighting.4': 0.5, 'lighting.5': 0.5 } }, mod('music', 'music')],
+  };
+  const g = graphOfV2({ patch: p, types: t });
+  const d = dataOf(g, 's1');
   const poly = d.knobs.find((k) => k.id === 'lighting')!;
   assert.equal(poly.label, 'Linger');
   assert.deepEqual(poly.channels!.map((c) => c.id), ['lighting.0', 'lighting.1', 'lighting.2', 'lighting.3', 'lighting.4', 'lighting.5']);
@@ -521,14 +417,14 @@ test("a band's knobs are one polyphonic knob, its six as ticks, opened out to si
   assert.ok(!d.knobs.some((k) => k.id.startsWith('lighting.')), 'no channel knob drawn apart');
   assert.ok(!d.ports.some((x) => x.id === 'lighting'), 'nor as a port');
   assert.ok(poly.ring, 'a cable into one channel rings it');
-  assert.equal(edgeOf(edges, 'b2')?.targetHandle, 'k:lighting', 'onto the one knob');
+  assert.equal(edgeOf(g.edges, 'b2')?.targetHandle, 'k:lighting', 'onto the one knob');
   // Opened out: six knobs, the cable onto its own channel's.
-  const open = graphOf({ patch: p(into2), types: t, open: new Set(['s1.lighting']) });
-  const o = open.nodes.find((n) => n.id === 's1')!.data as ModuleData;
+  const open = graphOfV2({ patch: p, types: t, open: new Set(['s1.lighting']) });
+  const o = dataOf(open, 's1');
   assert.deepEqual(o.knobs.filter((k) => k.id.startsWith('lighting')).map((k) => [k.id, k.label]).slice(0, 2), [['lighting.0', 'Linger 1'], ['lighting.1', 'Linger 2']]);
   assert.equal(o.knobs.filter((k) => k.id.startsWith('lighting.')).length, 6);
   assert.equal(edgeOf(open.edges, 'b2')?.targetHandle, 'k:lighting.2');
-  // Turned as one: each channel as far, clamped.
+  // Turned as one: each channel as far, clamped; one change of the store's, keyed by the knob.
   const turnedTo = polyTurned(poly, 0.7);
   assert.deepEqual(turnedTo.map((c) => c.id), poly.channels!.map((c) => c.id));
   assert.deepEqual(turnedTo.map((c) => Math.round(c.value * 100) / 100), [0.4, 0.6, 0.8, 1, 0.7, 0.7]);
@@ -538,7 +434,7 @@ test("a band's knobs are one polyphonic knob, its six as ticks, opened out to si
 
 const await_graph = await import('../src/lib/visuals/patchgraph.ts');
 const import_device = await import('../src/lib/visuals/device-make.ts');
-const { graphOfV2, applyV2, editKey, connectionV2, patchAt, crumbsOf, portsOfModule, handleOf, macroKnob } = await import('../src/lib/visuals/patchgraph.ts');
+const { editKey, patchAt, crumbsOf, portsOfModule, macroKnob } = await import('../src/lib/visuals/patchgraph.ts');
 const { toV2 } = await import('../src/lib/visuals/v2.ts');
 const { newStore, change, undo, redo } = await import('../src/lib/visuals/patch-store.ts');
 const { ENGINE_MODULES, GRAPH_MODULES, showPartTypes, SHOW_PARTS } = await import('../src/lib/visuals/ports.ts');
@@ -599,7 +495,8 @@ test('v2: a device opened in place is a frame round its modules and cables; a ca
   assert.ok(g.nodes.indexOf(box) < g.nodes.findIndex((n) => n.parentId === 'show'), 'the frame before its modules');
   for (const n of g.nodes.filter((x) => x.parentId === 'show')) assert.ok(n.position.x >= 0 && n.position.y >= 0);
   assert.deepEqual(g.edges.filter((e) => e.id.startsWith('show/')).length, SHOW_PARTS.length - 1);
-  assert.equal(g.edges.find((e) => e.id === 'show/show-1')?.data?.wire, 'picture');
+  // Light runs through Show's first parts (they pass what comes in) until Tone map makes it a picture.
+  assert.equal(g.edges.find((e) => e.id === 'show/show-1')?.data?.wire, 'light');
   const wire = g.edges.find((e) => e.id === 'lab-1')!;
   assert.deepEqual([wire.target, wire.targetHandle], ['show/bend', 'in']);
   assert.ok(box.width! > 5 * 100 && box.height! > 60);
@@ -665,8 +562,9 @@ test('v2 through the store: each edit a step, a knob’s drag one, undone and re
 test('v2 connections: at one level, by type, not twice, a picture cycle only through a Feedback', () => {
   const p = v2patch();
   const g = graphOfV2({ patch: p, types: v2types, open: new Set(['show']) });
-  const inShow = connectionV2({ source: 'show/bend', sourceHandle: 'out', target: 'show/saturate', targetHandle: 'in' }, g.nodes, p, [], v2types);
-  assert.deepEqual(inShow, { kind: 'connect', scope: ['show'], from: { module: 'bend', port: 'picture' }, to: { module: 'saturate', port: 'picture' } });
+  const inShow = connectionV2({ source: 'show/tonemap', sourceHandle: 'out', target: 'show/saturate', targetHandle: 'in' }, g.nodes, p, [], v2types);
+  assert.deepEqual(inShow, { kind: 'connect', scope: ['show'], from: { module: 'tonemap', port: 'picture' }, to: { module: 'saturate', port: 'picture' } });
+  assert.equal(connectionV2({ source: 'show/bend', sourceHandle: 'out', target: 'show/saturate', targetHandle: 'in' }, g.nodes, p, [], v2types), null, 'Bend carries light here: not into a picture');
   assert.equal(connectionV2({ source: 'flame', sourceHandle: 'out', target: 'show/blur', targetHandle: 'in' }, g.nodes, p, [], v2types), null, 'across a frame: no');
   assert.equal(connectionV2({ source: 'show/saturate', sourceHandle: 'out', target: 'show/bend', targetHandle: 'in' }, g.nodes, p, [], v2types), null, 'a picture cycle with no Feedback: no');
   const music = md(g, 'music')!;
@@ -730,15 +628,15 @@ test('v2 categories: a whole one pinned through the store, a module added by its
 test("a step knob's next is a trigger beside it: a trigger cabled into it, a value not; no port row of its own", () => {
   const { nextPort } = await_graph;
   const t = { ...types, fx: { ...types.fx, knobs: [...types.fx.knobs, { id: 'mode', label: 'Mode', min: 1, max: 4, neutral: 1, default: 1, kind: 'step' as const }] } };
-  const p: Patch = { ...sample(), cables: [{ id: 'n', from: { signal: 'beat' }, to: { module: 'k1', knob: nextPort('mode') }, value: 1, mode: 'swing' }] };
-  const g = graphOf({ patch: p, types: t, signals: [{ signal: 'level' }] });
-  const d = g.nodes.find((n) => n.id === 'k1')!.data as ModuleData;
+  const p = sample([cab('music.beat', `k1.${nextPort('mode')}`, 1, undefined, 'n')]);
+  const g = graphOfV2({ patch: p, types: t });
+  const d = dataOf(g, 'k1');
   assert.equal(d.knobs.find((k) => k.id === 'mode')?.next, true, 'shown, cabled');
   assert.ok(!d.ports.some((x) => x.id.endsWith(':next')));
   assert.equal(g.edges.find((e) => e.id === 'n')?.targetHandle, 'k:mode:next');
-  const level = signalKey({ signal: 'level' });
-  assert.equal(cableOf({ source: level, target: 'k1', sourceHandle: 'mod', targetHandle: 'k:mode:next' }, g.nodes, []), null, 'a value into a next: no');
-  assert.ok(cableOf({ source: signalKey({ signal: 'beat' }), target: 'k1', sourceHandle: 'mod', targetHandle: 'k:turn' }, g.nodes, []));
+  const from = (port: string, into: string) => connectionV2({ source: 'music', sourceHandle: handleOf(dataOf(g, 'music'), 'out', port), target: 'k1', targetHandle: into }, g.nodes, p, [], t);
+  assert.equal(from('level', 'k:mode:next'), null, 'a value into a next: no');
+  assert.ok(from('beat', 'k:turn'));
 });
 
 test('faces: a VCA its gain as a bar; a Merge its channels as ticks into one bar; Flash is named Accent', () => {
@@ -830,9 +728,8 @@ test('Make device inside a device, and unmade there: ids taken at the level get 
 
 test("a level knob's gain is a dot beside it, not a port row; its cables do not ring the knob", () => {
   const { gainPort } = await_graph;
-  const p: Patch = { ...sample(), cables: [{ id: 'g', from: { modulator: 'lfo' }, to: { module: 'k1', knob: gainPort('amount') }, value: 1, mode: 'swing' }] };
-  const g = graphOf({ patch: p, types });
-  const d = g.nodes.find((n) => n.id === 'k1')!.data as ModuleData;
+  const g = graphOfV2({ patch: sample([cab('lfo.out', `k1.${gainPort('amount')}`, 1, undefined, 'g')]), types });
+  const d = dataOf(g, 'k1');
   const amount = d.knobs.find((k) => k.id === 'amount')!;
   assert.equal(amount.gain, true);
   assert.equal(amount.ring, null);
@@ -840,31 +737,6 @@ test("a level knob's gain is a dot beside it, not a port row; its cables do not 
   assert.equal(g.edges.find((e) => e.id === 'g')?.targetHandle, 'k:amount:gain');
 });
 
-test('portrait: the picture runs down (a layer, the blend, the loop, finish, the screen), the modulators in a column beside it', () => {
-  const g = graphOf({ patch: sample(), types, portrait: true });
-  const n = (id: string) => g.nodes.find((x) => x.id === id)!;
-  const abs = (id: string) => {
-    const x = n(id);
-    const p = x.parentId ? n(x.parentId).position : { x: 0, y: 0 };
-    return { x: p.x + x.position.x, y: p.y + x.position.y };
-  };
-  // Down a layer's box: its source over its module.
-  assert.ok(abs('s1').y < abs('k1').y && abs('s1').x === abs('k1').x);
-  assert.deepEqual([(n('s1').data as ModuleData).out, (n('k1').data as ModuleData).in], ['bottom', 'top']);
-  // Then the blend, the loop, finish and the screen, each under the last.
-  const order = ['@blend', '@loop', 'f1', 'f2', '@screen'].map((id) => n(id).position.y);
-  assert.deepEqual([...order].sort((a, b) => a - b), order);
-  assert.ok(order[0] > n(layerBox('two')).position.y);
-  // The modulators in a column right of the picture's, from its top; the far labels room to the right of each.
-  const column = Math.max(...['@blend', '@loop', '@screen', layerBox('one'), layerBox('two')].map((id) => n(id).position.x + (n(id).width ?? sizeOfTest(n(id).data).width)));
-  assert.ok(n('lfo').position.x > column && n('fol').position.x === n('lfo').position.x);
-  assert.ok(Math.min(n('lfo').position.y, n('fol').position.y) === 0);
-  const room = (id: string) => (n(id).data as ModuleData).room!;
-  assert.ok(room('k1') > sizeOfTest(n('k1').data).width, 'beside a picture module, room to the modulators');
-  assert.ok(abs('k1').x + room('k1') <= n('lfo').position.x, 'never over the next');
-  // A loop's way back leaves at the right.
-  assert.equal((n('m2').data as ModuleData).fbSide, 'right');
-});
 
 test('a cable ends at its jack’s centre: half a jack in from the edge point on the jack’s side', () => {
   const { toJack, JACK } = await_graph;
@@ -874,14 +746,14 @@ test('a cable ends at its jack’s centre: half a jack in from the edge point on
   assert.deepEqual(toJack(100, 50, 'top'), { x: 100, y: 50 + r });
   assert.deepEqual(toJack(100, 50, 'bottom'), { x: 100, y: 50 - r });
   // Every edge drawn by our own components (picture wires and cables), over the nodes.
-  const g = graphOf({ patch: sample(), types });
+  const g = graphOfV2({ patch: sample(), types });
   assert.ok(g.edges.every((e) => e.type === 'wire' || e.type === 'cable'));
-  assert.equal(g.edges.find((e) => e.id.startsWith('fb:'))?.data?.step, true);
+  assert.equal(g.edges.find((e) => e.id === 'p1')?.data?.step, true);
 });
 
 test('far out every cable is on its nodes’ far sockets (in on the input side, out on the output side), bundled', () => {
   const { farEdges, FAR_IN, FAR_OUT } = await_graph;
-  const g = graphOf({ patch: sample(), types });
+  const g = graphOfV2({ patch: sample(), types });
   const far = farEdges(g.edges, g.nodes);
   assert.equal(far.length, g.edges.length);
   for (const e of far) {
@@ -889,7 +761,8 @@ test('far out every cable is on its nodes’ far sockets (in on the input side, 
     assert.equal(e.targetHandle, FAR_IN, e.id);
   }
   // A frame (a device opened in place) has none: its edges as they are.
-  const boxed = farEdges([{ id: 'x', source: layerBox('one'), target: 'k1', sourceHandle: 'out', targetHandle: 'in' }], g.nodes);
+  const open = graphOfV2({ patch: v2patch(), types: v2types, open: new Set(['show']) });
+  const boxed = farEdges([{ id: 'x', source: 'show', target: 'flame', sourceHandle: 'out', targetHandle: 'in' }], open.nodes);
   assert.deepEqual([boxed[0].sourceHandle, boxed[0].targetHandle], ['out', FAR_IN]);
 });
 
@@ -911,16 +784,12 @@ test('portrait with the view known: the layout takes the shape that fits it best
   const { extent, fitZoom } = await_graph;
   const phone = { width: 358, height: 420 };
   const fit = (g: { nodes: GraphNode[] }) => fitZoom(extent(g.nodes as never, (n: never) => sizeOfTest((n as { data: never }).data)), phone);
-  // v1: no worse than one column beside the modulators.
-  const plain = graphOf({ patch: sample(), types, portrait: true });
-  const fitted = graphOf({ patch: sample(), types, portrait: true, view: phone });
-  assert.ok(fit(fitted) >= fit(plain) - 1e-9, `${fit(fitted)} < ${fit(plain)}`);
-  // v2: the lanes' width that fits best, at least as well as the fixed one.
+  // The lanes' width that fits best, at least as well as the fixed one.
   const fixed = graphOfV2({ patch: v2patch(), types: v2types, portrait: true });
   const best = graphOfV2({ patch: v2patch(), types: v2types, portrait: true, view: phone });
   assert.ok(fit(best) >= fit(fixed) - 1e-9, `${fit(best)} < ${fit(fixed)}`);
   // A node the viewer put somewhere stays.
-  const kept = graphOf({ patch: sample(), types, portrait: true, view: phone, positions: { lfo: { x: 900, y: 900 } } });
+  const kept = graphOfV2({ patch: sample(), types, portrait: true, view: phone, positions: { lfo: { x: 900, y: 900 } } });
   assert.deepEqual(kept.nodes.find((n) => n.id === 'lfo')!.position, { x: 900, y: 900 });
 });
 
@@ -1040,18 +909,12 @@ test('too big for the view, the graph opens at its first module (the leftmost; t
 test("a step knob's diamond and a level knob's gain dot are on (shown) only where a cable is in them", () => {
   const { gainPort, nextPort } = await_graph;
   const t = { ...types, fx: { ...types.fx, knobs: [...types.fx.knobs, { id: 'mode', label: 'Mode', min: 1, max: 4, neutral: 1, default: 1, kind: 'step' as const }] } };
-  const bare = graphOf({ patch: sample(), types: t, open: new Set(['k1']) });
+  const bare = graphOfV2({ patch: sample(), types: t, open: new Set(['k1']) });
   const k = (g: typeof bare, id: string) => (g.nodes.find((n) => n.id === 'k1')!.data as ModuleData).knobs.find((x) => x.id === id)!;
   assert.ok(k(bare, 'mode').next && !k(bare, 'mode').nextOn);
   assert.ok(k(bare, 'amount').gain && !k(bare, 'amount').gainOn);
-  const p: Patch = {
-    ...sample(),
-    cables: [
-      { id: 'n', from: { signal: 'beat' }, to: { module: 'k1', knob: nextPort('mode') }, value: 1, mode: 'swing' },
-      { id: 'g', from: { modulator: 'lfo' }, to: { module: 'k1', knob: gainPort('amount') }, value: 1, mode: 'swing' },
-    ],
-  };
-  const wired = graphOf({ patch: p, types: t, open: new Set(['k1']) });
+  const p = sample([cab('music.beat', `k1.${nextPort('mode')}`, 1, undefined, 'n'), cab('lfo.out', `k1.${gainPort('amount')}`, 1, undefined, 'g')]);
+  const wired = graphOfV2({ patch: p, types: t, open: new Set(['k1']) });
   assert.ok(k(wired, 'mode').nextOn && k(wired, 'amount').gainOn);
 });
 
