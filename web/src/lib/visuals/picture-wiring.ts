@@ -58,6 +58,8 @@ export function pictureWiring(p: Patch): { modules: Module[]; cables: CableV2[] 
     for (const m of layer.modules) {
       // Show's device takes the light and gives a picture; any other module a picture.
       cables.push(cable(at, [m.id, m.id === 'show' ? 'light' : 'picture']));
+      // A Tint on a layer after the first takes its colours from the first (the flame's), as 70.1's tint did.
+      if (m.type === 'tint' && into.length) cables.push(cable(into[0], [m.id, 'by']));
       at = [m.id, 'picture'];
     }
     const i = into.length + 1;
