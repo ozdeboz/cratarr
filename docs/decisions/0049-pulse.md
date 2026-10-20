@@ -141,6 +141,11 @@ them, from 0035's grid until then.
   its bar) comes from its downbeats, sure (255), instead of being guessed. The beats and signals are sent with an ETag
   that says whose beats they are, and the page asks under a new address (`?b=2`) so no browser keeps the grid's: kept
   a month once they are Beat this!'s, asked again each time until then.
+- **Checked** (2026-10-19): on a 22,050 Hz file neither side resamples, the NAS's hearing gives the package's beats
+  exactly (803 of 803, F 1.000; downbeats F 0.998). Through each one's own resampler, ten library tracks agree at F
+  0.966 to 1.000 (beats) and 0.918 to 1.000 (downbeats), the lowest an ambient track and a 20 s one: only borderline
+  beats move. A review against the package's code found the rest the same. On the NAS (N95, one core) a 150 s track is
+  heard in 41 s; the image grew from 19 to 66 MB (tract and the model).
 - **Gaps**: Beat this! gives beats only where it hears a pulse, so a break or an ambient passage has none, where the
   grid ran on (on ten library tracks: 0 to 3 gaps of 1 to 3 s in grooves, 19 in an ambient track, 42 in a Chopin
   nocturne). The page counts an interval over twice the beats' typical one round it as a gap: the beat ends after
