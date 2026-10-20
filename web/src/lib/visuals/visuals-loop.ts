@@ -421,11 +421,39 @@ export class VisualsLoop {
         }
         return signals(ref);
       };
+      // The canvas at the device's quality and the pace's fit, and the compose targets at the buffer's size (kept with
+      // or without a flame): the canvas's size, and whether the buffer's changed.
+      const sized = (): [number, number, boolean, ReturnType<typeof ceilingOf>] => {
+        const dpr = Math.min(devicePixelRatio || 1, 2);
+        const top = ceilingOf(device.quality, canvas.clientWidth * canvas.clientHeight * dpr * dpr);
+        const r = top.resolution * fit;
+        const w = Math.max(1, Math.round(canvas.clientWidth * dpr * r));
+        const h = Math.max(1, Math.round(canvas.clientHeight * dpr * r));
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+        const scale = Math.min(1, Math.sqrt(600_000 / (w * h)));
+        const bw = Math.max(1, Math.round(w * scale));
+        const bh = Math.max(1, Math.round(h * scale));
+        const resized = renderer!.width !== bw || renderer!.height !== bh;
+        renderer!.resize(bw, bh);
+        return [w, h, resized, top];
+      };
       const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { still, now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere });
       const levers = leversOf(stepped.outputs);
-      // A patch with no Cratarr device (a blank slate): nothing drawn, the screen black.
+      // The layers past the flame and the picture's own loop: the compositor's, from the patch (setPatch), each
+      // module's knobs as the engine moves them; where a roll is easing in, where each knob is going.
+      const inputs: PictureInputs = {
+        knobs: (id) => stepped.knobs[id],
+        target: (id, knob) => easing?.to[id]?.[knob] ?? stepped.knobs[id]?.[knob] ?? flat.modules.find((x) => x.id === id)?.knobs[knob] ?? 0,
+        frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
+      };
+      // A patch with no Cratarr device (a blank slate): no flame, whatever else reaches the Screen drawn from black
+      // (the renderer blanks it when nothing does).
       if (!stepped.aspects) {
-        (renderer as FlameRenderer & { blank?: () => void }).blank?.();
+        const [w, h] = sized();
+        renderer.frame(passes, null, w, h, inputs);
         return;
       }
       const d = stepped.aspects;
@@ -496,20 +524,7 @@ export class VisualsLoop {
       }
       renderer.setFlame(frame ? { ...drawnFlame, center: frame.center, size: frame.size } : drawnFlame);
 
-      const dpr = Math.min(devicePixelRatio || 1, 2);
-      const top = ceilingOf(device.quality, canvas.clientWidth * canvas.clientHeight * dpr * dpr);
-      const r = top.resolution * fit;
-      const w = Math.max(1, Math.round(canvas.clientWidth * dpr * r));
-      const h = Math.max(1, Math.round(canvas.clientHeight * dpr * r));
-      if (canvas.width !== w || canvas.height !== h) {
-        canvas.width = w;
-        canvas.height = h;
-      }
-      const scale = Math.min(1, Math.sqrt(600_000 / (w * h)));
-      const bw = Math.max(1, Math.round(w * scale));
-      const bh = Math.max(1, Math.round(h * scale));
-      const resized = renderer.width !== bw || renderer.height !== bh;
-      renderer.resize(bw, bh);
+      const [w, h, resized, top] = sized();
 
       // The fluid, stirred: its pushes at what reaches its `at` (the Flame's parts by default), each worth what the
       // patch's cables into Stir, Flow and Swirl give it.
@@ -561,13 +576,6 @@ export class VisualsLoop {
         gain: (signal, band, aspect, x) => (how as unknown as Record<string, number>)[aspect] * gains(signal, band, aspect as 'stir', x),
       });
 
-      // The layers past the flame and the picture's own loop: the compositor's, from the patch (setPatch), each
-      // module's knobs as the engine moves them; where a roll is easing in, where each knob is going.
-      const inputs: PictureInputs = {
-        knobs: (id) => stepped.knobs[id],
-        target: (id, knob) => easing?.to[id]?.[knob] ?? stepped.knobs[id]?.[knob] ?? flat.modules.find((x) => x.id === id)?.knobs[knob] ?? 0,
-        frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
-      };
       renderer.frame(
         passes,
         chainNow(d, { how, levers, still, ceiling: device.brightness, coverage: frame ? frame.coverage : null, fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
