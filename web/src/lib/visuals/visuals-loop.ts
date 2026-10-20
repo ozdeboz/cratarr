@@ -423,7 +423,7 @@ export class VisualsLoop {
       };
       const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { still, now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere });
       const levers = leversOf(stepped.outputs);
-      // A patch with no Cratarr chain (a blank slate): nothing drawn, the screen black.
+      // A patch with no Cratarr device (a blank slate): nothing drawn, the screen black.
       if (!stepped.aspects) {
         (renderer as FlameRenderer & { blank?: () => void }).blank?.();
         return;

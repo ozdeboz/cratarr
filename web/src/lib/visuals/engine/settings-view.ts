@@ -1,6 +1,6 @@
 // A patch seen as today's settings (decision 0057, the switch): what the renderer's side and the meters still read
 // (`how`: the effects, the dive, the show, the look) while they read settings, each from the knob toV2 put it in. The
-// inverse of toV2's mapping (v2.ts): the Cratarr chain found beside its Flame (top level, or inside the Cratarr device),
+// inverse of toV2's mapping (v2.ts): the Cratarr device found beside its Flame (top level, or inside the Cratarr device),
 // the Show's parts inside its device, the Envelope's, Accent's and Clock's knobs for Intensity, Flash and Speed, Music's
 // hold for each band's Linger. A column's scale is in its cables' amounts now (0057 §7e): those settings read 1. What a
 // patch has no knob for, as `base` has it (the device's own settings: quality, frame rate, brightness).

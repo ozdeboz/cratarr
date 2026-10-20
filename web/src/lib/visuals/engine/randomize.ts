@@ -6,7 +6,7 @@
 //
 // As VCV has it: each knob, uniformly within its range (VCV's ParamQuantity::randomize), unless it says not to (its
 // `randomize: false`, VCV's randomizeEnabled); and modules that draw their knobs together do so themselves (VCV's
-// onRandomize). Here that is the Cratarr chain's draw, one over the flame, the effect slots, the loop effect and the
+// onRandomize). Here that is the Cratarr device's draw, one over the flame, the effect slots, the loop effect and the
 // facets (flame.ts drawing: the flame's form surveyed until it draws something), so a track's seed gives the values it
 // gave before 0057. Each other module draws from its own stream of the seed, so one module more or less changes no
 // other's draw.
@@ -36,7 +36,7 @@ export type RandomizeOptions = {
 /** The new values: each module's knobs by id (a device's modules under `<device>/<module>`, as flatten names them). */
 export type Randomized = Record<string, Record<string, number>>;
 
-/** The Cratarr chain's draw: each key flame.ts's drawing gives (PRESET_KEYS), the knob it is in the chain. */
+/** The Cratarr device's draw: each key flame.ts's drawing gives (PRESET_KEYS), the knob it is in the chain. */
 const CHAIN_DRAW = PRESET_KEYS.flatMap((key) => (SETTING_KNOB[key] ? [{ key, module: SETTING_KNOB[key][0], knob: SETTING_KNOB[key][1] }] : []));
 const CHAIN_DRAWN = new Set(CHAIN_DRAW.map((l) => `${l.module}.${l.knob}`));
 
@@ -101,7 +101,7 @@ function* into(
     (out[at + m.id] ??= {})[id] = v;
   };
 
-  // The Cratarr chain's draw, as one: what is pinned of it kept, and drawn around (as before 0057).
+  // The Cratarr device's draw, as one: what is pinned of it kept, and drawn around (as before 0057).
   const chain = at ? [] : CHAIN_DRAW.filter((l) => byId.has(l.module));
   if (chain.length) {
     const fixed: Partial<Record<keyof Preset, number>> = {};
