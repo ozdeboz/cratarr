@@ -39,6 +39,16 @@ We looked at how the established modular tools are built:
 - **Reaktor**: blocks built from core parts, with macros.
 - **ISF**: a shader declares its inputs; the host builds its controls from that.
 
+## Words (the owner, 2026-10-20)
+
+- **Rack:** the whole thing: every module, device and cable. Not "chain", "synthesizer" or "patch" (those words in this
+  record before this section mean the rack). A preset is a rack saved; a snapshot too.
+- **Device:** a group of modules shown as one, with its macros (Show, Cratarr, the nine of §6b).
+- **Module:** one unit (a Flame, a Blur, an LFO).
+
+What shows (labels, help, the panel, the graph) says rack, device and module, today. The code's names (`chains.ts`,
+`Chain`, `PatchV2`, `patch`) follow in step 6, as that code is replaced.
+
 ## Decision: the North Star
 
 **One patch, one engine. Everything that changes the picture is a module, a cable or a macro, and it shows in the graph
