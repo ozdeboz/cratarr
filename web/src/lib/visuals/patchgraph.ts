@@ -936,9 +936,10 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
  *  taken out (with every cable to or from them, and what of them a device exposes or a macro or a pin holds). */
 export type V2Edit =
   | { kind: 'knob'; module: string[]; knob: string; value: number }
-  | { kind: 'connect'; scope: string[]; from: PortRef; to: PortRef }
+  // `replaces`: the cable a picture, light or points input had (it takes one: VCV's way, the new one in its place).
+  | { kind: 'connect'; scope: string[]; from: PortRef; to: PortRef; replaces?: string }
   | { kind: 'remove'; scope: string[]; cables: string[] }
-  | { kind: 'reroute'; scope: string[]; id: string; end: 'from' | 'to'; to: PortRef }
+  | { kind: 'reroute'; scope: string[]; id: string; end: 'from' | 'to'; to: PortRef; replaces?: string }
   | { kind: 'removeModules'; scope: string[]; modules: string[] }
   | { kind: 'pinOne'; scope: string[]; pin: string; on: boolean }
   | { kind: 'pin'; scope: string[]; category: Category; on: boolean }
@@ -998,6 +999,7 @@ export function applyV2(p: PatchV2, e: V2Edit, types?: Record<string, ModuleType
     // The one end moved (the panel's Reroute too: patch-edits.ts); the other, and the cable's amount, as they were.
     const c = inside.cables.find((x) => x.id === e.id);
     if (c) c[e.end] = { ...e.to };
+    if (e.replaces && e.replaces !== e.id) inside.cables = inside.cables.filter((x) => x.id !== e.replaces);
     return p;
   }
   if (e.kind === 'pinOne') {
@@ -1010,6 +1012,7 @@ export function applyV2(p: PatchV2, e: V2Edit, types?: Record<string, ModuleType
     removeModules(p, e.scope, new Set(e.modules));
     return p;
   }
+  if (e.replaces) inside.cables = inside.cables.filter((c) => c.id !== e.replaces);
   const taken = new Set(inside.cables.map((c) => c.id));
   let n = inside.cables.length + 1;
   while (taken.has(`cable-${n}`)) n++;
@@ -1131,12 +1134,16 @@ export function connectionV2(
   const from = { module: c.source.split('/').pop()!, port: out.id };
   const to = { module: c.target.split('/').pop()!, port: into.id };
   if (inside.cables.some((x) => x.from.module === from.module && x.from.port === from.port && x.to.module === to.module && x.to.port === to.port)) return null;
+  // A picture, light or points input takes one cable: one already in it is replaced (VCV's way); a value or a
+  // trigger input takes many.
+  const single = PICTURE_TYPES.has(into.type) || into.type === 'points';
+  const replaces = single ? inside.cables.find((x) => x.to.module === to.module && x.to.port === to.port)?.id : undefined;
   if (PICTURE_TYPES.has(out.type)) {
-    const next: PatchV2 = { ...inside, cables: [...inside.cables, { id: '?', from, to, value: 1 }] };
+    const next: PatchV2 = { ...inside, cables: [...inside.cables.filter((x) => x.id !== replaces), { id: '?', from, to, value: 1 }] };
     const pictureOut = (t: string): (ModuleType & { ports?: Ports }) | undefined => (t === FEEDBACK.type ? FEEDBACK : types[t]);
     if (!cyclesClosed(next, pictureOut)) return null;
   }
-  return { kind: 'connect', scope: [...at, ...scope(c.source)], from, to };
+  return { kind: 'connect', scope: [...at, ...scope(c.source)], from, to, ...(replaces ? { replaces } : {}) };
 }
 
 /** A cable's end moved in the graph (its edge as it was, by its id from the level shown; the connection it would be
@@ -1159,7 +1166,7 @@ export function rerouteV2(
   const fromMoved = made.from.module !== was.from.module || made.from.port !== was.from.port;
   const toMoved = made.to.module !== was.to.module || made.to.port !== was.to.port;
   if (fromMoved === toMoved) return null;
-  return { kind: 'reroute', scope: made.scope, id: cable, end: fromMoved ? 'from' : 'to', to: fromMoved ? made.from : made.to };
+  return { kind: 'reroute', scope: made.scope, id: cable, end: fromMoved ? 'from' : 'to', to: fromMoved ? made.from : made.to, ...(made.replaces ? { replaces: made.replaces } : {}) };
 }
 
 /** Where a category's "+" adds: a module of it at a level (`scope`: the devices it is inside, from the level shown). */

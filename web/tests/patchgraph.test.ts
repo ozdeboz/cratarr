@@ -299,6 +299,26 @@ test('the select bar’s actions fit the selection', () => {
   assert.deepEqual(barActions([{}], 0), ['pin', 'delete', 'open'], 'no help, no Help');
 });
 
+test('a picture, light or points input takes one cable: a new one replaces the old in one edit; a value input many', () => {
+  const t = labTypes;
+  const p: PatchV2 = { ...sample([cab('waves.picture', 'mix.in1', 1, undefined, 'old'), cab('lfo.out', 'mix.amount1', 1, undefined, 'v1')]), modules: [mod('waves', 'waves'), mod('shapes', 'shapes'), mod('mix', 'mix'), mod('lfo', 'lfo'), mod('lfo2', 'lfo')] };
+  const g = graphOfV2({ patch: p, types: t });
+  const into = (src: string, port: string, handle: string) => connectionV2({ source: src, sourceHandle: port, target: 'mix', targetHandle: handle }, g.nodes, p, [], t);
+  const pic = into('shapes', 'out', handleOf(dataOf(g, 'mix'), 'in', 'in1'));
+  assert.equal(pic?.replaces, 'old');
+  const after = applyV2(structuredClone(p), pic!, t);
+  assert.deepEqual(after.cables.filter((c) => c.to.port === 'in1').map((c) => c.from.module), ['shapes'], 'one cable in it');
+  const val = into('lfo2', 'mod', 'k:amount1');
+  assert.ok(val && !val.replaces, 'a value input takes many');
+  assert.equal(applyV2(structuredClone(p), val!, t).cables.filter((c) => c.to.port === 'amount1').length, 2);
+  // Rerouted onto an occupied picture input: the one there goes, in the same edit.
+  const p2: PatchV2 = { ...p, cables: [...p.cables, cab('shapes.picture', 'mix.in2', 1, undefined, 'two')] };
+  const g2 = graphOfV2({ patch: p2, types: t });
+  const r = rerouteV2('two', { source: 'shapes', sourceHandle: 'out', target: 'mix', targetHandle: handleOf(dataOf(g2, 'mix'), 'in', 'in1') }, g2.nodes, p2, [], t);
+  assert.equal(r?.replaces, 'old');
+  assert.deepEqual(applyV2(structuredClone(p2), r!, t).cables.filter((c) => c.to.port === 'in1').map((c) => c.id), ['two']);
+});
+
 test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tension)(150 + length)', () => {
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 1), { x: 50, y: 0 });
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5), { x: 50, y: 125 });
@@ -669,7 +689,9 @@ test('v2 connections: at one level, by type, not twice, a picture cycle only thr
   const p = v2patch();
   const g = graphOfV2({ patch: p, types: v2types, open: new Set(['show']) });
   const inShow = connectionV2({ source: 'show/tonemap', sourceHandle: 'out', target: 'show/saturate', targetHandle: 'in' }, g.nodes, p, [], v2types);
-  assert.deepEqual(inShow, { kind: 'connect', scope: ['show'], from: { module: 'tonemap', port: 'picture' }, to: { module: 'saturate', port: 'picture' } });
+  const { replaces, ...made } = inShow!;
+  assert.deepEqual(made, { kind: 'connect', scope: ['show'], from: { module: 'tonemap', port: 'picture' }, to: { module: 'saturate', port: 'picture' } });
+  assert.equal(typeof replaces, 'string', 'Saturate’s picture input had a cable: it is replaced');
   assert.equal(connectionV2({ source: 'show/bend', sourceHandle: 'out', target: 'show/saturate', targetHandle: 'in' }, g.nodes, p, [], v2types), null, 'Bend carries light here: not into a picture');
   assert.equal(connectionV2({ source: 'flame', sourceHandle: 'out', target: 'show/blur', targetHandle: 'in' }, g.nodes, p, [], v2types), null, 'across a frame: no');
   assert.equal(connectionV2({ source: 'show/saturate', sourceHandle: 'out', target: 'show/bend', targetHandle: 'in' }, g.nodes, p, [], v2types), null, 'a picture cycle with no Feedback: no');

@@ -736,7 +736,7 @@
     {nodeTypes}
     {edgeTypes}
     colorMode="dark"
-    minZoom={0.2}
+    minZoom={0.05}
     maxZoom={2}
     zoomOnDoubleClick={false}
     connectionRadius={coarse ? 36 : 20}
