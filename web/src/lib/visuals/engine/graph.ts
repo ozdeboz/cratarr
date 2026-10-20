@@ -1,7 +1,7 @@
 // The one engine (decision 0057, step 2): every value and trigger of a v2 patch, a frame at a time, over its typed
 // cables. Music, Track and the Envelope first (what every cable reads and what scales it); then the modulators, VCAs
 // and Merges in the order their cables need (a cycle reads last frame's value, VCV Rack's rule); then what the cables
-// give each of the Cratarr chain's columns, by the routes' rules (routes.ts give: a swing sums, a level lets through, a
+// give each of the Cratarr device's columns, by the routes' rules (routes.ts give: a swing sums, a level lets through, a
 // band's cable into a part's column is that part's own, into another the bands' mean, a moment's their largest; a
 // column's scale is in its cables' amounts, 0057 §7e), a level column's gain input and a moment column's trigger; then
 // the chain's own modules (chain.ts); and every other module's knobs as their cables move them (evaluate.ts's rule).
@@ -135,7 +135,7 @@ export function newEngine(): EngineState {
 
 export type EngineFrame = {
   /** What the picture is drawn with this frame (today's renderer's input, until step 3's modules take knob values); null
-   *  where the patch has no Cratarr chain (a blank slate: nothing is drawn). */
+   *  where the patch has no Cratarr device (a blank slate: nothing is drawn). */
   aspects: AspectsNow | null;
   /** Every module's knobs as their cables move them (the chain's: its settings, its columns given in `aspects`). */
   knobs: Record<string, Record<string, number>>;
@@ -431,7 +431,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   }
   // Each key is written again every frame; one read before its module this frame is last frame's (a cycle's rule).
   const outputs = st.outputs;
-  // The Cratarr chain (0057 §3; the owner: a device, "Cratarr"), where the patch has it: found by its Flame, its other
+  // The Cratarr device (0057 §3; the owner: a device, "Cratarr"), where the patch has it: found by its Flame, its other
   // modules beside it (the Flame's path: the top level, or inside the device as flatten names them). None: a blank
   // slate, nothing drawn.
   const flameModule = plan.flame;

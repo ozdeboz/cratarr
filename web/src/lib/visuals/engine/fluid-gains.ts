@@ -1,5 +1,5 @@
 // What each of the music's pushes is worth to the fluid (decision 0057, the switch; stirring.ts asks it as `gain`): the
-// cables from that signal (that band's, or the whole track's) into the Cratarr chain's Fluid's Stir, Flow or Swirl,
+// cables from that signal (that band's, or the whole track's) into the Cratarr device's Fluid's Stir, Flow or Swirl,
 // each its curve's height at the push's strength, added up. What the routes' matrix (heightOn) and the extras' cables
 // (chain-cables.ts cableGain) gave between them, from the patch's own cables. The loudness comes from the Envelope's
 // level, the Track's pulse from the Track, the hits through their ADSRs (v2.ts), as toV2 wires them.

@@ -18,7 +18,7 @@ type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
 /** A loop drawn as one pass, by its Mix: its Feedback, and the Warps and Keeps between them. */
 type Loop = { feedback: string; chain: { id: string; type: string }[] };
 /** A frame's walk: its plan, the module it starts from, the output it gives on, the loops drawn as one pass. */
-export type Walk = { p: Plan; from: string; out: PortRef; loops: Map<string, Loop> };
+export type Walk = { p: Plan; from: string | null; out: PortRef; loops: Map<string, Loop> };
 
 const VERTEX = `#version 300 es
 out vec2 vUv;
@@ -88,7 +88,7 @@ void main() { o = texture(uIn, vUv); }`);
   /** This frame's walk of `c`'s modules `ids` (the compose step's), from what module `from` drew (Show's) to what
    *  module `to` gives, under the lazy rules (`knobs`: each module's this frame); null where it draws nothing (all of
    *  it at rest: Show's picture goes on as it is). */
-  planned(c: Compiled, ids: ReadonlySet<string>, from: string, to: string, knobs: (id: string) => Record<string, number>): Walk | null {
+  planned(c: Compiled, ids: ReadonlySet<string>, from: string | null, to: string, knobs: (id: string) => Record<string, number>): Walk | null {
     const sub: Compiled = { order: c.order.filter((n) => ids.has(n.id)), screen: to, errors: [] };
     const loops = loopsOf(sub.order, knobs);
     // A loop none of whose Keeps keeps anything is gone: its Mix is the other picture.
@@ -99,13 +99,15 @@ void main() { o = texture(uIn, vUv); }`);
     return out.module === from ? null : { p, from, out, loops };
   }
 
-  /** The walk drawn from `picture` (`from`'s): the texture the effects or the screen read next. */
-  run(w: Walk, picture: WebGLTexture, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo): WebGLTexture {
+  /** The walk drawn from `picture` (`from`'s; null: nothing, black): the texture the effects or the screen read next. */
+  run(w: Walk, given: WebGLTexture | null, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo): WebGLTexture {
     this.sized(width, height);
     if (this.given && ![...this.state.held.values()].some((h) => h.t === this.given)) this.pool.give(this.given);
     this.given = null;
     this.time += frame.dt;
     const { p, from, out, loops } = w;
+    this.black ??= this.target(this.spec);
+    const picture = given ?? this.black.tex;
     const fused = new Set([...loops.values()].flatMap((l) => l.chain.map((x) => x.id)));
     // What the walk gives on is read after it: one reader more, so it is not given back within.
     p.readers.set(outKey(out), (p.readers.get(outKey(out)) ?? 0) + 1);
@@ -120,7 +122,7 @@ void main() { o = texture(uIn, vUv); }`);
       },
       copy: (a: Target, b: Target) => this.copied(a, b),
     };
-    const values = walk(p, this.pool, io, this.state, new Map([[from, outside]]));
+    const values = walk(p, this.pool, io, this.state, new Map(from ? [[from, outside]] : []));
     const got = values.get(out.module) ?? null;
     if (!got || got === outside) return picture;
     this.given = got;
@@ -158,8 +160,7 @@ void main() { o = texture(uIn, vUv); }`);
       wobble += a * (k.wobble ?? 0);
       size = k.wobbleSize ?? size;
     }
-    this.black ??= this.target(this.spec);
-    const last = this.state.held.get(l.feedback)?.t ?? this.black;
+    const last = this.state.held.get(l.feedback)?.t ?? this.black!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
     gl.viewport(0, 0, this.spec.w, this.spec.h);
     gl.disable(gl.BLEND);
@@ -249,6 +250,14 @@ void main() { o = texture(uIn, vUv); }`);
       this.nodes.set(id, r);
     }
     return r.node;
+  }
+
+  /** Lets go of every Feedback's last picture (the loops start from nothing). */
+  forget() {
+    for (const h of this.state.held.values()) if (h.pooled) this.pool.give(h.t);
+    if (this.given) this.pool.give(this.given);
+    this.state = newWalkState();
+    this.given = null;
   }
 
   /** Lets go of the nodes of modules no longer in the patch. */

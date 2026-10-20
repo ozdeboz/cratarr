@@ -1,4 +1,4 @@
-// The Cratarr chain's own modules in the one engine (decision 0057, §3): the Flame's parts (their turning, evolution,
+// The Cratarr device's own modules in the one engine (decision 0057, §3): the Flame's parts (their turning, evolution,
 // presence, lights and steps on their band's hits) and the Show's and the loops' levels, from what the cables give
 // them (`Given`, routes.ts's shape) and the Envelope's, Clock's and Track's outputs (modules.ts). The same arithmetic
 // as aspects.ts, which the equivalence harness holds it to; what aspects.ts made out of sight comes in as inputs.
