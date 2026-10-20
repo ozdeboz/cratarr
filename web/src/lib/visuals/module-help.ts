@@ -58,7 +58,7 @@ export const moduleHelp: Record<string, string> = {
   threshold: 'Only the picture’s bright parts, the rest black: a luma key.',
   adsr: 'An ADSR envelope on each gate or trigger, one a channel.',
   sequencer: 'A step sequencer: up to sixteen values, one a clock step.',
-  randomizer: 'The dice as a module: a trigger randomizes every knob in its scope that is not pinned, from its seed.',
+  dice: 'The panel’s dice as a module: a trigger randomizes every knob in its scope that is not pinned, from its seed.',
   looper: 'Records a value over a number of bars and loops it in time with the Clock.',
   grid: 'Points on a lattice, with each point’s values as channels.',
   lfo: 'A low-frequency oscillator, sine to triangle; in time with a clock when one is plugged in.',
@@ -258,7 +258,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     amount: 'The peak’s height.',
     out: 'One envelope a channel.',
   },
-  randomizer: {
+  dice: {
     trigger: 'Randomizes on each trigger.',
     seed: 'Where its randomness starts: the same seed, the same values (a track’s seed, the same look).',
     scope: 'Which knobs it reaches: everything, or the sources, effects, mixers, modulators or cables alone.',

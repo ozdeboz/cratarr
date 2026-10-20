@@ -430,12 +430,13 @@ export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE,
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;
 
-/** Randomizer (0057 §7f, the owner: "same randomize"): the dice as a module. A trigger randomizes every knob in its
+/** Dice (0057 §7f, the owner: "same randomize"; named Dice beside Random, the value generator): the panel's dice as a
+ *  module. A trigger randomizes every knob in its
  *  scope that is not pinned, as the dice do (the flame's settings rolled together and checked), from its seed: the same
  *  seed, the same values. Music's New track and Track seed into it are a track's look (the Track Look device). */
-export const RANDOMIZER = declared(
-  'randomizer',
-  'Randomizer',
+export const DICE = declared(
+  'dice',
+  'Dice',
   'modulator',
   [{ ...knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), randomize: false }],
   [
@@ -446,7 +447,7 @@ export const RANDOMIZER = declared(
   [out('done', 'Randomized', 'trigger')],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, RANDOMIZER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, DICE, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
