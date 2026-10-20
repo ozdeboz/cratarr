@@ -574,6 +574,10 @@ Order, so the page is never edited by two at once: S2's extraction of the loop f
 S3 are built as new files; then the page mounts the store, the loop and the panel. The seam is the store's API:
 `patch` (raw state), `change(f, key?)` (one undo step, coalesced by key), `replace(p)`, `undo()`, `redo()`.
 
+After the switch (the owner, 2026-10-20), with the Fluid's picture side, the grids and the edges: a **Monitor** (In /
+Out), its one polymorphic input (a picture, light, points as dots, a flow as arrows) shown live in its node and on its
+page; a tap solos it, its signal full screen in place of the Screen's (TouchDesigner's viewers, VCV's Scope).
+
 ### Conversion details (claude-632, step 3)
 
 - A v1 effects stage samples once with every shape effect applied in slot order, then colours at the final
