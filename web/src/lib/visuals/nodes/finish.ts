@@ -1,22 +1,20 @@
-// The picture's effects after the light is shown (decision 0057 step 3: the effect modules, fused as today's chain):
-// one pass of the chain's program from the picture, the last finished one (Echo) and the fluid's flow into the next
-// finished one; its targets at the light's size, made when a chain first asks and let go of ten seconds after the last.
-import { type EffectClocks, MOST_PICTURE, pictureShader } from '../effects';
+// The effects' pass (decision 0057 step 3: a run of effect modules in the walk, nodes/effect-runs.ts): one pass of a
+// run's program from its picture, its Echo's trail and the fluid's flow into its target. And the picture Show draws
+// the walk from, at the light's size: made when a walk first asks, let go of ten seconds after the last.
+import { type EffectClocks, MOST_PICTURE } from '../effects';
 import type { Fluid } from '../fluid';
-import { program } from '../sources/gl';
 import type { EffectsParams } from '../chain-params';
-import { FULL, uniforms } from './shared';
+import { uniforms } from './shared';
 
-/** The effects stage's targets: the two finished pictures and the picture (2), the buffer's size. */
+/** A pass's targets: what it reads as the last picture (0) and what it draws into (1), at `w` x `h`. */
 export type FxTargets = { tex: WebGLTexture[]; fbo: WebGLFramebuffer[]; w: number; h: number; cur: number; last: number };
+/** The picture Show draws, at the buffer's size, and when a walk last asked for it. */
+export type Shown = { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number; last: number };
 
 export class Finish {
   private gl: WebGL2RenderingContext;
-  /** The chains' programs by their effects. */
-  private fxPrograms = new Map<string, WebGLProgram | null>();
-  /** The targets by run (each a fused run of effects: one, or several where a live Echo ends one, decision 0057). */
-  private fxs: (FxTargets | null)[] = [];
-  /** When a chain's program was last made (making it makes a frame or two late). */
+  private shown: Shown | null = null;
+  /** When an effects pass's program was last made (making it makes a frame or two late). */
   madeAt = -Infinity;
   private empty: WebGLVertexArrayObject;
   private now: () => number;
@@ -29,74 +27,43 @@ export class Finish {
     this.empty = gl.createVertexArray()!;
   }
 
-  /** The picture chain's program for these effects, or null where none would show (none set, all at nothing, or one
-   *  that would not compile here: then the stage stands aside for good for that chain). */
-  chainFor(fx: EffectsParams, clocks: EffectClocks): WebGLProgram | null {
-    if (!fx || !(fx.amounts.some((a, k) => a > 0 && fx.ids[k]) || clocks.holding())) return null;
-    const ids = fx.ids.slice(0, MOST_PICTURE);
-    const key = ids.join(',');
-    if (!this.fxPrograms.has(key)) {
-      const source = pictureShader(ids);
-      let p: WebGLProgram | null = null;
-      try {
-        p = source ? program(this.gl, FULL, source) : null;
-      } catch (e) {
-        console.warn('Visuals: an effects chain did not compile here', ids, e);
-      }
-      this.fxPrograms.set(key, p);
-      this.madeAt = this.now();
-    }
-    return this.fxPrograms.get(key) ?? null;
-  }
-
-  /** A run's targets at the buffer's size (`width` x `height`): two finished pictures (one written, one the last) and
-   *  the picture (the first run's). */
-  targets(width: number, height: number, run = 0): FxTargets {
+  /** The picture Show draws, at the buffer's size (`width` x `height`). */
+  targets(width: number, height: number): Shown {
     const gl = this.gl;
-    if (this.fxs[run] && (this.fxs[run]!.w !== width || this.fxs[run]!.h !== height)) this.freeFx();
-    if (!this.fxs[run]) {
-      const tex: WebGLTexture[] = [];
-      const fbo: WebGLFramebuffer[] = [];
-      for (let i = 0; i < 3; i++) {
-        const t = gl.createTexture()!;
-        gl.bindTexture(gl.TEXTURE_2D, t);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        // Read past its edge (a kaleidoscope reaching into the corners), the picture is mirrored, not smeared.
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
-        const f = gl.createFramebuffer()!;
-        gl.bindFramebuffer(gl.FRAMEBUFFER, f);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
-        tex.push(t);
-        fbo.push(f);
-      }
+    if (this.shown && (this.shown.w !== width || this.shown.h !== height)) this.freeFx();
+    if (!this.shown) {
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      // Read past its edge (a kaleidoscope reaching into the corners), the picture is mirrored, not smeared.
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+      const fbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
       gl.bindTexture(gl.TEXTURE_2D, null);
-      this.fxs[run] = { tex, fbo, w: width, h: height, cur: 0, last: 0 };
+      this.shown = { tex, fbo, w: width, h: height, last: 0 };
     }
-    const fx = this.fxs[run]!;
-    fx.last = this.now();
-    return fx;
+    this.shown.last = this.now();
+    return this.shown;
   }
 
   freeFx() {
-    const gl = this.gl;
-    for (const fx of this.fxs) {
-      if (!fx) continue;
-      for (const t of fx.tex) gl.deleteTexture(t);
-      for (const f of fx.fbo) gl.deleteFramebuffer(f);
-    }
-    this.fxs = [];
+    if (!this.shown) return;
+    this.gl.deleteTexture(this.shown.tex);
+    this.gl.deleteFramebuffer(this.shown.fbo);
+    this.shown = null;
   }
 
-  /** Lets go of the targets ten seconds after a chain last asked for them. */
+  /** Lets go of Show's picture ten seconds after a walk last asked for it. */
   idle() {
-    if (this.fxs[0] && this.now() - this.fxs[0].last > 10_000) this.freeFx();
+    if (this.shown && this.now() - this.shown.last > 10_000) this.freeFx();
   }
 
-  /** The picture slot after the show pass: the chain's pass from the picture (and the last finished one, for echoes,
-   *  and the flow, for what modulates by it) into the next finished one, which it gives. */
+  /** An effects pass (`p`, effects.ts pictureShader) from the picture (and the last one, for echoes, and the flow, for
+   *  what modulates by it) into the next, which it gives. */
   finish(p: WebGLProgram, fx: NonNullable<EffectsParams>, into: FxTargets, picture: WebGLTexture, clocks: EffectClocks, frames: number, fluid: Fluid | null): WebGLTexture {
     const gl = this.gl;
     const next = 1 - into.cur;
@@ -132,6 +99,5 @@ export class Finish {
   dispose() {
     this.freeFx();
     this.gl.deleteVertexArray(this.empty);
-    for (const p of this.fxPrograms.values()) if (p) this.gl.deleteProgram(p);
   }
 }

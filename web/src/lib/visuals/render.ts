@@ -12,13 +12,14 @@
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import type { ChainNow } from './chain-params';
 import type { FrameInfo, Module, PatchExtra } from './patch';
-import { compile, composeOf, effectRuns, plan, STAGES, stagesOf, type Compiled, type Stage, type TypeOf } from './picture-graph';
+import { compile, composeOf, plan, STAGES, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
+import { fxOfModule, slotOf, type Fx } from './nodes/effect-runs';
 import { MIX_MODES, type PatchV2 } from './ports';
 import { flatten } from './v2';
 import { Walker } from './nodes/walker';
 import type { Flame } from './flame';
 import type { Fluid, Flow, Force, Loop } from './fluid';
-import { EffectClocks } from './effects';
+import { EffectClocks, effectOf } from './effects';
 import type { FrameStats, MeterValues, Tiles } from './meters';
 import { Carry } from './nodes/carry';
 import { Finish } from './nodes/finish';
@@ -120,10 +121,6 @@ export class FlameRenderer {
   /** The patch's picture side as drawn (picture-graph.ts): the stages it needs, in this version each fused as before;
    *  every one until a patch is given. Why any of it is not drawn. */
   private stages = new Set<Stage>(STAGES);
-  /** The effects' slots in the order the graph draws them (one module each: fx1 → 0). */
-  private fxOrder: number[] = [0, 1, 2];
-  /** The slots whose Echo is fed back the line's own finished picture (Feedback → Echo → Mix). */
-  private fxLooped = new Set<number>();
   private compiled: Compiled | null = null;
   /** The compose step, the graph's own walk (nodes/walker.ts): its modules, the module whose picture it starts from
    *  (Show's), the one it gives on; each module's knobs as the patch has them. */
@@ -198,9 +195,6 @@ export class FlameRenderer {
     this.compiled = stages ? c : null;
     this.errors = stages ? c.errors : [...c.errors, 'This version draws the picture in its own order only.'];
     this.stages = new Set(stages ?? STAGES);
-    const fx = c.order.filter((n) => /^fx\d$/.test(n.id)).map((n) => Number(n.id.slice(2)) - 1);
-    this.fxOrder = stages && fx.length ? fx : [0, 1, 2];
-    this.fxLooped = new Set(stages ? c.order.filter((n) => /^fx\d$/.test(n.id) && n.inputs.some((f) => f.from.module === `${n.id}-feedback`)).map((n) => Number(n.id.slice(2)) - 1) : []);
     this.knobsIn = new Map(flatten(p).modules.map((m) => [m.id, m.knobs]));
     this.composed = stages ? composeOf(c) : null;
     this.walker?.prune(this.composed?.ids ?? new Set());
@@ -297,33 +291,34 @@ export class FlameRenderer {
       this.points.draw(light, now!.points, passes, since);
     }
 
-    // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where a
-    // chain of effects is set, into the picture at the buffer's size, for the chain's pass to finish.
+    // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where the
+    // compose step walks on from it, into the picture at the buffer's size.
+    // Each effect's module as the inputs give its knobs; one the inputs do not give (today's chain's slots) as the
+    // nodes' values have it, in the slot its effect is drawn in.
     const fx = now?.effects;
-    const chain = this.stages.has('effects') && fx ? effectRuns(this.fxOrder, fx.ids, fx.amounts, this.fxLooped).flatMap((ids) => {
-      const p = this.fin.chainFor({ ...fx, ids }, this.clocks);
-      return p ? [{ p, ids }] : [];
-    }) : [];
+    const fxOf = (n: PictureNode): Fx | null => {
+      const k = given?.knobs(n.id);
+      const f = fxOfModule(n.type, k ?? this.knobsIn.get(n.id) ?? {});
+      const e = f && effectOf(f.id);
+      const slot = e ? slotOf(e) : -1;
+      return f && !k && fx && slot >= 0 && fx.ids[slot] === f.id ? { id: f.id, amount: fx.amounts[slot] ?? 0, k: fx.knobs?.[slot] ?? f.k } : f;
+    };
     const walks = this.stages.has('compose') && this.compiled && this.composed;
-    if (walks) this.walker ??= new Walker(gl);
-    const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt) : null;
+    if (walks) this.walker ??= new Walker(gl, this.fin, this.now);
+    const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt, fxOf) : null;
     if (!drawn && !walking) return this.blank(screenWidth, screenHeight);
     this.blanked = false;
-    const into = chain.length || walking ? this.fin.targets(light.width, light.height) : null;
+    const into = walking ? this.fin.targets(light.width, light.height) : null;
     if (drawn) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo : null);
       if (into) viewWidth = light.width, viewHeight = light.height;
       this.show.draw(light, this.points, now!.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
     }
     const info = given?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
     // Without the flame drawn, the compose step starts from nothing where Show's picture would be.
-    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex[2] : null, into.w, into.h, knobsAt, info) : into ? into.tex[2] : null;
-    if (chain.length && into && picture) {
-      // Each run from the last one's picture; the first into the picture's own targets, as before.
-      let shown = picture;
-      chain.forEach(({ p, ids }, i) => (shown = this.fin.finish(p, { ...fx!, ids }, i ? this.fin.targets(light.width, light.height, i) : into, shown, this.clocks, this.fxFrames, this.carry.fluid)));
-      this.screen.toScreen(shown, screenWidth, screenHeight);
-    } else if (into && picture) this.screen.toScreen(picture, screenWidth, screenHeight);
+    const effects = { t: fx?.t ?? info.time, beat: fx?.beat, frames: this.fxFrames, fluid: this.carry.fluid };
+    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects) : null;
+    if (picture) this.screen.toScreen(picture, screenWidth, screenHeight);
     else this.fin.idle();
   }
 

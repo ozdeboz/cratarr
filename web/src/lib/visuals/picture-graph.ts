@@ -12,7 +12,6 @@
 // Devices are opened first (v2.ts `flatten`): they cost nothing. A polymorphic port takes light or a picture, its
 // module's output the type of what comes in. A module's picture outputs are one picture.
 import { ENGINE_MODULES, GRAPH_MODULES, LIGHT_CARRIERS, MIX_MODES, PICTURE_MODULES, portsOf, showPartTypes, SHOW_PARTS, type Port, type PatchV2, type PortRef, type Ports, type PortType } from './ports';
-import { effectOf } from './effects';
 import type { ModuleType } from './patch';
 import { EXTRA_TYPES } from './registry';
 import { flatten } from './v2';
@@ -48,9 +47,9 @@ export function v2Types(chain: readonly ModuleType[]): TypeOf {
 }
 
 /** The passes this version draws a picture graph with, in their order: the flame's own loop on its light, its points,
- *  Show's device, the compose step (the layers and the picture's own loop), the effects, the screen; each fused into
+ *  Show's device, the compose step (the layers, the effects, the picture's own loop), the screen; each fused into
  *  one as today's renderer draws it. */
-export const STAGES = ['carry', 'points', 'show', 'compose', 'effects', 'screen'] as const;
+export const STAGES = ['carry', 'points', 'show', 'compose', 'screen'] as const;
 export type Stage = (typeof STAGES)[number];
 const SHOWN = new Set(SHOW_PARTS.map((p) => p.type));
 
@@ -61,8 +60,6 @@ export function stageOf(n: PictureNode): Stage | null {
   if (LIGHT_ROLES.points.has(n.type)) return 'points';
   if (SHOWN.has(n.type)) return 'show';
   if (n.type === 'screen') return 'screen';
-  // Today's effects keep their ids (v2.ts): the finish's slots, and an Echo's own loop (its Mix).
-  if (/^fx\d(-mix)?$/.test(n.id)) return 'effects';
   return 'compose';
 }
 
@@ -71,38 +68,15 @@ export function stagesOf(c: Compiled): Stage[] | null {
   const stage = stageOf;
   const out: Stage[] = [];
   let at = 0;
-  const feedback = new Set(c.order.filter((n) => n.type === 'feedback').map((n) => n.id));
   for (const n of c.order) {
     const s = stage(n);
-    // What reads only last frame's pictures is drawn in the pass that reads it (an Echo in its loop).
-    if (!s || (n.inputs.length && n.inputs.every((f) => feedback.has(f.from.module)) && s === 'effects')) continue;
+    if (!s) continue;
     const i = STAGES.indexOf(s);
     if (i < at) return null;
     at = i;
     if (out.at(-1) !== s) out.push(s);
   }
   return out;
-}
-
-/** The effects (today's slots, `order` as the graph draws them) as fused runs this frame: each its slots' `ids` (the
- *  others none), drawn in one pass. A run ends at an Echo that shows, so its trail is its own, not what the shapes
- *  after it make of it; one in a loop of the line's own finished picture (`looped`: Feedback → Echo → Mix) runs on,
- *  that loop drawn in the pass (its last picture the pass's own). */
-export function effectRuns(order: readonly number[], ids: readonly number[], amounts: readonly number[], looped: ReadonlySet<number> = new Set()): number[][] {
-  const runs: number[][] = [];
-  let run = ids.map(() => 0);
-  let any = false;
-  for (const k of order) {
-    run[k] = ids[k] ?? 0;
-    any = true;
-    if (effectOf(run[k])?.kind === 'echo' && (amounts[k] ?? 0) > 0 && !looped.has(k)) {
-      runs.push(run);
-      run = ids.map(() => 0);
-      any = false;
-    }
-  }
-  if (any) runs.push(run);
-  return runs;
 }
 
 /** An output's key: `module.port`. */
@@ -371,7 +345,7 @@ export type Spec = { w: number; h: number; format: Format };
 const specKey = (s: Spec) => `${s.w}x${s.h}:${s.format}`;
 
 /** Targets to draw into, kept by size and format and given out again once given back; let go of after `unused` ms
- *  not taken (as the effects' targets, render.ts). */
+ *  not taken (as the walk's targets, nodes/walker.ts). */
 export class Pool<T> {
   private free = new Map<string, { t: T; at: number }[]>();
   private specs = new Map<T, Spec>();
@@ -500,10 +474,8 @@ export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<
   return value;
 }
 
-/** The converted chain's compose modules, drawn fused (compose.ts): the layers' sources, modules and engines, the
- *  picture loop's Warp, Keep and modules, the layers' Mix, the loop's Mix and Feedback. */
 /** The compose step's modules (with its loops' Feedbacks), the module whose picture it starts from (Show's; none
- *  where there is no flame), and the one it gives on (into the effects or the screen); none where it has none. */
+ *  where there is no flame), and the one it gives on (into the screen); none where it has none. */
 export function composeOf(c: Compiled): { ids: Set<string>; from: string | null; to: string } | null {
   const byId = new Map(c.order.map((n) => [n.id, n]));
   const ids = new Set(c.order.filter((n) => stageOf(n) === 'compose').map((n) => n.id));
