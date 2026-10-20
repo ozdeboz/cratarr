@@ -319,6 +319,16 @@ test('a picture, light or points input takes one cable: a new one replaces the o
   assert.deepEqual(applyV2(structuredClone(p2), r!, t).cables.filter((c) => c.to.port === 'in1').map((c) => c.id), ['two']);
 });
 
+test('far out the whole node is its handle: drag (no nodrag on its one line), long press and tap (inside the node’s long press; one toggle)', async () => {
+  const fs = await import('node:fs');
+  const frame = fs.readFileSync(new URL('../src/lib/visuals/face/NodeFrame.svelte', import.meta.url), 'utf8');
+  const sum = /<button class="([^"]*sum[^"]*)"/.exec(frame);
+  assert.ok(sum && !sum[1].split(' ').includes('nodrag'), 'its far line drags the node');
+  assert.ok(frame.indexOf('use:longpress={() => graph.menu(id)}') < frame.indexOf('class="sum'), 'inside the node, so its long press is the node’s');
+  const graph = fs.readFileSync(new URL('../src/lib/visuals/PatchGraph.svelte', import.meta.url), 'utf8');
+  assert.ok(/open\(id\) \{[\s\S]{0,300}if \(selecting\) return;/.test(graph), 'a tap toggles once (Svelte Flow’s node click), not twice');
+});
+
 test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tension)(150 + length)', () => {
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 1), { x: 50, y: 0 });
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5), { x: 50, y: 125 });

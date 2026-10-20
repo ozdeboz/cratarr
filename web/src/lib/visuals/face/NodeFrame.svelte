@@ -69,7 +69,8 @@
     {#if data.pinned}<span class="pinned" title="Pinned" aria-label="Pinned"><Icon name="pin" size={13} /></span>{/if}
     {#if data.device}<button class="plus nodrag" aria-label="Open {data.label} here" title="Open here" onclick={() => graph.toggle(id)}>+</button>{/if}
   </span>
-  <!-- Far out (no knobs to turn), the whole node is its drag handle: its one line is no nodrag; its jacks stay jacks. -->
+  <!-- Far out (no knobs to turn), the whole node is its drag handle and its long press (the node's: select mode): its one
+       line is no nodrag; a drag past the threshold moves it before the hold's 500 ms; its jacks stay jacks. -->
   <button class="sum" tabindex="-1" onclick={() => graph.open(id)}
     ><b>{data.label}</b>{#if countLabel(data.cables)}<span class="n">{' · '}{countLabel(data.cables)}</span>{/if}</button
   >

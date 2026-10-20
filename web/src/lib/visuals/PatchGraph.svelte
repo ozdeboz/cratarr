@@ -428,7 +428,9 @@
         `knob:${path(module).join('/')}.${poly}`,
       ),
     open(id) {
-      if (selecting) return togglePick(id);
+      // In select mode a tap anywhere on a node (its name, far out its whole one line) toggles it: Svelte Flow's node
+      // click does, once.
+      if (selecting) return;
       const d = dataOf(id);
       // A device's title (or its frame): into it; a module's, its page.
       if (d?.kind === 'box' || (d?.kind === 'module' && d.device)) enter(id);
