@@ -1,6 +1,5 @@
 // Development only (graph-lab.html, PatchGraphLab.svelte, and the graph's tests): the lab's module types and its
-// sample v2 patches. Default: today's settings as a v2 patch (v2.ts toV2), its picture's wiring stood in for (the
-// flame's light into Show, Show's picture through the effects). `wiresV2`: every wire type drawn, as cables and as
+// sample v2 patches. Default: today's settings as a v2 patch (v2.ts toV2, its picture side wired as the app's). `wiresV2`: every wire type drawn, as cables and as
 // normals: the flame's light through the Fluid and the Loop effect back into it by a Feedback, its points into the
 // Fluid's pushes, the Fluid's flow into Bend (and the Loop effect's by its normal), Waves (its sound by its normal) bent
 // into a Mix to the screen, values dashed, triggers dotted, a band's six at once "· 6", the Clock into a Sequencer by
@@ -11,6 +10,8 @@ import type { CableV2, PatchV2 } from './ports';
 import { MODULATORS } from './modulators/modulators';
 import { WAVES } from './sources/waves';
 import { toV2 } from './v2';
+// The picture side of toV2 (its layers, loops and finish as cables), as the app's store has it.
+import './picture-wiring';
 import { v2TypeRecord } from './v2-types';
 import { DEFAULTS } from './settings.svelte';
 
@@ -19,20 +20,9 @@ export function labTypes(): Record<string, ModuleType> {
   return { ...Object.fromEntries([...Object.values(MODULATORS), WAVES].map((t) => [t.type, t])), ...v2TypeRecord() };
 }
 
-/** Today's settings as a v2 patch, the picture's wiring stood in for. */
+/** Today's settings as a v2 patch, as the app's store makes it (its picture side wired: picture-wiring.ts). */
 export function labV2(): PatchV2 {
-  const p = toV2(DEFAULTS);
-  const has = (id: string) => p.modules.some((m) => m.id === id);
-  const chainOf = [
-    ['flame', 'light', 'show', 'light'],
-    ['show', 'picture', 'fx1', 'picture'],
-    ['fx1', 'picture', 'fx2', 'picture'],
-    ['fx2', 'picture', 'fx3', 'picture'],
-  ];
-  chainOf.forEach(([a, ap, b, bp], i) => {
-    if (has(a) && has(b)) p.cables.push({ id: `lab-${i + 1}`, from: { module: a, port: ap }, to: { module: b, port: bp }, value: 1 });
-  });
-  return p;
+  return toV2(DEFAULTS);
 }
 
 /** Every wire type, as cables and as normals. */

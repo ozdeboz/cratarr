@@ -33,7 +33,6 @@
   import MenuSheet from '../MenuSheet.svelte';
   import SelectBar from '../SelectBar.svelte';
   import Icon from '../Icon.svelte';
-  import CableMenu from './CableMenu.svelte';
   import PatchNode from './PatchNode.svelte';
   import PatchCable from './PatchCable.svelte';
   import PatchWire from './PatchWire.svelte';
@@ -54,6 +53,9 @@
   import { fits } from './ports';
   import {
     applyV2,
+    barActions,
+    deleteEdits,
+    unmakeEdits,
     freeModuleId,
     CABLE_OPACITIES,
     connectionV2,
@@ -76,6 +78,7 @@
     type CableData,
     type Fine,
     type GraphActions,
+    type ModuleData,
     type NodeData,
     type PickRequest,
     type Size,
@@ -204,8 +207,6 @@
   let openCable = $state<string | null>(null);
   /** A long press's menu: a cable's, a module's, a knob's or port's help; the types to add somewhere; Make device. */
   type Menu =
-    | { kind: 'cable'; id: string; at: XY }
-    | { kind: 'node'; id: string }
     | { kind: 'add'; to: AddTo }
     | { kind: 'make'; ids: string[] }
     | { kind: 'help'; id: string; port: string }
@@ -222,7 +223,7 @@
   let selCables = $state<string[]>([]);
   function togglePick(id: string) {
     const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
-    if (d?.kind !== 'module') return;
+    if (d?.kind !== 'module' || d.type === 'screen') return;
     sel = sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id];
   }
   function toggleCable(id: string) {
@@ -492,9 +493,16 @@
     menu(id) {
       // Not while a knob is being fine-adjusted, nor just after (a touch's long press sends its context menu to whatever
       // is under the finger by then).
-      if (fine || performance.now() - fineEnded < 600 || dataOf(id)?.kind !== 'module') return;
+      if (fine || performance.now() - fineEnded < 600) return;
+      const d = dataOf(id);
+      if (d?.kind !== 'module' || d.type === 'screen') return;
+      // A long press: select mode, with it picked (the owner: long press is multi-select).
       holdStill();
-      menu = { kind: 'node', id };
+      if (!selecting) {
+        selecting = true;
+        sel = [id];
+        selCables = [];
+      } else if (!sel.includes(id)) sel = [...sel, id];
     },
     adding: (to) => (menu = { kind: 'add', to }),
     pinCategory: (scope, category, on) => edit([{ kind: 'pin', scope: [...at, ...scope], category, on }]),
@@ -502,7 +510,12 @@
     cableMenu(id, where) {
       holdStill();
       reroute = null;
-      menu = { kind: 'cable', id, at: where };
+      pressedAt = { ...pressedAt, [id]: where };
+      if (!selecting) {
+        selecting = true;
+        sel = [];
+        selCables = [id];
+      } else if (!selCables.includes(id)) selCables = [...selCables, id];
     },
     rerouting: () => reroute,
     live: () => live?.frame ?? null,
@@ -573,8 +586,43 @@
       picked.every((id) => (dataOf(id) as { pinned?: boolean } | undefined)?.pinned) &&
       pickedCables.every((id) => (edges.find((e) => e.id === id)?.data as CableData | undefined)?.pinned),
   );
+  // Modules, devices and cables picked, deleted in one change (one undo step); never the Screen.
+  const deletable = (id: string) => (dataOf(id) as { type?: string } | undefined)?.type !== 'screen';
+  // The devices picked: unmade at once (one change), each as its own menu's Unmake does.
+  const pickedDevices = $derived(picked.filter((id) => (dataOf(id) as { device?: unknown } | undefined)?.device));
+  const actions = $derived(
+    new Set(
+      barActions(
+        picked.map((id) => {
+          const d = dataOf(id) as ModuleData | undefined;
+          return { device: !!d?.device, screen: d?.type === 'screen', help: !!(d && helpFor?.(d.type)), scope: id.split('/').slice(0, -1).join('/') };
+        }),
+        pickedCables.length,
+      ),
+    ),
+  );
+  // Where each cable picked by a long press was pressed (its Reroute lifts the end nearer that).
+  let pressedAt: Record<string, XY> = {};
+  /** The one module or device picked, alone (Open, Help). */
+  const onlyModule = $derived(picked.length === 1 && !pickedCables.length ? picked[0] : null);
+  const onlyHelp = $derived.by(() => {
+    const d = onlyModule ? dataOf(onlyModule) : undefined;
+    return d?.kind === 'module' && !d.device && helpFor?.(d.type) ? onlyModule : null;
+  });
+  function reroutePicked() {
+    const id = pickedCables[0];
+    const e = edges.find((x) => x.id === id);
+    endSelect();
+    if (!e) return;
+    openCable = null;
+    reroute = { id, at: pressedAt[id] ?? { x: 0, y: 0 } };
+  }
+  function unmakePicked() {
+    edit(unmakeEdits(at, pickedDevices));
+    endSelect();
+  }
   function deletePicked() {
-    unplug({ nodes: [], edges: edges.filter((e) => pickedCables.includes(e.id)) });
+    edit(deleteEdits(at, picked, pickedCables, deletable));
     endSelect();
   }
   // A knob's lens after its fine adjust, settled (its pin): until a tap elsewhere or Escape.
@@ -721,7 +769,10 @@
       if (edge.type === 'cable') openIt(edge.id);
     }}
     onnodeclick={({ node }) => selecting && togglePick(node.id)}
-    onpaneclick={() => (reroute = null)}
+    onpaneclick={() => {
+      reroute = null;
+      if (selecting) endSelect();
+    }}
   >
     <PatchFit layout={fitKey} active={!touched} {pad} view={{ width, height }} {portrait} onzoom={(z) => (zoom = z)} />
     <!-- The map: bottom right over the chips; on a narrow screen a button (Map) opens it top right, over the view only
@@ -773,8 +824,20 @@
     {@const n = picked.length + pickedCables.length}
     <SelectBar label="Selected" count="{n}/{nodes.filter((x) => (x.data as NodeData).kind === 'module').length + edges.filter((e) => e.deletable !== false).length}" onclose={endSelect}>
       <button aria-label={allPinned ? 'Unpin' : 'Pin'} title={allPinned ? 'Unpin' : 'Pin'} disabled={!n} onclick={() => pinPicked(!allPinned)}><Icon name={allPinned ? 'pinOff' : 'pin'} size={24} /></button>
-      <button aria-label="Make device" title="Make device" disabled={chosen.length < 2 || pickedCables.length > 0} onclick={() => (menu = { kind: 'make', ids: chosen })}><Icon name="intoBox" size={24} /></button>
-      <button aria-label="Delete cables" title="Delete" disabled={!pickedCables.length || picked.length > 0} onclick={deletePicked}><Icon name="trash" size={24} /></button>
+      {#if actions.has('make')}<button aria-label="Make device" title="Make device" onclick={() => (menu = { kind: 'make', ids: chosen })}><Icon name="intoBox" size={24} /></button>{/if}
+      {#if actions.has('reroute')}<button aria-label="Reroute" title="Reroute" onclick={reroutePicked}><Icon name="swap" size={24} /></button>{/if}
+      {#if actions.has('open') && onlyModule}<button
+          aria-label="Open"
+          title="Open"
+          onclick={() => {
+            const id = onlyModule!;
+            endSelect();
+            onopen?.(path(id));
+          }}><Icon name="squareArrowOutUpRight" size={24} /></button
+        >{/if}
+      {#if actions.has('help') && onlyHelp}<button aria-label="Help" title="Help" onclick={() => (menu = { kind: 'help', id: onlyHelp!, port: '' })}><Icon name="info" size={24} /></button>{/if}
+      {#if actions.has('unmake')}<button aria-label="Unmake {pickedDevices.length === 1 ? 'device' : 'devices'}" title="Unmake" onclick={unmakePicked}><Icon name="expand" size={24} /></button>{/if}
+      <button aria-label="Delete" title="Delete" disabled={!actions.has('delete')} onclick={deletePicked}><Icon name="trash" size={24} /></button>
     </SelectBar>
   {/if}
 </div>
@@ -786,92 +849,15 @@
     onpin={settledPin ? () => edit([{ kind: 'pinOne', scope: settledPin!.scope, pin: settledPin!.pin, on: !settledPin!.on }]) : undefined}
   />{/if}
 
-{#if menu?.kind === 'cable'}
-  {@const id = menu.id}
-  {@const where = menu.at}
-  <CableMenu
-    title={cableName(id)}
-    pinned={!!(edges.find((e) => e.id === id)?.data as CableData | undefined)?.pinned}
-    onpin={(on) => edit([{ kind: 'pinOne', ...pinOf(id, 'cable'), on }])}
-    onselect={() => {
-      selecting = true;
-      sel = [];
-      selCables = [id];
-    }}
-    onremove={() => removeCable(id)}
-    onreroute={() => {
-      openCable = null;
-      reroute = { id, at: where };
-    }}
-    onclose={() => (menu = null)}
-  />
-{:else if menu?.kind === 'node'}
-  {@const id = menu.id}
-  {@const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined}
-  {@const help = d?.kind === 'module' ? helpFor?.(d.type) : null}
-  <MenuSheet label={nodeName(id)} title={nodeName(id)} onclose={() => (menu = null)} over>
-    {#if help}<p class="help">{help}</p>{/if}
-    <div role="menu">
-      {#if d?.kind === 'module'}
-        <MenuEntry
-          icon="listChecks"
-          label="Select"
-          onclick={() => {
-            menu = null;
-            selecting = true;
-            sel = [id];
-            selCables = [];
-          }}
-        />
-        <MenuEntry
-          icon={d.pinned ? 'pinOff' : 'pin'}
-          label={d.pinned ? 'Unpin' : 'Pin'}
-          onclick={() => {
-            menu = null;
-            edit([{ kind: 'pinOne', ...pinOf(id, 'module'), on: !d.pinned }]);
-          }}
-        />
-      {/if}
-      {#if d?.kind === 'module' && d.device}
-        <MenuEntry
-          icon="expand"
-          label="Open"
-          onclick={() => {
-            menu = null;
-            const next = new Set(opened);
-            next.add(id);
-            opened = next;
-          }}
-        />
-        <MenuEntry
-          label="Unmake"
-          onclick={() => {
-            menu = null;
-            edit([{ kind: 'unmake', scope: [...at, ...id.split('/').slice(0, -1)], device: id.split('/').pop()! }]);
-          }}
-        />
-      {/if}
-      {#if d?.kind === 'module'}
-        <MenuEntry
-          icon="trash"
-          label="Delete"
-          danger
-          onclick={() => {
-            menu = null;
-            removeModule(id);
-          }}
-        />
-      {/if}
-    </div>
-  </MenuSheet>
-{:else if menu?.kind === 'help'}
+{#if menu?.kind === 'help'}
   {@const hid = menu.id}
   {@const port = menu.port}
   {@const d = nodes.find((n) => n.id === hid)?.data as NodeData | undefined}
   {#if d?.kind === 'module'}
-    {@const name = d.knobs.find((k) => k.id === port)?.label ?? d.ports.find((p) => p.id === port)?.label ?? port}
-    <MenuSheet label="{d.label} · {name}" title="{d.label} · {name}" onclose={() => (menu = null)} over>
-      <p class="help">{helpFor?.(d.type, port)}</p>
+    {@const name = port ? (d.knobs.find((k) => k.id === port)?.label ?? d.ports.find((p) => p.id === port)?.label ?? port) : ''}
+    {@const title = name ? `${d.label} · ${name}` : d.label}
+    <MenuSheet label={title} {title} onclose={() => (menu = null)} over>
+      <p class="help">{port ? helpFor?.(d.type, port) : helpFor?.(d.type)}</p>
     </MenuSheet>
   {/if}
 {:else if menu?.kind === 'make'}

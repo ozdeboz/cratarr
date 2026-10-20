@@ -859,7 +859,8 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
         continue;
       }
       const d = view(m, id, into, p);
-      const node: GraphNode = { id, type: 'patch', position: { x: 0, y: 0 }, data: d, deletable: false };
+      // The Screen is never deleted, so never picked.
+      const node: GraphNode = { id, type: 'patch', position: { x: 0, y: 0 }, data: d, deletable: false, ...(m.type === 'screen' ? { selectable: false } : {}) };
       if (parent) Object.assign(node, { parentId: parent, extent: 'parent', expandParent: true });
       nodes.push(node);
       items.set(m.id, { id, node, size: sizes[id] ?? sizeOf(d) });
@@ -1070,6 +1071,49 @@ function removeModules(p: PatchV2, scope: readonly string[], gone: ReadonlySet<s
   if (!ins.size && !outs.size) return;
   outside.cables = outside.cables.filter((c) => !(c.to.module === device.id && ins.has(c.to.port)) && !(c.from.module === device.id && outs.has(c.from.port)));
 }
+
+/** What deleting picked modules and cables is, as one change: the cables at their levels, then the modules (their
+ *  cables, pins and the rest with them: removeModules); never the Screen. Node and edge ids from the level `at` shows. */
+export function deleteEdits(at: readonly string[], modules: readonly string[], cables: readonly string[], keep: (id: string) => boolean = () => true): V2Edit[] {
+  const group = (ids: readonly string[]) => {
+    const by = new Map<string, { scope: string[]; ids: string[] }>();
+    for (const id of ids) {
+      const parts = id.split('/');
+      const scope = [...at, ...parts.slice(0, -1)];
+      (by.get(scope.join('/')) ?? by.set(scope.join('/'), { scope, ids: [] }).get(scope.join('/'))!).ids.push(parts[parts.length - 1]);
+    }
+    return [...by.values()];
+  };
+  return [
+    ...group(cables).map((g): V2Edit => ({ kind: 'remove', scope: g.scope, cables: g.ids })),
+    ...group(modules.filter(keep)).map((g): V2Edit => ({ kind: 'removeModules', scope: g.scope, modules: g.ids })),
+  ];
+}
+
+/** What the select bar offers for a selection (the owner: a long press on a module, a device or a cable is select
+ *  mode): Delete (anything but the Screen), Pin, Make device (two or more modules at one level, no cables), Unmake
+ *  (devices), Reroute (one cable alone), Open (one module or device alone), Help (one module alone, with help). */
+export type BarAction = 'delete' | 'pin' | 'make' | 'unmake' | 'reroute' | 'open' | 'help';
+export function barActions(modules: readonly { device?: boolean; screen?: boolean; help?: boolean; scope?: string }[], cables: number): BarAction[] {
+  const out: BarAction[] = [];
+  const n = modules.length + cables;
+  if (!n) return out;
+  out.push('pin');
+  if (cables || modules.some((m) => !m.screen)) out.push('delete');
+  if (!cables && modules.length > 1 && new Set(modules.map((m) => m.scope ?? '')).size === 1) out.push('make');
+  if (modules.some((m) => m.device)) out.push('unmake');
+  if (cables === 1 && !modules.length) out.push('reroute');
+  if (!cables && modules.length === 1) out.push('open');
+  if (!cables && modules.length === 1 && !modules[0].device && modules[0].help) out.push('help');
+  return out;
+}
+
+/** Devices picked, unmade as one change (each as its menu's Unmake): node ids from the level `at` shows. */
+export const unmakeEdits = (at: readonly string[], devices: readonly string[]): V2Edit[] =>
+  devices.map((id) => {
+    const parts = id.split('/');
+    return { kind: 'unmake', scope: [...at, ...parts.slice(0, -1)], device: parts[parts.length - 1] };
+  });
 
 /** An id no module at this level has: `<base>-<n>`. */
 export function freeModuleId(p: PatchV2, base: string): string {
