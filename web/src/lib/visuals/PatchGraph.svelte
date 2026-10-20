@@ -31,6 +31,7 @@
   import '@xyflow/svelte/dist/base.css';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
+  import { longpress } from '../longpress';
   import SelectBar from '../SelectBar.svelte';
   import Icon from '../Icon.svelte';
   import PatchNode from './PatchNode.svelte';
@@ -54,6 +55,9 @@
   import { fits } from './ports';
   import {
     applyV2,
+    CABLE_OPACITY_MIN,
+    cableOpacity,
+    drawnOpacity,
     categoryPin,
     barActions,
     deleteEdits,
@@ -97,6 +101,7 @@
     onpick,
     live,
     thumbnail,
+    previewShown = false,
     openAtStart = [],
     sheetHeight = 0,
     layout = 'elk',
@@ -125,6 +130,8 @@
     /** Draws a module's output into a thumbnail's canvas (the renderer's `thumbnail(moduleId, canvas)`): one a live
      *  frame, in turn, only while the graph shows (live frames come only then). */
     thumbnail?: Thumbnailer;
+    /** The page shows the picked module's preview itself (its sheet's top): the graph's popover then gives way. */
+    previewShown?: boolean;
     /** Nodes (devices) open from the start. */
     openAtStart?: string[];
     /** How much of the graph's bottom an open sheet covers (px): the fitted view keeps clear of it. */
@@ -198,6 +205,8 @@
   type Menu =
     // The module browser (the graph's one "+"): every type by category, Music's signals, a category's pin.
     | { kind: 'browser' }
+    // The graph's view options (the Rack's long press): kept on this device, not in the patch.
+    | { kind: 'view' }
     | { kind: 'make'; ids: string[] }
     | { kind: 'help'; id: string; port: string }
     // From a knob dragged into the empty: the music signals that fit it, a module of one cabled into it.
@@ -428,7 +437,9 @@
         `knob:${path(module).join('/')}.${poly}`,
       ),
     open(id) {
-      if (selecting) return togglePick(id);
+      // In select mode a tap anywhere on a node (its name, far out its whole one line) toggles it: Svelte Flow's node
+      // click does, once.
+      if (selecting) return;
       const d = dataOf(id);
       // A device's title (or its frame): into it; a module's, its page.
       if (d?.kind === 'box' || (d?.kind === 'module' && d.device)) enter(id);
@@ -684,6 +695,26 @@
     const k = to?.kind === 'module' ? (to.knobs.find((x) => x.id === port)?.label ?? to.v2.ports.in.find((x) => x.id === port)?.label ?? port) : port;
     return `${nodeName(e.source)} → ${nodeName(e.target)} · ${k}`;
   }
+  // The cables' opacity (VCV Rack's), this device's: a view option, the Rack's long press.
+  const OPACITY_KEY = 'cratarr-graph-cable-opacity';
+  let opacity = $state(
+    (() => {
+      try {
+        return cableOpacity(Number(localStorage.getItem(OPACITY_KEY) ?? 1));
+      } catch {
+        return 1;
+      }
+    })(),
+  );
+  function setOpacity(v: number) {
+    opacity = cableOpacity(v);
+    try {
+      localStorage.setItem(OPACITY_KEY, String(opacity));
+    } catch {
+      /* this visit only */
+    }
+  }
+
   // The one preview (the owner, 71.1): of the one module picked, or (nothing picked) the one last tapped.
   let tapped = $state<string | null>(null);
   const preview = $derived.by(() => {
@@ -729,7 +760,7 @@
   }}
 />
 
-<div class="patch-graph" style:--graph-w="{width}px" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
+<div class="patch-graph" style:--cable-alpha={drawnOpacity(opacity)} style:--graph-w="{width}px" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -786,12 +817,11 @@
     <Panel position="top-left" style={TOP}>
       <div class="topleft">
         <button class="addbtn" aria-label="Add a module" title="Add a module" onclick={() => ((menu = { kind: 'browser' }), (query = ''))}><Icon name="plus" size={22} /></button>
-    {#if at.length}
+        <!-- The Rack: a tap back to the top; its long press (a right click), the graph's view options. -->
         <nav class="crumbs" aria-label="Devices">
-          <button onclick={() => (at = [])}>Rack</button>
+          <button class:here={!at.length} onclick={() => (at = [])} use:longpress={() => (menu = { kind: 'view' })}>Rack</button>
           {#each crumbsOf(patch, at) as name, i (i)}<span>›</span><button class:here={i === at.length - 1} onclick={() => (at = at.slice(0, i + 1))}>{name}</button>{/each}
         </nav>
-    {/if}
       </div>
     </Panel>
     <Panel position="top-right" style={TOP}>
@@ -804,7 +834,8 @@
           >
         {/each}
       </div>
-      {#if preview}
+      <!-- Top right, under the legend (clear of the safe area); never with the page's own preview. -->
+      {#if preview && !previewShown}
         <div class="previewbox"><Preview module={preview.path} label={preview.label} kind={preview.kind} live={live?.frame ?? null} thumbs={thumbnail ? thumbs : null} /></div>
       {/if}
     </Panel>
@@ -839,7 +870,15 @@
     onpin={settledPin ? () => edit([{ kind: 'pinOne', scope: settledPin!.scope, pin: settledPin!.pin, on: !settledPin!.on }]) : undefined}
   />{/if}
 
-{#if menu?.kind === 'help'}
+{#if menu?.kind === 'view'}
+  <MenuSheet label="Graph view" title="Graph view" onclose={() => (menu = null)} over>
+    <label class="viewopt">
+      <span>Cable opacity</span>
+      <input type="range" min={CABLE_OPACITY_MIN * 100} max="100" step="5" value={Math.round(opacity * 100)} oninput={(e) => setOpacity(Number((e.currentTarget as HTMLInputElement).value) / 100)} />
+      <span class="val">{Math.round(opacity * 100)}%</span>
+    </label>
+  </MenuSheet>
+{:else if menu?.kind === 'help'}
   {@const hid = menu.id}
   {@const port = menu.port}
   {@const d = nodes.find((n) => n.id === hid)?.data as NodeData | undefined}
@@ -960,7 +999,9 @@
   .patch-graph :global(.svelte-flow__edge.feedback .svelte-flow__edge-path) {
     opacity: 0.35;
   }
+  /* The modulation cables at the opacity set (the Rack's view options); one in focus at all of it. */
   .patch-graph :global(.svelte-flow__edge.cable) {
+    opacity: var(--cable-alpha, 1);
     -webkit-touch-callout: none;
   }
   .patch-graph :global(.svelte-flow__edge.cable.lit),
@@ -1076,6 +1117,25 @@
     stroke: var(--patch-bg);
     stroke-width: 1.6px;
     stroke-dasharray: none;
+  }
+  .viewopt {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 4px 20px 20px;
+    color: var(--text);
+    font-size: 15px;
+  }
+  .viewopt input {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+  .viewopt .val {
+    min-width: 3.5em;
+    text-align: right;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
   }
   .previewbox {
     display: flex;

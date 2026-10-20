@@ -1088,6 +1088,12 @@ export const unmakeEdits = (at: readonly string[], devices: readonly string[]): 
     return { kind: 'unmake', scope: [...at, ...parts.slice(0, -1)], device: parts[parts.length - 1] };
   });
 
+/** The cables' opacity (VCV Rack's, a view option kept on this device): 10 to 100 %, drawn as Rack draws it, its
+ *  power 1.5 (nvgAlpha(pow(opacity, 1.5))). */
+export const CABLE_OPACITY_MIN = 0.1;
+export const cableOpacity = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(CABLE_OPACITY_MIN, v)) : 1);
+export const drawnOpacity = (o: number) => Math.pow(cableOpacity(o), 1.5);
+
 /** An id no module at this level has: `<base>-<n>`. */
 export function freeModuleId(p: PatchV2, base: string): string {
   const taken = new Set(p.modules.map((m) => m.id));
