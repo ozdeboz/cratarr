@@ -58,15 +58,8 @@ test("the effects in a line drawing today's one pass: colours and echoes in slot
   assert.deepEqual(effectsInOrder([fx('fx1', 'kaleidoscope-engine', 1), fx('fx3', 'hydra-engine', 7)]).map((m) => m.id), ['fx3', 'fx1']);
 });
 
-test('the effects run as one pass, but a run ends at an Echo that shows', async () => {
-  const { effectRuns } = await import('../src/lib/visuals/picture-graph.ts');
-  const ids = [10, 16, 9]; // Rotate, Pulse, Echo
-  assert.deepEqual(effectRuns([0, 1, 2], ids, [1, 1, 1]), [[10, 16, 9]], 'Echo last: one pass');
-  assert.deepEqual(effectRuns([2, 1, 0], ids, [1, 1, 1]), [[0, 0, 9], [10, 16, 0]]);
-  assert.deepEqual(effectRuns([2, 1, 0], ids, [1, 1, 0]), [[10, 16, 9]], 'an Echo at nothing ends none');
-});
-
-test('an Echo with shapes after it is a visible loop: Feedback → Echo → Mix (Lighten) beside the picture', () => {
+test('an Echo with shapes after it is a visible loop: Feedback → Echo → Mix (Lighten) beside the picture, one pass', async () => {
+  const { effectRuns, fxOfModule } = await import('../src/lib/visuals/nodes/effect-runs.ts');
   // Rotate, Pulse, Echo (the effects recording's): each its effect's module.
   const v = toV2({ ...settings(), fx1: 3, fx1Amount: 1, fx2: 1, fx2Amount: 0.8, fx3: 1, fx3Amount: 0.8 });
   const c = compile(v, types);
@@ -79,7 +72,12 @@ test('an Echo with shapes after it is a visible loop: Feedback → Echo → Mix 
   assert.deepEqual(by('fx-echo').inputs.map((f) => f.from.module), ['fx-echo-feedback']);
   assert.deepEqual(by('fx-echo-mix').inputs.map((f) => [f.port, f.from.module]), [['in1', 'layers'], ['in2', 'fx-echo']]);
   assert.deepEqual(by('fx-echo-feedback').inputs.map((f) => f.from.module), ['fx-rotate']);
-  assert.ok(stagesOf(c));
+  assert.deepEqual(stagesOf(c), [...STAGES]);
+  // The walk draws the line as one pass, its Echo trailing the Feedback.
+  const knobs = (id: string) => v.modules.find((m) => m.id === id)?.knobs ?? {};
+  const { runs, order } = effectRuns(c.order, (n) => fxOfModule(n.type, knobs(n.id)));
+  assert.deepEqual([...runs], [['fx-rotate', { fx: ['fx-echo', 'fx-pulse', 'fx-rotate'], trails: 'fx-echo-feedback', own: false }]]);
+  assert.deepEqual(order.find((n) => n.id === 'fx-rotate')!.inputs.map((f) => [f.port, f.from.module]), [['picture', 'layers'], ['trails', 'fx-echo-feedback']]);
   // Without shapes an Echo stays a plain module.
   const plain = compile(toV2({ ...settings(), fx3: 1, fx3Amount: 0.8 }), types);
   assert.ok(!plain.order.some((n) => n.id === 'fx-echo-feedback') && plain.order.some((n) => n.id === 'fx-echo'));
@@ -117,9 +115,9 @@ test('the compose step: its modules, from Show’s picture to what goes on', asy
   const c = compile(toV2(settings(layered())), types);
   const cs = composeOf(c)!;
   assert.equal(cs.from, 'show/saturate');
-  assert.equal(cs.to, 'loop-mix');
+  assert.equal(cs.to, 'loop-mix', 'no effect at nothing: the loop gives on');
   for (const id of ['shapes-source', 'shapes-kaleido', 'window-source', 'layers', 'example-warp', 'example-keep', 'loop-mix', 'loop-feedback']) assert.ok(cs.ids.has(id), id);
-  assert.ok(!cs.ids.has('fx1') && !cs.ids.has('show/saturate'));
+  assert.ok(!cs.ids.has('show/saturate'));
   // A Glow on a layer: in the compose step.
   const v = toV2(settings(layered()));
   const glowed = { ...v, modules: [...v.modules, { id: 'glow-1', type: 'glow', knobs: { glow: 0.5 } }], cables: v.cables.map((x) => (x.from.module === 'window-source' ? { ...x, from: { module: 'glow-1', port: 'picture' } } : x)).concat({ id: 'g', from: { module: 'window-source', port: 'picture' }, to: { module: 'glow-1', port: 'picture' }, value: 1, mode: 'swing' }) };
@@ -140,4 +138,13 @@ test('the walk draws the picture’s own loop as one pass: its Feedback, its War
   assert.deepEqual([...loops.entries()], [['loop-mix', { feedback: 'loop-feedback', chain: [{ id: 'example-warp', type: 'warp' }, { id: 'example-keep', type: 'keep' }] }]]);
   // Not lightened: drawn module by module.
   assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), (id) => (id === 'loop-mix' ? { ...knobs(id), mode2: 0 } : knobs(id))).size, 0);
+});
+
+test('every preset is drawn whole: no errors, its stages; Start from scratch has no Screen', async () => {
+  const { PRESETS } = await import('../src/lib/visuals/presets.ts');
+  for (const p of PRESETS) {
+    const c = compile(p.patch(), types);
+    if (p.id === 'scratch') assert.deepEqual(c.errors, ['Nothing reaches a Screen: there is none.']);
+    else assert.ok(!c.errors.length && stagesOf(c), `${p.id}: ${c.errors.join(' · ')}`);
+  }
 });
