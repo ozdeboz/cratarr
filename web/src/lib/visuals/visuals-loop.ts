@@ -226,14 +226,14 @@ export class VisualsLoop {
     // or the dice's (tried against the track, an edit).
     let rolling: Generator<void, { values: Randomized; cables: Record<string, PatchV2['cables'][number]['value']> }> | null = null;
     let rollingAs: { edit: string | null; ms: number } = { edit: null, ms: BLEND_MS };
-    const rollOf = function* (seed: number, roll: Roll, check: { key: string; position: number } | null) {
+    const rollOf = function* (seed: number, roll: Roll, check: { key: string; position: number } | null, reach = 1) {
       const patch = host.store.patch;
       const scope = typeof roll === 'string' ? roll : null;
       const ids = typeof roll === 'string' ? null : new Set(roll.module);
       const knobsScope = scope ? scopeNamed(scope, host.types) : (m: { id: string }) => ids!.has(m.id);
       const withCables = scope === 'everything' || scope === 'cables';
-      const values: Randomized = knobsScope ? yield* randomize(patch, host.types, { seed, scope: knobsScope }) : {};
-      const cables = withCables ? randomizeCables(patch, host.types, { seed }) : {};
+      const values: Randomized = knobsScope ? yield* randomize(patch, host.types, { seed, scope: knobsScope, reach }) : {};
+      const cables = withCables ? randomizeCables(patch, host.types, { seed, reach }) : {};
       if (!check) return { values, cables };
       // The dice: this seed and the next ones, each checked against the track (its sidechains taken out), the first
       // within the limits taken, else the least over them.
@@ -244,8 +244,8 @@ export class VisualsLoop {
       const limits = Object.fromEntries(Object.entries(STANDING).map(([k, v]) => [k, v * 2 ** (2 * (wild - 0.5))]));
       let best: { values: Randomized; cables: typeof cables; by: number } | null = null;
       for (let t = 0; t < TRIES; t++) {
-        const tryValues: Randomized = t === 0 ? values : knobsScope ? yield* randomize(patch, host.types, { seed: seed + t, scope: knobsScope }) : {};
-        const tryCables = t === 0 ? cables : withCables ? randomizeCables(patch, host.types, { seed: seed + t }) : {};
+        const tryValues: Randomized = t === 0 ? values : knobsScope ? yield* randomize(patch, host.types, { seed: seed + t, scope: knobsScope, reach }) : {};
+        const tryCables = t === 0 ? cables : withCables ? randomizeCables(patch, host.types, { seed: seed + t, reach }) : {};
         const candidate = structuredClone(patch);
         applyKnobs(candidate, tryValues);
         for (const c of candidate.cables) if (c.id in tryCables) c.value = tryCables[c.id];
@@ -439,7 +439,7 @@ export class VisualsLoop {
       // A new track's look, as the patch's Dice roll it: worked out over the next frames, a performance.
       for (const r of stepped.dice) {
         if (rolling) break;
-        rolling = rollOf(r.seed, r.scope, null);
+        rolling = rollOf(r.seed, r.scope, null, r.reach);
         // The first look shows at once; each next one blends in over a new track's time.
         rollingAs = { edit: null, ms: looked ? BLEND_MS : 0 };
         looked = true;

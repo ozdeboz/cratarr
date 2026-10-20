@@ -158,7 +158,8 @@ export type EngineFrame = {
 };
 
 /** A Dice's roll: which, the seed its seed input gives (Music's `seed`: the track's own), its scope. */
-export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_SCOPES)[number] };
+/** A Dice's roll: its seed, its scope, and how far from where each knob is (`reach` 0..1: 1, anywhere in its range). */
+export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_SCOPES)[number]; reach: number };
 
 export type EngineOptions = {
   still: boolean;
@@ -975,7 +976,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     if (!rose) continue;
     const seeded = plan.ports.get(x.id)?.get('seed');
     const seed = seeded && seeded[0].length ? Math.floor(clamp(sumOf(seeded, 0), 0, 1 - 2 ** -33) * 4294967296) : Math.floor(opts.now) >>> 0;
-    dice.push({ module: x.id, seed, scope: RANDOMIZE_SCOPES[clamp(Math.round(finite(x.knobs.scope, 0)), 0, RANDOMIZE_SCOPES.length - 1)] });
+    dice.push({ module: x.id, seed, scope: RANDOMIZE_SCOPES[clamp(Math.round(finite(x.knobs.scope, 0)), 0, RANDOMIZE_SCOPES.length - 1)], reach: clamp(finite(x.knobs.reach, 1), 0, 1) });
   }
   // What reaches each Fluid's `at`: the points output cabled into it (a Flame's, a Grid's), else the Flame's (its normal).
   const pointsOf = (r: PortRef): readonly (Point | null)[] | null => {
