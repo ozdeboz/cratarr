@@ -12,12 +12,13 @@ export type RecordedXform = Plain<Xform>;
 export type RecordedFlame = Plain<Flame>;
 
 /** What the compositor was given in a frame: the extras, every module's knobs, the frame (its signals as they were
- *  read: by the reference's JSON), the flame layer's share. */
+ *  read: by the reference's JSON), the flame layer's share and its morph's target. */
 export type RecordedCompose = {
   extra: PatchExtra;
   knobs: Record<string, Record<string, number>>;
   frame: { dt: number; time: number; beat: FrameInfo['beat']; signals: Record<string, number>; waveform: number[] | null };
   flame: number;
+  flameTo?: number;
 };
 
 export type RecordedFrame = {
@@ -91,6 +92,7 @@ export function recordPictures(renderer: FlameRenderer) {
         knobs: Object.fromEntries(modules.map((m) => [m.id, { ...extras.knobsOf(m) }])),
         frame: { dt: info.dt, time: info.time, beat: info.beat && { ...info.beat }, signals, waveform: info.waveform ? Array.from(info.waveform) : null },
         flame: extras.flame,
+        ...(extras.flameTo !== undefined ? { flameTo: extras.flameTo } : {}),
       };
       given = { ...extras, frame: { ...info, signals: (ref) => (signals[signalKey(ref)] = info.signals(ref)) } };
     }
