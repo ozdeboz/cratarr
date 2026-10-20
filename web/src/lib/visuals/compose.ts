@@ -45,6 +45,7 @@ export function mixShader(n: number): string {
     else if (uMode${i} == 3) c = c * mix(vec3(1.0), b.rgb / max(b.a, 1e-4), b.a);
     else if (uMode${i} == 4) c = c * mix(1.0 - uAmount${i}, 1.0, cover);
     else if (uMode${i} == 5) c = max(c, b.rgb);
+    else if (uMode${i} == 6) c = max(vec3(0.0), c - b.rgb);
     else c = c + b.rgb;
   }`;
   const each = (f: (i: number) => string) => Array.from({ length: n }, (_, i) => f(i)).join('\n');
