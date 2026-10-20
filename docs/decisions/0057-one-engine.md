@@ -476,6 +476,13 @@ don't implement multi-select for knobs"), to pin or unpin them all at once; cabl
 undoes 70's "a long press on a cable gives Delete or Reroute (NOT multi-select)": a long press now also starts picking,
 in the graph (claude-632's SelectBar) and in the panel alike.
 
+### 7b3. Framing in sight: Transform, and the Camera a device
+
+The owner (2026-10-20): the auto-framing, exposure and colours become visible. A **Transform** module (across, up,
+scale, turn: knobs to cable) moves light or a picture; the **Camera** is a device of it, Envelope Followers following
+the Flame's new `x`, `y` and `size` outputs into the Transform ("Yes" to Transform with the Camera a device). The
+Flame's `coverage` is there for the exposure; Music's `cover` output (a picture) gives its colours through a Tint.
+
 ### 7c. Sync groups: not in this version
 
 The owner: "since I won't be sync grouping in the upcoming version, spend no time on this." Sync groups are handled at

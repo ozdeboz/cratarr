@@ -498,24 +498,20 @@ export const LENS = declared(
   [{ id: 'out', label: 'Out', type: 'points', polymorphic: LENS_TYPES }],
 );
 
-/** Camera (0057 audit row 8, the owner: "visible modules"): the picture or light framed, moved to centre on (x, y) and
- *  scaled to `size`, following them by its Follow and Slew (cabled from the Flame's centre and size by default). */
-const CAMERA_TYPES: readonly PortType[] = ['light', 'picture'];
-export const CAMERA = declared(
-  'camera',
-  'Camera',
+/** Transform (the owner, 2026-10-20: "a transform module"): light or a picture moved across and up, scaled and
+ *  turned, every one a knob to cable (TouchDesigner's Transform, Hydra's scroll, scale and rotate). The Camera is a
+ *  device of it: the Flame's centre and size, followed slowly, into these knobs (devices.ts). */
+const TRANSFORM_TYPES: readonly PortType[] = ['light', 'picture'];
+export const TRANSFORM = declared(
+  'transform',
+  'Transform',
   'module',
-  [knob('follow', 'Follow', 0, 1, 1, 'level'), knob('slew', 'Slew', 0, 4, 0.8), knob('margin', 'Margin', 0, 1, 0.15)],
-  [
-    { id: 'in', label: 'In', type: 'light', polymorphic: CAMERA_TYPES },
-    { id: 'x', label: 'Centre across', type: 'value', normal: { module: 'flame', port: 'x' } },
-    { id: 'y', label: 'Centre up', type: 'value', normal: { module: 'flame', port: 'y' } },
-    { id: 'size', label: 'Size', type: 'value', normal: { module: 'flame', port: 'size' } },
-  ],
-  [{ id: 'out', label: 'Out', type: 'light', polymorphic: CAMERA_TYPES }],
+  [knob('x', 'Across', -1, 1, 0), knob('y', 'Up', -1, 1, 0), knob('scale', 'Scale', 0.25, 4, 1), knob('rotate', 'Turn', -1, 1, 0)],
+  [{ id: 'in', label: 'In', type: 'light', polymorphic: TRANSFORM_TYPES }],
+  [{ id: 'out', label: 'Out', type: 'light', polymorphic: TRANSFORM_TYPES }],
 );
 
-export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, CAMERA];
+export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;

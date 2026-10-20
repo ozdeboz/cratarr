@@ -18,7 +18,7 @@ const typeOf = (t: string) => chainTypeOf(t) ?? extra.get(t);
 test('the nine devices', () => {
   assert.deepEqual(
     DEVICES.map((d) => d.label),
-    ['Feedback Tunnel', 'Kick', 'Breather', 'Wanderer', 'Bloom', 'Scope', 'Grid Particles', 'Echo Trails', 'Fractal Spiral'],
+    ['Feedback Tunnel', 'Kick', 'Breather', 'Wanderer', 'Bloom', 'Scope', 'Grid Particles', 'Echo Trails', 'Fractal Spiral', 'Camera'],
   );
 });
 

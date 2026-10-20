@@ -160,4 +160,29 @@ export const DEVICES: readonly Device[] = [
       macro('depth', 'Depth', 0.6, [{ module: 'keep', knob: 'amount', from: 0.4, to: 0.9 }]),
     ]);
   })(),
+  // The Camera (the owner: a Transform, and the camera a device of it): where the Flame is and how big, followed
+  // slowly by Envelope Followers, into a Transform's position and scale. Cable the Flame's centre and size in.
+  device(
+    'camera',
+    'Camera',
+    [
+      m('fx', 'envelope', { attack: 0.8, release: 0.8, intensity: 1 }),
+      m('fy', 'envelope', { attack: 0.8, release: 0.8, intensity: 1 }),
+      m('fsize', 'envelope', { attack: 0.8, release: 0.8, intensity: 1 }),
+      m('move', 'transform', { x: 0, y: 0, scale: 1, rotate: 0 }),
+    ],
+    [c('fx', 'out', 'move', 'x', -1), c('fy', 'out', 'move', 'y', -1), c('fsize', 'out', 'move', 'scale', -0.5)],
+    [port('picture', 'Picture', 'move', 'in'), port('x', 'Centre across', 'fx', 'in'), port('y', 'Centre up', 'fy', 'in'), port('size', 'Size', 'fsize', 'in')],
+    [port('picture', 'Picture', 'move', 'out')],
+    [
+      macro('slew', 'Slew', 0.2, [
+        { module: 'fx', knob: 'attack', from: 0.1, to: 4 },
+        { module: 'fx', knob: 'release', from: 0.1, to: 4 },
+        { module: 'fy', knob: 'attack', from: 0.1, to: 4 },
+        { module: 'fy', knob: 'release', from: 0.1, to: 4 },
+        { module: 'fsize', knob: 'attack', from: 0.1, to: 4 },
+        { module: 'fsize', knob: 'release', from: 0.1, to: 4 },
+      ]),
+    ],
+  ),
 ];
