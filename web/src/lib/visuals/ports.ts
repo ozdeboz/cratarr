@@ -115,7 +115,11 @@ type Declared = ModuleType & { ports: Ports };
 
 /** Today's hidden behaviours as modules (0057 §3). Their knobs are what the old settings held; their ports normalled
  *  to where the behaviour reaches today. claude-5f's engine steps them; the views draw them as any other. */
-const MUSIC_KNOBS: Knob[] = [{ ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 }];
+const MUSIC_KNOBS: Knob[] = [
+  { ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 },
+  // How each row is read (0057 §7e item 10): 0 against this track's typical, 1 lately's, 2 as it is.
+  ...[...TRACK_SIGNALS, ...BAND_SIGNALS].map((s) => ({ ...knob(`reference.${s}`, `${label(s)}: reading`, 0, 2, 0, 'step'), randomize: false as const })),
+];
 
 export const MUSIC: Declared = {
   type: 'music',
@@ -131,6 +135,9 @@ export const MUSIC: Declared = {
       out('playing', 'Playing'),
       ...TRACK_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value')),
       ...BAND_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value', 6)),
+      // Each value signal's slow form (the speed a cable no longer says).
+      ...TRACK_SIGNALS.filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => out(`${s}:slow`, `${label(s)} (slow)`)),
+      ...BAND_SIGNALS.filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => out(`${s}:slow`, `${label(s)} (slow)`, 'value', 6)),
     ],
   },
 };
@@ -235,6 +242,8 @@ export const ADSR = declared(
     // is (1, the textbook's).
     { ...knob('retrigger', 'Retrigger', 0, 1, 0, 'step'), randomize: false },
     knob('amount', 'Amount', 0, 1, 1, 'level'),
+    // How it reads a strike's strength (READINGS): the reading its gate's cable had.
+    { ...knob('reference', 'Reading', 0, 2, 0, 'step'), randomize: false },
   ],
   [{ id: 'gate', label: 'Gate', type: 'trigger', channels: 6 }],
   [out('out', 'Out', 'value', 6)],
@@ -282,7 +291,9 @@ export const SHOW_PARTS: readonly { knob: string; type: string; label: string; p
 export function showPartTypes(show: ModuleType): Declared[] {
   return SHOW_PARTS.map(({ knob: id, type, label: name, polymorphic }) => {
     const k = show.knobs.find((x) => x.id === id);
-    const knobs = k ? [k] : [];
+    // Tone map's Level (0057 §7e item 6): the whole picture's brightness as a fader, 1 as set; the pause dims it
+    // through its gain.
+    const knobs = [...(k ? [k] : []), ...(type === 'tonemap' ? [knob('level', 'Level', 0, 1, 1, 'level')] : [])];
     const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : polymorphic ? { ...PICTURE_IN, polymorphic } : PICTURE_IN;
     return declared(type, name, 'module', knobs, [input], [polymorphic ? { ...PICTURE_OUT, polymorphic } : PICTURE_OUT]);
   });
@@ -405,14 +416,19 @@ export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOC
 
 /** A cable between typed ports. From a signal port of Music it keeps 0056's reference and speed; its `depth` is the
  *  port that scales it (undefined: normalled to the Envelope; null: unplugged). */
+/** A cable (0057 §7e item 10, the owner): its amount (a curve; the plain amount the straight one), its depth (what
+ *  scales it: undefined normalled to the Loudness's out, null none, else that port), its channel (one band, in its
+ *  ends). It only adds. How a signal is read is its Music row's; its slow form a Music output of its own. */
 export type CableV2 = {
   id: string;
-  from: PortRef & { reference?: 'track' | 'lately' | 'absolute'; speed?: 'fast' | 'slow' };
+  from: PortRef;
   to: PortRef;
   value: RouteValue;
-  mode: 'level' | 'swing';
   depth?: PortRef | null;
 };
+
+/** How a Music row reads its signal (0057, "reference per row"): against this track's typical, lately's, or as it is. */
+export const READINGS = ['track', 'lately', 'absolute'] as const;
 
 export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
 

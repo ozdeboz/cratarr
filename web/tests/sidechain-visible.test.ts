@@ -100,7 +100,7 @@ test("open loop: each Ducker gives the lever today's sidechaining gives, the Scr
       levers = stepSidechain(sc, seen[k], { dt: DT, limits: STANDING, wild: busy.wild, activity: a.lit, budgets: true });
     }
     // Both keyed by those meters, at one activity.
-    const p = sidechained(flatten(toV2(busy)), busy.wild, activity);
+    const p = sidechained(flatten(toV2(busy, { sidechain: false })), busy.wild, activity);
     const eng = newEngine();
     const ref = newSidechain();
     const music2 = newMusicState();
@@ -162,7 +162,8 @@ test('closed loop: the visible sidechains keep the picture within its budgets as
       return { a, levers: { ...levers } };
     });
     // The visible wiring over the one engine.
-    const p = sidechained(flatten(toV2(busy)), busy.wild, false);
+    // toV2 as it ships: its own sidechain wiring (this function's, activity from the music).
+    const p = flatten(toV2(busy));
     const eng = newEngine();
     const after = outcome(t, (m, at, meters) => {
       const f = stepEngine(eng, p, {}, m, () => 0, busy, DT, { still: false, now: at * 1000, fluidFull: FLUID_FULL, meters });

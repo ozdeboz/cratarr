@@ -51,7 +51,7 @@ test('the extras come as they are: their modules, and their cables from a modula
   for (const m of calm.extra.modulators) assert.ok(ids.has(m.id), m.id);
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by['calm-size'].from, { module: 'breath', port: 'out' });
-  assert.deepEqual(by['calm-hue'].from, { module: 'music', port: 'swell', speed: 'slow' });
+  assert.deepEqual(by['calm-hue'].from, { module: 'music', port: 'swell:slow' }, 'its slow reading Music’s slow output');
   assert.deepEqual(by['calm-in'].to, { module: 'breath', port: 'in' });
   assert.deepEqual(by['calm-size'].to, { module: 'flame', port: 'zoom' }, "a cable into Show's size goes into the Flame's zoom");
   assert.deepEqual(by['calm-saturation'].to, { module: 'show', port: 'saturation' }, "Show's saturation keeps its address");
@@ -84,8 +84,10 @@ test("the bands' Linger: Music's hold and the hits' ADSR release; a hits route f
   assert.ok(!m['adsr-drums'], 'no ADSR where no cable needs one');
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by[routeKey('hits', 2, 'lights')].from, { module: 'adsr', port: 'out', channel: 2 });
-  assert.deepEqual(by['adsr-gate'].from, { module: 'music', port: 'hits', reference: 'absolute' });
-  assert.deepEqual(by[routeKey('level', 1, 'hue')].from, { module: 'music', port: 'level', channel: 1, reference: 'absolute' });
+  assert.deepEqual(by['adsr-gate'].from, { module: 'music', port: 'hits' });
+  assert.equal(m.adsr.knobs.reference, 2, 'the ADSR reads its strikes as the routes did');
+  assert.deepEqual(by[routeKey('level', 1, 'hue')].from, { module: 'music', port: 'level', channel: 1 });
+  assert.equal(m.music.knobs['reference.level'], 2, 'the row read as it is, as routes read it');
 });
 
 test("an extra cable from the hits keeps its reading: its own ADSR, the gate reading against the track's typical", () => {
@@ -96,7 +98,8 @@ test("an extra cable from the hits keeps its reading: its own ADSR, the gate rea
   const v = toV2(s);
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by['pulse-kick-in'].from, { module: 'adsr-track', port: 'out', channel: 1 });
-  assert.deepEqual(by['adsr-track-gate'].from, { module: 'music', port: 'hits', reference: 'track' });
+  assert.deepEqual(by['adsr-track-gate'].from, { module: 'music', port: 'hits' });
+  assert.equal(v.modules.find((x) => x.id === 'adsr-track')!.knobs.reference, 0, 'reading against the track’s typical');
   assert.deepEqual(by[routeKey('hits', 0, 'lights')].from, { module: 'adsr', port: 'out', channel: 0 }, 'the route through the absolute one');
 });
 
