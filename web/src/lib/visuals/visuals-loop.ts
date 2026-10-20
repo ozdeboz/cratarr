@@ -30,7 +30,7 @@ import { SETTING_KNOB } from './patch';
 import { isDevice, RANDOMIZE_SCOPES, type PatchV2 } from './ports';
 import { precheckingPatch, type Checked } from './precheck';
 import { ceilingOf } from './quality';
-import { FlameRenderer, type Extras } from './render';
+import { FlameRenderer, type PictureInputs } from './render';
 import { A, B, MOMENT_ASPECTS, T } from './routes';
 import { FLUID_FULL, RANGES, type VisualSettings } from './settings.svelte';
 import { signalsOf } from './signals';
@@ -193,9 +193,10 @@ export class VisualsLoop {
     let cover: { key: string; colours: PaletteColour[] | null } | null = null;
     let fire = 0;
     let key: string | null | undefined;
+    let looked = false;
 
     // Values moving in after a roll or a new track's look (the one morph, 0057): each knob from where it was to where
-    // the roll put it, over the blend (its steps at once).
+    // the roll put it, over the blend; a step at once, and the Flame's look as a flame blends (`from` → `to`).
     let easing: { from: Randomized; to: Randomized; start: number; ms: number } | null = null;
     const ease = (flat: PatchV2, now: number) => {
       if (!easing) return;
@@ -215,9 +216,15 @@ export class VisualsLoop {
     const apply = (values: Randomized, cables: Record<string, PatchV2['cables'][number]['value']>, ms: number, edit: boolean, now: number) => {
       const flat = live.update(host.store.patch);
       const fromValues: Randomized = {};
+      const toValues: Randomized = {};
       for (const [id, knobs] of Object.entries(values)) {
         const m = flat.modules.find((x) => x.id === id);
-        if (m) fromValues[id] = Object.fromEntries(Object.keys(knobs).map((k) => [k, m.knobs[k]]));
+        if (!m || m.type === 'flame') continue;
+        const t = host.types[m.type];
+        const eased = Object.keys(knobs).filter((k) => t?.knobs.find((x) => x.id === k.replace(/\.\d+$/, ''))?.kind !== 'step');
+        if (!eased.length) continue;
+        fromValues[id] = Object.fromEntries(eased.map((k) => [k, m.knobs[k]]));
+        toValues[id] = Object.fromEntries(eased.map((k) => [k, knobs[k]]));
       }
       const f = (p: PatchV2) => {
         applyKnobs(p, values);
@@ -225,7 +232,7 @@ export class VisualsLoop {
       };
       if (edit) host.store.change(f, 'dice');
       else host.store.perform(f);
-      easing = ms > 0 ? { from: fromValues, to: values, start: now, ms } : null;
+      if (ms > 0) easing = { from: fromValues, to: toValues, start: now, ms };
     };
 
     // A roll being worked out, over frames (the flame's survey yields): a new track's (the patch's Dice: a performance)
@@ -335,11 +342,7 @@ export class VisualsLoop {
       }
 
       const m = musicNow(now, how.lighting, flat.modules.some((x) => x.type === 'waves'));
-      if (m.key !== key) {
-        // A new track: its look blends in (the first shows at once), as the patch's Dice roll it.
-        nextBlend = key === undefined ? 0 : BLEND_MS;
-        key = m.key;
-      }
+      key = m.key;
       // The dice the owner tapped: a roll over its scope, checked against the track, as an edit.
       if (this.#rollWanted && !rolling) {
         rolling = rollOf(Math.floor(Math.random() * 0x100000000), this.#rollWanted, m.key ? { key: m.key, position: m.position } : null);
@@ -411,7 +414,9 @@ export class VisualsLoop {
       for (const r of stepped.dice) {
         if (rolling) break;
         rolling = rollOf(r.seed, r.scope, null);
-        rollingAs = { edit: false, ms: key === undefined ? 0 : BLEND_MS };
+        // The first look shows at once; each next one blends in over a new track's time.
+        rollingAs = { edit: false, ms: looked ? BLEND_MS : 0 };
+        looked = true;
         lookCame = 'track';
       }
       // The moments: the chain's steps moved on (the same on every device for the track and beat), a performance.
@@ -537,14 +542,18 @@ export class VisualsLoop {
       });
 
       // The layers past the flame and the picture's own loop: the compositor's, from the patch (setPatch), each
-      // module's knobs as the engine moves them.
-      const extras: Extras | null = this.extrasOf(stepped, flat, { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null });
+      // module's knobs as the engine moves them; where a roll is easing in, where each knob is going.
+      const inputs: PictureInputs = {
+        knobs: (id) => stepped.knobs[id],
+        target: (id, knob) => easing?.to[id]?.[knob] ?? stepped.knobs[id]?.[knob] ?? flat.modules.find((x) => x.id === id)?.knobs[knob] ?? 0,
+        frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
+      };
       renderer.frame(
         passes,
         chainNow(d, { how, levers, still, ceiling: device.brightness, coverage: frame ? frame.coverage : null, fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
         w,
         h,
-        extras,
+        inputs,
       );
       renderer.measure(w, h, now / 1000);
       const stats: Omit<FrameStats, 'tiles'> = {
@@ -638,15 +647,6 @@ export class VisualsLoop {
       renderer?.dispose();
       stopMusic();
     };
-  }
-
-  /** What the compositor is given beside the patch (render.ts Extras): the modules' knobs as the engine moves them.
-   *  Its exact shape is claude-632's to settle (the one compose walk over the v2 graph). */
-  private extrasOf(stepped: EngineFrame, flat: PatchV2, frame: Extras['frame']): Extras | null {
-    void stepped;
-    void flat;
-    void frame;
-    return null;
   }
 }
 
