@@ -420,6 +420,13 @@ what a modular system does:
 9. **Accent, not Flash.** The course-and-swing filter is renamed Accent, so "flash" means only the Screen's flash
    guard.
 
+10. **A cable is amount, depth and channel** (the owner: "yes, amount, depth, channel. and most definitely amount as
+    a curve"). Its amount is a curve (the plain amount the straight one); its depth what scales it (normalled to the
+    Envelope); its channel one band of a polyphonic source. Everything else leaves the wire: its mode (item 1), its
+    walk (item 5), its speed (Music gives a slow output beside each signal, `<signal>:slow`, or a Slow follower does
+    it), and its reading (a reference a Music row, item 8: how a signal is read is settled at its source, not per
+    wire).
+
 Kept on purpose, documented: reduced motion (the system's accessibility setting, as the flash guard is safety), and
 each module's own inner maths (the flame's parts and light ranges).
 

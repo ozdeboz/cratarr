@@ -181,7 +181,7 @@ const gate = define(
     knob('lift', 'Lift', 0, 2, 0, 0.3),
     knob('recover', 'Recover', 0, 4, 0, 0.5),
     knob('release', 'Release', 0, 2, 0, 0.1),
-    knob('gap', 'Gap', 0, 10, 0, 0),
+    { ...knob('gap', 'Gap', 0, 10, 0, 0), time: true },
     AMOUNT,
   ],
   IN,

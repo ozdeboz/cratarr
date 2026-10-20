@@ -23,6 +23,10 @@ export type Knob = {
   busy?: Busy;
   /** A polyphonic knob (0057 §4b): one value a channel, kept as `<id>.<channel>` among its module's knobs. */
   channels?: number;
+  /** A time (seconds): its gain stretches it (set ÷ gain), as a time CV does (0057 §7e). */
+  time?: boolean;
+  /** Never rolled by Randomize (VCV's randomizeEnabled off): a choice of how, not a value. */
+  randomize?: false;
   /** false: Randomize leaves it (VCV's randomizeEnabled), for a knob that is a choice of how, not a value. */
   randomize?: false;
 };
@@ -274,7 +278,8 @@ export function cratarrTypes(ranges: Record<string, [number, number]>, defaults:
   add('frame', knob('lookWalk', LABELS.lookWalk, [0, 1], 0, 'swing', 0));
   add('frame', knob('behaviourWalk', LABELS.behaviourWalk, [0, 1], 0, 'swing', 0));
   for (const key of BAND_KNOBS)
-    for (let b = 0; b < BANDS; b++) add('flame', knob(`${key}.${b}`, `${BAND_LABEL[key]} ${b + 1}`, ranges[key], defaults[key][b], 'swing', defaults[key][b]));
+    for (let b = 0; b < BANDS; b++)
+      add('flame', { ...knob(`${key}.${b}`, `${BAND_LABEL[key]} ${b + 1}`, ranges[key], defaults[key][b], 'swing', defaults[key][b]), ...(key === 'evolution' ? { time: true } : {}) });
   const type = (id: string, label: string, place: Place): ModuleType => ({ type: id, label, place, knobs: byModule.get(id) ?? [] });
   return [
     type('frame', 'Whole frame', 'frame'),

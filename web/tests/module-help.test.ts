@@ -7,12 +7,12 @@ import assert from 'node:assert/strict';
 const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts');
 const { cratarrTypes } = await import('../src/lib/visuals/patch.ts');
 const { EXTRA_TYPES } = await import('../src/lib/visuals/registry.ts');
-const { ENGINE_MODULES, GRAPH_MODULES, polyKnobs, portsOf, showPartTypes } = await import('../src/lib/visuals/ports.ts');
+const { ENGINE_MODULES, GRAPH_MODULES, PICTURE_MODULES, polyKnobs, portsOf, showPartTypes } = await import('../src/lib/visuals/ports.ts');
 const { HELP } = await import('../src/lib/visuals/help.ts');
 const { HELP_KEY, PLAIN, helpFor, isPlain, moduleHelp, portHelp } = await import('../src/lib/visuals/module-help.ts');
 
 const chain = cratarrTypes(RANGES, DEFAULTS);
-const all = [...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...showPartTypes(chain.find((t) => t.type === 'show')!)];
+const all = [...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...PICTURE_MODULES, ...showPartTypes(chain.find((t) => t.type === 'show')!)];
 const types = new Map(all.map((t) => [t.type, t]));
 /** Every id a type has a port or a knob by (a polyphonic knob once). */
 const idsOf = (type: string) => {
