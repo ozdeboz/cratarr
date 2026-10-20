@@ -324,7 +324,7 @@ function toWire(given: Module[], all: Wire[]): { modules: Module[]; cables: Cabl
  *  - `addOnly` (default true): cables only add (0057 §7e); false gives the patch before that step, for the proof.
  *  - `sidechain` (default true): the sidechain in sight; false leaves it out, for the proof.
  *  - `limits`: the limits as learned (the app's `limitsNow`), frozen into the Duckers; else the defaults. */
-export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: boolean; limits?: Partial<Record<Budgeted, number>>; devices?: boolean } = {}): PatchV2 {
+export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: boolean; limits?: Partial<Record<Budgeted, number>>; devices?: boolean; follow?: boolean } = {}): PatchV2 {
   const p = cratarrPatch(s);
   // Drift is Random now (its smooth end: Shape 0), as VCV, Vital and Bitwig name it (the owner).
   const modules: Module[] = [...modulesOf(p).values()].map((m) => (m.type === 'drift' ? { ...m, type: 'random', knobs: { ...m.knobs, shape: 0 } } : { ...m, knobs: { ...m.knobs } }));
@@ -457,16 +457,63 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const macros: Macro[] = [...effects.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
   const wired = toWire(added.modules, added.cables);
   const rack: PatchV2 = { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: effects.pins };
-  return opts.devices === false ? rack : packed(rack);
+  // The loudness's VCAs in sight (`follow`): off until the engine reads a cable through one as it read the normal.
+  const follows = opts.follow ? followed(rack) : rack;
+  return opts.devices === false ? follows : packed(follows);
 }
 
 /** The common patterns as devices (0057 §7f: "common patterns that replace removed special cases ship as ready-made
  *  devices"): the sidechain's Duckers and their activity VCAs as Calm, the pause's dimming as Pause Dim, the hits'
  *  envelopes as Hit Lights. Each opens to its modules and can be unmade. */
+/** The loudness scaling every cable, in sight (0057 §7f): where a cable's depth was the Envelope Follower's by its
+ *  normal, it goes through a VCA keyed by the Follower instead (gain 0, its gain input the Follower's out: in × out).
+ *  Straight cables from one source share one VCA after it, their amounts on its cables out; a curved one gets its own
+ *  after its curve (the owner: curved cables kept exact). The Follower is the Loudness: the first with no input cabled.
+ *  Then no cable is scaled by a normal: every depth is cabled or none. */
+function followed(p: PatchV2): PatchV2 {
+  const follower = p.modules.find((m) => m.type === 'envelope' && !p.cables.some((c) => c.to.module === m.id && c.to.port === 'in'));
+  if (!follower || !p.cables.some((c) => c.depth === undefined && !c.id.startsWith('picture:'))) return p;
+  // Ahead of every other module: the engine steps its VCAs in the rack's order, and these feed the rest this frame.
+  const follows: Module[] = [];
+  const cables: CableV2[] = [];
+  const shared = new Map<string, string>();
+  let n = 0;
+  const vca = (): string => {
+    const id = `follow-${++n}`;
+    follows.push({ id, type: 'vca', knobs: { gain: 0 } });
+    cables.push({ id: `${id}-key`, from: { module: follower.id, port: 'out' }, to: { module: id, port: 'cv' }, value: 1, depth: null });
+    return id;
+  };
+  for (const c of p.cables) {
+    // A picture's cable (picture-wiring.ts) is no value scaled.
+    if (c.depth !== undefined || c.id.startsWith('picture:')) {
+      cables.push(c);
+      continue;
+    }
+    const channel = c.from.channel !== undefined ? { channel: c.from.channel } : {};
+    if (typeof c.value === 'number') {
+      const key = `${c.from.module}.${c.from.port}.${c.from.channel ?? ''}`;
+      let id = shared.get(key);
+      if (!id) {
+        id = vca();
+        shared.set(key, id);
+        cables.push({ id: `${id}-in`, from: c.from, to: { module: id, port: 'in' }, value: 1, depth: null });
+      }
+      cables.push({ ...c, from: { module: id, port: 'out', ...channel }, depth: null });
+    } else {
+      const id = vca();
+      cables.push({ id: `${id}-in`, from: c.from, to: { module: id, port: 'in' }, value: c.value, depth: null });
+      cables.push({ ...c, from: { module: id, port: 'out', ...channel }, value: 1, depth: null });
+    }
+  }
+  return { ...p, modules: [...follows, ...p.modules], cables };
+}
+
 function packed(p: PatchV2): PatchV2 {
   const ids = (f: (m: Module) => boolean) => p.modules.filter(f).map((m) => m.id);
   makeDevice(p, ids((m) => m.id.startsWith('duck-')), { id: 'calm', label: 'Calm' });
   makeDevice(p, ids((m) => m.id.startsWith('pause-')), { id: 'pause', label: 'Pause Dim' });
+  makeDevice(p, ids((m) => m.id.startsWith('follow-')), { id: 'loudness-follow', label: 'Loudness Follow' });
   makeDevice(p, ids((m) => m.type === 'adsr' && m.id !== NEWTRACK), { id: 'hit-lights', label: 'Hit Lights' });
   return p;
 }
