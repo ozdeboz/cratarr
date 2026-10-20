@@ -238,6 +238,17 @@ test('music per signal: which signal a module gives, a new one, the hub split, e
   assert.ok(next.modules.some((m) => m.id === 'beat-1') && next.cables.some((c) => c.from.module === 'beat-1' && c.to.port === 'amount'));
 });
 
+test('every picture cable of today’s settings (toV2, its picture side wired) is a drawn edge, as is the lab’s', () => {
+  const p = toV2(DEFAULTS) as PatchV2;
+  const pic = p.cables.filter((c) => c.id.startsWith('picture:'));
+  assert.ok(pic.length >= 5, `picture cables: ${pic.length}`);
+  const g = graphOfV2({ patch: p, types: labTypes });
+  assert.deepEqual(pic.filter((c) => !g.edges.some((e) => e.id === c.id)).map((c) => c.id), []);
+  assert.ok(pic.every((c) => ['wire'].includes(g.edges.find((e) => e.id === c.id)!.type!)), 'each a picture’s (or light’s) wire');
+  const lab2 = lab.labV2();
+  assert.equal(lab2.cables.filter((c) => c.id.startsWith('picture:')).length, pic.length, 'the lab’s default as the app’s');
+});
+
 test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tension)(150 + length)', () => {
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 1), { x: 50, y: 0 });
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5), { x: 50, y: 125 });
