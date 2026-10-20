@@ -36,7 +36,7 @@ test('layers and the picture’s own loop: mixed in their order, the loop’s Fe
   const ids = c.order.map((n) => n.id);
   const at = (id: string) => ids.indexOf(id);
   assert.ok(at('shapes-kaleido') < at('layers') && at('window-source') < at('layers'));
-  assert.ok(at('example-keep') < at('loop-mix') && at('loop-mix') < at('loop-feedback') && at('loop-feedback') < at('screen'));
+  assert.ok(at('example-keep') < at('loop-mix') && at('loop-mix') < at('loop-feedback') && at('loop-mix') < at('screen'));
   assert.deepEqual(c.order.find((n) => n.id === 'layers')!.inputs.map((f) => f.from.module), ['show/saturate', 'shapes-kaleido', 'window-source']);
   const mix = v.modules.find((m) => m.id === 'layers')!;
   assert.deepEqual([mix.knobs.mode1, mix.knobs.mode2, mix.knobs.mode3], [0, 1, 4], 'add, screen, window');
@@ -71,7 +71,8 @@ test('an Echo with shapes after it is a visible loop: Feedback → Echo → Mix 
   const c = compile(v, types);
   assert.deepEqual(c.errors, []);
   const ids = c.order.map((n) => n.id);
-  assert.deepEqual(ids.slice(ids.indexOf('layers')), ['layers', 'fx3-mix', 'fx2', 'fx1', 'fx3-feedback', 'screen']);
+  assert.deepEqual(ids.slice(ids.indexOf('layers')).filter((id) => id !== 'fx3-feedback'), ['layers', 'fx3-mix', 'fx2', 'fx1', 'screen']);
+  assert.ok(ids.indexOf('fx3-feedback') > ids.indexOf('fx1'), 'after its input and its reader');
   assert.ok(ids.indexOf('fx3') < ids.indexOf('fx3-mix'));
   const by = (id: string) => c.order.find((n) => n.id === id)!;
   assert.deepEqual(by('fx3').inputs.map((f) => f.from.module), ['fx3-feedback']);

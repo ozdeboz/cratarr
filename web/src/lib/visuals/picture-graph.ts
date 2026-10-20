@@ -115,7 +115,10 @@ export const LIGHT_ROLES = {
 
 /** The picture graph of `patch` (its devices opened): what reaches the Screen, in order. */
 export function compile(patch: PatchV2, typeOf: TypeOf): Compiled {
-  const p = flatten(patch);
+  const flat = flatten(patch);
+  // A module given twice (the same id and type: the conversion's sidechain and the wiring both add the Screen) is one.
+  const seen = new Set<string>();
+  const p = { ...flat, modules: flat.modules.filter((m) => !seen.has(`${m.id}:${m.type}`) && !!seen.add(`${m.id}:${m.type}`)) };
   const errors: string[] = [];
   const byId = new Map(p.modules.map((m) => [m.id, m]));
   const ports = new Map<string, Ports>();
