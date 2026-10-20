@@ -11,6 +11,9 @@ import defaultPatch from './presets/default.json' with { type: 'json' };
 import zanzibar from './presets/entrance-to-zanzibar.json' with { type: 'json' };
 import glitch from './presets/glitch-adventure.json' with { type: 'json' };
 
+/** The modules every rack has. */
+export const FIXED = ['music', 'meter', 'screen'] as const;
+
 export type Preset = { id: string; label: string; line: string; patch: () => PatchV2 };
 
 const saved = (id: string, label: string, line: string, p: unknown): Preset => ({ id, label, line, patch: () => structuredClone(p as PatchV2) });
@@ -25,5 +28,11 @@ export const PRESETS: readonly Preset[] = [
     line: c.line,
     patch: () => toV2({ ...structuredClone(DEFAULTS), ...(c.settings ?? {}), routes: chainRoutes(c, BANDS), extra: structuredClone(c.extra) } as VisualSettings),
   })),
-  { id: 'scratch', label: 'Start from scratch', line: 'Nothing: add a source', patch: () => ({ v: 2, modules: [], cables: [], macros: [], pins: [] }) },
+  // Nothing but what every rack has (0057): Music, the Meter, the Screen (its flash guard, never removed).
+  {
+    id: 'scratch',
+    label: 'Start from scratch',
+    line: 'Nothing: add a source',
+    patch: () => ({ v: 2, modules: FIXED.map((type) => ({ id: type, type, knobs: {} })), cables: [], macros: [], pins: [] }),
+  },
 ];

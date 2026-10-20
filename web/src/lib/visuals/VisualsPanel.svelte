@@ -186,6 +186,19 @@
   {/if}
 
   {#if !path.length}
+    {#if patch.macros.some((m) => (m as { on?: string }).on === 'rack')}
+      <div class="rows">
+        <h3>Rack</h3>
+        {#each patch.macros.filter((m) => (m as { on?: string }).on === 'rack') as x (x.id)}
+          {@const v = (x as { value: number }).value}
+          <label class="row">
+            <span>{(x as { label: string }).label}</span>
+            <input type="range" min="0" max="1" step="0.01" value={v} oninput={(e) => edit({ kind: 'macro', scope: [], id: x.id, value: Number(e.currentTarget.value) })} />
+            <output>{percent(v)}</output>
+          </label>
+        {/each}
+      </div>
+    {/if}
     <div class="rows">
       <h3>Preset</h3>
       {@render goRow(presets.find((p) => p.id === preset)?.label ?? 'Your own', presets.find((p) => p.id === preset)?.line ?? 'Changed since a preset was chosen', 'presets')}
@@ -281,7 +294,7 @@
         {/if}
         <div class="rows">
           <button class="go" onclick={() => onrandomize({ module: at })}><span class="name">Randomize</span></button>
-          <button class="go danger" onclick={() => (edit({ kind: 'removeModule', scope, id: m.id }), back())}><span class="name">Remove</span></button>
+          {#if m.type !== 'screen'}<button class="go danger" onclick={() => (edit({ kind: 'removeModule', scope, id: m.id }), back())}><span class="name">Remove</span></button>{/if}
         </div>
       {/if}
     {/if}

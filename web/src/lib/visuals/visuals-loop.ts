@@ -347,7 +347,7 @@ export class VisualsLoop {
         rebuildsSeen = live.rebuilds;
         try {
           renderer.setPatch(patch, host.pictureTypes);
-          if (renderer.errors.length) console.warn('Visuals:', renderer.errors);
+          if (renderer.errors.length) console.warn(`Visuals: ${renderer.errors.join(' · ')}`);
         } catch (e) {
           console.warn('Visuals: the patch could not be drawn as a graph', e);
         }

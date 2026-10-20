@@ -14,20 +14,28 @@ export type PanelEdit =
   | { kind: 'reroute'; scope: string[]; id: string; end: 'from' | 'to'; to: PortRef }
   | { kind: 'removeModule'; scope: string[]; id: string }
   | { kind: 'pinOne'; scope: string[]; pin: string; on: boolean }
-  | { kind: 'addDevice'; scope: string[]; device: Device };
+  | { kind: 'addDevice'; scope: string[]; device: Device }
+  | { kind: 'macro'; scope: string[]; id: string; value: number };
 
 /** The store's key for an edit: a knob's turns, a cable's curve drawn, one undo step each. */
 export function panelKey(e: PanelEdit): string | null {
   if (e.kind === 'knob') return `knob:${e.module.join('/')}.${e.knob}`;
+  if (e.kind === 'macro') return `macro:${[...e.scope, e.id].join('/')}`;
   if (e.kind === 'cable') return `cable:${[...e.scope, e.id].join('/')}`;
   return null;
 }
 
 /** An edit applied to `p` in place, and `p`. */
 export function applyPanel(p: PatchV2, e: PanelEdit, types?: Record<string, ModuleType>): PatchV2 {
-  if (e.kind !== 'cable' && e.kind !== 'reroute' && e.kind !== 'removeModule' && e.kind !== 'pinOne' && e.kind !== 'addDevice') return applyV2(p, e, types);
+  if (e.kind !== 'cable' && e.kind !== 'reroute' && e.kind !== 'removeModule' && e.kind !== 'pinOne' && e.kind !== 'addDevice' && e.kind !== 'macro') return applyV2(p, e, types);
   const inside = patchAt(p, e.scope);
   if (!inside) return p;
+  if (e.kind === 'macro') {
+    // A macro of the rack (or a level's): Intensity, Flash, Speed, Wild …, 0..1.
+    const m = inside.macros.find((x) => x.id === e.id);
+    if (m) m.value = Math.min(1, Math.max(0, e.value));
+    return p;
+  }
   if (e.kind === 'addDevice') {
     // A copy, its id free at the level (`<device>`, else `<device>-2` …).
     const taken = new Set(inside.modules.map((m) => m.id));
@@ -42,6 +50,8 @@ export function applyPanel(p: PatchV2, e: PanelEdit, types?: Record<string, Modu
     return p;
   }
   if (e.kind === 'removeModule') {
+    // The Screen stays (its flash guard: 0057 §7e).
+    if (inside.modules.find((m) => m.id === e.id)?.type === 'screen') return p;
     inside.modules = inside.modules.filter((m) => m.id !== e.id);
     const gone = inside.cables.filter((c) => c.from.module === e.id || c.to.module === e.id || c.depth?.module === e.id).map((c) => c.id);
     inside.cables = inside.cables.filter((c) => !gone.includes(c.id));
