@@ -12,7 +12,7 @@
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import type { ChainNow } from './chain-params';
 import type { FrameInfo, Module, PatchExtra } from './patch';
-import { compile, composeOf, plan, STAGES, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
+import { compile, composeOf, plan, STAGES, stageOf, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
 import { fxOfModule, slotOf, type Fx } from './nodes/effect-runs';
 import { MIX_MODES, type PatchV2 } from './ports';
 import { flatten } from './v2';
@@ -28,6 +28,7 @@ import { Meter } from './nodes/meter';
 import { FlamePoints } from './nodes/points';
 import { Screen } from './nodes/screen';
 import { Thumbs } from './nodes/thumbs';
+import { chain, IDENTITY, transformOf } from './transform';
 import { Show } from './nodes/show';
 
 /** Everything the nodes read in a frame, as one (the frozen renderer's look; chain-params.ts groups it by node). */
@@ -131,6 +132,8 @@ export class FlameRenderer {
   /** Whether the lazy rules cut the flame last frame; whether the last frame was blank. */
   private cut = false;
   private blanked = false;
+  /** The Transforms on the flame's light (the points' camera's view), in order. */
+  private lightTransforms: string[] = [];
   /** The pictures this frame has of its own, by module (flattened ids), at the buffer's size: for the graph's
    *  thumbnails. */
   private pictures = new Map<string, WebGLTexture>();
@@ -203,6 +206,7 @@ export class FlameRenderer {
     this.stages = new Set(stages ?? STAGES);
     this.knobsIn = new Map(flatten(p).modules.map((m) => [m.id, m.knobs]));
     this.composed = stages ? composeOf(c) : null;
+    this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.walker?.prune(this.composed?.ids ?? new Set());
     this.pictures = new Map();
   }
@@ -295,6 +299,8 @@ export class FlameRenderer {
       // Fade what is there; with the Fluid setting, carry it along the flow as it fades, into the other set of
       // buffers (as the scrub copies), and draw on there.
       fluid = this.carry.draw(light, now!.carry, since, loop);
+      // The light's Transforms, in the patch's order: where the points land, after the camera frames the flame.
+      this.points.view = this.lightTransforms.reduce((t, id) => chain(t, transformOf(knobsAt(id), light.width / light.height)), IDENTITY);
       this.points.draw(light, now!.points, passes, since);
     }
 

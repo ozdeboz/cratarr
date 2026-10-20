@@ -58,7 +58,8 @@ const SHOWN = new Set(SHOW_PARTS.map((p) => p.type));
 export function stageOf(n: PictureNode): Stage | null {
   if (n.type === 'feedback') return null;
   if (LIGHT_CARRIERS.has(n.type) || (effectOfType(n.type) && n.inputs.some((f) => f.type === 'light'))) return 'carry';
-  if (LIGHT_ROLES.points.has(n.type)) return 'points';
+  // A Transform on the light is the points' camera's view (transform.ts): drawn as they land.
+  if (LIGHT_ROLES.points.has(n.type) || (n.type === 'transform' && n.inputs[0]?.type === 'light')) return 'points';
   if (SHOWN.has(n.type)) return 'show';
   if (n.type === 'screen') return 'screen';
   return 'compose';

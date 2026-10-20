@@ -16,10 +16,13 @@
   import { applyV2, type PickRequest, type XY } from './patchgraph';
   import { LiveFaces } from './faces.svelte';
   import { labTypes, labV2, wiresV2 } from './graph-lab';
+  import { splitMusic } from './music-signals';
 
   const query = new URLSearchParams(location.search);
   const types = labTypes();
-  let store = $state.raw(newStore(query.has('wires') ? wiresV2() : labV2()));
+  // ?split: Music's hub split into a module a signal beside what each feeds (what toV2 will do).
+  const first = query.has('wires') ? wiresV2() : labV2();
+  let store = $state.raw(newStore(query.has('split') ? splitMusic(first) : first));
   let at = $state<string[]>([]);
   let positions = $state.raw<Record<string, XY>>({});
   let openCable = $state<string | null>(null);
