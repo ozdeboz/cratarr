@@ -326,6 +326,32 @@ Bubble, Spherical, Swirl …) are the flame's final transform. They become a **L
 - The flame's own lens is a Lens cabled between the flame's points and its light, inside the Cratarr device. It can be
   unplugged, swapped, or joined by others anywhere. The conversion places it so, exact.
 
+### 4g. One set of shapes
+
+The owner (2026-10-20): "I want the same set of shapes everywhere shapes are used." Two modules work with shapes:
+Shapes (it draws them) and Lens (it sends points into them). Each had its own: Shapes the regular polygons, Lens Heart
+and Cratarr. Now one set, each shape defined once (`shape-set.ts`) and used by both:
+
+- **Regular:** polygon (3–48 sides) and star (3–48 points, a depth; depth 0 the polygon). They morph: the sides go
+  through the fractions, the depth through its range.
+- **Irregular**, a list stepped through (with `next`), never morphed:
+  - Heart and Cratarr (the logo: the record's rings and its slice, `MARK`);
+  - ring, cross, arrow, crescent, drop (the owner's pick of common symbols);
+  - the 11 forms of the warps (Spherical, Swirl, Julia, Fisheye, Eyefish, Bubble, Polar, Disc, Sinusoidal, Horseshoe,
+    Handkerchief): each the form its warp makes of a disc, as Heart's is.
+
+The owner: "a difference between morphable shapes and non-morphable shapes … two different modules":
+
+- **Regular shapes** (the Shapes module of 70, renamed): sides and depth. It also gives its **corners** as `points`,
+  so a corner fractal (Sierpinski, Koch) is standard modules: corners → Instance (a smaller copy at each) → Feedback.
+  Only regular shapes have corners; a feedback fractal (Fractal Spiral) takes any picture.
+- **Irregular shapes**: a shape knob (a step).
+- Both keep the same layout and look knobs (count on a ring, spread, orbit, spin, twist, taper, hue, outline or fill),
+  one code; they differ only in how they pick their shape.
+- **Lens stays one module** (the owner): its kind steps through the 11 warps, Polygon, Star and the irregular shapes;
+  Polygon and Star take Sides and Depth knobs. A warp kind moves points as today; a shape kind sends them into the
+  shape evenly, as the Cratarr lens does. The kinds of today keep their numbers, so every track's look stays.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
