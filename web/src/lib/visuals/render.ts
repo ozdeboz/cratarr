@@ -99,6 +99,8 @@ export class FlameRenderer {
   private stages = new Set<Stage>(STAGES);
   /** The effects' slots in the order the graph draws them (one module each: fx1 → 0). */
   private fxOrder: number[] = [0, 1, 2];
+  /** The slots whose Echo is fed back the line's own finished picture (Feedback → Echo → Mix). */
+  private fxLooped = new Set<number>();
   errors: string[] = [];
   /** The context, for what draws beside the flame (the compositor). */
   get context(): WebGL2RenderingContext {
@@ -168,6 +170,7 @@ export class FlameRenderer {
     this.stages = new Set(stages ?? STAGES);
     const fx = c.order.filter((n) => /^fx\d$/.test(n.id)).map((n) => Number(n.id.slice(2)) - 1);
     this.fxOrder = stages && fx.length ? fx : [0, 1, 2];
+    this.fxLooped = new Set(stages ? c.order.filter((n) => /^fx\d$/.test(n.id) && n.inputs.some((f) => f.from.module === `${n.id}-feedback`)).map((n) => Number(n.id.slice(2)) - 1) : []);
   }
 
 
@@ -252,7 +255,7 @@ export class FlameRenderer {
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where a
     // chain of effects is set, into the picture at the buffer's size, for the chain's pass to finish.
     const fx = now.effects;
-    const chain = this.stages.has('effects') && fx ? effectRuns(this.fxOrder, fx.ids, fx.amounts).flatMap((ids) => {
+    const chain = this.stages.has('effects') && fx ? effectRuns(this.fxOrder, fx.ids, fx.amounts, this.fxLooped).flatMap((ids) => {
       const p = this.fin.chainFor({ ...fx, ids }, this.clocks);
       return p ? [{ p, ids }] : [];
     }) : [];

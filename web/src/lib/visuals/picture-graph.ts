@@ -62,15 +62,17 @@ export function stagesOf(c: Compiled): Stage[] | null {
     if (LIGHT_ROLES.points.has(n.type)) return 'points';
     if (SHOWN.has(n.type)) return 'show';
     if (n.type === 'screen') return 'screen';
-    // Today's effects keep their ids (v2.ts): the finish's slots.
-    if (/^fx\d$/.test(n.id)) return 'effects';
+    // Today's effects keep their ids (v2.ts): the finish's slots, and an Echo's own loop (its Mix).
+    if (/^fx\d(-mix)?$/.test(n.id)) return 'effects';
     return 'compose';
   };
   const out: Stage[] = [];
   let at = 0;
+  const feedback = new Set(c.order.filter((n) => n.type === 'feedback').map((n) => n.id));
   for (const n of c.order) {
     const s = stage(n);
-    if (!s) continue;
+    // What reads only last frame's pictures is drawn in the pass that reads it (an Echo in its loop).
+    if (!s || (n.inputs.length && n.inputs.every((f) => feedback.has(f.from.module)) && s === 'effects')) continue;
     const i = STAGES.indexOf(s);
     if (i < at) return null;
     at = i;
@@ -81,15 +83,16 @@ export function stagesOf(c: Compiled): Stage[] | null {
 
 /** The effects (today's slots, `order` as the graph draws them) as fused runs this frame: each its slots' `ids` (the
  *  others none), drawn in one pass. A run ends at an Echo that shows, so its trail is its own, not what the shapes
- *  after it make of it. */
-export function effectRuns(order: readonly number[], ids: readonly number[], amounts: readonly number[]): number[][] {
+ *  after it make of it; one in a loop of the line's own finished picture (`looped`: Feedback → Echo → Mix) runs on,
+ *  that loop drawn in the pass (its last picture the pass's own). */
+export function effectRuns(order: readonly number[], ids: readonly number[], amounts: readonly number[], looped: ReadonlySet<number> = new Set()): number[][] {
   const runs: number[][] = [];
   let run = ids.map(() => 0);
   let any = false;
   for (const k of order) {
     run[k] = ids[k] ?? 0;
     any = true;
-    if (effectOf(run[k])?.kind === 'echo' && (amounts[k] ?? 0) > 0) {
+    if (effectOf(run[k])?.kind === 'echo' && (amounts[k] ?? 0) > 0 && !looped.has(k)) {
       runs.push(run);
       run = ids.map(() => 0);
       any = false;
