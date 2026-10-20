@@ -38,9 +38,12 @@ export type KnobView = {
    *  knob's own `value` and `at` their mean. */
   channels?: { id: string; value: number; at: number }[];
   /** A step knob's `<id>:next` trigger (0057 §7e), drawn as a small diamond beside it; a level knob's `<id>:gain`
-   *  input (§7e), a small dot beside it. */
+   *  input (§7e), a small dot beside it; `nextOn`/`gainOn` where a cable is in it (else shown only on the node in
+   *  focus, so a panel of knobs is not strewn with them). */
   next?: boolean;
   gain?: boolean;
+  nextOn?: boolean;
+  gainOn?: boolean;
 };
 
 export type ModuleData = {
@@ -397,7 +400,10 @@ export function knobViews(
   // Shown in the type's order, cabled or not.
   const knobs: KnobView[] = shown.map((k) => {
     const ring = (at: number) => ringOf(at, own(k).flatMap(o.cablesInto));
-    const beside = { ...(hasNext(k) ? { next: true } : {}), ...(hasGain(k) ? { gain: true } : {}) };
+    const beside = {
+      ...(hasNext(k) ? { next: true, ...(o.cabled(nextPort(k.id)) ? { nextOn: true } : {}) } : {}),
+      ...(hasGain(k) ? { gain: true, ...(o.cabled(gainPort(k.id)) ? { gainOn: true } : {}) } : {}),
+    };
     if (!k.channels) {
       const value = m.knobs[k.id] ?? k.default;
       return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...beside };
@@ -473,6 +479,25 @@ export function fitPortrait(nodes: GraphNode[], size: (n: GraphNode) => Size, vi
   place(best.most, true);
 }
 
+/** A knob's step or gain jack with a cable on it is on (shown), wherever the cable is kept (one led in through a
+ *  device's port too). */
+export function withJacksOn(nodes: GraphNode[], edges: GraphEdge[]) {
+  const on = new Set(edges.map((e) => `${e.target}|${e.targetHandle}`));
+  for (const n of nodes) {
+    if (n.data.kind !== 'module') continue;
+    const d = n.data;
+    if (!d.knobs.some((k) => (k.next && !k.nextOn && on.has(`${n.id}|${knobHandle(nextPort(k.id))}`)) || (k.gain && !k.gainOn && on.has(`${n.id}|${knobHandle(gainPort(k.id))}`)))) continue;
+    n.data = {
+      ...d,
+      knobs: d.knobs.map((k) => ({
+        ...k,
+        ...(k.next && on.has(`${n.id}|${knobHandle(nextPort(k.id))}`) ? { nextOn: true } : {}),
+        ...(k.gain && on.has(`${n.id}|${knobHandle(gainPort(k.id))}`) ? { gainOn: true } : {}),
+      })),
+    };
+  }
+}
+
 /** Each node's cables in and out (not its normals): its far form counts them. */
 export function withCounts(nodes: GraphNode[], edges: GraphEdge[]) {
   const count = new Map<string, Count>();
@@ -538,7 +563,7 @@ export function sizeOf(d: NodeData): Size {
   const rows = Math.ceil(shown / KNOBS_ACROSS);
   return {
     width: Math.max(d.modulator ? 150 : 140, 20 + Math.min(shown, KNOBS_ACROSS) * KNOB_W),
-    height: 38 + rows * 60 + d.ports.length * 20 + Math.ceil(d.outs.length / JACKS_ACROSS) * 30 + (faceHeight(d.face) ? faceHeight(d.face) + 8 : 0),
+    height: 38 + rows * 60 + d.ports.length * 20 + Math.ceil(d.outs.length / JACKS_ACROSS) * 42 + (faceHeight(d.face) ? faceHeight(d.face) + 8 : 0),
   };
 }
 
@@ -885,6 +910,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
   }
   withRoom(nodes, size);
   withCounts(nodes, edges);
+  withJacksOn(nodes, edges);
   return { nodes, edges };
 }
 
@@ -945,6 +971,33 @@ export function polyTurned(k: Pick<KnobView, 'value' | 'min' | 'max' | 'kind' | 
     return { id: c.id, value: k.kind === 'step' ? Math.round(v) : v };
   });
 }
+
+// ---- Fine adjust: a knob's long press (the owner, after the player's waveform lens and iOS's scrubbing) -------------
+
+/** How far sideways a knob's whole range is at full speed (px). */
+export const FINE_SPAN = 240;
+/** The speed a fine adjust moves at: full within 40 px of where the finger was held, half to 80, a quarter to 160, an
+ *  eighth beyond (the further the finger has moved up from the slider, the finer). */
+export function fineSpeed(up: number): number {
+  const d = Math.max(0, up);
+  return d <= 40 ? 1 : d <= 80 ? 0.5 : d <= 160 ? 0.25 : 0.125;
+}
+export const speedLabel = (speed: number) => (speed >= 1 ? '×1' : speed >= 0.5 ? '×½' : speed >= 0.25 ? '×¼' : '×⅛');
+/** A fine adjust's step: `raw` (the unrounded value carried between moves) moved by `dx` px at `speed`, kept in the
+ *  range; the knob's value is that, a step knob's rounded to its whole step. */
+export function fineStep(k: Pick<KnobView, 'min' | 'max' | 'kind'>, raw: number, dx: number, speed: number): { raw: number; value: number } {
+  const r = Math.min(k.max, Math.max(k.min, raw + (dx / FINE_SPAN) * (k.max - k.min) * speed));
+  return { raw: r, value: k.kind === 'step' ? Math.round(r) : r };
+}
+/** A knob's value as the fine adjust shows it: a step's whole number, else as many places as tell it apart. */
+export function fineText(k: Pick<KnobView, 'kind' | 'min' | 'max'>, value: number): string {
+  if (k.kind === 'step') return String(Math.round(value));
+  const span = Math.abs(k.max - k.min);
+  return value.toFixed(span >= 100 ? 0 : span >= 10 ? 1 : span >= 1 ? 3 : 4);
+}
+/** A fine adjust under way: the knob (its node and id, name, range, kind), its value, its speed, where it was held (the
+ *  window's coordinates). */
+export type Fine = { node: string; knob: string; label: string; min: number; max: number; kind: Knob['kind']; value: number; speed: number; at: XY };
 
 /** A knob's value after a drag of `dy` pixels up (a whole range over `span`), a step's whole. */
 export function turned(k: Pick<KnobView, 'min' | 'max' | 'kind'>, value: number, dy: number, span = 160): number {
@@ -1378,6 +1431,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
   level(top, '', undefined, { x: 0, y: 0 });
   withRoom(nodes, (n) => sizes[n.id] ?? sizeOf(n.data));
   withCounts(nodes, edges);
+  withJacksOn(nodes, edges);
   return { nodes, edges };
 }
 
@@ -1498,6 +1552,10 @@ export type GraphActions = {
   open(id: string): void;
   /** Into a device (v2): its own modules as the level shown. */
   enter(id: string): void;
+  /** A knob's or a port's long press: what it is (module-help.ts), where there is help for it. */
+  help(node: string, port: string): void;
+  /** A knob's fine adjust as it goes (null: let go). */
+  fine(f: Fine | null): void;
   /** Open a node out to every knob, or back; a device (v2) opened in place, or closed. */
   toggle(id: string): void;
   opened(id: string): boolean;

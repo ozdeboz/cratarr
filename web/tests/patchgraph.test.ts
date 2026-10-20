@@ -1036,3 +1036,41 @@ test('too big for the view, the graph opens at its first module (the leftmost; t
   const v = openView({ x: 0, y: 0, width: 3000, height: 3000 }, { width: 390, height: 500 }, pad, 1, firstModule(nodes, true));
   assert.deepEqual(v, { x: 16 - 400, y: 56 - 30, zoom: 1 });
 });
+
+test("a step knob's diamond and a level knob's gain dot are on (shown) only where a cable is in them", () => {
+  const { gainPort, nextPort } = await_graph;
+  const t = { ...types, fx: { ...types.fx, knobs: [...types.fx.knobs, { id: 'mode', label: 'Mode', min: 1, max: 4, neutral: 1, default: 1, kind: 'step' as const }] } };
+  const bare = graphOf({ patch: sample(), types: t, open: new Set(['k1']) });
+  const k = (g: typeof bare, id: string) => (g.nodes.find((n) => n.id === 'k1')!.data as ModuleData).knobs.find((x) => x.id === id)!;
+  assert.ok(k(bare, 'mode').next && !k(bare, 'mode').nextOn);
+  assert.ok(k(bare, 'amount').gain && !k(bare, 'amount').gainOn);
+  const p: Patch = {
+    ...sample(),
+    cables: [
+      { id: 'n', from: { signal: 'beat' }, to: { module: 'k1', knob: nextPort('mode') }, value: 1, mode: 'swing' },
+      { id: 'g', from: { modulator: 'lfo' }, to: { module: 'k1', knob: gainPort('amount') }, value: 1, mode: 'swing' },
+    ],
+  };
+  const wired = graphOf({ patch: p, types: t, open: new Set(['k1']) });
+  assert.ok(k(wired, 'mode').nextOn && k(wired, 'amount').gainOn);
+});
+
+test('fine adjust: full speed within 40 px up, half to 80, a quarter to 160, an eighth beyond; a step knob in whole steps', () => {
+  const { fineSpeed, fineStep, speedLabel, fineText, FINE_SPAN } = await_graph;
+  assert.deepEqual([0, 40, 41, 80, 81, 160, 161, 500, -30].map(fineSpeed), [1, 1, 0.5, 0.5, 0.25, 0.25, 0.125, 0.125, 1]);
+  assert.deepEqual([1, 0.5, 0.25, 0.125].map(speedLabel), ['×1', '×½', '×¼', '×⅛']);
+  const level = { min: 0, max: 2, kind: 'level' as const };
+  // A whole span sideways at full speed: the whole range; at an eighth, an eighth of it.
+  assert.equal(fineStep(level, 0, FINE_SPAN, 1).value, 2);
+  assert.equal(fineStep(level, 1, FINE_SPAN, 0.125).value, 1.25);
+  assert.equal(fineStep(level, 1.9, FINE_SPAN, 1).value, 2, 'kept in range');
+  assert.equal(fineStep(level, 0.1, -FINE_SPAN, 1).value, 0);
+  // A step knob: whole steps, the fraction carried so slow moves still get there.
+  const step = { min: 1, max: 4, kind: 'step' as const };
+  let raw = 2;
+  for (let i = 0; i < 10; i++) raw = fineStep(step, raw, FINE_SPAN / 30, 1).raw;
+  assert.equal(fineStep(step, raw, 0, 1).value, 3);
+  assert.equal(fineText(step, 2.6), '3');
+  assert.equal(fineText(level, 0.123456), '0.123');
+  assert.equal(fineText({ min: 20, max: 16000, kind: 'swing' }, 251.7), '252');
+});

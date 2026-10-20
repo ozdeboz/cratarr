@@ -97,7 +97,7 @@
     {#if data.ports.length}
       <div class="ports">
         {#each data.ports as p (p.id)}
-          <div class="port" class:cabled={p.cabled}>
+          <div class="port" class:cabled={p.cabled} use:longpress={() => graph.help(id, p.id)}>
             <span class="pl">{p.label}</span>
             <Handle type="target" id={knobHandle(p.id)} position={Position.Left} class="jack in-mod t-{p.type}" style="left: -10px" />
           </div>
@@ -108,10 +108,10 @@
       <div class="knobs">
         {#each data.knobs as k (k.id)}
           <div class="kw">
-            <PatchKnob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.channels ? `${k.id}.0` : k.id)} />
+            <PatchKnob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.id)} onfine={(f) => graph.fine(f && { ...f, node: id, knob: k.id, label: k.label, min: k.min, max: k.max, kind: k.kind })} />
             <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="jack in-mod t-value" style={knobJack} />
-            {#if k.next}<Handle type="target" id={knobHandle(nextPort(k.id))} position={Position.Left} class="jack in-mod t-trigger next" style="top: 6px; left: 2px" />{/if}
-            {#if k.gain}<Handle type="target" id={knobHandle(gainPort(k.id))} position={Position.Right} class="jack in-mod t-value next" style="top: 6px; right: 2px" />{/if}
+            {#if k.next}<Handle type="target" id={knobHandle(nextPort(k.id))} position={Position.Left} class={['jack in-mod t-trigger next', !k.nextOn && 'quiet']} style="top: 6px; left: 2px" />{/if}
+            {#if k.gain}<Handle type="target" id={knobHandle(gainPort(k.id))} position={Position.Right} class={['jack in-mod t-value next', !k.gainOn && 'quiet']} style="top: 6px; right: 2px" />{/if}
             {#if k.channels}
               <button class="poly nodrag" aria-label="{k.label}: each band" title="Each band" onclick={() => graph.toggle(pair(k))}>{k.channels.length}</button>
             {:else if polyOf(k) && graph.opened(pair(k)) && k.id.endsWith('.0')}
@@ -372,8 +372,19 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px 2px;
-    max-width: calc(6 * 44px);
+    max-width: calc(6 * 62px);
     margin-top: 10px;
+  }
+  /* A step knob's diamond and a level knob's gain dot with nothing in them: shown only on the node in focus (hovered or
+     selected), or while a cable is being drawn onto it. */
+  .node :global(.jack.quiet) {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .node:hover :global(.jack.quiet),
+  .node.sel :global(.jack.quiet),
+  .node :global(.jack.quiet.connectingto) {
+    opacity: 1;
   }
   .outjack {
     position: relative;
@@ -381,17 +392,19 @@
     justify-items: center;
     gap: 2px;
     min-width: 26px;
-    max-width: 44px;
+    max-width: 62px;
     padding-top: 6px;
     font-size: 11px;
     color: var(--muted);
   }
+  /* A jack's whole name, on two lines if it needs them. */
   .jl {
-    max-width: 44px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+    width: 60px;
+    text-align: center;
+    line-height: 1.15;
+    white-space: normal;
+    overflow-wrap: normal;
+}
   .light {
     width: 6px;
     height: 6px;

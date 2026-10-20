@@ -56,6 +56,7 @@
   import PatchConnection from './PatchConnection.svelte';
   import PatchFit from './PatchFit.svelte';
   import PatchChips from './PatchChips.svelte';
+  import KnobLens from './KnobLens.svelte';
   import type { Cable, ModuleType, Patch, Place, SignalRef } from './patch';
   import type { PatchV2, PortType } from './ports';
   import type { LiveFaces } from './faces.svelte';
@@ -72,6 +73,7 @@
     patchAt,
     typesOf,
     type AddTo,
+    type Fine,
     type V2Edit,
     pictureFits,
     wireStyle,
@@ -172,6 +174,16 @@
   // (13.5 px) would be under 11 too, and nodes show their name and how much is cabled.
   const FAR = 0.82;
   let zoom = $state(1);
+  // The overview map on a narrow screen: shut until asked for.
+  let mapOpen = $state(false);
+  // A knob's fine adjust under way (its lens over the graph), and its help.
+  let fine = $state.raw<Fine | null>(null);
+  let fineEnded = -Infinity;
+  const fineHelp = $derived.by(() => {
+    if (!fine || !helpFor) return null;
+    const d = nodes.find((n) => n.id === fine!.node)?.data as NodeData | undefined;
+    return d?.kind === 'module' ? (helpFor(d.type, fine.knob) ?? null) : null;
+  });
   const farNow = $derived(zoom < FAR);
   // What the view fits round: clear of the legend and crumbs above, the chips and an open sheet below.
   const pad = $derived({ top: 56, left: 16, right: 16, bottom: Math.round(sheetHeight) + 60 });
@@ -207,7 +219,7 @@
   /** The cable last tapped: its configuration is what the parent shows. */
   let openCable = $state<string | null>(null);
   /** A long press's menu: a cable's, a module's; or the types to add somewhere. */
-  type Menu = { kind: 'cable'; id: string; at: XY } | { kind: 'node'; id: string } | { kind: 'add'; to: AddTo } | { kind: 'make'; ids: string[] };
+  type Menu = { kind: 'cable'; id: string; at: XY } | { kind: 'node'; id: string } | { kind: 'add'; to: AddTo } | { kind: 'make'; ids: string[] } | { kind: 'help'; id: string; port: string };
   // The knobs chosen as a device's macros while it is being made (`<node>|<knob>`).
   let picks = $state<string[]>([]);
   // Selecting (v2: a module's long press, Select): taps add or take away modules, for Make device; a finger's way to
@@ -417,6 +429,16 @@
       } else onopen?.(id);
     },
     enter: (id) => v2?.onenter([...v2.at, ...id.split('/')]),
+    fine(f) {
+      if (!f && fine) fineEnded = performance.now();
+      fine = f;
+    },
+    help(id, port) {
+      const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
+      if (d?.kind !== 'module' || !helpFor?.(d.type, port)) return;
+      holdStill();
+      menu = { kind: 'help', id, port };
+    },
     toggle(id) {
       const next = new Set(opened);
       if (!next.delete(id)) next.add(id);
@@ -432,6 +454,9 @@
       return v2 ? true : !!onremove && removable(id);
     },
     menu(id) {
+      // Not while a knob is being fine-adjusted, nor just after (a touch's long press sends its context menu to whatever
+      // is under the finger by then).
+      if (fine || performance.now() - fineEnded < 600) return;
       holdStill();
       menu = { kind: 'node', id };
     },
@@ -608,7 +633,9 @@
     onpaneclick={() => (reroute = null)}
   >
     <PatchFit layout={fitKey} active={!touched} {pad} view={{ width, height }} {portrait} onzoom={(z) => (zoom = z)} />
-    <!-- The map: bottom right over the chips; on a narrow screen top right, where the legend gives way. -->
+    <!-- The map: bottom right over the chips; on a narrow screen a button (Map) opens it top right, over the view only
+         while wanted. -->
+    {#if width >= 600 || mapOpen}
     <MiniMap
       position={width < 600 ? 'top-right' : 'bottom-right'}
       pannable
@@ -619,6 +646,7 @@
       ariaLabel="Overview"
       style={`${width < 600 ? 'margin: calc(12px + env(safe-area-inset-top)) 12px 0 0' : `margin: 0 16px calc(${Math.round(sheetHeight)}px + 64px + env(safe-area-inset-bottom)) 0`}; border: 1px solid var(--border); border-radius: 10px; overflow: hidden`}
     />
+    {/if}
     <Panel position="bottom-left" class="chips-panel">
       <div class="bottom">
         {#if selecting}
@@ -632,6 +660,7 @@
           <PatchChips {parts} {padding} onjump={() => (touched = true)} />
         {/if}
         {#if onarrange && Object.keys(placed).length}<button class="opacity" onclick={onarrange}>Arrange</button>{/if}
+        {#if width < 600}<button class="opacity" class:on={mapOpen} aria-pressed={mapOpen} onclick={() => (mapOpen = !mapOpen)}>Map</button>{/if}
         <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
       </div>
     </Panel>
@@ -656,6 +685,8 @@
     </Panel>
   </SvelteFlow>
 </div>
+
+{#if fine}<KnobLens {fine} help={fineHelp} />{/if}
 
 {#if menu?.kind === 'cable'}
   {@const id = menu.id}
@@ -717,6 +748,16 @@
       {/if}
     </div>
   </MenuSheet>
+{:else if menu?.kind === 'help'}
+  {@const hid = menu.id}
+  {@const port = menu.port}
+  {@const d = nodes.find((n) => n.id === hid)?.data as NodeData | undefined}
+  {#if d?.kind === 'module'}
+    {@const name = d.knobs.find((k) => k.id === port)?.label ?? d.ports.find((p) => p.id === port)?.label ?? port}
+    <MenuSheet label="{d.label} · {name}" title="{d.label} · {name}" onclose={() => (menu = null)} over>
+      <p class="help">{helpFor?.(d.type, port)}</p>
+    </MenuSheet>
+  {/if}
 {:else if menu?.kind === 'make'}
   {@const ids = menu.ids}
   <MenuSheet label="Make device" title="Make device" onclose={() => ((menu = null), (picks = []))} over>
@@ -948,6 +989,10 @@
     color: var(--muted);
     font-size: 14px;
     line-height: 1.45;
+  }
+  .opacity.on {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--text) 35%, var(--border));
   }
   .make {
     color: var(--text);
