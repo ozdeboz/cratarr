@@ -1,6 +1,7 @@
 // Closing a sheet by dragging it down (up, for one that comes from the top), from anywhere on it (the owner,
 // 2026-10-16): a press on its card, a button or a list scrolled to its top, moved mostly downward, drags the whole
-// sheet. Past a third of its height (at most 120 px) or with a flick it closes; less springs back. Text fields and
+// sheet, if the list under it was at its top when the press began (a scroll that gets there is still a scroll). Past a
+// third of its height (at most 120 px) or with a flick it closes; less springs back. Text fields and
 // sliders keep their own gestures, as does anything marked `data-sheet-drag="off"` (a reorder grip); a list not at its
 // top scrolls; a sideways move (a row's swipe) is left alone. A drag cancels the click it began on. (Not "whatever
 // captured the pointer": on a touch screen every press is captured by the element it began on.)
@@ -19,7 +20,7 @@ const SLOP = 8;
 
 export function sheetDrag(node: HTMLElement, options: SheetDragOptions) {
   let opts = options;
-  let press: { id: number; x: number; y: number; t: number; scroller: HTMLElement | null } | null = null;
+  let press: { id: number; x: number; y: number; t: number; scroller: HTMLElement | null; edge: boolean } | null = null;
   let dragging = false;
   let offset = 0;
   /** The drag's recent moves (time, offset), for a flick's speed. */
@@ -44,7 +45,10 @@ export function sheetDrag(node: HTMLElement, options: SheetDragOptions) {
     if (opts.enabled === false || !e.isPrimary || e.button !== 0) return;
     const target = e.target as Element;
     if (target.closest('input, select, textarea, [contenteditable="true"], [data-sheet-drag="off"]')) return;
-    press = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), scroller: scrollerOf(target) };
+    // Whether its list is at its top as the press begins (the owner, 71.1): a scroll that reaches the top on the way
+    // stays a scroll; closing takes a new pull from the top.
+    const scroller = scrollerOf(target);
+    press = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), scroller, edge: atEdge(scroller) };
     dragging = false;
   }
 
@@ -59,7 +63,7 @@ export function sheetDrag(node: HTMLElement, options: SheetDragOptions) {
         return;
       }
       if (dy < SLOP) return;
-      if (!atEdge(press.scroller)) {
+      if (!press.edge) {
         press = null;
         return;
       }
@@ -102,7 +106,7 @@ export function sheetDrag(node: HTMLElement, options: SheetDragOptions) {
     if (!t) return;
     const dx = t.clientX - press.x;
     const dy = (t.clientY - press.y) * dir();
-    if (dragging || (dy > 0 && Math.abs(dy) >= Math.abs(dx) && atEdge(press.scroller))) e.preventDefault();
+    if (dragging || (dy > 0 && Math.abs(dy) >= Math.abs(dx) && press.edge)) e.preventDefault();
   }
 
   node.addEventListener('pointerdown', down);
