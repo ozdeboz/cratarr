@@ -19,11 +19,11 @@
 // Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
 
 import type { RouteValue } from './curves';
-import { ASPECTS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, type Aspect } from './routes';
+import { ASPECTS, BAND_SIGNALS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, type Aspect } from './routes';
 import { shapeOf } from './evaluate';
 import { DEFAULT_LIMITS, type Budgeted } from './budget';
 import { BUSY } from './engine/sidechain';
-import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Module, type Patch } from './patch';
+import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Module, type Patch } from './patch';
 import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import { extraType } from './registry';
 
@@ -171,13 +171,16 @@ function cablesAdd(modules: Module[], cables: Wire[]): { modules: Module[]; cabl
   const typeOf = new Map(modules.map((m) => [m.id, m.type]));
   const kindAt = (module: string, knob: string) => extraType(typeOf.get(module) ?? '')?.knobs.find((k) => k.id === knob);
   const shapeAt = new Map<string, 'level' | 'moment' | 'mean'>();
+  // A cable carrying the bands: one band of them (its channel), or all six at once (from a band's port with no channel:
+  // Music's band rows, an ADSR).
+  const banded = (c: Wire) => c.from.channel !== undefined || (c.from.module === 'music' && (BAND_SIGNALS as readonly string[]).includes(c.from.port.replace(/:slow$/, ''))) || typeOf.get(c.from.module) === 'adsr';
   for (const c of cables) {
     const key = `${c.to.module}.${c.to.port}`;
     const aspect = ASPECT_AT.get(key);
     const k = aspect ? undefined : kindAt(c.to.module, c.to.port);
     const level = aspect ? LEVEL_ASPECTS.includes(aspect) : !!k && c.mode === 'level';
     const moment = aspect ? (MOMENT_ASPECTS as readonly string[]).includes(aspect) : k?.kind === 'step';
-    const merged = !level && !moment && c.from.channel !== undefined && (aspect ? !PART_ASPECTS.includes(aspect) : !!k && !k.channels);
+    const merged = !level && !moment && banded(c) && (aspect ? !PART_ASPECTS.includes(aspect) : !!k && !k.channels);
     if (level || moment || merged) {
       shapeAt.set(key, level ? 'level' : moment ? 'moment' : 'mean');
       (byColumn.get(key) ?? byColumn.set(key, []).get(key)!).push(c);
@@ -237,15 +240,19 @@ const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [strin
   // The moments' Gates (null): their gaps stretched.
   { kind: 'looks', meter: 'looksPerMinute', into: null },
 ];
-function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Partial<Record<Budgeted, number>>): { modules: Module[]; cables: Wire[] } {
+function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Partial<Record<Budgeted, number>>): { modules: Module[]; cables: Wire[]; macro?: Macro } {
   const one = (id: string, from: Wire['from'], to: Wire['to'], value = 1): Wire => ({ id, from, to, value, mode: 'swing', depth: null });
   const out = { modules: [...modules, { id: 'meter', type: 'meter', knobs: {} }], cables: [...cables] };
   if (!out.modules.some((m) => m.type === 'screen')) out.modules.push({ id: 'screen', type: 'screen', knobs: {} });
   out.cables.push(one('guard', { module: 'screen', port: 'guard' }, { module: 'accent', port: 'accent:gain' }));
   const wildFactor = 2 ** (2 * (wild - 0.5));
+  // Wild, a macro on the five thresholds (the owner): along the threshold's exponential taper from half to twice
+  // (× 1.5) of the limit, so at today's Wild it is exactly today's factor 2^(2(wild − ½)).
+  const macro: Macro = { id: 'wild', on: 'frame', label: 'Wild', value: wild, targets: [] };
   for (const { kind, meter, into } of SIDECHAIN) {
     const id = `duck-${kind}`;
     const limit = limits[meter] ?? DEFAULT_LIMITS[meter];
+    macro.targets.push({ module: id, knob: 'threshold', from: limit * 1.5 * 0.5, to: limit * 1.5 * 2 });
     out.modules.push({ id, type: 'ducker', knobs: { threshold: limit * wildFactor * 1.5, depth: Math.abs(20 * Math.log10(BUSY[meter].most)), attack: 1 / 0.7, hold: 0, release: 10 / 3, hysteresis: 0.8 } });
     out.cables.push(one(`${id}-key`, { module: 'meter', port: kind }, { module: id, port: 'key' }));
     out.modules.push({ id: `${id}-activity`, type: 'vca', knobs: { gain: 1 / 3 } });
@@ -254,7 +261,7 @@ function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Pa
     const targets = into ? [into] : modules.filter((m) => m.type === 'gate' && m.id.startsWith('gate-')).map((m) => [m.id, 'gap'] as const);
     for (const [module, knob] of targets) out.cables.push(one(`${id}-${module}`, { module: id, port: 'out' }, { module, port: `${knob}:gain` }));
   }
-  return out;
+  return { ...out, macro };
 }
 
 /** The cables as wires (0057 §7e item 10): how each signal is read goes to its Music row (`reference.<signal>`: 'absolute'
@@ -373,5 +380,6 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const adding = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);
-  return { v: 2, modules: [...added.modules, ...wiring.modules], cables: [...toWire(added.modules, added.cables), ...wiring.cables], macros: p.macros, pins: p.pins };
+  const macros = 'macro' in added && added.macro ? [...p.macros, added.macro] : p.macros;
+  return { v: 2, modules: [...added.modules, ...wiring.modules], cables: [...toWire(added.modules, added.cables), ...wiring.cables], macros, pins: p.pins };
 }

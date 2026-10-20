@@ -120,14 +120,18 @@ Each of today's hidden behaviours becomes a module with ports, in the graph:
     through which the cables into knobs of that kind run (each knob declares its kind, `busy`). Today's behaviour is
     that wiring with today's limits as the thresholds. Everything in it can be seen, re-keyed, re-patched or removed.
   - **No Taste, no learning in this version** (the owner: "we drop taste altogether. We defer it to a future version,
-    maybe not even the next version"). The thumbs and learning.ts go. The Compressors' thresholds start at the limits
-    as they stand when the patch is converted (learned values included, frozen), and are plain knobs from then on. The
-    server keeps what was learned, untouched, for whenever the learning returns.
+    maybe not even the next version"). The thumbs and learning.ts go. The Duckers' thresholds start at the default
+    limits (nothing learned) and are plain knobs from then on, Wild a macro on them. What the server stored of the
+    learning has no reader left, and goes with the /limits retirement.
   - **No rating page** (the owner: "Yes, the rating page should also go"). It existed to calibrate the governor and the
     learning. Its fitting (fit.ts) and the trial's plumbing go with aspects.ts.
   - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
     (WCAG). It is safety, not taste: never learned, never removable, last.
   - The precheck and the dice read the same thresholds.
+  - **Thresholds and Wild** (the owner, via claude-5f): each Ducker's threshold starts at its default limit × 1.5,
+    nothing learned. **Wild is a macro on the five thresholds**, moving each along its exponential taper (a knob's
+    taper: equal steps of position multiply the value, as a frequency knob's do) from half to twice. So Wild gives
+    exactly today's factor 2^(2(wild − ½)). Randomize's reach is a setting of its own, no longer Wild's.
 - **Show, split into standard modules and kept as a device** (§6; the owner: "it makes it more coherent"). Show is the flame's output stage, a
   sound synth's channel strip, and each of its parts becomes the module it is. Only the first converts:
   | Module | Was Show's | Sound equivalent |

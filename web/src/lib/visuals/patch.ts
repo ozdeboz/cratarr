@@ -25,6 +25,10 @@ export type Knob = {
   channels?: number;
   /** A time (seconds): its gain stretches it (set ÷ gain), as a time CV does (0057 §7e). */
   time?: boolean;
+  /** How its value follows its position (0057): 'exp' an exponential taper, as a frequency or time knob has (equal
+   *  steps of position multiply the value). A macro moves a knob along its taper, so a macro on an exponential knob
+   *  multiplies. */
+  taper?: 'exp';
   /** Never rolled by Randomize (VCV's randomizeEnabled off): a choice of how, not a value. */
   randomize?: false;
 };

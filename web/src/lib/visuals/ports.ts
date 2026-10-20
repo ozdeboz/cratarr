@@ -90,12 +90,16 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   if (t.place === 'frame') return { in: knobs, out: [] };
   // The flame and its own loop work on light (claude-632, step 3): the flame takes last frame's light and gives its
   // light; Trails, Fluid, Tunnel, the Loop effect and Dive carry light on.
-  if (t.type === 'flame') return { in: [LIGHT('light', 'Last light'), ...knobs], out: [LIGHT('light', 'Light')] };
+  // The flame's part columns take six channels, one a part (0057 §4b): a band's cable reaches its part; a whole
+  // track's every part. Into any one-channel knob, six channels are the bands' mean (a Merge, in the conversion).
+  if (t.type === 'flame') return { in: [LIGHT('light', 'Last light'), ...knobs.map((p) => (FLAME_PARTS.has(p.id) ? { ...p, channels: 6 } : p))], out: [LIGHT('light', 'Light')] };
   if (LIGHT_CARRIERS.has(t.type)) return { in: [LIGHT('light', 'Light'), ...knobs], out: [LIGHT('light', 'Light')] };
   return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT] };
 }
 
 const LIGHT = (id: string, label: string): Port => ({ id, label, type: 'light' });
+/** The flame's part columns: polyphonic inputs, a part a channel. */
+export const FLAME_PARTS: ReadonlySet<string> = new Set(['shape', 'rotation', 'lights', 'hue', 'spread', 'presence']);
 /** The flame's own loop, on its light (Dive last: a pass-through whose rate the points' camera reads). */
 export const LIGHT_CARRIERS: ReadonlySet<string> = new Set(['trails', 'fluid', 'tunnel', 'loop-effect', 'dive']);
 
@@ -379,7 +383,7 @@ export const DUCKER = declared(
   'Ducker',
   'modulator',
   [
-    knob('threshold', 'Threshold', 0, 10, 1),
+    { ...knob('threshold', 'Threshold', 0.001, 10, 1), taper: 'exp' as const },
     knob('depth', 'Depth (dB)', 0, 40, 12),
     knob('attack', 'Attack', 0, 5, 1),
     knob('hold', 'Hold', 0, 10, 0),
