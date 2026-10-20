@@ -21,6 +21,8 @@
 import type { RouteValue } from './curves';
 import { ASPECTS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, type Aspect } from './routes';
 import { shapeOf } from './evaluate';
+import { DEFAULT_LIMITS, type Budgeted } from './budget';
+import { BUSY } from './engine/sidechain';
 import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Module, type Patch } from './patch';
 import { isDevice, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import type { VisualSettings } from './settings.svelte';
@@ -209,9 +211,43 @@ function cablesAdd(modules: Module[], cables: CableV2[]): { modules: Module[]; c
   return { modules: [...modules, ...added], cables: out };
 }
 
-/** Today's settings (with their extras) as a v2 patch. `addOnly` (default): cables only add (0057 §7e); false gives the
- *  patch before that step, for the proof. */
-export function toV2(s: VisualSettings, opts: { addOnly?: boolean } = {}): PatchV2 {
+/** The sidechain in sight (0057 §7e; claude-5f's wiring, proved against today's levers): a Meter on the picture, a
+ *  Ducker a kind keyed by it (its threshold the limit as learned and frozen, × Wild's factor, × the music's activity
+ *  through a VCA from the Loudness's level), each into the gain of what that kind of busyness moves; the Screen's flash
+ *  guard into the Accent's gain. */
+const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [string, string] | null }[] = [
+  { kind: 'motion', meter: 'motion', into: ['clock', 'speed'] },
+  { kind: 'shape', meter: 'shapeChurn', into: ['flame', 'evolution'] },
+  { kind: 'colour', meter: 'colourChurn', into: ['flame', 'hue'] },
+  { kind: 'zoom', meter: 'zoomPumping', into: ['flame', 'zoom'] },
+  // The moments' Gates (null): their gaps stretched.
+  { kind: 'looks', meter: 'looksPerMinute', into: null },
+];
+function sidechained(modules: Module[], cables: CableV2[], wild: number, limits: Partial<Record<Budgeted, number>>): { modules: Module[]; cables: CableV2[] } {
+  const one = (id: string, from: CableV2['from'], to: CableV2['to'], value = 1): CableV2 => ({ id, from, to, value, mode: 'swing', depth: null });
+  const out = { modules: [...modules, { id: 'meter', type: 'meter', knobs: {} }], cables: [...cables] };
+  if (!out.modules.some((m) => m.type === 'screen')) out.modules.push({ id: 'screen', type: 'screen', knobs: {} });
+  out.cables.push(one('guard', { module: 'screen', port: 'guard' }, { module: 'accent', port: 'accent:gain' }));
+  const wildFactor = 2 ** (2 * (wild - 0.5));
+  for (const { kind, meter, into } of SIDECHAIN) {
+    const id = `duck-${kind}`;
+    const limit = limits[meter] ?? DEFAULT_LIMITS[meter];
+    out.modules.push({ id, type: 'ducker', knobs: { threshold: limit * wildFactor * 1.5, depth: Math.abs(20 * Math.log10(BUSY[meter].most)), attack: 1 / 0.7, hold: 0, release: 10 / 3, hysteresis: 0.8 } });
+    out.cables.push(one(`${id}-key`, { module: 'meter', port: kind }, { module: id, port: 'key' }));
+    out.modules.push({ id: `${id}-activity`, type: 'vca', knobs: { gain: 1 / 3 } });
+    out.cables.push(one(`${id}-loudness`, { module: 'envelope', port: 'level' }, { module: `${id}-activity`, port: 'cv' }, 2 / 3));
+    out.cables.push(one(`${id}-activity-out`, { module: `${id}-activity`, port: 'out' }, { module: id, port: 'threshold:gain' }));
+    const targets = into ? [into] : modules.filter((m) => m.type === 'gate' && m.id.startsWith('gate-')).map((m) => [m.id, 'gap'] as const);
+    for (const [module, knob] of targets) out.cables.push(one(`${id}-${module}`, { module: id, port: 'out' }, { module, port: `${knob}:gain` }));
+  }
+  return out;
+}
+
+/** Today's settings (with their extras) as a v2 patch.
+ *  - `addOnly` (default true): cables only add (0057 §7e); false gives the patch before that step, for the proof.
+ *  - `sidechain` (default true): the sidechain in sight; false leaves it out, for the proof.
+ *  - `limits`: the limits as learned (the app's `limitsNow`), frozen into the Duckers; else the defaults. */
+export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: boolean; limits?: Partial<Record<Budgeted, number>> } = {}): PatchV2 {
   const p = cratarrPatch(s);
   // Drift is Random now (its smooth end: Shape 0), as VCV, Vital and Bitwig name it (the owner).
   const modules: Module[] = [...modulesOf(p).values()].map((m) => (m.type === 'drift' ? { ...m, type: 'random', knobs: { ...m.knobs, shape: 0 } } : { ...m, knobs: { ...m.knobs } }));
@@ -286,7 +322,8 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean } = {}): Patch
   }
   for (const a of adsrs.values()) cables.push(a.gate);
   const all = [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules];
-  const added = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
+  const adding = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
+  const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);
   return { v: 2, modules: [...added.modules, ...wiring.modules], cables: [...added.cables, ...wiring.cables], macros: p.macros, pins: p.pins };
 }
