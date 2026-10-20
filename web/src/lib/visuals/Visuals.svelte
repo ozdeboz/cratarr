@@ -273,7 +273,7 @@
       pictureTypes: PICTURE_TYPES,
       onPace: (p) => (fps = p.fps),
       onFrame: (frame) => {
-        if (graphShown) liveFaces.offer(performance.now(), () => ({ time: performance.now() / 1000, beat: null, outputs: { ...frame.outputs } }));
+        if (graphShown || panelShown) liveFaces.offer(performance.now(), () => ({ time: performance.now() / 1000, beat: null, outputs: { ...frame.outputs } }));
       },
       onUnsupported: () => (unsupported = true),
     });
@@ -424,7 +424,7 @@
           onpointerdown={(e) => e.stopPropagation()}
           onpointerup={(e) => e.stopPropagation()}
         >
-          <VisualsPanel patch={visualsPatch.patch} types={TYPES} onedit={panelEdit} presets={PRESETS} preset={presetNow} onpreset={choosePreset} onrandomize={randomizeFrom} bind:path={panelPath} />
+          <VisualsPanel patch={visualsPatch.patch} types={TYPES} onedit={panelEdit} presets={PRESETS} preset={presetNow} onpreset={choosePreset} onrandomize={randomizeFrom} live={liveFaces.frame} bind:path={panelPath} />
           {#if !panelPath.length}
             <div class="foot">
               <span class="fps">{fps} fps</span>
