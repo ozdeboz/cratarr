@@ -2,11 +2,13 @@
   // A knob's fine adjust (the owner, after the player's waveform lens, lib/WaveLens): lifted clear of the finger, its
   // name, its value as a clear number, a magnified slider with the knob's place on it, the speed it moves at ("×¼":
   // the further up from it, the finer) and its one line of help. Drawn over the graph at true size, wherever the graph
-  // is zoomed; it takes no pointer (the knob keeps the gesture). Its look is the waveform lens's: a card on the surface,
-  // an accent edge, a stem down to the finger.
+  // is zoomed; it takes no pointer while the knob is held (the knob keeps the gesture). Let go, it stays settled with the
+  // knob's pin (`onpin`, 0057: knob pins live in its long-press slider) until a tap elsewhere. Its look is the waveform
+  // lens's: a card on the surface, an accent edge, a stem down to the finger.
+  import Icon from '../Icon.svelte';
   import { fineText, speedLabel, type Fine } from './patchgraph';
 
-  let { fine, help = null }: { fine: Fine; help?: string | null } = $props();
+  let { fine, help = null, pinned = false, onpin }: { fine: Fine; help?: string | null; pinned?: boolean; onpin?: () => void } = $props();
 
   const W = 264;
   const LIFT = 92;
@@ -20,9 +22,12 @@
   const top = $derived(above ? fine.at.y - LIFT - h : fine.at.y + LIFT);
 </script>
 
-<div class="lens" style:left="{left}px" style:top="{top}px" role="status" aria-live="polite" bind:clientHeight={h}>
+<div class="lens" class:settled={!!onpin} style:left="{left}px" style:top="{top}px" role="status" aria-live="polite" bind:clientHeight={h}>
   <div class="head">
     <span class="name">{fine.label}</span>
+    {#if onpin}<button class="pin" class:on={pinned} aria-pressed={pinned} aria-label={pinned ? `Unpin ${fine.label}` : `Pin ${fine.label}`} title={pinned ? 'Unpin' : 'Pin'} onclick={onpin}
+        ><Icon name="pin" size={16} /></button
+      >{/if}
     <span class="value">{fineText(fine, fine.value)}</span>
   </div>
   <svg class="track" viewBox="0 0 {W - 28} 22" width={W - 28} height="22" aria-hidden="true">
@@ -58,6 +63,25 @@
     background: var(--surface);
     box-shadow: 0 8px 22px rgb(0 0 0 / 0.55);
     color: var(--text);
+  }
+  /* Settled (let go): it takes taps, for its pin. */
+  .lens.settled {
+    pointer-events: auto;
+  }
+  .pin {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    margin-left: auto;
+    border: 0;
+    border-radius: 14px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .pin.on {
+    color: var(--accent);
   }
   .head {
     display: flex;

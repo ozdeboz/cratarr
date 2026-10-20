@@ -12,5 +12,5 @@ test('every preset is a v2 patch; the saved ones draw the flame; Start from scra
     assert.ok(Array.isArray(v.modules) && Array.isArray(v.cables), p.id);
   }
   for (const id of ['default', 'entrance-to-zanzibar', 'glitch-adventure']) assert.ok(PRESETS.find((p) => p.id === id)!.patch().modules.some((m) => m.type === 'flame'), id);
-  assert.deepEqual(PRESETS.find((p) => p.id === 'scratch')!.patch().modules, []);
+  assert.deepEqual(PRESETS.find((p) => p.id === 'scratch')!.patch().modules.map((m) => m.type), ['music', 'meter', 'screen']);
 });

@@ -459,6 +459,23 @@ graph where there is room and as sheets over it where there is not. On a phone t
 
 The graph is built for touch from the start, not adapted to it later.
 
+How the two sit (the owner, 2026-10-20):
+
+- **The graph is the page:** the rack drawn, filling the screen over the picture once the rack is open.
+- **The panel is its inspector:** the views of what is picked (the top view: the rack's macros, the preset, the
+  categories; a module's, a device's, a port's, a cable's; the pickers), as TouchDesigner's parameters beside its network.
+  - Where there is room, a column at the right beside the graph.
+  - On a phone, a sheet over the graph from below. It covers the graph, which stays as it is underneath (no resizing,
+    no redrawing); it is as tall as its view needs, up to nearly the top, then scrolls inside.
+
+### 7b2. Pins at four levels, several picked at once
+
+The owner (2026-10-20): pins at four levels, a **knob**, a **module**, a **device** and a **category** (a device's
+modules each by their own category inside it: §3b). **Multi-select** of modules, devices and cables (not knobs: "We
+don't implement multi-select for knobs"), to pin or unpin them all at once; cables picked may be deleted together. This
+undoes 70's "a long press on a cable gives Delete or Reroute (NOT multi-select)": a long press now also starts picking,
+in the graph (claude-632's SelectBar) and in the panel alike.
+
 ### 7c. Sync groups: not in this version
 
 The owner: "since I won't be sync grouping in the upcoming version, spend no time on this." Sync groups are handled at

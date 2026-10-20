@@ -71,6 +71,7 @@
   <div class="node" style:--room={data.room ? `${data.room}px` : null} class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation" use:longpress={() => graph.menu(id)}>
     <span class="title">
       <button class="t nodrag" onclick={() => graph.open(id)}>{data.label}<span class="chev">›</span></button>
+      {#if data.pinned}<span class="pinned" title="Pinned" aria-label="Pinned"><Icon name="pin" size={13} /></span>{/if}
       {#if data.device}<button class="plus nodrag" aria-label="Open {data.label} here" title="Open here" onclick={() => graph.toggle(id)}>+</button>{/if}
     </span>
     <button class="sum nodrag" tabindex="-1" onclick={() => graph.open(id)}
@@ -218,6 +219,11 @@
   .chev {
     color: var(--muted);
     font-weight: 400;
+  }
+  .pinned {
+    align-self: center;
+    color: var(--accent);
+    line-height: 0;
   }
   /* Its jacks: inputs down the left, outputs down the right, each with its name. */
   .io {

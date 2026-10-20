@@ -10,6 +10,7 @@
   import type { VisualsSnapshot } from '../api';
   import Icon from '../Icon.svelte';
   import { longpress } from '../longpress';
+  import { sheetDrag } from '../sheetDrag';
   import { reducedMotion } from '../motion';
   import { player } from '../live.svelte';
   import { panel as sidePanel } from '../panel.svelte';
@@ -117,6 +118,8 @@
   }
   function togglePanel() {
     panel = !panel;
+    if (panel && sheet) openSheet(true);
+    if (!panel && history.state?.sheet) history.back();
     showChrome();
   }
 
@@ -159,9 +162,28 @@
     showChrome();
   }
 
-  // ---- The graph beside the panel where there is room (claude-632's) ----------------------------------------------
+  // ---- The rack open: the graph is the page, the panel its inspector (0057 §7b) -----------------------------------
+  // Where there is room the panel is a column beside the graph; on a narrow screen (a phone, the visuals beside the
+  // page) a sheet over it from below, as tall as its view needs, closed by a drag down, a tap on the graph or Back, the
+  // graph untouched underneath. Its handle brings it back at its top view.
   let wide = $state(typeof innerWidth === 'number' ? innerWidth >= 1100 : false);
-  const graphShown = $derived(panel && wide && !docked);
+  const sheet = $derived(!wide || docked);
+  const graphShown = $derived(panel);
+  let sheetOpen = $state(true);
+  let sheetDy = $state(0);
+  function openSheet(top = false) {
+    if (top) panelPath = [];
+    if (sheet && !sheetOpen) history.pushState({ ...history.state, visuals: true, sheet: true }, '');
+    sheetOpen = true;
+    sheetDy = 0;
+  }
+  function closeSheet() {
+    if (!sheetOpen) return;
+    sheetOpen = false;
+    sheetDy = 0;
+    if (history.state?.sheet) history.back();
+  }
+  const panelShown = $derived(panel && (!sheet || sheetOpen));
   let graphLevel = $state<string[]>([]);
   let panelPath = $state<string[]>([]);
   const liveFaces = new LiveFaces();
@@ -185,6 +207,7 @@
   }
   const graphPage = (page: string) => {
     panelPath = [page];
+    openSheet();
     showChrome();
   };
 
@@ -212,6 +235,12 @@
     showChrome();
     if (!history.state?.visuals) history.pushState({ ...history.state, visuals: true }, '');
     const popped = () => {
+      // Back with the sheet open closes the sheet only.
+      if (sheetOpen && sheet && !history.state?.sheet) {
+        sheetOpen = false;
+        sheetDy = 0;
+        if (history.state?.visuals) return;
+      }
       if (!closed && !history.state?.visuals) {
         closed = true;
         onclose();
@@ -350,7 +379,18 @@
         {/if}
       </div>
       {#if graphShown}
-        <div class="graph" role="group" aria-label="Rack" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
+        <div
+          class="graph"
+          class:whole={sheet}
+          role="group"
+          aria-label="Rack"
+          onpointerdown={(e) => {
+            e.stopPropagation();
+            // A tap on the graph closes the sheet over it (a module tapped opens it again, on its view).
+            if (sheet && sheetOpen) closeSheet();
+          }}
+          onpointerup={(e) => e.stopPropagation()}
+        >
           <PatchGraph
             patch={visualsPatch.patch}
             onchange={(next, key) => {
@@ -370,8 +410,20 @@
           />
         </div>
       {/if}
-      {#if panel}
-        <div class="panel" role="group" aria-label="Rack" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()}>
+      {#if panel && sheet && !sheetOpen}
+        <button class="panel-handle" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => openSheet(true)}>Panel</button>
+      {/if}
+      {#if panelShown}
+        <div
+          class="panel"
+          class:sheet
+          role="group"
+          aria-label="Panel"
+          style:transform={sheet && sheetDy ? `translateY(${sheetDy}px)` : undefined}
+          use:sheetDrag={{ onclose: closeSheet, ondrag: (d) => (sheetDy = d), enabled: sheet }}
+          onpointerdown={(e) => e.stopPropagation()}
+          onpointerup={(e) => e.stopPropagation()}
+        >
           <VisualsPanel patch={visualsPatch.patch} types={TYPES} onedit={panelEdit} presets={PRESETS} preset={presetNow} onpreset={choosePreset} onrandomize={randomizeFrom} bind:path={panelPath} />
           {#if !panelPath.length}
             <div class="foot">
@@ -523,6 +575,40 @@
     pointer-events: auto;
   }
 
+  /* The graph alone on a narrow screen: the whole page under the sheet. */
+  .graph.whole {
+    right: max(12px, env(safe-area-inset-right));
+  }
+
+  /* The panel as a sheet over the graph: from below, as tall as its view needs. */
+  .panel.sheet {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: calc(100% - max(12px, env(safe-area-inset-top)) - 56px);
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 24px rgb(0 0 0 / 0.4);
+  }
+
+  .panel-handle {
+    position: absolute;
+    left: 50%;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    height: 36px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 18px;
+    background: rgb(20 20 24 / 0.92);
+    color: #fff;
+    font: inherit;
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
   .panel {
     position: absolute;
     top: calc(max(12px, env(safe-area-inset-top)) + 56px);
@@ -579,15 +665,6 @@
     text-shadow: 0 1px 6px rgb(0 0 0 / 0.6);
   }
 
-  .held-back {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    margin-left: 6px;
-    border-radius: 50%;
-    background: #f0b44c;
-    vertical-align: middle;
-  }
 
   .sought {
     position: absolute;

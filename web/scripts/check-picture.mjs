@@ -3,18 +3,16 @@
 // give the same picture: 0 difference; a merged pass at most 1/255 with a PSNR of 50 dB or more.
 //
 //   node scripts/check-picture.mjs [names|all] [--a current] [--b current] [--bits 32,16] [--base url]
-//   node scripts/check-picture.mjs record <scene>… [--frames 240] [--base url]   into tests/pictures/<scene>.json.gz
 //
 // It drives a Chromium browser (BROWSER; Edge on Windows by default) on SwiftShader, the same GPU everywhere, over
 // its debugging port (CDP_PORT, else one at random; PROFILE: its profile, else a new one). base: the running dev
 // server, http://localhost:5173 by default. Exits 1 when a replay differs by more than --tolerance (of 255; 0 by
 // default).
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { gzipSync } from 'node:zlib';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -24,13 +22,10 @@ const option = (name, fallback) => {
   return value;
 };
 const base = option('base', 'http://localhost:5173').replace(/\/$/, '');
-const frames = Number(option('frames', 240));
 const a = option('a', 'current');
 const b = option('b', 'current');
 const bits = option('bits', '32,16').split(',').map(Number);
 const tolerance = Number(option('tolerance', 0));
-const recording = args[0] === 'record';
-if (recording) args.shift();
 const pictures = join(dirname(fileURLToPath(import.meta.url)), '..', 'tests', 'pictures');
 const names = !args.length || args[0] === 'all' ? readdirSync(pictures).filter((f) => f.endsWith('.json.gz')).map((f) => f.slice(0, -8)) : args;
 
@@ -88,15 +83,7 @@ async function lab(query, ready, minutes = 20) {
 
 let bad = 0;
 try {
-  if (recording) {
-    for (const scene of names) {
-      await lab(`record=${scene}&frames=${frames}`, 'l.request?.done');
-      const text = await js('JSON.stringify(window.pictureLab.request.recording)');
-      const gz = gzipSync(text, { level: 9 });
-      writeFileSync(join(pictures, `${scene}.json.gz`), gz);
-      console.log(`recorded ${scene}: ${JSON.parse(text).frames.length} frames, ${(gz.length / 1024).toFixed(0)} KB`);
-    }
-  } else {
+  {
     for (const name of names)
       for (const precision of bits) {
         await lab(`replay=${name}&a=${a}&b=${b}&bits=${precision}`, 'l.result');

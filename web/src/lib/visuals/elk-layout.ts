@@ -5,8 +5,7 @@
 //
 // Pure but for the ELK instance handed in (the page's runs in a web worker, the tests' in-process):
 // - toElk: the graph's nodes (a frame round a device opened in place a compound node, its modules inside) and their
-//   cables' sockets as ports, inputs on the side the picture comes in (west, or north in portrait) and outputs on the
-//   other, in their order; the categories as ELK partitions in the order signals flow (flowOrder), so their lanes stay
+//   cables' sockets as ports, inputs west and outputs east (where the jacks are, in portrait too), in their order; the categories as ELK partitions in the order signals flow (flowOrder), so their lanes stay
 //   in order.
 // - fromElk: ELK's places for the nodes (a node the viewer put somewhere stays there), a frame's size, and each picture
 //   wire's route (its bends; its ends are its jacks' centres, PatchWire).
@@ -36,8 +35,9 @@ function isInput(handle: string): boolean {
 
 /** The graph as ELK takes it. Lane headers are not ELK's (laneHeads puts them). */
 export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNode) => Size, o: ElkOptions = {}): ElkNode {
-  const inSide = o.portrait ? 'NORTH' : 'WEST';
-  const outSide = o.portrait ? 'SOUTH' : 'EAST';
+  // Where the jacks are (PatchNode): inputs down a node's left, outputs down its right, on a phone too.
+  const inSide = 'WEST';
+  const outSide = 'EAST';
   const laid = nodes.filter((n) => n.data.kind !== 'lane');
   const ids = new Set(laid.map((n) => n.id));
   // Each node's ports: the handles its cables use, in the order they come.

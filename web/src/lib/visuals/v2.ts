@@ -20,8 +20,8 @@
 // Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
 
 import { slotsAsEffects } from './effect-modules';
-import type { RouteValue } from './curves';
-import { ASPECTS, BAND_SIGNALS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, type Aspect } from './routes';
+import { endOf, type RouteValue } from './curves';
+import { ASPECTS, BAND_SIGNALS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, routeKey, type Aspect } from './routes';
 import { shapeOf } from './evaluate';
 import { DEFAULT_LIMITS, type Budgeted } from './budget';
 import { BUSY } from './engine/sidechain';
@@ -29,6 +29,7 @@ import { slotKnobOf, slotOf } from './engine/effect-slots';
 import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Module, type Patch } from './patch';
 import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import { extraType } from './registry';
+import { makeDevice } from './device-make';
 
 /** A cable as the conversion carries it until the end: how it reads its signal, its speed and its mode still on it; they
  *  leave the wire at the end (`toWire`). */
@@ -323,7 +324,7 @@ function toWire(given: Module[], all: Wire[]): { modules: Module[]; cables: Cabl
  *  - `addOnly` (default true): cables only add (0057 §7e); false gives the patch before that step, for the proof.
  *  - `sidechain` (default true): the sidechain in sight; false leaves it out, for the proof.
  *  - `limits`: the limits as learned (the app's `limitsNow`), frozen into the Duckers; else the defaults. */
-export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: boolean; limits?: Partial<Record<Budgeted, number>> } = {}): PatchV2 {
+export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: boolean; limits?: Partial<Record<Budgeted, number>>; devices?: boolean } = {}): PatchV2 {
   const p = cratarrPatch(s);
   // Drift is Random now (its smooth end: Shape 0), as VCV, Vital and Bitwig name it (the owner).
   const modules: Module[] = [...modulesOf(p).values()].map((m) => (m.type === 'drift' ? { ...m, type: 'random', knobs: { ...m.knobs, shape: 0 } } : { ...m, knobs: { ...m.knobs } }));
@@ -428,14 +429,36 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     { id: 'pause-follow-out', from: { module: 'pause-follow', port: 'out' }, to: { module: 'pause-dim', port: 'cv' }, value: -0.45, mode: 'swing', depth: null },
     { id: 'pause-dim-out', from: { module: 'pause-dim', port: 'out' }, to: { module: 'show', port: 'level:gain' }, value: 1, mode: 'swing', depth: null },
   );
+  // A new track's own look (0057 §7f, "same randomize"): the Dice on Music's New track, seeded by the Track seed,
+  // wherever the Track row's route into Look was on (as it is by default).
+  const dice: Module[] = [];
+  if (endOf(s.routes[routeKey('track', null, 'look')] ?? 0) !== 0) {
+    dice.push({ id: 'dice', type: 'dice', knobs: { scope: 0 } });
+    cables.push(
+      { id: 'dice-trigger', from: { module: 'music', port: 'newtrack', reference: 'absolute' }, to: { module: 'dice', port: 'trigger' }, value: 1, mode: 'swing', depth: null },
+      { id: 'dice-seed', from: { module: 'music', port: 'seed', reference: 'absolute' }, to: { module: 'dice', port: 'seed' }, value: 1, mode: 'swing', depth: null },
+    );
+  }
   // One module per effect (0057 §3): each slot as the module of the effect it draws, its cables and pins with it.
   const effects = slotsAsEffects(modules, cables, p.pins, p.macros);
-  const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...effects.modules, ...pause];
+  const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...effects.modules, ...pause, ...dice];
   const adding = opts.addOnly === false ? { modules: all, cables: effects.cables } : cablesAdd(all, effects.cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);
   const wildMacro = (added as { macro?: Macro }).macro;
   const macros: Macro[] = [...effects.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
   const wired = toWire(added.modules, added.cables);
-  return { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: effects.pins };
+  const rack: PatchV2 = { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: effects.pins };
+  return opts.devices === false ? rack : packed(rack);
+}
+
+/** The common patterns as devices (0057 §7f: "common patterns that replace removed special cases ship as ready-made
+ *  devices"): the sidechain's Duckers and their activity VCAs as Calm, the pause's dimming as Pause Dim, the hits'
+ *  envelopes as Hit Lights. Each opens to its modules and can be unmade. */
+function packed(p: PatchV2): PatchV2 {
+  const ids = (f: (m: Module) => boolean) => p.modules.filter(f).map((m) => m.id);
+  makeDevice(p, ids((m) => m.id.startsWith('duck-')), { id: 'calm', label: 'Calm' });
+  makeDevice(p, ids((m) => m.id.startsWith('pause-')), { id: 'pause', label: 'Pause Dim' });
+  makeDevice(p, ids((m) => m.type === 'adsr' && m.id !== NEWTRACK), { id: 'hit-lights', label: 'Hit Lights' });
+  return p;
 }
