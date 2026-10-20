@@ -115,13 +115,31 @@
       panel = false;
     } else showChrome();
   }
-  function togglePanel() {
-    panel = !panel;
-    if (panel) void loadLibrary();
-    if (panel && sheet) openSheet(true);
-    if (!panel && history.state?.sheet) history.back();
+  // The rack open is a step of the history (the owner, 71.1: "so long as the rack view is open, the close button should
+  // close the rack"): the close button, Esc and Back close it first (its sheet before it, on a phone), the visuals after.
+  function openRack() {
+    panel = true;
+    void loadLibrary();
+    history.pushState({ ...history.state, visuals: true, rack: true }, '');
+    if (sheet) {
+      panelPath = [];
+      sheetOpen = true;
+      sheetDy = 0;
+    }
     showChrome();
   }
+  function closeRack() {
+    if (!panel) return;
+    const steps = (history.state?.rack ? 1 : 0) + (history.state?.sheet ? 1 : 0);
+    panel = false;
+    sheetOpen = false;
+    sheetDy = 0;
+    if (steps) history.go(-steps);
+    showChrome();
+  }
+  const togglePanel = () => (panel ? closeRack() : openRack());
+  /** The close button and Esc: the rack first, then the visuals. */
+  const closeOne = () => (panel ? closeRack() : close());
 
   // ---- The patch's changes ----------------------------------------------------------------------------------------
   // The preset the patch was last set to (its name in the panel), until something is changed.
@@ -249,19 +267,23 @@
     showChrome();
     if (!history.state?.visuals) history.pushState({ ...history.state, visuals: true }, '');
     const popped = () => {
-      // Back with the sheet open closes the sheet only.
-      if (sheetOpen && sheet && !history.state?.sheet) {
+      // Back closes one thing at a time: the panel's sheet, then the rack, then the visuals.
+      const st = history.state ?? {};
+      if (sheetOpen && sheet && !st.sheet) {
         sheetOpen = false;
         sheetDy = 0;
-        if (history.state?.visuals) return;
       }
-      if (!closed && !history.state?.visuals) {
+      if (panel && !st.rack) {
+        panel = false;
+        sheetOpen = false;
+      }
+      if (!closed && !st.visuals) {
         closed = true;
         onclose();
       }
     };
     addEventListener('popstate', popped);
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && closeOne();
     addEventListener('keydown', onKey);
     const resized = () => (wide = innerWidth >= 1100);
     addEventListener('resize', resized);
@@ -328,7 +350,7 @@
   {/if}
   {#if chrome}
     <div class="chrome" transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      <button class="close" aria-label="Close the visuals" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={close}
+      <button class="close" aria-label={panel ? 'Close the rack' : 'Close the visuals'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={closeOne}
         ><Icon name="close" size={26} /></button
       >
       <div class="corner">
