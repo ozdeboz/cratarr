@@ -9,6 +9,7 @@ import { heightOf, shapeOf, type Shape } from '../evaluate';
 import type { PatchV2 } from '../ports';
 import { BAND_SIGNALS } from '../routes';
 import { followsOf } from './follow';
+import { musicView } from './music-signals';
 
 export type FluidAspect = 'stir' | 'flow' | 'swirl';
 export type FluidGain = (signal: string, band: number | null, aspect: FluidAspect, x: number) => number;
@@ -19,7 +20,7 @@ const gains = new WeakMap<PatchV2, Map<string, Shape[]>>();
 /** The patch's fluid gains (a flattened patch's; worked out once a patch object). */
 export function fluidGains(p: PatchV2): FluidGain {
   let index = gains.get(p);
-  if (!index) gains.set(p, (index = indexOf(p)));
+  if (!index) gains.set(p, (index = indexOf(musicView(p))));
   const by = index;
   return (signal, band, aspect, x) => {
     let sum = 0;

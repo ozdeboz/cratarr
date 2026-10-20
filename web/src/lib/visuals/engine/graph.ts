@@ -24,6 +24,7 @@ import { gridOf, type Grid, type GridPoint } from './grid';
 import { FLASH_GUARD } from './sidechain';
 import type { MeterValues } from '../meters';
 import { slotKnobOf, slotOf } from './effect-slots';
+import { musicView } from './music-signals';
 import { NO_STRIKE, adsrOf, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
 
 const NA = ASPECTS.length;
@@ -442,7 +443,9 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
 
 /** One frame. `read`: the music's signals on 1 = typical (normal.ts signalsFor), for cables that read them so; `s`: the
  *  chain's knobs as settings (until the chain's modules hold their own). */
-export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, ModuleType>, m: Music, read: (ref: SignalRef) => number, s: VisualSettings, dt: number, opts: EngineOptions): EngineFrame {
+export function stepEngine(st: EngineState, given: PatchV2, types: Record<string, ModuleType>, m: Music, read: (ref: SignalRef) => number, s: VisualSettings, dt: number, opts: EngineOptions): EngineFrame {
+  // A Music signal module is Music's port of its signal (music-signals.ts).
+  const p = musicView(given);
   const L = opts.levers ?? OPEN;
   const step = Number.isFinite(dt) ? Math.max(0, dt) : 0;
   const plan = planOf(p, types);
