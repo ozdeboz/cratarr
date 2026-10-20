@@ -71,6 +71,10 @@ export type ModuleData = {
   fbSide?: Side;
   /** How far right of its left edge the node's far form may reach before the next node (flow px). */
   room?: number;
+  /** How many cables come in and go out (its far form says so). */
+  cables?: Count;
+  /** Its category's lane (v2): ELK keeps the lanes in order by it. */
+  category?: Category;
   modulator: boolean;
   /** Drawn from a v2 patch (graphOfV2): its ports whole, which of them the picture handles and the `mod` handle are,
    *  every handle connectable. */
@@ -83,10 +87,12 @@ export type PortView = { id: string; label: string; type: PortType; channels?: n
 /** An output jack: its handle (`mod`, or `o:<port>`). */
 export type OutView = { id: string; label: string; type: PortType; handle: string; connectable?: boolean };
 /** A signal of Music's: its type (an event's a trigger, the sound audio), a band's six at once `channels` 6. */
-export type SignalData = { kind: 'signal'; label: string; ref: SignalRef; type: PortType; channels?: number; room?: number };
-export type MarkData = { kind: 'blend' | 'screen'; label: string; in: Side; out: Side | null; room?: number };
+export type SignalData = { kind: 'signal'; label: string; ref: SignalRef; type: PortType; channels?: number; room?: number; cables?: Count };
+export type MarkData = { kind: 'blend' | 'screen'; label: string; in: Side; out: Side | null; room?: number; cables?: Count };
+/** Cables into a node and out of it. */
+export type Count = { in: number; out: number };
 /** A layer's box, or the loop's; `add`: where a module added from its "+" goes (the layer's id, or `loop`). */
-export type BoxData = { kind: 'box'; label: string; add?: string; device?: true };
+export type BoxData = { kind: 'box'; label: string; add?: string; device?: true; category?: Category };
 /** A layer that is off, as one row: what brings it back is its id (the flame's: `flame`). */
 export type OffData = { kind: 'off'; layer: string; label: string };
 /** "+ Add layer" at the picture lane's end, "+ Add modulator" by the modulators. */
@@ -118,7 +124,8 @@ export type GraphEdge = {
   target: string;
   sourceHandle: string;
   targetHandle: string;
-  type?: 'cable' | 'smoothstep';
+  /** `cable` (a modulation cable, sagging), `wire` (a picture's or light's, a curve or, `data.step`, in steps). */
+  type?: 'cable' | 'wire';
   /** `picture`, `light`, `feedback`, `cable`, or `normal` (a port's normal, faint); then `w-<type>`. */
   class: string;
   label?: string;
@@ -129,7 +136,7 @@ export type GraphEdge = {
   data?: CableData;
 };
 /** A modulation cable's (or a normal's) data: its amount, its wire's type, a bundle's channels. */
-export type CableData = { amount: string; wire: PortType; channels?: number; lit?: boolean; muted?: true; normal?: true };
+export type CableData = { amount: string; wire: PortType; channels?: number; lit?: boolean; muted?: true; normal?: true; step?: boolean; route?: XY[] };
 
 /** Graph ids that are not a module's (a module's node is its id). */
 export const BLEND = '@blend';
@@ -144,6 +151,57 @@ export const ADD_LAYER = '@add-layer';
 export const ADD_MODULATOR = '@add-modulator';
 /** An output jack's handle past the first (which is `mod`). */
 export const outHandle = (port: string) => `o:${port}`;
+
+/** A jack's size (every socket is one, PatchNode's `.jack`), and where a cable meets it: its centre, half a jack in
+ *  from the edge point Svelte Flow gives on the jack's side. */
+export const JACK = 10;
+export function toJack(x: number, y: number, side: Side | string | undefined): XY {
+  const r = JACK / 2;
+  if (side === 'left') return { x: x + r, y };
+  if (side === 'right') return { x: x - r, y };
+  if (side === 'top') return { x, y: y + r };
+  if (side === 'bottom') return { x, y: y - r };
+  return { x, y };
+}
+/** A route (ELK's, from its port to its port) drawn from jack centre `a` to jack centre `b`: its first and last bends slid
+ *  onto the jacks' lines (ELK's port is near the jack, not on it), a square corner wherever two points are still not in
+ *  line (across first, or down first in portrait), and points in line merged. */
+export function routePath(a: XY, route: XY[], b: XY, portrait = false): [path: string, mid: XY] {
+  const bends = route.slice(1, -1).map((p) => ({ ...p }));
+  const along = (p: XY, q: XY) => (Math.abs(p.y - q.y) < 0.5 ? 'x' : Math.abs(p.x - q.x) < 0.5 ? 'y' : null);
+  if (bends.length) {
+    const first = along(route[0], route[1]);
+    if (first === 'x') bends[0].y = a.y;
+    else if (first === 'y') bends[0].x = a.x;
+    const last = along(route[route.length - 2], route[route.length - 1]);
+    const z = bends[bends.length - 1];
+    if (last === 'x') z.y = b.y;
+    else if (last === 'y') z.x = b.x;
+  }
+  const pts: XY[] = [a, ...bends, b];
+  const square: XY[] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const p = square[square.length - 1];
+    const q = pts[i];
+    if (Math.abs(p.x - q.x) > 0.5 && Math.abs(p.y - q.y) > 0.5) square.push(portrait ? { x: p.x, y: q.y } : { x: q.x, y: p.y });
+    square.push(q);
+  }
+  // Points in line with both neighbours, and repeats, dropped.
+  const clean = square.filter((p, i) => {
+    if (i === 0 || i === square.length - 1) return true;
+    const o = square[i - 1];
+    const q = square[i + 1];
+    const same = Math.abs(p.x - o.x) < 0.5 && Math.abs(p.y - o.y) < 0.5;
+    const line = (Math.abs(o.x - p.x) < 0.5 && Math.abs(p.x - q.x) < 0.5) || (Math.abs(o.y - p.y) < 0.5 && Math.abs(p.y - q.y) < 0.5);
+    return !same && !line;
+  });
+  const f = (v: number) => Math.round(v * 10) / 10;
+  const path = clean.map((p, i) => `${i ? 'L' : 'M'}${f(p.x)},${f(p.y)}`).join(' ');
+  return [path, clean[Math.floor(clean.length / 2)]];
+}
+
+/** Cables over the nodes (as VCV Rack draws them): every edge's z-index. */
+export const EDGE_Z = 1000;
 
 /** Each type's wire (0057 §1): picture solid; light solid and thicker (amber, by its class); value dashed; trigger
  *  dotted (round caps on near-nothing dashes); audio a double line (a wide stroke with its middle drawn out). */
@@ -322,6 +380,92 @@ export function knobViews(
 /** What a face reads of its module's knobs: each at its default, as set, a polyphonic one's channels too. */
 export const faceKnobs = (m: Module, t: ModuleType): Record<string, number> => ({ ...Object.fromEntries(t.knobs.map((k) => [k.id, k.default])), ...m.knobs });
 
+/** The top-level nodes' extent (flow px). */
+export function extent(nodes: GraphNode[], size: (n: GraphNode) => Size): Size {
+  const top = nodes.filter((n) => !n.parentId);
+  const right = Math.max(0, ...top.map((n) => n.position.x + (n.width ?? size(n).width)));
+  const bottom = Math.max(0, ...top.map((n) => n.position.y + (n.height ?? size(n).height)));
+  const left = Math.min(0, ...top.map((n) => n.position.x));
+  const up = Math.min(0, ...top.map((n) => n.position.y));
+  return { width: right - left, height: bottom - up };
+}
+/** The zoom a fit of `e` into `view` comes to. */
+export const fitZoom = (e: Size, view: Size) => Math.min(view.width / Math.max(1, e.width), view.height / Math.max(1, e.height));
+
+/** Portrait (0057 §7b): each group of top-level nodes (the picture's, in its order; the modulators beside it) laid in
+ *  columns, a column turning past a height chosen so the whole fits `view` best (the largest fit zoom); nodes the viewer
+ *  put somewhere (`kept`) stay. */
+export function fitPortrait(nodes: GraphNode[], size: (n: GraphNode) => Size, view: Size, groups: string[][], kept: (id: string) => boolean) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const sz = (id: string) => {
+    const n = byId.get(id)!;
+    return { width: n.width ?? size(n).width, height: n.height ?? size(n).height };
+  };
+  const lists = groups.map((g) => g.filter((id) => byId.has(id) && !kept(id)));
+  const place = (most: number, apply: boolean): Size => {
+    let x = 0;
+    let bottom = 0;
+    for (const list of lists) {
+      if (!list.length) continue;
+      let y = 0;
+      let w = 0;
+      for (const id of list) {
+        const s = sz(id);
+        if (y > 0 && y + s.height > most) {
+          x += w + PORTRAIT_GAP;
+          y = 0;
+          w = 0;
+        }
+        if (apply) byId.get(id)!.position = { x, y };
+        y += s.height + GAP_Y;
+        w = Math.max(w, s.width);
+        bottom = Math.max(bottom, y - GAP_Y);
+      }
+      x += w + PORTRAIT_GAP;
+    }
+    return { width: x - PORTRAIT_GAP, height: bottom };
+  };
+  const all = lists.flat();
+  if (!all.length) return;
+  const tallest = Math.max(...all.map((id) => sz(id).height));
+  const total = Math.max(...lists.map((l) => l.reduce((a, id) => a + sz(id).height + GAP_Y, 0)));
+  let best = { most: total, z: fitZoom(place(total, false), view) };
+  for (let i = 0; i <= 16; i++) {
+    const most = tallest + ((total - tallest) * i) / 16;
+    const z = fitZoom(place(most, false), view);
+    if (z > best.z + 1e-6) best = { most, z };
+  }
+  place(best.most, true);
+}
+
+/** Each node's cables in and out (not its normals): its far form counts them. */
+export function withCounts(nodes: GraphNode[], edges: GraphEdge[]) {
+  const count = new Map<string, Count>();
+  const at = (id: string) => count.get(id) ?? count.set(id, { in: 0, out: 0 }).get(id)!;
+  for (const e of edges) {
+    if (e.data?.normal || e.class === 'feedback') continue;
+    at(e.source).out++;
+    at(e.target).in++;
+  }
+  for (const n of nodes) if (n.data.kind === 'module' || n.data.kind === 'signal' || n.data.kind === 'blend' || n.data.kind === 'screen') n.data = { ...n.data, cables: count.get(n.id) ?? { in: 0, out: 0 } };
+}
+/** A node's cables as its far form says them: "6 in · 12 out", one side alone where the other has none. */
+export function countLabel(c: Count | undefined): string {
+  if (!c) return '';
+  return [c.in ? `${c.in} in` : '', c.out ? `${c.out} out` : ''].filter(Boolean).join(' · ');
+}
+
+/** The far form's sockets (0057 §7b): one for what comes in, on the side the node takes in, one for what goes out, on
+ *  the side it gives out; far out every cable is led to these (bundled there), so none ends inside a node. */
+export const FAR_IN = 'far-in';
+export const FAR_OUT = 'far-out';
+/** The edges as the far form draws them: each end on its node's far socket (a frame's edges, which have none, as they
+ *  are). */
+export function farEdges<E extends { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }>(edges: E[], nodes: { id: string; data: NodeData }[]): E[] {
+  const socketed = new Set(nodes.filter((n) => n.data.kind === 'module' || n.data.kind === 'signal' || n.data.kind === 'blend' || n.data.kind === 'screen').map((n) => n.id));
+  return edges.map((e) => ({ ...e, ...(socketed.has(e.source) ? { sourceHandle: FAR_OUT } : {}), ...(socketed.has(e.target) ? { targetHandle: FAR_IN } : {}) }));
+}
+
 /** How far right a node's far form may reach (its `room`): to the next node beside it that its row overlaps, less a
  *  little; far from any, `ROOM_MOST`. Positions as laid out (a node in a box by its box's). */
 const ROOM_MOST = 900;
@@ -376,8 +520,10 @@ export type GraphInput = {
   adds?: boolean;
   /** Which boxes take a module from their "+" (a layer's id, or `loop`); every one when not given. */
   addTo?: (where: string) => boolean;
-  /** A screen taller than wide (a phone upright): the picture runs down, the modulators in rows under it. */
+  /** A screen taller than wide (a phone upright): the picture runs down, the modulators in columns beside it. */
   portrait?: boolean;
+  /** The graph's visible size (above an open sheet): the portrait layout takes the shape that fits it best. */
+  view?: Size;
 };
 
 /** Whether a layer is off: blended at nothing, so none of it is seen. */
@@ -386,7 +532,7 @@ export const layerOff = (l: Pick<Patch['layers'][number], 'blend'>) => l.blend.a
 /** The patch as Svelte Flow's nodes and edges. The picture runs left to right: each layer a row in its box (its own
  *  loop at the row's end), the layers stacked, then the blend, the loop, finish and the screen in one row; the frame
  *  under the screen. Signals and modulators sit under the knobs they move, so their cables run short and mostly up. */
-export function graphOf({ patch, types, positions = {}, signals = [], open = new Set(), sizes = {}, adds = false, addTo = () => true, portrait = false }: GraphInput): { nodes: GraphNode[]; edges: GraphEdge[] } {
+export function graphOf({ patch, types, positions = {}, signals = [], open = new Set(), sizes = {}, adds = false, addTo = () => true, portrait = false, view }: GraphInput): { nodes: GraphNode[]; edges: GraphEdge[] } {
   // The way the picture runs: across, or (portrait) down.
   const IN: Side = portrait ? 'top' : 'left';
   const OUT: Side = portrait ? 'bottom' : 'right';
@@ -474,7 +620,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
   };
   const picture = (a: string, b: string, label?: string) => {
     const wire = gives.get(a) ?? 'picture';
-    edges.push({ id: `pic:${a}>${b}`, source: a, target: b, sourceHandle: 'out', targetHandle: 'in', class: wire, style: wireStyle(wire), deletable: false, selectable: false, ...(label ? { label } : {}) });
+    edges.push({ id: `pic:${a}>${b}`, source: a, target: b, sourceHandle: 'out', targetHandle: 'in', type: 'wire', class: wire, style: wireStyle(wire), deletable: false, selectable: false, data: { amount: '', wire }, ...(label ? { label } : {}) });
   };
 
   /** A box around a row of modules, those from `loopAt` on a loop (its last back to its first). */
@@ -495,7 +641,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     });
     for (let i = 1; i < row.length; i++) picture(row[i - 1].id, row[i].id);
     if (loops)
-      edges.push({ id: `fb:${row.at(-1)!.id}>${row[loopAt].id}`, source: row.at(-1)!.id, target: row[loopAt].id, sourceHandle: 'fb', targetHandle: 'fbin', type: 'smoothstep', class: 'feedback', style: wireStyle(gives.get(row.at(-1)!.id) ?? 'picture'), label: 'feedback', deletable: false, selectable: false });
+      edges.push({ id: `fb:${row.at(-1)!.id}>${row[loopAt].id}`, source: row.at(-1)!.id, target: row[loopAt].id, sourceHandle: 'fb', targetHandle: 'fbin', type: 'wire', class: 'feedback', style: wireStyle(gives.get(row.at(-1)!.id) ?? 'picture'), label: 'feedback', deletable: false, selectable: false, data: { amount: '', wire: gives.get(row.at(-1)!.id) ?? 'picture', step: true } });
     box.width = Math.max(120, ...inside.map((n) => n.position.x + size(n).width)) + PAD;
     box.height = Math.max(60, ...inside.map((n) => n.position.y + size(n).height)) + PAD + (loops && !portrait ? 24 : 0);
     if (loops && portrait) box.width += 32;
@@ -631,7 +777,9 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     return xs.length ? Math.min(...xs) - (sizes[x.id] ?? sizeOf(x.data)).width / 2 - 24 : Infinity;
   };
   // Portrait: in columns beside the picture's, as tall as it, in the order of what they move (so the whole is about
-  // as tall as wide as a phone's screen above a sheet, and a far label has the room beside it).
+  // as tall as wide as a phone's screen above a sheet, and a far label has the room beside it); `fitPortrait` then
+  // turns both into the columns that fit the view best.
+  const pictureColumn = nodes.filter((n) => !n.parentId).map((n) => n.id);
   const column = { x: Math.max(...nodes.filter((n) => !n.parentId).map((n) => n.position.x + (n.width ?? size(n).width)), 0) + PORTRAIT_GAP, y: 0, w: 0 };
   const tall = Math.max(bottom, 600);
   for (const x of [...first, ...later]) {
@@ -694,7 +842,12 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     const data: CableData = { amount: '', wire: n.wire, normal: true };
     edges.push({ id: `normal:${n.to}.${n.port}`, source: n.from, target: n.to, sourceHandle: n.handle, targetHandle: knobHandle(n.port), type: 'cable', class: `normal w-${n.wire}`, style: wireStyle(n.wire), deletable: false, selectable: false, data });
   }
+  if (portrait && view) {
+    const beside = nodes.filter((n) => !n.parentId && !pictureColumn.includes(n.id)).map((n) => n.id);
+    fitPortrait(nodes, size, view, [pictureColumn, beside], (id) => !!positions[id]);
+  }
   withRoom(nodes, size);
+  withCounts(nodes, edges);
   return { nodes, edges };
 }
 
@@ -853,8 +1006,9 @@ export type V2Input = {
   open?: ReadonlySet<string>;
   positions?: Record<string, XY>;
   sizes?: Record<string, Size>;
-  /** A screen taller than wide: each lane's row turns at about a phone's width, so the lanes run down. */
+  /** A screen taller than wide: each lane's row turns sooner, so the lanes run down, as wide as fits `view` best. */
   portrait?: boolean;
+  view?: Size;
 };
 
 /** The patch inside the devices `at` leads through; null where one is not there. */
@@ -966,9 +1120,21 @@ const intoOf = (p: PatchV2) => {
 };
 
 /** The v2 patch as Svelte Flow's nodes and edges, at the level `at` leads to. */
-export function graphOfV2({ patch, types, at = [], open = new Set(), positions = {}, sizes = {}, portrait = false }: V2Input): { nodes: GraphNode[]; edges: GraphEdge[] } {
-  // Portrait: rows a little wider than a phone at a readable zoom, a far label's room between the modules.
-  const ACROSS = portrait ? PORTRAIT_ACROSS : LANE_ACROSS;
+export function graphOfV2(input: V2Input): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  if (!input.portrait || !input.view) return layoutV2(input, input.portrait ? PORTRAIT_ACROSS : LANE_ACROSS);
+  // Portrait with the view known: the lanes' width whose whole fits it best (the largest fit zoom).
+  const view = input.view;
+  let best: { g: { nodes: GraphNode[]; edges: GraphEdge[] }; z: number } | null = null;
+  for (let across = 400; across <= 2400; across += 200) {
+    const g = layoutV2(input, across);
+    const z = fitZoom(extent(g.nodes, (n) => input.sizes?.[n.id] ?? sizeOf(n.data)), view);
+    if (!best || z > best.z + 1e-6) best = { g, z };
+  }
+  return best!.g;
+}
+
+function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, sizes = {}, portrait = false }: V2Input, ACROSS: number): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  // Portrait: a far label's room between the modules.
   const BESIDE = portrait ? PORTRAIT_BESIDE : 0;
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
@@ -1105,6 +1271,7 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
       let x = 0;
       let rowH = 0;
       for (const it of ms) {
+        it.node.data = { ...it.node.data, category: cat } as NodeData;
         if (x > 0 && x + it.size.width > ACROSS) {
           x = 0;
           y += rowH + 40;
@@ -1140,14 +1307,14 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
       const wire = out?.type ?? 'value';
       const channels = channel === undefined ? out?.channels : undefined;
       const picture = PICTURE_TYPES.has(wire);
-      const cd: CableData = { amount: c ? amountLabel(c.value, c.mode) : '', wire, ...(channels ? { channels } : {}), ...(c ? {} : { normal: true as const }) };
+      const cd: CableData = { amount: c ? amountLabel(c.value, c.mode) : '', wire, ...(channels ? { channels } : {}), ...(c ? {} : { normal: true as const }), ...(picture ? { step: true } : {}) };
       edges.push({
         id,
         source: from.node,
         target: to.node,
         sourceHandle,
         targetHandle,
-        type: picture ? ('smoothstep' as const) : ('cable' as const),
+        type: picture ? ('wire' as const) : ('cable' as const),
         class: !c ? `normal w-${wire}` : picture ? wire : 'cable',
         style: wireStyle(wire),
         deletable: !!c,
@@ -1173,6 +1340,7 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
   };
   level(top, '', undefined, { x: 0, y: 0 });
   withRoom(nodes, (n) => sizes[n.id] ?? sizeOf(n.data));
+  withCounts(nodes, edges);
   return { nodes, edges };
 }
 
@@ -1314,5 +1482,9 @@ export type GraphActions = {
   rerouting(): { id: string; at: XY } | null;
   /** The live faces' frame (faces.ts), where the parent feeds one. */
   live(): import('./faces').LiveFrame | null;
+  /** Whether the graph is laid out for a screen taller than wide (the far sockets then at top and bottom). */
+  portrait(): boolean;
+  /** Whether a modulation cable follows its ELK route (else it sags as VCV Rack's do). */
+  routeCables(): boolean;
 };
 export const GRAPH = 'patchgraph';

@@ -48,6 +48,11 @@
   import CableMenu from './CableMenu.svelte';
   import PatchNode from './PatchNode.svelte';
   import PatchCable from './PatchCable.svelte';
+  import PatchWire from './PatchWire.svelte';
+  import ElkApi from 'elkjs/lib/elk-api.js';
+  import elkWorker from 'elkjs/lib/elk-worker.min.js?url';
+  import type { ElkNode } from 'elkjs/lib/elk-api';
+  import { fromElk, layoutKey, toElk } from './elk-layout';
   import PatchConnection from './PatchConnection.svelte';
   import PatchFit from './PatchFit.svelte';
   import PatchChips from './PatchChips.svelte';
@@ -61,6 +66,8 @@
     connectionV2,
     crumbsOf,
     graphOfV2,
+    EDGE_Z,
+    farEdges,
     knobHandle,
     patchAt,
     typesOf,
@@ -76,6 +83,7 @@
     labelOf,
     nextOpacity,
     rerouted,
+    sizeOf,
     type GraphActions,
     type NodeData,
     type Size,
@@ -107,6 +115,9 @@
     live,
     openAtStart = [],
     sheetHeight = 0,
+    layout = 'elk',
+    routeCables = false,
+    onarrange,
     helpFor,
     onedges,
   }: {
@@ -142,22 +153,31 @@
     openAtStart?: string[];
     /** How much of the graph's bottom an open sheet covers (px): the fitted view keeps clear of it. */
     sheetHeight?: number;
+    /** v2's layout: ELK's (layered, in a worker; the owner's choice) or the hand one (the lab's comparison). */
+    layout?: 'elk' | 'hand';
+    /** Whether modulation cables follow ELK's routes too (else they sag, as VCV Rack's). */
+    routeCables?: boolean;
+    /** "Arrange": the places the viewer gave nodes forgotten, ELK's taken (shown while there are any). */
+    onarrange?: () => void;
     /** A module's help (module-help.ts), for its long press's menu. */
     helpFor?: (type: string, port?: string) => string | null | undefined;
     /** The edges as drawn, each time they change (the lab's check that every cable ends on its sockets). */
-    onedges?: (edges: { id: string; source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }[]) => void;
+    onedges?: (edges: { id: string; source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null; wire: string }[]) => void;
   } = $props();
 
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  // The top panels clear of the safe area (a notch).
+  const TOP = 'margin-top: calc(15px + env(safe-area-inset-top))';
   // The view's zoom: no text under 11 px on screen. Under 1 the small labels (11 px) are not drawn; under FAR a title
   // (13.5 px) would be under 11 too, and nodes show their name and how much is cabled.
   const FAR = 0.82;
   let zoom = $state(1);
+  const farNow = $derived(zoom < FAR);
   // What the view fits round: clear of the legend and crumbs above, the chips and an open sheet below.
   const padding = $derived<FitViewOptions['padding']>({ top: '56px', left: '16px', right: '16px', bottom: `${Math.round(sheetHeight) + 60}px` as `${number}px` });
 
   const nodeTypes = { patch: PatchNode, box: PatchNode };
-  const edgeTypes = { cable: PatchCable };
+  const edgeTypes = { cable: PatchCable, wire: PatchWire };
 
   let nodes = $state.raw<Node[]>([]);
   let edges = $state.raw<Edge[]>([]);
@@ -204,8 +224,10 @@
   let touched = $state(false);
   let width = $state(0);
   let height = $state(0);
-  // Taller than wide where the graph shows (above an open sheet): the picture runs down (a phone upright).
+  // Taller than wide where the graph shows (above an open sheet): the picture runs down (a phone upright); the view the
+  // layout fits (less the fit's padding).
   const portrait = $derived(width > 0 && height - sheetHeight > width);
+  const view = $derived(portrait ? { width: Math.max(1, width - 32), height: Math.max(1, height - sheetHeight - 116) } : undefined);
 
   // The cables' opacity (VCV Rack's cable opacity), this device's.
   const OPACITY_KEY = 'cratarr-graph-cable-opacity';
@@ -229,6 +251,23 @@
   }
 
   const adds = $derived(!!onaddlayer && !!onaddmodulator);
+
+  // ELK in a web worker (elk-layout.ts), made when first wanted; its last layout by the graph's shape.
+  let elk: InstanceType<typeof ElkApi> | null = null;
+  let elkDone = $state.raw<{ key: string; laid: ElkNode } | null>(null);
+  let elkAsked: string | null = null;
+  function askElk(key: string, graph: ElkNode) {
+    if (elkAsked === key) return;
+    elkAsked = key;
+    elk ??= new ElkApi({ workerUrl: elkWorker });
+    elk
+      .layout(graph)
+      .then((laid) => {
+        if (elkAsked === key) elkDone = { key, laid: laid as ElkNode };
+      })
+      .catch((e) => console.warn('Visuals: the graph could not be laid out', e));
+  }
+  $effect(() => () => elk?.terminateWorker());
   // Into another level (v2): the view fits it again.
   $effect(() => {
     void v2?.at.join('/');
@@ -277,10 +316,20 @@
       sizes[id] = { width, height };
     }
     const g = v2
-      ? graphOfV2({ patch: v2.patch, types, at: v2.at, open: opened, positions: placed, sizes, portrait })
+      ? graphOfV2({ patch: v2.patch, types, at: v2.at, open: opened, positions: placed, sizes, portrait, view })
       : patch
-        ? graphOf({ patch, types, positions: placed, signals, open: opened, sizes, adds, addTo: (w) => !!onaddmodule && canAddTo(w), portrait })
+        ? graphOf({ patch, types, positions: placed, signals, open: opened, sizes, adds, addTo: (w) => !!onaddmodule && canAddTo(w), portrait, view })
         : { nodes: [], edges: [] };
+    // v2 by ELK: its layout once it is in for this graph's shape (a knob's turn does not change it), else asked for.
+    if (v2 && layout === 'elk') {
+      const sz = (n: Node | (typeof g.nodes)[number]) => sizes[n.id] ?? sizeOf((n as (typeof g.nodes)[number]).data);
+      const key = layoutKey(g.nodes, g.edges, sz, { portrait });
+      if (elkDone?.key === key) Object.assign(g, fromElk(elkDone.laid, g.nodes, g.edges, (id) => !!placed[id]));
+      else untrack(() => askElk(key, toElk(g.nodes, g.edges, sz, { portrait })));
+    }
+    // Far out, every cable on its nodes' far sockets (none ends inside a node); every cable over the nodes (EDGE_Z).
+    if (farNow) g.edges = farEdges(g.edges, g.nodes);
+    g.edges = g.edges.map((e) => ({ ...e, zIndex: EDGE_Z }));
     untrack(() => {
       // What Svelte Flow knows of each node (its size, selection, a drag under way) carries over.
       const before = new Map(nodes.map((n) => [n.id, n]));
@@ -304,10 +353,21 @@
     const key = focusKey;
     untrack(() => (edges = dress(edges, key)));
   });
-  $effect(() => onedges?.(edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle }))));
+  $effect(() =>
+    onedges?.(
+      edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        sourceHandle: e.sourceHandle,
+        targetHandle: e.targetHandle,
+        wire: (e.data as CableData | undefined)?.wire ?? (String(e.class).startsWith('light') ? 'light' : 'picture'),
+      })),
+    ),
+  );
 
   // What the view fits to: the top-level nodes' places and sizes, and the graph's own size.
-  const layout = $derived(
+  const fitKey = $derived(
     `${width}x${height};${sizeKey};` +
       nodes
         .filter((n) => !n.parentId)
@@ -380,6 +440,8 @@
     },
     rerouting: () => reroute,
     live: () => live?.frame ?? null,
+    portrait: () => portrait,
+    routeCables: () => routeCables,
   });
 
   const ends = () => nodes as unknown as { id: string; data: NodeData }[];
@@ -539,7 +601,7 @@
     onnodeclick={({ node }) => selecting && togglePick(node.id)}
     onpaneclick={() => (reroute = null)}
   >
-    <PatchFit {layout} active={!touched} {padding} onzoom={(z) => (zoom = z)} />
+    <PatchFit layout={fitKey} active={!touched} {padding} onzoom={(z) => (zoom = z)} />
     <Panel position="bottom-left" class="chips-panel">
       <div class="bottom">
         {#if selecting}
@@ -552,18 +614,19 @@
           {#if chosen.length > 1}<button class="opacity make" onclick={() => (menu = { kind: 'make', ids: chosen })}>Make device</button>{/if}
           <PatchChips {parts} {padding} onjump={() => (touched = true)} />
         {/if}
+        {#if onarrange && Object.keys(placed).length}<button class="opacity" onclick={onarrange}>Arrange</button>{/if}
         <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
       </div>
     </Panel>
     {#if v2?.at.length}
-      <Panel position="top-left">
+      <Panel position="top-left" style={TOP}>
         <nav class="crumbs" aria-label="Devices">
           <button onclick={() => v2.onenter([])}>Patch</button>
           {#each crumbsOf(v2.patch, v2.at) as name, i (i)}<span>›</span><button class:here={i === v2.at.length - 1} onclick={() => v2.onenter(v2.at.slice(0, i + 1))}>{name}</button>{/each}
         </nav>
       </Panel>
     {/if}
-    <Panel position="top-right">
+    <Panel position="top-right" style={TOP}>
       <div class="legend">
         {#each LEGEND.filter(([t]) => wires.has(t)) as [t, name] (t)}
           <span
@@ -851,10 +914,6 @@
   .make:disabled {
     opacity: 0.5;
     cursor: default;
-  }
-  .patch-graph :global(.svelte-flow__panel.top-left),
-  .patch-graph :global(.svelte-flow__panel.top-right) {
-    margin-top: calc(15px + env(safe-area-inset-top));
   }
   /* On a narrow screen the legend gives way. */
   .narrow .legend {

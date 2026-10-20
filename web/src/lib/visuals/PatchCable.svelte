@@ -5,18 +5,24 @@
   // knob or output (Svelte Flow's reconnection). Its hit path is wider than it looks, wider still under a finger.
   // Its wire is its type's (patchgraph.ts WIRES, as CSS variables in `style`): the sound's a double line (its middle
   // drawn out); a band's six at once marked "· 6". A port's normal (`normal`) is the line alone, faint, never tapped.
+  // It runs from jack centre to jack centre and ends in a plug in each, so no dash stops short of a socket.
   import { getContext } from 'svelte';
   import { BaseEdge, EdgeLabel, EdgeReconnectAnchor, useSvelteFlow, type EdgeProps } from '@xyflow/svelte';
   import { longpress } from '../longpress';
-  import { cableLabel, GRAPH, nearestEnd, saggingPath, WIRES, type CableData, type GraphActions } from './patchgraph';
+  import { cableLabel, GRAPH, nearestEnd, routePath, saggingPath, toJack, WIRES, type CableData, type GraphActions } from './patchgraph';
 
-  let { id, sourceX, sourceY, targetX, targetY, data, selected, style }: EdgeProps = $props();
+  let { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, selected, style }: EdgeProps = $props();
   const graph = getContext<GraphActions>(GRAPH);
   const flow = useSvelteFlow();
-  const HIT = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 28 : 16;
+  // Over the nodes, its hit line stays near the line itself, so a knob under it still turns.
+  const HIT = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 18 : 10;
 
-  const [path, mid] = $derived(saggingPath({ x: sourceX, y: sourceY }, { x: targetX, y: targetY }));
   const d = $derived((data ?? { amount: '', wire: 'value' }) as CableData);
+  // From jack centre to jack centre (toJack), with VCV Rack's sag between.
+  const a = $derived(toJack(sourceX, sourceY, sourcePosition));
+  const b = $derived(toJack(targetX, targetY, targetPosition));
+  // Or its ELK route, where the graph routes cables so.
+  const [path, mid] = $derived(d.route && graph.routeCables() ? routePath(a, d.route, b, graph.portrait()) : saggingPath(a, b));
   const label = $derived(cableLabel(d, !!(selected || d.lit)));
 
   // Where the last press on it was (the long press's), for the end to reroute.
@@ -32,6 +38,9 @@
 
 <BaseEdge {path} {style} interactionWidth={0} class={reconnecting ? 'cable-path held' : 'cable-path'} />
 {#if WIRES[d.wire]?.double}<path d={path} class="gap" />{/if}
+<!-- A plug at each end, over its jack's hole: the cable plainly in it, whatever its dash. -->
+<circle cx={a.x} cy={a.y} r="3.4" class="plug w-{d.wire}" class:normal={d.normal} />
+<circle cx={b.x} cy={b.y} r="3.4" class="plug w-{d.wire}" class:normal={d.normal} />
 {#if !d.normal}
 <path
   d={path}
@@ -63,6 +72,24 @@
 {/if}
 
 <style>
+  .plug {
+    fill: var(--wire-value);
+    stroke: var(--patch-bg);
+    stroke-width: 1.2;
+    pointer-events: none;
+  }
+  .plug.w-trigger {
+    fill: var(--wire-trigger);
+  }
+  .plug.w-audio {
+    fill: var(--wire-audio);
+  }
+  .plug.w-points {
+    fill: var(--wire-points);
+  }
+  .plug.normal {
+    opacity: 0.45;
+  }
   .gap {
     fill: none;
     stroke: var(--patch-bg);

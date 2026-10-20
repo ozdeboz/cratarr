@@ -6,7 +6,8 @@
   // beat stood in for here until claude-5f's engine gives them), and "New ▸ LFO / ADSR" from a knob dragged into the
   // empty. ?v2: today's settings as a v2 patch (v2.ts toV2), held in the patch store (patch-store.ts) as the truth,
   // drawn by the v2 graph: Show a device (open it here, or go into it), every edit a step, Ctrl+Z and Ctrl+Shift+Z;
-  // &open=show starts with Show open here. ?sheet: a sheet over the bottom 40 %, as the page's (the graph fits clear of it).
+  // &open=show starts with Show open here; &layout=hand the hand layout in place of ELK's (to compare); &cables=elk
+  // modulation cables on ELK's routes too. ?sheet: a sheet over the bottom 40 %, as the page's (the graph fits clear of it).
   import { onMount } from 'svelte';
   import PatchGraph from './PatchGraph.svelte';
   import { cratarrPatch, cratarrTypes, type Cable, type Knob, type Module, type ModuleType, type Patch } from './patch';
@@ -276,6 +277,13 @@
     positions={v2mode ? here : positions}
     openAtStart={query.get('open')?.split(',') ?? []}
     sheetHeight={sheetH}
+    layout={query.get('layout') === 'hand' ? 'hand' : 'elk'}
+    routeCables={query.get('cables') === 'elk'}
+    onarrange={() => {
+      positions = {};
+      v2positions = {};
+      last = 'arranged';
+    }}
     {helpFor}
     onedges={(list) => ((window as unknown as { __edges: unknown }).__edges = list)}
     {onconnect}

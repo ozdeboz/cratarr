@@ -12,7 +12,7 @@
   import PatchFace from './PatchFace.svelte';
   import Icon from '../Icon.svelte';
   import { clockLights } from './faces';
-  import { GRAPH, gainPort, knobHandle, MOD_OUT, nextPort, polyTurned, type GraphActions, type KnobView, type NodeData, type Side } from './patchgraph';
+  import { countLabel, FAR_IN, FAR_OUT, GRAPH, gainPort, knobHandle, MOD_OUT, nextPort, polyTurned, type GraphActions, type KnobView, type NodeData, type Side } from './patchgraph';
 
   let { id, data, selected }: { id: string; data: NodeData; selected?: boolean } = $props();
   const graph = getContext<GraphActions>(GRAPH);
@@ -30,6 +30,15 @@
   // A polyphonic knob opened out to its channels, or one of them back to the one.
   const polyOf = (k: KnobView) => (k.channels ? k.id : /^(.+)\.\d+$/.exec(k.id)?.[1]);
   const pair = (k: KnobView) => `${id}.${polyOf(k)}`;
+
+  // A knob's jack: under its dial's middle; on touch under the dial, clear of it (a finger turns the dial).
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  const knobJack = coarse ? 'top: auto; bottom: -6px' : 'top: 17.5px; bottom: auto';
+
+  // The far form's sockets: what comes in on the side the node takes in, what goes out on the other (portrait: top and
+  // bottom), every cable led there far out (patchgraph.ts farEdges).
+  const farIn = $derived(graph.portrait() ? Position.Top : Position.Left);
+  const farOut = $derived(graph.portrait() ? Position.Bottom : Position.Right);
 
   // The Clock's lights, from the graph's live frame (only a Clock's node reads it).
   const lights = $derived(data.kind === 'module' && data.face?.kind === 'clock' ? (clockLights(graph.live()?.beat ?? null) as Record<string, number>) : null);
@@ -73,7 +82,9 @@
   <div class="node mod" style:--room={data.room ? `${data.room}px` : null} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
     <span class="t">{data.label}</span>
     <span class="sum only"><b>{data.label}</b></span>
-    <Handle type="source" id={MOD_OUT} position={Position.Top} class="out t-{data.type}" />
+    <Handle type="source" id={MOD_OUT} position={Position.Top} class="jack out t-{data.type}" />
+    <Handle type="target" id={FAR_IN} position={farIn} isConnectable={false} class="jack farh" />
+    <Handle type="source" id={FAR_OUT} position={farOut} isConnectable={false} class="jack farh" />
   </div>
 {:else if data.kind === 'module'}
   <div class="node" style:--room={data.room ? `${data.room}px` : null} class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation" use:longpress={() => graph.removable(id) && graph.menu(id)}>
@@ -82,14 +93,14 @@
       {#if data.device}<button class="plus nodrag" aria-label="Open {data.label} here" title="Open here" onclick={() => graph.toggle(id)}>+</button>{/if}
     </span>
     <button class="sum nodrag" tabindex="-1" onclick={() => graph.open(id)}
-      ><b>{data.label}</b><span class="n">{' · '}{data.knobs.filter((k) => k.ring).length + data.ports.filter((p) => p.cabled).length} cabled</span></button
+      ><b>{data.label}</b>{#if countLabel(data.cables)}<span class="n">{' · '}{countLabel(data.cables)}</span>{/if}</button
     >
     {#if data.ports.length}
       <div class="ports">
         {#each data.ports as p (p.id)}
           <div class="port" class:cabled={p.cabled}>
             {p.label}
-            <Handle type="target" id={knobHandle(p.id)} position={Position.Left} class="in-mod t-{p.type}" style="left: -10px" />
+            <Handle type="target" id={knobHandle(p.id)} position={Position.Left} class="jack in-mod t-{p.type}" style="left: -10px" />
           </div>
         {/each}
       </div>
@@ -99,9 +110,9 @@
         {#each data.knobs as k (k.id)}
           <div class="kw">
             <PatchKnob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.channels ? `${k.id}.0` : k.id)} />
-            <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="in-mod t-value" style="top: 17.5px; bottom: auto" />
-            {#if k.next}<Handle type="target" id={knobHandle(nextPort(k.id))} position={Position.Left} class="in-mod t-trigger next" style="top: 6px; left: 2px" />{/if}
-            {#if k.gain}<Handle type="target" id={knobHandle(gainPort(k.id))} position={Position.Right} class="in-mod t-value next" style="top: 6px; right: 2px" />{/if}
+            <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="jack in-mod t-value" style={knobJack} />
+            {#if k.next}<Handle type="target" id={knobHandle(nextPort(k.id))} position={Position.Left} class="jack in-mod t-trigger next" style="top: 6px; left: 2px" />{/if}
+            {#if k.gain}<Handle type="target" id={knobHandle(gainPort(k.id))} position={Position.Right} class="jack in-mod t-value next" style="top: 6px; right: 2px" />{/if}
             {#if k.channels}
               <button class="poly nodrag" aria-label="{k.label}: each band" title="Each band" onclick={() => graph.toggle(pair(k))}>{k.channels.length}</button>
             {:else if polyOf(k) && graph.opened(pair(k)) && k.id.endsWith('.0')}
@@ -121,26 +132,30 @@
         {#each data.outs as o (o.id)}
           <div class="jack">
             <i class="light t-{o.type}" style:--lit={lights?.[o.id] ?? 0}></i><span class="jl">{o.label}</span>
-            <Handle type="source" id={o.handle} position={Position.Top} isConnectable={o.connectable || o.handle === MOD_OUT} class="out t-{o.type}" />
+            <Handle type="source" id={o.handle} position={Position.Top} isConnectable={o.connectable || o.handle === MOD_OUT} class="jack out t-{o.type}" />
           </div>
         {/each}
       </div>
     {/if}
     {#if data.face && data.face.kind !== 'clock'}<PatchFace {id} face={data.face} />{/if}
-    {#if data.in}<Handle type="target" id="in" position={SIDE[data.in]} isConnectable={!!data.v2} class="pic t-picture" style={at(data.in)} />{/if}
-    {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={!!data.v2} class="pic" style={at(data.out)} />{/if}
-    {#if data.feedback}<Handle type="source" id="fb" position={SIDE[data.fbSide ?? 'bottom']} isConnectable={false} class="fb" />{/if}
-    {#if data.feedbackIn}<Handle type="target" id="fbin" position={SIDE[data.fbSide ?? 'bottom']} isConnectable={false} class="fb" />{/if}
+    {#if data.in}<Handle type="target" id="in" position={SIDE[data.in]} isConnectable={!!data.v2} class="jack pic t-picture" style={at(data.in)} />{/if}
+    {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={!!data.v2} class="jack pic t-picture" style={at(data.out)} />{/if}
+    {#if data.feedback}<Handle type="source" id="fb" position={SIDE[data.fbSide ?? 'bottom']} isConnectable={false} class="jack fb t-picture" />{/if}
+    {#if data.feedbackIn}<Handle type="target" id="fbin" position={SIDE[data.fbSide ?? 'bottom']} isConnectable={false} class="jack fb t-picture" />{/if}
+    <Handle type="target" id={FAR_IN} position={farIn} isConnectable={false} class="jack farh" />
+    <Handle type="source" id={FAR_OUT} position={farOut} isConnectable={false} class="jack farh" />
     {#if data.modulator && !data.outs.length}
-      <Handle type="source" id={MOD_OUT} position={Position.Top} class="out t-{data.gives?.type ?? 'value'}" />
+      <Handle type="source" id={MOD_OUT} position={Position.Top} class="jack out t-{data.gives?.type ?? 'value'}" />
     {/if}
   </div>
 {:else}
   <div class="node mark" style:--room={data.room ? `${data.room}px` : null} class:sel={selected}>
     <span class="t">{data.label}</span>
     <span class="sum only"><b>{data.label}</b></span>
-    <Handle type="target" id="in" position={SIDE[data.in]} isConnectable={false} class="pic" />
-    {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={false} class="pic" />{/if}
+    <Handle type="target" id={FAR_IN} position={farIn} isConnectable={false} class="jack farh" />
+    <Handle type="source" id={FAR_OUT} position={farOut} isConnectable={false} class="jack farh" />
+    <Handle type="target" id="in" position={SIDE[data.in]} isConnectable={false} class="jack pic t-picture" />
+    {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={false} class="jack pic t-picture" />{/if}
   </div>
 {/if}
 
@@ -172,12 +187,14 @@
     font-size: max(12px, calc(11px / var(--z, 1)));
   }
   .node {
+    /* Opaque, so no cable shows through a node. */
+    --node-bg: var(--tile);
     position: relative;
     min-width: 140px;
     padding: 8px 10px 10px;
     border-radius: 12px;
     border: 1px solid var(--border);
-    background: var(--tile);
+    background: linear-gradient(var(--node-bg), var(--node-bg)), var(--patch-bg);
     color: var(--text);
     font-size: 13.5px;
   }
@@ -186,7 +203,8 @@
   }
   .node.mod {
     min-width: 150px;
-    background: color-mix(in srgb, var(--patch-mod) 12%, var(--surface));
+    --node-bg: color-mix(in srgb, var(--patch-mod) 12%, var(--surface));
+    background: linear-gradient(var(--node-bg), var(--node-bg)), var(--patch-bg);
     border-color: color-mix(in srgb, var(--patch-mod) 35%, var(--border));
   }
   .node.mark {
@@ -301,58 +319,53 @@
   .more:hover {
     color: var(--text);
   }
-  .node :global(.svelte-flow__handle) {
-    width: 9px;
-    height: 9px;
+  /* Every socket a jack (after VCV Rack's, drawn our own way): a ring in its wire's colour round a dark hole, all one
+     size (patchgraph.ts JACK), so a cable ends at its centre with its plug over it. A trigger's ring is a diamond. */
+  .node :global(.jack) {
+    --jack-ring: var(--muted);
+    width: 10px;
+    height: 10px;
     min-width: 0;
     min-height: 0;
     border: 0;
     border-radius: 50%;
+    background: var(--jack-hole, #0b0c0f);
+    box-shadow: inset 0 0 0 2px var(--jack-ring);
   }
-  .node :global(.svelte-flow__handle.pic) {
-    background: var(--text);
+  .node :global(.jack.t-picture) {
+    --jack-ring: var(--text);
   }
-  .node :global(.svelte-flow__handle.out) {
-    background: var(--patch-mod);
+  .node :global(.jack.t-value) {
+    --jack-ring: var(--wire-value);
+  }
+  .node :global(.jack.t-audio) {
+    --jack-ring: var(--wire-audio);
+  }
+  .node :global(.jack.t-light) {
+    --jack-ring: var(--wire-light);
+  }
+  .node :global(.jack.t-points) {
+    --jack-ring: var(--wire-points);
+  }
+  .node :global(.jack.t-trigger) {
+    background: none;
+    box-shadow: none;
+  }
+  .node :global(.jack.t-trigger)::before {
+    content: '';
+    position: absolute;
+    inset: 1.5px;
+    transform: rotate(45deg);
+    border: 2px solid var(--wire-trigger);
+    background: var(--jack-hole, #0b0c0f);
+    pointer-events: none;
+  }
+  .node :global(.jack.out) {
     cursor: crosshair;
   }
-  .node :global(.svelte-flow__handle.in-mod) {
-    width: 7px;
-    height: 7px;
-    background: color-mix(in srgb, var(--patch-mod) 35%, transparent);
-  }
-  .node :global(.svelte-flow__handle.in-mod.connectingto),
-  .node :global(.svelte-flow__handle.in-mod:hover) {
-    background: var(--patch-mod);
-  }
-  /* By type: a value's purple, a trigger's a diamond, the sound's a ring, light amber (PatchGraph's --wire-*). */
-  .node :global(.svelte-flow__handle.t-trigger) {
-    background: var(--wire-trigger);
-    border-radius: 0;
-    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
-    width: 10px;
-    height: 10px;
-  }
-  .node :global(.svelte-flow__handle.in-mod.t-trigger) {
-    background: color-mix(in srgb, var(--wire-trigger) 55%, transparent);
-  }
-  .node :global(.svelte-flow__handle.t-audio) {
-    background: var(--patch-bg);
-    box-shadow: inset 0 0 0 2px var(--wire-audio);
-    width: 10px;
-    height: 10px;
-  }
-  .node :global(.svelte-flow__handle.t-light) {
-    background: var(--wire-light);
-  }
-  /* Points: a small square. */
-  .node :global(.svelte-flow__handle.t-points) {
-    background: var(--wire-points);
-    border-radius: 2px;
-  }
-  .node :global(.svelte-flow__handle.in-mod.t-trigger.connectingto),
-  .node :global(.svelte-flow__handle.in-mod.t-trigger:hover) {
-    background: var(--wire-trigger);
+  .node :global(.jack:hover),
+  .node :global(.jack.connectingto) {
+    box-shadow: inset 0 0 0 3px var(--jack-ring);
   }
   .outs {
     display: flex;
@@ -451,7 +464,21 @@
   :global(.far) .node.off .back {
     visibility: hidden;
   }
+  /* The far sockets: only far out, over the node's edge, above its name. */
+  .node :global(.jack.farh) {
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 2;
+  }
+  :global(.far) .node :global(.jack.farh) {
+    visibility: visible;
+  }
   /* A category's lane's header (v2): its name, its pin, its "+". */
+  .lane > span {
+    padding: 0 6px;
+    border-radius: 6px;
+    background: var(--patch-bg);
+  }
   .lane {
     display: flex;
     gap: 8px;
@@ -491,24 +518,11 @@
   }
   /* A finger's handles: 24 px and more to hit; a knob's under it, clear of the dial. */
   @media (pointer: coarse) {
-    .node :global(.svelte-flow__handle)::after {
+    .node :global(.jack)::after {
       content: '';
       position: absolute;
-      inset: -9px;
+      inset: -8px;
       border-radius: 50%;
     }
-    .kw :global(.svelte-flow__handle.in-mod:not(.next)) {
-      top: auto !important;
-      bottom: -6px !important;
-    }
-  }
-  /* A step knob's next: a small diamond at its dial's upper left; a level knob's gain, a small dot at its upper right. */
-  .node :global(.svelte-flow__handle.next) {
-    width: 8px;
-    height: 8px;
-  }
-  .node :global(.svelte-flow__handle.fb) {
-    opacity: 0;
-    pointer-events: none;
   }
 </style>

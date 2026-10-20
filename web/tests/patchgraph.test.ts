@@ -865,3 +865,130 @@ test('portrait: the picture runs down (a layer, the blend, the loop, finish, the
   // A loop's way back leaves at the right.
   assert.equal((n('m2').data as ModuleData).fbSide, 'right');
 });
+
+test('a cable ends at its jack’s centre: half a jack in from the edge point on the jack’s side', () => {
+  const { toJack, JACK } = await_graph;
+  const r = JACK / 2;
+  assert.deepEqual(toJack(100, 50, 'right'), { x: 100 - r, y: 50 });
+  assert.deepEqual(toJack(100, 50, 'left'), { x: 100 + r, y: 50 });
+  assert.deepEqual(toJack(100, 50, 'top'), { x: 100, y: 50 + r });
+  assert.deepEqual(toJack(100, 50, 'bottom'), { x: 100, y: 50 - r });
+  // Every edge drawn by our own components (picture wires and cables), over the nodes.
+  const g = graphOf({ patch: sample(), types });
+  assert.ok(g.edges.every((e) => e.type === 'wire' || e.type === 'cable'));
+  assert.equal(g.edges.find((e) => e.id.startsWith('fb:'))?.data?.step, true);
+});
+
+test('far out every cable is on its nodes’ far sockets (in on the input side, out on the output side), bundled', () => {
+  const { farEdges, FAR_IN, FAR_OUT } = await_graph;
+  const g = graphOf({ patch: sample(), types });
+  const far = farEdges(g.edges, g.nodes);
+  assert.equal(far.length, g.edges.length);
+  for (const e of far) {
+    assert.equal(e.sourceHandle, FAR_OUT, e.id);
+    assert.equal(e.targetHandle, FAR_IN, e.id);
+  }
+  // A frame (a device opened in place) has none: its edges as they are.
+  const boxed = farEdges([{ id: 'x', source: layerBox('one'), target: 'k1', sourceHandle: 'out', targetHandle: 'in' }], g.nodes);
+  assert.deepEqual([boxed[0].sourceHandle, boxed[0].targetHandle], ['out', FAR_IN]);
+});
+
+test('a node’s far form counts its cables in and out ("6 in · 12 out"), not its normals', () => {
+  const { countLabel } = await_graph;
+  assert.equal(countLabel({ in: 6, out: 12 }), '6 in · 12 out');
+  assert.equal(countLabel({ in: 0, out: 3 }), '3 out');
+  assert.equal(countLabel({ in: 2, out: 0 }), '2 in');
+  assert.equal(countLabel({ in: 0, out: 0 }), '');
+  const g = graphOfV2({ patch: v2patch(), types: v2types });
+  const count = (id: string) => (g.nodes.find((n) => n.id === id)!.data as ModuleData).cables!;
+  const music = count('music');
+  assert.ok(music.out > 5, `Music: ${JSON.stringify(music)}`);
+  assert.equal(music.out, g.edges.filter((e) => e.source === 'music' && !e.data?.normal).length);
+  assert.equal(count('flame').in, g.edges.filter((e) => e.target === 'flame' && !e.data?.normal).length);
+});
+
+test('portrait with the view known: the layout takes the shape that fits it best', () => {
+  const { extent, fitZoom } = await_graph;
+  const phone = { width: 358, height: 420 };
+  const fit = (g: { nodes: GraphNode[] }) => fitZoom(extent(g.nodes as never, (n: never) => sizeOfTest((n as { data: never }).data)), phone);
+  // v1: no worse than one column beside the modulators.
+  const plain = graphOf({ patch: sample(), types, portrait: true });
+  const fitted = graphOf({ patch: sample(), types, portrait: true, view: phone });
+  assert.ok(fit(fitted) >= fit(plain) - 1e-9, `${fit(fitted)} < ${fit(plain)}`);
+  // v2: the lanes' width that fits best, at least as well as the fixed one.
+  const fixed = graphOfV2({ patch: v2patch(), types: v2types, portrait: true });
+  const best = graphOfV2({ patch: v2patch(), types: v2types, portrait: true, view: phone });
+  assert.ok(fit(best) >= fit(fixed) - 1e-9, `${fit(best)} < ${fit(fixed)}`);
+  // A node the viewer put somewhere stays.
+  const kept = graphOf({ patch: sample(), types, portrait: true, view: phone, positions: { lfo: { x: 900, y: 900 } } });
+  assert.deepEqual(kept.nodes.find((n) => n.id === 'lfo')!.position, { x: 900, y: 900 });
+});
+
+// ---- ELK's layout (elk-layout.ts), ELK in-process here (its bundled build) -------------------------------------------
+
+const elkMod = await import('../src/lib/visuals/elk-layout.ts');
+const ELKBundled = (await import('elkjs/lib/elk.bundled.js')).default;
+const elkNow = new ELKBundled();
+const sizeBy = (n: { id: string; data: unknown }) => sizeOfTest(n.data as never);
+
+test('ELK’s graph: ports by the cables’ sockets, inputs west and outputs east (north and south in portrait), the categories as partitions, a device opened here a compound node', () => {
+  const g = graphOfV2({ patch: v2patch(), types: v2types, open: new Set(['show']) });
+  const e = elkMod.toElk(g.nodes, g.edges, sizeBy as never);
+  assert.equal(e.layoutOptions!['elk.algorithm'], 'layered');
+  assert.equal(e.layoutOptions!['elk.edgeRouting'], 'ORTHOGONAL');
+  assert.equal(e.layoutOptions!['elk.hierarchyHandling'], 'INCLUDE_CHILDREN');
+  const flame = e.children!.find((n) => n.id === 'flame')!;
+  assert.equal(flame.layoutOptions!['elk.portConstraints'], 'FIXED_ORDER');
+  assert.equal(flame.layoutOptions!['elk.partitioning.partition'], '0', 'Sources first');
+  const side = (n: typeof flame, h: string) => n.ports!.find((p) => p.id === `${n.id}::${h}`)?.layoutOptions!['elk.port.side'];
+  assert.equal(side(flame, 'out'), 'EAST');
+  assert.equal(side(flame, 'k:shape'), 'WEST');
+  const show = e.children!.find((n) => n.id === 'show')!;
+  assert.deepEqual(show.children!.map((c) => c.id), SHOW_PARTS.map((x) => `show/${x.type}`));
+  assert.ok(!e.children!.some((n) => n.id.startsWith('@lane')), 'lane headers are not ELK’s');
+  const p = elkMod.toElk(g.nodes, g.edges, sizeBy as never, { portrait: true });
+  assert.equal(p.layoutOptions!['elk.direction'], 'DOWN');
+  assert.equal(side(p.children!.find((n) => n.id === 'flame')!, 'out'), 'SOUTH');
+  // What ELK depends on: not a knob's value.
+  const turned = v2patch();
+  applyV2(turned, { kind: 'knob', module: ['flame'], knob: 'hue', value: 0.9 });
+  const k1 = elkMod.layoutKey(g.nodes, g.edges, sizeBy as never);
+  const g2 = graphOfV2({ patch: turned, types: v2types, open: new Set(['show']) });
+  assert.equal(elkMod.layoutKey(g2.nodes, g2.edges, sizeBy as never), k1);
+});
+
+test('ELK lays the v2 patch: the categories in order, the picture wires routed, the viewer’s places kept, lane heads over their lanes', async () => {
+  const g = graphOfV2({ patch: v2patch(), types: v2types });
+  const laid = await elkMod.elkLayout(elkNow, g.nodes, g.edges, sizeBy as never, (id: string) => id === 'clock');
+  const at = (id: string) => laid.nodes.find((n) => n.id === id)!.position;
+  // Partitions left to right: Sources, Effects, …, In / Out.
+  assert.ok(at('flame').x < at('show').x && at('show').x < at('music').x, JSON.stringify([at('flame'), at('show'), at('music')]));
+  // The clock was put somewhere by the viewer: where it was.
+  assert.deepEqual(at('clock'), g.nodes.find((n) => n.id === 'clock')!.position);
+  // A picture wire has its route; a lane's head is just above its first node.
+  const wire = laid.edges.find((e) => e.id === 'lab-1')!;
+  assert.ok(wire.data?.route && wire.data.route.length >= 2);
+  const head = at('@lane:sources');
+  assert.ok(head.y < at('flame').y && head.x <= at('flame').x);
+  // Every node has a place.
+  assert.ok(laid.nodes.every((n) => Number.isFinite(n.position.x) && Number.isFinite(n.position.y)));
+});
+
+test('ELK with Show open here (a compound node) and in portrait (down)', async () => {
+  const g = graphOfV2({ patch: v2patch(), types: v2types, open: new Set(['show']), portrait: true });
+  const laid = await elkMod.elkLayout(elkNow, g.nodes, g.edges, sizeBy as never, () => false, { portrait: true });
+  const n = (id: string) => laid.nodes.find((x) => x.id === id)!;
+  assert.ok(n('show').width! > 0 && n('show').height! > 0, 'the frame sized by ELK');
+  assert.ok(n('show/bend').position.y < n('show/saturate').position.y, 'down inside the frame too');
+  assert.ok(n('flame').position.y < n('show').position.y, 'Sources over Effects');
+});
+
+test('a route drawn square from jack to jack', () => {
+  const { routePath } = await_graph;
+  // ELK's port a pixel off the jack: its first bend slid onto the jack's line, no needless step.
+  const [path] = routePath({ x: 0, y: 0 }, [{ x: 0, y: 1 }, { x: 50, y: 1 }, { x: 50, y: 40 }, { x: 99, y: 40 }], { x: 100, y: 40 });
+  assert.equal(path, 'M0,0 L50,0 L50,40 L100,40');
+  // No bends and not in line: one square corner (down first in portrait).
+  const [down] = routePath({ x: 0, y: 0 }, [{ x: 0, y: 0 }, { x: 30, y: 50 }], { x: 30, y: 50 }, true);
+  assert.equal(down, 'M0,0 L0,50 L30,50');
+});
