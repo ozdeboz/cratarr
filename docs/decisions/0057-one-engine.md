@@ -346,8 +346,11 @@ The owner: "a difference between morphable shapes and non-morphable shapes … t
   so a corner fractal (Sierpinski, Koch) is standard modules: corners → Instance (a smaller copy at each) → Feedback.
   Only regular shapes have corners; a feedback fractal (Fractal Spiral) takes any picture.
 - **Irregular shapes**: a shape knob (a step).
-- Both keep the same layout and look knobs (count on a ring, spread, orbit, spin, twist, taper, hue, outline or fill),
-  one code; they differ only in how they pick their shape.
+- Both keep the same layout knobs (count on a ring, spread, orbit, spin, twist, taper) and the same stroke: an outline
+  of a width, a fill, or both. One code; they differ only in how they pick their shape.
+- **Monochrome** (the owner: "all monochrome"): they draw light only. Colour is a Tint's after them (its own hue, or a
+  picture's colours by its second input), one meaning a module; hue, hue spread and saturation leave them for Tint, as
+  70.1's tint and glow do (§5). The conversion puts a Tint behind every coloured Shapes of today, so it looks the same.
 - **Lens stays one module** (the owner): its kind steps through the 11 warps, Polygon, Star and the irregular shapes;
   Polygon and Star take Sides and Depth knobs. A warp kind moves points as today; a shape kind sends them into the
   shape evenly, as the Cratarr lens does. The kinds of today keep their numbers, so every track's look stays.
