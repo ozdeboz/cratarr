@@ -9,7 +9,7 @@ import { EffectClocks, pictureShader } from '../effects';
 import type { Fluid } from '../fluid';
 import { effectRuns, passOf, runIdle, type Fx, type Run } from './effect-runs';
 import type { Finish } from './finish';
-import { FULL } from './shared';
+import { FULL, none } from './shared';
 import { keptPerSecond } from '../loopmods';
 import { MIX_INPUTS, MIX_MODES } from '../ports';
 import type { FrameInfo } from '../patch';
@@ -276,7 +276,7 @@ void main() { o = texture(uIn, vUv); }`);
       gl.uniform1i(gl.getUniformLocation(p!, name), unit);
     };
     // Without a first, the rest over nothing.
-    bind(0, first?.tex ?? rest[0]?.t?.tex ?? null, 'uBase');
+    bind(0, first?.tex ?? rest[0]?.t?.tex ?? none(gl), 'uBase');
     // The first's share of the picture (a morph may run past 1 or below 0 for a frame).
     gl.uniform1f(gl.getUniformLocation(p, 'uBaseGain'), first ? Math.min(1, Math.max(0, k.amount1 ?? 1)) : 0);
     rest.forEach(({ i, t }, j) => {

@@ -4,7 +4,7 @@
 import { type EffectClocks, MOST_PICTURE } from '../effects';
 import type { Fluid } from '../fluid';
 import type { EffectsParams } from '../chain-params';
-import { uniforms } from './shared';
+import { none, uniforms } from './shared';
 
 /** A pass's targets: what it reads as the last picture (0) and what it draws into (1), at `w` x `h`. */
 export type FxTargets = { tex: WebGLTexture[]; fbo: WebGLFramebuffer[]; w: number; h: number; cur: number; last: number };
@@ -75,7 +75,7 @@ export class Finish {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, into.tex[into.cur]);
     gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, fluid ? fluid.velocity : null);
+    gl.bindTexture(gl.TEXTURE_2D, fluid ? fluid.velocity : none(gl));
     gl.activeTexture(gl.TEXTURE0);
     const u = (n: string) => this.u(p, n);
     gl.uniform1i(u('uPicture'), 0);
