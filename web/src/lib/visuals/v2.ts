@@ -18,6 +18,7 @@
 // The picture side's wiring (which picture goes into which, and the modules it needs: the Screen, the Feedbacks, the
 // Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
 
+import { slotsAsEffects } from './effect-modules';
 import type { RouteValue } from './curves';
 import { ASPECTS, BAND_SIGNALS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, type Aspect } from './routes';
 import { shapeOf } from './evaluate';
@@ -388,11 +389,13 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     { id: 'pause-follow-out', from: { module: 'pause-follow', port: 'out' }, to: { module: 'pause-dim', port: 'cv' }, value: -0.45, mode: 'swing', depth: null },
     { id: 'pause-dim-out', from: { module: 'pause-dim', port: 'out' }, to: { module: 'show', port: 'level:gain' }, value: 1, mode: 'swing', depth: null },
   );
-  const all = [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules, ...pause];
-  const adding = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
+  // One module per effect (0057 §3): each slot as the module of the effect it draws, its cables and pins with it.
+  const effects = slotsAsEffects(modules, cables, p.pins, p.macros);
+  const all = [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...effects.modules, ...pause];
+  const adding = opts.addOnly === false ? { modules: all, cables: effects.cables } : cablesAdd(all, effects.cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);
   const wildMacro = (added as { macro?: Macro }).macro;
-  const macros: Macro[] = wildMacro ? [...p.macros, wildMacro] : p.macros;
-  return { v: 2, modules: [...added.modules, ...wiring.modules], cables: [...toWire(added.modules, added.cables), ...wiring.cables], macros, pins: p.pins };
+  const macros: Macro[] = wildMacro ? [...effects.macros, wildMacro] : effects.macros;
+  return { v: 2, modules: [...added.modules, ...wiring.modules], cables: [...toWire(added.modules, added.cables), ...wiring.cables], macros, pins: effects.pins };
 }
