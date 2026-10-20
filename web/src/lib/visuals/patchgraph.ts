@@ -878,21 +878,6 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
     for (const cat of CATEGORIES) {
       const ms = lanes[cat].map((m) => items.get(m.id)).filter((it): it is Placed => !!it);
       if (!ms.length) continue;
-      if (!parent) {
-        const hid = `${prefix}${laneId(cat)}`;
-        const head: GraphNode = {
-          id: hid,
-          type: 'patch',
-          position: { x: origin.x, y: origin.y + y },
-          data: { kind: 'lane', category: cat, label: CATEGORY_LABEL[cat], pinned: p.pins.includes(categoryPin(cat)), scope },
-          deletable: false,
-          selectable: false,
-          connectable: false,
-          draggable: false,
-        };
-        nodes.push(head);
-        y += LANE_HEAD;
-      }
       const gap = Math.max(cat === 'effects' ? GAP_X : 24, BESIDE);
       let x = 0;
       let rowH = 0;

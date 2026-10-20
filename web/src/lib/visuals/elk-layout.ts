@@ -5,8 +5,8 @@
 //
 // Pure but for the ELK instance handed in (the page's runs in a web worker, the tests' in-process):
 // - toElk: the graph's nodes (a frame round a device opened in place a compound node, its modules inside) and their
-//   cables' sockets as ports, inputs west and outputs east (where the jacks are, in portrait too), in their order; the categories as ELK partitions in the order signals flow (flowOrder), so their lanes stay
-//   in order.
+//   cables' sockets as ports, inputs west and outputs east (where the jacks are, in portrait too), in their order; laid
+//   by signal flow alone (the owner, 71.1: no lanes, as VCV Rack).
 // - fromElk: ELK's places for the nodes (a node the viewer put somewhere stays there), a frame's size, and each picture
 //   wire's route (its bends; its ends are its jacks' centres, PatchWire).
 // - laneHeads: each category's header over its lane's nodes once ELK has placed them.
@@ -61,8 +61,6 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       height: 10,
       layoutOptions: { 'elk.port.side': isInput(h) ? inSide : outSide, 'elk.port.index': String(i) },
     }));
-    const category = (n.data as { category?: Category }).category;
-    const partition = category ? flowOrder(category, handles) : null;
     const children = laid.filter((c) => c.parentId === n.id).map(elkNode);
     return {
       id: n.id,
@@ -71,7 +69,6 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       ...(children.length ? { children } : {}),
       layoutOptions: {
         'elk.portConstraints': 'FIXED_ORDER',
-        ...(partition !== null ? { 'elk.partitioning.partition': String(partition) } : {}),
         // A frame's room round its modules: its name over them, the same room as between modules inside.
         ...(children.length ? { 'elk.padding': '[top=48,left=28,bottom=28,right=28]', 'elk.spacing.nodeNode': '48', 'elk.layered.spacing.nodeNodeBetweenLayers': '72' } : {}),
       },
@@ -85,7 +82,6 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       'elk.direction': o.portrait ? 'DOWN' : 'RIGHT',
       'elk.edgeRouting': 'ORTHOGONAL',
       'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
-      'elk.partitioning.activate': 'true',
       // Back edges (a Feedback's last frame, a loop's way back) routed round, not through.
       'elk.layered.feedbackEdges': 'true',
       'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',

@@ -1,8 +1,7 @@
 <script lang="ts">
   // A node of the patch graph (patchgraph.ts): a module or a device (face/NodeFrame: the one frame every node has), the
-  // frame round a device opened in place, or a category's lane's header (its pin, its "+").
+  // frame round a device opened in place.
   import { getContext } from 'svelte';
-  import Icon from '../Icon.svelte';
   import NodeFrame from './face/NodeFrame.svelte';
   import { GRAPH, type GraphActions, type NodeData } from './patchgraph';
 
@@ -21,16 +20,7 @@
         ><button class="plus nodrag" aria-label="Into {data.label}" title="Into" onclick={() => graph.enter(id)}>›</button>{/if}</span
     >
   </div>
-{:else if data.kind === 'lane'}
-  {@const lane = data}
-  <div class="lane">
-    <span>{lane.label}</span>
-    <button class="pin nodrag" class:on={lane.pinned} aria-pressed={lane.pinned} aria-label="Pin {lane.label}" title="Pin" onclick={() => graph.pinCategory(lane.scope, lane.category, !lane.pinned)}
-      ><Icon name="pin" size={14} /></button
-    >
-    <button class="plus nodrag" aria-label="Add to {lane.label}" title="Add" onclick={() => graph.adding({ category: lane.category, scope: lane.scope })}>+</button>
-  </div>
-{:else}
+{:else if data.kind === 'module'}
   <NodeFrame {id} {data} {selected} />
 {/if}
 
@@ -75,40 +65,5 @@
   }
   :global(.far) .bl {
     visibility: hidden;
-  }
-  .lane > span {
-    padding: 0 6px;
-    border-radius: 6px;
-    background: var(--patch-bg);
-  }
-  .lane {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    /* Its size fixed (the layout's), its name growing past it as the view zooms out, never under 11 px. */
-    width: 220px;
-    height: 26px;
-    overflow: visible;
-    white-space: nowrap;
-    color: var(--muted);
-    font-size: max(12.5px, calc(11px / var(--z, 1)));
-    font-weight: 600;
-    letter-spacing: 0.02em;
-  }
-  .pin {
-    display: grid;
-    place-items: center;
-    width: 24px;
-    height: 24px;
-    border-radius: 12px;
-    color: var(--muted);
-    opacity: 0.6;
-  }
-  .pin.on {
-    color: var(--accent);
-    opacity: 1;
-  }
-  .pin:hover {
-    opacity: 1;
   }
 </style>

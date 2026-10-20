@@ -580,13 +580,10 @@ test('v2: Show is one device node, its exposed light in, picture out and knobs; 
   assert.ok(!g.nodes.some((n) => n.id.startsWith('show/')), 'its modules not drawn while it is closed');
   const wire = g.edges.find((e) => e.id === 'lab-1')!;
   assert.deepEqual([wire.source, wire.sourceHandle, wire.target, wire.targetHandle, wire.data?.wire], ['flame', 'out', 'show', 'in', 'light']);
-  // Lanes by category (rack.ts byCategory), each under its header: the flame in Sources, Show in Effects, the
-  // modulators under them, In / Out last.
+  // No lanes (the owner, 71.1: by signal flow alone, as VCV): no headers; the hand layout's rows still by category.
   const at = (id: string) => g.nodes.find((n) => n.id === id)!.position;
-  const heads = g.nodes.filter((n) => n.data.kind === 'lane').map((n) => n.id);
-  assert.deepEqual(heads, ['@lane:sources', '@lane:effects', '@lane:mixers', '@lane:modulators', '@lane:io']);
-  assert.ok(at('@lane:sources').y < at('flame').y && at('flame').y < at('@lane:effects').y && at('@lane:effects').y < at('show').y);
-  assert.ok(at('show').y < at('@lane:modulators').y && at('music').y > at('@lane:io').y);
+  assert.ok(!g.nodes.some((n) => n.data.kind === 'lane'), 'no lane headers');
+  assert.ok(at('flame').y < at('show').y);
   const control = g.nodes.filter((n) => (n.data as ModuleData).modulator);
   assert.ok(control.length > 3 && control.every((n) => n.position.y > at('show').y));
   const adsrs = g.nodes.filter((n) => (n.data as ModuleData).type === 'adsr');
@@ -710,14 +707,12 @@ test('v2: a cable into a port its module does not declare, on a port row of its 
   if (adsr) assert.equal(g.edges.find((e) => e.id === 'r')?.targetHandle, adsr.id === 'adsr' ? 'k:release' : undefined);
 });
 
-test('v2 categories: a whole one pinned through the store, a module added by its lane’s "+"', () => {
+test('v2 categories: a whole one pinned through the store (the module browser’s pins), a module added from it', () => {
   const { typesOf, categoryPin } = await_graph;
   let st = newStore(v2patch());
   st = change(st, (p: PatchV2) => applyV2(p, { kind: 'pin', scope: [], category: 'effects', on: true }), null, 1);
   assert.ok(st.now.pins.includes(categoryPin('effects')));
-  const g = graphOfV2({ patch: st.now, types: v2types });
-  assert.equal((g.nodes.find((n) => n.id === '@lane:effects')!.data as { pinned: boolean }).pinned, true);
-  assert.equal((g.nodes.find((n) => n.id === '@lane:sources')!.data as { pinned: boolean }).pinned, false);
+  assert.ok(!st.now.pins.includes(categoryPin('sources')));
   st = change(st, (p: PatchV2) => applyV2(p, { kind: 'pin', scope: [], category: 'effects', on: false }), null, 2);
   assert.ok(!st.now.pins.includes(categoryPin('effects')));
   st = undo(st);
@@ -991,7 +986,7 @@ const ELKBundled = (await import('elkjs/lib/elk.bundled.js')).default;
 const elkNow = new ELKBundled();
 const sizeBy = (n: { id: string; data: unknown }) => sizeOfTest(n.data as never);
 
-test('ELK’s graph: ports by the cables’ sockets, inputs west and outputs east (in portrait too), the categories as partitions, a device opened here a compound node', () => {
+test('ELK’s graph: ports by the cables’ sockets, inputs west and outputs east (in portrait too), by signal flow alone (no partitions), a device opened here a compound node', () => {
   const g = graphOfV2({ patch: v2patch(), types: v2types, open: new Set(['show']) });
   const e = elkMod.toElk(g.nodes, g.edges, sizeBy as never);
   assert.equal(e.layoutOptions!['elk.algorithm'], 'layered');
@@ -1000,8 +995,8 @@ test('ELK’s graph: ports by the cables’ sockets, inputs west and outputs eas
   const flame = e.children!.find((n) => n.id === 'flame')!;
   assert.equal(flame.layoutOptions!['elk.portConstraints'], 'FIXED_ORDER');
   // Partitions in the order signals flow: In (Music), Modulators, Sources, Effects, Mixers, Out.
-  assert.equal(flame.layoutOptions!['elk.partitioning.partition'], '2', 'Sources after the Modulators');
-  assert.equal(e.children!.find((n) => n.id === 'music')!.layoutOptions!['elk.partitioning.partition'], '0', 'Music in');
+  assert.equal(flame.layoutOptions!['elk.partitioning.partition'], undefined, 'no partitions (no lanes)');
+  assert.equal(e.layoutOptions!['elk.partitioning.activate'], undefined);
   const side = (n: typeof flame, h: string) => n.ports!.find((p) => p.id === `${n.id}::${h}`)?.layoutOptions!['elk.port.side'];
   assert.equal(side(flame, 'out'), 'EAST');
   assert.equal(side(flame, 'k:shape'), 'WEST');
@@ -1019,19 +1014,17 @@ test('ELK’s graph: ports by the cables’ sockets, inputs west and outputs eas
   assert.equal(elkMod.layoutKey(g2.nodes, g2.edges, sizeBy as never), k1);
 });
 
-test('ELK lays the v2 patch: the categories in order, the picture wires routed, the viewer’s places kept, lane heads over their lanes', async () => {
+test('ELK lays the v2 patch: by signal flow, the picture wires routed, the viewer’s places kept', async () => {
   const g = graphOfV2({ patch: v2patch(), types: v2types });
   const laid = await elkMod.elkLayout(elkNow, g.nodes, g.edges, sizeBy as never, (id: string) => id === 'clock');
   const at = (id: string) => laid.nodes.find((n) => n.id === id)!.position;
-  // Partitions left to right as signals flow: Music, the modulators, the flame, its effects.
-  assert.ok(at('music').x < at('envelope').x && at('envelope').x < at('flame').x && at('flame').x < at('show').x, JSON.stringify([at('music'), at('envelope'), at('flame'), at('show')]));
+  // Left to right as signals flow: Music before what it feeds, the flame before its effects.
+  assert.ok(at('music').x < at('envelope').x && at('flame').x < at('show').x, JSON.stringify([at('music'), at('envelope'), at('flame'), at('show')]));
   // The clock was put somewhere by the viewer: where it was.
   assert.deepEqual(at('clock'), g.nodes.find((n) => n.id === 'clock')!.position);
-  // A picture wire has its route; a lane's head is just above its first node.
+  // A picture wire has its route.
   const wire = laid.edges.find((e) => e.id === 'lab-1')!;
   assert.ok(wire.data?.route && wire.data.route.length >= 2);
-  const head = at('@lane:sources');
-  assert.ok(head.y < at('flame').y && head.x <= at('flame').x);
   // Every node has a place.
   assert.ok(laid.nodes.every((n) => Number.isFinite(n.position.x) && Number.isFinite(n.position.y)));
 });

@@ -7,7 +7,7 @@
   import { useNodes, useSvelteFlow, useUpdateNodeInternals, useViewport } from '@xyflow/svelte';
   import { firstModule, openView, type NodeData, type Pad, type Size } from './patchgraph';
 
-  let { layout, active, pad, view, portrait = false, onzoom }: { layout: string; active: boolean; pad: Pad; view: Size; portrait?: boolean; onzoom?: (zoom: number) => void } = $props();
+  let { layout, active, pad, view, portrait = false, onzoom, onview }: { layout: string; active: boolean; pad: Pad; view: Size; portrait?: boolean; onzoom?: (zoom: number) => void; onview?: (v: { x: number; y: number; zoom: number }) => void } = $props();
   const flow = useSvelteFlow();
   const viewport = useViewport();
   const all = useNodes();
@@ -23,6 +23,8 @@
     return () => cancelAnimationFrame(frame);
   });
   $effect(() => onzoom?.(viewport.current.zoom));
+  // The viewport as it is (where a module added is put: the view's centre).
+  $effect(() => onview?.({ ...viewport.current }));
 
   const update = useUpdateNodeInternals();
   $effect(() => {

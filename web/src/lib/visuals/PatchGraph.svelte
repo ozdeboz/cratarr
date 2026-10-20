@@ -47,12 +47,13 @@
   import type { ModuleType } from './patch';
   import type { PatchV2, PortType } from './ports';
   import type { LiveFaces } from './faces.svelte';
-  import { CATEGORY_LABEL } from './rack';
+  import { CATEGORIES, CATEGORY_LABEL } from './rack';
   import { Thumbs, type Thumbnailer } from './face/face';
   import { MUSIC_SIGNALS, musicModuleFor, SIGNAL_OUT } from './music-signals';
   import { fits } from './ports';
   import {
     applyV2,
+    categoryPin,
     barActions,
     deleteEdits,
     unmakeEdits,
@@ -207,11 +208,11 @@
   let openCable = $state<string | null>(null);
   /** A long press's menu: a cable's, a module's, a knob's or port's help; the types to add somewhere; Make device. */
   type Menu =
-    | { kind: 'add'; to: AddTo }
+    // The module browser (the graph's one "+"): every type by category, Music's signals, a category's pin.
+    | { kind: 'browser' }
     | { kind: 'make'; ids: string[] }
     | { kind: 'help'; id: string; port: string }
-    // Music ▸ a signal: a music module of it, added at a level; or (from a knob dragged into the empty) cabled into it.
-    | { kind: 'music'; scope: string[] }
+    // From a knob dragged into the empty: the music signals that fit it, a module of one cabled into it.
     | { kind: 'pick'; node: string; port: string; at: XY };
   // The knobs chosen as a device's macros while it is being made (`<node>|<knob>`).
   let picks = $state<string[]>([]);
@@ -504,7 +505,7 @@
         selCables = [];
       } else if (!sel.includes(id)) sel = [...sel, id];
     },
-    adding: (to) => (menu = { kind: 'add', to }),
+    adding: () => (menu = { kind: 'browser' }),
     pinCategory: (scope, category, on) => edit([{ kind: 'pin', scope: [...at, ...scope], category, on }]),
     openCable: openIt,
     cableMenu(id, where) {
@@ -716,7 +717,28 @@
     const k = to?.kind === 'module' ? (to.knobs.find((x) => x.id === port)?.label ?? to.v2.ports.in.find((x) => x.id === port)?.label ?? port) : port;
     return `${nodeName(e.source)} → ${nodeName(e.target)} · ${k}`;
   }
-  const addTitle = (to: AddTo) => `Add · ${CATEGORY_LABEL[to.category]}`;
+  // The module browser: its search; where a module added goes (the view's centre, or right of the one picked).
+  let query = $state('');
+  const music = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    return MUSIC_SIGNALS.filter((sg) => !q || sg.label.toLowerCase().includes(q) || 'music'.includes(q));
+  });
+  let vp = { x: 0, y: 0, zoom: 1 };
+  function addModule(type: string, knobs: Record<string, number>, base: string) {
+    menu = null;
+    const inside = top;
+    if (!inside) return;
+    const id = freeModuleId(inside, base.replace(/[^\w-]/g, '_'));
+    edit([{ kind: 'add', scope: [...at], type, id, knobs }]);
+    const near = picked.length ? nodes.find((n) => n.id === picked[0] && !n.parentId) : undefined;
+    const where = near
+      ? { x: Math.round(near.position.x + (near.measured?.width ?? 160) + 60), y: Math.round(near.position.y) }
+      : { x: Math.round((width / 2 - vp.x) / vp.zoom - 80), y: Math.round((height / 2 - vp.y) / vp.zoom - 40) };
+    const key = `${levelKey}|${id}`;
+    if (!positions) moved = { ...moved, [key]: where };
+    onmove?.(key, where.x, where.y);
+    touched = true;
+  }
 </script>
 
 <svelte:window
@@ -774,7 +796,7 @@
       if (selecting) endSelect();
     }}
   >
-    <PatchFit layout={fitKey} active={!touched} {pad} view={{ width, height }} {portrait} onzoom={(z) => (zoom = z)} />
+    <PatchFit layout={fitKey} active={!touched} {pad} view={{ width, height }} {portrait} onzoom={(z) => (zoom = z)} onview={(v) => (vp = v)} />
     <!-- The map: bottom right over the chips; on a narrow screen a button (Map) opens it top right, over the view only
          while wanted. -->
     {#if (width >= 600 && !barShown) || mapOpen}
@@ -799,14 +821,18 @@
         </div>
       </Panel>
     {/if}
+    <!-- The way to add a module: always here, whatever the rack holds (the owner, 71.1). -->
+    <Panel position="top-left" style={TOP}>
+      <div class="topleft">
+        <button class="addbtn" aria-label="Add a module" title="Add a module" onclick={() => ((menu = { kind: 'browser' }), (query = ''))}><Icon name="plus" size={22} /></button>
     {#if at.length}
-      <Panel position="top-left" style={TOP}>
         <nav class="crumbs" aria-label="Devices">
           <button onclick={() => (at = [])}>Rack</button>
           {#each crumbsOf(patch, at) as name, i (i)}<span>›</span><button class:here={i === at.length - 1} onclick={() => (at = at.slice(0, i + 1))}>{name}</button>{/each}
         </nav>
-      </Panel>
     {/if}
+      </div>
+    </Panel>
     <Panel position="top-right" style={TOP}>
       <div class="legend">
         {#each LEGEND.filter(([t]) => wires.has(t)) as [t, name] (t)}
@@ -890,33 +916,33 @@
         />{/if}
     </div>
   </MenuSheet>
-{:else if menu?.kind === 'music'}
-  {@const scope = menu.scope}
-  <MenuSheet label="Music" title="Music" onclose={() => (menu = null)} over>
-    <div role="menu">
-      {#each MUSIC_SIGNALS as sg (sg.id)}<MenuEntry
-          label={sg.label}
-          onclick={() => {
-            menu = null;
-            const made = musicModuleFor(sg.id);
-            const inside = patchAt(patch, [...at, ...scope]);
-            if (inside) edit([{ kind: 'add', scope: [...at, ...scope], type: made.type, id: freeModuleId(inside, sg.id.replace(/[^\w-]/g, '_')), knobs: made.knobs }]);
-          }}
-        />{/each}
-    </div>
-  </MenuSheet>
-{:else if menu?.kind === 'add'}
-  {@const to = menu.to}
-  <MenuSheet label={addTitle(to)} title={addTitle(to)} onclose={() => (menu = null)} over>
-    <div role="menu">
-      {#if to.category === 'modulators' || to.category === 'io'}<MenuEntry label="Music ▸" onclick={() => (menu = { kind: 'music', scope: to.scope })} />{/if}
-      {#each typesOf(to.category, types) as t (t.type)}<MenuEntry
-          label={labelOf(t)}
-          onclick={() => {
-            menu = null;
-            edit([{ kind: 'add', scope: [...at, ...to.scope], type: t.type }]);
-          }}
-        />{/each}
+{:else if menu?.kind === 'browser'}
+  {@const q = query.trim().toLowerCase()}
+  <MenuSheet label="Add a module" title="Add a module" onclose={() => (menu = null)} over>
+    <div class="browser">
+      <!-- svelte-ignore a11y_autofocus -->
+      <input class="search" type="search" placeholder="Search" aria-label="Search modules" bind:value={query} autofocus={!coarse} />
+      {#each CATEGORIES as cat (cat)}
+        {@const list = typesOf(cat, types).filter((t) => !q || labelOf(t).toLowerCase().includes(q))}
+        {#if list.length || !q}
+          {@const pinned = !!top?.pins.includes(categoryPin(cat))}
+          <div class="section">
+            <span>{CATEGORY_LABEL[cat]}</span>
+            <button class="catpin" class:on={pinned} aria-pressed={pinned} aria-label="Pin all of {CATEGORY_LABEL[cat]}" title="Pin all" onclick={() => edit([{ kind: 'pin', scope: [...at], category: cat, on: !pinned }])}
+              ><Icon name="pin" size={16} /></button
+            >
+          </div>
+          <div role="menu">
+            {#each list as t (t.type)}<MenuEntry label={labelOf(t)} onclick={() => addModule(t.type, {}, t.type)} />{/each}
+          </div>
+        {/if}
+      {/each}
+      {#if music.length}
+        <div class="section"><span>Music ▸</span></div>
+        <div role="menu">
+          {#each music as sg (sg.id)}<MenuEntry label={sg.label} onclick={() => addModule(musicModuleFor(sg.id).type, {}, sg.id)} />{/each}
+        </div>
+      {/if}
     </div>
   </MenuSheet>
 {/if}
@@ -1091,6 +1117,68 @@
     stroke: var(--patch-bg);
     stroke-width: 1.6px;
     stroke-dasharray: none;
+  }
+  .topleft {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  /* The one "+": always over the canvas, top left (clear of the notch). */
+  .addbtn {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    background: var(--float-bg, var(--surface));
+    -webkit-backdrop-filter: var(--float-blur);
+    backdrop-filter: var(--float-blur);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .addbtn:hover {
+    border-color: color-mix(in srgb, var(--text) 35%, var(--border));
+  }
+  .browser {
+    display: grid;
+    padding: 0 0 12px;
+  }
+  .search {
+    margin: 0 20px 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+  }
+  .section {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px 4px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .catpin {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 16px;
+    background: none;
+    color: var(--muted);
+    opacity: 0.7;
+    cursor: pointer;
+  }
+  .catpin.on {
+    color: var(--accent);
+    opacity: 1;
   }
   .crumbs {
     display: flex;
