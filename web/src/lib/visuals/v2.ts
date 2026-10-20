@@ -19,8 +19,8 @@
 // The picture side's wiring (which picture goes into which, and the modules it needs: the Screen, the Feedbacks, the
 // Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
 
-import type { RouteValue } from './curves';
-import { ASPECTS, BAND_SIGNALS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, type Aspect } from './routes';
+import { endOf, type RouteValue } from './curves';
+import { ASPECTS, BAND_SIGNALS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, routeKey, type Aspect } from './routes';
 import { shapeOf } from './evaluate';
 import { DEFAULT_LIMITS, type Budgeted } from './budget';
 import { BUSY } from './engine/sidechain';
@@ -423,7 +423,17 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     { id: 'pause-follow-out', from: { module: 'pause-follow', port: 'out' }, to: { module: 'pause-dim', port: 'cv' }, value: -0.45, mode: 'swing', depth: null },
     { id: 'pause-dim-out', from: { module: 'pause-dim', port: 'out' }, to: { module: 'show', port: 'level:gain' }, value: 1, mode: 'swing', depth: null },
   );
-  const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...modules, ...pause];
+  // A new track's own look (0057 §7f, "same randomize"): the Dice on Music's New track, seeded by the Track seed,
+  // wherever the Track row's route into Look was on (as it is by default).
+  const dice: Module[] = [];
+  if (endOf(s.routes[routeKey('track', null, 'look')] ?? 0) !== 0) {
+    dice.push({ id: 'dice', type: 'dice', knobs: { scope: 0 } });
+    cables.push(
+      { id: 'dice-trigger', from: { module: 'music', port: 'newtrack', reference: 'absolute' }, to: { module: 'dice', port: 'trigger' }, value: 1, mode: 'swing', depth: null },
+      { id: 'dice-seed', from: { module: 'music', port: 'seed', reference: 'absolute' }, to: { module: 'dice', port: 'seed' }, value: 1, mode: 'swing', depth: null },
+    );
+  }
+  const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...modules, ...pause, ...dice];
   const adding = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);
