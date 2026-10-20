@@ -243,7 +243,7 @@ const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [strin
 function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Partial<Record<Budgeted, number>>): { modules: Module[]; cables: Wire[]; macro?: Macro } {
   const one = (id: string, from: Wire['from'], to: Wire['to'], value = 1): Wire => ({ id, from, to, value, mode: 'swing', depth: null });
   const out = { modules: [...modules, { id: 'meter', type: 'meter', knobs: {} }], cables: [...cables] };
-  if (!out.modules.some((m) => m.type === 'screen')) out.modules.push({ id: 'screen', type: 'screen', knobs: {} });
+  // The Screen is the picture wiring's (claude-632's `screen`); its guard cabled from here.
   out.cables.push(one('guard', { module: 'screen', port: 'guard' }, { module: 'accent', port: 'accent:gain' }));
   const wildFactor = 2 ** (2 * (wild - 0.5));
   // Wild, a macro on the five thresholds (the owner): along the threshold's exponential taper from half to twice
