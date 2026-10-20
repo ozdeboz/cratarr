@@ -58,7 +58,7 @@ export const VARIATIONS = {
 } as const;
 /** The lens's shapes of the one set (0057 §4g; shape-set.ts `LENS_SHAPES`, in its order): a point sent into the shape.
  *  Numbers of their own, past flam3's and Cratarr's (flam3 has a Cross variation of its own). */
-export const LENS_SHAPE_VARIATIONS = { polygon: 100, star: 101, ring: 102, cross: 103, arrow: 104, crescent: 105, drop: 106 } as const;
+export const LENS_SHAPE_VARIATIONS = { polygon: 100, star: 101, ring: 102, cross: 103, arrow: 104, crescent: 105, drop: 106, heart: 107 } as const;
 const LENS_SHAPE_FIRST = LENS_SHAPE_VARIATIONS.polygon;
 export type Variation = (typeof VARIATIONS)[keyof typeof VARIATIONS] | (typeof LENS_SHAPE_VARIATIONS)[keyof typeof LENS_SHAPE_VARIATIONS];
 
@@ -231,10 +231,17 @@ const FINALS: Variation[] = [
   VARIATIONS.sinusoidal,
   VARIATIONS.horseshoe,
   VARIATIONS.handkerchief,
-  VARIATIONS.heart,
+  // The real heart, at flam3's heart's place (the owner, 2026-10-20: "real heart only"; the parts keep flam3's).
+  LENS_SHAPE_VARIATIONS.heart,
   VARIATIONS.cratarr,
-  // The rest of the one set of shapes (0057 §4g), after Cratarr's, so every track's look stays as it was drawn.
-  ...Object.values(LENS_SHAPE_VARIATIONS),
+  // The rest of the one set of shapes (0057 §4g), after Cratarr's, so every other track's look stays as it was drawn.
+  LENS_SHAPE_VARIATIONS.polygon,
+  LENS_SHAPE_VARIATIONS.star,
+  LENS_SHAPE_VARIATIONS.ring,
+  LENS_SHAPE_VARIATIONS.cross,
+  LENS_SHAPE_VARIATIONS.arrow,
+  LENS_SHAPE_VARIATIONS.crescent,
+  LENS_SHAPE_VARIATIONS.drop,
 ];
 /** The finals a preset draws among: the ones before Cratarr's, so every track's own look stays as it was drawn (the
  *  Cratarr lens is one to pick). */

@@ -1,6 +1,6 @@
 // One set of shapes (shape-set.ts, decision 0057 §4g): the list as decided; every shape's fill inside its own edge and
-// even; the polygon and the Cratarr mark exactly as before; and every lens a track can have draws its points exactly as
-// before the set (its warps and the mark moved to warps.ts and shape-set.ts): npm test.
+// even; the polygon and the Cratarr mark exactly as before; every lens a track can have draws its points exactly as
+// before the set (its warps and the mark moved to warps.ts and shape-set.ts), but Heart, now the real heart: npm test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -58,12 +58,17 @@ const SHAPES: Shape[] = [
   ...S.IRREGULAR.map((name) => ({ name, edge: (x: number, y: number) => S.irregularEdge(name, x, y), fill: (t: number, u: number) => S.irregularFill(name, t, u) })),
 ];
 
-test('the list: two regular, eighteen irregular, in the decided order', () => {
+test('the list: two regular, nine irregular (only distinct forms), in the decided order', () => {
   assert.deepEqual(S.REGULAR, ['polygon', 'star']);
-  assert.deepEqual(S.IRREGULAR, ['heart', 'cratarr', 'ring', 'cross', 'arrow', 'crescent', 'drop', 'spherical', 'swirl', 'julia', 'fisheye', 'eyefish', 'bubble', 'polar', 'disc', 'sinusoidal', 'horseshoe', 'handkerchief']);
-  // The warps' forms are the lens's warps, each by its number.
+  assert.deepEqual(S.IRREGULAR, ['heart', 'cratarr', 'ring', 'cross', 'arrow', 'crescent', 'drop', 'polar', 'handkerchief']);
+  // The warps' forms are the lens's warps, each by its number; the parts keep flam3's heart.
   for (const name of S.IRREGULAR.slice(7)) assert.equal(WARPS[name as keyof typeof WARPS], VARIATIONS[name as keyof typeof VARIATIONS]);
   assert.equal(WARPS.heart, VARIATIONS.heart);
+  // A real heart: its tip at the bottom, its notch at the top, its lobes either side; it fits the unit circle.
+  assert.ok(S.irregularEdge('heart', 0, -0.95) < 0 && S.irregularEdge('heart', 0, -1.05) > 0, 'its tip');
+  assert.ok(S.irregularEdge('heart', 0, 0.7) > 0 && S.irregularEdge('heart', 0, 0.5) < 0, 'its notch');
+  assert.ok(S.irregularEdge('heart', -0.4, 0.5) < 0 && S.irregularEdge('heart', 0.4, 0.5) < 0, 'its lobes');
+  assert.ok(Math.abs(S.irregularEdge('heart', 0.3, 0) - S.irregularEdge('heart', -0.3, 0)) < 1e-12, 'mirrored');
   // The lens's shapes by their own numbers, in the set's order; flam3's Cross stays its own.
   assert.deepEqual(Object.keys(LENS_SHAPE_VARIATIONS), [...S.LENS_SHAPES]);
   assert.equal(VARIATIONS.cross, 48);
@@ -184,10 +189,11 @@ function oldApply(t: { affine: number[]; post?: number[]; variations: Map<number
   return [ox, oy];
 }
 
-test('every lens a track could have before draws exactly as before; the set’s new ones come after them', () => {
+test('every lens a track could have before draws exactly as before but Heart (the real heart now); the set’s new ones after them', () => {
   assert.deepEqual(LENSES.slice(0, 13), ['Spherical', 'Swirl', 'Julia', 'Fisheye', 'Eyefish', 'Bubble', 'Polar', 'Disc', 'Sinusoidal', 'Horseshoe', 'Handkerchief', 'Heart', 'Cratarr']);
   assert.deepEqual(LENSES.slice(13), ['Polygon', 'Star', 'Ring', 'Cross', 'Arrow', 'Crescent', 'Drop']);
-  for (let lens = 1; lens <= 13; lens++)
+  assert.deepEqual(flameOf({ ...preset, final: 12 }, false).final!.variations, new Map([[LENS_SHAPE_VARIATIONS.heart, 1]]));
+  for (const lens of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13])
     for (const form of [0, 17, 404]) {
       const final = flameOf({ ...preset, form, final: lens }, false).final!;
       assert.equal(final.shape, undefined);
@@ -213,7 +219,8 @@ test('every lens a track could have before draws exactly as before; the set’s 
 
 test('a lens’s shape: its points sent into the shape, Polygon and Star by its sides and depth', () => {
   for (const [i, name] of S.LENS_SHAPES.entries()) {
-    const lens = 14 + i;
+    // Heart's at its place of old; the rest after Cratarr.
+    const lens = name === 'heart' ? 12 : 14 + i;
     assert.equal(LENSES[lens - 1].toLowerCase(), name);
     const final = flameOf({ ...preset, final: lens, lensSides: 6, lensDepth: 0.6 }, false).final!;
     assert.deepEqual(final.variations, new Map([[LENS_SHAPE_VARIATIONS[name], 1]]));

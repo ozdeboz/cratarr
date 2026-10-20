@@ -28,30 +28,11 @@ import { WARPS, warpOf } from './warps';
 
 /** The shapes that morph: the polygon's sides through the fractions, the star's depth through its range. */
 export const REGULAR = ['polygon', 'star'] as const;
-/** The shapes a list holds, stepped through, never morphed: Heart and Cratarr (the logo), the common symbols (the
- *  owner's pick), and the forms of the lens's warps (each the form its warp makes of the square −1..1, on which flam3's
- *  own pictures of its variations are drawn: of a disc, six of them, which only move points round or out, are one
- *  circle). */
-export const IRREGULAR = [
-  'heart',
-  'cratarr',
-  'ring',
-  'cross',
-  'arrow',
-  'crescent',
-  'drop',
-  'spherical',
-  'swirl',
-  'julia',
-  'fisheye',
-  'eyefish',
-  'bubble',
-  'polar',
-  'disc',
-  'sinusoidal',
-  'horseshoe',
-  'handkerchief',
-] as const;
+/** The shapes a list holds, stepped through, never morphed: a real heart and Cratarr (the logo), the common symbols
+ *  (the owner's pick), and the lens's warps' forms that are shapes of their own (each the form its warp makes of a
+ *  disc): Polar a band, Handkerchief a slanted ellipse. The owner (2026-10-20): only distinct forms; the rest are a
+ *  circle, a rounded square or the ring, and stay warps in Lens. */
+export const IRREGULAR = ['heart', 'cratarr', 'ring', 'cross', 'arrow', 'crescent', 'drop', 'polar', 'handkerchief'] as const;
 export type Regular = (typeof REGULAR)[number];
 export type Irregular = (typeof IRREGULAR)[number];
 export type ShapeName = Regular | Irregular;
@@ -80,9 +61,10 @@ export function ringAt(rings: readonly (readonly [number, number])[], u: number)
 
 // ---- Lens: a point into a shape ------------------------------------------------------------------------------------------
 
-/** The shapes the Lens adds to its warps (flame.ts VARIATIONS 100 on, in this order): the regular two and the symbols.
- *  Heart, Cratarr and the warps' forms are its kinds already (a warp moves a point as itself, Cratarr by the mark). */
-export const LENS_SHAPES = ['polygon', 'star', 'ring', 'cross', 'arrow', 'crescent', 'drop'] as const satisfies readonly ShapeName[];
+/** The Lens's shapes (flame.ts LENS_SHAPE_VARIATIONS, 100 on, in this order): the regular two, the symbols, and the
+ *  real heart (Heart's lens kind, its place in the lens list kept: flam3's heart variation left the lens). Cratarr's is
+ *  the mark's own; the warps' forms are their warps in Lens (a warp moves a point as itself). */
+export const LENS_SHAPES = ['polygon', 'star', 'ring', 'cross', 'arrow', 'crescent', 'drop', 'heart'] as const satisfies readonly ShapeName[];
 
 /** A point (its distance `r`) sent into a lens shape, evenly: Polygon and Star by `shape`'s sides (and Star's depth). */
 export function lensInto(name: (typeof LENS_SHAPES)[number], x: number, y: number, r: number, shape = { sides: 5, depth: 0.5 }): [number, number] {
@@ -292,7 +274,20 @@ function drop(x: number, y: number): number {
   return a * px + b * py - r1;
 }
 
+/** A heart (Quilez's): its tip at the bottom, centred so its tip and its lobes touch the unit circle. */
+const HEART_MIDDLE = 0.5 / (1.5 - Math.SQRT1_2);
+function heart(x: number, y: number): number {
+  const k = HEART_MIDDLE;
+  const px = Math.abs(x * k);
+  const py = y * k + k;
+  const d2 = (ax: number, ay: number) => ax * ax + ay * ay;
+  if (px + py > 1) return (Math.sqrt(d2(px - 0.25, py - 0.75)) - Math.SQRT2 / 4) / k;
+  const m = 0.5 * Math.max(px + py, 0);
+  return (Math.sqrt(Math.min(d2(px, py - 1), d2(px - m, py - m))) * Math.sign(px - py)) / k;
+}
+
 const SYMBOLS: Partial<Record<Irregular, (x: number, y: number) => number>> = {
+  heart,
   cratarr: markEdge,
   ring: (x, y) => {
     const r = Math.hypot(x, y);
@@ -308,7 +303,7 @@ const SYMBOLS: Partial<Record<Irregular, (x: number, y: number) => number>> = {
 
 /** The side of a shape's grid of distances (the warps' forms are made on one; every shape is drawn from one). */
 export const SDF_SIZE = 128;
-/** Points of the square each warp's form is made from. */
+/** Points of the disc each warp's form is made from. */
 const FORM_POINTS = 160_000;
 /** The share of them its form keeps (the nearest its middle: an unbounded warp, such as Spherical, has a far tail). */
 const FORM_KEEP = 0.95;
@@ -371,7 +366,7 @@ function signed(inside: Uint8Array, n: number): Float32Array {
   return Float32Array.from(inside, (v, i) => (v ? -(Math.sqrt(toOut[i]) - 0.5) : Math.sqrt(toIn[i]) - 0.5) * unit);
 }
 
-/** A warp's form: the square's points through it, the nearest `FORM_KEEP` of them about their middle kept, centred and
+/** A warp's form: the disc's points through it, the nearest `FORM_KEEP` of them about their middle kept, centred and
  *  scaled to fit the unit circle, laid on the grid (a cell its own if a point landed by it), as signed distances. */
 function warpForm(name: keyof typeof WARPS): Float32Array {
   const rnd = seeded(name);
@@ -379,8 +374,10 @@ function warpForm(name: keyof typeof WARPS): Float32Array {
   const ys = new Float64Array(FORM_POINTS);
   let m = 0;
   for (let i = 0; i < FORM_POINTS; i++) {
-    const x = 2 * rnd() - 1;
-    const y = 2 * rnd() - 1;
+    const rr = Math.sqrt(rnd());
+    const a = TAU * rnd();
+    const x = rr * Math.cos(a);
+    const y = rr * Math.sin(a);
     const r2 = x * x + y * y + 1e-12;
     const w = warpOf(WARPS[name], x, y, r2, Math.sqrt(r2), Math.atan2(x, y), rnd);
     if (!w || !Number.isFinite(w[0]) || !Number.isFinite(w[1])) continue;

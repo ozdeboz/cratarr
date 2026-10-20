@@ -147,7 +147,7 @@ export const portHelp: Record<string, Record<string, string>> = {
   },
   irregular: {
     ...SHAPE_RING,
-    shape: 'Which shape of the set: Heart, Cratarr, Ring, Cross, Arrow, Crescent, Drop, or a lens’s form.',
+    shape: 'Which shape of the set: Heart, Cratarr, Ring, Cross, Arrow, Crescent, Drop, Polar or Handkerchief.',
   },
   waves: {
     audio: 'The sound to draw: Music’s unless unplugged.',
