@@ -101,6 +101,7 @@
     onpick,
     live,
     thumbnail,
+    previewShown = false,
     openAtStart = [],
     sheetHeight = 0,
     layout = 'elk',
@@ -129,6 +130,8 @@
     /** Draws a module's output into a thumbnail's canvas (the renderer's `thumbnail(moduleId, canvas)`): one a live
      *  frame, in turn, only while the graph shows (live frames come only then). */
     thumbnail?: Thumbnailer;
+    /** The page shows the picked module's preview itself (its sheet's top): the graph's popover then gives way. */
+    previewShown?: boolean;
     /** Nodes (devices) open from the start. */
     openAtStart?: string[];
     /** How much of the graph's bottom an open sheet covers (px): the fitted view keeps clear of it. */
@@ -831,7 +834,8 @@
           >
         {/each}
       </div>
-      {#if preview}
+      <!-- Top right, under the legend (clear of the safe area); never with the page's own preview. -->
+      {#if preview && !previewShown}
         <div class="previewbox"><Preview module={preview.path} label={preview.label} kind={preview.kind} live={live?.frame ?? null} thumbs={thumbnail ? thumbs : null} /></div>
       {/if}
     </Panel>
