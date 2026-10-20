@@ -11,13 +11,16 @@ const { EXTRA_TYPES } = await import('../src/lib/visuals/registry.ts');
 const { ENGINE_MODULES, GRAPH_MODULES, showPartTypes } = await import('../src/lib/visuals/ports.ts');
 const { toV2 } = await import('../src/lib/visuals/v2.ts');
 const { drawing, seedOf, PRESET_KEYS } = await import('../src/lib/visuals/flame.ts');
-const { randomize, SEEDED_BEFORE, EVERYTHING } = await import('../src/lib/visuals/engine/randomize.ts');
+const { randomize, SEEDED_BEFORE, EVERYTHING, SLOT_DRAW } = await import('../src/lib/visuals/engine/randomize.ts');
+const { effectAt, ownKnob, slotModules, SLOT_IDS, SLOT_SETTINGS } = await import('../src/lib/visuals/engine/effect-slots.ts');
+const { EFFECT_TYPES, effectType } = await import('../src/lib/visuals/effect-modules.ts');
+const { effectOf } = await import('../src/lib/visuals/effects.ts');
 type ModuleType = import('../src/lib/visuals/patch.ts').ModuleType;
 type PatchV2 = import('../src/lib/visuals/ports.ts').PatchV2;
 
 const chain = cratarrTypes(RANGES as Record<string, [number, number]>, DEFAULTS);
 const types: Record<string, ModuleType> = Object.fromEntries(
-  [...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...showPartTypes(chain.find((t) => t.type === 'show')!)].map((t) => [t.type, t]),
+  [...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...EFFECT_TYPES, ...showPartTypes(chain.find((t) => t.type === 'show')!)].map((t) => [t.type, t]),
 );
 function run<T>(g: Generator<void, T>): T {
   for (;;) {
@@ -40,27 +43,45 @@ test("a track's seed gives what it drew before 0057 (presetDraws), value for val
       assert.equal(mine[m]?.[knob], drawn[k], `${key}: ${m}.${knob}`);
       n++;
     }
-    assert.ok(n >= 25, `${key}: ${n} of the chain's draw`);
+    assert.ok(n >= 17, `${key}: ${n} of the chain's draw`);
+    // The effects (modules now, 0057 §3): each slot's draw on its module where it is that effect, else the slot's.
+    const effects = slotModules(p.modules);
+    for (const slot of SLOT_IDS) {
+      const names = SLOT_SETTINGS[slot];
+      const effect = effectAt(slot, drawn[names.effect]);
+      const amount = effect ? drawn[names.amount] : 0;
+      const m = effects.get(slot);
+      if (!(amount > 0)) {
+        assert.equal(mine[SLOT_DRAW + slot], undefined, `${key}: ${slot} drawn at nothing`);
+        if (m) assert.equal(mine[m.id]?.amount, 0);
+      } else if (m && m.type === effectType(effectOf(effect)!)) {
+        assert.equal(mine[m.id]?.amount, amount, `${key}: ${slot}'s module`);
+        if (ownKnob(m.type, 'k1')) assert.equal(mine[m.id]?.[ownKnob(m.type, 'k1')!], drawn[names.k1]);
+      } else assert.deepEqual(mine[SLOT_DRAW + slot], { effect, amount, k1: drawn[names.k1], k2: drawn[names.k2] }, `${key}: ${slot}'s draw`);
+    }
     // Nothing past the chain's draw.
-    for (const [m, knobs] of Object.entries(mine)) for (const knob of Object.keys(knobs)) assert.ok(SEEDED_BEFORE({ id: m, type: '', knobs: {} }, { id: knob } as never), `${m}.${knob}`);
+    const typeOf = new Map(p.modules.map((x) => [x.id, x.type]));
+    for (const [m, knobs] of Object.entries(mine)) if (!m.startsWith(SLOT_DRAW)) for (const knob of Object.keys(knobs)) assert.ok(SEEDED_BEFORE({ id: m, type: typeOf.get(m) ?? '', knobs: {} }, { id: knob } as never), `${m}.${knob}`);
   }
 });
 
-test("pins are kept, and the chain's draw drawn around them as before", () => {
+test("pins are kept, and the chain's draw drawn around them as before (an effect module pinned whole keeps its effect)", () => {
   const s = structuredClone(DEFAULTS);
-  const p: PatchV2 = { ...toV2(s), pins: ['flame.hue', 'fx1.effect'] };
+  // Effect 1 on Rotate (the kaleidoscope's third), its module pinned whole.
+  const v = toV2(s);
+  const p: PatchV2 = { ...v, modules: [...v.modules, { id: 'fx-rotate', type: 'fx-rotate', knobs: { amount: 0.6 } }], pins: ['flame.hue', 'module:fx-rotate'] };
   const flame = p.modules.find((m) => m.id === 'flame')!;
-  const fx1 = p.modules.find((m) => m.id === 'fx1')!;
   const seed = seedOf('subsonic/tr-10329');
-  const drawn = run(drawing(seed, { hue: flame.knobs.hue, fx1: fx1.knobs.effect })).preset as Record<string, number>;
+  const drawn = run(drawing(seed, { hue: flame.knobs.hue, fx1: 3, fx1Amount: 0.6, fx1K1: 0.5, fx1K2: 0.5 })).preset as Record<string, number>;
   const mine = run(randomize(p, types, { seed, scope: EVERYTHING }));
   assert.equal(mine.flame.hue, undefined);
-  assert.equal(mine.fx1?.effect, undefined);
+  assert.equal(mine['fx-rotate'], undefined);
+  assert.equal(mine[SLOT_DRAW + 'fx1'], undefined);
   assert.equal(mine.flame.form, drawn.form);
   assert.equal(mine.flame.twist, drawn.twist);
 });
 
-test("over everything: the chain's draw as before, every other knob within its range (steps whole), the same again, nothing but knobs", () => {
+test("over everything: the chain's draw as before, every other knob within its range (steps whole), the same again, nothing but knobs and slots' draws", () => {
   const p = toV2(structuredClone(DEFAULTS));
   const before = JSON.stringify(p);
   const seed = seedOf('subsonic/tr-8934');
@@ -71,6 +92,8 @@ test("over everything: the chain's draw as before, every other knob within its r
   for (const [m, knobs] of Object.entries(narrow)) for (const [k, v] of Object.entries(knobs)) assert.equal(all[m][k], v);
   let others = 0;
   for (const [id, knobs] of Object.entries(all)) {
+    // A slot's effect drawn where its module is not that effect: a module for the loop to place (placeEffect).
+    if (id.startsWith(SLOT_DRAW)) continue;
     const m = p.modules.find((x) => x.id === id) ?? p.modules.flatMap((x) => ('patch' in x ? (x as { patch: PatchV2 }).patch.modules.map((y) => ({ ...y, id: `${x.id}/${y.id}` })) : [])).find((x) => x.id === id);
     assert.ok(m, `${id} is a module of the patch`);
     for (const [k, v] of Object.entries(knobs)) {

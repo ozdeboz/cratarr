@@ -4,6 +4,7 @@
 // loop (a Feedback → its modules → a Mix keeping the brighter, with the new picture), the effects, the Screen.
 import type { Layer, Module, Patch } from './patch';
 import { effectOf, engineEffect } from './effects';
+import { effectModuleOf, effectOfType, SLOTS } from './effect-modules';
 import { engineOf } from './engine-module';
 import { MIX_MODES, type CableV2 } from './ports';
 import { setPictureWiring } from './v2';
@@ -25,7 +26,7 @@ export const mixMode = (b: Layer['blend']['mode']) => MIX_MODES.indexOf(b as (ty
 /** What an effect module draws: a shape, a colour, an echo (none for an engine on no effect). */
 const kindOf = (m: Module) => {
   const engine = engineOf(m.type);
-  return effectOf(engine ? engineEffect(engine, m.knobs.effect ?? 1) : 0)?.kind;
+  return (effectOfType(m.type) ?? effectOf(engine ? engineEffect(engine, m.knobs.effect ?? 1) : 0))?.kind;
 };
 
 /** The effects as modules in a line drawing what today's one pass draws (effects.ts pictureShader: every shape in slot
@@ -47,11 +48,15 @@ export function pictureWiring(p: Patch): { modules: Module[]; cables: CableV2[] 
     if (layer.source.type === 'flame') {
       modules.push({ id: 'light-feedback', type: 'feedback', knobs: {} });
       let light: End = ['light-feedback', 'picture'];
-      for (const id of CARRY_ORDER)
-        if (layer.loop.some((m) => m.id === id)) {
-          cables.push(cable(light, [id, 'light']));
-          light = [id, 'light'];
-        }
+      for (const id of CARRY_ORDER) {
+        const m = layer.loop.find((x) => x.id === id);
+        // The loop's slot as its effect's module, on the light (none on no effect).
+        const effect = m && SLOTS.has(m.id) ? effectModuleOf(m) : null;
+        if (!m || (SLOTS.has(m.id) && !effect)) continue;
+        const to: End = effect ? [effect.id, 'picture'] : [id, 'light'];
+        cables.push(cable(light, to));
+        light = to;
+      }
       cables.push(cable(light, [layer.source.id, 'light']), cable([layer.source.id, 'light'], ['light-feedback', 'picture']));
       at = [layer.source.id, 'light'];
     } else at = [layer.source.id, 'picture'];
@@ -87,7 +92,7 @@ export function pictureWiring(p: Patch): { modules: Module[]; cables: CableV2[] 
   // An Echo with shapes after it (the owner): a visible loop, the line's finished picture fed back, moved and dimmed
   // by the Echo, kept where it is the brighter (a Mix's Lighten) with the picture before it, then the shapes turn the
   // two together (the trails spiral as they always did).
-  const line = effectsInOrder(p.finish);
+  const line = effectsInOrder(p.finish.flatMap((m) => (SLOTS.has(m.id) ? (effectModuleOf(m) ?? []) : [m])));
   const looped = line.some((m) => kindOf(m) === 'shape') ? line.filter((m) => kindOf(m) === 'echo') : [];
   for (const m of line) {
     if (looped.includes(m)) {

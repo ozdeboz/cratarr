@@ -2,12 +2,13 @@
 // (`how`: the effects, the dive, the show, the look) while they read settings, each from the knob toV2 put it in. The
 // inverse of toV2's mapping (v2.ts): the Cratarr device's modules found beside its Flame (at the top level, or inside it),
 // the Show's parts inside its device, the Loudness's, Accent's and Clock's knobs for Intensity, Flash and Speed (as the
-// rack's macros set them; Wild the rack's macro's own value), Music's
-// hold for each band's Linger. A column's scale is in its cables' amounts now (0057 §7e): those settings read 1. What a
-// patch has no knob for, as `base` has it (the device's own settings: quality, frame rate, brightness).
+// rack's macros set them; Wild the rack's macro's own value), Music's hold for each band's Linger, the effects' slots
+// from the effect modules (0057 §3). A column's scale is in its cables' amounts now (0057 §7e): those settings read 1.
+// What a patch has no knob for, as `base` has it (the device's own settings: quality, frame rate, brightness).
 
 import type { Module } from '../patch';
 import { SETTING_KNOB } from '../patch';
+import { ownKnob, placeOf, slotModules, SLOT_IDS, SLOT_SETTINGS } from './effect-slots';
 import { SHOW_PARTS, type PatchV2 } from '../ports';
 import { COLUMN_SCALES } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
@@ -40,6 +41,23 @@ export function settingsOfPatch(p: PatchV2, base: VisualSettings): VisualSetting
     const moved = MOVED[setting];
     const v = moved ? read(ofType(moved[0]), moved[1]) : module === 'show' ? read(inChain(`show/${SHOW_PART.get(knob) ?? knob}`), knob) : read(inChain(module), knob);
     if (v !== undefined) out[setting] = v;
+  }
+  // The effects as modules (0057 §3): each slot's effect, Amount and controls from the module standing for it; a slot
+  // with none, none of it.
+  const effects = slotModules(p.modules);
+  for (const slot of SLOT_IDS) {
+    const names = SLOT_SETTINGS[slot];
+    const m = effects.get(slot);
+    if (!m) {
+      out[names.amount] = 0;
+      continue;
+    }
+    out[names.effect] = placeOf(slot, m.type);
+    out[names.amount] = read(m, 'amount') ?? 1;
+    for (const k of ['k1', 'k2'] as const) {
+      const own = ownKnob(m.type, k);
+      out[names[k]] = (own && read(m, own)) ?? 0.5;
+    }
   }
   const wild = p.macros.find((x) => x.id === 'wild');
   if (wild && Number.isFinite(wild.value)) out.wild = wild.value;

@@ -19,11 +19,13 @@
 // The picture side's wiring (which picture goes into which, and the modules it needs: the Screen, the Feedbacks, the
 // Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
 
+import { slotsAsEffects } from './effect-modules';
 import type { RouteValue } from './curves';
 import { ASPECTS, BAND_SIGNALS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, type Aspect } from './routes';
 import { shapeOf } from './evaluate';
 import { DEFAULT_LIMITS, type Budgeted } from './budget';
 import { BUSY } from './engine/sidechain';
+import { slotKnobOf, slotOf } from './engine/effect-slots';
 import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Module, type Patch } from './patch';
 import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import { extraType } from './registry';
@@ -186,7 +188,10 @@ function cablesAdd(modules: Module[], cables: Wire[]): { modules: Module[]; cabl
   const banded = (c: Wire) => c.from.channel !== undefined || (c.from.module === 'music' && (BAND_SIGNALS as readonly string[]).includes(c.from.port)) || (typeOf.get(c.from.module) === 'adsr' && c.from.module !== NEWTRACK);
   for (const c of cables) {
     const key = `${c.to.module}.${c.to.port}`;
-    const aspect = ASPECT_AT.get(key);
+    // An effect module's knob is its slot's column (0057 §3).
+    const slot = slotOf(c.to.module, typeOf.get(c.to.module) ?? '');
+    const knob = slot && slotKnobOf(typeOf.get(c.to.module)!, c.to.port);
+    const aspect = ASPECT_AT.get(slot && knob ? `${slot}.${knob}` : key);
     const k = aspect ? undefined : kindAt(c.to.module, c.to.port);
     const level = aspect ? LEVEL_ASPECTS.includes(aspect) : !!k && c.mode === 'level';
     const moment = aspect ? (MOMENT_ASPECTS as readonly string[]).includes(aspect) : k?.kind === 'step';
@@ -423,12 +428,14 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     { id: 'pause-follow-out', from: { module: 'pause-follow', port: 'out' }, to: { module: 'pause-dim', port: 'cv' }, value: -0.45, mode: 'swing', depth: null },
     { id: 'pause-dim-out', from: { module: 'pause-dim', port: 'out' }, to: { module: 'show', port: 'level:gain' }, value: 1, mode: 'swing', depth: null },
   );
-  const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...modules, ...pause];
-  const adding = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
+  // One module per effect (0057 §3): each slot as the module of the effect it draws, its cables and pins with it.
+  const effects = slotsAsEffects(modules, cables, p.pins, p.macros);
+  const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...effects.modules, ...pause];
+  const adding = opts.addOnly === false ? { modules: all, cables: effects.cables } : cablesAdd(all, effects.cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);
   const wildMacro = (added as { macro?: Macro }).macro;
-  const macros: Macro[] = [...p.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
+  const macros: Macro[] = [...effects.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
   const wired = toWire(added.modules, added.cables);
-  return { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: p.pins };
+  return { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: effects.pins };
 }

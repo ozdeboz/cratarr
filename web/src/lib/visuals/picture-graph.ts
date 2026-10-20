@@ -15,6 +15,7 @@ import { ENGINE_MODULES, GRAPH_MODULES, LIGHT_CARRIERS, MIX_MODES, PICTURE_MODUL
 import { effectOf } from './effects';
 import type { ModuleType } from './patch';
 import { EXTRA_TYPES } from './registry';
+import { EFFECT_TYPES, effectOfType } from './effect-modules';
 import { flatten } from './v2';
 // A converted patch's picture side (v2.ts's hook).
 import './picture-wiring';
@@ -43,7 +44,7 @@ export type Compiled = {
  *  engine's, the graph's, the picture modules (Glow, Tint…) and Show's parts. */
 export function v2Types(chain: readonly ModuleType[]): TypeOf {
   const show = chain.find((t) => t.type === 'show');
-  const all = new Map<string, ModuleType & { ports?: Ports }>([...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...PICTURE_MODULES, ...(show ? showPartTypes(show) : [])].map((t) => [t.type, t]));
+  const all = new Map<string, ModuleType & { ports?: Ports }>([...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...PICTURE_MODULES, ...EFFECT_TYPES, ...(show ? showPartTypes(show) : [])].map((t) => [t.type, t]));
   return (t) => all.get(t);
 }
 
@@ -57,7 +58,7 @@ const SHOWN = new Set(SHOW_PARTS.map((p) => p.type));
 /** The pass a module is drawn in (none for a Feedback: it keeps a picture, it draws none). */
 export function stageOf(n: PictureNode): Stage | null {
   if (n.type === 'feedback') return null;
-  if (LIGHT_CARRIERS.has(n.type)) return 'carry';
+  if (LIGHT_CARRIERS.has(n.type) || (effectOfType(n.type) && n.inputs.some((f) => f.type === 'light'))) return 'carry';
   if (LIGHT_ROLES.points.has(n.type)) return 'points';
   if (SHOWN.has(n.type)) return 'show';
   if (n.type === 'screen') return 'screen';

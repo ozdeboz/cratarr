@@ -43,7 +43,8 @@ test('Intensity, Flash and Speed move to the modules that do them, each a rack m
   assert.ok(Math.abs(macro.flash.value - 0.7) < 1e-9 && Math.abs(macro.speed.value - 0.35) < 1e-9 && macro.intensity.value === 0.3);
   assert.equal(m.flame.knobs.zoom, 0, "Show's Size is the Flame's zoom; its scale went into the cables, the knob its resting value (§7e item 2)");
   assert.equal(m.show.type, 'device');
-  for (const id of ['music', 'envelope', 'clock', 'accent', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
+  // The effects' slots are their effects' modules (effect-modules.ts): none here, on no effect.
+  for (const id of ['music', 'envelope', 'clock', 'accent', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails']) assert.ok(m[id], id);
 });
 
 test('the extras come as they are: their modules, and their cables from a modulator or from Music with their reference and speed', () => {

@@ -23,6 +23,7 @@ import { newClockTriggers, stepClockTriggers, type ClockTriggerState, type Clock
 import { gridOf, type Grid, type GridPoint } from './grid';
 import { FLASH_GUARD } from './sidechain';
 import type { MeterValues } from '../meters';
+import { slotKnobOf, slotOf } from './effect-slots';
 import { NO_STRIKE, adsrOf, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
 
 const NA = ASPECTS.length;
@@ -451,10 +452,19 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   /** A key (`module|knob`, flattened) as the chain's column it is. */
   const colAt = (key: string) => {
     if (plan.columns.has(key)) return plan.columns.get(key);
-    const a = key.startsWith(at) ? COLUMN.get(key.slice(at.length)) : undefined;
+    const a = key.startsWith(at) ? COLUMN.get(key.slice(at.length)) : effectColumn(key);
     plan.columns.set(key, a);
     return a;
   };
+  /** An effect module's knob (0057 §3, wherever it sits) as its slot's column: `fx-rotate|amount` Effect 1's Amount. */
+  function effectColumn(key: string): number | undefined {
+    const bar = key.indexOf('|');
+    const id = key.slice(0, bar);
+    const type = typeOf.get(id);
+    const slot = type ? slotOf(id, type) : null;
+    const knob = slot && slotKnobOf(type!, key.slice(bar + 1));
+    return slot && knob ? COLUMN.get(`${slot}|${knob}`) : undefined;
+  }
   /** The chain's settings from its modules' knobs (the patch is the truth, 0057 Phase B); a knob a patch has no module
    *  for, as the settings had it. */
   // Intensity, Flash and Speed are the rack's macros on these knobs (0057: the Whole frame gone): as last frame left them.
