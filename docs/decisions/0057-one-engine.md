@@ -41,8 +41,10 @@ We looked at how the established modular tools are built:
 
 ## Words (the owner, 2026-10-20)
 
-- **Rack:** the whole thing: every module, device and cable. Not "chain", "synthesizer" or "patch" (those words in this
-  record before this section mean the rack). A preset is a rack saved; a snapshot too.
+- **Rack:** the whole thing, live: every module, device and cable. Not "chain" or "synthesizer" (those words in this
+  record before this section mean the rack).
+- **Snapshot:** a rack saved (the owner: "a patch is a snapshot. But we will keep calling that snapshot because it's
+  more clear"); never "patch" in what shows. A preset is a snapshot that comes with the app.
 - **Device:** a group of modules shown as one, with its macros (Show, Cratarr, the nine of §6b).
 - **Module:** one unit (a Flame, a Blur, an LFO).
 
