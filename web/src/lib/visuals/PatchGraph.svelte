@@ -27,7 +27,7 @@
   // cables come in and go out; jump chips to the picture's parts; `sheetHeight` (an open sheet over the bottom) keeps
   // the fitted view clear of it.
   import { setContext, untrack } from 'svelte';
-  import { SvelteFlow, MiniMap, Panel, type Connection, type Edge, type FitViewOptions, type Node } from '@xyflow/svelte';
+  import { SvelteFlow, Panel, type Connection, type Edge, type FitViewOptions, type Node } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/base.css';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
@@ -59,10 +59,8 @@
     deleteEdits,
     unmakeEdits,
     freeModuleId,
-    CABLE_OPACITIES,
     connectionV2,
     crumbsOf,
-    drawnOpacity,
     EDGE_Z,
     editKey,
     farEdges,
@@ -70,7 +68,6 @@
     GRAPH,
     knobHandle,
     labelOf,
-    nextOpacity,
     patchAt,
     rerouteV2,
     sizeOf,
@@ -152,8 +149,6 @@
   // (13.5 px) would be under 11 too, and nodes show their name and how much is cabled.
   const FAR = 0.82;
   let zoom = $state(1);
-  // The overview map on a narrow screen: shut until asked for.
-  let mapOpen = $state(false);
   // A knob's fine adjust under way (its lens over the graph), and its help.
   let fine = $state.raw<Fine | null>(null);
   let fineEnded = -Infinity;
@@ -166,12 +161,6 @@
   // What the view fits round: clear of the legend and crumbs above, the chips and an open sheet below.
   const pad = $derived({ top: 56, left: 16, right: 16, bottom: Math.round(sheetHeight) + 60 });
   const padding = $derived<FitViewOptions['padding']>({ top: `${pad.top}px`, left: `${pad.left}px`, right: `${pad.right}px`, bottom: `${pad.bottom}px` });
-  // The overview map's nodes by class (themed below): a modulator's purple, the rest the tiles' grey, frames left out.
-  const mapClass = (n: Node) => {
-    const d = n.data as NodeData;
-    if (d.kind !== 'module') return 'map-none';
-    return d.modulator ? 'map-mod' : 'map-node';
-  };
 
   const nodeTypes = { patch: PatchNode, box: PatchNode };
   const edgeTypes = { cable: PatchCable, wire: PatchWire };
@@ -284,26 +273,6 @@
     if (live?.frame) untrack(() => thumbs.next(thumbnail));
   });
 
-  // The cables' opacity (VCV Rack's cable opacity), this device's.
-  const OPACITY_KEY = 'cratarr-graph-cable-opacity';
-  let opacity = $state<number>(
-    (() => {
-      try {
-        const v = Number(localStorage.getItem(OPACITY_KEY));
-        return (CABLE_OPACITIES as readonly number[]).includes(v) ? v : 1;
-      } catch {
-        return 1;
-      }
-    })(),
-  );
-  function cycleOpacity() {
-    opacity = nextOpacity(opacity);
-    try {
-      localStorage.setItem(OPACITY_KEY, String(opacity));
-    } catch {
-      /* this visit only */
-    }
-  }
 
   // ELK in a web worker (elk-layout.ts), made when first wanted; its last layout by the graph's shape.
   let elk: InstanceType<typeof ElkApi> | null = null;
@@ -763,7 +732,7 @@
   }}
 />
 
-<div class="patch-graph" style:--graph-w="{width}px" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--cable-alpha={drawnOpacity(opacity)} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
+<div class="patch-graph" style:--graph-w="{width}px" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -808,27 +777,11 @@
     }}
   >
     <PatchFit layout={fitKey} active={!touched} {pad} view={{ width, height }} {portrait} onzoom={(z) => (zoom = z)} onview={(v) => (vp = v)} />
-    <!-- The map: bottom right over the chips; on a narrow screen a button (Map) opens it top right, over the view only
-         while wanted. -->
-    {#if (width >= 600 && !barShown) || mapOpen}
-    <MiniMap
-      position={width < 600 ? 'top-right' : 'bottom-right'}
-      pannable
-      zoomable
-      width={coarse ? 112 : 168}
-      height={coarse ? 84 : 112}
-      nodeClass={mapClass}
-      ariaLabel="Overview"
-      style={`${width < 600 ? 'margin: calc(12px + env(safe-area-inset-top)) 12px 0 0' : `margin: 0 16px calc(${Math.round(sheetHeight)}px + 64px + env(safe-area-inset-bottom)) 0`}; border: 1px solid var(--border); border-radius: 10px; overflow: hidden`}
-    />
-    {/if}
     {#if !barShown}
       <Panel position="bottom-left" class="chips-panel">
         <div class="bottom">
           <PatchChips {parts} {padding} onjump={() => (touched = true)} />
-          {#if onarrange && Object.keys(kept).length}<button class="opacity" onclick={onarrange}>Arrange</button>{/if}
-          {#if width < 600}<button class="opacity" class:on={mapOpen} aria-pressed={mapOpen} onclick={() => (mapOpen = !mapOpen)}>Map</button>{/if}
-          <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
+          {#if onarrange && Object.keys(kept).length}<button class="chipbtn" onclick={onarrange}>Arrange</button>{/if}
         </div>
       </Panel>
     {/if}
@@ -987,9 +940,6 @@
     color: var(--text);
   }
   .patch-graph :global(.svelte-flow) {
-    /* The overview map (Svelte Flow's MiniMap, by its theming variables). */
-    --xy-minimap-background-color: var(--patch-bg);
-    --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg) 55%, transparent);
     background: transparent;
     --xy-connectionline-stroke: var(--patch-mod);
     --xy-connectionline-stroke-width: 2;
@@ -1013,9 +963,7 @@
   .patch-graph :global(.svelte-flow__edge.feedback .svelte-flow__edge-path) {
     opacity: 0.35;
   }
-  /* The modulation cables at the opacity set (the corner's button); one in focus at all of it. */
   .patch-graph :global(.svelte-flow__edge.cable) {
-    opacity: var(--cable-alpha, 1);
     -webkit-touch-callout: none;
   }
   .patch-graph :global(.svelte-flow__edge.cable.lit),
@@ -1218,7 +1166,7 @@
   .crumbs button.here {
     color: var(--text);
   }
-  /* Over the bottom: the chips and the opacity button, above an open sheet and the safe area. */
+  /* Over the bottom: the chips (and Arrange), above an open sheet and the safe area. */
   .patch-graph :global(.chips-panel) {
     margin: 0 16px calc(var(--sheet-h, 0px) + 12px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
   }
@@ -1246,20 +1194,7 @@
     font-size: 14px;
     line-height: 1.45;
   }
-  .opacity.on {
-    color: var(--text);
-    border-color: color-mix(in srgb, var(--text) 35%, var(--border));
-  }
-  .patch-graph :global(.map-node) {
-    fill: color-mix(in srgb, var(--text) 30%, var(--surface));
-  }
-  .patch-graph :global(.map-mod) {
-    fill: color-mix(in srgb, var(--patch-mod) 45%, var(--surface));
-  }
-  .patch-graph :global(.map-none) {
-    fill: none;
-  }
-  .opacity {
+  .chipbtn {
     min-height: 32px;
     flex: none;
     min-width: 44px;
@@ -1272,7 +1207,7 @@
     font-variant-numeric: tabular-nums;
     cursor: pointer;
   }
-  .opacity:hover {
+  .chipbtn:hover {
     color: var(--text);
   }
 </style>

@@ -511,7 +511,6 @@ export function nearestEnd(at: XY, from: XY, to: XY): 'from' | 'to' {
 // Rack's src/app/CableWidget.cpp (VCVRack/Rack v2, 061ccf63), getSlumpPos and drawLayer: a cable is a quadratic curve
 // from its output to its input through the point midway between them, lowered as the cable grows longer:
 // `(1 - tension) * (150 + dist)`. Rack's tension setting is 0..1; here it is fixed for a slight sag on the graph's scale.
-// Its opacity is drawn as `opacity ** 1.5`, as Rack's nvgAlpha(pow(opacity, 1.5)).
 
 /** How taut a modulation cable hangs (Rack's cableTension: 1 straight, 0 its fullest sag). */
 export const CABLE_TENSION = 0.9;
@@ -531,10 +530,6 @@ export function saggingPath(a: XY, b: XY, tension = CABLE_TENSION): [path: strin
   return [`M${f(a.x)},${f(a.y)} Q${f(s.x)},${f(s.y)} ${f(b.x)},${f(b.y)}`, mid];
 }
 
-/** The cables' opacity steps (the graph's corner button cycles them), and as drawn (Rack's `opacity ** 1.5`). */
-export const CABLE_OPACITIES = [1, 0.5, 0.2] as const;
-export const drawnOpacity = (o: number) => Math.pow(Math.min(1, Math.max(0, o)), 1.5);
-export const nextOpacity = (o: number) => CABLE_OPACITIES[(Math.max(0, CABLE_OPACITIES.indexOf(o as (typeof CABLE_OPACITIES)[number])) + 1) % CABLE_OPACITIES.length];
 
 // ---- "New ▸ LFO / ADSR" from a knob (0057 §4b) ----------------------------------------------------------------------
 

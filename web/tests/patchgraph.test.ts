@@ -10,7 +10,7 @@ await import('../src/lib/visuals/picture-wiring.ts');
 const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts');
 const { cratarrTypes } = await import('../src/lib/visuals/patch.ts');
 const { MODULATORS } = await import('../src/lib/visuals/modulators/modulators.ts');
-const { amountLabel, drawnOpacity, labelOf, nearestEnd, nextOpacity, ringOf, saggingPath, slumpOf, turned } = await import('../src/lib/visuals/patchgraph.ts');
+const { amountLabel, labelOf, nearestEnd, ringOf, saggingPath, slumpOf, turned } = await import('../src/lib/visuals/patchgraph.ts');
 const { ADSR, CLOCK, ENVELOPE, MUSIC, SEQUENCER, FEEDBACK } = await import('../src/lib/visuals/ports.ts');
 type ModuleType = import('../src/lib/visuals/patch.ts').ModuleType;
 type Module = import('../src/lib/visuals/patch.ts').Module;
@@ -312,14 +312,6 @@ test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tens
   assert.equal(nearestEnd({ x: 90, y: 0 }, { x: 0, y: 0 }, { x: 100, y: 0 }), 'to');
 });
 
-test('cable opacity: 100, 50, 20 % in turn, drawn as Rack draws it (to the power 1.5)', () => {
-  assert.equal(nextOpacity(1), 0.5);
-  assert.equal(nextOpacity(0.5), 0.2);
-  assert.equal(nextOpacity(0.2), 1);
-  assert.equal(nextOpacity(0.7), 0.5);
-  assert.equal(drawnOpacity(1), 1);
-  assert.ok(Math.abs(drawnOpacity(0.25) - 0.125) < 1e-9);
-});
 
 // ---- Typed wires and ports, normals, bundles, faces, "New ▸ LFO / ADSR" (0057 §1, §4b, §4h) -------------------------
 
