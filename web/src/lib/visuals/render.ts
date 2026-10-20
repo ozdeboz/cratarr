@@ -11,7 +11,7 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import type { ChainNow } from './chain-params';
-import { Compositor } from './compose';
+import { composeActive, Compositor } from './compose';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { compile, effectRuns, plan, STAGES, stagesOf, type Compiled, type Stage, type TypeOf } from './picture-graph';
 import type { PatchV2 } from './ports';
@@ -102,6 +102,8 @@ export class FlameRenderer {
   /** The slots whose Echo is fed back the line's own finished picture (Feedback → Echo → Mix). */
   private fxLooped = new Set<number>();
   private compiled: Compiled | null = null;
+  /** Whether the graph has the picture's own loop (loop-feedback → … → loop-mix). */
+  private looped = true;
   /** Whether the lazy rules cut the flame last frame. */
   private cut = false;
   errors: string[] = [];
@@ -170,6 +172,7 @@ export class FlameRenderer {
     const c = compile(p, typeOf);
     const stages = stagesOf(c);
     this.compiled = stages ? c : null;
+    this.looped = !stages || c.order.some((n) => n.id === 'loop-mix');
     this.errors = stages ? c.errors : [...c.errors, 'This version draws the picture in its own order only.'];
     this.stages = new Set(stages ?? STAGES);
     const fx = c.order.filter((n) => /^fx\d$/.test(n.id)).map((n) => Number(n.id.slice(2)) - 1);
@@ -274,7 +277,7 @@ export class FlameRenderer {
       const p = this.fin.chainFor({ ...fx, ids }, this.clocks);
       return p ? [{ p, ids }] : [];
     }) : [];
-    const compose = this.stages.has('compose') && extras && this.compositor && Compositor.active(extras.extra, extras.knobsOf, extras.flame) ? this.compositor : null;
+    const compose = this.stages.has('compose') && extras && this.compositor && composeActive(extras.extra, extras.knobsOf, extras.flame) ? this.compositor : null;
     const composing = !!compose;
     const into = chain.length || composing ? this.fin.targets(light.width, light.height) : null;
     if (drawn) {
@@ -282,7 +285,7 @@ export class FlameRenderer {
       if (into) viewWidth = light.width, viewHeight = light.height;
       this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
     }
-    const picture = into && compose ? compose.run(into.tex[2], into.w, into.h, extras!.extra, extras!.knobsOf, extras!.frame, extras!.flame) : into ? into.tex[2] : null;
+    const picture = into && compose ? compose.run(into.tex[2], into.w, into.h, extras!.extra, extras!.knobsOf, extras!.frame, extras!.flame, this.looped) : into ? into.tex[2] : null;
     if (chain.length && into && picture) {
       // Each run from the last one's picture; the first into the picture's own targets, as before.
       let shown = picture;

@@ -1,7 +1,7 @@
 // The picture lab's recorder (decision 0057, step 3; development only): each frame's inputs to the renderer and the
 // compositor, kept as plain data for picture-lab.html to replay through two pipelines and compare pixel by pixel. On
 // only where the lab asks for it (`globalThis.cratarrPictureRecord`), before the visuals open.
-import { Compositor } from './compose';
+import { composeActive } from './compose';
 import type { Flame, Xform } from './flame';
 import type { FrameInfo, Module, PatchExtra, SignalRef } from './patch';
 import { shownOf } from './chain-params';
@@ -83,7 +83,7 @@ export function recordPictures(renderer: FlameRenderer) {
     pruned = undefined;
     // The compose step as drawn: only where it draws (compose.ts `active`), its signals as they are read.
     let given = extras;
-    if (extras && Compositor.active(extras.extra, extras.knobsOf, extras.flame)) {
+    if (extras && composeActive(extras.extra, extras.knobsOf, extras.flame)) {
       const signals: Record<string, number> = {};
       const modules: Module[] = [...extras.extra.layers.flatMap((l) => [l.source, ...l.modules]), ...extras.extra.loop];
       const info = extras.frame;

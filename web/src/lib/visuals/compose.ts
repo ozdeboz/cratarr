@@ -1,11 +1,12 @@
-// The patch's picture past the flame (decision 0056, step 4): the layers after the flame, each drawn by its source
-// into a picture of its own and blended over the flame's; then the picture's own loop, the last frame's picture moved
-// (Warp) and kept (Keep) under the new one: MilkDrop's feedback, as modules. The flame's own loop stays inside the
-// flame (render.ts). The renderer calls `run` between its show and finish when `active` says there is something to do;
-// with nothing beyond today's chain it is never called, and the picture is exactly as before.
-
+// The patch's picture past the flame (decision 0056, step 4; 0057 step 3, the compose step of the picture graph): the
+// layers after the flame, each drawn by its source into a picture of its own and blended over the flame's (the
+// `layers` Mix); then the picture's own loop (loop-feedback → Warp, Keep … → loop-mix, Lighten), drawn as one pass:
+// the last frame's picture moved and kept under the new one, MilkDrop's feedback. Its targets come from a pool by
+// size and format (picture-graph.ts); the Feedback keeps the pass's own target for the next frame, no copy. The
+// renderer calls `run` between its show and the effects when `composeActive` says there is something to do.
 import { keptPerSecond } from './loopmods';
 import { BLENDS, type FrameInfo, type Layer, type Module, type PatchExtra, type PictureModule } from './patch';
+import { Pool, type Spec } from './picture-graph';
 import { createSource } from './sources/index';
 import { createFluidLoop, FLUID_LOOP } from './fluid-loop';
 import { createEngine } from './engine-module';
@@ -106,23 +107,27 @@ void main() {
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
 
+/** Whether there is anything to compose: the flame layer less than whole, a layer past the flame with something of
+ *  it, or the picture's loop. */
+export function composeActive(extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>, flame = 1): boolean {
+  return flame < 1 || extra.layers.some((l) => l.blend.amount > 0) || extra.loop.some((m) => (knobsOf(m).amount ?? 0) > 0);
+}
+
 export class Compositor {
   private gl: WebGL2RenderingContext;
   private blend: WebGLProgram;
   private loop: WebGLProgram;
   private empty: WebGLVertexArrayObject;
-  private half: boolean;
-  private w = 0;
-  private h = 0;
+  private spec: Spec = { w: 0, h: 0, format: 'rgba8' };
   /** Each layer's source, running, by its source module's id and type. */
   private sources = new Map<string, { type: string; module: PictureModule | null }>();
   /** Every other running module (a layer's, the loop's), by its module's id. */
   private running = new Map<string, { type: string; module: PictureModule | null }>();
-  private scratch: Target[] = [];
-  private layerTargets = new Map<string, Target>();
-  private mix: Target[] = [];
-  private feedback: Target[] = [];
-  private fed = 0;
+  private pool: Pool<Target>;
+  /** The loop's Feedback: the picture its loop gave last frame (the pass's own target, kept from the pool). */
+  private held: Target | null = null;
+  /** What the last run gave (read after it, by the effects or the screen): back to the pool at the next. */
+  private given: Target | null = null;
   private time = 0;
 
   constructor(gl: WebGL2RenderingContext) {
@@ -131,30 +136,30 @@ export class Compositor {
     this.loop = program(gl, FULL, LOOP);
     this.empty = gl.createVertexArray()!;
     // Half floats where they can be drawn into (the loop's faint trails would band in 8 bits), else 8 bits.
-    this.half = !!gl.getExtension('EXT_color_buffer_float') || !!gl.getExtension('EXT_color_buffer_half_float');
+    this.spec.format = gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float') ? 'rgba16f' : 'rgba8';
+    this.pool = new Pool<Target>(
+      (s) => this.target(s),
+      (t) => this.free(t),
+    );
   }
 
-  /** Whether there is anything to compose: the flame layer less than whole, a layer past the flame with something of
-   *  it, or the picture's loop. */
-  static active(extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>, flame = 1): boolean {
-    return flame < 1 || extra.layers.some((l) => l.blend.amount > 0) || extra.loop.some((m) => (knobsOf(m).amount ?? 0) > 0);
-  }
-
-  /** The picture composed from `picture` (the flame's, `width` × `height`; `flame` of it shown): the texture finish
-   *  is to read next. */
-  run(picture: WebGLTexture, width: number, height: number, extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>, frame: FrameInfo, flame = 1): WebGLTexture {
+  /** The picture composed from `picture` (the flame's, `width` × `height`; `flame` of it shown), the picture's own
+   *  loop drawn where the graph has one (`loop`): the texture the effects or the screen read next. */
+  run(picture: WebGLTexture, width: number, height: number, extra: PatchExtra, knobsOf: (m: Module) => Record<string, number>, frame: FrameInfo, flame = 1, loop = true): WebGLTexture {
     const gl = this.gl;
     this.sized(width, height);
+    if (this.given && this.given !== this.held) this.pool.give(this.given);
+    this.given = null;
     this.time += frame.dt;
     // The layers, each drawn alone, then over what there is so far; the flame's share taken with the first (or alone,
     // where no other layer draws).
     let base: WebGLTexture = picture;
+    let mixed: Target | null = null;
     let gain = Math.min(1, Math.max(0, flame));
-    let into = 0;
     const over = (drawn: WebGLTexture, mode: Layer['blend']['mode'], amount: number, tint = 0, glow = 0) => {
-      const t = this.mix[into];
+      const t = this.pool.take(this.spec);
       gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
-      gl.viewport(0, 0, this.w, this.h);
+      gl.viewport(0, 0, this.spec.w, this.spec.h);
       gl.disable(gl.BLEND);
       gl.useProgram(this.blend);
       this.bind(0, base, 'uBase', this.blend);
@@ -162,38 +167,42 @@ export class Compositor {
       gl.uniform1i(gl.getUniformLocation(this.blend, 'uMode'), BLENDS.indexOf(mode));
       gl.uniform1f(gl.getUniformLocation(this.blend, 'uTint'), tint);
       gl.uniform1f(gl.getUniformLocation(this.blend, 'uGlow'), glow);
-      gl.uniform2f(gl.getUniformLocation(this.blend, 'uAspect'), Math.min(1, this.h / this.w), Math.min(1, this.w / this.h));
+      gl.uniform2f(gl.getUniformLocation(this.blend, 'uAspect'), Math.min(1, this.spec.h / this.spec.w), Math.min(1, this.spec.w / this.spec.h));
       gl.uniform1f(gl.getUniformLocation(this.blend, 'uAmount'), amount);
       gl.uniform1f(gl.getUniformLocation(this.blend, 'uBaseGain'), gain);
       this.full();
+      if (mixed) this.pool.give(mixed);
+      mixed = t;
       base = t.tex;
       gain = 1;
-      into = 1 - into;
     };
     for (const layer of extra.layers) {
       if (layer.blend.amount <= 0) continue;
       const drawn = this.drawLayer(layer, knobsOf, frame);
       const k = knobsOf(layer.source);
-      if (drawn) over(drawn, layer.blend.mode, layer.blend.amount, k.tint ?? 0, k.glow ?? 0);
+      if (drawn) {
+        over(drawn.tex, layer.blend.mode, layer.blend.amount, k.tint ?? 0, k.glow ?? 0);
+        this.pool.give(drawn);
+      }
     }
     if (gain < 1) over(picture, 'add', 0);
     // The picture's own loop: its Warps summed, its Keeps multiplied (each by its Amount).
-    const warps = extra.loop.filter((m) => m.type === 'warp');
-    const keeps = extra.loop.filter((m) => m.type === 'keep');
     let keep = 1;
     let kept = false;
-    for (const m of keeps) {
+    for (const m of loop ? extra.loop : []) {
+      if (m.type !== 'keep') continue;
       const k = knobsOf(m);
       if ((k.amount ?? 0) <= 0) continue;
       kept = true;
       keep *= 1 - k.amount + k.amount * keptPerSecond(k.trails ?? 0.5) ** frame.dt;
     }
     if (!kept) {
-      this.fed = 0;
+      this.given = mixed;
       return base;
     }
     let zoom = 0, turn = 0, dx = 0, dy = 0, stretch = 0, wobble = 0, size = 0.5;
-    for (const m of warps) {
+    for (const m of extra.loop) {
+      if (m.type !== 'warp') continue;
       const k = knobsOf(m);
       const a = k.amount ?? 0;
       zoom += a * (k.zoom ?? 0);
@@ -205,29 +214,29 @@ export class Compositor {
       size = k.wobbleSize ?? size;
     }
     const dt = frame.dt;
-    let last = this.feedback[this.fed];
     // The loop's other modules (claude-5f's fluid…), in order, on the last picture before it is warped and kept.
-    let scratchAt = 0;
+    let last = this.held!;
+    const scratch: Target[] = [];
     for (const m of extra.loop) {
       if (m.type === 'warp' || m.type === 'keep') continue;
       const run = this.module(m.id, m.type);
       if (!run) continue;
-      const out = this.scratch[scratchAt];
-      run.draw(gl, last.tex, out.fbo, this.w, this.h, knobsOf(m), frame);
+      const out = this.pool.take(this.spec);
+      run.draw(gl, last.tex, out.fbo, this.spec.w, this.spec.h, knobsOf(m), frame);
       done(gl);
       last = out;
-      scratchAt = 1 - scratchAt;
+      scratch.push(out);
     }
-    const next = this.feedback[1 - this.fed];
+    const next = this.pool.take(this.spec);
     gl.bindFramebuffer(gl.FRAMEBUFFER, next.fbo);
-    gl.viewport(0, 0, this.w, this.h);
+    gl.viewport(0, 0, this.spec.w, this.spec.h);
     gl.disable(gl.BLEND);
     gl.bindVertexArray(null);
     gl.useProgram(this.loop);
     this.bind(0, base, 'uNow', this.loop);
     this.bind(1, last.tex, 'uLast', this.loop);
     const u = (n: string) => gl.getUniformLocation(this.loop, n);
-    gl.uniform1f(u('uAspect'), this.w / this.h);
+    gl.uniform1f(u('uAspect'), this.spec.w / this.spec.h);
     // A second's worth at full: zoom half again (in or out), half a turn, a fifth of the picture across.
     gl.uniform1f(u('uZoom'), Math.exp(0.4 * zoom * dt));
     gl.uniform1f(u('uTurn'), Math.PI * turn * dt);
@@ -236,13 +245,18 @@ export class Compositor {
     gl.uniform3f(u('uWobble'), 0.02 * wobble * Math.min(1, dt * 30), 4 + 20 * size, this.time * 1.7);
     gl.uniform1f(u('uKeep'), keep);
     this.full();
-    this.fed = 1 - this.fed;
     done(gl);
+    // The Feedback adopts the pass's own target for the next frame; what it held is read by now.
+    for (const t of scratch) this.pool.give(t);
+    if (mixed) this.pool.give(mixed);
+    this.pool.give(this.held!);
+    this.held = next;
+    this.given = next;
     return next.tex;
   }
 
-  /** A layer's picture: its source drawn into its target (and, later, its modules after it). */
-  private drawLayer(layer: Layer, knobsOf: (m: Module) => Record<string, number>, frame: FrameInfo): WebGLTexture | null {
+  /** A layer's picture: its source drawn into a target, then its modules, each from the last into another. */
+  private drawLayer(layer: Layer, knobsOf: (m: Module) => Record<string, number>, frame: FrameInfo): Target | null {
     const gl = this.gl;
     let s = this.sources.get(layer.source.id);
     if (!s || s.type !== layer.source.type) {
@@ -257,27 +271,19 @@ export class Compositor {
       this.sources.set(layer.source.id, s);
     }
     if (!s.module) return null;
-    let t = this.layerTargets.get(layer.id);
-    if (!t) {
-      t = this.target();
-      this.layerTargets.set(layer.id, t);
-    }
-    s.module.draw(gl, null, t.fbo, this.w, this.h, knobsOf(layer.source), frame);
+    let t = this.pool.take(this.spec);
+    s.module.draw(gl, null, t.fbo, this.spec.w, this.spec.h, knobsOf(layer.source), frame);
     done(gl);
-    // Its modules, in order, each from the last picture into the other scratch (then copied back by being the next
-    // one's input): the layer's picture is the last one written.
-    let picture = t.tex;
-    let into = 0;
     for (const m of layer.modules) {
       const run = this.module(m.id, m.type);
       if (!run) continue;
-      const out = this.scratch[into];
-      run.draw(gl, picture, out.fbo, this.w, this.h, knobsOf(m), frame);
+      const out = this.pool.take(this.spec);
+      run.draw(gl, t.tex, out.fbo, this.spec.w, this.spec.h, knobsOf(m), frame);
       done(gl);
-      picture = out.tex;
-      into = 1 - into;
+      this.pool.give(t);
+      t = out;
     }
-    return picture;
+    return t;
   }
 
   /** A running module of `type` for module `id` (made on first use; none for a type the compositor does not run). */
@@ -301,30 +307,25 @@ export class Compositor {
   prune(extra: PatchExtra) {
     const sources = new Set(extra.layers.map((l) => l.source.id));
     for (const [id, s] of this.sources) if (!sources.has(id)) (s.module?.dispose(this.gl), this.sources.delete(id));
-    const layers = new Set(extra.layers.map((l) => l.id));
-    for (const [id, t] of this.layerTargets) if (!layers.has(id)) (this.free(t), this.layerTargets.delete(id));
     const modules = new Set([...extra.layers.flatMap((l) => l.modules.map((m) => m.id)), ...extra.loop.map((m) => m.id)]);
     for (const [id, r] of this.running) if (!modules.has(id)) (r.module?.dispose(this.gl), this.running.delete(id));
   }
 
+  /** At a new size every target goes, and the loop starts from nothing. */
   private sized(width: number, height: number) {
-    if (width === this.w && height === this.h && this.mix.length) return;
-    for (const t of [...this.mix, ...this.feedback, ...this.scratch, ...this.layerTargets.values()]) this.free(t);
-    this.layerTargets.clear();
-    this.w = width;
-    this.h = height;
-    this.mix = [this.target(), this.target()];
-    this.feedback = [this.target(), this.target()];
-    this.scratch = [this.target(), this.target()];
-    this.fed = 0;
+    if (width === this.spec.w && height === this.spec.h && this.held) return;
+    this.pool.clear();
+    this.given = null;
+    this.spec = { ...this.spec, w: width, h: height };
+    this.held = this.pool.take(this.spec);
   }
 
-  private target(): Target {
+  private target(s: Spec): Target {
     const gl = this.gl;
     const tex = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    if (this.half) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, this.w, this.h, 0, gl.RGBA, gl.HALF_FLOAT, null);
-    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, this.w, this.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    if (s.format === 'rgba16f') gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, s.w, s.h, 0, gl.RGBA, gl.HALF_FLOAT, null);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, s.w, s.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     // Read past its edge (a warp reaching out), the picture is mirrored, not smeared.
@@ -362,7 +363,7 @@ export class Compositor {
   dispose() {
     const gl = this.gl;
     for (const s of [...this.sources.values(), ...this.running.values()]) s.module?.dispose(gl);
-    for (const t of [...this.mix, ...this.feedback, ...this.scratch, ...this.layerTargets.values()]) this.free(t);
+    this.pool.clear();
     gl.deleteProgram(this.blend);
     gl.deleteProgram(this.loop);
     gl.deleteVertexArray(this.empty);
