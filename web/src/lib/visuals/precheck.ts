@@ -10,6 +10,8 @@ import { wavesMotion, zoomsMotion, type AspectsNow } from './aspects';
 import { newEngine, stepEngine } from './engine/graph';
 import { newNormalState, signalsFor } from './normal';
 import { flatten, toV2 } from './v2';
+import { settingsOfPatch } from './engine/settings-view';
+import type { PatchV2 } from './ports';
 import type { Beats } from './beats';
 import { BUDGETED, budgetOf } from './budget';
 import { settingsReport, type Report } from './effects';
@@ -100,11 +102,43 @@ export function* prechecking(
   scope: Scope = 'all',
 ): Generator<void, Checked> {
   const settings = settingsOf(recipe, base, scope);
+  // The recipe's patch, without its sidechains (decision 0057).
+  return yield* checking(flatten(toV2(settings, { sidechain: false })), settings, signals, beats, from, limits, seconds);
+}
+
+/** A patch's check (the dice on the store, 0057): what it does on its own, its sidechains taken out (they hold back
+ *  whatever passes); `base` the device's settings (what a patch has no knob for). */
+export function* precheckingPatch(patch: PatchV2, base: VisualSettings, signals: Signals, beats: Beats | null, from: number, limits: Limits, seconds = SECONDS): Generator<void, Checked> {
+  return yield* checking(withoutSidechains(patch), settingsOfPatch(patch, base), signals, beats, from, limits, seconds);
+}
+
+/** `p` without its sidechains: its Meters, Screens and Duckers, the VCAs that fed only them (their thresholds' activity),
+ *  their cables and the macros onto them (Wild). */
+export function withoutSidechains(p: PatchV2): PatchV2 {
+  const gone = new Set(p.modules.filter((m) => m.type === 'meter' || m.type === 'screen' || m.type === 'ducker').map((m) => m.id));
+  for (let more = true; more; ) {
+    more = false;
+    for (const m of p.modules) {
+      if (gone.has(m.id) || m.type !== 'vca') continue;
+      const out = p.cables.filter((c) => c.from.module === m.id);
+      if (out.length && out.every((c) => gone.has(c.to.module))) {
+        gone.add(m.id);
+        more = true;
+      }
+    }
+  }
+  return {
+    ...p,
+    modules: p.modules.filter((m) => !gone.has(m.id)),
+    cables: p.cables.filter((c) => !gone.has(c.from.module) && !gone.has(c.to.module)),
+    macros: p.macros.filter((x) => !x.targets.every((t) => gone.has(t.module))),
+  };
+}
+
+/** A patch run over the track on the one engine and measured, `settings` what the measure reads (the effects, the dive). */
+function* checking(patch: PatchV2, settings: VisualSettings, signals: Signals, beats: Beats | null, from: number, limits: Limits, seconds: number): Generator<void, Checked> {
   // The dive's turn, as the visuals count it (the renderer's, beside each part's own); none where it cannot dive.
   const divePerRate = settings.dive > 0 ? diveTurnPerRate(settings) : 0;
-  // The one engine over the recipe's patch, without its sidechains: the check asks what the recipe does on its own, as
-  // today's ran without the old sidechaining; the patch's sidechains hold back whatever passes (decision 0057).
-  const patch = flatten(toV2(settings, { sidechain: false }));
   const engine = newEngine();
   const normal = newNormalState();
   const state = newMusicState();

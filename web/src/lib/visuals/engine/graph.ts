@@ -148,6 +148,9 @@ export type EngineFrame = {
   moments: MomentRequest[];
   /** Each Grid's points (its `points` output, for Instance: claude-632's compositor). */
   points: Record<string, GridPoint[]>;
+  /** What reaches each points input (`module.port`: a Fluid's `at`, where it pushes): what is cabled into it (a Flame's
+   *  points, a Grid's), else what it is normalled to (the Flame's points). For the compositor, which runs the sim. */
+  pointsAt: Record<string, readonly (Point | null)[]>;
   /** The Dice whose trigger rose this frame (0057 §7f): each one's seed and scope, for the page to randomize the patch
    *  with (randomize.ts: over frames, as one undoable change through the store). */
   dice: DiceRoll[];
@@ -165,7 +168,13 @@ export type EngineOptions = {
   walk?: Record<string, number>;
   /** What the Meter measured of the last frame drawn (meters.ts; the precheck's measure()): the sidechains' keys. */
   meters?: MeterValues;
+  /** The Flame's parts where they are on the screen (0..1, y up; null: a part not drawn), as the page measures them: it
+   *  holds the drawn flame and its framing. The Flame's `points` output (0057, the modular Fluid). */
+  flamePoints?: readonly (Point | null)[];
 };
+
+/** A point on the screen, 0..1 each way. */
+export type Point = readonly [number, number];
 
 /** A modulator's type: the caller's, else modulators.ts's (a renamed one's too). */
 function modulatorTypeIn(types: Record<string, ModuleType>, type: string): ModulatorType | null {
@@ -198,6 +207,7 @@ type Plan = {
   /** Each port's cables as a knob takes them (a polyphonic one as one a channel), the same objects each frame. */
   expanded: WeakMap<readonly CableV2[], CableV2[]>;
   dice: Module[];
+  fluids: Module[];
   /** Each Shaper's curve as a shape, and the knobs it was made from. */
   shapers: Map<string, { key: string; shape: Shape }>;
   /** Each key's (`module|port`) chain column, where it is one. */
@@ -367,6 +377,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     modulesNow: new Set(p.modules.map((x) => x.id)),
     grids: p.modules.filter((x) => x.type === 'grid'),
     dice: p.modules.filter((x) => x.type === 'dice'),
+    fluids: p.modules.filter((x) => x.type === 'fluid'),
     shapers: new Map(),
     expanded: new WeakMap(),
     columns: new Map(),
@@ -925,7 +936,20 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const seed = seeded && seeded[0].length ? Math.floor(clamp(sumOf(seeded, 0), 0, 1 - 2 ** -33) * 4294967296) : Math.floor(opts.now) >>> 0;
     dice.push({ module: x.id, seed, scope: RANDOMIZE_SCOPES[clamp(Math.round(finite(x.knobs.scope, 0)), 0, RANDOMIZE_SCOPES.length - 1)] });
   }
-  return { aspects, knobs, outputs, macros, moments, points, dice };
+  // What reaches each Fluid's `at`: the points output cabled into it (a Flame's, a Grid's), else the Flame's (its normal).
+  const pointsOf = (r: PortRef): readonly (Point | null)[] | null => {
+    const type = typeOf.get(r.module);
+    if (type === 'flame' && r.port === 'points') return opts.flamePoints ?? null;
+    if (type === 'grid' && r.port === 'points') return (st.grids[r.module]?.grid.points ?? []).map((q): Point => [q.x * 0.5 + 0.5, q.y * 0.5 + 0.5]);
+    return null;
+  };
+  const pointsAt: Record<string, readonly (Point | null)[]> = {};
+  for (const x of plan.fluids) {
+    const cabled = plan.intoOf.get(x.id)?.get('at')?.[0];
+    const got = cabled ? pointsOf(cabled.from) : flameModule ? (opts.flamePoints ?? null) : null;
+    if (got) pointsAt[`${x.id}.at`] = got;
+  }
+  return { aspects, knobs, outputs, macros, moments, points, pointsAt, dice };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */

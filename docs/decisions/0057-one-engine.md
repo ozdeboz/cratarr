@@ -39,6 +39,18 @@ We looked at how the established modular tools are built:
 - **Reaktor**: blocks built from core parts, with macros.
 - **ISF**: a shader declares its inputs; the host builds its controls from that.
 
+## Words (the owner, 2026-10-20)
+
+- **Rack:** the instrument, the container of modules and devices. Not "chain" or "synthesizer" (those words in this
+  record before this section mean the rack).
+- **Patch:** the rack's current state: its wiring and knob values ("patch is the current state").
+- **Snapshot:** any saved patch ("snapshot is any saved patch"). A preset is a snapshot that comes with the app.
+- **Device:** a group of modules shown as one, with its macros (Show, Cratarr, the nine of §6b).
+- **Module:** one unit (a Flame, a Blur, an LFO).
+
+What shows (labels, help, the panel, the graph) uses these words today. The code's names (`chains.ts`, `Chain`) follow
+in step 6, as that code is replaced; `PatchV2` and the store's `patch` already mean the patch.
+
 ## Decision: the North Star
 
 **One patch, one engine. Everything that changes the picture is a module, a cable or a macro, and it shows in the graph
@@ -573,6 +585,10 @@ stay exact (§7f).
 Order, so the page is never edited by two at once: S2's extraction of the loop first (claude-5f); meanwhile S1 and
 S3 are built as new files; then the page mounts the store, the loop and the panel. The seam is the store's API:
 `patch` (raw state), `change(f, key?)` (one undo step, coalesced by key), `replace(p)`, `undo()`, `redo()`.
+
+After the switch (the owner, 2026-10-20), with the Fluid's picture side, the grids and the edges: a **Monitor** (In /
+Out), its one polymorphic input (a picture, light, points as dots, a flow as arrows) shown live in its node and on its
+page; a tap solos it, its signal full screen in place of the Screen's (TouchDesigner's viewers, VCV's Scope).
 
 ### Conversion details (claude-632, step 3)
 

@@ -51,3 +51,26 @@ test('random recipes on the recorded tracks: the verdict and the worst as todayâ
   }
   assert.ok(over >= 0);
 });
+
+test("a patch's check (the dice on the store): the recipe's patch, its sidechains in it and taken out, as the recipe's check", async () => {
+  const { prechecking, precheckingPatch } = await import('../src/lib/visuals/precheck.ts');
+  const { flatten, toV2 } = await import('../src/lib/visuals/v2.ts');
+  const run = <T,>(g: Generator<void, T>): T => {
+    for (;;) {
+      const r = g.next();
+      if (r.done) return r.value;
+    }
+  };
+  for (const id of TRACKS.slice(0, 2)) {
+    const t = track(id);
+    for (const seed of [17, 4711]) {
+      const recipe = recipeFor(seed, ASPECTS);
+      const was = run(prechecking(recipe, DEFAULTS, t.signals, t.beats, 20, DEFAULT_LIMITS, 10));
+      // The whole patch as the store keeps it (sidechains, Wild's macro and all).
+      const patch = flatten(toV2(settingsOf(recipe, DEFAULTS, 'all')));
+      const now = run(precheckingPatch(patch, DEFAULTS, t.signals, t.beats, 20, DEFAULT_LIMITS, 10));
+      assert.deepEqual(now.over, was.over, `${id} ${seed}`);
+      for (const [key, v] of Object.entries(was.worst)) assert.ok(Math.abs((now.worst as Record<string, number>)[key] - (v as number)) <= 1e-6 * Math.max(1, Math.abs(v as number)), `${id} ${seed} ${key}`);
+    }
+  }
+});
