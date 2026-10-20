@@ -41,7 +41,7 @@
   // knobs are cabled; jump chips to the picture's parts; `sheetHeight` (an open sheet over the bottom) keeps the
   // fitted view clear of it.
   import { setContext, untrack } from 'svelte';
-  import { SvelteFlow, Panel, type Connection, type Edge, type FitViewOptions, type Node } from '@xyflow/svelte';
+  import { SvelteFlow, MiniMap, Panel, type Connection, type Edge, type FitViewOptions, type Node } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/base.css';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
@@ -174,7 +174,14 @@
   let zoom = $state(1);
   const farNow = $derived(zoom < FAR);
   // What the view fits round: clear of the legend and crumbs above, the chips and an open sheet below.
-  const padding = $derived<FitViewOptions['padding']>({ top: '56px', left: '16px', right: '16px', bottom: `${Math.round(sheetHeight) + 60}px` as `${number}px` });
+  const pad = $derived({ top: 56, left: 16, right: 16, bottom: Math.round(sheetHeight) + 60 });
+  const padding = $derived<FitViewOptions['padding']>({ top: `${pad.top}px`, left: `${pad.left}px`, right: `${pad.right}px`, bottom: `${pad.bottom}px` });
+  // The overview map's nodes by class (themed below): a modulator's purple, the rest the tiles' grey, frames left out.
+  const mapClass = (n: Node) => {
+    const d = n.data as NodeData;
+    if (d.kind === 'box' || d.kind === 'lane' || d.kind === 'add') return 'map-none';
+    return d.kind === 'module' && d.modulator ? 'map-mod' : 'map-node';
+  };
 
   const nodeTypes = { patch: PatchNode, box: PatchNode };
   const edgeTypes = { cable: PatchCable, wire: PatchWire };
@@ -573,7 +580,6 @@
     {nodeTypes}
     {edgeTypes}
     colorMode="dark"
-    fitView
     minZoom={0.2}
     maxZoom={2}
     zoomOnDoubleClick={false}
@@ -601,7 +607,17 @@
     onnodeclick={({ node }) => selecting && togglePick(node.id)}
     onpaneclick={() => (reroute = null)}
   >
-    <PatchFit layout={fitKey} active={!touched} {padding} onzoom={(z) => (zoom = z)} />
+    <PatchFit layout={fitKey} active={!touched} {pad} view={{ width, height }} onzoom={(z) => (zoom = z)} />
+    <MiniMap
+      position="bottom-right"
+      pannable
+      zoomable
+      width={coarse ? 112 : 168}
+      height={coarse ? 84 : 112}
+      nodeClass={mapClass}
+      ariaLabel="Overview"
+      style={`margin: 0 16px calc(${Math.round(sheetHeight)}px + 64px + env(safe-area-inset-bottom)) 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden`}
+    />
     <Panel position="bottom-left" class="chips-panel">
       <div class="bottom">
         {#if selecting}
@@ -735,6 +751,9 @@
     color: var(--text);
   }
   .patch-graph :global(.svelte-flow) {
+    /* The overview map (Svelte Flow's MiniMap, by its theming variables). */
+    --xy-minimap-background-color: var(--patch-bg);
+    --xy-minimap-mask-background-color: color-mix(in srgb, var(--bg) 55%, transparent);
     background: transparent;
     --xy-connectionline-stroke: var(--patch-mod);
     --xy-connectionline-stroke-width: 2;
@@ -932,6 +951,15 @@
   .make {
     color: var(--text);
     white-space: nowrap;
+  }
+  .patch-graph :global(.map-node) {
+    fill: color-mix(in srgb, var(--text) 30%, var(--surface));
+  }
+  .patch-graph :global(.map-mod) {
+    fill: color-mix(in srgb, var(--patch-mod) 45%, var(--surface));
+  }
+  .patch-graph :global(.map-none) {
+    fill: none;
   }
   .opacity {
     min-height: 32px;

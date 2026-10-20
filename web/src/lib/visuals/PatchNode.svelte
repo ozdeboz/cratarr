@@ -509,8 +509,9 @@
   .pin:hover {
     opacity: 1;
   }
-  .title,
-  .t {
+  /* At 100% a node is as wide as its title needs; only far out (its one line over it) does a name end in "…". */
+  :global(.far) .node .title,
+  :global(.far) .node .t {
     min-width: 0;
     max-width: 100%;
     overflow: hidden;

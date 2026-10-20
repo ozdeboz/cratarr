@@ -200,6 +200,22 @@ export function routePath(a: XY, route: XY[], b: XY, portrait = false): [path: s
   return [path, clean[Math.floor(clean.length / 2)]];
 }
 
+/** The zoom at which a node shows whole and its smallest text is 11 px on screen (knob labels: 11 px at 1): the graph
+ *  opens there and no fit goes below it; under it is the overview (only by the viewer's own zoom). */
+export const FULL_ZOOM = 1;
+export type Pad = { top: number; right: number; bottom: number; left: number };
+export type Rect = { x: number; y: number; width: number; height: number };
+
+/** Where the graph opens (VCV Rack's way): at FULL_ZOOM, modules whole. Along each axis the patch is centred where it
+ *  fits in the view (inside its padding), else its start (left, top) is at the view's start: a patch bigger than the
+ *  screen is panned to, not shrunk. Svelte Flow's viewport: the flow's origin on screen and the zoom. */
+export function openView(b: Rect, view: Size, pad: Pad, zoom = FULL_ZOOM): { x: number; y: number; zoom: number } {
+  const w = view.width - pad.left - pad.right;
+  const h = view.height - pad.top - pad.bottom;
+  const axis = (start: number, extent: number, room: number, lead: number) => (extent * zoom <= room ? lead + (room - extent * zoom) / 2 - start * zoom : lead - start * zoom);
+  return { x: axis(b.x, b.width, w, pad.left), y: axis(b.y, b.height, h, pad.top), zoom };
+}
+
 /** Cables over the nodes (as VCV Rack draws them): every edge's z-index. */
 export const EDGE_Z = 1000;
 

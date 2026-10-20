@@ -72,7 +72,8 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       layoutOptions: {
         'elk.portConstraints': 'FIXED_ORDER',
         ...(partition !== null ? { 'elk.partitioning.partition': String(partition) } : {}),
-        ...(children.length ? { 'elk.padding': '[top=34,left=16,bottom=16,right=16]' } : {}),
+        // A frame's room round its modules: its name over them, the same room as between modules inside.
+        ...(children.length ? { 'elk.padding': '[top=48,left=28,bottom=28,right=28]', 'elk.spacing.nodeNode': '48', 'elk.layered.spacing.nodeNodeBetweenLayers': '72' } : {}),
       },
     };
   };
@@ -88,10 +89,12 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       // Back edges (a Feedback's last frame, a loop's way back) routed round, not through.
       'elk.layered.feedbackEdges': 'true',
       'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
-      'elk.spacing.nodeNode': '36',
-      'elk.layered.spacing.nodeNodeBetweenLayers': '72',
-      'elk.spacing.edgeNode': '18',
-      'elk.spacing.edgeEdge': '10',
+      // Room between modules shown whole (their real sizes, whatever the zoom), and for the cables between.
+      'elk.spacing.nodeNode': '48',
+      'elk.layered.spacing.nodeNodeBetweenLayers': '96',
+      'elk.spacing.edgeNode': '24',
+      'elk.spacing.edgeEdge': '12',
+      'elk.spacing.componentComponent': '72',
       // Every route in the root's coordinates (the flow's).
       'elk.json.edgeCoords': 'ROOT',
       'elk.json.shapeCoords': 'PARENT',

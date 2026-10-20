@@ -994,3 +994,30 @@ test('a route drawn square from jack to jack', () => {
   const [down] = routePath({ x: 0, y: 0 }, [{ x: 0, y: 0 }, { x: 30, y: 50 }], { x: 30, y: 50 }, true);
   assert.equal(down, 'M0,0 L0,50 L30,50');
 });
+
+test('the graph opens at 100%, modules whole: centred where the patch fits, else at its start (panned, never shrunk)', () => {
+  const { openView, FULL_ZOOM } = await_graph;
+  assert.equal(FULL_ZOOM, 1);
+  const pad = { top: 56, right: 16, bottom: 60, left: 16 };
+  const view = { width: 1600, height: 1000 };
+  // Small: centred at 100%.
+  const small = openView({ x: 100, y: 50, width: 400, height: 300 }, view, pad);
+  assert.equal(small.zoom, 1);
+  assert.equal(small.x, 16 + (1568 - 400) / 2 - 100);
+  assert.equal(small.y, 56 + (884 - 300) / 2 - 50);
+  // Bigger than the view: at 100% still, its top-left at the view's (inside the padding).
+  const big = openView({ x: -20, y: 10, width: 5000, height: 3000 }, view, pad);
+  assert.deepEqual(big, { x: 16 + 20, y: 56 - 10, zoom: 1 });
+  // A phone: wide patch, short one: across from its start, centred down.
+  const phone = openView({ x: 0, y: 0, width: 1200, height: 200 }, { width: 390, height: 500 }, pad);
+  assert.equal(phone.x, 16);
+  assert.equal(phone.y, 56 + (384 - 200) / 2);
+});
+
+test('ELK: a device opened here has room round its modules, and modules room between them', () => {
+  const g = graphOfV2({ patch: v2patch(), types: v2types, open: new Set(['show']) });
+  const e = elkMod.toElk(g.nodes, g.edges, sizeBy as never);
+  const show = e.children!.find((n) => n.id === 'show')!;
+  assert.match(show.layoutOptions!['elk.padding'], /top=48/);
+  assert.ok(Number(e.layoutOptions!['elk.spacing.nodeNode']) >= 48 && Number(e.layoutOptions!['elk.layered.spacing.nodeNodeBetweenLayers']) >= 96);
+});
