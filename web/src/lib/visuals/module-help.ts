@@ -447,6 +447,14 @@ export const isPlain = (type: string, id: string) => PLAIN_ANYWHERE.has(id) || (
  *  undefined where the label says it all. A type saved under an old name (`drift`, `flash`) is read as the one it is now. */
 export function helpFor(type: string, portOrKnob?: string): string | undefined {
   const t = RENAMED[type] ?? WAS[type] ?? type;
+  // A Music signal on its own (`music-<signal>`): Music's line for that output; its reading and hold, Music's.
+  const signal = t.startsWith('music-') ? t.slice('music-'.length) : null;
+  if (signal) {
+    if (portOrKnob === undefined) return `One of the music’s signals on its own: ${(helpFor('music', signal) ?? signal).replace(/^./, (c) => c.toLowerCase())}`;
+    if (portOrKnob === 'out') return helpFor('music', signal);
+    if (portOrKnob === 'reference') return 'How it is read: against this track’s typical, lately’s, or as it is.';
+    return helpFor('music', portOrKnob);
+  }
   if (portOrKnob === undefined) return moduleHelp[t];
   const id = portOrKnob.replace(/\.\d+$/, '');
   const suffix = /:(\w+)$/.exec(id)?.[1];

@@ -4,7 +4,7 @@
 // `v2Types`, as a record for the panel and the rack.
 
 import { cratarrTypes, type ModuleType } from './patch';
-import { ENGINE_MODULES, GRAPH_MODULES, PICTURE_MODULES, showPartTypes, type Ports } from './ports';
+import { ENGINE_MODULES, GRAPH_MODULES, MUSIC_SIGNAL_MODULES, PICTURE_MODULES, showPartTypes, type Ports } from './ports';
 import { EXTRA_TYPES } from './registry';
 import { EFFECT_TYPES } from './effect-modules';
 import { DEFAULTS, RANGES } from './settings.svelte';
@@ -17,7 +17,7 @@ const WALKS = new Set(['lookWalk', 'behaviourWalk']);
 export function v2TypeList(chain: readonly ModuleType[] = cratarrTypes(RANGES, DEFAULTS)): V2Type[] {
   const show = chain.find((t) => t.type === 'show');
   const rack = chain.map((t) => (t.type === 'frame' ? { ...t, knobs: t.knobs.filter((k) => !WALKS.has(k.id)) } : t));
-  return [...EXTRA_TYPES, ...rack, ...ENGINE_MODULES, ...GRAPH_MODULES, ...PICTURE_MODULES, ...EFFECT_TYPES, ...(show ? showPartTypes(show) : [])];
+  return [...EXTRA_TYPES, ...rack, ...ENGINE_MODULES, ...MUSIC_SIGNAL_MODULES, ...GRAPH_MODULES, ...PICTURE_MODULES, ...EFFECT_TYPES, ...(show ? showPartTypes(show) : [])];
 }
 
 /** The types by name (a later one of a name over an earlier, as picture-graph.ts's map has them). */
