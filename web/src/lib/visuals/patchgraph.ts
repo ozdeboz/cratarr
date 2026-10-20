@@ -949,7 +949,7 @@ export type V2Edit =
   | { kind: 'knob'; module: string[]; knob: string; value: number }
   | { kind: 'connect'; scope: string[]; from: PortRef; to: PortRef }
   | { kind: 'remove'; scope: string[]; cables: string[] }
-  | { kind: 'reroute'; scope: string[]; cable: string; from: PortRef; to: PortRef }
+  | { kind: 'reroute'; scope: string[]; id: string; end: 'from' | 'to'; to: PortRef }
   | { kind: 'removeModules'; scope: string[]; modules: string[] }
   | { kind: 'pin'; scope: string[]; category: Category; on: boolean }
   | { kind: 'add'; scope: string[]; type: string }
@@ -1008,12 +1008,9 @@ export function applyV2(p: PatchV2, e: V2Edit, types?: Record<string, ModuleType
     return p;
   }
   if (e.kind === 'reroute') {
-    const c = inside.cables.find((x) => x.id === e.cable);
-    if (!c) return p;
-    // An end that stays keeps its channel.
-    const same = (a: PortRef, b: PortRef) => a.module === b.module && a.port === b.port;
-    c.from = same(c.from, e.from) ? c.from : e.from;
-    c.to = same(c.to, e.to) ? c.to : e.to;
+    // The one end moved (the panel's Reroute too: patch-edits.ts); the other, and the cable's amount, as they were.
+    const c = inside.cables.find((x) => x.id === e.id);
+    if (c) c[e.end] = { ...e.to };
     return p;
   }
   if (e.kind === 'removeModules') {
@@ -1037,7 +1034,7 @@ function removeModules(p: PatchV2, scope: readonly string[], gone: ReadonlySet<s
   inside.cables = inside.cables.filter((c) => !cut.has(c.id));
   for (const c of inside.cables) if (c.depth && gone.has(c.depth.module)) c.depth = null;
   for (const x of inside.macros) x.targets = x.targets.filter((t) => !gone.has(t.module.split('/')[0]));
-  const held = (pin: string) => gone.has(pin.split(/[./]/)[0]) || (pin.startsWith('cable:') && cut.has(pin.slice(6)));
+  const held = (pin: string) => gone.has(pin.split(/[./]/)[0]) || (pin.startsWith('module:') && gone.has(pin.slice(7))) || (pin.startsWith('cable:') && cut.has(pin.slice(6)));
   inside.pins = inside.pins.filter((x) => !held(x));
   if (!scope.length) return;
   const outside = patchAt(p, scope.slice(0, -1));
@@ -1114,8 +1111,10 @@ export function rerouteV2(
   const was = patchAt(top, scope)?.cables.find((x) => x.id === cable);
   const made = was ? connectionV2(now, nodes, top, at, types, cable) : null;
   if (!was || !made || made.scope.join('/') !== [...at, ...scope].join('/')) return null;
-  if (made.from.module === was.from.module && made.from.port === was.from.port && made.to.module === was.to.module && made.to.port === was.to.port) return null;
-  return { kind: 'reroute', scope: made.scope, cable, from: made.from, to: made.to };
+  const fromMoved = made.from.module !== was.from.module || made.from.port !== was.from.port;
+  const toMoved = made.to.module !== was.to.module || made.to.port !== was.to.port;
+  if (fromMoved === toMoved) return null;
+  return { kind: 'reroute', scope: made.scope, id: cable, end: fromMoved ? 'from' : 'to', to: fromMoved ? made.from : made.to };
 }
 
 /** Where a category's "+" adds: a module of it at a level (`scope`: the devices it is inside, from the level shown). */

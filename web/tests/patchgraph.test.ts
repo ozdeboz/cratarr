@@ -154,21 +154,21 @@ test('rerouting: the knob end onto another knob, the source end onto another out
   const p = sample();
   const g = graphOfV2({ patch: p, types });
   const r = rerouteV2('c1', { source: 'lfo', sourceHandle: 'mod', target: 'k1', targetHandle: 'k:amount' }, g.nodes, p, [], types);
-  assert.deepEqual(r, { kind: 'reroute', scope: [], cable: 'c1', from: { module: 'lfo', port: 'out' }, to: { module: 'k1', port: 'amount' } });
+  assert.deepEqual(r, { kind: 'reroute', scope: [], id: 'c1', end: 'to', to: { module: 'k1', port: 'amount' } });
   const from = rerouteV2('c1', { source: 'fol', sourceHandle: 'mod', target: 'k1', targetHandle: 'k:turn' }, g.nodes, p, [], types);
-  assert.deepEqual(from?.from, { module: 'fol', port: 'out' });
+  assert.deepEqual([from?.end, from?.to], ['from', { module: 'fol', port: 'out' }]);
   assert.equal(rerouteV2('c1', { source: 'lfo', sourceHandle: 'mod', target: 'k1', targetHandle: 'k:turn' }, g.nodes, p, [], types), null, 'nothing moved');
   assert.equal(rerouteV2('c1', { source: 'lfo', sourceHandle: 'mod', target: 'k1', targetHandle: 'in' }, g.nodes, p, [], types), null, 'a value into a picture: no');
   // Applied: the same cable (its amount kept), its end moved; the unmoved end keeps its channel.
   const next = applyV2(structuredClone(p), r!, types);
   assert.deepEqual(next.cables.find((c) => c.id === 'c1'), { id: 'c1', from: { module: 'lfo', port: 'out' }, to: { module: 'k1', port: 'amount' }, value: 0.4 });
-  const c2 = applyV2(structuredClone(p), { kind: 'reroute', scope: [], cable: 'c2', from: { module: 'music', port: 'level' }, to: { module: 'k1', port: 'turn' } }, types);
+  const c2 = applyV2(structuredClone(p), { kind: 'reroute', scope: [], id: 'c2', end: 'to', to: { module: 'k1', port: 'turn' } }, types);
   assert.deepEqual(c2.cables.find((c) => c.id === 'c2')!.from, { module: 'music', port: 'level', channel: 0 });
 });
 
 test('modules removed: their cables, the depths read from them, their pins; a device’s ports onto them and the cables into those', () => {
   const p = sample();
-  p.pins = ['k1.turn', 'cable:c1', 'lfo', 'category:effects'];
+  p.pins = ['k1.turn', 'cable:c1', 'lfo', 'module:lfo', 'lfo.rate', 'category:effects'];
   p.cables[2] = { ...p.cables[2], depth: { module: 'lfo', port: 'out' } };
   const next = applyV2(structuredClone(p), { kind: 'removeModules', scope: [], modules: ['lfo'] }, types);
   assert.ok(!next.modules.some((m) => m.id === 'lfo'));

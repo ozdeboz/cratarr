@@ -6,23 +6,17 @@
 // into a Mix to the screen, values dashed, triggers dotted, a band's six at once "· 6", the Clock into a Sequencer by
 // its normals; an LFO, a single ADSR and one on the six bands, each with its face.
 
-import { cratarrTypes, type ModuleType } from './patch';
-import { ADSR, CLOCK, ENGINE_MODULES, ENVELOPE, GRAPH_MODULES, SEQUENCER, showPartTypes, type CableV2, type PatchV2 } from './ports';
-import { EXTRA_TYPES } from './registry';
+import type { ModuleType } from './patch';
+import type { CableV2, PatchV2 } from './ports';
 import { MODULATORS } from './modulators/modulators';
 import { WAVES } from './sources/waves';
 import { toV2 } from './v2';
-import { DEFAULTS, RANGES } from './settings.svelte';
+import { v2TypeRecord } from './v2-types';
+import { DEFAULTS } from './settings.svelte';
 
-/** Every type the lab draws, by its id. */
+/** Every type the lab draws, by its id: the app's (v2-types.ts), the modulators and Waves first. */
 export function labTypes(): Record<string, ModuleType> {
-  const chain = cratarrTypes(RANGES as Record<string, [number, number]>, DEFAULTS);
-  return Object.fromEntries(
-    [...chain, ...Object.values(MODULATORS), WAVES, CLOCK, ADSR, ENVELOPE, SEQUENCER, ...EXTRA_TYPES, ...ENGINE_MODULES, ...GRAPH_MODULES, ...showPartTypes(chain.find((t) => t.type === 'show')!)].map((t) => [
-      t.type,
-      t,
-    ]),
-  );
+  return { ...Object.fromEntries([...Object.values(MODULATORS), WAVES].map((t) => [t.type, t])), ...v2TypeRecord() };
 }
 
 /** Today's settings as a v2 patch, the picture's wiring stood in for. */
