@@ -6,7 +6,7 @@
 // (Flash, Speed, Intensity, the fluid, the grain, the bands' times, each column's scale) varied within ranges that
 // keep it watchable. Then
 // a precheck runs the recipe against the track's own signals and refuses one that would flash or churn past the
-// governor's limits (`precheck`, with the frame's mapping the visuals use).
+// sidechaining's limits (`precheck`, with the frame's mapping the visuals use).
 //
 // Pure: the same seed gives the same recipe (every device of a sync group alike).
 
@@ -72,7 +72,7 @@ const EXTRAS: Extra[] = [
   { signal: 'swell', aspect: 'behaviour', lo: 0.1, hi: 0.4, family: 'behaviour' },
 ];
 
-/** The most all of a recipe's routes into light and glow may add up to (flashes are the governor's first worry). */
+/** The most all of a recipe's routes into light and glow may add up to (flashes are the sidechaining's first worry). */
 const MOST_FLASHING = 1.6;
 /** Today's bands' times, which a recipe varies. */
 const LIGHTING = [0.2, 0.18, 0.15, 0.13, 0.1, 0.08];

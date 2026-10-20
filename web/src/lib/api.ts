@@ -1320,7 +1320,7 @@ export const putGroupVisuals = (group: string, body: { base: number; settings: R
     body: JSON.stringify(body),
   });
 
-/** What the visuals' governor learned from the owner's thumbs (learning.ts): each limit's value, the step its next
+/** What the visuals' learning took from the owner's thumbs (learning.ts): each limit's value, the step its next
  *  change takes and which way it last went, as of `at` (ms); per user. `version` 0: nothing learned yet. */
 export type VisualsLimits = { version: number; limits: Record<string, { value: number; step: number; dir: -1 | 0 | 1 }>; at: number };
 export const getVisualsLimits = () => quietly<VisualsLimits>('/api/visuals/limits');

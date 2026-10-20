@@ -11,7 +11,9 @@ const { DEFAULTS, FLUID_FULL } = await import('../src/lib/visuals/settings.svelt
 const { newEngineV1, stepEngineV1 } = await import('../src/lib/visuals/engine/v1.ts');
 const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
 const { newSidechain, stepSidechain, BUSY } = await import('../src/lib/visuals/engine/sidechain.ts');
-const { newGovernor, stepGovernor, STANDING } = await import('../src/lib/visuals/governor.ts');
+// The governor these replaced (the old sidechaining, kept as the proofs' reference).
+const { newGovernor, stepGovernor } = await import('./harness/governor.ts');
+const { STANDING } = await import('../src/lib/visuals/engine/sidechain.ts');
 const { Meters } = await import('../src/lib/visuals/meters.ts');
 const { measure } = await import('../src/lib/visuals/precheck.ts');
 const { musicOf, newMusicState } = await import('../src/lib/visuals/music-core.ts');

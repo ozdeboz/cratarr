@@ -1,5 +1,5 @@
 // What the visuals do, measured (decision 0046, amended): how much they flash, move, change shape and colour, pump
-// and start new looks, each as a number the governor holds within its budget and the calibration compares with the
+// and start new looks, each as a number the sidechaining holds within its budget and the calibration compares with the
 // owner's ratings. One definition for both: the runtime fills `FrameStats` each frame; the precheck of a recipe fills
 // them from a simulation (no picture: its flashes from the glow it would show, one tile for the screen).
 //
@@ -9,7 +9,7 @@
 // in CIE 1976 u'v'; no more than three of either in any second. A tile flashes at its own rate. Over how much of the
 // screen is the owner's: "Full screen flashes at most 3 times per second, but if there is some minor flashing deep
 // inside a cloud, it shouldn't be limited", and of the choices, a quarter of the whole screen (2026-10-18): the rate a
-// quarter of all the tiles reach is `flash`, which the governor holds to three. WCAG's own area (a quarter of any 10°
+// quarter of all the tiles reach is `flash`, which the sidechaining holds to three. WCAG's own area (a quarter of any 10°
 // field of view, which it estimates as a third of the screen across and down) is `flashStrict`, measured and reported,
 // not held: on rhythmic music the visuals' beat-lit parts pass three by it (4 to 8 a second, 2026-10-18).
 

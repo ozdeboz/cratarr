@@ -1,6 +1,6 @@
 // The effects stage (decision 0050; the owner: "the Hydra effect layer"): effects after Hydra (hydra-synth, AGPL-3.0
 // like Cratarr), ported into the visuals' own shaders rather than embedded, so one renderer, one GL context, and the
-// flash meter and the governor see everything.
+// flash meter and the sidechaining see everything.
 //
 // Two slots:
 // - the picture: after the show pass, on the finished picture: shapes (where each pixel reads from), then one read of
@@ -10,9 +10,9 @@
 //
 // A chain is a few effects' ids with their amounts and knobs; it is compiled into one shader a slot, rebuilt only when
 // its ids change: the amounts and knobs are uniforms. Each effect says what it adds to the meters (meters.ts), so the
-// governor holds it back as it holds the flame back. Pure: no GL here.
+// sidechaining holds it back as it holds the flame back. Pure: no GL here.
 
-import type { Levers } from './governor';
+import type { Levers } from './engine/sidechain';
 import type { VisualSettings } from './settings.svelte';
 
 /** The engines (the owner, 65: "a kaleidoscope engine, exyedo engine, and maybe one more? And then have multiple
@@ -60,7 +60,7 @@ export type Effect = {
   /** Its own controls, at most two, in `k`'s order. */
   knobs: readonly Knob[];
   /** How fast its own time runs (its units a second; two for one that runs two) at its amount and knobs; none: it has
-   *  none. Run a frame at a time (`EffectClocks`), so a changing amount or knob (the routes, the governor, a hand)
+   *  none. Run a frame at a time (`EffectClocks`), so a changing amount or knob (the routes, the sidechaining, a hand)
    *  speeds it up or slows it down from where it is: a time multiplied out (the track's time times a speed) jumps at
    *  every change, the further the later in the track. */
   speed?: (amount: number, k: Knobs) => number | readonly [number, number];
@@ -707,7 +707,7 @@ export type EffectSettings = Pick<
 /** Nothing held back. */
 const FREE: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
 
-/** How far the governor lets an effect through (governor.ts): the flashes' swing always (any effect can flash), and the
+/** How far the sidechaining lets an effect through (engine/sidechain.ts): the flashes' swing always (any effect can flash), and the
  *  lever of every meter it counts toward (its report's), as each holds the flame back: motion the pace, shape churn the
  *  evolving (stretched: 1/evolution), colour churn the hues, zoom pumping the size. Its reports are in step with its
  *  amount, so each lever lowers just what its meter counts. */
@@ -734,9 +734,9 @@ export const moves = (id: number, k: Knobs) => Object.values(effectOf(id)?.repor
 export type Routed = { amounts: readonly number[]; knobs: readonly number[] };
 
 /** The look's effects for the renderer (render.ts `Shown.effects`): each amount times what the Effects setting's routes
- *  let through (`level`), its own routes' level (`routed`) and what the governor lets through (`levers`), none for
+ *  let through (`level`), its own routes' level (`routed`) and what the sidechaining lets through (`levers`), none for
  *  one that `moves` under reduced motion (`still`); each one's knobs as routed (the GLSL's, the clocks' and the
- *  reports' alike, so the governor sees what is drawn); `t` the track's own time (s); the beat. */
+ *  reports' alike, so the sidechaining sees what is drawn); `t` the track's own time (s); the beat. */
 export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null, levers: Levers = FREE, still = false, routed?: Routed) => {
   const unit = (v: number) => Math.max(0, Math.min(1, v));
   const swung = (v: number, i: number) => unit(v + (routed?.knobs[i] ?? 0));
@@ -774,7 +774,7 @@ export const beatOf = (b: Beat | null): [number, number, number, number] =>
     : [0, 1000, 0, 0];
 
 /** What the look's effects add to the meters a second, the picture's and the loop's together: the same for the visuals'
- *  meters and the precheck's, so the governor and the dice hold an effect alike. */
+ *  meters and the precheck's, so the sidechaining and the dice hold an effect alike. */
 export function settingsReport(how: EffectSettings, level: number, levers: Levers = FREE, still = false, routed?: Routed): Report {
   const fx = effectsNow(how, level, 0, null, levers, still, routed);
   const out: Report = { ...reportOf(fx.ids, fx.amounts, 'picture', fx.knobs) };

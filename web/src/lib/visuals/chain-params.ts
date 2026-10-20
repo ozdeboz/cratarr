@@ -5,7 +5,7 @@
 import type { AspectsNow } from './aspects';
 import { effectsNow, type Beat, type EffectSettings } from './effects';
 import type { Flow, Force } from './fluid';
-import type { Levers } from './governor';
+import type { Levers } from './engine/sidechain';
 import type { Shown } from './render';
 import { DIVE_MOST, TUNNEL_MOST } from './zoom';
 
@@ -22,7 +22,7 @@ export type EffectsParams = Shown['effects'];
 
 export type ChainNow = { points: PointsParams; carry: CarryParams; show: ShowParams; effects: EffectsParams };
 
-/** The frame's own, beside the mapping: the effects' and facets' settings, the governor's levers, reduced motion, the
+/** The frame's own, beside the mapping: the effects' and facets' settings, the sidechaining's levers, reduced motion, the
  *  most brightness, how much of its frame the flame covers (null till measured), the fire's share, the track's time
  *  and beat, the fluid's pushes and flow, the frame's length and the Speed setting as moved. */
 export type ChainContext = {

@@ -444,7 +444,7 @@ export const FORMS = 1000;
 const STANDBY: Preset = { form: 0, detail: 0.5, twist: 0.7, warp: 0.8, symmetry: 4, mirror: 0, final: 0, family: 0, hue: 0, lightness: 0.5, vividness: 0.5, spread: 1, purity: 0.75, ...NO_EFFECTS, facets: 0, lattice: 0 };
 
 /** Drawn effects held within the room the flame leaves under each limit (budget.ts `DRAWN_ROOM`), so a track's own
- *  look never trips the governor, quiet or loud: every amount (the picture's and the loop's) by one factor, the least
+ *  look never trips the sidechaining, quiet or loud: every amount (the picture's and the loop's) by one factor, the least
  *  any meter needs (made again until it holds, for the reports not quite in step with their amounts: Echo's zoom,
  *  Magnify's power). The owner's own effects are not held to it. */
 export function withinRoom<T extends Pick<Preset, keyof typeof NO_EFFECTS>>(fx: T): T {

@@ -1,6 +1,6 @@
 // A recipe's precheck (decision 0046, amended): before the dice show a complete randomisation, it is run against the
 // playing track's own signals for half a minute (from where it plays), through the visuals' own mapping (aspects.ts,
-// the music as musicOf gives it), and measured (meters.ts); one that would go over the governor's limits is refused,
+// the music as musicOf gives it), and measured (meters.ts); one that would go over the sidechaining's limits is refused,
 // and the dice draw another. No picture is drawn: the flashes are judged from the brightness the whole picture would
 // pulse with (the glow, and the parts' lights), one tile for the screen, as the runtime's limit judges a quarter of it.
 //
@@ -29,7 +29,7 @@ import { DEFAULT_LIMITS, type Limits } from './budget';
 export type Checked = {
   ok: boolean;
   /** Each meter's most and mean over the run (after its first seconds, while the meters settle): the budgeted ones on
-   *  the governor's scale (budget.ts), the flashes as counted. */
+   *  the sidechaining's scale (budget.ts), the flashes as counted. */
   worst: Partial<MeterValues>;
   mean: Partial<MeterValues>;
   /** The meters over their limits, by name. */
@@ -103,7 +103,7 @@ export function* prechecking(
   // The dive's turn, as the visuals count it (the renderer's, beside each part's own); none where it cannot dive.
   const divePerRate = settings.dive > 0 ? diveTurnPerRate(settings) : 0;
   // The one engine over the recipe's patch, without its sidechains: the check asks what the recipe does on its own, as
-  // today's ran without the governor; the patch's sidechains hold back whatever passes (decision 0057).
+  // today's ran without the old sidechaining; the patch's sidechains hold back whatever passes (decision 0057).
   const patch = flatten(toV2(settings, { sidechain: false }));
   const engine = newEngine();
   const normal = newNormalState();
@@ -122,7 +122,7 @@ export function* prechecking(
     if (!a) break;
     measure(meters, a, k * dt, settings, divePerRate);
     if (k * dt < SETTLE_S) continue;
-    // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the governor holds
+    // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the sidechaining holds
     // them; so a limit means the same here as there, loud passage or quiet.
     const budget = budgetOf(1, 0.5, a.lit);
     const now = meters.now();
