@@ -16,6 +16,7 @@ export const moduleHelp: Record<string, string> = {
   flame: 'The fractal flame: six parts, one for each band of the sound, drawn as light.',
   shapes: 'Polygons and stars on a ring, outlined or filled, each spinning as the ring turns; their sides and depth morph.',
   irregular: 'A heart, the Cratarr mark, an arrow or another shape on a ring, outlined or filled, in white light.',
+  noise: 'Clouds of noise over the whole picture, in white light; at its finest scale, moving, film grain.',
   waves: 'The sound’s waveform drawn as a line, a circle or spokes (without live sound, the bands’ levels).',
 
   // Effects.
@@ -137,6 +138,13 @@ export const portHelp: Record<string, Record<string, string>> = {
     tint: TINT,
     glow: GLOW,
   },
+  noise: {
+    amount: 'How bright it is; none at 0.',
+    scale: 'From the finest, a speck a pixel or two (grain), to clouds the size of the picture.',
+    detail: 'Layers of finer noise over it, 1 to 6; between whole numbers the last fades in.',
+    speed: 'How fast it changes, by its own size: at the finest scale a new pattern every frame.',
+    contrast: 'From soft greys (0) through as it is (50%) to hard black and white.',
+  },
   irregular: {
     ...SHAPE_RING,
     shape: 'Which shape of the set: Heart, Cratarr, Ring, Cross, Arrow, Crescent, Drop, or a lens’s form.',
@@ -208,7 +216,7 @@ export const portHelp: Record<string, Record<string, string>> = {
   },
   mix: {
     in1: 'The bottom picture; the others go over it in order.',
-    ...numbered(4, (i) => `mode${i}`, (i) => `How picture ${i} blends: add, screen, over, multiply, window or lighten.`),
+    ...numbered(4, (i) => `mode${i}`, (i) => `How picture ${i} blends: add, screen, over, multiply, window, lighten or subtract.`),
     ...numbered(4, (i) => `amount${i}`, (i) => `How much of picture ${i} shows.`),
   },
   feedback: { picture: 'In: the picture to hold back a frame; out: that picture as it was last frame.' },

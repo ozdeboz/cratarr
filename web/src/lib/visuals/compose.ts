@@ -5,10 +5,10 @@
 // size and format (picture-graph.ts); the Feedback keeps the pass's own target for the next frame, no copy. The
 // renderer calls `run` between its show and the effects when `composeActive` says there is something to do.
 import { keptPerSecond } from './loopmods';
-import { BLENDS, type FrameInfo, type Layer, type Module, type PatchExtra, type PictureModule } from './patch';
+import type { FrameInfo, Layer, Module, PatchExtra, PictureModule } from './patch';
 import { Pool, type Spec } from './picture-graph';
 import { createSource, SOURCE_TYPES } from './sources/index';
-import { portsOf, type PortRef } from './ports';
+import { MIX_MODES, portsOf, type PortRef } from './ports';
 import { createFluidLoop, FLUID_LOOP } from './fluid-loop';
 import { createEngine } from './engine-module';
 
@@ -44,9 +44,13 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
+/** Each Mix mode's number in the shader: its place in MIX_MODES. */
+const MODE = Object.fromEntries(MIX_MODES.map((m, i) => [m, i])) as Record<(typeof MIX_MODES)[number], number>;
+
 /** The Mix of `n` layers over the picture in one pass (decision 0057 §4), each over the picture so far (both
- *  premultiplied) as its mode says: added, screened, laid over, multiplied, or the picture seen through it (window:
- *  dimmed by its amount where the layer is not), by its amount; the picture so far kept in the shader, not in a target
+ *  premultiplied) as its mode says: added, screened, laid over, multiplied, the picture seen through it (window:
+ *  dimmed by its amount where the layer is not), the brighter of the two, or the picture less it (subtract: never
+ *  below black), by its amount; the picture so far kept in the shader, not in a target
  *  between. Before that, a layer's glow (its light spread over a ring of taps) and the first's tint (its colours the
  *  picture's around it: the hue of a wider ring's mean, at its own brightness; its own where the picture is dark): a
  *  later layer that tints reads the picture so far around it, so it starts a pass of its own. Taps one by one, no
@@ -63,10 +67,12 @@ ${i === 0 ? `    if (uTint0 > 0.0) {
     }
 ` : ''}    float cover = clamp(max(max(b.r, b.g), max(b.b, b.a)) * 1.5, 0.0, 1.0);
     b *= uAmount${i};
-    if (uMode${i} == 1) c = c + b.rgb - c * b.rgb;
-    else if (uMode${i} == 2) c = b.rgb + c * (1.0 - b.a);
-    else if (uMode${i} == 3) c = c * mix(vec3(1.0), b.rgb / max(b.a, 1e-4), b.a);
-    else if (uMode${i} == 4) c = c * mix(1.0 - uAmount${i}, 1.0, cover);
+    if (uMode${i} == ${MODE.screen}) c = c + b.rgb - c * b.rgb;
+    else if (uMode${i} == ${MODE.over}) c = b.rgb + c * (1.0 - b.a);
+    else if (uMode${i} == ${MODE.multiply}) c = c * mix(vec3(1.0), b.rgb / max(b.a, 1e-4), b.a);
+    else if (uMode${i} == ${MODE.window}) c = c * mix(1.0 - uAmount${i}, 1.0, cover);
+    else if (uMode${i} == ${MODE.lighten}) c = max(c, b.rgb);
+    else if (uMode${i} == ${MODE.subtract}) c = max(vec3(0.0), c - b.rgb);
     else c = c + b.rgb;
   }`;
   const each = (f: (i: number) => string) => Array.from({ length: n }, (_, i) => f(i)).join('\n');
@@ -199,7 +205,7 @@ export class Compositor {
       gl.uniform2f(gl.getUniformLocation(p, 'uAspect'), Math.min(1, this.spec.h / this.spec.w), Math.min(1, this.spec.w / this.spec.h));
       layers.forEach((l, i) => {
         this.bind(1 + i, l.t.tex, `uLayer${i}`, p);
-        gl.uniform1i(gl.getUniformLocation(p, `uMode${i}`), BLENDS.indexOf(l.mode));
+        gl.uniform1i(gl.getUniformLocation(p, `uMode${i}`), MODE[l.mode]);
         gl.uniform1f(gl.getUniformLocation(p, `uAmount${i}`), l.amount);
         gl.uniform1f(gl.getUniformLocation(p, `uGlow${i}`), l.glow);
       });
@@ -300,7 +306,7 @@ export class Compositor {
       s?.module?.dispose(gl);
       let module: PictureModule | null = null;
       try {
-        module = createSource(layer.source.type, gl);
+        module = createSource(layer.source.type, gl, layer.source.id);
       } catch (e) {
         console.warn('Visuals: a layer could not be made here', layer.source.type, e);
       }

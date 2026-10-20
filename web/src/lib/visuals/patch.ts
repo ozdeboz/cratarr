@@ -316,6 +316,7 @@ const CHAIN_KNOBS = (() => {
   return out;
 })();
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+// A layer's blends: Mix's first modes, by the same names and places (ports.ts MIX_MODES).
 export const BLENDS = ['add', 'screen', 'over', 'multiply', 'window'] as const;
 const clampTo = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);

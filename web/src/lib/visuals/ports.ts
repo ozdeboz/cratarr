@@ -450,7 +450,9 @@ export const READINGS = ['track', 'lately', 'absolute'] as const;
 export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
 
 /** The blends a Mix input takes (0056's, as a step knob per input). */
-export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window', 'lighten'] as const;
+// Appended only: a saved Mix keeps its modes by their place (Subtract, 0057 §4: a picture less another, its high-pass
+// a picture less its blur).
+export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window', 'lighten', 'subtract'] as const;
 /** How many pictures a Mix takes. */
 export const MIX_INPUTS = 4;
 
