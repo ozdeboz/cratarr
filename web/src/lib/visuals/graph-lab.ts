@@ -12,11 +12,13 @@ import { MODULATORS } from './modulators/modulators';
 import { WAVES } from './sources/waves';
 import { toV2 } from './v2';
 import { v2TypeRecord } from './v2-types';
+import { signalTypes } from './music-signals';
 import { DEFAULTS } from './settings.svelte';
 
 /** Every type the lab draws, by its id: the app's (v2-types.ts), the modulators and Waves first. */
 export function labTypes(): Record<string, ModuleType> {
-  return { ...Object.fromEntries([...Object.values(MODULATORS), WAVES].map((t) => [t.type, t])), ...v2TypeRecord() };
+  // Music's per-signal modules stood in for until a5's type (music-signals.ts).
+  return { ...signalTypes(), ...Object.fromEntries([...Object.values(MODULATORS), WAVES].map((t) => [t.type, t])), ...v2TypeRecord() };
 }
 
 /** Today's settings as a v2 patch, the picture's wiring stood in for. */
