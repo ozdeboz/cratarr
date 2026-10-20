@@ -99,7 +99,7 @@ const ATTACK = 'How quickly it rises to a higher input (seconds).';
 const RELEASE = 'How quickly it falls to a lower input (seconds).';
 /** Lines for the inputs every level knob and every step knob has (ports.ts): `<knob>:gain`, `<knob>:next`. */
 const SUFFIX: Record<string, string> = {
-  gain: 'Its knob times this, from 0 to 1: a VCA’s output cabled in; 1 while unplugged.',
+  gain: 'How much of it gets through, 1 while unplugged: a level’s value, a swing’s movement; a time divided by it.',
   next: 'A trigger here moves its knob on to the next step, at its module’s neutral.',
 };
 
@@ -148,11 +148,23 @@ export const portHelp: Record<string, Record<string, string>> = {
     glow: GLOW,
   },
   tonemap: { light: LIGHT, level: 'The whole picture’s brightness, as a fader: 1 as set; the pause dims it through its gain.' },
-  fluid: { light: LIGHT },
-  tunnel: { light: LIGHT },
-  dive: { light: LIGHT },
+  fluid: {
+    light: LIGHT,
+    fluid: 'How much the picture flows like smoke: the most it reaches; cables into its gain take it lower.',
+    stir: 'How much of what its cables give pushes the fluid.',
+    flow: 'How much of what its cables give makes the fluid flow.',
+    swirl: 'How much of what its cables give sets the fluid whirling.',
+    facets: 'How much the fluid breaks into facets: the most it reaches; cables into its gain take it lower.',
+  },
+  tunnel: { light: LIGHT, tunnel: 'How fast the picture streams outward for ever: the most it reaches; cables into its gain take it lower.' },
+  dive: { light: LIGHT, dive: 'How fast the view dives into the flame for ever: the most it reaches; cables into its gain take it lower.' },
   trails: { light: LIGHT },
-  'loop-effect': { light: LIGHT },
+  'loop-effect': { light: LIGHT, amount: 'How strongly the loop’s effect acts: the most it reaches; cables into its gain take it lower.' },
+  'kaleidoscope-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
+  'eyedo-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
+  'hydra-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
+  blur: { smoothing: 'How wide sparse areas blur, up to twelve pixels: the most it reaches; cables into its gain take it lower.' },
+  curve: { haze: 'Lifts the faint mist into view (up) or sinks it to black (down): the most either way; cables into its gain take it toward 0.' },
   fold: {
     grid: 'A Grid’s points set the symmetry; without one, its own centre and Count.',
     mode: 'Mosaic, kaleidoscope, mirror or pixelate.',
@@ -306,6 +318,8 @@ export const portHelp: Record<string, Record<string, string>> = {
   music: {
     audio: 'The sound itself, its recent samples.',
     playing: '1 while the music plays, 0 while it is paused.',
+    hits: 'A trigger on each hit in a band, such as a drum or a plucked note, its strength with it.',
+    percussiveHits: 'A trigger on each drum hit in a band, held notes left out, its strength with it.',
     hold: 'How long each band’s envelope takes to fall (seconds).',
     ...Object.fromEntries([...TRACK_SIGNALS, ...BAND_SIGNALS].map((s) => [`reference.${s}`, 'How this row is read: against this track’s typical, lately’s, or as it is.'])),
     ...Object.fromEntries([...TRACK_SIGNALS, ...BAND_SIGNALS].filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => [`${s}:slow`, 'This row, followed slowly.'])),
@@ -324,7 +338,10 @@ export const portHelp: Record<string, Record<string, string>> = {
     looks: 'How many new looks a minute.',
   },
   screen: { guard: 'How far the flash guard is holding back now (at most three flashes a second over a large area).' },
-  frame: { loose: 'Set by a double tap of the dice: up to twice Wild’s limits until the next roll, an undo or a reset.' },
+  frame: {
+    effects: 'The most of every effect’s Amount: the most it reaches; cables into its gain take it lower.',
+    loose: 'Set by a double tap of the dice (going with the dice’s Randomize).',
+  },
 };
 
 /** Ports whose label says all there is (no line): on any type, and on these. */

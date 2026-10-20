@@ -303,6 +303,15 @@ export function showPartTypes(show: ModuleType): Declared[] {
   });
 }
 
+/** The swing columns of today's chain as v2 has them (0057 §7e item 2, VCV's rule): the column's resting value, the
+ *  cables adding to it; bipolar about 0 (a full cable gives ±1 in the same units). Their scale went into the cables. */
+export const COLUMN_OFFSETS: ReadonlySet<string> = new Set(['flame.shape', 'flame.rotation', 'flame.lights', 'flame.presence', 'flame.zoom', 'trails.trails', 'tonemap.glow', 'saturate.saturation', 'bend.waves']);
+
+/** Today's chain's types as v2 has them: the swing columns as offsets (−1..1, at 0). */
+export function v2ChainType(t: ModuleType): ModuleType {
+  return { ...t, knobs: t.knobs.map((k) => (COLUMN_OFFSETS.has(`${t.type}.${k.id}`) ? { ...k, min: -1, max: 1, neutral: 0, default: 0, kind: 'swing' as const } : k)) };
+}
+
 /** The lattices a Grid lays its points on (0057 §4c). */
 export const LATTICES = ['square', 'hexagonal', 'triangular', 'rings', 'spiral'] as const;
 /** The most points a Grid gives (its channels). */
