@@ -11,10 +11,12 @@
 //   reader has drawn; a Feedback adopts its input's target rather than copying it.
 // Devices are opened first (v2.ts `flatten`): they cost nothing. A polymorphic port takes light or a picture, its
 // module's output the type of what comes in. A module's picture outputs are one picture.
-import { ENGINE_MODULES, GRAPH_MODULES, LIGHT_CARRIERS, MIX_MODES, portsOf, showPartTypes, SHOW_PARTS, type Port, type PatchV2, type PortRef, type Ports, type PortType } from './ports';
+import { ENGINE_MODULES, GRAPH_MODULES, LIGHT_CARRIERS, MIX_MODES, PICTURE_MODULES, portsOf, showPartTypes, SHOW_PARTS, type Port, type PatchV2, type PortRef, type Ports, type PortType } from './ports';
 import { effectOf } from './effects';
 import type { ModuleType } from './patch';
-import { EXTRA_TYPES } from './registry';
+import { ENGINE_TYPES, EXTRA_TYPES } from './registry';
+import { SOURCE_TYPES } from './sources/index';
+import { FLUID_LOOP } from './fluid-loop';
 import { flatten } from './v2';
 // A converted patch's picture side (v2.ts's hook).
 import './picture-wiring';
@@ -40,10 +42,10 @@ export type Compiled = {
 };
 
 /** Every module type a converted patch holds: the extras', today's chain's (`chain`: patch.ts cratarrTypes), the
- *  engine's, the graph's and Show's parts. */
+ *  engine's, the graph's, the picture modules (Glow, Tint…) and Show's parts. */
 export function v2Types(chain: readonly ModuleType[]): TypeOf {
   const show = chain.find((t) => t.type === 'show');
-  const all = new Map<string, ModuleType & { ports?: Ports }>([...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...(show ? showPartTypes(show) : [])].map((t) => [t.type, t]));
+  const all = new Map<string, ModuleType & { ports?: Ports }>([...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...PICTURE_MODULES, ...(show ? showPartTypes(show) : [])].map((t) => [t.type, t]));
   return (t) => all.get(t);
 }
 
@@ -54,18 +56,21 @@ export const STAGES = ['carry', 'points', 'show', 'compose', 'effects', 'screen'
 export type Stage = (typeof STAGES)[number];
 const SHOWN = new Set(SHOW_PARTS.map((p) => p.type));
 
+/** The pass a module is drawn in (none for a Feedback: it keeps a picture, it draws none). */
+export function stageOf(n: PictureNode): Stage | null {
+  if (n.type === 'feedback') return null;
+  if (LIGHT_CARRIERS.has(n.type)) return 'carry';
+  if (LIGHT_ROLES.points.has(n.type)) return 'points';
+  if (SHOWN.has(n.type)) return 'show';
+  if (n.type === 'screen') return 'screen';
+  // Today's effects keep their ids (v2.ts): the finish's slots, and an Echo's own loop (its Mix).
+  if (/^fx\d(-mix)?$/.test(n.id)) return 'effects';
+  return 'compose';
+}
+
 /** The stages a compiled graph needs, or null where its modules are not in their order (not drawn in this version). */
 export function stagesOf(c: Compiled): Stage[] | null {
-  const stage = (n: PictureNode): Stage | null => {
-    if (n.type === 'feedback') return null;
-    if (LIGHT_CARRIERS.has(n.type)) return 'carry';
-    if (LIGHT_ROLES.points.has(n.type)) return 'points';
-    if (SHOWN.has(n.type)) return 'show';
-    if (n.type === 'screen') return 'screen';
-    // Today's effects keep their ids (v2.ts): the finish's slots, and an Echo's own loop (its Mix).
-    if (/^fx\d(-mix)?$/.test(n.id)) return 'effects';
-    return 'compose';
-  };
+  const stage = stageOf;
   const out: Stage[] = [];
   let at = 0;
   const feedback = new Set(c.order.filter((n) => n.type === 'feedback').map((n) => n.id));
@@ -438,9 +443,10 @@ export const newWalkState = <T>(): WalkState<T> => ({ held: new Map() });
 
 /** Draws `p` in order, with targets from `pool`, each given back as its last reader has drawn. A Feedback gives what
  *  it held from the start of the frame; at its place it adopts its input's target, copying only one not the pool's
- *  (another's own), and keeping the light's own buffers as they are. */
-export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<T>) {
-  const value = new Map<string, T | null>();
+ *  (another's own), and keeping the light's own buffers as they are. `given`: pictures drawn outside the walk, by
+ *  module. Gives every module's picture. */
+export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<T>, given: ReadonlyMap<string, T> = new Map()): Map<string, T | null> {
+  const value = new Map<string, T | null>(given);
   const pooled = new Set<T>();
   const left = new Map<string, number>();
   for (const [key, n] of p.readers) {
@@ -493,4 +499,23 @@ export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<
       pool.give(out);
     }
   }
+  return value;
+}
+
+/** The converted chain's compose modules, drawn fused (compose.ts): the layers' sources, modules and engines, the
+ *  picture loop's Warp, Keep and modules, the layers' Mix, the loop's Mix and Feedback. */
+/** The modules compose.ts runs on a layer or in the loop (its MODULE_MAKERS'). */
+const FUSED_MODULES: ReadonlySet<string> = new Set([FLUID_LOOP.type, ...ENGINE_TYPES.map((t) => t.type)]);
+export const fused = (n: PictureNode) =>
+  SOURCE_TYPES.some((t) => t.type === n.type) || FUSED_MODULES.has(n.type) || n.type === 'warp' || n.type === 'keep' || (n.type === 'mix' && (n.id === 'layers' || n.id === 'loop-mix')) || (n.type === 'feedback' && n.id === 'loop-feedback');
+
+/** The compose step's modules (with its loops' Feedbacks), the module whose picture it starts from (Show's), and the
+ *  one it gives on (into the effects or the screen); none where it has none. */
+export function composeOf(c: Compiled): { ids: Set<string>; from: string; to: string } | null {
+  const byId = new Map(c.order.map((n) => [n.id, n]));
+  const ids = new Set(c.order.filter((n) => stageOf(n) === 'compose').map((n) => n.id));
+  for (const n of c.order) if (n.type === 'feedback' && n.inputs.some((f) => ids.has(f.from.module))) ids.add(n.id);
+  const from = c.order.flatMap((n) => (ids.has(n.id) ? n.inputs : [])).find((f) => stageOf(byId.get(f.from.module)!) === 'show')?.from.module;
+  const to = c.order.flatMap((n) => (ids.has(n.id) || n.type === 'feedback' ? [] : n.inputs)).find((f) => ids.has(f.from.module))?.from.module;
+  return ids.size && from && to ? { ids, from, to } : null;
 }

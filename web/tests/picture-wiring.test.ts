@@ -96,3 +96,22 @@ test('lazy: the flame’s layer at nothing cuts the flame and its own loop, unle
   assert.ok(cut.includes('screen'));
   assert.ok(live(0, 1).includes('flame'), 'coming back: still gathering');
 });
+
+test('the compose step: its modules, from Show’s picture to what goes on; fused where it is the converted chain’s', async () => {
+  const { composeOf, fused } = await import('../src/lib/visuals/picture-graph.ts');
+  const c = compile(toV2(settings(layered())), types);
+  const cs = composeOf(c)!;
+  assert.equal(cs.from, 'show/saturate');
+  assert.equal(cs.to, 'loop-mix');
+  for (const id of ['shapes-source', 'shapes-kaleido', 'window-source', 'layers', 'example-warp', 'example-keep', 'loop-mix', 'loop-feedback']) assert.ok(cs.ids.has(id), id);
+  assert.ok(!cs.ids.has('fx1') && !cs.ids.has('show/saturate'));
+  assert.ok(c.order.filter((n) => cs.ids.has(n.id)).every(fused), 'the converted chain is drawn fused');
+  // A Glow on a layer: the walk draws it.
+  const v = toV2(settings(layered()));
+  const glowed = { ...v, modules: [...v.modules, { id: 'glow-1', type: 'glow', knobs: { glow: 0.5 } }], cables: v.cables.map((x) => (x.from.module === 'window-source' ? { ...x, from: { module: 'glow-1', port: 'picture' } } : x)).concat({ id: 'g', from: { module: 'window-source', port: 'picture' }, to: { module: 'glow-1', port: 'picture' }, value: 1, mode: 'swing' }) };
+  const g = compile(glowed, types);
+  assert.deepEqual(g.errors, []);
+  const gs = composeOf(g)!;
+  assert.ok(gs.ids.has('glow-1'));
+  assert.ok(!g.order.filter((n) => gs.ids.has(n.id)).every(fused));
+});

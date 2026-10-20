@@ -58,13 +58,13 @@ const driver = (r: Made, draw: Driver['draw'], meter: Driver['meter']): Driver =
   dispose: () => r.dispose(),
 });
 
-/** The pipelines a replay can run: today's renderer (`current`: the patch's picture side as a graph, the nodes'
- *  values, its own compose step) and the frozen copies every step is compared with (`legacy`: render-legacy.ts and
- *  compose-legacy.ts, the look as one, the compose step as a hook). */
-const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, options: RendererOptions) => Promise<Driver>> = {
-  current: async (canvas, points, options) => {
+/** Today's renderer; `generic`: its compose step always the graph's own walk (nodes/walker.ts), not the fused one. */
+const today =
+  (generic: boolean) =>
+  async (canvas: HTMLCanvasElement, points: number, options: RendererOptions): Promise<Driver> => {
     const [{ FlameRenderer }, { v2Types }, { toV2 }, { cratarrTypes }, { DEFAULTS, RANGES }] = await Promise.all([import('./render'), import('./picture-graph'), import('./v2'), import('./patch'), import('./settings.svelte')]);
     const r = new FlameRenderer(canvas, points, 'high-performance', options);
+    r.generic = generic;
     const types = v2Types(cratarrTypes(RANGES, DEFAULTS));
     let patched = '';
     return driver(r, (f, all) => {
@@ -85,7 +85,14 @@ const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, opti
       r.meterAdd(stats);
       return r.meterValues;
     });
-  },
+  };
+
+/** The pipelines a replay can run: today's renderer (`current`: the patch's picture side as a graph, the nodes'
+ *  values, its own compose step; `generic`: that step the graph's own walk) and the frozen copies every step is
+ *  compared with (`legacy`: render-legacy.ts and compose-legacy.ts, the look as one, the compose step as a hook). */
+const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, options: RendererOptions) => Promise<Driver>> = {
+  current: today(false),
+  generic: today(true),
   legacy: async (canvas, points, options) => {
     const [{ FlameRenderer }, { Compositor }] = await Promise.all([import('./render-legacy'), import('./compose-legacy')]);
     const r = new FlameRenderer(canvas, points, 'high-performance', options);

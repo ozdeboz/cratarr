@@ -13,8 +13,10 @@
 import type { ChainNow } from './chain-params';
 import { composeActive, Compositor } from './compose';
 import type { FrameInfo, Module, PatchExtra } from './patch';
-import { compile, effectRuns, plan, STAGES, stagesOf, type Compiled, type Stage, type TypeOf } from './picture-graph';
-import type { PatchV2 } from './ports';
+import { compile, composeOf, effectRuns, fused, plan, STAGES, stagesOf, type Compiled, type Stage, type TypeOf } from './picture-graph';
+import { MIX_MODES, type PatchV2 } from './ports';
+import { flatten } from './v2';
+import { Walker } from './nodes/walker';
 import type { Flame } from './flame';
 import type { Fluid, Flow, Force, Loop } from './fluid';
 import { EffectClocks } from './effects';
@@ -103,6 +105,14 @@ export class FlameRenderer {
   /** The slots whose Echo is fed back the line's own finished picture (Feedback → Echo → Mix). */
   private fxLooped = new Set<number>();
   private compiled: Compiled | null = null;
+  /** The compose step as the graph's own walk (nodes/walker.ts), where the patch wires more than the converted chain
+   *  (a device, a Glow…) or `generic` asks: its modules, the module whose picture it starts from (Show's), the one it
+   *  gives on; each module's knobs as the patch has them. */
+  private walker: Walker | null = null;
+  generic = false;
+  private wired = false;
+  private composed: { ids: Set<string>; from: string; to: string } | null = null;
+  private knobsIn = new Map<string, Record<string, number>>();
   /** Whether the graph has the picture's own loop (loop-feedback → … → loop-mix). */
   private looped = true;
   /** Whether the lazy rules cut the flame last frame. */
@@ -181,6 +191,30 @@ export class FlameRenderer {
     const fx = c.order.filter((n) => /^fx\d$/.test(n.id)).map((n) => Number(n.id.slice(2)) - 1);
     this.fxOrder = stages && fx.length ? fx : [0, 1, 2];
     this.fxLooped = new Set(stages ? c.order.filter((n) => /^fx\d$/.test(n.id) && n.inputs.some((f) => f.from.module === `${n.id}-feedback`)).map((n) => Number(n.id.slice(2)) - 1) : []);
+    this.knobsIn = new Map(flatten(p).modules.map((m) => [m.id, m.knobs]));
+    this.composed = stages ? composeOf(c) : null;
+    this.wired = !!this.composed && c.order.some((n) => this.composed!.ids.has(n.id) && !fused(n));
+  }
+
+  /** A compose module's knobs this frame: the extras' as moved (the layers' Mix from their blends, the flame's share
+   *  first), else the patch's. */
+  private knobsAt(id: string, extras: Extras | null): Record<string, number> {
+    if (extras) {
+      const x = extras.extra;
+      if (id === 'layers') {
+        const k: Record<string, number> = { amount1: extras.flame };
+        x.layers.forEach((l, i) => {
+          k[`mode${i + 2}`] = MIX_MODES.indexOf(l.blend.mode);
+          k[`amount${i + 2}`] = l.blend.amount;
+          k[`glow${i + 2}`] = extras.knobsOf(l.source).glow ?? 0;
+          k[`tint${i + 2}`] = extras.knobsOf(l.source).tint ?? 0;
+        });
+        return k;
+      }
+      const m = [...x.layers.flatMap((l) => [l.source, ...l.modules]), ...x.loop].find((m) => m.id === id);
+      if (m) return extras.knobsOf(m);
+    }
+    return this.knobsIn.get(id) ?? {};
   }
 
 
@@ -280,15 +314,22 @@ export class FlameRenderer {
       const p = this.fin.chainFor({ ...fx, ids }, this.clocks);
       return p ? [{ p, ids }] : [];
     }) : [];
-    const compose = this.stages.has('compose') && extras && this.compositor && composeActive(extras.extra, extras.knobsOf, extras.flame) ? this.compositor : null;
-    const composing = !!compose;
+    const knobsAt = (id: string) => this.knobsAt(id, extras);
+    const walks = this.stages.has('compose') && this.compiled && this.composed && (this.generic || this.wired);
+    if (walks) this.walker ??= new Walker(gl);
+    const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt) : null;
+    const compose = !walks && this.stages.has('compose') && extras && this.compositor && composeActive(extras.extra, extras.knobsOf, extras.flame) ? this.compositor : null;
+    const composing = !!walking || !!compose;
     const into = chain.length || composing ? this.fin.targets(light.width, light.height) : null;
     if (drawn) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
       if (into) viewWidth = light.width, viewHeight = light.height;
       this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
     }
-    const picture = into && compose ? compose.run(into.tex[2], into.w, into.h, extras!.extra, extras!.knobsOf, extras!.frame, extras!.flame, this.looped) : into ? into.tex[2] : null;
+    const info = extras?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
+    const picture = into && walking
+      ? this.walker!.run(walking, into.tex[2], into.w, into.h, knobsAt, info)
+      : into && compose ? compose.run(into.tex[2], into.w, into.h, extras!.extra, extras!.knobsOf, extras!.frame, extras!.flame, this.looped) : into ? into.tex[2] : null;
     if (chain.length && into && picture) {
       // Each run from the last one's picture; the first into the picture's own targets, as before.
       let shown = picture;
@@ -336,7 +377,9 @@ export class FlameRenderer {
 
   dispose() {
     this.compositor?.dispose();
+    this.walker?.dispose();
     for (const n of [this.carry, this.screen, this.meter, this.points, this.light, this.show, this.fin]) n.dispose();
     this.gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 }
+
