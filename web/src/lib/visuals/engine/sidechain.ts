@@ -35,6 +35,20 @@ const BUSY_TIMING = { attack: 1 / 0.7, hold: 0, release: 10 / 3, hysteresis: 0.8
 export type Levers = { swing: number; pace: number; evolution: number; hue: number; size: number; gap: number };
 export const FREE: Readonly<Levers> = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
 
+/** Whether a lever holds something back (a stretch over 1, a share under 1), as the page marks it. */
+export const holding = (l: Levers, lever: keyof Levers) => (lever === 'evolution' || lever === 'gap' ? l[lever] > 1.05 : l[lever] < 0.95);
+
+/** The levers as a patch's sidechains hold them this frame (the one engine's outputs: each kind's Ducker, the Screen's
+ *  guard; 1 where a patch has none), for what the page still reads as levers. */
+export const leversOf = (o: Record<string, number>): Levers => ({
+  swing: o['screen.guard'] ?? 1,
+  pace: o['duck-motion.out'] ?? 1,
+  evolution: 1 / (o['duck-shape.out'] ?? 1),
+  hue: o['duck-colour.out'] ?? 1,
+  size: o['duck-zoom.out'] ?? 1,
+  gap: 1 / (o['duck-looks.out'] ?? 1),
+});
+
 export type SidechainState = { flash: DuckerState; busy: Record<Budgeted, DuckerState> };
 export const newSidechain = (): SidechainState => ({ flash: newDucker(), busy: Object.fromEntries(BUDGETED.map((k) => [k, newDucker()])) as Record<Budgeted, DuckerState> });
 
