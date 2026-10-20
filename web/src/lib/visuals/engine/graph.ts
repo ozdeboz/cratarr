@@ -392,6 +392,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   for (const id of Object.keys(st.modulators)) if (id in outputs) st.values[id] = outputs[id];
   st.poly = { ...poly };
   for (const [id, v] of Object.entries(poly)) outputs[`${id}.out`] = v[0];
+  outputs['screen.guard'] = guard;
   for (const id of Object.keys(macros)) st.macros[id] = macros[id];
 
   // The chain's columns: what their cables give, by the routes' rules.
